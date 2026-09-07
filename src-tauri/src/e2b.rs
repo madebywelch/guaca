@@ -537,11 +537,14 @@ impl E2bClient {
         if !status.is_success() {
             return Err(E2bError::Api {
                 status: status.as_u16(),
-                message: String::from_utf8_lossy(&body).chars().take(200).collect(),
+                message: crate::secrets::redact(&String::from_utf8_lossy(&body), &self.env)
+                    .chars()
+                    .take(200)
+                    .collect(),
             });
         }
 
-        collect(&body)
+        collect_private(&body, &self.env)
     }
 
     /// Brings up the desktop: framebuffer, session, VNC server, noVNC bridge.
@@ -1361,6 +1364,21 @@ fn envelope(payload: &[u8]) -> Vec<u8> {
 /// The end-of-stream frame carries an error when something went wrong inside
 /// the sandbox, and reporting that is the difference between "the command
 /// failed" and silence.
+fn collect_private(
+    body: &[u8],
+    env: &std::collections::BTreeMap<String, String>,
+) -> Result<Output, E2bError> {
+    let mut output = collect(body).map_err(|error| match error {
+        E2bError::Api { status, message } => {
+            E2bError::Api { status, message: crate::secrets::redact(&message, env) }
+        }
+        other => other,
+    })?;
+    output.stdout = crate::secrets::redact(&output.stdout, env);
+    output.stderr = crate::secrets::redact(&output.stderr, env);
+    Ok(output)
+}
+
 fn collect(body: &[u8]) -> Result<Output, E2bError> {
     let mut stdout = String::new();
     let mut stderr = String::new();
@@ -1450,6 +1468,19 @@ pub fn decode_bytes(raw: &str) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_computer_scrubs_output_and_error_trailers() {
+        let env = std::collections::BTreeMap::from([("TOKEN".into(), "private-value".into())]);
+        let out =
+            stream(&[(0, serde_json::json!({"event":{"data":{"stdout":"cHJpdmF0ZS12YWx1ZQ=="}}}))]);
+        assert_eq!(collect_private(&out, &env).unwrap().stdout, "[REDACTED]");
+        let failed =
+            stream(&[(2, serde_json::json!({"error":{"message":"rejected private-value"}}))]);
+        let error = collect_private(&failed, &env).unwrap_err().to_string();
+        assert!(!error.contains("private-value"));
+        assert!(error.contains("[REDACTED]"));
+    }
 
     #[test]
     fn the_window_is_allowed_to_frame_the_viewer() {

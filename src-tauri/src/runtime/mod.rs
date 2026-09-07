@@ -2169,7 +2169,18 @@ impl Runtime {
             }
         }
 
-        Ok(Line::Ran(shell::run(&directory, command, shell::PATIENCE).await?))
+        let env = self.secret_environment(card.id)?;
+        Ok(Line::Ran(shell::run_with_env(&directory, command, shell::PATIENCE, &env).await?))
+    }
+
+    fn secret_environment(
+        &self,
+        agent: AgentId,
+    ) -> Result<crate::secrets::Environment, RuntimeError> {
+        Ok(crate::secrets::Environment {
+            names: self.inner.store.connector_names()?,
+            values: self.inner.store.connector_env(agent)?,
+        })
     }
 
     /// Starts a coding job and returns the repository it is working in.
@@ -2402,13 +2413,32 @@ impl Runtime {
             // message delivery.
             let wiring = session.as_ref().map(|session| session.wiring().clone());
 
+            let env = match runtime.secret_environment(agent) {
+                Ok(env) => env,
+                Err(error) => {
+                    runtime.release_parked(job_run);
+                    runtime.forget_refusals(job_run);
+                    runtime.inner.coding.lock().remove(&directory);
+                    runtime.emit(UiEvent::CodingJobFinished { agent_id: agent, repository_id });
+                    runtime.job_finished(
+                        agent,
+                        &name,
+                        harness,
+                        Err(crate::coding::CodingError::Start(format!(
+                            "Could not load Secrets: {error}"
+                        ))),
+                    );
+                    return;
+                }
+            };
             let watcher = runtime.clone();
-            let running = crate::coding::run_with_control(
+            let running = crate::coding::run_with_env(
                 harness,
                 &working,
                 &brief,
                 wiring.as_ref(),
                 control,
+                &env,
                 move |progress| {
                     let (tool, detail) = match progress {
                         crate::coding::Progress::Using { tool, detail } => (tool, detail),
@@ -2444,9 +2474,11 @@ impl Runtime {
                             agent_id: agent,
                             repository_id,
                             tool: String::new(),
-                            detail: note,
+                            detail: crate::secrets::redact(&note, &env.values),
                         }),
                         crate::coding::Signal::PullRequest { url, branch } => {
+                            let url = crate::secrets::redact(&url, &env.values);
+                            let branch = crate::secrets::redact(&branch, &env.values);
                             runtime.emit(UiEvent::CodingProgress {
                                 agent_id: agent,
                                 repository_id,
@@ -2462,6 +2494,11 @@ impl Runtime {
                         // denied by Guaca's own plumbing is the one refusal
                         // that would be a lie.
                         crate::coding::Signal::Permission { line, reach, reply } => {
+                            let line = crate::secrets::redact(&line, &env.values);
+                            let reach = Reach {
+                                what: crate::secrets::redact(&reach.what, &env.values),
+                                through: reach.through.map(|text| crate::secrets::redact(&text, &env.values)),
+                            };
                             let asking = runtime.clone();
                             let repository = name.clone();
                             tokio::spawn(async move {
@@ -5195,12 +5232,6 @@ impl Runtime {
             }
 
             ToolInvocation::Shell { command } => {
-                // No `credentials_named_in` here, and that is not an omission.
-                // A connector's value reaches a sandbox's environment and
-                // nothing else, so a line naming `$STRIPE_KEY` in a repository
-                // names a variable that is not set. Prefixing the summary with
-                // `used Stripe` would put a spend in the operator's audit trail
-                // that never happened, which is worse than the silence.
                 let (rendered, outcome) = match self.run_in_repository(card, run_id, &command).await
                 {
                     Ok(Line::Ran(ran)) => {
@@ -5968,7 +5999,7 @@ impl Runtime {
         let named: Vec<String> = self
             .inner
             .store
-            .group_connectors(card.group_id)
+            .agent_connectors(card.id)
             .unwrap_or_default()
             .into_iter()
             .filter(|connector| {
@@ -6339,9 +6370,12 @@ impl Runtime {
         // which agent it is for, so it is where the group's credentials are
         // attached. Every command this client goes on to run carries them, and
         // no other path can forget to.
-        let client = E2bClient::new(&config.e2b.api_key)
-            .ok_or(E2bError::NoKey)?
-            .with_env(self.inner.store.connector_env(card.group_id).unwrap_or_default());
+        let client = E2bClient::new(&config.e2b.api_key).ok_or(E2bError::NoKey)?.with_env(
+            self.inner
+                .store
+                .connector_env(card.id)
+                .map_err(|error| E2bError::Transport(format!("Could not load Secrets: {error}")))?,
+        );
         let idle = config.e2b.idle_minutes.max(1) * 60;
 
         // A sandbox recorded without its tokens predates them and cannot be
@@ -7110,7 +7144,7 @@ impl Runtime {
     /// whatever its own browser turned out to be signed in to.
     ///
     /// The two halves come from opposite directions. A credential is a string
-    /// the operator pasted, so every machine in the group gets it. A sign-in is
+    /// the operator pasted and explicitly granted to this agent. A sign-in is
     /// cookies on one disk and nobody typed it at all, so it is read back from
     /// the machine that holds it and belongs to that agent alone.
     /// Sign-ins are filtered by the places this agent still has, for the reason
@@ -7119,7 +7153,7 @@ impl Runtime {
     fn reach_of(&self, card: &AgentCard) -> (Vec<Connector>, Vec<Signin>) {
         let surfaces = self.surfaces_for(card);
         (
-            self.inner.store.group_connectors(card.group_id).unwrap_or_default(),
+            self.inner.store.agent_connectors(card.id).unwrap_or_default(),
             self.inner
                 .store
                 .agent_signins(card.id)

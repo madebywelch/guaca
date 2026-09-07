@@ -1106,7 +1106,7 @@ It is sectioned on the Settings shell for the same reason Settings is: a group
 now decides who pays for its turns, which model answers them, how long a call may
 take and how far a conversation may run, and one scroll put the name and the
 delete button a page apart. The state lives in the shell, so changing section
-cannot discard a half-typed endpoint. Plugins and Repositories are both disabled
+cannot discard a half-typed endpoint. Plugins, Secrets and Repositories are disabled
 until the group exists, because a sign-in, a credential and a linked directory
 all have to belong to something.
 
@@ -1154,6 +1154,12 @@ from the other and will not accept them, so a crew that tries the subscription f
 an hour and moves back has to find its endpoint model where it left it. Test
 connection is here for the same reason it is in Settings, and it sends what is on
 screen resolved over the app settings, which is what the next turn would do.
+
+Secrets is a separate section. It replaces the credential block under Plugins
+and adds explicit agent selection, value replacement and revocation. New secrets
+start with nobody selected. Values are write-only and changes are saved within
+that panel, independently of the group's settings. `docs/SECRETS.md` describes
+where they are supplied and the limits of the process boundary.
 
 ## The flow board is analysis, so it is in a crew's settings
 

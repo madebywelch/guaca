@@ -357,6 +357,7 @@ describe("what the operator is shown", () => {
     // something, and there is no row to hang any of them on yet.
     open(null);
     expect((screen.getByRole("tab", { name: "Plugins" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("tab", { name: "Secrets" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("tab", { name: "Repositories" }) as HTMLButtonElement).disabled).toBe(
       true,
     );
@@ -374,6 +375,9 @@ describe("what the operator is shown", () => {
     pane("Plugins");
     await waitFor(() => expect(groupPlugins).toHaveBeenCalled());
     expect(screen.queryByText("Link a repository")).toBeNull();
+    expect(screen.queryByText("Add a secret")).toBeNull();
+    pane("Secrets");
+    expect(await screen.findByText("Add a secret")).toBeTruthy();
   });
 
   it("refuses to save a group with no name", () => {
