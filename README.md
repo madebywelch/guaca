@@ -49,6 +49,10 @@ require Docker on your Mac.
 Managed Guaca compute spaces are planned for a later release. Local and
 self-hosted workspaces are available now.
 
+For building and publishing signed macOS downloads, see
+[macOS releases](docs/RELEASING.md). It covers versioning, Developer ID signing,
+Apple notarization, and release credentials.
+
 ## Credits
 
 **Inspired by Grokbot, and not a clone of it.** The shape came from there:
