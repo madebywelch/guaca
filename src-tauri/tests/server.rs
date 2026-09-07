@@ -778,3 +778,51 @@ async fn repository_credentials_are_reusable_through_the_api_without_reading_sec
     assert!(error.get("err").is_some(), "{error}");
     assert!(error.to_string().contains("unavailable"));
 }
+
+#[tokio::test]
+async fn secrets_are_write_only_and_manageable_over_the_hosted_surface() {
+    let (addr, dir) = workspace().await;
+    let (_, groups) = call(addr, "list_groups", json!({})).await;
+    let group = &groups["ok"][0]["id"];
+    let (_, agent) = call(addr, "create_agent", json!({"draft":{
+        "name":"Deployer", "avatar":"avocado", "color":"#7ab55c", "model":"", "systemPrompt":"Test"
+    }})).await;
+    let agent = &agent["ok"]["id"];
+    let (_, saved) = call(
+        addr,
+        "create_connector",
+        json!({"draft":{
+            "groupId":group, "service":"Cloudflare", "account":"", "envVar":"CLOUDFLARE_API_TOKEN",
+            "secret":"a-private-deployment-token", "agents":[agent]
+        }}),
+    )
+    .await;
+    assert_eq!(saved["ok"]["agents"], json!([agent]));
+    assert_eq!(saved["ok"]["secretSet"], true);
+    assert!(!saved.to_string().contains("a-private-deployment-token"));
+    assert_eq!(saved["ok"]["secretHint"], "");
+    let id = &saved["ok"]["id"];
+    let (_, rejected) =
+        call(addr, "update_connector", json!({"id":id, "agents":[], "secret":""})).await;
+    assert!(rejected.get("err").is_some());
+    let (_, changed) = call(
+        addr,
+        "update_connector",
+        json!({"id":id, "agents":[], "secret":"  rotated-private-token\n"}),
+    )
+    .await;
+    assert!(changed.get("ok").is_some(), "{changed}");
+    let db = rusqlite::Connection::open(guac_lib::boot::Paths::under(dir.path()).db()).unwrap();
+    let stored: String = db
+        .query_row("SELECT secret FROM connectors WHERE id=?1", [id.as_str().unwrap()], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(stored, "rotated-private-token", "rotation trims pasted whitespace like creation");
+    let (_, listed) = call(addr, "group_connectors", json!({"groupId":group})).await;
+    assert_eq!(listed["ok"][0]["agents"], json!([]));
+    assert!(!listed.to_string().contains("rotated-private-token"));
+    call(addr, "delete_connector", json!({"id":id})).await;
+    let (_, listed) = call(addr, "group_connectors", json!({"groupId":group})).await;
+    assert_eq!(listed["ok"], json!([]));
+}

@@ -190,6 +190,7 @@ surface! {
     stop_agent_browser(id: AgentId) -> (),
     group_connectors(group_id: GroupId) -> Vec<Connector>,
     create_connector(draft: ConnectorDraft) -> Connector,
+    update_connector(id: ConnectorId, agents: Vec<AgentId>, secret: Option<String>) -> (),
     delete_connector(id: ConnectorId) -> (),
     group_repositories(group_id: GroupId) -> Vec<Repository>,
     repository_statuses() -> std::collections::HashMap<RepositoryId, crate::repo::RepoStatus>,

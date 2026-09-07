@@ -86,6 +86,7 @@ fn write_stand_in(dir: &Path, name: &str, canned: &str) {
          if [ \"$1\" = '--version' ]; then echo 'stand-in'; exit 0; fi\n\
          : > {ARGV}\n\
          for arg in \"$@\"; do printf '%s\\n<<>>\\n' \"$arg\" >> {ARGV}; done\n\
+         if [ -f .secret_probe ]; then python3 -c 'import os,json; v=os.environ[\"CLOUDFLARE_API_TOKEN\"]; print(json.dumps({{\"type\":\"message_end\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":v}}]}}}})); print(json.dumps({{\"type\":\"result\",\"subtype\":\"success\",\"result\":v}}))'; exit; fi\n\
          if [ -f .noisy ]; then dd if=/dev/zero bs=1024 count=256 >&2 2>/dev/null; fi\n\
          if [ -f {LINGER} ]; then sleep \"$(cat {LINGER})\"; fi\n\
          if [ -f {SAY} ]; then cat {SAY}; fi\n\
@@ -1797,4 +1798,169 @@ async fn a_landed_branch_is_left_behind_before_the_next_job_starts() {
     assert_eq!(theirs.branch, "landed", "their checkout is not this app's to move");
 
     let _ = std::fs::remove_dir_all(&repo);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn repository_commands_receive_only_granted_secrets_and_refresh_after_rotation() {
+    use guac_lib::domain::connector::CleanConnector;
+    let repo = a_repository("secret-runtime");
+    let stub = serve(|body| {
+        if body["messages"].as_array().unwrap().iter().rev().take_while(|m| m["role"] != "user").any(|m| m["role"] == "tool") {
+            Script::Say("Checked.".into())
+        } else {
+            Script::InRepository(
+                "printf '%s\\n' \"${CLOUDFLARE_API_TOKEN:-missing}\"; printf '%s' \"${CLOUDFLARE_API_TOKEN:-missing}\" | shasum -a 256".into(),
+            )
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Deployer", "Researcher"], GuardLimits::default());
+    put_in_a_repository(&h, "Deployer", &repo, Gate::Open);
+    let repository = h.runtime.store().agent_repository(h.id("Deployer")).unwrap().unwrap();
+    h.runtime.store().set_agent_repository(h.id("Researcher"), Some(repository.id)).unwrap();
+    let agent = h.runtime.store().get_agent(h.id("Deployer")).unwrap().unwrap();
+    let saved = h
+        .runtime
+        .store()
+        .create_connector(&CleanConnector {
+            group_id: agent.group_id,
+            service: "Cloudflare".into(),
+            account: String::new(),
+            env_var: "CLOUDFLARE_API_TOKEN".into(),
+            note: String::new(),
+            secret: "private-cloudflare-fixture".into(),
+            agents: vec![agent.id],
+        })
+        .unwrap();
+    let run = h.runtime.send_from_human(agent.id, "Check access").unwrap();
+    h.settle(run).await;
+    let results = tool_results(&stub).join("\n");
+    assert!(results.contains("[REDACTED]"), "{results}");
+    assert!(!results.contains("private-cloudflare-fixture"));
+    let run = h.runtime.send_from_human(h.id("Researcher"), "Check access").unwrap();
+    h.settle(run).await;
+    assert!(tool_results(&stub).join("\n").contains("missing"));
+    h.runtime.store().update_connector(saved.id, &[agent.id], Some("new-private-value")).unwrap();
+    let run = h.runtime.send_from_human(agent.id, "Check rotated access").unwrap();
+    h.settle(run).await;
+    use sha2::{Digest, Sha256};
+    let expected = format!("{:x}", Sha256::digest(b"new-private-value"));
+    assert!(tool_results(&stub).last().unwrap().contains(&expected));
+    h.runtime.store().update_connector(saved.id, &[], None).unwrap();
+    let run = h.runtime.send_from_human(agent.id, "Check revoked access").unwrap();
+    h.settle(run).await;
+    assert!(tool_results(&stub).last().unwrap().contains("missing"));
+    assert!(h.runtime.store().connector_env(agent.id).unwrap().is_empty());
+    assert!(!h.transcript().contains("private-cloudflare-fixture"));
+    let _ = std::fs::remove_dir_all(repo);
+}
+
+#[tokio::test]
+async fn every_coding_harness_receives_secrets_without_putting_values_in_guaca_output() {
+    stand_ins();
+    for (which, name) in
+        [(Which::Pi, "secret-pi"), (Which::Claude, "secret-claude"), (Which::Codex, "secret-codex")]
+    {
+        let repo = a_repository(name);
+        std::fs::write(repo.join(".secret_probe"), "").unwrap();
+        let env = guac_lib::secrets::Environment {
+            names: vec!["CLOUDFLARE_API_TOKEN".into()],
+            values: std::collections::BTreeMap::from([(
+                "CLOUDFLARE_API_TOKEN".into(),
+                "private-harness-fixture".into(),
+            )]),
+        };
+        let mut progress = Vec::new();
+        let done =
+            coding::run_with_env(which, repo.to_str().unwrap(), "check", None, None, &env, |p| {
+                progress.push(p)
+            })
+            .await
+            .unwrap();
+        assert!(done.failed.is_none(), "{which:?}");
+        assert!(done.said.contains("[REDACTED]"), "{which:?}: {}", done.said);
+        assert!(!format!("{progress:?} {done:?}").contains("private-harness-fixture"));
+        let recorded = if which == Which::Codex {
+            std::fs::read_to_string(repo.join(".rpc.jsonl")).unwrap()
+        } else {
+            argv_at(&repo).join("\n")
+        };
+        assert!(recorded.contains("CLOUDFLARE_API_TOKEN"));
+        assert!(!recorded.contains("private-harness-fixture"));
+        let _ = std::fs::remove_dir_all(repo);
+    }
+}
+
+#[tokio::test]
+#[ignore = "live: checks all three signed-in harnesses with synthetic credentials"]
+async fn real_harness_shells_receive_the_granted_environment() {
+    use sha2::{Digest, Sha256};
+    let mut failures = Vec::new();
+    for which in Which::ALL {
+        let repo = a_repository(&format!("live-secret-{}", which.as_str()));
+        std::fs::write(repo.join("check-secret.py"),
+            "import hashlib, os\nfrom pathlib import Path\nPath('secret-result.txt').write_text(hashlib.sha256(os.environ.get('CLOUDFLARE_API_TOKEN', '').encode()).hexdigest())\n").unwrap();
+        let value = format!("synthetic-{}", uuid::Uuid::new_v4());
+        let expected = format!("{:x}", Sha256::digest(value.as_bytes()));
+        let env = guac_lib::secrets::Environment {
+            names: vec!["CLOUDFLARE_API_TOKEN".into()],
+            values: std::collections::BTreeMap::from([("CLOUDFLARE_API_TOKEN".into(), value)]),
+        };
+        let result = tokio::time::timeout(std::time::Duration::from_secs(180), coding::run_with_env(
+            which, repo.to_str().unwrap(),
+            "Run python3 check-secret.py once using your shell tool. Do not edit the script or inspect environment values. Do not commit, use other tools, or delegate. Then say done.",
+            None, None, &env, |_| {},
+        )).await;
+        let passed = matches!(result, Ok(Ok(_)))
+            && std::fs::read_to_string(repo.join("secret-result.txt")).ok().as_deref()
+                == Some(&expected);
+        if !passed {
+            failures.push(format!("{}: {result:?}", which.as_str()));
+        }
+        let _ = std::fs::remove_dir_all(repo);
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_runtime_coding_job_uses_the_agents_secret_grant() {
+    stand_ins();
+    let repo = a_repository("secret-runtime-job");
+    std::fs::write(repo.join(".secret_probe"), "").unwrap();
+    let stub = serve(|body| {
+        if anyone_said(body, "has finished") {
+            Script::Say("Secret job complete.".into())
+        } else if anyone_said(body, "could not finish") {
+            Script::Say("Secret job failed.".into())
+        } else {
+            Script::Code("Check deployment access".into())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Deployer"], GuardLimits::default());
+    put_in_a_repository(&h, "Deployer", &repo, Gate::Open);
+    let agent = h.agent_named("Deployer").unwrap();
+    h.runtime
+        .store()
+        .create_connector(&guac_lib::domain::connector::CleanConnector {
+            group_id: agent.group_id,
+            service: "Cloudflare".into(),
+            account: String::new(),
+            env_var: "CLOUDFLARE_API_TOKEN".into(),
+            note: String::new(),
+            secret: "private-runtime-fixture".into(),
+            agents: vec![agent.id],
+        })
+        .unwrap();
+    let run = h.runtime.send_from_human(agent.id, "Check deployment access").unwrap();
+    h.settle(run).await;
+    h.wait_until("the job answers", |h| {
+        h.channel_texts("Deployer").iter().any(|line| line.contains("Secret job"))
+    })
+    .await;
+    let text = h.transcript();
+    assert!(text.contains("Secret job complete."), "{text}");
+    assert!(text.contains("[REDACTED]"), "{text}");
+    assert!(!text.contains("private-runtime-fixture"));
+    let _ = std::fs::remove_dir_all(repo);
 }

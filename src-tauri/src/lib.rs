@@ -25,6 +25,7 @@ pub mod programs;
 pub mod proxy;
 pub mod repo;
 pub mod runtime;
+pub mod secrets;
 /// The server host: the same runtime, reached over HTTP and a socket.
 #[cfg(feature = "server")]
 pub mod server;

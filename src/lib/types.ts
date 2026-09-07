@@ -283,7 +283,7 @@ export interface GroupDraft {
 export type ConnectorId = string;
 
 /**
- * A credential the whole group's machines are given.
+ * A credential granted to selected agents in one group.
  *
  * The value is never on this side of the boundary: there is no command that
  * returns one. `secretSet` and `secretHint` are all the UI ever sees.
@@ -300,15 +300,15 @@ export interface Connector {
   /** One line the agent reads: `read-only`, `production, do not write`. */
   note: string;
   secretSet: boolean;
-  /** Last four characters, so two tokens can be told apart. Never the value. */
+  agents: AgentId[];
+  /** Empty for wire compatibility; no part of a secret is returned. */
   secretHint: string;
   createdAt: number;
   updatedAt: number;
 }
 
 /**
- * There is no edit command: a credential is forgotten and re-added rather than
- * rewritten, so this is the only call that ever carries a value.
+ * Write-only creation input. Updates may replace the value and agent grants.
  */
 export interface ConnectorDraft {
   groupId: GroupId;
@@ -317,6 +317,7 @@ export interface ConnectorDraft {
   envVar: string;
   note: string;
   secret: string;
+  agents?: AgentId[];
 }
 
 export type RepositoryId = string;

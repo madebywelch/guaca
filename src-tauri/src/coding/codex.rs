@@ -39,10 +39,12 @@ pub async fn run(
     repository: &str,
     task: &str,
     control: Option<Control>,
+    env: &crate::secrets::Environment,
     mut watching: impl FnMut(Progress),
 ) -> Result<Outcome, CodingError> {
     let mut command = tokio::process::Command::new(BINARY);
     crate::repo::github::environment(repository, &mut command).await;
+    env.apply(&mut command);
     let mut child = command
         .args(["app-server", "--listen", "stdio://"])
         .current_dir(repository)

@@ -1396,6 +1396,7 @@ mod tests {
             account: account.into(),
             env_var: env_var.into(),
             note: String::new(),
+            agents: vec![],
             secret_set: true,
             secret_hint: "...cret".into(),
             created_at: 0,

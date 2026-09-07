@@ -69,7 +69,7 @@ fn configured() -> Option<guac_lib::config::AppConfig> {
 fn credentials_holding(var: &str) -> Option<BTreeMap<String, String>> {
     let store = Store::open(&app_dir()?.join("guac.db")).ok()?;
     store
-        .list_groups()
+        .list_agents()
         .ok()?
         .into_iter()
         .filter_map(|group| store.connector_env(group.id).ok())

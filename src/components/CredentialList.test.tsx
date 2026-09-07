@@ -7,11 +7,13 @@ import { CredentialList } from "./CredentialList";
 const groupConnectors = vi.fn<(groupId: string) => Promise<Connector[]>>();
 const createConnector = vi.fn<(draft: ConnectorDraft) => Promise<Connector>>();
 const deleteConnector = vi.fn();
+const updateConnector = vi.fn();
 
 vi.mock("../lib/ipc", () => ({
   api: {
     groupConnectors: (groupId: string) => groupConnectors(groupId),
     createConnector: (draft: ConnectorDraft) => createConnector(draft),
+    updateConnector: (...args: unknown[]) => updateConnector(...args),
     deleteConnector: (id: string) => deleteConnector(id),
   },
 }));
@@ -27,6 +29,7 @@ function connector(over: Partial<Connector> = {}): Connector {
     envVar: "GITHUB_TOKEN",
     note: "",
     secretSet: true,
+    agents: [],
     secretHint: "...ter2",
     createdAt: 0,
     updatedAt: 0,
@@ -36,7 +39,7 @@ function connector(over: Partial<Connector> = {}): Connector {
 
 /** Opens the form, which is behind a button now that there are no tiles. */
 async function openForm() {
-  fireEvent.click(await screen.findByText("Add a credential"));
+  fireEvent.click(await screen.findByText("Add a secret"));
 }
 
 describe("CredentialList", () => {
@@ -44,6 +47,7 @@ describe("CredentialList", () => {
     groupConnectors.mockReset();
     createConnector.mockReset();
     deleteConnector.mockReset();
+    updateConnector.mockReset();
     groupConnectors.mockResolvedValue([]);
   });
 
@@ -54,7 +58,7 @@ describe("CredentialList", () => {
     // the variable name it suggested.
     render(<CredentialList groupId={GROUP} />);
 
-    expect(await screen.findByText("Add a credential")).toBeTruthy();
+    expect(await screen.findByText("Add a secret")).toBeTruthy();
     expect(screen.queryByText("GitHub")).toBeNull();
     expect(screen.queryByText("Something else")).toBeNull();
   });
@@ -112,7 +116,8 @@ describe("CredentialList", () => {
 
     expect(await screen.findByText("GitHub")).toBeTruthy();
     expect(screen.getByText("$GITHUB_TOKEN")).toBeTruthy();
-    expect(screen.getByText("...ter2")).toBeTruthy();
+    expect(screen.getByText("Value saved")).toBeTruthy();
+    expect(screen.queryByText("...ter2")).toBeNull();
   });
 
   it("says when a credential has no value, because it will hand over an empty variable", async () => {
@@ -129,5 +134,61 @@ describe("CredentialList", () => {
 
     fireEvent.click(await screen.findByText("Forget"));
     await waitFor(() => expect(deleteConnector).toHaveBeenCalledWith("c1"));
+  });
+  it("defaults to nobody and saves only the selected recipients", async () => {
+    render(
+      <CredentialList
+        groupId={GROUP}
+        crew={[
+          { id: "deployer", name: "Deployer" },
+          { id: "writer", name: "Writer" },
+        ]}
+      />,
+    );
+    await openForm();
+    expect(screen.getByRole("button", { name: "Deployer" }).getAttribute("aria-pressed")).toBe(
+      "false",
+    );
+    fireEvent.change(screen.getByLabelText("Service"), { target: { value: "Cloudflare" } });
+    fireEvent.change(screen.getByLabelText("Environment variable"), {
+      target: { value: "CLOUDFLARE_API_TOKEN" },
+    });
+    fireEvent.change(screen.getByLabelText("Secret value"), {
+      target: { value: "private-fixture" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Deployer" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await waitFor(() =>
+      expect(createConnector).toHaveBeenCalledWith(
+        expect.objectContaining({ agents: ["deployer"] }),
+      ),
+    );
+    await waitFor(() => expect(screen.queryByLabelText("Secret value")).toBeNull());
+  });
+
+  it("rotates and revokes together without reading back the value", async () => {
+    groupConnectors.mockResolvedValue([connector({ agents: ["deployer"] })]);
+    render(<CredentialList groupId={GROUP} crew={[{ id: "deployer", name: "Deployer" }]} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Manage" }));
+    fireEvent.click(screen.getByRole("button", { name: "Deployer" }));
+    fireEvent.change(screen.getByLabelText("Replace value (optional)"), {
+      target: { value: "replacement-fixture" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() =>
+      expect(updateConnector).toHaveBeenCalledWith("c1", [], "replacement-fixture"),
+    );
+    await waitFor(() => expect(screen.queryByLabelText("Replace value (optional)")).toBeNull());
+  });
+
+  it("keeps a failed update visible and does not claim access was changed", async () => {
+    groupConnectors.mockResolvedValue([connector()]);
+    updateConnector.mockRejectedValue(new Error("Backend unavailable"));
+    render(<CredentialList groupId={GROUP} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Manage" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("Backend unavailable");
+    expect(updateConnector).toHaveBeenCalledWith("c1", [], null);
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeTruthy();
   });
 });

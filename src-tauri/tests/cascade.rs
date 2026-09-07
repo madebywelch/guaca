@@ -3709,6 +3709,7 @@ async fn an_agent_is_told_what_its_browser_holds_and_what_its_peers_hold() {
             account: "madebywelch".into(),
             env_var: "GITHUB_TOKEN".into(),
             note: String::new(),
+            agents: vec![h.id("Manager"), h.id("Researcher")],
             secret: "ghp_hunter2".into(),
         })
         .unwrap();

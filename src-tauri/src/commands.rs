@@ -677,6 +677,20 @@ pub async fn create_connector(state: &AppState, draft: ConnectorDraft) -> Reply<
     Ok(connector)
 }
 
+pub async fn update_connector(
+    state: &AppState,
+    id: ConnectorId,
+    agents: Vec<AgentId>,
+    secret: Option<String>,
+) -> Reply<()> {
+    if let Some(value) = &secret {
+        crate::domain::connector::validate_secret(value)?;
+    }
+    state.runtime.store().update_connector(id, &agents, secret.as_deref().map(str::trim))?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(())
+}
+
 pub async fn delete_connector(state: &AppState, id: ConnectorId) -> Reply<()> {
     state.runtime.store().delete_connector(id)?;
     state.runtime.emit(UiEvent::AgentsChanged);
