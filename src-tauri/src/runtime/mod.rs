@@ -2599,6 +2599,10 @@ impl Runtime {
             }
         };
 
+        // Use the job's captured choice: the repository may have switched
+        // while it ran, and a login error alone does not name its provider.
+        let text = format!("Coding harness: {}.\n\n{text}", harness.label());
+
         if let Some(reason) = operator_should_know {
             self.emit(UiEvent::CodingJobFailed {
                 agent_id: agent,

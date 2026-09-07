@@ -619,6 +619,13 @@ words: with two harnesses, the way out of the commonest failure here is the othe
 one, and a banner that does not say which was running leaves the operator
 guessing which sign-in to go and look at.
 
+The result delivered to the agent also names the harness that actually ran.
+The repository may have changed since that job started, and a conversation
+about Codex does not prove Codex ran. Without that label, a Claude login failure
+was reported back as a Codex login failure. The harness selector renders the
+saved repository row, including while a write is pending or after it fails;
+only the name and note are drafts waiting for Save.
+
 ## What is not here
 
 Any confinement. The process runs as the operator, in their repository, with
