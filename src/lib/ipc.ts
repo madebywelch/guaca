@@ -17,8 +17,10 @@ import {
   notify,
   openExternal as reachBrowser,
   subscribe,
+  token,
   type Unlisten,
   upload,
+  workspaceOrigin,
 } from "./transport";
 
 import type {
@@ -637,7 +639,13 @@ export const api = {
   },
 
   /** Copies a file out to the downloads folder, and says where it landed. */
-  saveFile: (digest: string, name: string) => invoke<string>("save_file", { digest, name }),
+  saveFile: (digest: string, name: string) =>
+    invokeLocal<string>("download_file", {
+      origin: workspaceOrigin(),
+      token: token(),
+      digest,
+      name,
+    }),
 
   /**
    * Puts a page an agent wrote somewhere it can be framed, and says where.

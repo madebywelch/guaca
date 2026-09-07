@@ -432,8 +432,13 @@ storage. The remote computer's files, sign-ins and clipboard remain its own.
 
 HTML attachments download when opened directly and remain readable as text in
 the transcript. File responses prohibit script, disable MIME sniffing and carry
-no referrer. Explicit downloads request attachment disposition on the server,
-so a desktop window connected across origins also receives a download.
+no referrer. Browser downloads request attachment disposition on the server.
+The native client fetches attachments with header authentication and writes them
+to the operator's Downloads folder, then shows the saved path. This decision
+uses the client type, not the backend's `localFiles` capability: a container has
+no operator Downloads folder, but its desktop client does. Native downloads
+never navigate the webview. They verify the content digest and size limit before
+writing, and reserve a new filename without overwriting existing files.
 
 An artifact URL carries a ticket for that document, not the workspace token:
 script can read its own URL even with an opaque origin. Artifact policies admit

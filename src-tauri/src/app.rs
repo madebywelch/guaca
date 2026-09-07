@@ -53,6 +53,19 @@ async fn forward_files(
     crate::commands::upload_local_files(origin, token, paths).await
 }
 #[tauri::command]
+async fn download_file(
+    app: tauri::AppHandle,
+    origin: String,
+    token: String,
+    digest: String,
+    name: String,
+) -> Result<String, String> {
+    let root = app.path().download_dir().map_err(|e| e.to_string())?;
+    crate::files::download(&origin, &token, &digest, &name, root)
+        .await
+        .map(|path| path.to_string_lossy().into_owned())
+}
+#[tauri::command]
 async fn report_presence(app: tauri::AppHandle, presence: Option<crate::menubar::Presence>) {
     if let Some(tray) = app.try_state::<Arc<Tray>>() {
         tray.feed(presence);
@@ -100,6 +113,7 @@ pub fn run() {
             connect_local_host,
             open_docker,
             forward_files,
+            download_file,
             report_presence,
             legacy_groups,
             export_legacy_group,
