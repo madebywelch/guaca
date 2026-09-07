@@ -171,6 +171,8 @@ export const api = {
 
   createConnector: (draft: ConnectorDraft) => invoke<Connector>("create_connector", { draft }),
 
+  updateConnector: (id: ConnectorId, agents: AgentId[], secret: string | null) =>
+    invoke<void>("update_connector", { id, agents, secret }),
   deleteConnector: (id: ConnectorId) => invoke<void>("delete_connector", { id }),
 
   /**

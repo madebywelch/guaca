@@ -45,6 +45,7 @@ const SECTIONS = [
   "provider",
   "limits",
   "plugins",
+  "secrets",
   "repositories",
   "activity",
   "transfer",
@@ -57,6 +58,7 @@ const SECTION_LABELS: Record<Section, string> = {
   provider: "Provider",
   limits: "Limits",
   plugins: "Plugins",
+  secrets: "Secrets",
   repositories: "Repositories",
   activity: "Activity",
   transfer: "Import / export",
@@ -68,7 +70,7 @@ const SECTION_LABELS: Record<Section, string> = {
  * belong to something, and there is no row to hang any of them on until the
  * group is created.
  */
-const NEEDS_GROUP: readonly Section[] = ["plugins", "repositories", "activity"];
+const NEEDS_GROUP: readonly Section[] = ["plugins", "secrets", "repositories", "activity"];
 
 /** What a group says when it has no opinion about who pays. */
 const INHERIT = "inherit";
@@ -670,8 +672,7 @@ export function GroupEditor({ group, onClose }: Props) {
             {/* What a crew can reach is signed in to once, here, and handing it
                 out is a second decision: a plugin can be narrowed to named
                 agents, because the one that files issues has no business
-                holding the account that issues refunds. Credentials are still
-                the whole group's. */}
+                holding the account that issues refunds. Secrets have their own pane and agent grants. */}
             {section === "plugins" && group && (
               <>
                 <h3 className="settings__title">Plugins</h3>
@@ -681,7 +682,17 @@ export function GroupEditor({ group, onClose }: Props) {
                   ever holds the sign-in.
                 </p>
                 <PluginList groupId={group.id} crew={members} />
-                <CredentialList groupId={group.id} />
+              </>
+            )}
+
+            {section === "secrets" && group && (
+              <>
+                <h3 className="settings__title">Secrets</h3>
+                <p className="settings__lede">
+                  Save a service token and choose the agents that can use it. Selected agents get
+                  the variable in repository shells, coding jobs, and computer commands.
+                </p>
+                <CredentialList groupId={group.id} crew={members} />
               </>
             )}
 

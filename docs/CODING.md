@@ -133,10 +133,9 @@ other is actually in the list: `run_command` says the repository is not on that
 machine, `shell` says the sandbox is not where the codebase is. A model reads
 one description and takes the nearest shell.
 
-A connector's value reaches a sandbox's environment and nothing else, so a
-`shell` line naming `$STRIPE_KEY` names a variable that is not set. That is why
-`credentials_named_in` is not applied here: prefixing the summary with `used
-Stripe` would put a spend in the operator's audit trail that never happened.
+Secrets granted to the agent now reach both repository doors as environment
+variables, as well as computer commands. Values are scrubbed from Guaca output.
+The storage, grant and process boundaries are described in `docs/SECRETS.md`.
 
 ## There are two harnesses because a subscription is spent by one program
 

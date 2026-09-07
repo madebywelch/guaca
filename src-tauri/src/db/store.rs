@@ -115,7 +115,7 @@ pub enum StoreError {
     ConnectorNotFound(ConnectorId),
     #[error("no plugin with id {0}")]
     PluginNotFound(PluginId),
-    #[error("agent {0} is not in this group, so it cannot be given one of the group's plugins")]
+    #[error("agent {0} is not in this group, so it cannot be given this group's access")]
     AgentNotInGroup(AgentId),
     #[error(
         "this plugin publishes no tool called {1:?}, so there is nothing to allow or deny; the \
@@ -1766,11 +1766,11 @@ impl Store {
     // ---- connectors ------------------------------------------------------
 
     pub fn create_connector(&self, clean: &CleanConnector) -> Result<Connector, StoreError> {
-        let conn = self.conn()?;
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let now = now_ms();
         let id = ConnectorId::new();
-
-        conn.execute(
+        tx.execute(
             "INSERT INTO connectors
                 (id,group_id,service,account,env_var,secret,note,created_at,updated_at)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?8)",
@@ -1782,12 +1782,43 @@ impl Store {
                 clean.env_var,
                 clean.secret,
                 clean.note,
-                now,
+                now
             ],
         )
         .map_err(|e| classify_connector(e, &clean.env_var))?;
-
+        write_connector_agents(&tx, id, &clean.agents)?;
+        tx.commit()?;
         self.get_connector(id)?.ok_or(StoreError::ConnectorNotFound(id))
+    }
+
+    pub fn update_connector(
+        &self,
+        id: ConnectorId,
+        agents: &[AgentId],
+        secret: Option<&str>,
+    ) -> Result<(), StoreError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        write_connector_agents(&tx, id, agents)?;
+        tx.execute(
+            "UPDATE connectors SET secret=coalesce(?2,secret), updated_at=?3 WHERE id=?1",
+            params![id.to_string(), secret, now_ms()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn agent_connectors(&self, agent: AgentId) -> Result<Vec<Connector>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(&format!(
+            "{CONNECTOR_COLUMNS} WHERE EXISTS (
+            SELECT 1 FROM connector_agents ca JOIN agents a ON a.id=ca.agent_id
+            WHERE ca.connector_id=connectors.id AND a.id=?1
+              AND a.group_id=connectors.group_id AND a.discarded_at IS NULL)
+            ORDER BY service, connectors.rowid"
+        ))?;
+        let rows = stmt.query_map(params![agent.to_string()], row_to_connector)?;
+        rows.map(|row| row?).collect()
     }
 
     pub fn get_connector(&self, id: ConnectorId) -> Result<Option<Connector>, StoreError> {
@@ -1813,31 +1844,34 @@ impl Store {
         Ok(out)
     }
 
-    /// The credentials one group's machines are given, as environment
-    /// variables.
-    ///
-    /// The only path a stored secret takes out of this table, and it leads
-    /// straight into a sandbox. Nothing here is ever rendered into a prompt or
-    /// returned over IPC, which is why it is a separate query rather than a
-    /// field on `Connector`.
+    /// Resolve grants at execution time. A moved or discarded agent fails closed.
     pub fn connector_env(
         &self,
-        group: GroupId,
+        agent: AgentId,
     ) -> Result<std::collections::BTreeMap<String, String>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT env_var, secret FROM connectors
-              WHERE group_id=?1 AND env_var <> '' AND secret <> ''",
+            "SELECT c.env_var, c.secret FROM connectors c
+             JOIN connector_agents ca ON ca.connector_id=c.id
+             JOIN agents a ON a.id=ca.agent_id AND a.group_id=c.group_id
+             WHERE a.id=?1 AND a.discarded_at IS NULL AND c.secret <> ''",
         )?;
-        let rows = stmt.query_map(params![group.to_string()], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-        let mut out = std::collections::BTreeMap::new();
-        for row in rows {
-            let (name, value) = row?;
-            out.insert(name, value);
+        let rows =
+            stmt.query_map(params![agent.to_string()], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        let values: std::collections::BTreeMap<String, String> = rows.collect::<Result<_, _>>()?;
+        if values.keys().any(|name| crate::domain::connector::reserved(name)) {
+            return Err(StoreError::Corrupt("A secret uses a process-control variable. Remove it from the group's Secrets tab and use the service's token variable".into()));
         }
-        Ok(out)
+        Ok(values)
+    }
+
+    /// Registered names must not fall back to an inherited daemon credential.
+    pub fn connector_names(&self) -> Result<Vec<String>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare("SELECT DISTINCT env_var FROM connectors")?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        let names: Vec<String> = rows.collect::<Result<_, _>>()?;
+        Ok(names.into_iter().filter(|name| !crate::domain::connector::reserved(name)).collect())
     }
 
     pub fn delete_connector(&self, id: ConnectorId) -> Result<bool, StoreError> {
@@ -4265,8 +4299,12 @@ fn row_to_approval(row: &Row<'_>) -> RowResult<Approval> {
 
 /// The column list every connector read uses, kept in one place so a new column
 /// cannot be added to one query and forgotten in the other.
-const CONNECTOR_COLUMNS: &str = "SELECT id,group_id,service,account,env_var,secret,note,\
-                                 created_at,updated_at FROM connectors";
+const CONNECTOR_COLUMNS: &str =
+    "SELECT id,group_id,service,account,env_var,(trim(secret) <> ''),note,\
+                                 created_at,updated_at, \
+    (SELECT json_group_array(ca.agent_id) FROM connector_agents ca \
+     JOIN agents a ON a.id=ca.agent_id AND a.group_id=connectors.group_id \
+     WHERE ca.connector_id=connectors.id AND a.discarded_at IS NULL) FROM connectors";
 
 /// Maps the unique index on `(group_id, env_var)` onto something an operator
 /// can act on. The raw driver message names an index, not a decision.
@@ -4279,10 +4317,40 @@ fn classify_connector(err: rusqlite::Error, env_var: &str) -> StoreError {
     StoreError::Sqlite(err)
 }
 
+fn write_connector_agents(
+    conn: &rusqlite::Connection,
+    id: ConnectorId,
+    agents: &[AgentId],
+) -> Result<(), StoreError> {
+    let group: String = conn
+        .query_row("SELECT group_id FROM connectors WHERE id=?1", params![id.to_string()], |row| {
+            row.get(0)
+        })
+        .optional()?
+        .ok_or(StoreError::ConnectorNotFound(id))?;
+    // Validate all recipients before replacing any grant. The caller holds a transaction.
+    for agent in agents {
+        let valid: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM agents WHERE id=?1 AND group_id=?2 AND discarded_at IS NULL)",
+            params![agent.to_string(), group], |row| row.get(0))?;
+        if !valid {
+            return Err(StoreError::AgentNotInGroup(*agent));
+        }
+    }
+    conn.execute("DELETE FROM connector_agents WHERE connector_id=?1", params![id.to_string()])?;
+    for agent in agents {
+        conn.execute(
+            "INSERT OR IGNORE INTO connector_agents (connector_id,agent_id) VALUES (?1,?2)",
+            params![id.to_string(), agent.to_string()],
+        )?;
+    }
+    Ok(())
+}
+
 fn row_to_connector(row: &Row<'_>) -> RowResult<Connector> {
     let id_raw: String = row.get(0)?;
     let group_raw: String = row.get(1)?;
-    let secret: String = row.get(5)?;
+    let secret_set: bool = row.get(5)?;
 
     Ok((|| {
         Ok(Connector {
@@ -4296,8 +4364,10 @@ fn row_to_connector(row: &Row<'_>) -> RowResult<Connector> {
             account: row.get(3)?,
             env_var: row.get(4)?,
             note: row.get(6)?,
-            secret_set: !secret.trim().is_empty(),
-            secret_hint: crate::config::hint_for(&secret),
+            secret_set,
+            secret_hint: String::new(),
+            agents: serde_json::from_str(&row.get::<_, String>(9)?)
+                .map_err(|_| StoreError::Corrupt("invalid secret grants".into()))?,
             created_at: row.get(7)?,
             updated_at: row.get(8)?,
         })
@@ -4780,6 +4850,7 @@ mod tests {
             account: "madebywelch".into(),
             env_var: env_var.into(),
             note: String::new(),
+            agents: vec![],
             secret: secret.into(),
         }
     }
@@ -4876,13 +4947,86 @@ mod tests {
             .unwrap();
 
         assert!(stored.secret_set, "the operator has to be able to see that one is set");
-        assert_eq!(stored.secret_hint, "...ter2");
+        assert!(stored.secret_hint.is_empty());
+        f.store.update_connector(stored.id, &[agent.id], None).unwrap();
         let json = serde_json::to_string(&stored).unwrap();
         assert!(!json.contains("hunter2"), "a secret reached the wire: {json}");
 
         // And the value is still there, on the one path that is allowed to see it.
-        let env = f.store.connector_env(agent.group_id).unwrap();
+        let env = f.store.connector_env(agent.id).unwrap();
         assert_eq!(env.get("GITHUB_TOKEN").map(String::as_str), Some("ghp_hunter2"));
+    }
+
+    #[test]
+    fn secret_grants_are_atomic_and_rechecked_against_live_membership() {
+        let f = fixture();
+        let mine = f.store.create_agent(&draft("Engineer")).unwrap();
+        let peer = f.store.create_agent(&draft("Researcher")).unwrap();
+        let other = f.store.create_group(&group_named("Other")).unwrap();
+        let outsider = f.store.create_agent(&draft_in("Outsider", other.id)).unwrap();
+        let clean = key_for(mine.group_id, "CLOUDFLARE_API_TOKEN", "original-token");
+        let secret = f.store.create_connector(&clean).unwrap();
+        assert!(secret.agents.is_empty());
+        assert!(f.store.connector_env(mine.id).unwrap().is_empty());
+        assert!(f.store.update_connector(secret.id, &[outsider.id], Some("wrong-token")).is_err());
+        assert!(f.store.connector_env(outsider.id).unwrap().is_empty());
+        f.store.update_connector(secret.id, &[mine.id, mine.id], None).unwrap();
+        assert_eq!(f.store.agent_connectors(mine.id).unwrap()[0].agents, vec![mine.id]);
+        assert!(f.store.agent_connectors(peer.id).unwrap().is_empty());
+        assert_eq!(
+            f.store.connector_env(mine.id).unwrap()["CLOUDFLARE_API_TOKEN"],
+            "original-token"
+        );
+        assert!(f
+            .store
+            .update_connector(secret.id, &[mine.id, outsider.id], Some("wrong-token"))
+            .is_err());
+        assert_eq!(
+            f.store.connector_env(mine.id).unwrap()["CLOUDFLARE_API_TOKEN"],
+            "original-token"
+        );
+        f.store.update_connector(secret.id, &[mine.id], Some("rotated-token")).unwrap();
+        assert_eq!(
+            f.store.connector_env(mine.id).unwrap()["CLOUDFLARE_API_TOKEN"],
+            "rotated-token"
+        );
+        f.store.update_agent(mine.id, &draft_in("Engineer", other.id)).unwrap();
+        assert!(f.store.connector_env(mine.id).unwrap().is_empty());
+        assert!(f.store.agent_connectors(mine.id).unwrap().is_empty());
+        f.store.update_connector(secret.id, &[peer.id], None).unwrap();
+        f.store.discard_agent(peer.id, 1_000).unwrap();
+        assert!(f.store.connector_env(peer.id).unwrap().is_empty());
+        f.store.update_connector(secret.id, &[], None).unwrap();
+        assert!(f.store.get_connector(secret.id).unwrap().unwrap().agents.is_empty());
+        f.store.delete_connector(secret.id).unwrap();
+        assert!(f.store.connector_names().unwrap().is_empty());
+    }
+
+    #[test]
+    fn adding_a_secret_with_a_foreign_recipient_creates_nothing() {
+        let f = fixture();
+        let mine = f.store.create_agent(&draft("Engineer")).unwrap();
+        let mut clean = key_for(mine.group_id, "TOKEN", "private-token");
+        clean.agents = vec![AgentId::new()];
+        assert!(f.store.create_connector(&clean).is_err());
+        assert!(f.store.group_connectors(mine.group_id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn migrating_secrets_preserves_current_recipients_but_not_future_agents() {
+        let f = fixture();
+        let mine = f.store.create_agent(&draft("Engineer")).unwrap();
+        let discarded = f.store.create_agent(&draft("Discarded")).unwrap();
+        f.store.discard_agent(discarded.id, 1_000).unwrap();
+        f.store.create_connector(&key_for(mine.group_id, "TOKEN", "private-token")).unwrap();
+        let mut conn = f.store.conn().unwrap();
+        conn.execute_batch("DROP TABLE connector_agents; PRAGMA user_version=51;").unwrap();
+        migrations::run(&mut conn).unwrap();
+        drop(conn);
+        assert_eq!(f.store.connector_env(mine.id).unwrap()["TOKEN"], "private-token");
+        assert!(f.store.connector_env(discarded.id).unwrap().is_empty());
+        let later = f.store.create_agent(&draft("Later")).unwrap();
+        assert!(f.store.connector_env(later.id).unwrap().is_empty());
     }
 
     // ---- the compost -----------------------------------------------------
@@ -5074,7 +5218,7 @@ mod tests {
         f.store.create_connector(&key_for(other_group.id, "THEIRS", "b")).unwrap();
 
         assert_eq!(f.store.group_connectors(mine.group_id).unwrap().len(), 1);
-        assert!(!f.store.connector_env(mine.group_id).unwrap().contains_key("THEIRS"));
+        assert!(!f.store.connector_env(mine.id).unwrap().contains_key("THEIRS"));
     }
 
     #[test]

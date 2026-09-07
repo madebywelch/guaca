@@ -1451,6 +1451,21 @@ CREATE UNIQUE INDEX decisions_topic ON decisions(agent_id,topic);
 CREATE INDEX decisions_reminder ON decisions(remind_at) WHERE status IN ('pending','answered');
 "#,
     ),
+    (
+        52,
+        r#"
+CREATE TABLE connector_agents (
+    connector_id TEXT NOT NULL REFERENCES connectors(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    PRIMARY KEY (connector_id, agent_id)
+);
+-- Preserve access for the agents who already received these credentials.
+-- Future agents and newly created secrets require an explicit grant.
+INSERT INTO connector_agents (connector_id, agent_id)
+SELECT c.id, a.id FROM connectors c JOIN agents a ON a.group_id=c.group_id
+WHERE a.discarded_at IS NULL;
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

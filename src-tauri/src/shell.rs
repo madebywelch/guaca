@@ -167,6 +167,15 @@ pub enum ShellError {
 /// for the same reason: a process group would also take out whatever the
 /// operator's own tooling started in there.
 pub async fn run(directory: &str, line: &str, patience: Duration) -> Result<Ran, ShellError> {
+    run_with_env(directory, line, patience, &crate::secrets::Environment::default()).await
+}
+
+pub async fn run_with_env(
+    directory: &str,
+    line: &str,
+    patience: Duration,
+    env: &crate::secrets::Environment,
+) -> Result<Ran, ShellError> {
     // Checked here rather than left to the spawn, because the spawn's own error
     // for a missing directory is an errno the operator cannot act on and this
     // is the one failure that happens to people: a repository linked last month
@@ -177,6 +186,7 @@ pub async fn run(directory: &str, line: &str, patience: Duration) -> Result<Ran,
 
     let mut command_process = tokio::process::Command::new(SHELL);
     crate::repo::github::environment(directory, &mut command_process).await;
+    env.apply(&mut command_process);
     let mut child = command_process
         .arg("-c")
         .arg(line)
@@ -199,7 +209,8 @@ pub async fn run(directory: &str, line: &str, patience: Duration) -> Result<Ran,
     let mut err = child.stderr.take();
 
     let reading = async {
-        let (stdout, stderr) = tokio::join!(drain(&mut out), drain(&mut err));
+        let (stdout, stderr) =
+            tokio::join!(drain(&mut out, &env.values), drain(&mut err, &env.values));
         let status = child.wait().await;
         (stdout, stderr, status)
     };
@@ -232,7 +243,10 @@ pub async fn run(directory: &str, line: &str, patience: Duration) -> Result<Ran,
 /// be [`PATIENCE`]. So everything is read and the middle is thrown away as it
 /// goes, which is what makes the memory this holds bounded by [`KEPT`] rather
 /// than by what the command decided to print.
-async fn drain<R: AsyncRead + Unpin>(reader: &mut Option<R>) -> (String, usize) {
+async fn drain<R: AsyncRead + Unpin>(
+    reader: &mut Option<R>,
+    values: &std::collections::BTreeMap<String, String>,
+) -> (String, usize) {
     let Some(reader) = reader.as_mut() else { return (String::new(), 0) };
 
     let ends = KEPT / 2;
@@ -241,12 +255,17 @@ async fn drain<R: AsyncRead + Unpin>(reader: &mut Option<R>) -> (String, usize) 
     let mut dropped = 0usize;
     let mut chunk = [0u8; 8192];
 
+    let redactor = crate::secrets::Redactor::new(values);
+    let mut pending = Vec::new();
     loop {
         let read = match reader.read(&mut chunk).await {
-            Ok(0) | Err(_) => break,
+            Ok(0) | Err(_) => 0,
             Ok(read) => read,
         };
-        for &byte in &chunk[..read] {
+        pending.extend_from_slice(&chunk[..read]);
+        let (safe, consumed) = redactor.take(&pending, read == 0);
+        pending.drain(..consumed);
+        for &byte in &safe {
             if head.len() < ends {
                 head.push(byte);
                 continue;
@@ -256,6 +275,9 @@ async fn drain<R: AsyncRead + Unpin>(reader: &mut Option<R>) -> (String, usize) 
                 tail.pop_front();
                 dropped += 1;
             }
+        }
+        if read == 0 {
+            break;
         }
     }
 
@@ -330,6 +352,37 @@ mod running {
     /// rest of the suite. What is being asserted is the answer, not the
     /// deadline; the deadline has a test of its own.
     const ENOUGH: Duration = Duration::from_secs(60);
+
+    #[tokio::test]
+    async fn a_secret_reaches_only_the_child_and_is_scrubbed_before_clipping() {
+        let value = "fixture-secret-12345";
+        let env = crate::secrets::Environment {
+            names: vec!["GUACA_FIXTURE_TOKEN".into()],
+            values: std::collections::BTreeMap::from([(
+                "GUACA_FIXTURE_TOKEN".into(),
+                value.into(),
+            )]),
+        };
+        let ran = run_with_env(".",
+            "test -n \"$GUACA_FIXTURE_TOKEN\" || exit 9; printf '%s' \"$GUACA_FIXTURE_TOKEN\"; printf '%s' \"$GUACA_FIXTURE_TOKEN\" >&2",
+            ENOUGH, &env).await.unwrap();
+        assert_eq!(ran.exit_code, Some(0));
+        assert_eq!(ran.stdout, "[REDACTED]");
+        assert_eq!(ran.stderr, "[REDACTED]");
+        let ran = run_with_env(
+            ".",
+            "printf '%5995s' ''; printf '%s' \"$GUACA_FIXTURE_TOKEN\"; seq 1 20000",
+            ENOUGH,
+            &env,
+        )
+        .await
+        .unwrap();
+        assert!(ran.dropped > 0);
+        assert!(!ran.stdout.contains("fixture"));
+        assert!(!ran.stdout.contains("12345"));
+        let absent = run(".", "test -z \"$GUACA_FIXTURE_TOKEN\"", ENOUGH).await.unwrap();
+        assert_eq!(absent.exit_code, Some(0));
+    }
 
     #[tokio::test]
     async fn a_line_runs_in_the_directory_it_was_given() {

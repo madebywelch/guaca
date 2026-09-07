@@ -1,32 +1,13 @@
 //! Credentials a crew can use.
 //!
-//! One kind, deliberately. A connector is an API token the operator pastes in
-//! once, held for a whole group, and put into the environment of every command
-//! that group's machines run. The *other* way an agent reaches an account, a
-//! browser that is already logged in, is not recorded here and is not recorded
-//! anywhere: it is detected from the machine itself. See [`super::signin`].
-//!
-//! That split is the design. Anything the browser can be asked, Guaca asks the
-//! browser; a token is stored only because there is nowhere else for it to live.
-//!
-//! Two kinds of access are still offered to the agent in one list, because
-//! *Beyond Browsing: API-Based Web Agents* (Song, Xu, Zhou and Neubig,
-//! [arXiv 2410.16464](https://arxiv.org/abs/2410.16464)) measured API-calling
-//! agents against browsing agents on the same WebArena tasks: APIs beat
-//! browsing, and a hybrid that could choose beat both by 24 points absolute
-//! over browsing alone. What changed is where each half comes from, not that
-//! there are two.
-//!
-//! **The secret never reaches the model.** A value lives in SQLite and is put
-//! into the environment of commands the agent runs. It is never rendered into a
-//! prompt, never returned over IPC, and never written to the sandbox's disk.
-//! The agent is told the variable's name and told to use it by name. This is
-//! the boundary `commands.rs` draws around the API key, moved one layer in: the
-//! webview never holds a credential, and neither does the model.
+//! The operator supplies values through the group's Secrets tab and explicitly
+//! selects recipients. The store rechecks group membership at execution time.
+//! Values go into child-process environments, never into this metadata type.
+//! `docs/SECRETS.md` describes storage, output redaction and the process boundary.
 
 use serde::{Deserialize, Serialize};
 
-use super::ids::{ConnectorId, GroupId};
+use super::ids::{AgentId, ConnectorId, GroupId};
 
 /// A service name longer than this is a paragraph, not a label.
 pub const MAX_SERVICE_LEN: usize = 48;
@@ -34,10 +15,10 @@ pub const MAX_ACCOUNT_LEN: usize = 120;
 /// Notes are read by a model on every turn, so they are one line, not a page.
 pub const MAX_NOTE_LEN: usize = 240;
 
-/// A credential the whole group's machines are given.
+/// A credential granted to selected agents in one group.
 ///
 /// Serializable in full: there is no secret on it. The value is held in the
-/// store and only ever leaves it into a sandbox's process environment.
+/// store and supplied to authorized process environments.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Connector {
@@ -59,8 +40,9 @@ pub struct Connector {
     /// Whether a value is stored. False is a connector that would hand the
     /// machine an empty variable, which is worth showing as broken.
     pub secret_set: bool,
-    /// Last four characters, so an operator can tell two tokens apart without
-    /// either of them being sent to the webview.
+    #[serde(default)]
+    pub agents: Vec<AgentId>,
+    /// Kept empty for wire compatibility. No fragment of a value is returned.
     pub secret_hint: String,
     pub created_at: i64,
     pub updated_at: i64,
@@ -84,7 +66,7 @@ impl Connector {
 /// Fields an operator can set. Separate from [`Connector`] so ids and
 /// timestamps cannot be forged across IPC, and so the secret can be carried
 /// inward without ever being carried back.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectorDraft {
     pub group_id: GroupId,
@@ -93,12 +75,11 @@ pub struct ConnectorDraft {
     pub env_var: String,
     #[serde(default)]
     pub note: String,
-    /// There is no edit path, so this is the only moment a value can arrive: a
-    /// connector is forgotten and re-added rather than rewritten, which keeps
-    /// the one command that can carry a secret to a command that also creates
-    /// the row it belongs to.
+    /// Write-only input; rotation uses the update command.
     #[serde(default)]
     pub secret: Option<String>,
+    #[serde(default)]
+    pub agents: Vec<AgentId>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -118,6 +99,12 @@ pub enum ConnectorError {
     BadEnvVar { got: String },
     #[error("a credential needs a value")]
     BlankSecret,
+    #[error(
+        "this name controls the process runtime; use the service's API token variable instead"
+    )]
+    ReservedEnvVar,
+    #[error("a secret must be at most 64 KiB and cannot contain NUL bytes")]
+    InvalidSecret,
 }
 
 impl ConnectorDraft {
@@ -145,6 +132,9 @@ impl ConnectorDraft {
         }
 
         let env_var = self.env_var.trim().to_ascii_uppercase();
+        if reserved(&env_var) {
+            return Err(ConnectorError::ReservedEnvVar);
+        }
         if !is_env_name(&env_var) {
             return Err(ConnectorError::BadEnvVar { got: env_var });
         }
@@ -152,11 +142,9 @@ impl ConnectorDraft {
         // A credential with no value would put an empty variable on the
         // machine, and the agent would read the resulting 401 as a revoked
         // token rather than as a connector nobody finished setting up. There is
-        // no edit path to supply it later, so it is required here.
+        // no usable credential without a value, so it is required here.
         let secret = self.secret.as_deref().unwrap_or_default().trim().to_string();
-        if secret.is_empty() {
-            return Err(ConnectorError::BlankSecret);
-        }
+        validate_secret(&secret)?;
 
         Ok(CleanConnector {
             group_id: self.group_id,
@@ -165,11 +153,12 @@ impl ConnectorDraft {
             env_var,
             note: note.to_string(),
             secret,
+            agents: self.agents.clone(),
         })
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct CleanConnector {
     pub group_id: GroupId,
     pub service: String,
@@ -177,6 +166,49 @@ pub struct CleanConnector {
     pub env_var: String,
     pub note: String,
     pub secret: String,
+    pub agents: Vec<AgentId>,
+}
+
+impl std::fmt::Debug for CleanConnector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CleanConnector").field("env_var", &self.env_var).finish_non_exhaustive()
+    }
+}
+
+pub fn validate_secret(secret: &str) -> Result<(), ConnectorError> {
+    if secret.trim().is_empty() {
+        return Err(ConnectorError::BlankSecret);
+    }
+    if secret.len() > 65_536 || secret.contains('\0') {
+        return Err(ConnectorError::InvalidSecret);
+    }
+    Ok(())
+}
+
+pub(crate) fn reserved(name: &str) -> bool {
+    matches!(
+        name,
+        "PATH"
+            | "HOME"
+            | "SHELL"
+            | "ENV"
+            | "BASH_ENV"
+            | "ZDOTDIR"
+            | "NODE_OPTIONS"
+            | "PYTHONPATH"
+            | "PYTHONHOME"
+            | "RUBYOPT"
+            | "PERL5OPT"
+            | "GIT_SSH"
+            | "GIT_SSH_COMMAND"
+            | "GIT_ASKPASS"
+            | "SSH_ASKPASS"
+            | "GIT_EXEC_PATH"
+            | "GIT_TEMPLATE_DIR"
+            | "GIT_TERMINAL_PROMPT"
+    ) || ["GUACA_", "GUAC_", "LD_", "DYLD_", "GIT_CONFIG", "BASH_FUNC_"]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
 }
 
 /// Whether a string is safe to use as a shell environment variable name.
@@ -194,6 +226,30 @@ fn is_env_name(name: &str) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn process_controls_and_invalid_values_are_refused() {
+        for name in [
+            "PATH",
+            "HOME",
+            "BASH_ENV",
+            "NODE_OPTIONS",
+            "LD_PRELOAD",
+            "GUACA_TOKEN",
+            "GIT_CONFIG_COUNT",
+        ] {
+            let mut input = draft();
+            input.env_var = name.into();
+            assert_eq!(input.validate().unwrap_err(), ConnectorError::ReservedEnvVar);
+        }
+        for value in ["a\0b".to_string(), "x".repeat(65_537)] {
+            assert_eq!(validate_secret(&value), Err(ConnectorError::InvalidSecret));
+        }
+        assert_eq!(validate_secret("  "), Err(ConnectorError::BlankSecret));
+        let mut input = draft();
+        input.env_var = "CLOUDFLARE_API_TOKEN".into();
+        assert!(input.validate().is_ok());
+    }
+
     fn draft() -> ConnectorDraft {
         ConnectorDraft {
             group_id: GroupId::new(),
@@ -201,6 +257,7 @@ mod tests {
             account: "  madebywelch ".into(),
             env_var: " github_token ".into(),
             note: "  read-only  ".into(),
+            agents: vec![],
             secret: Some("  ghp_secret  ".into()),
         }
     }
@@ -233,8 +290,8 @@ mod tests {
     fn a_credential_without_a_value_is_refused_rather_than_stored_empty() {
         // Stored empty, the machine gets `GITHUB_TOKEN=` and every call comes
         // back unauthorized, which reads to the agent as a revoked token rather
-        // than as a connector nobody finished setting up. There is no edit path
-        // to supply it later, so this is the only moment to insist.
+        // than as a connector nobody finished setting up. Creation requires a
+        // usable value before access can be granted.
         for missing in [Some("   ".to_string()), None] {
             let mut d = draft();
             d.secret = missing;
@@ -275,6 +332,7 @@ mod tests {
             account: "madebywelch".into(),
             env_var: "GITHUB_TOKEN".into(),
             note: note.into(),
+            agents: vec![],
             secret_set: true,
             secret_hint: "...cret".into(),
             created_at: 0,

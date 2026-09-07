@@ -31,7 +31,7 @@ def item(kind, **fields):
 
 
 def finish():
-    item("agentMessage", text="Fixed the flaky test and pushed.")
+    item("agentMessage", text=os.environ["CLOUDFLARE_API_TOKEN"] if Path(".secret_probe").exists() else "Fixed the flaky test and pushed.")
     failed = Path(".codex_failure").exists()
     send({"method": "turn/completed", "params": {"threadId": thread, "turn": {"id": turn, "status": "failed" if failed else "completed", "error": {"message": "fixture failed after editing"} if failed else None}}})
 

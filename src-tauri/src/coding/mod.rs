@@ -401,10 +401,75 @@ pub async fn run_with_control(
     task: &str,
     wiring: Option<&Wiring>,
     control: Option<codex::Control>,
+    watching: impl FnMut(Progress),
+) -> Result<Outcome, CodingError> {
+    run_with_env(
+        harness,
+        repository,
+        task,
+        wiring,
+        control,
+        &crate::secrets::Environment::default(),
+        watching,
+    )
+    .await
+}
+
+pub async fn run_with_env(
+    harness: Harness,
+    repository: &str,
+    task: &str,
+    wiring: Option<&Wiring>,
+    control: Option<codex::Control>,
+    env: &crate::secrets::Environment,
+    mut watching: impl FnMut(Progress),
+) -> Result<Outcome, CodingError> {
+    let task = format!("{task}{}", env.description());
+    let mut sanitized = |progress| {
+        watching(match progress {
+            Progress::Using { tool, detail } => Progress::Using {
+                tool: crate::secrets::redact(&tool, &env.values),
+                detail: crate::secrets::redact(&detail, &env.values),
+            },
+            Progress::Said(said) => Progress::Said(crate::secrets::redact(&said, &env.values)),
+        })
+    };
+    let result =
+        run_process(harness, repository, &task, wiring, control, env, &mut sanitized).await;
+    result
+        .map(|mut outcome| {
+            outcome.said = crate::secrets::redact(&outcome.said, &env.values);
+            outcome.failed = outcome.failed.map(|text| crate::secrets::redact(&text, &env.values));
+            outcome.model = crate::secrets::redact(&outcome.model, &env.values);
+            outcome.session_id = crate::secrets::redact(&outcome.session_id, &env.values);
+            if let Some(pr) = &mut outcome.pull_request {
+                pr.url = crate::secrets::redact(&pr.url, &env.values);
+                pr.branch = crate::secrets::redact(&pr.branch, &env.values);
+            }
+            outcome
+        })
+        .map_err(|error| match error {
+            CodingError::NoAnswer(text) => {
+                CodingError::NoAnswer(crate::secrets::redact(&text, &env.values))
+            }
+            CodingError::Start(text) => {
+                CodingError::Start(crate::secrets::redact(&text, &env.values))
+            }
+            other => other,
+        })
+}
+
+async fn run_process(
+    harness: Harness,
+    repository: &str,
+    task: &str,
+    wiring: Option<&Wiring>,
+    control: Option<codex::Control>,
+    env: &crate::secrets::Environment,
     mut watching: impl FnMut(Progress),
 ) -> Result<Outcome, CodingError> {
     if harness == Harness::Codex {
-        return codex::run(repository, task, control, watching).await;
+        return codex::run(repository, task, control, env, watching).await;
     }
     let (args, fold): (Vec<String>, Fold) = match harness {
         // `pi` has no hooks and no second interface, so the wiring is not
@@ -416,6 +481,7 @@ pub async fn run_with_control(
 
     let mut command = tokio::process::Command::new(binary(harness));
     crate::repo::github::environment(repository, &mut command).await;
+    env.apply(&mut command);
     let mut child = command
         .current_dir(repository)
         .args(&args)
