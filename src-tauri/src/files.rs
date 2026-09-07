@@ -14,7 +14,7 @@
 //! digests, which is a job for the day somebody notices the directory.
 
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -164,12 +164,7 @@ impl FileStore {
     /// wants a second copy or has lost the first, and neither is a reason for
     /// this app to destroy a file it did not write.
     pub fn save_copy(&self, digest: &str, name: &str, into: &Path) -> Result<PathBuf, FileError> {
-        let name = clean_name(name).ok_or(FileError::Unnamed)?;
-        let bytes = self.read(digest)?;
-        fs::create_dir_all(into).map_err(|e| FileError::io(into, e))?;
-        let path = free_path(into, &name, digest);
-        fs::write(&path, &bytes).map_err(|e| FileError::io(&path, e))?;
-        Ok(path)
+        save_bytes(name, &self.read(digest)?, into)
     }
 
     /// The text of a file, for a prompt, cut at `limit` characters.
@@ -265,27 +260,119 @@ fn decode(raw: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// `brief.pdf`, then `brief (2).pdf`, then `brief (3).pdf`.
-///
-/// The digest is the last resort rather than the first, because a person
-/// looking in their downloads folder should see the name they know. Two files
-/// that reach the same digest-suffixed name hold the same bytes by definition,
-/// so the one write that can land on an existing file cannot lose anything.
-fn free_path(dir: &Path, name: &str, digest: &str) -> PathBuf {
-    let first = dir.join(name);
-    if !first.exists() {
-        return first;
+/// Fetches a backend attachment onto the client machine without navigating its webview.
+pub async fn download(
+    origin: &str,
+    token: &str,
+    digest: &str,
+    name: &str,
+    into: PathBuf,
+) -> Result<PathBuf, String> {
+    if digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("This attachment has an invalid content address. Ask for a new copy.".into());
     }
+    let name = clean_name(name).ok_or_else(|| FileError::Unnamed.to_string())?;
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        // A redirect must not turn a workspace credential into another host's input.
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut response = http
+        .get(format!(
+            "{}/v1/file/{}/{}",
+            origin.trim_end_matches('/'),
+            digest,
+            crate::oauth::encode(&name)
+        ))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| {
+            format!(
+                "Could not download {name}. Check the workspace connection and try again: {}",
+                e.without_url()
+            )
+        })?;
+    match response.status().as_u16() {
+        200 => {}
+        401 => {
+            return Err(
+                "The workspace refused the download. Reconnect with its current access key.".into(),
+            )
+        }
+        404 => {
+            return Err(format!(
+                "{name} is no longer in this workspace's file store. Ask for a new copy."
+            ))
+        }
+        status => {
+            return Err(format!(
+                "Could not download {name}: the workspace answered {status}. Try again."
+            ))
+        }
+    }
+    let too_big = || format!("{name} exceeds the attachment limit of {MAX_FILE_BYTES} bytes.");
+    if response.content_length().is_some_and(|size| size > MAX_FILE_BYTES) {
+        return Err(too_big());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| {
+        format!("The download of {name} was interrupted. Try again: {}", e.without_url())
+    })? {
+        if bytes.len() as u64 + chunk.len() as u64 > MAX_FILE_BYTES {
+            return Err(too_big());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    if !format!("{:x}", Sha256::digest(&bytes)).eq_ignore_ascii_case(digest) {
+        return Err(format!(
+            "The contents of {name} did not match the attachment. Try downloading it again."
+        ));
+    }
+    tokio::task::spawn_blocking(move || save_bytes(&name, &bytes, &into).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Reserve the name atomically: two simultaneous downloads must not overwrite
+/// each other, an existing document, or a symlink in Downloads.
+fn save_bytes(name: &str, bytes: &[u8], into: &Path) -> Result<PathBuf, FileError> {
+    let name = clean_name(name).ok_or(FileError::Unnamed)?;
+    fs::create_dir_all(into).map_err(|e| FileError::io(into, e))?;
     let (stem, extension) = match name.rsplit_once('.') {
-        Some((stem, extension)) if !stem.is_empty() => (stem, format!(".{extension}")),
-        _ => (name, String::new()),
+        Some((stem, extension)) => (stem, format!(".{extension}")),
+        None => (name.as_str(), String::new()),
     };
-    (2..100)
-        .map(|n| dir.join(format!("{stem} ({n}){extension}")))
-        .find(|candidate| !candidate.exists())
-        .unwrap_or_else(|| {
-            dir.join(format!("{stem} ({}){extension}", &digest[..8.min(digest.len())]))
-        })
+    for n in 1..=10_000 {
+        let path =
+            into.join(if n == 1 { name.clone() } else { format!("{stem} ({n}){extension}") });
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = match options.open(&path) {
+            Ok(file) => file,
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(FileError::io(path, e)),
+        };
+        if let Err(e) = file.write_all(bytes).and_then(|_| file.sync_all()) {
+            drop(file);
+            let _ = fs::remove_file(&path);
+            return Err(FileError::io(path, e));
+        }
+        return Ok(path);
+    }
+    Err(FileError::io(
+        into,
+        io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "too many copies; rename an existing copy and try again",
+        ),
+    ))
 }
 
 /// The name as it will be shown and as it will land on a machine.
@@ -307,6 +394,77 @@ fn clean_name(name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_download_refuses_redirects_corruption_and_oversized_bodies_without_writing() {
+        use axum::{
+            body::Body,
+            http::{Request, Response},
+            routing::get,
+            Router,
+        };
+        let app = Router::new().route(
+            "/v1/file/:digest/:name",
+            get(|request: Request<Body>| async move {
+                assert_eq!(request.headers()["authorization"], "Bearer private-token");
+                assert!(request.uri().query().is_none(), "credentials stay out of URLs");
+                match request.uri().path().rsplit('/').next().unwrap() {
+                    "redirect.md" => Response::builder()
+                        .status(302)
+                        .header("location", "/login")
+                        .body(Body::empty())
+                        .unwrap(),
+                    "large.zip" => Response::builder()
+                        .header("content-length", MAX_FILE_BYTES + 1)
+                        .body(Body::from(vec![0; (MAX_FILE_BYTES + 1) as usize]))
+                        .unwrap(),
+                    "stream.zip" => Response::new(Body::from_stream(futures_util::stream::iter(
+                        (0..=MAX_FILE_BYTES / 1024)
+                            .map(|_| Ok::<_, std::io::Error>(vec![0u8; 1024])),
+                    ))),
+                    _ => Response::new(Body::from("wrong contents")),
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let dir = tempfile::tempdir().unwrap();
+        let downloads = dir.path().join("Downloads");
+        for (name, reason) in [
+            ("redirect.md", "302"),
+            ("corrupt.md", "did not match"),
+            ("large.zip", "exceeds"),
+            ("stream.zip", "exceeds"),
+        ] {
+            let error =
+                download(&origin, "private-token", &"a".repeat(64), name, downloads.clone())
+                    .await
+                    .unwrap_err();
+            assert!(error.contains(reason), "{name}: {error}");
+            assert!(!error.contains("private-token"));
+            assert!(!downloads.exists());
+        }
+        server.abort();
+    }
+
+    #[test]
+    fn a_download_cannot_escape_its_folder_or_overwrite_a_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let downloads = dir.path().join("Downloads");
+        fs::create_dir(&downloads).unwrap();
+        let original = dir.path().join("original.md");
+        fs::write(&original, b"keep").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&original, downloads.join("brief.md")).unwrap();
+        #[cfg(not(unix))]
+        fs::write(downloads.join("brief.md"), b"keep").unwrap();
+        let path = save_bytes("../../brief.md", b"new", &downloads).unwrap();
+        assert_eq!(path, downloads.join("brief (2).md"));
+        assert_eq!(fs::read(original).unwrap(), b"keep");
+        assert_eq!(fs::read(path).unwrap(), b"new");
+        assert!(save_bytes("...", b"no", &downloads).is_err());
+    }
 
     fn store() -> (FileStore, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();

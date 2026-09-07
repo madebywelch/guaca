@@ -12,6 +12,7 @@ import {
 } from "../lib/files";
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
+import { desktop } from "../lib/transport";
 import { type Attachment, errorMessage } from "../lib/types";
 import { Markdown } from "./Markdown";
 
@@ -356,17 +357,16 @@ function Document({ file }: { file: Attachment }) {
  */
 function SaveButton({ file }: { file: Attachment }) {
   const [saving, setSaving] = useState(false);
-  const localFiles = useStore((s) => s.capabilities.localFiles);
-
-  // On a server there is no downloads folder on the box that means anything
-  // to the operator, and the browser has its own. The same bytes, on the route
-  // every preview already reads from, handed to the browser as a download.
-  if (!localFiles) {
+  // The backend's disk capabilities say nothing about the client. WKWebView
+  // can navigate a download link away from the app, so desktop saves use IPC.
+  if (!desktop) {
     return (
       <a
         className="btn btn--ghost btn--small"
         href={`${fileUrl(file)}&download=true`}
         download={file.name}
+        target="_blank"
+        rel="noopener noreferrer"
         title={`Download ${file.name}`}
       >
         Download

@@ -7,6 +7,14 @@ import { FileCard } from "./FileCard";
 
 const saveFile = vi.fn(async (_digest: string, _name: string) => "/Users/robert/Downloads/x");
 const setBanner = vi.fn();
+const client = vi.hoisted(() => ({ desktop: true }));
+
+vi.mock("../lib/transport", async (original) => ({
+  ...(await original<typeof import("../lib/transport")>()),
+  get desktop() {
+    return client.desktop;
+  },
+}));
 
 vi.mock("../lib/ipc", () => ({
   api: { saveFile: (digest: string, name: string) => saveFile(digest, name) },
@@ -20,7 +28,7 @@ const state = {
     loopbackEndpoints: true,
     claudeProvider: true,
     claudeCodeHarness: true,
-    localFiles: true,
+    localFiles: false,
   },
 };
 
@@ -44,6 +52,7 @@ const revoked: string[] = [];
 
 describe("FileCard", () => {
   beforeEach(() => {
+    client.desktop = true;
     saveFile.mockClear();
     setBanner.mockClear();
     fetched.mockReset();
@@ -195,43 +204,44 @@ describe("FileCard", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("saves a copy and says where it went", async () => {
-    saveFile.mockResolvedValue("/Users/robert/Downloads/brief.pdf");
-    render(<FileCard file={file("brief.pdf", "application/pdf")} />);
+  it.each([
+    ["brief.md", "text/markdown"],
+    ["brief.pdf", "application/pdf"],
+    ["bundle.zip", "application/zip"],
+  ])("saves %s on the desktop even when the backend has no local files", async (name, mime) => {
+    saveFile.mockResolvedValue(`/Users/robert/Downloads/${name}`);
+    render(<FileCard file={file(name, mime)} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Save a copy" }));
 
-    await waitFor(() =>
-      expect(saveFile).toHaveBeenCalledWith(
-        file("brief.pdf", "application/pdf").digest,
-        "brief.pdf",
-      ),
-    );
+    await waitFor(() => expect(saveFile).toHaveBeenCalledWith(file(name, mime).digest, name));
     // A file saved somewhere the operator has to go looking for has not really
     // been saved.
     expect(setBanner).toHaveBeenCalledWith({
       tone: "ok",
-      text: "Saved to /Users/robert/Downloads/brief.pdf",
+      text: `Saved to /Users/robert/Downloads/${name}`,
     });
   });
 
-  it("hands the browser a download where there is no downloads folder", () => {
+  it("hands the browser a download where there is no downloads folder", async () => {
     // On a server the box's downloads folder is nobody's. The browser has its
     // own, and the same bytes are already on the route every preview reads.
-    state.capabilities = { ...state.capabilities, localFiles: false };
+    client.desktop = false;
     try {
       render(<FileCard file={file("brief.pdf", "application/pdf")} />);
 
       expect(screen.queryByRole("button", { name: "Save a copy" })).toBeNull();
       const link = screen.getByRole("link", { name: "Download" }) as HTMLAnchorElement;
       expect(link.getAttribute("download")).toBe("brief.pdf");
+      expect(link.target).toBe("_blank");
+      await waitFor(() => expect(made.length).toBeGreaterThan(0));
       // The same address every preview reads from, whichever host spelled it.
       expect(link.getAttribute("href")).toBe(
         `${fileUrl(file("brief.pdf", "application/pdf"))}&download=true`,
       );
       expect(saveFile).not.toHaveBeenCalled();
     } finally {
-      state.capabilities = { ...state.capabilities, localFiles: true };
+      client.desktop = true;
     }
   });
 
@@ -247,6 +257,25 @@ describe("FileCard", () => {
         text: "no file here with that content",
       }),
     );
+  });
+
+  it("keeps a markdown preview closable after saving from it", async () => {
+    saveFile.mockResolvedValue("/Users/robert/Downloads/notes.md");
+    render(<FileCard file={file("notes.md", "text/markdown")} />);
+    fireEvent.click(screen.getByRole("button", { name: "Open notes.md" }));
+    const dialog = screen.getByRole("dialog");
+
+    expect(within(dialog).queryByRole("link", { name: "Download" })).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save a copy" }));
+    await waitFor(() =>
+      expect(setBanner).toHaveBeenCalledWith({
+        tone: "ok",
+        text: "Saved to /Users/robert/Downloads/notes.md",
+      }),
+    );
+    expect(screen.getByRole("dialog")).toBe(dialog);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("says a text file could not be read rather than showing an empty box", async () => {
