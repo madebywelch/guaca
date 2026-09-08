@@ -258,8 +258,7 @@ fn opened_on_screen(asked: &str) -> String {
 struct ToolResult {
     rendered: String,
     part: Part,
-    /// A `data:` URL, present only for a look at the screen. It is the one
-    /// answer a model cannot act on as text.
+    /// A `data:` URL for a screen or saved picture, which cannot travel as text.
     image: Option<String>,
 }
 
@@ -1554,7 +1553,7 @@ impl Runtime {
     ///
     /// Generous enough for a brief or a spreadsheet exported as CSV, short
     /// enough that a log file cannot crowd out the conversation it arrived in.
-    /// Past this the agent is told it was cut and where the whole thing is.
+    /// Past this the agent is given the offset to continue reading.
     const FILE_TEXT_LIMIT: usize = 24_000;
 
     /// The largest file this will push onto a machine one command at a time.
@@ -1628,31 +1627,15 @@ impl Runtime {
                 } else if file.is_text() {
                     match self.inner.files.read_text(&file.digest, Self::FILE_TEXT_LIMIT) {
                         Ok((text, cut)) => {
-                            // The failure is its own sentence rather than
-                            // being interpolated where the path goes. Written
-                            // the other way it read as "the whole file is on
-                            // your machine at you have not been given a
-                            // computer", which is a location an agent will try
-                            // to open.
                             let tail = if cut {
-                                match self.place(card, file).await {
-                                    Ok(path) => format!(
-                                        "\n\n[cut at {} characters. The whole file is on your \
-                                         machine at {path}]",
-                                        Self::FILE_TEXT_LIMIT,
-                                    ),
-                                    Err(why) => format!(
-                                        "\n\n[cut at {} characters, and the rest could not be \
-                                         put on your machine: {why}. Work from what is above, \
-                                         and say it was truncated if that matters]",
-                                        Self::FILE_TEXT_LIMIT,
-                                    ),
-                                }
+                                format!(
+                                    "\n\n[cut at {} characters. Call read_file with name {:?} \
+                                     and offset {} to read the rest.]",
+                                    Self::FILE_TEXT_LIMIT,
+                                    file.name,
+                                    Self::FILE_TEXT_LIMIT,
+                                )
                             } else {
-                                // Not placed at all when it fit. A file that
-                                // arrived whole is one the agent has already
-                                // read, and a round trip to a sandbox to write
-                                // a copy nothing will open is one per file.
                                 String::new()
                             };
                             format!("The attached file {} contains:\n\n{text}{tail}", file.name)
@@ -1711,22 +1694,18 @@ impl Runtime {
             return (found, missing);
         }
 
-        let known = self.attachments_in_channel(card.id);
         for name in wanted {
             let leaf = name.rsplit(['/', '\\']).next().unwrap_or(name).trim();
-            // What this turn has just made comes first. `write_document` is the
-            // one way to produce a file with no machine, and a document written
-            // a moment ago is not in any channel yet: the message carrying it
-            // has not landed. Looked for only in the channel, an agent that
-            // wrote a brief and sent it to a colleague in the same turn was
-            // told its own document did not exist.
-            if let Some(file) = made.iter().find(|f| f.name.eq_ignore_ascii_case(leaf)) {
-                found.push(file.clone());
-                continue;
-            }
-            if let Some(file) = known.iter().find(|f| f.name.eq_ignore_ascii_case(leaf)) {
-                found.push(file.clone());
-                continue;
+            match self.saved_file(card.id, leaf, made) {
+                Ok(Some(file)) => {
+                    found.push(file);
+                    continue;
+                }
+                Ok(None) => {}
+                Err(why) => {
+                    missing.push(format!("{name} was not attached: {why}. {consequence}"));
+                    continue;
+                }
             }
             // Not something it was sent, so it is something it made.
             match self.pull_file(card, name).await {
@@ -1737,21 +1716,72 @@ impl Runtime {
         (found, missing)
     }
 
-    /// Every file this agent can already see in its own channel, newest first.
-    fn attachments_in_channel(&self, agent: AgentId) -> Vec<Attachment> {
-        let mut seen: Vec<Attachment> = self
-            .inner
-            .store
-            .channel_messages(agent, HISTORY_WINDOW * 4)
-            .unwrap_or_default()
-            .iter()
-            .rev()
-            .flat_map(|envelope| prompt::attachments(envelope).into_iter().cloned())
-            .collect();
-        // A name reused later refers to the newer file, which is the one an
-        // agent means when it says "send the draft".
-        seen.dedup_by(|a, b| a.name.eq_ignore_ascii_case(&b.name));
-        seen
+    /// The current turn has not delivered its files yet. Once delivered, the
+    /// message is the durable reference, regardless of the prompt's window.
+    fn saved_file(
+        &self,
+        agent: AgentId,
+        name: &str,
+        made: &[Attachment],
+    ) -> Result<Option<Attachment>, String> {
+        if let Some(file) = made.iter().rev().find(|file| file.name.eq_ignore_ascii_case(name)) {
+            return Ok(Some(file.clone()));
+        }
+        self.inner.store.agent_file(agent, name).map_err(|err| err.to_string())
+    }
+
+    async fn read_file(
+        &self,
+        card: &AgentCard,
+        name: &str,
+        offset: usize,
+        made: &[Attachment],
+        modalities: Modalities,
+    ) -> Result<(String, Option<String>), String> {
+        let file = self.saved_file(card.id, name, made)?.ok_or_else(|| format!(
+            "No saved attachment named {name:?} is in your conversation or messages you sent. \
+             Check the file name or ask for the attachment. Do not infer its contents from its name."
+        ))?;
+        if file.is_text() {
+            let (text, more) = self
+                .inner
+                .files
+                .read_text_at(&file.digest, offset, Self::FILE_TEXT_LIMIT)
+                .map_err(|err| {
+                    format!("{} could not be read: {err}. Ask for a new copy.", file.name)
+                })?;
+            let next = offset.saturating_add(text.chars().count());
+            let tail = if more {
+                format!("More remains. Call read_file with name {:?} and offset {next}.", file.name)
+            } else {
+                "End of file. An empty chunk means the offset is at or past the end.".to_string()
+            };
+            return Ok((
+                format!("File {:?}, characters {offset}..{next}:\n\n{text}\n\n[{tail}]", file.name),
+                None,
+            ));
+        }
+        if offset != 0 {
+            return Err("Offsets apply only to text. Omit offset to reopen this file.".into());
+        }
+        if file.is_image() && modalities.image {
+            let bytes = self.inner.files.read(&file.digest).map_err(|err| {
+                format!("{} could not be opened: {err}. Ask for a new copy.", file.name)
+            })?;
+            return Ok((
+                format!("The saved attachment {:?} is shown below.", file.name),
+                Some(format!("data:{};base64,{}", file.mime, crate::e2b::encode(&bytes))),
+            ));
+        }
+        let path = self.place(card, &file).await.map_err(|why| {
+            format!(
+            "{} could not be opened: {why}. This is a {} file; ask for a text copy or a computer \
+             that can open it. You have not read its contents.", file.name, file.mime
+        )
+        })?;
+        Ok((format!("The saved attachment {:?} ({}) is on your computer at {path}. \
+            Open it there with a tool that understands this format; its contents have not been shown here.",
+            file.name, file.mime), None))
     }
 
     /// Reads a file off an agent's machine and into the store.
@@ -4037,6 +4067,8 @@ impl Runtime {
                         &named,
                     )
                     .await;
+                let file_image = matches!(&outcome.part,
+                    Part::ToolCall { name, .. } if name == tools::READ_FILE);
                 tool_parts.push(outcome.part);
                 messages.push(ChatMessage::Tool {
                     tool_call_id: call.id.clone(),
@@ -4054,8 +4086,15 @@ impl Runtime {
                     // shown ten pictures of one desktop starts reasoning about
                     // the wrong one. What an old screenshot was evidence of is
                     // in the tool result beside it, which is text and stays.
-                    forget_old_screens(&mut messages);
-                    messages.push(ChatMessage::user_seeing(SCREEN_NOW, image));
+                    if file_image {
+                        messages.push(ChatMessage::user_seeing(
+                            "The saved attachment looks like this.",
+                            image,
+                        ));
+                    } else {
+                        forget_old_screens(&mut messages);
+                        messages.push(ChatMessage::user_seeing(SCREEN_NOW, image));
+                    }
                 }
             }
 
@@ -4719,7 +4758,7 @@ impl Runtime {
     }
 
     /// The body of `execute_tool`, kept separate so every arm can go on
-    /// returning a pair while only the screen arm produces a picture.
+    /// returning a pair while screen and file reads can produce a picture.
     #[allow(clippy::too_many_arguments)]
     async fn dispatch_tool(
         &self,
@@ -4767,6 +4806,19 @@ impl Runtime {
             );
         }
 
+        if let ToolInvocation::ReadFile { name, offset } = invocation {
+            let (rendered, outcome, image) =
+                match self.read_file(card, &name, offset, attached, modalities).await {
+                    Ok((rendered, image)) => (
+                        rendered,
+                        ToolOutcome::Ok { summary: format!("read {name} at character {offset}") },
+                        image,
+                    ),
+                    Err(error) => (format!("Error: {error}"), ToolOutcome::Failed { error }, None),
+                };
+            return (rendered, Part::tool_call(tools::READ_FILE, arguments, outcome), image);
+        }
+
         if let ToolInvocation::UseScreen { action } = invocation {
             let result = self.use_screen(card, action, arguments).await;
             // A picture of a page is the same untrusted content as its text,
@@ -4795,9 +4847,9 @@ impl Runtime {
         }
 
         let (rendered, part) = match invocation {
-            // Both handled above: one answers with a picture, the other has to
-            // stop and ask the operator.
-            ToolInvocation::UseScreen { .. }
+            // Handled above: these can answer with a picture or park the turn.
+            ToolInvocation::ReadFile { .. }
+            | ToolInvocation::UseScreen { .. }
             | ToolInvocation::CreateAgent { .. }
             | ToolInvocation::RequestPermission { .. }
             | ToolInvocation::AskOperator { .. } => {

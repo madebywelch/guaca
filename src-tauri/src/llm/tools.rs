@@ -36,6 +36,7 @@ pub const ASK_OPERATOR: &str = "ask_operator";
 pub const ESCALATE: &str = "escalate";
 pub const ATTACH_FILE: &str = "attach_file";
 pub const WRITE_DOCUMENT: &str = "write_document";
+pub const READ_FILE: &str = "read_file";
 pub const CODE: &str = "code";
 pub const SHELL: &str = "shell";
 
@@ -1012,6 +1013,29 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: READ_FILE.to_string(),
+            description: "Reopen a saved attachment by file name, including documents you wrote \
+                          with `write_document` on earlier turns and files you sent to peers. \
+                          Older messages show only file names; this retrieves their contents. \
+                          The newest file with that name is used. Text needs no computer and \
+                          is returned in chunks; use the returned offset to continue. Pictures \
+                          are shown if your model supports them. Other formats are placed on \
+                          your computer if you have one. This reads a file without attaching \
+                          it to your answer."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "minLength": 1,
+                        "description": "The saved attachment's file name."},
+                    "offset": {"type": "integer", "minimum": 0,
+                        "description": "Text character offset. Omit to start at the beginning."}
+                },
+                "required": ["name"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
             name: WRITE_DOCUMENT.to_string(),
             // The twelfth, and it exists because the eleventh had a hole under
             // it. `attach_file` hands over a file; until this, the only way an
@@ -1136,6 +1160,10 @@ pub enum ToolInvocation {
     /// Hand files to whoever this turn is answering, on the answer itself.
     AttachFile {
         files: Vec<String>,
+    },
+    ReadFile {
+        name: String,
+        offset: usize,
     },
     /// Hand a piece of work to a coding harness in this agent's repository.
     ///
@@ -1344,7 +1372,7 @@ pub enum ScreenAction {
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ToolParseError {
     #[error(
-        "unknown tool {name:?}. Available tools: directory, send_message, attach_file, \
+        "unknown tool {name:?}. Available tools: directory, send_message, read_file, attach_file, \
          update_memory, note_progress, run_command, open_on_desktop, use_screen, browse, \
          schedule, calendar, create_agent."
     )]
@@ -1361,6 +1389,8 @@ pub enum ToolParseError {
     MissingTask,
     #[error("write_document needs a `name`")]
     MissingDocumentName,
+    #[error("read_file needs an attachment `name` and an optional nonnegative integer `offset`")]
+    InvalidFileRead,
     #[error("write_document was called for {name} with nothing in it")]
     EmptyDocument { name: String },
     #[error("update_memory needs a `content` string")]
@@ -1396,10 +1426,13 @@ impl ToolParseError {
     /// correct call looks like, so the next attempt can succeed.
     pub fn guidance(&self) -> String {
         match self {
+            ToolParseError::InvalidFileRead => format!(
+                "Error: {self}. Use {{\"name\": \"brief.md\"}} to start reading a saved attachment."
+            ),
             ToolParseError::UnknownTool { name } => {
                 format!(
                     "Error: no tool named {name:?}. You can call `directory`, `send_message`, \
-                     `attach_file`, `update_memory`, or `run_command`."
+                     `read_file`, `attach_file`, `update_memory`, or `run_command`."
                 )
             }
             ToolParseError::MissingNote => "Error: `note_progress` needs a non-empty `note` \
@@ -2176,6 +2209,23 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
             let files = normalize_list(args.files.as_ref().or(args.attachments.as_ref()));
 
             Ok(ToolInvocation::SendMessage { to, text, intent, files })
+        }
+        READ_FILE => {
+            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                name: READ_FILE.to_string(),
+                detail: e.to_string(),
+            })?;
+            let name = first_string(&value, &["name", "filename", "file_name"])
+                .filter(|name| !name.trim().is_empty())
+                .ok_or(ToolParseError::InvalidFileRead)?;
+            let offset = match value.get("offset") {
+                None => 0,
+                Some(value) => value
+                    .as_u64()
+                    .and_then(|n| usize::try_from(n).ok())
+                    .ok_or(ToolParseError::InvalidFileRead)?,
+            };
+            Ok(ToolInvocation::ReadFile { name: name.trim().to_string(), offset })
         }
         // The aliases are the words a model reaches for when it has just been
         // told to give the operator a document. Each names this and nothing
@@ -3517,10 +3567,10 @@ mod tests {
         let specs = specs(Surfaces::both(), Modalities::seeing());
         assert_eq!(
             specs.len(),
-            19,
+            20,
             "directory, run_command, open_on_desktop, use_screen, browse, code, shell, schedule, \
              calendar, create_agent, request_permission, ask_operator, decision, escalate, send_message, \
-             write_document, attach_file, update_memory, note_progress"
+             read_file, write_document, attach_file, update_memory, note_progress"
         );
         for spec in &specs {
             assert_eq!(
@@ -4057,6 +4107,30 @@ mod tests {
     #[test]
     fn delivery_rendering_handles_an_empty_result() {
         assert_eq!(render_deliveries(&[]), "No messages were sent.");
+    }
+
+    #[test]
+    fn a_file_read_requires_a_name_and_a_valid_character_offset() {
+        for arguments in [
+            r#"{}"#,
+            r#"{"name":" "}"#,
+            r#"{"name":"brief.md","offset":-1}"#,
+            r#"{"name":"brief.md","offset":1.5}"#,
+            r#"{"name":"brief.md","offset":"3"}"#,
+        ] {
+            assert_eq!(parse(&call(READ_FILE, arguments)), Err(ToolParseError::InvalidFileRead));
+        }
+        assert_eq!(
+            parse(&call(READ_FILE, r#"{"name":"brief.md"}"#)),
+            Ok(ToolInvocation::ReadFile { name: "brief.md".into(), offset: 0 })
+        );
+        assert_eq!(
+            parse(&call(READ_FILE, r#"{"name":"brief.md","offset":24000}"#)),
+            Ok(ToolInvocation::ReadFile { name: "brief.md".into(), offset: 24000 })
+        );
+        assert!(specs(Surfaces::none(), Modalities::text_only())
+            .iter()
+            .any(|tool| tool.name == READ_FILE));
     }
 
     #[test]

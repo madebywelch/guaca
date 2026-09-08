@@ -661,3 +661,281 @@ async fn a_document_called_for_with_nothing_in_it_is_refused_with_the_reason() {
     let told = tool_results(&stub).join("\n");
     assert!(told.contains("no second call"), "it has to say there is no later round: {told}");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_document_created_on_an_earlier_turn_can_be_reopened_without_a_computer() {
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Done.".into())
+        } else if anyone_said(body, "Reopen") {
+            Script::Plugin {
+                name: "read_file".into(),
+                arguments: serde_json::json!({"name": "pilot-playbook.md"}),
+            }
+        } else {
+            Script::Write {
+                tool: "write_document".into(),
+                name: "pilot-playbook.md".into(),
+                content: "# Pilot\n\nThe verification code is ORCHID-4729.".into(),
+            }
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let first = h.runtime.send_from_human(h.id("Manager"), "Write the playbook.").unwrap();
+    h.settle(first).await;
+    let second = h.runtime.send_from_human(h.id("Manager"), "Reopen the playbook.").unwrap();
+    h.settle(second).await;
+    let results = tool_results(&stub).join("\n");
+    assert!(results.contains("ORCHID-4729"), "saved contents did not reach the model: {results}");
+    assert_eq!(handed_over(&h, "Manager"), vec!["pilot-playbook.md"]);
+}
+
+/// A completed reply carrying a stored file, with no document contents in history.
+fn saved_reply(h: &Harness, agent: &str, name: &str, bytes: &[u8]) -> Envelope {
+    use guac_lib::domain::{
+        envelope::{Intent, Trust},
+        ids::{MessageId, RunId},
+        now_ms,
+    };
+    Envelope {
+        id: MessageId::new(),
+        run_id: RunId::new(),
+        channel_id: h.id(agent),
+        from: Participant::Agent { id: h.id(agent) },
+        to: Participant::Human,
+        parts: vec![Part::File(h.runtime.files().put(name, bytes).unwrap())],
+        trust: Trust::Peer,
+        hop: 0,
+        expects_reply: false,
+        intent: Intent::Courtesy,
+        cause: None,
+        created_at: now_ms(),
+    }
+}
+
+fn read_saved(body: &serde_json::Value, name: &str, offset: usize) -> Script {
+    if has_tool_result(body) {
+        Script::Say("Done.".into())
+    } else {
+        Script::Plugin {
+            name: "read_file".into(),
+            arguments: serde_json::json!({"name": name, "offset": offset}),
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reading_a_saved_file_distinguishes_missing_inaccessible_and_unreadable() {
+    let stub = serve(|body| read_saved(body, "brief.md", 0)).await;
+    let h = harness(&stub, &["Manager", "Scribe"], GuardLimits::default());
+    let secret = saved_reply(&h, "Scribe", "brief.md", b"PRIVATE-CONTENTS");
+    h.runtime.store().append(&secret).unwrap();
+    // Even a known name and stored bytes confer no access to another channel.
+    let run = h.runtime.send_from_human(h.id("Manager"), "Read the brief.").unwrap();
+    h.settle(run).await;
+    let results = tool_results(&stub).join("\n");
+    assert!(results.contains("No saved attachment"), "{results}");
+    assert!(!prompts(&stub).contains("PRIVATE-CONTENTS"));
+
+    let mut missing = saved_reply(&h, "Manager", "brief.md", b"lost");
+    if let Part::File(file) = &mut missing.parts[0] {
+        file.digest = "0".repeat(64);
+    }
+    h.runtime.store().append(&missing).unwrap();
+    let run = h.runtime.send_from_human(h.id("Manager"), "Try reading the brief again.").unwrap();
+    h.settle(run).await;
+    let results = tool_results(&stub).join("\n");
+    assert!(
+        results.contains("could not be read") && results.contains("Ask for a new copy"),
+        "{results}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_saved_file_outlives_history_and_includes_replies_filed_under_a_peer() {
+    use guac_lib::domain::ids::MessageId;
+    let stub = serve(|body| read_saved(body, "BRIEF.md", 0)).await;
+    let h = harness(&stub, &["Manager", "Scribe"], GuardLimits::default());
+    let mut old = saved_reply(&h, "Manager", "brief.md", b"OLD-VERSION");
+    old.created_at = 1;
+    h.runtime.store().append(&old).unwrap();
+    let mut latest = saved_reply(&h, "Manager", "brief.md", b"LATEST-VERSION");
+    latest.to = Participant::Agent { id: h.id("Scribe") };
+    latest.channel_id = h.id("Scribe");
+    latest.created_at = 2;
+    h.runtime.store().append(&latest).unwrap();
+    for i in 0..200 {
+        let mut chatter = old.clone();
+        chatter.id = MessageId::new();
+        chatter.parts = vec![Part::text("Unrelated conversation.")];
+        chatter.created_at = 3 + i;
+        h.runtime.store().append(&chatter).unwrap();
+    }
+    let run = h.runtime.send_from_human(h.id("Manager"), "Read the brief.").unwrap();
+    h.settle(run).await;
+    let results = tool_results(&stub).join("\n");
+    assert!(results.contains("LATEST-VERSION") && !results.contains("OLD-VERSION"), "{results}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn long_saved_text_can_be_read_to_the_end_without_a_computer() {
+    let stub = serve(|body| {
+        let results =
+            body["messages"].as_array().unwrap().iter().filter(|m| m["role"] == "tool").count();
+        match results {
+            0 | 1 => Script::Plugin {
+                name: "read_file".into(),
+                arguments: serde_json::json!({"name": "long.md", "offset": results * 24_000}),
+            },
+            _ => Script::Say("Done.".into()),
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let contents = format!("{}LAST-PARAGRAPH", "é".repeat(24_000));
+    h.runtime.store().append(&saved_reply(&h, "Manager", "long.md", contents.as_bytes())).unwrap();
+    let run = h.runtime.send_from_human(h.id("Manager"), "Read the entire document.").unwrap();
+    h.settle(run).await;
+    let results = tool_results(&stub);
+    assert!(results[0].contains("offset 24000"), "{results:?}");
+    assert!(!results[0].contains("LAST-PARAGRAPH"));
+    assert!(
+        results.last().unwrap().contains("LAST-PARAGRAPH")
+            && results.last().unwrap().contains("End of file")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_saved_image_is_shown_again_only_when_requested() {
+    let stub = serve(|body| read_saved(body, "chart.png", 0)).await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    h.runtime.store().append(&saved_reply(&h, "Manager", "chart.png", b"image-bytes")).unwrap();
+    let run = h.runtime.send_from_human(h.id("Manager"), "Inspect the chart again.").unwrap();
+    h.settle(run).await;
+    let transcript = stub.transcript.lock();
+    assert!(!transcript[0].to_string().contains("data:image/png"));
+    assert!(transcript.last().unwrap().to_string().contains("data:image/png;base64,"));
+    assert!(!transcript
+        .last()
+        .unwrap()
+        .to_string()
+        .contains("This is what your screen looks like now."));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unsupported_saved_format_reports_why_it_cannot_be_opened() {
+    let stub = serve(|body| read_saved(body, "brief.docx", 0)).await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    h.runtime.store().append(&saved_reply(&h, "Manager", "brief.docx", b"PK fake docx")).unwrap();
+    let run = h.runtime.send_from_human(h.id("Manager"), "Read the document.").unwrap();
+    h.settle(run).await;
+    let results = tool_results(&stub).join("\n");
+    assert!(
+        results.contains("could not be opened") && results.contains("ask for a text copy"),
+        "{results}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "live: costs money, needs a configured model"]
+async fn live_an_agent_reopens_its_saved_playbook() {
+    use harness::live::{configured, live_crew, LiveAgent};
+    let config = configured().expect("this live eval requires a configured model");
+    let h = live_crew(config, &[LiveAgent::generic("Manager")]);
+    let name = "virtual-try-on-boutique-pilot-playbook.md";
+    let code = guac_lib::domain::ids::MessageId::new().to_string();
+    h.runtime
+        .store()
+        .append(&saved_reply(
+            &h,
+            "Manager",
+            name,
+            format!("# Pilot playbook\n\nPilot verification code: {code}").as_bytes(),
+        ))
+        .unwrap();
+    let run = h
+        .runtime
+        .send_from_human(
+            h.id("Manager"),
+            &format!(
+                "What is the exact pilot verification code in the {name} you attached earlier?"
+            ),
+        )
+        .unwrap();
+    h.settle(run).await;
+    let messages = h.runtime.store().channel_messages(h.id("Manager"), 50).unwrap();
+    assert!(
+        messages.iter().any(|message| message.from == Participant::Agent { id: h.id("Manager") }
+            && message.plain_text().contains(&code)),
+        "{}",
+        h.transcript()
+    );
+    assert!(
+        messages
+            .iter()
+            .flat_map(|message| &message.parts)
+            .any(|part| matches!(part, Part::ToolCall {name, ..} if name == "read_file")),
+        "{}",
+        h.transcript()
+    );
+    println!("{}", h.transcript());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_new_long_attachment_points_to_the_rest_without_a_computer() {
+    let stub = serve(|body| read_saved(body, "long.md", 24_000)).await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let file = h
+        .runtime
+        .files()
+        .put("long.md", format!("{}THE-END", "x".repeat(24_000)).as_bytes())
+        .unwrap();
+    let run = h
+        .runtime
+        .send_from_human_with(h.id("Manager"), "Read the whole brief.", vec![file])
+        .unwrap();
+    h.settle(run).await;
+    assert!(prompts(&stub).contains("and offset 24000 to read the rest"));
+    assert!(tool_results(&stub).join("\n").contains("THE-END"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_saved_picture_is_not_sent_to_a_text_only_model() {
+    let listing = serde_json::json!({"data": [{"id": "test/model", "architecture": {"input_modalities": ["text"]}}]});
+    let stub = serve_publishing(Some(listing), |body| read_saved(body, "chart.png", 0)).await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    h.runtime.store().append(&saved_reply(&h, "Manager", "chart.png", b"picture")).unwrap();
+    let run = h.runtime.send_from_human(h.id("Manager"), "Read the picture.").unwrap();
+    h.settle(run).await;
+    assert!(!prompts(&stub).contains("data:image/png"));
+    assert!(tool_results(&stub).join("\n").contains("could not be opened"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_file_written_this_turn_is_read_before_its_older_saved_version() {
+    let stub = serve(|body| {
+        let results =
+            body["messages"].as_array().unwrap().iter().filter(|m| m["role"] == "tool").count();
+        match results {
+            0 => Script::Write {
+                tool: "write_document".into(),
+                name: "brief.md".into(),
+                content: "NEW-CONTENTS".into(),
+            },
+            1 => Script::Plugin {
+                name: "read_file".into(),
+                arguments: serde_json::json!({"name":"brief.md"}),
+            },
+            _ => Script::Say("Done.".into()),
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    h.runtime.store().append(&saved_reply(&h, "Manager", "brief.md", b"OLD-CONTENTS")).unwrap();
+    let run =
+        h.runtime.send_from_human(h.id("Manager"), "Revise the brief and read it back.").unwrap();
+    h.settle(run).await;
+    let results = tool_results(&stub).join("\n");
+    assert!(results.contains("NEW-CONTENTS") && !results.contains("OLD-CONTENTS"), "{results}");
+}

@@ -3465,6 +3465,28 @@ impl Store {
         Ok(out)
     }
 
+    /// A saved attachment remains reachable after its message leaves the prompt.
+    /// The visibility rule matches agent_history, including replies filed under peers.
+    pub fn agent_file(
+        &self,
+        agent: AgentId,
+        name: &str,
+    ) -> Result<Option<crate::domain::attachment::Attachment>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT m.id, m.channel_id, m.from_kind, m.from_agent, m.created_at, part.value
+               FROM messages m, json_each(m.parts) AS part
+              WHERE (m.channel_id=?1 OR (m.from_kind='agent' AND m.from_agent=?1))
+                AND json_extract(part.value, '$.type')='file'
+                AND json_extract(part.value, '$.name')=?2 COLLATE NOCASE
+              ORDER BY m.created_at DESC, m.id DESC, part.key DESC LIMIT 1",
+        )?;
+        stmt.query_row(params![agent.to_string(), name], row_to_file_hit)
+            .optional()?
+            .transpose()
+            .map(|hit| hit.map(|hit| hit.file))
+    }
+
     /// What an agent has read and written, oldest first, for its next turn.
     ///
     /// Incoming messages newer than the batch stay in the inbox. Its own
