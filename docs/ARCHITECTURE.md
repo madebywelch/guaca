@@ -941,14 +941,25 @@ told the path. The host does not learn to parse PDF or docx: the agent has a
 Linux box and can install what it needs, which is the premise the rest of the
 app already rests on.
 
+**A saved attachment can be reopened through `read_file`.** Only a file's name
+is kept in later prompts, including a document the agent wrote itself. The tool
+resolves that name against files made this turn, then messages in its channel or
+sent by it, newest first. The lookup has no history-window cutoff and grants no
+access to other agents' files. Forwarding and attaching use the same lookup.
+Text returns at most 24,000 characters with an offset for the next chunk, so a
+long document needs no computer to finish reading. Pictures follow the model's
+image capability; other formats use the existing machine-placement path. Reading
+does not attach the file again. Missing references, missing bytes and formats
+that need an unavailable computer are reported separately.
+
 **A file that could not be delivered is admitted.** Placing needs a machine, and
 starting one can fail. The agent is told, in words, that the file is out of
 reach and not to describe something it has not read. The same holds for a file
 an agent asks to send and does not have. Silence here is the worst available
 outcome, because both ends believe the document arrived.
 
-Files an agent attaches are resolved first against its own channel, which is
-forwarding and needs no machine at all, and otherwise as a path on its computer,
+Files an agent attaches are resolved first against its saved attachments, which
+is forwarding and needs no machine at all, and otherwise as a path on its computer,
 which is where an agent that *produced* a document has it. The operator's end is
 the same pipe: `dragDropEnabled` hands Rust the dropped paths, so the bytes are
 read on the Rust side and never enter the webview.

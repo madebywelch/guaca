@@ -173,12 +173,21 @@ impl FileStore {
     /// one invalid byte in a log file should cost that byte rather than the
     /// whole document.
     pub fn read_text(&self, digest: &str, limit: usize) -> Result<(String, bool), FileError> {
+        self.read_text_at(digest, 0, limit)
+    }
+
+    /// Character offsets let a model read past the prompt limit without a machine.
+    pub fn read_text_at(
+        &self,
+        digest: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<(String, bool), FileError> {
         let bytes = self.read(digest)?;
         let text = String::from_utf8_lossy(&bytes);
-        match text.char_indices().nth(limit) {
-            Some((at, _)) => Ok((text[..at].to_string(), true)),
-            None => Ok((text.to_string(), false)),
-        }
+        let mut chars = text.chars().skip(offset);
+        let chunk = chars.by_ref().take(limit).collect();
+        Ok((chunk, chars.next().is_some()))
     }
 
     fn path(&self, digest: &str) -> PathBuf {
@@ -469,6 +478,19 @@ mod tests {
     fn store() -> (FileStore, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         (FileStore::new(dir.path().join("files")), dir)
+    }
+
+    #[test]
+    fn text_chunks_count_characters_and_handle_the_end_and_missing_bytes() {
+        let (files, _dir) = store();
+        let file = files.put("brief.md", "aé🙂z".as_bytes()).unwrap();
+        assert_eq!(files.read_text_at(&file.digest, 1, 2).unwrap(), ("é🙂".into(), true));
+        assert_eq!(files.read_text_at(&file.digest, 3, 2).unwrap(), ("z".into(), false));
+        assert_eq!(
+            files.read_text_at(&file.digest, usize::MAX, 2).unwrap(),
+            (String::new(), false)
+        );
+        assert!(files.read_text_at(&"0".repeat(64), 0, 2).is_err());
     }
 
     #[test]
