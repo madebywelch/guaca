@@ -3945,16 +3945,26 @@ impl Runtime {
             let request = ChatRequest {
                 model: model.clone(),
                 messages: messages.clone(),
-                // The crew's plugins after the app's own tools, in that order,
-                // so a provider that truncates a long list keeps the ones every
-                // agent needs to answer at all.
-                tools: tools::specs(surfaces, modalities)
+                // Put the agent's granted integrations before the general
+                // workspace helpers. With helpers first, the live model denied
+                // a send function present later in the same request; presenting
+                // the integrations first restored calls without changing grants.
+                tools: tools::plugin_specs(&plugins)
                     .into_iter()
-                    .chain(tools::plugin_specs(&plugins))
+                    .chain(tools::specs(surfaces, modalities))
                     .collect(),
                 temperature: None,
             };
 
+            if round == 0 {
+                tracing::info!(
+                    %agent_id,
+                    %run_id,
+                    model = %request.model,
+                    tools = ?request.tools.iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(),
+                    "turn tool definitions"
+                );
+            }
             let completion = self.stream_with_retries(&inference, &request, &mut stream).await;
 
             let completion = match completion {

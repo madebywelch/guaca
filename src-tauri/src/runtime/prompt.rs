@@ -353,14 +353,19 @@ pub fn system_prompt(
             out.push_str(
                 "Your crew has these plugins connected. The sign-in behind each one is the \
                  operator's, held by Guaca: there is nothing for you to authenticate, no key to \
-                 find, and no command to run.\n",
+                 find, and no command to run. These tools do not depend on a browser being \
+                 signed in. The available names below come from this turn's tool definitions; \
+                 use them rather than earlier claims about missing access. A tool missing \
+                 from this list and a tool call returning an error are different failures: \
+                 report which one you observed.\n",
             );
             for set in plugins {
+                let offered = crate::llm::tools::plugin_specs(std::slice::from_ref(set));
                 out.push_str(&format!(
                     "- {} — {} tool{}, called as `{}{}…`{}\n",
                     set.kind.label(),
-                    set.offered.len(),
-                    if set.offered.len() == 1 { "" } else { "s" },
+                    offered.len(),
+                    if offered.len() == 1 { "" } else { "s" },
                     set.kind.slug(),
                     crate::llm::tools::PLUGIN_SEPARATOR,
                     // Where it is, but only for a server the operator added. A
@@ -373,6 +378,21 @@ pub fn system_prompt(
                         format!(" (your operator's own server at {})", set.kind.endpoint())
                     } else {
                         String::new()
+                    },
+                ));
+                // A count did not stop an SDR claiming Gmail was read-only
+                // while gmail_send was offered. Name the callable functions,
+                // using the same validation as the provider's definitions.
+                out.push_str(&format!(
+                    "  Available now: {}.\n",
+                    if offered.is_empty() {
+                        "none".to_string()
+                    } else {
+                        offered
+                            .iter()
+                            .map(|tool| format!("`{}`", tool.name))
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     },
                 ));
                 // Named, not counted, and not left out. An agent that is simply
@@ -797,10 +817,11 @@ pub fn system_prompt(
             one_line(&one.summary)
         ));
         out.push_str(
-            "It is still on their desk and they have not cleared it, so assume they have not \
-             dealt with it yet. Do not raise it again unless what you would say has changed, and \
-             do not spend this turn waiting on it: work around it if there is a way around it, or \
-             say plainly what is stopped and stop. If it has come unstuck, carry on and say so.\n",
+            "This is your earlier report, not a fresh check of the underlying condition. An uncleared \
+             report does not mean a tool is still unavailable: use this turn's available tool \
+             definitions and actual call results to check that. Do not raise it again unless what \
+             you would say has changed. Do not spend this turn waiting on it: carry on if the \
+             condition has cleared, work around it if possible, or say what is still stopped and why.\n",
         );
     }
 
@@ -1614,6 +1635,52 @@ mod tests {
         );
         // And the warning that these are not a sandbox.
         assert!(prompt.contains("operator's real account"), "{prompt}");
+    }
+
+    #[test]
+    fn available_plugin_names_match_callable_definitions() {
+        let mut set = plugin(PluginKind::Google, &["gmail_search", "gmail_send", "invalid name"]);
+        set.withheld = vec!["drive_create_file".into()];
+        set.elsewhere = vec!["gmail_read".into()];
+        for available in [true, false] {
+            if !available {
+                set.offered.clear();
+            }
+            let prompt = system_prompt(
+                &card("SDR"),
+                "Robert",
+                &[],
+                &[],
+                &[],
+                &[set.clone()],
+                "",
+                &[],
+                &[],
+                &[],
+                ReplyMode::ToOperator,
+                &[],
+                None,
+                None,
+                Surfaces::none(),
+                Modalities::seeing(),
+            );
+            let line = prompt.lines().find(|line| line.contains("Available now:")).unwrap();
+            let names: Vec<_> = crate::llm::tools::plugin_specs(std::slice::from_ref(&set))
+                .into_iter()
+                .map(|tool| format!("`{}`", tool.name))
+                .collect();
+            assert_eq!(
+                line,
+                format!(
+                    "  Available now: {}.",
+                    if names.is_empty() { "none".into() } else { names.join(", ") }
+                )
+            );
+            assert!(!line.contains("invalid name"));
+            assert!(!line.contains("gmail_read"));
+            assert!(!line.contains("drive_create_file"));
+            assert!(prompt.contains("do not depend on a browser being signed in"));
+        }
     }
 
     #[test]

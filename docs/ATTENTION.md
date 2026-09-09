@@ -137,7 +137,9 @@ and configurable briefing times are not implemented here.
 An escalation is an operational blocker, not an unanswered preference. Nothing
 parks and nothing expires. One row per agent preserves `raised_at` and increments
 `times` when the same agent raises again. The prompt shows its own open
-escalation so the agent knows it already reported the wall.
+escalation so the agent knows it already reported the wall. The report is historical:
+an uncleared row is not evidence that a tool is still unavailable. Current tool
+definitions and call results determine whether the work can continue.
 
 **Open channel** is the primary action because that is where the operator can
 unblock the agent. **Clear** only removes the report. The agent cannot withdraw
