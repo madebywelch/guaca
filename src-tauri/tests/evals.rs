@@ -1249,6 +1249,99 @@ mod live {
         }
     }
 
+    /// A stale capability claim must not hide a currently offered write tool.
+    /// Calls are inspected only; this test cannot send mail.
+    #[tokio::test]
+    #[ignore = "live: needs a configured model"]
+    async fn live_plugin_inventory_overrides_stale_read_only_claims() {
+        use guac_lib::db::Store;
+        use guac_lib::domain::plugin::{PluginKind, PluginTool, PluginToolset};
+        use guac_lib::llm::{
+            modality::Modalities,
+            openrouter::{ChatMessage, ChatRequest, LlmClient},
+            tools::{self, Surfaces},
+        };
+        use guac_lib::runtime::prompt::{system_prompt, ReplyMode};
+        let path = std::path::PathBuf::from(
+            std::env::var_os("GUACA_TEST_CONFIG_DIR").expect("GUACA_TEST_CONFIG_DIR"),
+        );
+        let config: guac_lib::config::AppConfig =
+            serde_json::from_slice(&std::fs::read(path.join("config.json")).unwrap()).unwrap();
+        let client = LlmClient::new().unwrap().with_subscription(std::sync::Arc::new(
+            guac_lib::subscription::Subscription::open(path.join("subscription.json")),
+        ));
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("guac.db")).unwrap();
+        let card = store.create_agent(&draft("SDR", &["outreach"])).unwrap();
+        let plugins = [PluginToolset {
+            kind: PluginKind::Google,
+            offered: vec![
+                PluginTool { name: "gmail_search".into(), description: "Search Gmail.".into(), input_schema: serde_json::json!({"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}) },
+                PluginTool { name: "gmail_read".into(), description: "Read Gmail.".into(), input_schema: serde_json::json!({"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}) },
+                PluginTool { name: "gmail_send".into(), description: "Send an email as the operator. Empty to, subject or body returns a validation error before sending anything.".into(), input_schema: serde_json::json!({"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"}},"required":["to","subject","body"]}) },
+            ], withheld: vec![], elsewhere: vec![],
+        }];
+        let surfaces = Surfaces { computer: false, browser: true, repository: false };
+        let prompt = system_prompt(
+            &card,
+            "Robert",
+            &[],
+            &[],
+            &[],
+            &plugins,
+            "",
+            &[],
+            &[],
+            &[],
+            ReplyMode::ToOperator,
+            &[],
+            None,
+            None,
+            surfaces,
+            Modalities::seeing(),
+        );
+        let mut request = ChatRequest {
+            model: config.inference.active_model().into(),
+            messages: vec![
+                ChatMessage::system(prompt),
+                ChatMessage::assistant("Only google__gmail_search and google__gmail_read are exposed. No gmail_send tool exists. The browser is signed out, so sending is blocked."),
+                ChatMessage::user("[OPERATOR] Diagnose dispatch with google__gmail_send using empty strings for to, subject and body. These fail required-field validation before sending. Do not use the browser or send real mail."),
+            ],
+            tools: tools::plugin_specs(&plugins).into_iter().chain(tools::specs(surfaces, Modalities::seeing())).collect(),
+            temperature: None,
+        };
+        let completion = client.stream_chat(&config.inference, &request, |_| {}).await.unwrap();
+        println!("inventory diagnostic: {:?} {}", completion.tool_calls, completion.content);
+        assert_eq!(completion.tool_calls.len(), 1, "{}", completion.content);
+        let call = &completion.tool_calls[0];
+        assert_eq!(call.name, "google__gmail_send");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&call.arguments).unwrap(),
+            serde_json::json!({"to":"", "subject":"", "body":""})
+        );
+
+        // A diagnostic is easier than continuing work after a browser failure.
+        // Keep the same inventory and conversation, then ask for the real shape
+        // of operation. Neither completion is dispatched by this test.
+        request.messages.push(ChatMessage::assistant(
+            "The send diagnostic reached the API and returned a required-field validation error. Later research found the browser signed out. I previously reported that this meant sending was unavailable.",
+        ));
+        request.messages.push(ChatMessage::user(
+            "[OPERATOR] Resume the authorized email now. Research and deduplication are complete. Send exactly to prospect@example.test, subject 'Website inquiry', body 'Hello, may I ask about your website?' using the connected integration. This is the one email authorized for this test.",
+        ));
+        let completion = client.stream_chat(&config.inference, &request, |_| {}).await.unwrap();
+        println!("inventory recovery: {:?} {}", completion.tool_calls, completion.content);
+        let send = completion
+            .tool_calls
+            .iter()
+            .find(|call| call.name == "google__gmail_send")
+            .unwrap_or_else(|| panic!("recovery did not call send: {completion:?}"));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&send.arguments).unwrap(),
+            serde_json::json!({"to":"prospect@example.test", "subject":"Website inquiry", "body":"Hello, may I ask about your website?"})
+        );
+    }
+
     /// Everything a live scenario needs: real agents, real model, real prompt.
     async fn run_live(names: &[&'static str], instruction: &str) -> Option<Eval> {
         let crew: Vec<LiveAgent> = names.iter().map(|n| LiveAgent::generic(n)).collect();

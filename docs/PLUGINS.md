@@ -870,6 +870,20 @@ crew has Neon behave differently when asked "can we check the database".
 The section also carries the one thing a tool description cannot: these act on
 the operator's real account. A database dropped through a plugin is dropped.
 
+The section lists each callable name, using the same validation as the tool
+definitions. A count alone lets an earlier claim of missing access stand beside
+a working tool without an explicit contradiction. Browser sign-in is separate
+from plugin access. The first model call of each turn logs its offered tool
+names, agent and run identifiers, so a missing-tool report can be checked
+without logging prompts, arguments or credentials.
+
+A turn offers its granted plugin functions before the general workspace tools.
+The order is deliberate: in a live ChatGPT replay, a Gmail send function at the
+tail was received by the endpoint but repeatedly described by the model as
+unavailable. Moving the same granted functions first restored the call; changing
+the prompt or explicitly setting allowed tools alone did not. All workspace
+functions remain offered, and permission checks still run at dispatch.
+
 ## A session per call
 
 Every tool call opens a fresh session. On a legacy server that is `initialize`
