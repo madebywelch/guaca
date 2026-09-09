@@ -3,12 +3,13 @@ import { useEffect, useRef, useState } from "react";
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { ACCENTS, CHARACTERS, suggestAccent, suggestCharacter } from "../avatars/catalog";
 import { api } from "../lib/ipc";
-import { onOpenRouter } from "../lib/providers";
+import { onOpenRouter, providerFor } from "../lib/providers";
 import { useStore } from "../lib/store";
 import { type AgentCard, type AgentDraft, errorMessage } from "../lib/types";
 import { AgentRepositories } from "./AgentRepositories";
 import { GrantList } from "./GrantList";
 import { ModelSuggestions } from "./ModelSuggestions";
+import { SubscriptionModel } from "./ProviderFields";
 import { SigninList } from "./SigninList";
 
 interface Props {
@@ -32,7 +33,7 @@ export function AgentEditor({ agent, onClose }: Props) {
     groupId: agent?.groupId,
     avatar: agent?.avatar ?? suggestCharacter(agents.map((a) => a.avatar)),
     color: agent?.color ?? suggestAccent(agents.map((a) => a.color)),
-    model: agent?.model ?? settings?.defaultModel ?? "",
+    model: agent?.model ?? "",
     systemPrompt: agent?.systemPrompt ?? "",
     skills: agent?.skills ?? [],
   }));
@@ -70,6 +71,19 @@ export function AgentEditor({ agent, onClose }: Props) {
   // given one yet is already in it. Named for the crew rather than the group
   // because the character picker below binds `group` to something else.
   const crew = groups.find((entry) => entry.id === draft.groupId) ?? groups[0];
+  const provider = crew?.inference.provider ?? settings?.provider;
+  const endpoint = crew?.inference.baseUrl || settings?.baseUrl || "";
+  const providerName =
+    provider === "chatgpt"
+      ? "ChatGPT subscription"
+      : provider === "claude"
+        ? "Claude subscription"
+        : providerFor(endpoint)?.name || endpoint || "App endpoint";
+  const inheritedModel =
+    provider === "chatgpt"
+      ? crew?.inference.subscriptionModel || settings?.subscriptionModel || ""
+      : crew?.inference.defaultModel || settings?.defaultModel || "";
+  const inherit = `Use group default${inheritedModel ? ` · ${inheritedModel}` : ""}`;
 
   const save = async () => {
     setBusy(true);
@@ -209,18 +223,57 @@ export function AgentEditor({ agent, onClose }: Props) {
           </label>
         )}
 
-        <label className="field">
-          <span className="field__label">Model</span>
-          <input
-            className="input input--mono"
-            value={draft.model}
-            placeholder={settings?.defaultModel || "anthropic/claude-sonnet-4.5"}
-            onChange={(event) => patch({ model: event.target.value })}
-          />
+        <div className="field">
+          <span className="field__label">Provider · {providerName}</span>
           <span className="field__hint">
-            Any model slug your endpoint accepts. Agents can each use a different one.
+            Inherited from {crew?.name ?? "the group"}. Change the provider in group settings.
           </span>
-        </label>
+        </div>
+
+        {provider === "chatgpt" ? (
+          <SubscriptionModel
+            value={draft.model}
+            models={settings?.subscriptionModels ?? []}
+            inherit={inherit}
+            onChange={(model) => patch({ model })}
+            hint="Choose a ChatGPT model for this agent, or use the group default. Choices come from your signed-in account."
+          />
+        ) : provider === "claude" ? (
+          <div className="field">
+            <span className="field__label">Model</span>
+            <span className="field__hint">
+              Claude controls which model runs. Per-agent model overrides are not used with this
+              provider. Any saved override is kept for when you switch back.
+            </span>
+          </div>
+        ) : (
+          <>
+            <label className="field">
+              <span className="field__label">Model</span>
+              <input
+                className="input input--mono"
+                value={draft.model}
+                placeholder={inherit}
+                onChange={(event) => patch({ model: event.target.value })}
+              />
+              <span className="field__hint">
+                Enter a model ID accepted by {providerName}, or leave blank to use the group
+                default. This override applies only to this agent.
+              </span>
+            </label>
+            {draft.model && (
+              <div className="field">
+                <button
+                  type="button"
+                  className="btn btn--small"
+                  onClick={() => patch({ model: "" })}
+                >
+                  Use group default
+                </button>
+              </div>
+            )}
+          </>
+        )}
 
         <ModelSuggestions
           name={draft.name}
