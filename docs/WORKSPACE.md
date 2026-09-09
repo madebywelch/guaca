@@ -1411,9 +1411,22 @@ the same reason, as the memory cap.
 
 ## The model field suggests three, and is still a text box
 
-An agent's model is any slug its endpoint accepts, and the endpoint is the
-operator's to choose. That is right, and it also means somebody who has just
-decided they want an agent that reads contracts is looking at a blank box with
+The agent profile names the provider inherited from its group, resolving the
+group's choice over the app's. New agents leave their model blank, which means
+use the group default. Opening a profile never copies that default into an
+override. Changing groups updates the provider and inherited model immediately,
+while keeping any explicit override visible.
+
+On ChatGPT the field is the same account-backed selector used in Settings and
+the group editor, with a first row that says "Use group default" and names that
+model. A saved override missing from the live catalog stays selected and is
+identified as unlisted; neither discovery nor its failure changes the draft.
+On Claude there is no model control: the profile explains that Claude controls
+the model and keeps any saved override for switching back.
+
+On a compatible endpoint, an agent's model is any slug that endpoint accepts.
+The field names the endpoint and offers a reset to the group default. Somebody
+who has just decided they want an agent that reads contracts is looking at a blank box with
 no way to find out what to put in it. Under the box are three models, and
 pressing one fills the box in. It is the same edit as typing: nothing is saved
 by it, and nothing about the field changed.

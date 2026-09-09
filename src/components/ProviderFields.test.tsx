@@ -43,6 +43,9 @@ it("replaces fallback choices with the live catalog without changing the saved m
   expect(options()).toEqual(["new-model", "another-model", "saved-model"]);
   expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe("saved-model");
   expect(onChange).not.toHaveBeenCalled();
+  expect(screen.getByRole("status").textContent).toContain(
+    "saved-model is not in your account's current ChatGPT model list",
+  );
   fireEvent.change(screen.getByRole("combobox"), { target: { value: "new-model" } });
   expect(onChange).toHaveBeenCalledWith("new-model");
 });

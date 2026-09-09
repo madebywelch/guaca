@@ -61,6 +61,7 @@ vi.mock("./lib/ipc", () => ({
     openEscalations: async () => [],
     agentLastActive: () => agentLastActive(),
     getSettings: () => getSettings(),
+    subscriptionModels: async () => ["gpt-5.6-luna"],
     reportPresence: async () => {},
     capabilities: async () => ({
       localDirectories: true,

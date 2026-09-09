@@ -509,7 +509,7 @@ export function GroupEditor({ group, onClose }: Props) {
                     models={settings?.subscriptionModels ?? []}
                     onChange={setSubscriptionModel}
                     inherit={`Inherit · ${settings?.subscriptionModel ?? ""}`}
-                    hint="Used by every agent in this group that does not name its own model. A subscription has an hourly quota rather than a per-token bill, and every crew spending it shares that quota."
+                    hint="The default for this group. To choose a different ChatGPT model for one agent, open its profile and change Model. All agents using this subscription share its quota."
                   />
                 )}
 

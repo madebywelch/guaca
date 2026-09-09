@@ -1,7 +1,8 @@
 /**
  * The two parts of choosing a provider that are drawn twice.
  *
- * Once in Settings, for the app, and once in a group, for one crew. The rest of
+ * Once in Settings, for the app, and once in a group, for one crew. The model
+ * selector is also used in an agent's profile for its own override. The rest of
  * each pane differs enough that sharing it would be a component with a prop per
  * sentence; these two are here because getting either subtly wrong is expensive
  * and invisible. A misspelled endpoint fails on every turn of every agent with
@@ -100,10 +101,9 @@ interface ModelProps {
   /** Initial choices while the account catalog loads. */
   models: string[];
   onChange: (model: string) => void;
-  /** Offered as the first row when a blank value means something: a group that
-   *  leaves this alone runs on whatever the app is set to. */
+  /** Offered as the first row when blank means inherit from the app or group. */
   inherit?: string;
-  /** What this model is used for, which differs between the app and a group. */
+  /** What this model is used for in the app, group or agent profile. */
   hint: ReactNode;
 }
 
@@ -151,8 +151,14 @@ export function SubscriptionModel({ value, models, onChange, inherit, hint }: Mo
         ))}
       </select>
       <span className="field__hint">{hint}</span>
+      {catalog && value && !catalog.includes(value) && (
+        <span className="field__hint" role="status" style={{ display: "block" }}>
+          {value} is not in your account's current ChatGPT model list. Choose a listed model
+          {inherit !== undefined ? " or use the default above" : ""} if it no longer works.
+        </span>
+      )}
       {unavailable && (
-        <span className="field__hint" role="status">
+        <span className="field__hint" role="status" style={{ display: "block" }}>
           Could not load current ChatGPT models. Showing saved and default choices. Reopen this
           panel to retry.
         </span>
