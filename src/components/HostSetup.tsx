@@ -6,6 +6,7 @@ import {
   localHost,
   rememberMode,
 } from "../lib/host";
+import { INSTRUCTIONS, RELEASES } from "../lib/releases";
 import {
   activateRemote,
   attached,
@@ -66,8 +67,10 @@ export function HostSetup({ children }: { children: ReactNode }) {
 export function HostChoice({
   initialError = "",
   onConnected,
+  showUpdate = true,
 }: {
   initialError?: string;
+  showUpdate?: boolean;
   onConnected?: () => void;
 }) {
   const [mode, setMode] = useState<"local" | "remote">(
@@ -156,6 +159,17 @@ export function HostChoice({
 
   return (
     <div className="host-choice">
+      {initialError && (
+        <p className="field__hint">
+          <a href={INSTRUCTIONS} target="_blank" rel="noopener noreferrer">
+            Host update instructions
+          </a>
+          {" · "}
+          <a href={RELEASES} target="_blank" rel="noopener noreferrer">
+            Guaca downloads
+          </a>
+        </p>
+      )}
       <p className="settings__lede">
         Guaca is your desktop interface. Your host runs your agents and keeps their groups,
         conversations and files.
@@ -210,7 +224,7 @@ export function HostChoice({
             <div className="preset__text">
               <strong>Docker</strong>
               <p role="status">{docker?.message ?? "Checking Docker…"}</p>
-              {docker?.updateAvailable && (
+              {showUpdate && docker?.updateAvailable && (
                 <div className="field">
                   <p className="field__hint">
                     A host update is ready. Updating interrupts current jobs and restarts the host.
@@ -225,6 +239,20 @@ export function HostChoice({
                     Back up and update host
                   </button>
                 </div>
+              )}
+              {showUpdate && docker?.operation && (
+                <details>
+                  <summary>Last host update: {docker.operation.stage}</summary>
+                  {docker.operation.backup && (
+                    <p>
+                      Backup volume: <code>{docker.operation.backup}</code>
+                    </p>
+                  )}
+                  {docker.operation.error && <p>{docker.operation.error}</p>}
+                  <a href={INSTRUCTIONS} target="_blank" rel="noopener noreferrer">
+                    Host recovery instructions
+                  </a>
+                </details>
               )}
               <div className="access__row">
                 {docker?.state === "missing" ? (

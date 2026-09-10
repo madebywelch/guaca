@@ -8,6 +8,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { HostSetup } from "./components/HostSetup";
+import { HostMonitor } from "./components/HostUpdates";
 import { Roster } from "./components/Markdown";
 import { TokenEntry } from "./components/TokenEntry";
 import { applyAppearance } from "./lib/appearance";
@@ -106,7 +107,9 @@ ReactDOM.createRoot(root).render(
           need one. A desktop passes straight through. */}
       <HostSetup>
         <TokenEntry>
-          <Guaca />
+          <HostMonitor>
+            <Guaca />
+          </HostMonitor>
         </TokenEntry>
       </HostSetup>
     </ErrorBoundary>

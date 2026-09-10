@@ -36,6 +36,7 @@ pub mod transfer;
 /// The other one.
 #[cfg(feature = "desktop")]
 pub mod tray;
+pub mod updates;
 pub mod webhook;
 pub mod workspace;
 

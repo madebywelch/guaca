@@ -699,3 +699,65 @@ it can be pulled without registry credentials. Run the candidate script with
 `GUACA_BACKEND_IMAGE=...@sha256:...` to pin the app to that image. macOS signing
 and notarization remain release prerequisites for a public download. Test on a
 clean Mac and on the remote host before merging or publishing the release.
+
+
+## Updating a self-hosted backend
+
+Settings > Workspace reports the installed release, compatibility, the latest
+published stable release, and when the check last succeeded. `guacad` reads the
+public GitHub release manifest at most once per six hours after a successful
+automatic check. Explicit checks and failed checks have a one-minute minimum
+retry interval. Set `GUACA_UPDATE_CHECKS=off` to disable automatic release
+lookups; an explicit Check for updates still works. No workspace contents,
+access keys or Guaca account credentials are sent to the release service.
+The cache lasts for the backend process; a restart starts a fresh check.
+
+A browser whose frontend and backend are both old can detect a new release.
+A stale open page offers to preserve its current text and uploaded attachment
+references in session storage before reloading. An incompatible API stops the
+workspace from opening and leaves update instructions available. Legacy hosts
+without API metadata are marked unverified; an operator can explicitly continue.
+Custom builds are never ordered by their commit hashes or claimed to be current.
+
+For a source-based Compose deployment, get the desired revision and build it
+before interrupting the running service. Keep the original Compose project
+name, environment, bind address, and volume. Stop the service and make a
+complete copy of its stopped data volume before recreating it. Then run the
+existing deployment command with `--build --wait` from that revision. Do not
+use `docker compose down -v`: it removes the workspace volume. For a deployment
+that uses a published image, set the verified release's immutable digest in
+that deployment's configuration, pull it, then follow the same stop, backup
+and recreate process. For systemd, stop the service, copy its state directory,
+replace the binary and matching served frontend, then restart it.
+
+Verify `/health` reports the intended build, version and API generation, and
+that authenticated workspace access succeeds. The client reconnects without
+replaying interrupted actions. Review its recovery notices before retrying work.
+A plain container restart does not change the image. This app does not hold
+SSH or Docker privileges on an externally managed server; its update panel
+provides instructions rather than a remote update button.
+
+After a failed update, preserve the failed volume. Restore the complete backup
+into a separate volume and run the recorded previous image on that restored
+copy. Never run an old binary on a database a newer binary may have migrated.
+Restoring a backup drops changes made after that backup, so inspect its age
+before proceeding.
+
+The native local manager records its update stages and recovery backup in
+`host-update.json` under the app's application-support directory. It serializes
+operations across app processes and prevents ordinary app exit while a local
+host operation runs. If an update was interrupted after replacement could have
+begun, startup refuses automatic recovery. The saved journal identifies the
+backup volume and previous image. Restore manually using the procedure above,
+then archive the journal after verifying the restored workspace; retaining an
+unfinished journal intentionally keeps automatic startup blocked. Do not erase
+an unreadable journal merely to get past the error.
+
+A failed download leaves the old host running. A failed backup restarts the old
+container and reports separately if that restart fails. Completion requires a
+matching version, image revision (where provided), API generation and successful
+authenticated workspace call. Update progress remains outside the container
+being replaced. The UI installs the image embedded in its desktop build, and
+refuses to downgrade a host with a newer labeled release. Backups are retained;
+list them in Docker by the `<container>-backup-` prefix and remove obsolete
+copies manually after verifying the updated workspace.

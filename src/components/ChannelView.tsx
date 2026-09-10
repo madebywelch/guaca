@@ -269,6 +269,8 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
               open on a channel the operator has just switched to. */}
       {agent && <TurnFooter key={agent.id} agent={agent} state={activity[agent.id]} />}
       <Composer
+        key={`composer-${channel}`}
+        draftKey={channel}
         placeholder={`Message ${agent?.name ?? "agent"}`}
         group={agent?.groupId ?? null}
         disabled={!agent || agent.lifecycle === "terminated"}

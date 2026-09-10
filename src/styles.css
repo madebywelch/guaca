@@ -7941,3 +7941,8 @@ input[type="file"]:disabled {
     max-height: 65dvh;
   }
 }
+
+/* The compatibility screen preserves the mounted workspace and unsent draft. */
+.host-workspace:not([hidden]) { display: contents; }
+.host-update-facts { display: grid; grid-template-columns: auto 1fr; gap: var(--space-2) var(--space-4); }
+.host-update-facts dd { margin: 0; overflow-wrap: anywhere; }

@@ -10,6 +10,8 @@
  */
 
 declare const __COMMIT__: string;
+declare const __VERSION__: string;
+export const VERSION: string = __VERSION__;
 
 /** The commit this build was made from, suffixed `-dirty` where the tree had
  *  uncommitted edits on top of it, and empty where there was none to read. */

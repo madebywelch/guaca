@@ -8,6 +8,7 @@ import { Calendar } from "./components/Calendar";
 import { ChannelView } from "./components/ChannelView";
 import { ForYou } from "./components/ForYou";
 import { GroupEditor } from "./components/GroupEditor";
+import { HostUpdateNotice } from "./components/HostUpdates";
 import { Inspector } from "./components/Inspector";
 import { MobileNavigation } from "./components/MobileNavigation";
 import { Search } from "./components/Search";
@@ -356,6 +357,8 @@ export default function App() {
             </button>
           </div>
         )}
+
+        <HostUpdateNotice onReview={() => setShowSettings("workspace")} />
 
         {handoff && (
           <div className="banner" role="status">

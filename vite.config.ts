@@ -1,5 +1,7 @@
 import { execFileSync } from "node:child_process";
 
+import { readFileSync } from "node:fs";
+
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
@@ -40,7 +42,12 @@ function builtOn(): string {
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   clearScreen: false,
-  define: { __COMMIT__: JSON.stringify(builtOn()) },
+  define: {
+    __COMMIT__: JSON.stringify(builtOn()),
+    __VERSION__: JSON.stringify(
+      JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version,
+    ),
+  },
   server: {
     port: 1420,
     strictPort: true,

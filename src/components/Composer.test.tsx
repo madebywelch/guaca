@@ -388,3 +388,58 @@ async function type(text: string) {
     fireEvent.change(screen.getByRole("combobox"), { target: { value: text } });
   });
 }
+
+describe("drafts across an update reload", () => {
+  it("restores text and uploaded files in the same channel", async () => {
+    const { BEFORE_RELOAD } = await import("../lib/transport");
+    const renderComposer = () =>
+      render(
+        <Composer
+          placeholder="Message"
+          group={CREW}
+          draftKey="reload-test"
+          onSend={async () => {}}
+        />,
+      );
+    const first = renderComposer();
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "Keep this draft" } });
+    const attachment: Attachment = {
+      digest: "a".repeat(64),
+      name: "saved.txt",
+      mime: "text/plain",
+      bytes: 4,
+    };
+    await act(async () => dropped?.(Promise.resolve({ attached: [attachment], refused: [] })));
+    expect(window.dispatchEvent(new Event(BEFORE_RELOAD, { cancelable: true }))).toBe(true);
+    first.unmount();
+    renderComposer();
+    expect((screen.getByRole("combobox") as HTMLTextAreaElement).value).toBe("Keep this draft");
+    expect(screen.getByText("saved.txt")).toBeTruthy();
+    sessionStorage.clear();
+  });
+  it("cancels reload if session storage cannot preserve an unsent draft", async () => {
+    const { BEFORE_RELOAD } = await import("../lib/transport");
+    render(
+      <Composer
+        placeholder="Message"
+        group={CREW}
+        draftKey="unavailable-store"
+        onSend={async () => {}}
+      />,
+    );
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "Do not lose this" } });
+    vi.stubGlobal("sessionStorage", {
+      setItem: () => {
+        throw new Error("Storage unavailable");
+      },
+    });
+    try {
+      await act(async () => {
+        expect(window.dispatchEvent(new Event(BEFORE_RELOAD, { cancelable: true }))).toBe(false);
+      });
+      expect((screen.getByRole("combobox") as HTMLTextAreaElement).value).toBe("Do not lose this");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

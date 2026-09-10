@@ -1,0 +1,157 @@
+<div id="guaca-host-update-preview">
+  <div class="viz-controls">
+    <label class="form-label">Client and host
+      <select class="form-select" data-host>
+        <option value="local">Desktop · On this Mac</option>
+        <option value="remote">Desktop · Remote VPS</option>
+        <option value="browser">Browser · Remote VPS</option>
+        <option value="managed">Browser · VPS with update controller</option>
+      </select>
+    </label>
+    <label class="form-label">Preview state
+      <select class="form-select" data-state>
+        <option value="available">Update available</option>
+        <option value="current">Up to date</option>
+        <option value="offline">Could not check</option>
+        <option value="unknown">Legacy or custom host</option>
+        <option value="incompatible">Host update required</option>
+        <option value="client">Frontend update required</option>
+        <option value="updating">Update in progress</option>
+        <option value="failed">Update failed</option>
+      </select>
+    </label>
+  </div>
+  <p class="text-small text-muted">Proposed interface · illustrative releases · no real update actions</p>
+  <div class="viz-row" data-notice role="status">
+    <i data-lucide="arrow-up-circle" aria-hidden="true"></i>
+    <span data-notice-text>Host update available</span>
+    <button type="button" class="btn btn-ghost" data-review>Review update</button>
+    <button type="button" class="btn btn-ghost" data-dismiss>Later</button>
+  </div>
+  <hr>
+  <div class="viz-row"><span class="text-small text-muted">Settings / Workspace</span></div>
+  <h2 data-title>Host update</h2>
+  <div class="viz-row"><i data-lucide="server" aria-hidden="true"></i><span data-host-name>On this Mac</span></div>
+  <p data-summary>A new release is available. Your host can keep working until you update.</p>
+  <table class="table table-sm" aria-label="Host release information">
+    <tbody>
+      <tr><th scope="row">Installed</th><td data-installed>0.2.0</td></tr>
+      <tr><th scope="row">Available</th><td data-target>0.3.0</td></tr>
+      <tr><th scope="row">Compatibility</th><td data-compatible>Works with this Guaca</td></tr>
+      <tr><th scope="row">Last checked</th><td data-checked>Just now</td></tr>
+    </tbody>
+  </table>
+  <div data-details>
+    <details>
+      <summary>Release notes</summary>
+      <p>Sample release: improved host recovery and connection diagnostics.</p>
+    </details>
+    <p data-impact>Two conversations and one coding job are running. Updating interrupts them. Review interrupted work after the host restarts.</p>
+    <p data-backup>A complete backup is saved before the host is replaced.</p>
+  </div>
+  <div data-progress hidden aria-live="polite">
+    <h3 data-stage>Downloading update</h3>
+    <ol data-stages>
+      <li>Download verified release</li>
+      <li>Stop host</li>
+      <li>Back up workspace</li>
+      <li>Start updated host</li>
+      <li>Verify and reconnect</li>
+    </ol>
+    <p data-stage-detail>Your current host is still running.</p>
+  </div>
+  <div data-instructions hidden>
+    <h3>Update on the server</h3>
+    <ol>
+      <li>Choose the verified target release in your deployment.</li>
+      <li>Stop the host and back up its complete workspace.</li>
+      <li>Recreate the service, keeping its data volume and configuration.</li>
+      <li>Verify the new host, then reconnect here.</li>
+    </ol>
+    <p>The commands depend on how this host was installed. This connection does not manage the server.</p>
+  </div>
+  <div class="viz-row">
+    <button class="btn btn-primary" type="button" data-action>Back up and update</button>
+    <button class="btn btn-ghost" type="button" data-secondary>Later</button>
+  </div>
+  <p class="text-small" data-feedback role="status"></p>
+</div>
+<script>
+(() => {
+  const root = document.getElementById('guaca-host-update-preview');
+  const el = name => root.querySelector('[data-' + name + ']');
+  let step = 0;
+  const stages = [
+    ['Downloading update', 'Your current host is still running.'],
+    ['Stopping host', 'New work is paused. Running work is being interrupted.'],
+    ['Backing up workspace', 'The stopped workspace is copied before the new release can change it.'],
+    ['Starting updated host', 'The backup is saved. The new host is starting and applying database migrations.'],
+    ['Verifying and reconnecting', 'Checking the expected release, workspace access and readiness.'],
+    ['Host updated', 'Your workspace is connected. Three interrupted tasks are ready for review.']
+  ];
+  const managed = () => ['local', 'managed'].includes(el('host').value);
+  function render() {
+    const state = el('state').value;
+    const host = el('host').value;
+    el('host-name').textContent = host === 'local' ? 'On this Mac · Managed by Guaca' : host === 'managed' ? 'team.example.com · Managed by host controller' : 'team.example.com · Managed on the server';
+    el('title').textContent = state === 'incompatible' ? 'This host needs an update' : state === 'client' ? 'This Guaca needs an update' : state === 'failed' ? 'The updated host could not start' : 'Host update';
+    el('notice').hidden = !['available', 'incompatible', 'client', 'failed'].includes(state);
+    el('notice-text').textContent = state === 'incompatible' ? 'Host update required to connect' : state === 'client' ? 'Guaca update required to connect' : state === 'failed' ? 'Host recovery needed' : 'Host update available';
+    el('dismiss').hidden = state !== 'available';
+    el('review').textContent = state === 'failed' ? 'Review recovery' : 'Review update';
+    el('installed').textContent = state === 'unknown' ? 'Unverified build' : state === 'current' || state === 'client' ? '0.3.0' : '0.2.0';
+    el('target').textContent = state === 'offline' || state === 'unknown' ? 'Not verified' : '0.3.0';
+    el('compatible').textContent = state === 'incompatible' ? 'Host API is too old for this Guaca' : state === 'client' ? 'This frontend cannot use the host API' : state === 'unknown' ? 'Could not verify' : 'Works with this Guaca';
+    el('checked').textContent = state === 'offline' ? 'Yesterday · latest check failed' : state === 'unknown' ? 'Release could not be identified' : 'Just now';
+    const summaries = {
+      available: 'A new release is available. Your host can keep working until you update.',
+      current: 'Your host is on the latest stable release.',
+      offline: 'Could not check for updates. Your workspace is still connected.',
+      unknown: 'This host does not report a published release we can verify.',
+      incompatible: 'Update the host before opening this workspace. Its existing work continues on the server.',
+      client: host === 'browser' || host === 'managed' ? 'A newer frontend is served by this host. Save your draft and reload Guaca.' : 'Download the compatible desktop app before opening this workspace.',
+      updating: 'The update continues if you close this panel.',
+      failed: 'Your backup is preserved. The old release has not been started against the changed database.'
+    };
+    el('summary').textContent = summaries[state];
+    el('details').hidden = !['available', 'incompatible', 'failed'].includes(state);
+    el('impact').textContent = state === 'failed' ? 'Backup saved before the update. Restoring returns the workspace to that point.' : 'Two conversations and one coding job are running. Updating interrupts them. Review interrupted work after the host restarts.';
+    el('backup').textContent = state === 'failed' ? 'The failed workspace is kept separately for diagnosis.' : 'A complete backup is saved before the host is replaced.';
+    el('progress').hidden = state !== 'updating';
+    el('instructions').hidden = true;
+    el('secondary').hidden = ['current', 'unknown', 'client'].includes(state);
+    el('secondary').textContent = state === 'updating' ? 'Close panel' : state === 'failed' ? 'View diagnostics' : 'Later';
+    el('action').textContent = state === 'updating' ? (step === 5 ? 'Review interrupted work' : 'Preview next stage') : state === 'failed' ? (managed() ? 'Review restore' : 'View recovery instructions') : state === 'client' ? (host === 'browser' || host === 'managed' ? 'Save draft and reload' : 'Download Guaca') : state === 'offline' || state === 'current' ? 'Check for updates' : state === 'unknown' || !managed() ? 'View update instructions' : 'Back up and update';
+    el('feedback').textContent = '';
+    el('stage').textContent = stages[step][0];
+    el('stage-detail').textContent = stages[step][1];
+    Array.from(el('stages').children).forEach((item, i) => {
+      item.style.fontWeight = i === step ? '500' : '400';
+      item.style.color = i === step ? 'var(--foreground)' : 'var(--muted-foreground)';
+    });
+  }
+  el('host').addEventListener('change', () => {step = 0; render();});
+  el('state').addEventListener('change', () => {step = 0; render();});
+  el('review').addEventListener('click', () => {el('details').hidden = false; el('action').focus();});
+  el('dismiss').addEventListener('click', () => {el('notice').hidden = true;});
+  el('secondary').addEventListener('click', () => {el('feedback').textContent = el('state').value === 'updating' ? 'Panel closed. Progress remains available in Workspace settings.' : el('state').value === 'failed' ? 'Diagnostics would show the operation, failed stage and backup location.' : 'Reminder dismissed for this host and release. Status remains in Workspace settings.';});
+  el('action').addEventListener('click', () => {
+    const state = el('state').value;
+    if (state === 'updating') {
+      if (step < 5) {step++; render();}
+      else el('feedback').textContent = 'The existing recovery view lists interrupted tasks. Nothing is retried automatically.';
+    } else if (state === 'failed') {
+      el('feedback').textContent = 'Restore review: recover the saved backup into a separate volume using the previous release. Changes after the backup will not be included. A separate confirmation is required.';
+    } else if (state === 'client') {
+      el('feedback').textContent = 'Preview only. This would preserve the draft and reload the browser, or open the desktop release download.';
+    } else if (['current', 'offline'].includes(state)) {
+      el('feedback').textContent = 'Preview only. A real check would report its result and timestamp without changing the host.';
+    } else if (state === 'unknown' || !managed()) {
+      el('instructions').hidden = false;
+    } else {
+      step = 0; el('state').value = 'updating'; render();
+    }
+  });
+  render();
+})();
+</script>

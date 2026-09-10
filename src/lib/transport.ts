@@ -1,5 +1,6 @@
 /** One backend transport for browsers and the native desktop client. */
 
+import { compatibility, parseHealth } from "./releases";
 import type { UiEvent } from "./types";
 
 /** Tauri v2 puts this on `window` before any of our code runs. */
@@ -63,7 +64,12 @@ export function setRemote(remote: Remote | null): void {
 }
 
 /** Reloads the page, which is how a change of workspace takes effect. */
+export const BEFORE_RELOAD = "guaca:before-reload";
+export const RECONNECTED = "guaca:reconnected";
 export function restart(): void {
+  if (!window.dispatchEvent(new Event(BEFORE_RELOAD, { cancelable: true }))) {
+    throw new Error("Your unsent draft could not be saved. Copy it before reloading Guaca.");
+  }
   window.location.reload();
 }
 
@@ -168,6 +174,30 @@ export async function probe(candidate: Remote): Promise<{ build: string; capabil
   let answer: Response;
   try {
     health = await fetch(`${base}/health`, { signal: AbortSignal.timeout(15000) });
+  } catch (cause) {
+    throw {
+      kind: "unreachable",
+      message: `nothing answered at ${base} (${cause instanceof Error ? cause.message : cause}). Check the address, and that the box is up and reachable from here`,
+    } satisfies Refusal;
+  }
+  const said = await health.json().catch(() => null);
+  if (said?.service !== "guacad") {
+    throw {
+      kind: "unreachable",
+      message: `${base} answered, but it is not a Guaca workspace`,
+    } satisfies Refusal;
+  }
+  const match = compatibility(parseHealth(said));
+  if (match === "hostOld" || match === "clientOld") {
+    throw {
+      kind: "compatibility",
+      message:
+        match === "clientOld"
+          ? "This host needs a newer Guaca frontend. Download the latest desktop app, or reload the browser from this host."
+          : "This Guaca frontend needs a newer host. Update the backend before connecting.",
+    } satisfies Refusal;
+  }
+  try {
     answer = await fetch(`${base}/v1/call`, {
       method: "POST",
       headers: {
@@ -180,14 +210,7 @@ export async function probe(candidate: Remote): Promise<{ build: string; capabil
   } catch (cause) {
     throw {
       kind: "unreachable",
-      message: `nothing answered at ${base} (${cause instanceof Error ? cause.message : cause}). Check the address, and that the box is up and reachable from here`,
-    } satisfies Refusal;
-  }
-  const said = await health.json().catch(() => null);
-  if (said?.service !== "guacad") {
-    throw {
-      kind: "unreachable",
-      message: `${base} answered, but it is not a Guaca workspace`,
+      message: `Could not authenticate with ${base}: ${cause instanceof Error ? cause.message : cause}. Try again.`,
     } satisfies Refusal;
   }
   const body = await answer.json().catch(() => null);
@@ -351,6 +374,7 @@ function openSocket(handler: (payload: UiEvent) => void, onReconnect?: () => voi
     socket = new WebSocket(url);
 
     socket.onopen = () => {
+      window.dispatchEvent(new Event(RECONNECTED));
       wait = RETRY_FLOOR;
       // The first connection may have completed after the initial HTTP reads.
       // Refresh on it too, so that startup gap cannot lose a durable message.

@@ -4,6 +4,17 @@ export interface DockerStatus {
   state: "missing" | "unavailable" | "ready" | "running" | "stopped";
   message: string;
   updateAvailable: boolean;
+  updating?: boolean;
+  origin?: string | null;
+  targetImage?: string;
+  targetVersion?: string;
+  operation?: {
+    stage: string;
+    backup: string | null;
+    previousImage: string;
+    targetImage: string;
+    error: string | null;
+  } | null;
 }
 export interface ExistingHost {
   name: string;
@@ -14,7 +25,7 @@ export const localHost = {
   existing: () => invokeLocal<ExistingHost[]>("local_hosts"),
   connect: (name: string) => invokeLocal<Remote>("connect_local_host", { name }),
   status: () => invokeLocal<DockerStatus>("local_host_status"),
-  update: () => invokeLocal<Remote>("local_host_update"),
+  update: (origin?: string) => invokeLocal<Remote>("local_host_update", { origin }),
   start: () => invokeLocal<Remote>("local_host_start"),
   openDocker: () => invokeLocal<void>("open_docker"),
 };

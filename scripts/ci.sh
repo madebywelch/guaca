@@ -29,6 +29,9 @@ run_web() {
   step "Typecheck and build"
   pnpm build
 
+  step "Release metadata contract"
+  node --test scripts/release-manifest.test.mjs
+
   step "Frontend tests"
   pnpm test
 }

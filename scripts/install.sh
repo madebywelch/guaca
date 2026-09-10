@@ -122,7 +122,7 @@ pnpm install --frozen-lockfile
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
   step "Building the local host"
   export GUACA_BACKEND_IMAGE="guacad:$(git rev-parse --short=12 HEAD)"
-  docker build --build-arg "GUACA_COMMIT=$COMMIT" -t "$GUACA_BACKEND_IMAGE" .
+  docker build --build-arg "GUACA_VERSION=$(node -p 'require("./package.json").version')" --build-arg "GUACA_COMMIT=$COMMIT" -t "$GUACA_BACKEND_IMAGE" .
 else
   note "Docker is not ready; installing the desktop client for a remote host."
   note "For a local source build, start Docker and run this installer again."

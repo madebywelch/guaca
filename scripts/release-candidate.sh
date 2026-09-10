@@ -4,10 +4,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ./scripts/ci.sh
-COMMIT="$(git rev-parse --short=12 HEAD)"
+COMMIT="$(git rev-parse HEAD)"
 if [ -z "${GUACA_BACKEND_IMAGE:-}" ]; then
   export GUACA_BACKEND_IMAGE="guacad:$COMMIT"
-  docker build --build-arg "GUACA_COMMIT=$COMMIT" -t "$GUACA_BACKEND_IMAGE" .
+  docker build --build-arg "GUACA_VERSION=$(node -p 'require("./package.json").version')" --build-arg "GUACA_COMMIT=$COMMIT" -t "$GUACA_BACKEND_IMAGE" .
   GUACA_TEST_IMAGE="$GUACA_BACKEND_IMAGE" cargo test --manifest-path src-tauri/Cargo.toml \
     --no-default-features --features server --lib \
     host::tests::docker_host_survives_client_and_container_restarts -- --ignored
@@ -17,5 +17,6 @@ else
     *) echo 'A distributable candidate needs GUACA_BACKEND_IMAGE pinned by digest.' >&2; exit 1 ;;
   esac
 fi
+export GUACA_COMMIT="$COMMIT"
 pnpm tauri build --bundles app
 printf '\nCandidate: src-tauri/target/release/bundle/macos/Guaca.app\nBackend: %s\n' "$GUACA_BACKEND_IMAGE"

@@ -42,6 +42,7 @@ import {
 import { Compost } from "./Compost";
 import { GroupTransfer, LegacyGroups } from "./GroupTransfer";
 import { HostChoice } from "./HostSetup";
+import { HostUpdatePanel } from "./HostUpdates";
 import { ProviderPresets, SubscriptionModel } from "./ProviderFields";
 
 interface Props {
@@ -1355,7 +1356,8 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
 function WorkspacePane() {
   return (
     <div className="workspace-settings">
-      <HostChoice />
+      <HostUpdatePanel />
+      <HostChoice showUpdate={false} />
       <GroupTransfer />
       <LegacyGroups />
     </div>

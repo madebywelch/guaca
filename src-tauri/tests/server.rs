@@ -246,6 +246,12 @@ async fn nothing_is_reachable_without_the_token() {
     // unhealthy for the whole time a token was being rotated.
     let health = client.get(format!("http://{addr}/health")).send().await.expect("a health check");
     assert_eq!(health.status(), 200);
+    let health: Value = health.json().await.unwrap();
+    assert_eq!(health["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(health["apiGeneration"], guac_lib::updates::protocol().generation);
+    let updates =
+        client.get(format!("http://{addr}/v1/updates?refresh=true")).send().await.unwrap();
+    assert_eq!(updates.status(), 401, "release checks require workspace authorization");
 
     for token in [None, Some("not-the-token")] {
         let mut request = client
