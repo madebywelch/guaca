@@ -13,8 +13,11 @@ async fn local_host_start(state: tauri::State<'_, LocalHost>) -> Result<Connecti
     state.start().await
 }
 #[tauri::command]
-async fn local_host_update(state: tauri::State<'_, LocalHost>) -> Result<Connection, String> {
-    state.update().await
+async fn local_host_update(
+    state: tauri::State<'_, LocalHost>,
+    origin: Option<String>,
+) -> Result<Connection, String> {
+    state.update(origin.as_deref()).await
 }
 #[tauri::command]
 async fn local_hosts(
@@ -96,7 +99,11 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .on_window_event(hide_rather_than_quit)
         .setup(|app| {
-            app.manage(LocalHost::new(&app.config().identifier, crate::host::IMAGE));
+            let journal = app.path().app_data_dir()?.join("host-update.json");
+            std::fs::create_dir_all(journal.parent().unwrap())?;
+            app.manage(
+                LocalHost::new(&app.config().identifier, crate::host::IMAGE).with_journal(journal),
+            );
             match Tray::install(app.handle()) {
                 Ok(tray) => {
                     app.manage(tray);
@@ -119,8 +126,15 @@ pub fn run() {
             export_legacy_group,
             save_group_export,
         ])
-        .run(tauri::generate_context!())
-        .expect("could not run Guaca");
+        .build(tauri::generate_context!())
+        .expect("could not run Guaca")
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                if app.state::<LocalHost>().is_updating() {
+                    api.prevent_exit();
+                }
+            }
+        });
 }
 
 #[derive(serde::Serialize)]

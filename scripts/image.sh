@@ -22,7 +22,7 @@ NAME="guacad-check-$$"
 VOLUME="${NAME}-data"
 
 step "Building ${IMAGE}"
-docker build --build-arg "GUACA_COMMIT=${COMMIT}" -t "${IMAGE}" .
+docker build --build-arg "GUACA_VERSION=$(node -p 'require("./package.json").version')" --build-arg "GUACA_COMMIT=${COMMIT}" -t "${IMAGE}" .
 
 step "Starting"
 cleanup() {

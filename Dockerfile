@@ -16,6 +16,8 @@
 # `/health` and the page's About so a box and a laptop can be told apart.
 
 ARG GUACA_COMMIT=""
+ARG GUACA_RELEASE=0
+ARG GUACA_VERSION=""
 
 # ---- the page ---------------------------------------------------------------
 FROM node:22-bookworm-slim AS web
@@ -23,11 +25,14 @@ WORKDIR /app
 RUN corepack enable
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
-COPY index.html tsconfig.json vite.config.ts ./
+COPY index.html tsconfig.json vite.config.ts release-protocol.json ./
 COPY src ./src
 ARG GUACA_COMMIT
-ENV GUACA_COMMIT=$GUACA_COMMIT
+ARG GUACA_RELEASE
+ARG GUACA_VERSION
+ENV GUACA_COMMIT=$GUACA_COMMIT GUACA_RELEASE=$GUACA_RELEASE
 # The same `pnpm build` CI runs: the typecheck is the gate, not a nicety.
+RUN test "$GUACA_RELEASE" != 1 || test "$GUACA_VERSION" = "$(node -p 'require("./package.json").version')"
 RUN pnpm build
 
 # ---- the daemon -------------------------------------------------------------
@@ -45,13 +50,21 @@ RUN mkdir -p src/bin \
  && cargo build --release --no-default-features --features server --bin guacad \
  && rm -rf src build.rs target/release/deps/guac* target/release/deps/libguac*
 COPY src-tauri/ ./
+COPY release-protocol.json /app/release-protocol.json
 COPY deploy/github/github_app.py /app/deploy/github/github_app.py
 ARG GUACA_COMMIT
-ENV GUACA_COMMIT=$GUACA_COMMIT
+ARG GUACA_RELEASE
+ENV GUACA_COMMIT=$GUACA_COMMIT GUACA_RELEASE=$GUACA_RELEASE
 RUN cargo build --release --no-default-features --features server --bin guacad
 
 # ---- what runs --------------------------------------------------------------
 FROM node:22-bookworm-slim
+ARG GUACA_COMMIT
+ARG GUACA_RELEASE
+ARG GUACA_VERSION
+LABEL org.opencontainers.image.version=$GUACA_VERSION \
+      org.opencontainers.image.revision=$GUACA_COMMIT \
+      bot.guaca.release=$GUACA_RELEASE
 # `curl` is the health check. TLS roots are for the model endpoints, the
 # sandboxes and the plugins the daemon calls out to. `git` and `gh` are what a
 # remote-linked repository is cloned, fetched and pushed with, and `claude` is

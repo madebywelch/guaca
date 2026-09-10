@@ -116,6 +116,7 @@ struct Serving {
     state: Arc<AppState>,
     token: Arc<str>,
     sink: Arc<SocketSink>,
+    updates: Arc<crate::updates::Checker>,
 }
 
 /// A workspace that is open and a socket that is listening, not yet serving.
@@ -196,10 +197,16 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
     });
 
     let token: Arc<str> = settings.token.into();
-    let serving = Serving { state, token: token.clone(), sink };
+    let serving = Serving {
+        state,
+        token: token.clone(),
+        sink,
+        updates: Arc::new(crate::updates::Checker::default()),
+    };
 
     let mut app = Router::new()
         .route("/health", get(health))
+        .route("/v1/updates", get(update_status))
         .route("/v1/call", post(call))
         .route("/v1/events", get(events_socket))
         .route(
@@ -349,7 +356,28 @@ const BUILD: &str = match option_env!("GUACA_COMMIT") {
 /// health check has no credential, and a check that needed one would be a box
 /// that reports itself unhealthy for the whole time a token is being rotated.
 async fn health() -> Json<Value> {
-    Json(json!({ "status": "ok", "service": "guacad", "build": BUILD }))
+    let mut value = crate::updates::metadata();
+    value["status"] = json!("ok");
+    value["service"] = json!("guacad");
+    value["build"] = json!(BUILD);
+    Json(value)
+}
+
+#[derive(Default, Deserialize)]
+struct UpdateQuery {
+    #[serde(default)]
+    refresh: bool,
+}
+
+async fn update_status(
+    State(serving): State<Serving>,
+    headers: HeaderMap,
+    Query(query): Query<UpdateQuery>,
+) -> Response {
+    if let Err(response) = authorized(&serving, &headers, None) {
+        return *response;
+    }
+    Json(serving.updates.check(query.refresh).await).into_response()
 }
 
 #[derive(Deserialize)]

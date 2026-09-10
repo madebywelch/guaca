@@ -108,6 +108,15 @@ describe("a window pointed at a box", () => {
 });
 
 describe("probing a box", () => {
+  it("explains an incompatible host before sending workspace commands", async () => {
+    fetched.mockResolvedValueOnce(
+      new Response(JSON.stringify({ service: "guacad", build: "abcdef1", apiGeneration: 2 })),
+    );
+    await expect(probe({ origin: "https://host.example", token: "t" })).rejects.toMatchObject({
+      kind: "compatibility",
+    });
+    expect(fetched).toHaveBeenCalledTimes(1);
+  });
   it("accepts a box that answers as guacad and takes the token", async () => {
     fetched
       .mockResolvedValueOnce(new Response(JSON.stringify({ service: "guacad", build: "abc1234" })))

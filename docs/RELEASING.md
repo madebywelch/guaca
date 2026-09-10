@@ -94,7 +94,8 @@ First build, test, and publish the backend from that same source commit:
 1. Run `./scripts/ci.sh` and `./scripts/image.sh`. The latter checks the local
    image's health, authentication, bundled tools, and restart persistence.
 2. Publish the root `Dockerfile` as a multi-platform image for `linux/arm64`
-   and `linux/amd64`, supplying `GUACA_COMMIT` as a build argument. Use
+   and `linux/amd64`, supplying the full source SHA as `GUACA_COMMIT`,
+   `GUACA_RELEASE=1`, and the package version as `GUACA_VERSION` build arguments. Use
    `ghcr.io/madebywelch/guaca/guacad` with a version tag for the release.
 3. In the GitHub package settings, make that package public. A public source
    repository does not automatically make its package public. Verify image
@@ -111,6 +112,8 @@ only an app bundle; use the command below for the universal DMG.
 
 ```sh
 : "${GUACA_BACKEND_IMAGE:?Set the published backend image digest first}"
+export GUACA_RELEASE=1
+export GUACA_COMMIT="$GUACA_SOURCE"
 pnpm install --frozen-lockfile
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 ./scripts/ci.sh
@@ -310,3 +313,36 @@ and [Tauri macOS signing](https://v2.tauri.app/distribute/sign/macos/).
 For uploading and package access, see
 [GitHub release management](https://docs.github.com/en/repositories/releasing-projects-on-github/managing-releases-in-a-repository)
 and [GitHub Container Registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
+
+
+## Release checks in browser and desktop
+
+Every published stable release also carries `guaca-release.json`. Generate it
+from the same clean checkout after recording the image digest:
+
+```sh
+GUACA_BACKEND_IMAGE=ghcr.io/madebywelch/guaca/guacad@sha256:THE_DIGEST \
+  node scripts/release-manifest.mjs /path/to/artifacts/guaca-release.json
+```
+
+The generator verifies the frontend, Cargo and desktop versions agree and
+refuses prereleases, mutable image tags, or an invalid API range. Upload this
+file alongside the verified DMG and checksum before publishing the release.
+Do not publish the manifest until both artifacts have passed verification.
+The public stable feed is GitHub's
+`/madebywelch/guaca/releases/latest/download/guaca-release.json`; verify an
+anonymous download returns the generated file after publication. A release
+without this asset reports "could not check", not "up to date".
+
+`release-protocol.json` is shared by Rust and the frontend. Increment its API
+generation for an incompatible contract change and set the client-supported
+range deliberately. `GUACA_RELEASE=1` marks an official build; source installs
+remain unverified/development builds even when their package version matches.
+The Rust build rejects official releases without a full source SHA, and rejects
+an official desktop without a pinned GHCR image digest. Build and verify the
+same metadata on both architectures.
+
+The feed is advisory. It cannot supply an executable update target: the native
+manager installs only its embedded image. Installing directly from a future
+feed requires signed metadata and verification in the update manager first.
+There is no automatic desktop download or remote deployment in this version.

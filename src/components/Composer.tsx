@@ -1,14 +1,17 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
+import { readDraft, saveDraft } from "../lib/draft";
 import { fileUrl, previewKind, readableSize } from "../lib/files";
 import { api, onFileDrop } from "../lib/ipc";
 import { applyMention, matchMentions, mentionAt, splitMentions } from "../lib/mentions";
 import { useLiveAgents, useStore } from "../lib/store";
+import { BEFORE_RELOAD, workspaceOrigin } from "../lib/transport";
 import { type Attachment, errorMessage, type GroupId, type Staged } from "../lib/types";
 
 interface Props {
   placeholder: string;
+  draftKey?: string;
   /**
    * The crew this channel belongs to, or null when it belongs to nobody.
    *
@@ -25,16 +28,40 @@ interface Props {
   onSend: (text: string, files: Attachment[]) => Promise<void>;
 }
 
-export function Composer({ placeholder, group, disabled, disabledReason, onSend }: Props) {
-  const [text, setText] = useState("");
+export function Composer({
+  placeholder,
+  group,
+  disabled,
+  disabledReason,
+  onSend,
+  draftKey,
+}: Props) {
+  const storageKey = `guaca.draft:${workspaceOrigin()}:${draftKey ?? group ?? "composer"}`;
+  const [initial] = useState(() => readDraft(storageKey));
+  const [text, setText] = useState(initial.text);
   const [sending, setSending] = useState(false);
   const [caret, setCaret] = useState(0);
   const [highlighted, setHighlighted] = useState(0);
   const [dismissed, setDismissed] = useState(false);
-  const [files, setFiles] = useState<Attachment[]>([]);
+  const [files, setFiles] = useState<Attachment[]>(initial.files);
   /** What was dropped and could not be taken, in the words the runtime used. */
   const [refused, setRefused] = useState<string[]>([]);
   const [dragging, setDragging] = useState(false);
+  useEffect(() => {
+    const preserve = (event: Event) => {
+      try {
+        if (sending)
+          throw new Error("A message is being sent. Wait for it to finish before reloading.");
+        saveDraft(storageKey, { text, files });
+      } catch (error) {
+        event.preventDefault();
+        setRefused([errorMessage(error)]);
+      }
+    };
+    window.addEventListener(BEFORE_RELOAD, preserve);
+    return () => window.removeEventListener(BEFORE_RELOAD, preserve);
+  }, [storageKey, text, files, sending]);
+
   const ref = useRef<HTMLTextAreaElement>(null);
   const mirror = useRef<HTMLDivElement>(null);
   const picker = useRef<HTMLInputElement>(null);
@@ -127,6 +154,11 @@ export function Composer({ placeholder, group, disabled, disabledReason, onSend 
     setRefused([]);
     try {
       await onSend(body, files);
+      try {
+        sessionStorage.removeItem(storageKey);
+      } catch {
+        /* The message was sent. */
+      }
     } catch {
       setText(body);
       setFiles(files);
