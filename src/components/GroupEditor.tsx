@@ -25,6 +25,7 @@ import {
   type GroupDraft,
   type GroupReset,
   type Provider,
+  type ReasoningEffort,
   type SubscriptionStatus,
 } from "../lib/types";
 import { CredentialList } from "./CredentialList";
@@ -95,6 +96,9 @@ export function GroupEditor({ group, onClose }: Props) {
   const [subscriptionModel, setSubscriptionModel] = useState(
     group?.inference.subscriptionModel ?? "",
   );
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | null>(
+    group?.inference.reasoningEffort ?? null,
+  );
   const [timeout, setTimeoutSecs] = useState(asText(group?.inference.requestTimeoutSecs));
   // Null until the operator types, because absent and blank are different
   // instructions: one keeps the stored key, the other clears it.
@@ -152,6 +156,7 @@ export function GroupEditor({ group, onClose }: Props) {
       baseUrl: baseUrl.trim() || null,
       defaultModel: model.trim() || null,
       subscriptionModel: subscriptionModel.trim() || null,
+      reasoningEffort,
       requestTimeoutSecs: asNumber(timeout),
     },
     // Only sent once the operator has touched it. Sending the redacted hint
@@ -188,6 +193,7 @@ export function GroupEditor({ group, onClose }: Props) {
     baseUrl !== (group.inference.baseUrl ?? "") ||
     model !== (group.inference.defaultModel ?? "") ||
     subscriptionModel !== (group.inference.subscriptionModel ?? "") ||
+    reasoningEffort !== (group.inference.reasoningEffort ?? null) ||
     timeout !== asText(group.inference.requestTimeoutSecs) ||
     // Typed at all, including typed and then emptied, which is the one
     // instruction that puts a group back on the app's key.
@@ -503,9 +509,14 @@ export function GroupEditor({ group, onClose }: Props) {
                   machine and every group spends the same one.
                 </p>
 
-                {onSubscription && (
+                {(onSubscription || (provider === INHERIT && settings?.provider === "chatgpt")) && (
                   <SubscriptionModel
                     value={subscriptionModel}
+                    effort={reasoningEffort}
+                    onEffortChange={setReasoningEffort}
+                    inheritedModel={settings?.subscriptionModel}
+                    inheritedEffort={settings?.reasoningEffort ?? "auto"}
+                    effortInherit="Inherit"
                     models={settings?.subscriptionModels ?? []}
                     onChange={setSubscriptionModel}
                     inherit={`Inherit · ${settings?.subscriptionModel ?? ""}`}

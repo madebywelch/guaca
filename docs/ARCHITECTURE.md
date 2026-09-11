@@ -450,6 +450,19 @@ behalf. Reopening the selector reads again, with no catalog cached across
 accounts. `tests/subscription_catalog.rs` checks this wire and its live half
 checks whether the service still publishes the shape Guaca reads.
 
+**Reasoning effort inherits independently of the model.** The app default is
+`auto`, which omits `reasoning.effort` and leaves the choice to the model.
+Groups and agents store nullable overrides: null inherits, while `auto`
+explicitly chooses the model default even when the enclosing layer pins an
+effort. Resolution is app, group, agent, once per turn. Only the ChatGPT
+transport consumes it; changing providers preserves the saved effort.
+
+The same catalog read carries each model's supported efforts and default.
+The selector follows the effective model, including an inherited one. Saved
+choices survive catalog failures and model changes; a choice absent from the
+selected model's offers is shown with a warning so it can be corrected.
+Migration 53 adds nullable columns and leaves existing workspaces inheriting.
+
 **What the Responses API disagrees with chat completions about.** Each of these
 was learned from a live call refusing one, and each has a test that fails without
 it:

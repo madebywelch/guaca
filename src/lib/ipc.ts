@@ -744,7 +744,7 @@ export const api = {
    */
   rankedModels: (category: string) => invoke<RankedModel[]>("ranked_models", { category }),
 
-  subscriptionModels: () => invoke<string[]>("subscription_models"),
+  subscriptionModels: () => invoke<import("./types").SubscriptionModel[]>("subscription_models"),
 
   subscriptionStatus: () => invoke<SubscriptionStatus>("subscription_status"),
 

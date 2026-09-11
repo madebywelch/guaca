@@ -54,6 +54,7 @@ function stored(over: Partial<Settings> = {}): Settings {
     defaultModel: "anthropic/claude-sonnet-4.5",
     provider: "compatible",
     subscriptionModel: "gpt-5.6-luna",
+    reasoningEffort: "auto",
     subscriptionModels: ["gpt-5.6-luna", "gpt-5.4-mini"],
     apiKeySet: true,
     apiKeyHint: "…9f2c",
@@ -158,7 +159,15 @@ vi.mock("../lib/ipc", () => ({
     updateSettings: (patch: SettingsPatch) => updateSettings(patch),
     testConnection: (patch?: SettingsPatch) => testConnection(patch),
     subscriptionStatus: () => subscriptionStatus(),
-    subscriptionModels: async () => ["gpt-5.6-luna", "gpt-5.4-mini"],
+    subscriptionModels: async () =>
+      ["gpt-5.6-luna", "gpt-5.4-mini"].map((slug) => ({
+        slug,
+        defaultReasoningEffort: "medium",
+        reasoningEfforts: [
+          { effort: "low", description: "Faster" },
+          { effort: "high", description: "More thorough" },
+        ],
+      })),
     beginSubscriptionSignin: () => beginSubscriptionSignin(),
     completeSubscriptionSignin: (code: DeviceCode) => completeSubscriptionSignin(code),
     signOutSubscription: () => signOutSubscription(),
@@ -358,6 +367,7 @@ describe("what a save sends", () => {
       baseUrl: "https://openrouter.ai/api/v1",
       defaultModel: "anthropic/claude-sonnet-4.5",
       subscriptionModel: "gpt-5.6-luna",
+      reasoningEffort: "auto",
       // The one field here that cannot be omitted: a checkbox left alone is a
       // decision, and off has to be sendable or stealth can never be turned off.
       browserStealth: false,
@@ -452,6 +462,7 @@ describe("what a save sends", () => {
       baseUrl: "http://localhost:1234/v1",
       defaultModel: "qwen3-coder-30b",
       subscriptionModel: "gpt-5.6-luna",
+      reasoningEffort: "auto",
       apiKey: "sk-or-v1-typed",
       e2bApiKey: "e2b_typed",
       computerIdleMinutes: 45,
@@ -725,6 +736,7 @@ describe("testing the endpoint", () => {
       baseUrl: "https://api.groq.com/openai/v1",
       defaultModel: "anthropic/claude-sonnet-4.5",
       subscriptionModel: "gpt-5.6-luna",
+      reasoningEffort: "auto",
       apiKey: "gsk_typed",
       browserStealth: false,
     });
@@ -1691,4 +1703,15 @@ describe("the provider key when an endpoint changes", () => {
     expect(testConnection.mock.calls[0]?.[0]).not.toHaveProperty("apiKey");
     expect(updateSettings).not.toHaveBeenCalled();
   });
+});
+
+it("saves a ChatGPT effort default", async () => {
+  subscriptionStatus.mockResolvedValue(signedIn());
+  open(stored({ provider: "chatgpt", reasoningEffort: "high" }), DEFAULT_PREFS, "provider");
+  const effort = await screen.findByRole("combobox", { name: /^Reasoning effort/ });
+  await screen.findByRole("option", { name: "low" });
+  fireEvent.change(effort, { target: { value: "low" } });
+  fireEvent.click(save());
+  await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+  expect(sentPatch().reasoningEffort).toBe("low");
 });

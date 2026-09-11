@@ -183,6 +183,7 @@ fn new_card(draft: &CleanDraft, rail_order: i32, fallback: GroupId) -> AgentCard
         avatar: draft.avatar.clone(),
         color: draft.color.clone(),
         model: draft.model.clone(),
+        reasoning_effort: draft.reasoning_effort,
         system_prompt: draft.system_prompt.clone(),
         skills: draft.skills.clone(),
         sandbox_id: None,
@@ -222,8 +223,8 @@ fn bottom_of_rail(conn: &rusqlite::Connection) -> Result<i32, StoreError> {
 /// single create and a batch inside a transaction; `Transaction` derefs here.
 fn insert_agent(conn: &rusqlite::Connection, card: &AgentCard) -> Result<(), StoreError> {
     conn.execute(
-        "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,rail_order)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+        "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,rail_order,reasoning_effort)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
         params![
             card.id.to_string(),
             card.name,
@@ -238,6 +239,7 @@ fn insert_agent(conn: &rusqlite::Connection, card: &AgentCard) -> Result<(), Sto
             card.updated_at,
             card.group_id.to_string(),
             card.rail_order,
+            card.reasoning_effort.map(|e| e.as_str()),
         ],
     )
     .map_err(|e| classify(e, &card.name))?;
@@ -386,7 +388,7 @@ impl Store {
                 "UPDATE agents
                     SET name=?2, avatar=?3, color=?4, model=?5, system_prompt=?6, skills=?7,
                         version = version + 1, updated_at=?8,
-                        group_id = coalesce(?9, group_id)
+                        group_id = coalesce(?9, group_id), reasoning_effort=?10
                   WHERE id=?1",
                 params![
                     id.to_string(),
@@ -398,6 +400,7 @@ impl Store {
                     serde_json::to_string(&draft.skills).unwrap_or_else(|_| "[]".into()),
                     now,
                     draft.group_id.map(|g| g.to_string()),
+                    draft.reasoning_effort.map(|e| e.as_str()),
                 ],
             )
             .map_err(|e| classify(e, &draft.name))?;
@@ -3055,7 +3058,7 @@ impl Store {
                     g.base_url, g.api_key, g.default_model,
                     g.provider, g.subscription_model, g.request_timeout_secs,
                     g.max_hops, g.max_steps_per_run, g.max_fanout_per_call,
-                    g.max_sends_per_pair, g.max_tool_rounds
+                    g.max_sends_per_pair, g.max_tool_rounds, g.reasoning_effort
                FROM groups g
               ORDER BY g.created_at, g.rowid",
         )?;
@@ -3076,8 +3079,8 @@ impl Store {
             "INSERT INTO groups (id,name,created_at,base_url,api_key,default_model,
                                  provider,subscription_model,request_timeout_secs,
                                  max_hops,max_steps_per_run,max_fanout_per_call,
-                                 max_sends_per_pair,max_tool_rounds)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+                                 max_sends_per_pair,max_tool_rounds,reasoning_effort)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
             params![
                 id.to_string(),
                 draft.name,
@@ -3093,6 +3096,7 @@ impl Store {
                 limits.max_fanout_per_call.map(|n| n as i64),
                 limits.max_sends_per_pair,
                 limits.max_tool_rounds,
+                over.reasoning_effort.map(|e| e.as_str()),
             ],
         )
         .map_err(|e| classify(e, &draft.name))?;
@@ -3124,7 +3128,8 @@ impl Store {
                         max_steps_per_run    = CASE WHEN ?11 THEN ?13 ELSE max_steps_per_run END,
                         max_fanout_per_call  = CASE WHEN ?11 THEN ?14 ELSE max_fanout_per_call END,
                         max_sends_per_pair   = CASE WHEN ?11 THEN ?15 ELSE max_sends_per_pair END,
-                        max_tool_rounds      = CASE WHEN ?11 THEN ?16 ELSE max_tool_rounds END
+                        max_tool_rounds      = CASE WHEN ?11 THEN ?16 ELSE max_tool_rounds END,
+                        reasoning_effort     = CASE WHEN ?3 THEN ?17 ELSE reasoning_effort END
                   WHERE id=?1",
                 params![
                     id.to_string(),
@@ -3143,6 +3148,7 @@ impl Store {
                     limits.max_fanout_per_call.map(|n| n as i64),
                     limits.max_sends_per_pair,
                     limits.max_tool_rounds,
+                    over.reasoning_effort.map(|e| e.as_str()),
                 ],
             )
             .map_err(|e| classify(e, &draft.name))?;
@@ -3161,7 +3167,7 @@ impl Store {
         let found = conn
             .query_row(
                 "SELECT base_url, api_key, default_model, provider, subscription_model,
-                        request_timeout_secs
+                        request_timeout_secs, reasoning_effort
                    FROM groups WHERE id=?1",
                 params![id.to_string()],
                 |row| {
@@ -3172,6 +3178,7 @@ impl Store {
                             default_model: row.get(2)?,
                             provider: provider.as_deref().and_then(crate::config::Provider::parse),
                             subscription_model: row.get(4)?,
+                            reasoning_effort: read_effort(row, 6)?,
                             request_timeout_secs: row.get(5)?,
                         },
                         api_key: row.get(1)?,
@@ -4048,7 +4055,24 @@ type RowResult<T> = Result<Result<T, StoreError>, rusqlite::Error>;
 /// one of the five queries that share this mapper and not the others is four
 /// reads that silently take the wrong field, which is what a card carrying
 /// somebody else's sandbox token looks like on the way out.
-const AGENT_COLUMNS: &str = "id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser,browser_consent,repository_id,discarded_at";
+const AGENT_COLUMNS: &str = "id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser,browser_consent,repository_id,discarded_at,reasoning_effort";
+
+fn read_effort(
+    row: &Row<'_>,
+    index: usize,
+) -> rusqlite::Result<Option<crate::domain::effort::ReasoningEffort>> {
+    row.get::<_, Option<String>>(index)?
+        .map(|raw| {
+            serde_json::from_value(serde_json::Value::String(raw)).map_err(|err| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    index,
+                    rusqlite::types::Type::Text,
+                    Box::new(err),
+                )
+            })
+        })
+        .transpose()
+}
 
 fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
     let id_raw: String = row.get(0)?;
@@ -4071,6 +4095,7 @@ fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
             avatar: row.get(2)?,
             color: row.get(3)?,
             model: row.get(4)?,
+            reasoning_effort: read_effort(row, 23)?,
             system_prompt: row.get(5)?,
             skills,
             lifecycle,
@@ -4651,6 +4676,7 @@ fn row_to_group(row: &Row<'_>) -> RowResult<Group> {
                 default_model: row.get(6)?,
                 provider: provider.as_deref().and_then(crate::config::Provider::parse),
                 subscription_model: row.get(8)?,
+                reasoning_effort: read_effort(row, 15)?,
                 request_timeout_secs: row.get(9)?,
             },
             api_key_set: api_key.as_deref().is_some_and(|k| !k.trim().is_empty()),
@@ -4763,6 +4789,7 @@ mod tests {
             avatar: "orb".into(),
             color: "#7fb069".into(),
             model: "anthropic/claude-sonnet-4.5".into(),
+            reasoning_effort: None,
             system_prompt: "be useful".into(),
             skills: vec!["coordination".into()],
         }
@@ -5042,7 +5069,7 @@ mod tests {
         f.store.discard_agent(discarded.id, 1_000).unwrap();
         f.store.create_connector(&key_for(mine.group_id, "TOKEN", "private-token")).unwrap();
         let mut conn = f.store.conn().unwrap();
-        conn.execute_batch("DROP TABLE connector_agents; PRAGMA user_version=51;").unwrap();
+        conn.execute_batch("DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; PRAGMA user_version=51;").unwrap();
         migrations::run(&mut conn).unwrap();
         drop(conn);
         assert_eq!(f.store.connector_env(mine.id).unwrap()["TOKEN"], "private-token");
@@ -6241,6 +6268,57 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_effort_persists_and_clears_independently_of_the_model() {
+        use crate::domain::effort::ReasoningEffort as Effort;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("effort.db");
+        let store = Store::open(&path).unwrap();
+        let mut group_draft = CleanGroup {
+            name: "Thinkers".into(),
+            inference: Some(InferenceOverrides {
+                reasoning_effort: Some(Effort::High),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let group = store.create_group(&group_draft).unwrap();
+        let mut agent_draft = draft("Thinker");
+        agent_draft.group_id = Some(group.id);
+        agent_draft.model.clear();
+        agent_draft.reasoning_effort = Some(Effort::Low);
+        let agent = store.create_agent(&agent_draft).unwrap();
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.get_agent(agent.id).unwrap().unwrap().reasoning_effort, Some(Effort::Low));
+        assert_eq!(
+            store.get_group(group.id).unwrap().unwrap().inference.reasoning_effort,
+            Some(Effort::High)
+        );
+        let app = crate::config::InferenceConfig {
+            reasoning_effort: Effort::Medium,
+            ..Default::default()
+        };
+        assert_eq!(
+            store.group_inference(group.id).unwrap().apply(&app).reasoning_effort,
+            Effort::High
+        );
+        agent_draft.reasoning_effort = None;
+        assert_eq!(store.update_agent(agent.id, &agent_draft).unwrap().reasoning_effort, None);
+        group_draft.inference.as_mut().unwrap().reasoning_effort = Some(Effort::Auto);
+        store.update_group(group.id, &group_draft).unwrap();
+        assert_eq!(
+            store.group_inference(group.id).unwrap().apply(&app).reasoning_effort,
+            Effort::Auto
+        );
+        group_draft.inference.as_mut().unwrap().reasoning_effort = None;
+        store.update_group(group.id, &group_draft).unwrap();
+        assert_eq!(
+            store.group_inference(group.id).unwrap().apply(&app).reasoning_effort,
+            Effort::Medium
+        );
+    }
+
+    #[test]
     fn a_groups_settings_round_trip_and_the_key_only_travels_one_way() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&dir.path().join("guac.db")).unwrap();
@@ -6253,6 +6331,7 @@ mod tests {
                     base_url: Some("http://localhost:1234/v1".into()),
                     default_model: Some("local/qwen".into()),
                     subscription_model: Some("gpt-5.4".into()),
+                    reasoning_effort: None,
                     request_timeout_secs: Some(600),
                 }),
                 api_key: Some(Some("sk-group-9999".into())),

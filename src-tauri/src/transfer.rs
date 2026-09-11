@@ -18,8 +18,8 @@ pub const MAX_ARCHIVE: usize = 64 * 1024 * 1024;
 
 // Order is also insertion order. Nothing from repository or plugin credential stores.
 const TABLES: &[(&str, &str, &str)] = &[
-    ("groups", "id,name,created_at,base_url,default_model,provider,subscription_model,request_timeout_secs,max_hops,max_steps_per_run,max_fanout_per_call,max_sends_per_pair,max_tool_rounds", "id = ?1"),
-    ("agents", "id,group_id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,pinned,rail_order,discarded_at,browser_consent", "group_id = ?1"),
+    ("groups", "id,name,created_at,base_url,default_model,provider,subscription_model,reasoning_effort,request_timeout_secs,max_hops,max_steps_per_run,max_fanout_per_call,max_sends_per_pair,max_tool_rounds", "id = ?1"),
+    ("agents", "id,group_id,name,avatar,color,model,reasoning_effort,system_prompt,skills,lifecycle,version,created_at,updated_at,pinned,rail_order,discarded_at,browser_consent", "group_id = ?1"),
     ("routines", "id,agent_id,name,what,fires,active,next_run_at,last_run_at,created_at,skip_if_working", "agent_id IN (SELECT id FROM agents WHERE group_id = ?1)"),
     ("messages", "id,run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,cause,created_at,intent", "channel_id IN (SELECT id FROM agents WHERE group_id = ?1)"),
     ("occasions", "id,group_id,agent_id,title,detail,place,starts_at,minutes,all_day,created_at,updated_at", "group_id = ?1"),
@@ -283,6 +283,10 @@ fn validate_row(table: &str, row: &Row) -> Result<()> {
                 text(row, agent)?;
             }
         }
+    }
+    if let Some(value) = row.get("reasoning_effort").filter(|v| !v.is_null()) {
+        serde_json::from_value::<crate::domain::effort::ReasoningEffort>(value.clone())
+            .map_err(|_| "The group file contains an invalid reasoning effort. Choose a supported effort and export again.")?;
     }
     for (key, value) in row {
         if [
@@ -577,6 +581,39 @@ mod tests {
         assert_eq!(archive.tables["groups"].len(), 1);
         assert_eq!(archive.tables["agents"].len(), 1);
         assert_eq!(archive.reconnect[0].details["harness"], "codex");
+    }
+    #[test]
+    fn reasoning_efforts_survive_export_and_invalid_efforts_are_refused() {
+        use crate::domain::effort::ReasoningEffort as Effort;
+        let f = Fixture::new();
+        let conn = f.store.conn().unwrap();
+        conn.execute(
+            "UPDATE groups SET reasoning_effort='high' WHERE id=?1",
+            [f.group.to_string()],
+        )
+        .unwrap();
+        conn.execute("UPDATE agents SET reasoning_effort='low' WHERE id=?1", [f.agent.to_string()])
+            .unwrap();
+        drop(conn);
+        let imported = f.import(f.export()).unwrap();
+        assert_eq!(
+            f.store.get_group(imported).unwrap().unwrap().inference.reasoning_effort,
+            Some(Effort::High)
+        );
+        assert_eq!(
+            f.store
+                .list_agents()
+                .unwrap()
+                .iter()
+                .find(|a| a.group_id == imported)
+                .unwrap()
+                .reasoning_effort,
+            Some(Effort::Low)
+        );
+        let mut bad = f.export();
+        bad.tables.get_mut("agents").unwrap()[0]
+            .insert("reasoning_effort".into(), "invented".into());
+        assert!(f.import(bad).unwrap_err().contains("invalid reasoning effort"));
     }
     #[test]
     fn round_trip_preserves_history_and_memory_without_reusing_identity_or_firing() {

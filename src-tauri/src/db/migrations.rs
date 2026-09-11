@@ -1466,6 +1466,13 @@ SELECT c.id, a.id FROM connectors c JOIN agents a ON a.group_id=c.group_id
 WHERE a.discarded_at IS NULL;
 "#,
     ),
+    (
+        53,
+        r#"
+ALTER TABLE agents ADD COLUMN reasoning_effort TEXT;
+ALTER TABLE groups ADD COLUMN reasoning_effort TEXT;
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

@@ -73,6 +73,7 @@ describe("ComputerScreen", () => {
         defaultModel: "",
         provider: "compatible",
         subscriptionModel: "gpt-5.6-luna",
+        reasoningEffort: "auto",
         subscriptionModels: ["gpt-5.6-luna", "gpt-5.4-mini"],
         apiKeySet: true,
         apiKeyHint: "",

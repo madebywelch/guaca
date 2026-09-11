@@ -917,6 +917,7 @@ async fn a_real_subscription_answers_a_real_turn() {
         operator_name: String::new(),
         inference: InferenceConfig {
             provider: Provider::Chatgpt,
+            reasoning_effort: guac_lib::domain::effort::ReasoningEffort::Low,
             request_timeout_secs: 120,
             ..Default::default()
         },
@@ -984,4 +985,49 @@ fn live_credentials() -> Option<std::path::PathBuf> {
     let path = std::path::Path::new(&home)
         .join("Library/Application Support/com.madebywelch.guac/subscription.json");
     path.exists().then_some(path)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn effort_resolves_from_app_group_and_agent_on_every_turn() {
+    use guac_lib::domain::effort::ReasoningEffort as Effort;
+    let stub = serve(|_| Say::Text("Finished.".into())).await;
+    let app = signed_in(&stub, &["Manager"], "pro");
+    let mut config = AppConfig::default();
+    config.inference.provider = Provider::Chatgpt;
+    config.inference.reasoning_effort = Effort::Medium;
+    app.runtime.set_config(config);
+    let agent = app.runtime.store().get_agent(app.id("Manager")).unwrap().unwrap();
+    let mut agent_draft = draft("Manager", &["testing"]);
+    agent_draft.model.clear();
+    for (group, own, expected) in [
+        (None, None, Some("medium")),
+        (Some(Effort::High), None, Some("high")),
+        (Some(Effort::High), Some(Effort::Low), Some("low")),
+        (Some(Effort::High), Some(Effort::Auto), None),
+        (Some(Effort::High), None, Some("high")),
+        (None, None, Some("medium")),
+    ] {
+        app.runtime
+            .store()
+            .update_group(
+                agent.group_id,
+                &CleanGroup {
+                    name: "Effort crew".into(),
+                    inference: Some(InferenceOverrides {
+                        reasoning_effort: group,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        agent_draft.reasoning_effort = own;
+        app.runtime.store().update_agent(agent.id, &agent_draft).unwrap();
+        let run = app.ask("Manager", "Reply with Finished.");
+        app.settle(run).await;
+        let bodies = stub.bodies();
+        let body = bodies.last().unwrap();
+        assert_eq!(body["reasoning"]["effort"].as_str(), expected);
+        assert_eq!(body["model"], guac_lib::llm::codex::DEFAULT_MODEL);
+    }
 }

@@ -4,6 +4,7 @@ pub mod attachment;
 pub mod connector;
 pub mod decision;
 pub mod deployment;
+pub mod effort;
 pub mod envelope;
 pub mod escalation;
 pub mod group;

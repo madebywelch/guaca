@@ -14,6 +14,7 @@ import { type ReactNode, useEffect, useState } from "react";
 import { api } from "../lib/ipc";
 import { PROVIDERS, type Provider as Preset, providerFor, providerReady } from "../lib/providers";
 import { hosted } from "../lib/transport";
+import type { SubscriptionModel as Model, ReasoningEffort } from "../lib/types";
 
 interface PresetProps {
   /** The endpoint in the box, whatever it is. Decides which row reads as
@@ -105,6 +106,11 @@ interface ModelProps {
   inherit?: string;
   /** What this model is used for in the app, group or agent profile. */
   hint: ReactNode;
+  effort: ReasoningEffort | null;
+  onEffortChange: (effort: ReasoningEffort | null) => void;
+  inheritedModel?: string;
+  inheritedEffort?: ReasoningEffort;
+  effortInherit?: string;
 }
 
 /**
@@ -114,8 +120,19 @@ interface ModelProps {
  * plan cannot run is a refusal by name on the next turn. The whole field rather
  * than the control, so the label wraps its own input.
  */
-export function SubscriptionModel({ value, models, onChange, inherit, hint }: ModelProps) {
-  const [catalog, setCatalog] = useState<string[] | null>(null);
+export function SubscriptionModel({
+  value,
+  models,
+  onChange,
+  inherit,
+  hint,
+  effort,
+  onEffortChange,
+  inheritedModel,
+  inheritedEffort,
+  effortInherit,
+}: ModelProps) {
+  const [catalog, setCatalog] = useState<Model[] | null>(null);
   const [unavailable, setUnavailable] = useState(false);
   useEffect(() => {
     let canceled = false;
@@ -134,35 +151,90 @@ export function SubscriptionModel({ value, models, onChange, inherit, hint }: Mo
 
   // Whatever is stored is listed even if it is not one of the known ones, so a
   // model chosen before this list changed is not silently swapped for another.
-  const offered = [...new Set([...(catalog ?? models), value].filter(Boolean))];
+  const offered = [
+    ...new Set([...(catalog?.map((model) => model.slug) ?? models), value].filter(Boolean)),
+  ];
+  const selected = catalog?.find((model) => model.slug === (value || inheritedModel));
+  const effectiveEffort = effort ?? inheritedEffort ?? "auto";
+  const efforts = selected?.reasoningEfforts ?? [];
+  const unsupported =
+    selected &&
+    effectiveEffort !== "auto" &&
+    !efforts.some((entry) => entry.effort === effectiveEffort);
   return (
-    <label className="field" style={{ marginTop: "1.1rem" }}>
-      <span className="field__label">Model</span>
-      <select
-        className="input input--mono"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-      >
-        {inherit !== undefined && <option value="">{inherit}</option>}
-        {offered.map((slug) => (
-          <option key={slug} value={slug}>
-            {slug}
+    <>
+      <label className="field" style={{ marginTop: "1.1rem" }}>
+        <span className="field__label">Model</span>
+        <select
+          className="input input--mono"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+        >
+          {inherit !== undefined && <option value="">{inherit}</option>}
+          {offered.map((slug) => (
+            <option key={slug} value={slug}>
+              {slug}
+            </option>
+          ))}
+        </select>
+        <span className="field__hint">{hint}</span>
+        {catalog && value && !catalog.some((model) => model.slug === value) && (
+          <span className="field__hint" role="status" style={{ display: "block" }}>
+            {value} is not in your account's current ChatGPT model list. Choose a listed model
+            {inherit !== undefined ? " or use the default above" : ""} if it no longer works.
+          </span>
+        )}
+        {unavailable && (
+          <span className="field__hint" role="status" style={{ display: "block" }}>
+            Could not load current ChatGPT models. Showing saved and default choices. Reopen this
+            panel to retry.
+          </span>
+        )}
+      </label>
+      <label className="field">
+        <span className="field__label">Reasoning effort</span>
+        <select
+          className="input"
+          value={effort ?? ""}
+          onChange={(event) =>
+            onEffortChange((event.target.value || null) as ReasoningEffort | null)
+          }
+        >
+          {effortInherit && (
+            <option value="">
+              {effortInherit} ·{" "}
+              {inheritedEffort === "auto" || !inheritedEffort ? "Model default" : inheritedEffort}
+            </option>
+          )}
+          <option value="auto">
+            Model default
+            {selected?.defaultReasoningEffort ? ` · ${selected.defaultReasoningEffort}` : ""}
           </option>
-        ))}
-      </select>
-      <span className="field__hint">{hint}</span>
-      {catalog && value && !catalog.includes(value) && (
-        <span className="field__hint" role="status" style={{ display: "block" }}>
-          {value} is not in your account's current ChatGPT model list. Choose a listed model
-          {inherit !== undefined ? " or use the default above" : ""} if it no longer works.
+          {efforts.map((entry) => (
+            <option key={entry.effort} value={entry.effort}>
+              {entry.effort}
+            </option>
+          ))}
+          {effort && effort !== "auto" && !efforts.some((entry) => entry.effort === effort) && (
+            <option value={effort}>{effort} (saved)</option>
+          )}
+        </select>
+        <span className="field__hint">
+          {efforts.find((entry) => entry.effort === effectiveEffort)?.description ??
+            "Choose how much reasoning this model uses. Higher effort can take longer and use more of your quota."}
         </span>
-      )}
-      {unavailable && (
-        <span className="field__hint" role="status" style={{ display: "block" }}>
-          Could not load current ChatGPT models. Showing saved and default choices. Reopen this
-          panel to retry.
-        </span>
-      )}
-    </label>
+        {unsupported && (
+          <span className="field__hint" role="status">
+            {effectiveEffort} is not offered for {selected.slug}. Choose an available effort or
+            Model default before starting a turn.
+          </span>
+        )}
+        {!selected && (
+          <span className="field__hint">
+            Effort choices load with the model catalog. Saved settings are kept.
+          </span>
+        )}
+      </label>
+    </>
   );
 }

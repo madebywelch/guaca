@@ -136,6 +136,9 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
   const [provider, setProvider] = useState<ProviderKind>(settings?.provider ?? "compatible");
   const [baseUrl, setBaseUrl] = useState(settings?.baseUrl ?? "");
   const [model, setModel] = useState(settings?.defaultModel ?? "");
+  const [reasoningEffort, setReasoningEffort] = useState<import("../lib/types").ReasoningEffort>(
+    settings?.reasoningEffort ?? "auto",
+  );
   const [subscriptionModel, setSubscriptionModel] = useState(settings?.subscriptionModel ?? "");
   const [apiKey, setApiKey] = useState("");
   const [editingApiKey, setEditingApiKey] = useState(false);
@@ -229,6 +232,7 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
     // Both models are always sent, whichever provider is chosen. Each belongs
     // to one provider and neither is cleared by the other, so an operator who
     // tries a subscription and goes back finds their endpoint model intact.
+    reasoningEffort,
     ...(subscriptionModel.trim() ? { subscriptionModel: subscriptionModel.trim() } : {}),
     // Omitted when blank, so saving without retyping keeps the stored key.
     ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
@@ -260,6 +264,7 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
     baseUrl !== (settings?.baseUrl ?? "") ||
     model !== (settings?.defaultModel ?? "") ||
     subscriptionModel !== (settings?.subscriptionModel ?? "") ||
+    reasoningEffort !== (settings?.reasoningEffort ?? "auto") ||
     stealth !== (settings?.browserStealth ?? false) ||
     apiKey.trim() !== "" ||
     e2bKey.trim() !== "" ||
@@ -716,6 +721,8 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
                 {subscription?.signedIn && provider === "chatgpt" && (
                   <SubscriptionModel
                     value={subscriptionModel}
+                    effort={reasoningEffort}
+                    onEffortChange={(effort) => setReasoningEffort(effort ?? "auto")}
                     models={settings?.subscriptionModels ?? []}
                     onChange={setSubscriptionModel}
                     hint="The default model for any group that does not name one, and any agent that does not name one. A subscription has an hourly quota rather than a per-token bill, so a crew that talks a lot reaches the ceiling faster than one person would."

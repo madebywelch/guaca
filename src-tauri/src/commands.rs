@@ -2144,6 +2144,7 @@ pub async fn duplicate_agent(state: &AppState, id: AgentId) -> Reply<AgentCard> 
         avatar: original.avatar,
         color: original.color,
         model: original.model,
+        reasoning_effort: original.reasoning_effort,
         system_prompt: original.system_prompt,
         skills: original.skills,
     };
@@ -2886,6 +2887,7 @@ pub struct SettingsPatch {
     pub api_key: Option<String>,
     pub default_model: Option<String>,
     pub subscription_model: Option<String>,
+    pub reasoning_effort: Option<crate::domain::effort::ReasoningEffort>,
     pub request_timeout_secs: Option<u64>,
     pub limits: Option<GuardLimits>,
     pub e2b_api_key: Option<String>,
@@ -2964,7 +2966,9 @@ pub async fn subscription_status(state: &AppState) -> Reply<Status> {
 }
 
 /// The account's current picker-visible models. Credentials stay in Rust.
-pub async fn subscription_models(state: &AppState) -> Reply<Vec<String>> {
+pub async fn subscription_models(
+    state: &AppState,
+) -> Reply<Vec<crate::llm::codex::SubscriptionModel>> {
     crate::llm::codex::models(&state.subscription).await.map_err(|err| {
         tracing::warn!(%err, "could not load ChatGPT model catalog");
         CommandError::new("subscriptionModels", err.to_string())
@@ -3056,6 +3060,9 @@ fn apply_patch(
             return Err(CommandError::new("validation", "default model must not be blank"));
         }
         config.inference.default_model = trimmed.to_string();
+    }
+    if let Some(effort) = patch.reasoning_effort {
+        config.inference.reasoning_effort = effort;
     }
     if let Some(model) = patch.subscription_model {
         let trimmed = model.trim();
