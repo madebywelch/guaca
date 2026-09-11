@@ -25,6 +25,7 @@ const getSettings = vi.fn<() => Promise<Settings>>(async () => ({
   operatorName: "",
   provider: "compatible",
   subscriptionModel: "gpt-5.6-luna",
+  reasoningEffort: "auto",
   subscriptionModels: ["gpt-5.6-luna", "gpt-5.4-mini"],
   apiKeySet: true,
   e2bKeySet: false,
@@ -61,7 +62,15 @@ vi.mock("./lib/ipc", () => ({
     openEscalations: async () => [],
     agentLastActive: () => agentLastActive(),
     getSettings: () => getSettings(),
-    subscriptionModels: async () => ["gpt-5.6-luna"],
+    subscriptionModels: async () =>
+      ["gpt-5.6-luna"].map((slug) => ({
+        slug,
+        defaultReasoningEffort: "medium",
+        reasoningEfforts: [
+          { effort: "low", description: "Faster" },
+          { effort: "high", description: "More thorough" },
+        ],
+      })),
     reportPresence: async () => {},
     capabilities: async () => ({
       localDirectories: true,
@@ -238,6 +247,7 @@ describe("App", () => {
       defaultModel: "test/model",
       provider: "compatible",
       subscriptionModel: "gpt-5.6-luna",
+      reasoningEffort: "auto",
       subscriptionModels: ["gpt-5.6-luna", "gpt-5.4-mini"],
       apiKeySet: false,
       e2bKeySet: false,
@@ -296,6 +306,7 @@ describe("App", () => {
       defaultModel: "test/model",
       provider: "chatgpt",
       subscriptionModel: "gpt-5.6-luna",
+      reasoningEffort: "auto",
       subscriptionModels: ["gpt-5.6-luna", "gpt-5.4-mini"],
       apiKeySet: false,
       e2bKeySet: false,

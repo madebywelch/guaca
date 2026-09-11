@@ -7,6 +7,7 @@
 //! boundary that a local single-process app does not have: no `.well-known`
 //! hosting, no DIDs, no signatures, no registry.
 
+use crate::domain::effort::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 
 use super::ids::{AgentId, GroupId, RepositoryId};
@@ -143,6 +144,8 @@ pub struct AgentCard {
     /// OpenRouter model slug. Per-agent so a cheap agent and an expensive one
     /// can share a room.
     pub model: String,
+    #[serde(default)]
+    pub reasoning_effort: Option<ReasoningEffort>,
     pub system_prompt: String,
     /// Free-text capability lines. This is what peers actually read when they
     /// decide who to talk to, so it is the highest-leverage field on the card.
@@ -293,6 +296,8 @@ pub struct AgentDraft {
     pub avatar: String,
     pub color: String,
     pub model: String,
+    #[serde(default)]
+    pub reasoning_effort: Option<ReasoningEffort>,
     pub system_prompt: String,
     #[serde(default)]
     pub skills: Vec<String>,
@@ -347,6 +352,7 @@ impl AgentDraft {
             avatar: avatar.to_string(),
             color,
             model: model.to_string(),
+            reasoning_effort: self.reasoning_effort,
             system_prompt: self.system_prompt.trim().to_string(),
             skills: self
                 .skills
@@ -365,6 +371,7 @@ pub struct CleanDraft {
     pub avatar: String,
     pub color: String,
     pub model: String,
+    pub reasoning_effort: Option<ReasoningEffort>,
     pub system_prompt: String,
     pub skills: Vec<String>,
 }
@@ -502,6 +509,7 @@ mod tests {
             avatar: "orb".into(),
             color: "#7FB069".into(),
             model: "anthropic/claude-sonnet-4.5".into(),
+            reasoning_effort: None,
             system_prompt: "  You coordinate.  ".into(),
             skills: vec!["  delegation  ".into(), "   ".into()],
         }
@@ -568,6 +576,7 @@ mod tests {
             avatar: "orb".into(),
             color: "#7fb069".into(),
             model: "m".into(),
+            reasoning_effort: None,
             system_prompt: "SECRET INSTRUCTIONS".into(),
             skills: vec!["delegation".into()],
             sandbox_id: None,

@@ -7,6 +7,7 @@
 //! If you want real secret storage, the honest answer is the OS keychain, and
 //! that is a deliberate follow-up rather than something faked here.
 
+use crate::domain::effort::ReasoningEffort;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -112,6 +113,8 @@ pub struct InferenceConfig {
     /// their model replaced both times.
     #[serde(default = "default_subscription_model")]
     pub subscription_model: String,
+    #[serde(default)]
+    pub reasoning_effort: ReasoningEffort,
     /// OpenRouter attributes requests by these headers. Harmless elsewhere.
     #[serde(default = "default_referer")]
     pub referer: String,
@@ -145,6 +148,7 @@ impl Default for InferenceConfig {
             api_key: String::new(),
             default_model: DEFAULT_MODEL.to_string(),
             subscription_model: default_subscription_model(),
+            reasoning_effort: ReasoningEffort::default(),
             referer: default_referer(),
             title: default_title(),
             request_timeout_secs: default_timeout(),
@@ -389,6 +393,8 @@ pub struct RedactedConfig {
     pub base_url: String,
     pub default_model: String,
     pub subscription_model: String,
+    #[serde(default)]
+    pub reasoning_effort: ReasoningEffort,
     pub api_key_set: bool,
     pub api_key_hint: String,
     pub request_timeout_secs: u64,
@@ -412,6 +418,7 @@ impl AppConfig {
             base_url: self.inference.base_url.clone(),
             default_model: self.inference.default_model.clone(),
             subscription_model: self.inference.subscription_model.clone(),
+            reasoning_effort: self.inference.reasoning_effort,
             api_key_set: !self.inference.api_key.trim().is_empty(),
             api_key_hint: hint_for(&self.inference.api_key),
             request_timeout_secs: self.inference.request_timeout_secs,

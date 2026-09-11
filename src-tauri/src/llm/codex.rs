@@ -92,7 +92,7 @@ pub const DEFAULT_MODEL: &str = "gpt-5.6-luna";
 /// Ask the signed-in account's catalog whenever its selector opens. Keeping
 /// this out of settings loading means an unavailable catalog cannot hold up
 /// the workspace, and keeping no cache avoids carrying offers across accounts.
-pub async fn models(subscription: &Subscription) -> Result<Vec<String>, LlmError> {
+pub async fn models(subscription: &Subscription) -> Result<Vec<SubscriptionModel>, LlmError> {
     tokio::time::timeout(Duration::from_secs(10), async {
         let mut access = subscription.access().await.map_err(auth_error)?;
         let url = format!("{}/models", subscription.backend().trim_end_matches('/'));
@@ -139,6 +139,20 @@ pub async fn models(subscription: &Subscription) -> Result<Vec<String>, LlmError
     .map_err(|_| LlmError::Timeout { secs: 10 })?
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubscriptionModel {
+    pub slug: String,
+    pub default_reasoning_effort: Option<crate::domain::effort::ReasoningEffort>,
+    pub reasoning_efforts: Vec<EffortPreset>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EffortPreset {
+    pub effort: crate::domain::effort::ReasoningEffort,
+    pub description: String,
+}
+
 #[derive(Deserialize)]
 struct ModelCatalog {
     models: Vec<CatalogModel>,
@@ -150,18 +164,26 @@ struct CatalogModel {
     visibility: String,
     #[serde(default)]
     priority: i64,
+    #[serde(default)]
+    default_reasoning_level: Option<crate::domain::effort::ReasoningEffort>,
+    #[serde(default)]
+    supported_reasoning_levels: Vec<EffortPreset>,
 }
 
 impl ModelCatalog {
-    fn visible(mut self) -> Result<Vec<String>, LlmError> {
+    fn visible(mut self) -> Result<Vec<SubscriptionModel>, LlmError> {
         self.models.sort_by_key(|model| model.priority);
-        let mut models = Vec::new();
+        let mut models: Vec<SubscriptionModel> = Vec::new();
         for model in self.models {
             if model.visibility == "list"
                 && !model.slug.trim().is_empty()
-                && !models.contains(&model.slug)
+                && !models.iter().any(|entry| entry.slug == model.slug)
             {
-                models.push(model.slug);
+                models.push(SubscriptionModel {
+                    slug: model.slug,
+                    default_reasoning_effort: model.default_reasoning_level,
+                    reasoning_efforts: model.supported_reasoning_levels,
+                });
             }
         }
         if models.is_empty() {
@@ -201,6 +223,8 @@ struct Request<'a> {
 
 #[derive(Debug, Serialize)]
 struct Reasoning {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effort: Option<crate::domain::effort::ReasoningEffort>,
     /// A readable summary of the model's working, for the Thinking line. The
     /// encrypted full reasoning is not requested: see the note at the top.
     summary: &'static str,
@@ -283,7 +307,11 @@ enum Part {
 /// Split out from the call so it can be tested directly. Most of the ways this
 /// can be wrong produce a 400 from somebody else's server, and reading the
 /// assembled body is far cheaper than reading that.
-fn build<'a>(request: &'a ChatRequest, model: &'a str) -> Request<'a> {
+fn build<'a>(
+    request: &'a ChatRequest,
+    model: &'a str,
+    effort: crate::domain::effort::ReasoningEffort,
+) -> Request<'a> {
     let mut instructions: Vec<&str> = Vec::new();
     let mut input: Vec<Item> = Vec::new();
 
@@ -356,7 +384,7 @@ fn build<'a>(request: &'a ChatRequest, model: &'a str) -> Request<'a> {
         parallel_tool_calls: false,
         store: false,
         stream: true,
-        reasoning: Reasoning { summary: "auto" },
+        reasoning: Reasoning { summary: "auto", effort: effort.wire() },
     }
 }
 
@@ -484,7 +512,7 @@ where
     // end-to-end suite drive this transport against a stub.
     let url = format!("{}/responses", subscription.backend().trim_end_matches('/'));
     let timeout = Duration::from_secs(cfg.request_timeout_secs.clamp(5, 900));
-    let body = build(request, &request.model);
+    let body = build(request, &request.model, cfg.reasoning_effort);
 
     // At most twice, and the second time only after a refresh. The backend is
     // the authority on whether a token still works and it disagrees with the
@@ -774,7 +802,7 @@ mod tests {
             tools: Vec::new(),
             temperature: Some(0.7),
         };
-        let json = wire(&build(&request, "m"));
+        let json = wire(&build(&request, "m", Default::default()));
 
         assert_eq!(json["instructions"], "be terse");
         assert_eq!(json["input"].as_array().unwrap().len(), 1, "the system turn is not an input");
@@ -794,7 +822,10 @@ mod tests {
             tools: Vec::new(),
             temperature: None,
         };
-        assert_eq!(wire(&build(&request, "m"))["instructions"], "first\n\nsecond");
+        assert_eq!(
+            wire(&build(&request, "m", Default::default()))["instructions"],
+            "first\n\nsecond"
+        );
     }
 
     #[test]
@@ -807,7 +838,7 @@ mod tests {
             tools: Vec::new(),
             temperature: Some(0.0),
         };
-        let json = wire(&build(&request, "m"));
+        let json = wire(&build(&request, "m", Default::default()));
         assert!(json.get("temperature").is_none(), "{json}");
     }
 
@@ -819,11 +850,18 @@ mod tests {
             tools: Vec::new(),
             temperature: None,
         };
-        let json = wire(&build(&request, "m"));
+        let json = wire(&build(&request, "m", Default::default()));
         assert_eq!(json["store"], false);
         assert_eq!(json["stream"], true);
         assert_eq!(json["parallel_tool_calls"], false);
         assert_eq!(json["reasoning"]["summary"], "auto");
+        assert!(json["reasoning"].get("effort").is_none());
+        for effort in ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] {
+            let chosen = serde_json::from_value(serde_json::json!(effort)).unwrap();
+            let explicit = wire(&build(&request, "m", chosen));
+            assert_eq!(explicit["reasoning"]["effort"], effort);
+            assert_eq!(explicit["reasoning"]["summary"], "auto");
+        }
         // The encrypted reasoning would have to be sent back to be worth
         // asking for, and this app does not keep reasoning.
         assert!(json.get("include").is_none(), "{json}");
@@ -837,7 +875,7 @@ mod tests {
             tools: vec![spec()],
             temperature: None,
         };
-        let json = wire(&build(&request, "m"));
+        let json = wire(&build(&request, "m", Default::default()));
 
         assert_eq!(json["tools"][0]["type"], "function");
         assert_eq!(json["tools"][0]["name"], "send_message", "{json}");
@@ -857,7 +895,7 @@ mod tests {
             tools: Vec::new(),
             temperature: None,
         };
-        let json = wire(&build(&request, "m"));
+        let json = wire(&build(&request, "m", Default::default()));
         assert!(json.get("tools").is_none());
         assert!(json.get("tool_choice").is_none());
     }
@@ -884,7 +922,7 @@ mod tests {
             tools: Vec::new(),
             temperature: None,
         };
-        let json = wire(&build(&request, "m"));
+        let json = wire(&build(&request, "m", Default::default()));
         let input = json["input"].as_array().unwrap();
 
         assert_eq!(input.len(), 3);
@@ -914,7 +952,7 @@ mod tests {
             tools: Vec::new(),
             temperature: None,
         };
-        let input = wire(&build(&request, "m"));
+        let input = wire(&build(&request, "m", Default::default()));
         let input = input["input"].as_array().unwrap();
         assert_eq!(input.len(), 1, "an empty content list is not a valid message");
         assert_eq!(input[0]["type"], "function_call");
@@ -928,7 +966,7 @@ mod tests {
             tools: Vec::new(),
             temperature: None,
         };
-        let json = wire(&build(&request, "m"));
+        let json = wire(&build(&request, "m", Default::default()));
         assert_eq!(json["input"][0]["role"], "assistant");
         assert_eq!(json["input"][0]["content"][0]["type"], "output_text");
     }
@@ -944,7 +982,7 @@ mod tests {
             tools: Vec::new(),
             temperature: None,
         };
-        let json = wire(&build(&request, "m"));
+        let json = wire(&build(&request, "m", Default::default()));
         let content = &json["input"][0]["content"];
 
         assert_eq!(content[0]["type"], "input_text", "the text goes first");
@@ -965,7 +1003,7 @@ mod tests {
             tools: Vec::new(),
             temperature: None,
         };
-        let json = wire(&build(&request, "m"));
+        let json = wire(&build(&request, "m", Default::default()));
         assert_eq!(json["input"][0]["content"][0]["image_url"], "data:image/jpeg;base64,BB");
     }
 

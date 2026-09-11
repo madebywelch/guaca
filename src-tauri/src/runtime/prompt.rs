@@ -1370,6 +1370,7 @@ mod tests {
             avatar: "orb".into(),
             color: "#7fb069".into(),
             model: "test/model".into(),
+            reasoning_effort: None,
             system_prompt: "You coordinate the kitchen.".into(),
             skills: vec!["delegation".into(), "scheduling".into()],
             lifecycle: Lifecycle::Active,

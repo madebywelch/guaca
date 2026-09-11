@@ -24,6 +24,7 @@ export function aGroup(over: Partial<Group> = {}): Group {
       baseUrl: null,
       defaultModel: null,
       subscriptionModel: null,
+      reasoningEffort: null,
       requestTimeoutSecs: null,
     },
     apiKeySet: false,

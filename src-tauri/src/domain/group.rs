@@ -25,6 +25,7 @@
 //! empty string is a field an operator blanked, which means inherit too, and is
 //! normalized to `None` on the way in so the two can never disagree.
 
+use crate::domain::effort::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 
 use super::ids::GroupId;
@@ -77,6 +78,7 @@ pub struct InferenceOverrides {
     /// disjoint model names, and a group that tries the subscription for an
     /// hour must find its endpoint model where it left it.
     pub subscription_model: Option<String>,
+    pub reasoning_effort: Option<ReasoningEffort>,
     pub request_timeout_secs: Option<u64>,
 }
 
@@ -216,6 +218,7 @@ impl GroupDraft {
                 },
                 default_model: override_of(&raw.default_model),
                 subscription_model: override_of(&raw.subscription_model),
+                reasoning_effort: raw.reasoning_effort,
                 request_timeout_secs: raw.request_timeout_secs.map(clamp_timeout),
             }),
         };
@@ -280,6 +283,9 @@ impl GroupInference {
         }
         if let Some(model) = &over.subscription_model {
             out.subscription_model = model.clone();
+        }
+        if let Some(effort) = over.reasoning_effort {
+            out.reasoning_effort = effort;
         }
         if let Some(secs) = over.request_timeout_secs {
             out.request_timeout_secs = secs;

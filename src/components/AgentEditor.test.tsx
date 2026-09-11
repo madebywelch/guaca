@@ -6,7 +6,16 @@ import { aGroup } from "../test-fixtures";
 import { AgentEditor } from "./AgentEditor";
 
 const api = vi.hoisted(() => ({
-  subscriptionModels: vi.fn(async () => ["chat-default", "chat-specialist"]),
+  subscriptionModels: vi.fn(async () =>
+    ["chat-default", "chat-specialist", "crew-default"].map((slug) => ({
+      slug,
+      defaultReasoningEffort: "medium",
+      reasoningEfforts: [
+        { effort: "low", description: "Faster" },
+        { effort: "high", description: "More thorough" },
+      ],
+    })),
+  ),
   updateAgent: vi.fn(async () => {}),
   createAgent: vi.fn(async () => ({ id: "new-agent" })),
   rankedModels: vi.fn(async () => []),
@@ -29,6 +38,7 @@ const settings: Settings = {
   defaultModel: "anthropic/endpoint-model",
   provider: "compatible",
   subscriptionModel: "chat-default",
+  reasoningEffort: "auto",
   subscriptionModels: ["chat-default"],
   apiKeySet: true,
   apiKeyHint: "",
@@ -91,7 +101,16 @@ async function save() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  api.subscriptionModels.mockResolvedValue(["chat-default", "chat-specialist"]);
+  api.subscriptionModels.mockResolvedValue(
+    ["chat-default", "chat-specialist", "crew-default"].map((slug) => ({
+      slug,
+      defaultReasoningEffort: "medium",
+      reasoningEfforts: [
+        { effort: "low", description: "Faster" },
+        { effort: "high", description: "Thorough" },
+      ],
+    })),
+  );
 });
 
 it("keeps a legacy endpoint override visible and explains it after the account list loads", async () => {
@@ -211,4 +230,39 @@ it("explains Claude's model ownership and preserves the inactive override when s
   );
   expect(api.subscriptionModels).not.toHaveBeenCalled();
   expect(api.rankedModels).not.toHaveBeenCalled();
+});
+
+it("overrides effort while inheriting the model and restores group inheritance", async () => {
+  const view = open({ ...card(), reasoningEffort: "high" });
+  const effort = await screen.findByRole("combobox", { name: /^Reasoning effort/ });
+  await screen.findByRole("option", { name: "low" });
+  fireEvent.change(effort, { target: { value: "low" } });
+  await save();
+  expect(api.updateAgent).toHaveBeenLastCalledWith(
+    "agent-1",
+    expect.objectContaining({ model: "", reasoningEffort: "low" }),
+  );
+  view.unmount();
+  open({ ...card(), reasoningEffort: "low" });
+  fireEvent.change(screen.getByRole("combobox", { name: /^Reasoning effort/ }), {
+    target: { value: "" },
+  });
+  await save();
+  expect(api.updateAgent).toHaveBeenLastCalledWith(
+    "agent-1",
+    expect.objectContaining({ model: "", reasoningEffort: null }),
+  );
+});
+
+it("updates inherited effort when the agent changes groups", () => {
+  const second = aGroup({
+    id: "second",
+    name: "Second",
+    inference: { ...crew.inference, reasoningEffort: "high" },
+  });
+  open(card(), [crew, second]);
+  fireEvent.change(screen.getByRole("combobox", { name: /^Group/ }), {
+    target: { value: "second" },
+  });
+  expect(screen.getByRole("option", { name: "Use group default · high" })).toBeTruthy();
 });

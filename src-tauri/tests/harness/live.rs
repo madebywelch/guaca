@@ -182,6 +182,7 @@ pub fn live_crew_watched(
                     .model
                     .map(str::to_string)
                     .unwrap_or_else(|| config.inference.default_model.clone()),
+                reasoning_effort: None,
                 system_prompt: agent.system_prompt(),
                 skills: agent.skills.iter().map(|s| (*s).to_string()).collect(),
                 group_id: None,

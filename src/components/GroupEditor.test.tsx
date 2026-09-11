@@ -41,6 +41,7 @@ function settings(over: Partial<Settings> = {}): Settings {
     defaultModel: "anthropic/claude-sonnet-4.5",
     provider: "compatible",
     subscriptionModel: "gpt-5.6-luna",
+    reasoningEffort: "auto",
     subscriptionModels: ["gpt-5.6-luna", "gpt-5.4-mini"],
     apiKeySet: true,
     apiKeyHint: "…9f2c",
@@ -99,7 +100,15 @@ vi.mock("../lib/ipc", () => ({
     clearGroup: (id: string) => clearGroup(id),
     testGroupConnection: (id: string | null, draft: GroupDraft) => testGroupConnection(id, draft),
     subscriptionStatus: () => subscriptionStatus(),
-    subscriptionModels: async () => ["gpt-5.6-luna", "gpt-5.4-mini"],
+    subscriptionModels: async () =>
+      ["gpt-5.6-luna", "gpt-5.4-mini"].map((slug) => ({
+        slug,
+        defaultReasoningEffort: "medium",
+        reasoningEfforts: [
+          { effort: "low", description: "Faster" },
+          { effort: "high", description: "More thorough" },
+        ],
+      })),
     groupConnectors: () => groupConnectors(),
     groupPlugins: () => groupPlugins(),
     pluginCatalog: () => pluginCatalog(),
@@ -166,6 +175,7 @@ describe("what a group sends", () => {
       baseUrl: null,
       defaultModel: null,
       subscriptionModel: null,
+      reasoningEffort: null,
       requestTimeoutSecs: null,
     });
     expect(draft.limits).toEqual({
@@ -592,4 +602,37 @@ describe("a crew's activity", () => {
     open(null);
     expect(screen.getByRole("tab", { name: "Activity" }).hasAttribute("disabled")).toBe(true);
   });
+});
+
+it("sets effort while inheriting the app's ChatGPT provider and model", async () => {
+  open(aGroup(), { provider: "chatgpt", reasoningEffort: "low" });
+  pane("Provider");
+  const effort = await screen.findByRole("combobox", { name: /^Reasoning effort/ });
+  await screen.findByRole("option", { name: "high" });
+  fireEvent.change(effort, { target: { value: "high" } });
+  const draft = await save();
+  expect(draft.inference).toMatchObject({
+    provider: null,
+    subscriptionModel: null,
+    reasoningEffort: "high",
+  });
+});
+
+it("clears a group's effort override and can explicitly choose the model default", async () => {
+  const group = aGroup({
+    inference: { ...aGroup().inference, provider: "chatgpt", reasoningEffort: "high" },
+  });
+  const view = open(group);
+  pane("Provider");
+  fireEvent.change(await screen.findByRole("combobox", { name: /^Reasoning effort/ }), {
+    target: { value: "" },
+  });
+  expect((await save()).inference?.reasoningEffort).toBeNull();
+  view.unmount();
+  open(group);
+  pane("Provider");
+  fireEvent.change(await screen.findByRole("combobox", { name: /^Reasoning effort/ }), {
+    target: { value: "auto" },
+  });
+  expect((await save()).inference?.reasoningEffort).toBe("auto");
 });

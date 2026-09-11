@@ -123,7 +123,15 @@ async fn live_offers_replace_the_compiled_list_in_priority_order() {
         false,
     )
     .await;
-    assert_eq!(codex::models(&server.subscription).await.unwrap(), ["new-model", "older"]);
+    assert_eq!(
+        codex::models(&server.subscription)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| m.slug)
+            .collect::<Vec<_>>(),
+        ["new-model", "older"]
+    );
 }
 
 #[tokio::test]
@@ -134,7 +142,15 @@ async fn an_expired_access_token_is_refreshed_once() {
         true,
     )
     .await;
-    assert_eq!(codex::models(&server.subscription).await.unwrap(), ["new-model"]);
+    assert_eq!(
+        codex::models(&server.subscription)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| m.slug)
+            .collect::<Vec<_>>(),
+        ["new-model"]
+    );
     assert_eq!(server.reads.load(Ordering::SeqCst), 2);
     assert_eq!(server.refreshes.load(Ordering::SeqCst), 1);
 }
@@ -155,5 +171,29 @@ async fn the_live_catalog_still_publishes_selectable_models() {
     let subscription = Subscription::open(path.into());
     let models = codex::models(&subscription).await.unwrap();
     assert!(!models.is_empty());
-    eprintln!("selectable models: {}", models.join(", "));
+    eprintln!(
+        "selectable models: {}",
+        models.iter().map(|m| m.slug.as_str()).collect::<Vec<_>>().join(", ")
+    );
+}
+
+#[tokio::test]
+async fn reasoning_capabilities_cross_the_catalog_boundary() {
+    let server = catalog(
+        StatusCode::OK,
+        json!({"models":[{
+            "slug":"thinking", "visibility":"list", "default_reasoning_level":"medium",
+            "supported_reasoning_levels":[
+                {"effort":"low", "description":"Fast"},
+                {"effort":"ultra", "description":"Most thorough"}
+            ]
+        }]}),
+        false,
+    )
+    .await;
+    let models = codex::models(&server.subscription).await.unwrap();
+    let value = serde_json::to_value(&models[0]).unwrap();
+    assert_eq!(value["defaultReasoningEffort"], "medium");
+    assert_eq!(value["reasoningEfforts"][1]["effort"], "ultra");
+    assert_eq!(value["reasoningEfforts"][1]["description"], "Most thorough");
 }

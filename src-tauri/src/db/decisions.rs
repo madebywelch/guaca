@@ -264,6 +264,7 @@ mod tests {
                 avatar: "orb".into(),
                 color: "#7fb069".into(),
                 model: "test".into(),
+                reasoning_effort: None,
                 system_prompt: String::new(),
                 skills: vec![],
             })

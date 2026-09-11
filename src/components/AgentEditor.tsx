@@ -34,6 +34,7 @@ export function AgentEditor({ agent, onClose }: Props) {
     avatar: agent?.avatar ?? suggestCharacter(agents.map((a) => a.avatar)),
     color: agent?.color ?? suggestAccent(agents.map((a) => a.color)),
     model: agent?.model ?? "",
+    reasoningEffort: agent?.reasoningEffort ?? null,
     systemPrompt: agent?.systemPrompt ?? "",
     skills: agent?.skills ?? [],
   }));
@@ -233,6 +234,11 @@ export function AgentEditor({ agent, onClose }: Props) {
         {provider === "chatgpt" ? (
           <SubscriptionModel
             value={draft.model}
+            effort={draft.reasoningEffort ?? null}
+            onEffortChange={(reasoningEffort) => patch({ reasoningEffort })}
+            inheritedModel={inheritedModel}
+            inheritedEffort={crew?.inference.reasoningEffort ?? settings?.reasoningEffort ?? "auto"}
+            effortInherit="Use group default"
             models={settings?.subscriptionModels ?? []}
             inherit={inherit}
             onChange={(model) => patch({ model })}

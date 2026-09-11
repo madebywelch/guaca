@@ -245,6 +245,23 @@ export interface Group {
 }
 
 /** Every field `null` is a group that runs on the app settings. */
+export type ReasoningEffort =
+  | "auto"
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max"
+  | "ultra";
+
+export interface SubscriptionModel {
+  slug: string;
+  defaultReasoningEffort: ReasoningEffort | null;
+  reasoningEfforts: { effort: ReasoningEffort; description: string }[];
+}
+
 export interface InferenceOverrides {
   provider: Provider | null;
   baseUrl: string | null;
@@ -253,6 +270,7 @@ export interface InferenceOverrides {
   /** The model used when the subscription is paying. Two fields for the reason
    *  the app keeps two: the providers have disjoint model names. */
   subscriptionModel: string | null;
+  reasoningEffort: ReasoningEffort | null;
   requestTimeoutSecs: number | null;
 }
 
@@ -781,6 +799,7 @@ export interface AgentCard {
   avatar: string;
   color: string;
   model: string;
+  reasoningEffort?: ReasoningEffort | null;
   systemPrompt: string;
   skills: string[];
   lifecycle: Lifecycle;
@@ -813,6 +832,7 @@ export interface AgentDraft {
   avatar: string;
   color: string;
   model: string;
+  reasoningEffort?: ReasoningEffort | null;
   systemPrompt: string;
   skills: string[];
 }
@@ -916,6 +936,7 @@ export interface Settings {
   /** The model used when a subscription is paying. Kept apart so switching
    *  providers does not overwrite either. */
   subscriptionModel: string;
+  reasoningEffort: ReasoningEffort;
   apiKeySet: boolean;
   apiKeyHint: string;
   requestTimeoutSecs: number;
@@ -937,6 +958,7 @@ export interface SettingsPatch {
   apiKey?: string;
   defaultModel?: string;
   subscriptionModel?: string;
+  reasoningEffort?: ReasoningEffort;
   requestTimeoutSecs?: number;
   limits?: GuardLimits;
 }

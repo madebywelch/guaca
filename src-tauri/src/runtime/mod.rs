@@ -5946,6 +5946,7 @@ impl Runtime {
             // Blank means inherit, which is how an agent created in the UI
             // starts too. What a new agent costs to run stays the operator's.
             model: String::new(),
+            reasoning_effort: None,
             system_prompt: draft.instructions.clone(),
             skills: draft.skills.clone(),
         };
@@ -7131,7 +7132,7 @@ impl Runtime {
     /// still uses the app's endpoint and key, so setting one field does not
     /// silently blank the others.
     fn inference_for(&self, card: &AgentCard, config: &AppConfig) -> InferenceConfig {
-        match self.inner.store.group_inference(card.group_id) {
+        let mut inference = match self.inner.store.group_inference(card.group_id) {
             Ok(overrides) => overrides.apply(&config.inference),
             Err(err) => {
                 // A group that cannot be read must not take its agents offline;
@@ -7139,7 +7140,9 @@ impl Runtime {
                 tracing::warn!(agent = %card.name, %err, "group settings unreadable, using app defaults");
                 config.inference.clone()
             }
-        }
+        };
+        inference.reasoning_effort = card.reasoning_effort.unwrap_or(inference.reasoning_effort);
+        inference
     }
 
     /// How far a conversation this agent is part of may run.
@@ -7794,6 +7797,7 @@ mod tests {
             avatar: "orb".into(),
             color: "#7fb069".into(),
             model: "m".into(),
+            reasoning_effort: None,
             system_prompt: String::new(),
             skills: Vec::new(),
             sandbox_id: Some(sandbox.into()),
