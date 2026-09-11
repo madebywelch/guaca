@@ -958,11 +958,20 @@ reach and not to describe something it has not read. The same holds for a file
 an agent asks to send and does not have. Silence here is the worst available
 outcome, because both ends believe the document arrived.
 
-Files an agent attaches are resolved first against its saved attachments, which
-is forwarding and needs no machine at all, and otherwise as a path on its computer,
-which is where an agent that *produced* a document has it. The operator's end is
-the same pipe: `dragDropEnabled` hands Rust the dropped paths, so the bytes are
-read on the Rust side and never enter the webview.
+Files an agent attaches resolve a bare name against its saved attachments first.
+An explicit path reads current bytes instead of reusing a saved file with the
+same basename. Repository files come from the same worktree as `shell`, without
+fetching or resetting it. Relative paths start there; absolute paths and symlinks
+must resolve inside that worktree. If the agent also has a computer, a path that
+cannot be read from the repository is tried on that computer. No repository or
+computer is needed to forward a saved attachment.
+
+**A send with a missing file delivers nothing.** All requested attachments must
+resolve before any recipient is queued or any message guard is spent. Otherwise
+the tool records a failure with the missing files and a way to retry. Delivering
+only the text let a recipient act on “the logo is attached” before the sender
+could correct it. Saved metadata whose bytes are missing is a failed attachment
+too, not a transferable reference.
 
 **A file reaches the operator on the turn's own answer, through `attach_file`.**
 For a while it could not reach them at all. `send_message` carries files to

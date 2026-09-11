@@ -422,24 +422,10 @@ const INBOX: &str = "/home/user/inbox";
 /// command line, and few enough round trips to be worth it.
 const PLACE_CHUNK: usize = 192 * 1024;
 
-/// What a model is told it has lost when a file it named could not be resolved.
-///
-/// What a model is told after a file it named did not get handed over.
-///
-/// Two axes, so four sentences, and collapsing either one produces a turn that
-/// goes round the loop it has just come out of.
-///
-/// **Which caller.** A send leaves a colleague waiting for a document; an
-/// attach leaves an answer claiming one. Silence is the worst outcome available
-/// in both cases, since agent and reader would each believe the file arrived.
-///
-/// **Whether the agent has a computer.** With one, a failure is a wrong path
-/// and checking it is the fix. Without one, no path was ever going to resolve:
-/// [`Runtime::pull_file`] reads a file off a sandbox and there is no sandbox.
-/// Told to check the path with `run_command`, an agent that is not offered
-/// `run_command` either has been handed a dead end, and a refusal that only
-/// says no gets reworded and retried. One did exactly that, twice, and then
-/// spent two more turns recording the lesson in a memory it overflowed.
+/// Failed sends must not leave a colleague expecting a file. Failed attaches
+/// must not leave an answer claiming one. Advice names only a filesystem the
+/// agent can actually reach: repository failures carry shell guidance at the
+/// call site, while these cover computers and agents with neither surface.
 const UNSENT_FILE: &str = "The recipient did not get it, so do not tell them it is on the way.";
 const UNSENT_FILE_NO_COMPUTER: &str =
     "The recipient did not get it, so do not tell them it is on the way, and there is nothing \
@@ -1664,12 +1650,9 @@ impl Runtime {
 
     /// Turns the names an agent asked to send into files that can travel.
     ///
-    /// Two places to look, in this order. A file already attached to something
-    /// in this agent's channel is here on disk and needs no machine at all,
-    /// which is what forwarding is: a coordinator passing on a brief it was
-    /// handed should not have to start a computer to do it. Otherwise the name
-    /// is a path on the agent's own machine, which is where an agent that
-    /// *produced* a document has it, and the bytes are pulled off.
+    /// A bare name first looks for a saved attachment, which needs no machine
+    /// to forward. A path reads current bytes from the repository worktree or
+    /// the agent's computer, never a saved attachment with the same basename.
     ///
     /// Returns what traveled and, for everything that did not, a line worded
     /// for the model: an agent that believes it attached a document will go on
@@ -1695,10 +1678,21 @@ impl Runtime {
         }
 
         for name in wanted {
-            let leaf = name.rsplit(['/', '\\']).next().unwrap_or(name).trim();
-            match self.saved_file(card.id, leaf, made) {
+            // A path asks for current bytes, not an older attachment that
+            // happens to have the same basename.
+            let saved = if name.contains(['/', '\\']) {
+                Ok(None)
+            } else {
+                self.saved_file(card.id, name.trim(), made)
+            };
+            match saved {
                 Ok(Some(file)) => {
-                    found.push(file);
+                    match self.inner.files.reference(&file.digest, &file.name) {
+                        Ok(file) => found.push(file),
+                        Err(why) => missing.push(format!(
+                            "{name} was not attached: {why}. Ask for a new copy. {consequence}"
+                        )),
+                    }
                     continue;
                 }
                 Ok(None) => {}
@@ -1708,7 +1702,7 @@ impl Runtime {
                 }
             }
             // Not something it was sent, so it is something it made.
-            match self.pull_file(card, name).await {
+            match self.source_file(card, name).await {
                 Ok(file) => found.push(file),
                 Err(why) => missing.push(format!("{name} was not attached: {why}. {consequence}")),
             }
@@ -1782,6 +1776,37 @@ impl Runtime {
         Ok((format!("The saved attachment {:?} ({}) is on your computer at {path}. \
             Open it there with a tool that understands this format; its contents have not been shown here.",
             file.name, file.mime), None))
+    }
+
+    /// Repository paths refer to the same worktree as `shell`. Only the
+    /// sandbox fallback can read a path outside that directory.
+    async fn source_file(&self, card: &AgentCard, path: &str) -> Result<Attachment, String> {
+        if let Some(repository) =
+            self.inner.store.agent_repository(card.id).map_err(|err| err.to_string())?
+        {
+            let directory = self
+                .repository_directory(card, &repository)
+                .await
+                .map_err(|err| err.to_string())?;
+            let files = self.inner.files.clone();
+            let source = path.to_string();
+            let result = tokio::task::spawn_blocking(move || {
+                files.take_from(std::path::Path::new(&directory), std::path::Path::new(&source))
+            })
+            .await
+            .map_err(|err| err.to_string())?;
+            match result {
+                Ok(file) => return Ok(file),
+                Err(why) if !self.surfaces_for(card).computer => return Err(why),
+                Err(why) => {
+                    return self
+                        .pull_file(card, path)
+                        .await
+                        .map_err(|sandbox| format!("Repository: {why}. Computer: {sandbox}"));
+                }
+            }
+        }
+        self.pull_file(card, path).await
     }
 
     /// Reads a file off an agent's machine and into the store.
@@ -2107,6 +2132,38 @@ impl Runtime {
         }
     }
 
+    async fn repository_directory(
+        &self,
+        card: &AgentCard,
+        repository: &crate::domain::repository::Repository,
+    ) -> Result<String, RuntimeError> {
+        // The same directory `code` works in, which is the whole of what makes
+        // two doors into one repository one repository. An agent whose job runs
+        // in a worktree and whose `git status` reads the linked directory is an
+        // agent being told about a tree it is not working in, and it is the
+        // read it most wants while a job is going.
+        //
+        // Made if it is not there yet, rather than falling back: the fallback is
+        // the disagreement. `ensure_bench` is the half of the preparation that
+        // does not fetch and does not reset, because a line run inside a turn
+        // must not pay for a network round trip and must not move a branch
+        // somebody asked a question about.
+        Ok(match repository.bench.is_own() {
+            false => repository.path.clone(),
+            true => {
+                let bench = crate::repo::bench_path(&self.inner.benches, repository.id, card.id);
+                crate::repo::ensure_bench(&repository.path, &bench)
+                    .await
+                    .map(|made| made.path)
+                    .map_err(|why| RuntimeError::NoWorkTree {
+                        repository: repository.name.clone(),
+                        at: bench.to_string_lossy().to_string(),
+                        why: why.why(),
+                    })?
+            }
+        })
+    }
+
     /// One shell line in this agent's repository, run and answered here.
     ///
     /// The opposite of [`Runtime::start_job`] in the one way that matters to a
@@ -2151,31 +2208,7 @@ impl Runtime {
             .agent_repository(card.id)?
             .ok_or_else(|| RuntimeError::NoRepository(card.name.clone()))?;
 
-        // The same directory `code` works in, which is the whole of what makes
-        // two doors into one repository one repository. An agent whose job runs
-        // in a worktree and whose `git status` reads the linked directory is an
-        // agent being told about a tree it is not working in, and it is the
-        // read it most wants while a job is going.
-        //
-        // Made if it is not there yet, rather than falling back: the fallback is
-        // the disagreement. `ensure_bench` is the half of the preparation that
-        // does not fetch and does not reset, because a line run inside a turn
-        // must not pay for a network round trip and must not move a branch
-        // somebody asked a question about.
-        let directory = match repository.bench.is_own() {
-            false => repository.path.clone(),
-            true => {
-                let bench = crate::repo::bench_path(&self.inner.benches, repository.id, card.id);
-                crate::repo::ensure_bench(&repository.path, &bench)
-                    .await
-                    .map(|made| made.path)
-                    .map_err(|why| RuntimeError::NoWorkTree {
-                        repository: repository.name.clone(),
-                        at: bench.to_string_lossy().to_string(),
-                        why: why.why(),
-                    })?
-            }
-        };
+        let directory = self.repository_directory(card, &repository).await?;
 
         if repository.gate == Gate::AskBeforePushing {
             // Rooted at the tree the line will actually run in, so a script the
@@ -5207,13 +5240,31 @@ impl Runtime {
             }
 
             ToolInvocation::SendMessage { to, text, intent, files } => {
-                let consequence = if self.surfaces_for(card).computer {
+                let surfaces = self.surfaces_for(card);
+                let consequence = if surfaces.repository || surfaces.computer {
                     UNSENT_FILE
                 } else {
                     UNSENT_FILE_NO_COMPUTER
                 };
                 let made = attached.clone();
                 let (carried, missing) = self.resolve_files(card, &files, &made, consequence).await;
+                if !missing.is_empty() {
+                    let error = format!(
+                        "Message not sent to anyone because its attachments could not all be \
+                         read. {} Fix the file references and retry, or send a message that \
+                         explicitly says the files are unavailable without requesting them.",
+                        missing.join("\n")
+                    );
+                    return (
+                        error.clone(),
+                        Part::tool_call(
+                            tools::SEND_MESSAGE,
+                            arguments,
+                            ToolOutcome::Failed { error },
+                        ),
+                        None,
+                    );
+                }
                 let deliveries = self.send_to_peers(
                     card,
                     run_id,
@@ -5260,14 +5311,6 @@ impl Runtime {
                             .unwrap_or("no recipients")
                             .to_string(),
                     }
-                };
-                // What did not travel matters as much as what did: an agent
-                // that thinks it sent a document goes on to talk about a file
-                // the recipient has never seen.
-                let rendered = if missing.is_empty() {
-                    rendered
-                } else {
-                    format!("{rendered}\n{}", missing.join("\n"))
                 };
                 (rendered, Part::tool_call(tools::SEND_MESSAGE, arguments, outcome))
             }
@@ -5364,7 +5407,11 @@ impl Runtime {
             }
 
             ToolInvocation::AttachFile { files } => {
-                let consequence = if self.surfaces_for(card).computer {
+                let surfaces = self.surfaces_for(card);
+                let consequence = if surfaces.repository {
+                    "It is not on your answer, so do not tell them it is attached. Check the \
+                     path in your repository with `shell` and attach it again."
+                } else if surfaces.computer {
                     UNATTACHED_FILE
                 } else {
                     UNATTACHED_FILE_NO_COMPUTER
