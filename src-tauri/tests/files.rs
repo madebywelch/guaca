@@ -939,3 +939,255 @@ async fn a_file_written_this_turn_is_read_before_its_older_saved_version() {
     let results = tool_results(&stub).join("\n");
     assert!(results.contains("NEW-CONTENTS") && !results.contains("OLD-CONTENTS"), "{results}");
 }
+
+fn file_repository(h: &Harness, bench: guac_lib::domain::repository::Bench) -> std::path::PathBuf {
+    use guac_lib::domain::repository::{CleanRepository, Gate, Harness as Which};
+    let root = h._dir.path().join("repository");
+    std::fs::create_dir_all(root.join("public")).unwrap();
+    std::fs::write(root.join("public/logo.png"), b"REPOSITORY-LOGO").unwrap();
+    for args in [
+        vec!["init", "-q"],
+        vec!["add", "."],
+        vec![
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.test",
+            "commit",
+            "-qm",
+            "initial",
+        ],
+    ] {
+        assert!(std::process::Command::new("git")
+            .args(args)
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success());
+    }
+    let card = h.agent_named("Manager").unwrap();
+    let repository = h
+        .runtime
+        .store()
+        .create_repository(&CleanRepository {
+            group_id: card.group_id,
+            name: "Website".into(),
+            path: root.to_string_lossy().into_owned(),
+            note: String::new(),
+            harness: Which::Claude,
+            gate: Gate::Open,
+            remote: None,
+            bench,
+        })
+        .unwrap();
+    h.runtime.store().set_agent_repository(card.id, Some(repository.id)).unwrap();
+    root
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_missing_attachment_stops_the_whole_send_and_preserves_the_retry() {
+    let stub = serve(|body| {
+        if speaker(body) != "Manager" {
+            return Script::Say("Received.".into());
+        }
+        let results =
+            body["messages"].as_array().unwrap().iter().filter(|m| m["role"] == "tool").count();
+        match results {
+            0 => Script::SendFiles {
+                recipients: vec!["Chef".into(), "Scribe".into()],
+                text: "The logo and brief are attached.".into(),
+                files: vec!["brief.md".into(), "logo.png".into()],
+            },
+            1 => Script::Write {
+                tool: "write_document".into(),
+                name: "logo.png".into(),
+                content: "recovered logo".into(),
+            },
+            2 => Script::SendFiles {
+                recipients: vec!["Chef".into(), "Scribe".into()],
+                text: "The logo and brief are attached.".into(),
+                files: vec!["brief.md".into(), "logo.png".into()],
+            },
+            _ => Script::Say("Done.".into()),
+        }
+    })
+    .await;
+    let h = harness(
+        &stub,
+        &["Manager", "Chef", "Scribe"],
+        GuardLimits { max_sends_per_pair: 1, ..GuardLimits::default() },
+    );
+    let brief = h.runtime.files().put("brief.md", b"brief").unwrap();
+    let run =
+        h.runtime.send_from_human_with(h.id("Manager"), "Send the assets.", vec![brief]).unwrap();
+    h.settle(run).await;
+    for peer in ["Chef", "Scribe"] {
+        let messages = h.runtime.store().channel_messages(h.id(peer), 200).unwrap();
+        let sends: Vec<_> = messages
+            .iter()
+            .filter(|m| {
+                m.from == Participant::Agent { id: h.id("Manager") }
+                    && m.plain_text() == "The logo and brief are attached."
+            })
+            .collect();
+        assert_eq!(sends.len(), 1, "{}", h.transcript());
+        assert_eq!(
+            sends[0].parts.iter().filter(|p| matches!(p, Part::File(_))).count(),
+            2,
+            "the initial send must not deliver text or a partial file set"
+        );
+    }
+    let messages = h.runtime.store().channel_messages(h.id("Manager"), 200).unwrap();
+    assert!(messages.iter().flat_map(|m| &m.parts).any(|p| matches!(p, Part::ToolCall { name, outcome: guac_lib::domain::envelope::ToolOutcome::Failed { error }, .. } if name == "send_message" && error.contains("logo.png"))));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_repository_file_reaches_a_peer_and_can_be_forwarded_without_a_computer() {
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            return Script::Say("Done.".into());
+        }
+        match speaker(body).as_str() {
+            "Manager" => Script::SendFiles {
+                recipients: vec!["Chef".into()],
+                text: "Logo attached.".into(),
+                files: vec!["public/logo.png".into()],
+            },
+            "Chef" => Script::SendFiles {
+                recipients: vec!["Scribe".into()],
+                text: "Forwarded logo.".into(),
+                files: vec!["logo.png".into()],
+            },
+            _ => Script::Say("Received.".into()),
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Manager", "Chef", "Scribe"], GuardLimits::default());
+    file_repository(&h, guac_lib::domain::repository::Bench::Shared);
+    let stale = h.runtime.files().put("logo.png", b"OLD-LOGO").unwrap();
+    let run = h
+        .runtime
+        .send_from_human_with(h.id("Manager"), "Send the repository logo.", vec![stale])
+        .unwrap();
+    h.settle(run).await;
+    for peer in ["Chef", "Scribe"] {
+        let file = h
+            .runtime
+            .store()
+            .agent_file(h.id(peer), "logo.png")
+            .unwrap()
+            .expect("logo reached the peer");
+        assert_eq!(
+            h.runtime.files().read(&file.digest).unwrap(),
+            b"REPOSITORY-LOGO",
+            "an explicit path must not forward a stale attachment with the same basename"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn attaching_a_repository_file_reads_the_shells_worktree_without_resetting_it() {
+    let stub = serve(|body| {
+        let results = body["messages"].as_array().unwrap().iter().filter(|m| m["role"] == "tool").count();
+        match results {
+            0 => Script::Plugin { name: "shell".into(), arguments: serde_json::json!({"command": "printf CHANGED-ON-BENCH > public/logo.png"}) },
+            1 => Script::Attach { tool: "attach_file".into(), files: vec!["public/logo.png".into()] },
+            _ => Script::Say("Attached.".into()),
+        }
+    }).await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let root = file_repository(&h, guac_lib::domain::repository::Bench::Own);
+    let run = h.runtime.send_from_human(h.id("Manager"), "Update and attach the logo.").unwrap();
+    h.settle(run).await;
+    let file = h
+        .runtime
+        .store()
+        .agent_file(h.id("Manager"), "logo.png")
+        .unwrap()
+        .expect("attachment was delivered");
+    assert_eq!(h.runtime.files().read(&file.digest).unwrap(), b"CHANGED-ON-BENCH");
+    assert_eq!(std::fs::read(root.join("public/logo.png")).unwrap(), b"REPOSITORY-LOGO");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn saved_metadata_without_bytes_cannot_send_a_phantom_attachment() {
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Could not send.".into())
+        } else {
+            Script::SendFiles {
+                recipients: vec!["Chef".into()],
+                text: "Attached.".into(),
+                files: vec!["logo.png".into()],
+            }
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let mut saved = saved_reply(&h, "Manager", "logo.png", b"lost");
+    if let Part::File(file) = &mut saved.parts[0] {
+        file.digest = "0".repeat(64);
+    }
+    h.runtime.store().append(&saved).unwrap();
+    let run = h.runtime.send_from_human(h.id("Manager"), "Send Chef the logo.").unwrap();
+    h.settle(run).await;
+    assert!(h.runtime.store().channel_messages(h.id("Chef"), 200).unwrap().is_empty());
+    let results = tool_results(&stub).join("\n");
+    assert!(
+        results.contains("Ask for a new copy") && results.contains("Message not sent"),
+        "{results}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn only_an_agent_given_the_repository_can_import_its_paths() {
+    let path = std::sync::Arc::new(parking_lot::Mutex::new(String::new()));
+    let requested = path.clone();
+    let stub = serve(move |body| {
+        if has_tool_result(body) {
+            Script::Say("Done.".into())
+        } else {
+            Script::Attach { tool: "attach_file".into(), files: vec![requested.lock().clone()] }
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let root = file_repository(&h, guac_lib::domain::repository::Bench::Shared);
+    *path.lock() = root.join("public/logo.png").to_string_lossy().into_owned();
+    let run = h.runtime.send_from_human(h.id("Chef"), "Attach this file.").unwrap();
+    h.settle(run).await;
+    assert!(handed_over(&h, "Chef").is_empty());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Attach this file.").unwrap();
+    h.settle(run).await;
+    assert_eq!(handed_over(&h, "Manager"), vec!["logo.png"]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "live: costs money, needs a configured model"]
+async fn live_a_repository_logo_reaches_a_peer_and_returns_as_an_attachment() {
+    use harness::live::{configured, live_crew, LiveAgent};
+    let config = configured().expect("this live eval requires a configured model");
+    let h = live_crew(config, &[LiveAgent::generic("Manager"), LiveAgent::generic("Scribe")]);
+    let root = file_repository(&h, guac_lib::domain::repository::Bench::Shared);
+    // A real PNG, so the recipient's vision endpoint can decode it.
+    let png = include_bytes!("../icons/32x32.png").to_vec();
+    std::fs::write(root.join("public/logo.png"), &png).unwrap();
+    let run = h.runtime.send_from_human(h.id("Manager"),
+        "Please give Scribe the original logo file at public/logo.png in your repository. Ask Scribe to attach the file to their reply to you. Do not change any files and do not send anything externally.").unwrap();
+    assert!(h.settled_within(run, 180).await, "{}", h.transcript());
+    println!("{}", h.transcript());
+    let file = h
+        .runtime
+        .store()
+        .agent_file(h.id("Scribe"), "logo.png")
+        .unwrap()
+        .expect("Scribe must receive the binary");
+    assert_eq!(h.runtime.files().read(&file.digest).unwrap(), png);
+    let messages = h.runtime.store().channel_messages(h.id("Manager"), 100).unwrap();
+    assert!(
+        messages.iter().any(|m| m.from == Participant::Agent { id: h.id("Scribe") }
+            && m.parts.iter().any(|p| matches!(p, Part::File(f) if f.digest == file.digest))),
+        "{}",
+        h.transcript()
+    );
+}

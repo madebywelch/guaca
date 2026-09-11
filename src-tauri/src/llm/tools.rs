@@ -229,6 +229,30 @@ pub fn specs(surfaces: Surfaces, modalities: Modalities) -> Vec<ToolSpec> {
 }
 
 fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
+    let file_sources = match (surfaces.repository, surfaces.computer) {
+        (true, true) => {
+            "Use a saved attachment's bare file name, a path in your repository \
+            worktree (relative to shell's directory or absolute), or a path on your own \
+            computer such as /home/user/brief.md. Repository paths are tried before computer \
+            paths. An explicit path reads current bytes rather than a saved file of the same name."
+        }
+        (true, false) => {
+            "Use a saved attachment's bare file name or a path in your repository \
+            worktree, relative to shell's directory (e.g. public/logo.png) or absolute within \
+            that worktree. An explicit path reads current bytes rather than a saved file of \
+            the same name. You have no computer; repository files need none."
+        }
+        (false, true) => {
+            "Use a saved attachment's bare file name or a path on your own \
+            computer, e.g. /home/user/brief.md. An explicit path reads current bytes rather \
+            than a saved file of the same name."
+        }
+        (false, false) => {
+            "Use a saved attachment's bare file name. You have no computer or \
+            repository, so filesystem paths cannot be read. Use write_document to create a \
+            text document without a machine."
+        }
+    };
     vec![
         ToolSpec {
             name: DIRECTORY.to_string(),
@@ -809,15 +833,9 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                     "files": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Files to send with the message. Each is either the name \
-                                        of a file already attached to something in your channel, \
-                                        or a path on your own computer, for example \
-                                        `/home/user/work/proposal.docx`. The recipient gets the \
-                                        file itself: a document lands in its inbox directory, a \
-                                        picture and a text file it simply reads. This is how work \
-                                        moves between agents. Naming a file in your message \
-                                        without attaching it sends nothing, because your machine \
-                                        is yours alone and nobody else can reach it."
+                        "description": format!("{file_sources} The recipient gets the file itself. \
+                            If any requested file cannot be read, the whole message is not sent; \
+                            fix the references and retry. Naming a file in text alone sends no bytes.")
                     },
                     "intent": {
                         "type": "string",
@@ -1091,40 +1109,11 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: ATTACH_FILE.to_string(),
-            // The eleventh tool, and it earns its place because without it a
-            // document an agent produces has no way to reach the operator at
-            // all. `send_message` carries files to another agent; the answer a
-            // turn ends with carried text and nothing else, so an agent asked
-            // for a brief wrote one and then typed the path to it. The operator
-            // read `/home/user/brief.md`, which is a path on a machine that is
-            // not theirs, in an app with no way to open it.
-            //
-            // Offered with no computer as well, and the description is the
-            // reason it has to be two. A file already in the channel is
-            // attachable with no machine anywhere, so the tool is genuinely
-            // useful without one; a path is not, because `pull_file` reads it
-            // off a sandbox. Told the version below about a computer it has
-            // not been given, an agent invents `/home/user/…`, is refused, and
-            // spends the rest of the turn finding that out. That is the one
-            // failure this whole surfaces mechanism exists to prevent, and it
-            // reached the operator through a tool nobody thought to gate.
-            description: if surfaces.computer {
-                "Attach a file to your answer, so whoever reads it can open it. The file you \
-                 made is on your own computer and nobody else can reach that machine, so \
-                 writing its path into your answer hands over nothing: this is what actually \
-                 delivers it. Name it by its path, for example `/home/user/brief.md`, or by \
-                 the name of a file already attached to something in your channel. Attach \
-                 anything you were asked to produce as a document and anything easier read as \
-                 one: a brief, a report, a table, a draft. Then say what it is in your answer \
-                 rather than repeating its contents, because the reader has the file itself."
-            } else {
-                "Attach a file to your answer, so whoever reads it can open it. You have no \
-                 computer, so there is no filesystem and no path that will resolve: this hands \
-                 on a file that is already in this conversation, named by its file name. To \
-                 hand over a document you are writing yourself, use `write_document` instead, \
-                 which needs no machine."
-            }
-            .to_string(),
+            description: format!(
+                "Attach a file to your answer so its reader can open it. {file_sources} \
+                 Writing a path into your answer hands over nothing. Attach documents you \
+                 were asked to produce, then describe them rather than repeating their contents."
+            ),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -1132,13 +1121,7 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                         "type": "array",
                         "items": { "type": "string" },
                         "minItems": 1,
-                        "description": if surfaces.computer {
-                            "The files to attach: a path on your computer, or the name of one \
-                             already in your channel."
-                        } else {
-                            "The files to attach, by the name each already has in this \
-                             conversation."
-                        }
+                        "description": file_sources
                     }
                 },
                 "required": ["files"],
@@ -3162,6 +3145,22 @@ mod tests {
         // With one, the path half is the whole point and stays.
         let with = description(ATTACH_FILE);
         assert!(with.contains("/home/user/brief.md"), "{with}");
+    }
+
+    #[test]
+    fn repository_attachments_are_described_without_inventing_a_computer() {
+        let mut surfaces = Surfaces::none();
+        surfaces.repository = true;
+        for spec in specs(surfaces, Modalities::seeing())
+            .into_iter()
+            .filter(|spec| [SEND_MESSAGE, ATTACH_FILE].contains(&spec.name.as_str()))
+        {
+            let words = format!("{} {}", spec.description, spec.parameters);
+            assert!(words.contains("repository worktree"), "{words}");
+            assert!(words.contains("public/logo.png"), "{words}");
+            assert!(!words.contains("/home/user"), "{words}");
+            assert!(!words.contains("no filesystem"), "{words}");
+        }
     }
 
     #[test]

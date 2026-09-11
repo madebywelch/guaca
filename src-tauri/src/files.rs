@@ -107,6 +107,29 @@ impl FileStore {
         self.put(&name, &bytes)
     }
 
+    /// Imports an output from the agent's repository, never another host
+    /// directory. Resolve symlinks on both sides before comparing the paths.
+    pub fn take_from(&self, root: &Path, source: &Path) -> Result<Attachment, String> {
+        let directory = fs::canonicalize(root)
+            .map_err(|err| format!("could not open the repository: {err}. Check it with shell"))?;
+        let path = fs::canonicalize(directory.join(source)).map_err(|err| {
+            format!("could not read {}: {err}. Check the path with shell", source.display())
+        })?;
+        if !path.starts_with(&directory) {
+            return Err("the file is outside your repository worktree. Copy it into your worktree with shell, then attach that path".into());
+        }
+        let about = fs::metadata(&path).map_err(|err| err.to_string())?;
+        if !about.is_file() {
+            return Err("the attachment must be a regular file. Choose a file with shell".into());
+        }
+        let file = self.take(&path).map_err(|err| err.to_string())?;
+        // A symlink can name an image whose target has no extension. The
+        // reference keeps the requested name and its format.
+        let name =
+            source.file_name().and_then(|name| name.to_str()).ok_or("a file must have a name")?;
+        self.reference(&file.digest, name).map_err(|err| err.to_string())
+    }
+
     /// What a message should carry for a file that is already stored.
     ///
     /// Everything but "which bytes" and "what to call it" is worked out here
@@ -478,6 +501,51 @@ mod tests {
     fn store() -> (FileStore, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         (FileStore::new(dir.path().join("files")), dir)
+    }
+
+    #[test]
+    fn repository_imports_refuse_other_directories_missing_files_folders_and_large_files() {
+        let (files, dir) = store();
+        let root = dir.path().join("repository");
+        let neighbor = dir.path().join("repository-other");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(&neighbor).unwrap();
+        fs::write(neighbor.join("secret.txt"), b"private").unwrap();
+        let large = root.join("large.bin");
+        fs::File::create(&large).unwrap().set_len(MAX_FILE_BYTES + 1).unwrap();
+        for (path, reason) in [
+            (neighbor.join("secret.txt"), "outside"),
+            (PathBuf::from("../repository-other/secret.txt"), "outside"),
+            (PathBuf::from("missing.png"), "Check the path"),
+            (PathBuf::from("."), "regular file"),
+            (large, "limit"),
+        ] {
+            let why = files.take_from(&root, &path).unwrap_err();
+            assert!(why.contains(reason), "{why}");
+        }
+        assert!(!files.root.exists(), "refusals must not import any bytes");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repository_imports_follow_only_internal_symlinks_and_preserve_the_requested_name() {
+        let (files, dir) = store();
+        let root = dir.path().join("repository");
+        fs::create_dir(&root).unwrap();
+        fs::write(dir.path().join("private"), b"private").unwrap();
+        fs::write(root.join("contents"), b"image").unwrap();
+        std::os::unix::fs::symlink("../private", root.join("outside.png")).unwrap();
+        std::os::unix::fs::symlink("contents", root.join("logo.png")).unwrap();
+        assert!(files.take_from(&root, Path::new("outside.png")).unwrap_err().contains("outside"));
+        for source in [PathBuf::from("logo.png"), root.join("logo.png")] {
+            let file = files.take_from(&root, &source).unwrap();
+            assert_eq!(file.name, "logo.png");
+            assert_eq!(file.mime, "image/png");
+            assert_eq!(files.read(&file.digest).unwrap(), b"image");
+        }
+        let socket = root.join("socket");
+        let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        assert!(files.take_from(&root, &socket).unwrap_err().contains("regular file"));
     }
 
     #[test]
