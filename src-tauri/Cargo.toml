@@ -1,6 +1,6 @@
 [package]
 name = "guac"
-version = "0.1.0"
+version = "0.2.0"
 description = "Guac: a local, no-auth chat surface where you and your agents talk to each other."
 authors = ["madebywelch"]
 edition = "2021"
