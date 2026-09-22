@@ -145,7 +145,7 @@ async fn a_repository_arrives_on_a_box_as_a_clone_of_a_remote() {
     let bare = dir.path().join("origin.git");
     let seed = dir.path().join("seed");
     for args in [
-        vec!["init", "--bare", bare.to_str().unwrap()],
+        vec!["init", "--bare", "-b", "main", bare.to_str().unwrap()],
         vec!["init", "-b", "main", seed.to_str().unwrap()],
     ] {
         let done = std::process::Command::new("git").args(&args).output().expect("git runs");
