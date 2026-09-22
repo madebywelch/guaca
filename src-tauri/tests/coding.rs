@@ -843,11 +843,17 @@ async fn a_job_is_told_which_branch_it_is_standing_on() {
     stand_ins();
     let repo = a_repository_on_a_landed_branch("footing");
 
-    let stub = serve(|body| {
+    // A completed harness can release the repository before its completion
+    // message reaches the model. Do not start another job in that interval:
+    // it would overwrite the captured first brief after .argv dirtied the tree.
+    let kickoff = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let stub = serve(move |body| {
         if anyone_said(body, "has finished") {
             Script::Say("The coding agent did the work.".into())
-        } else {
+        } else if kickoff.swap(false, std::sync::atomic::Ordering::SeqCst) {
             Script::Code("fix the flaky test".into())
+        } else {
+            Script::Say("I have started it.".into())
         }
     })
     .await;

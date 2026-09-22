@@ -60,6 +60,18 @@ pub struct LocalHost {
     binary: PathBuf,
 }
 
+struct ProcessLock(std::fs::File);
+
+impl Drop for ProcessLock {
+    fn drop(&mut self) {
+        // A concurrent fork can keep a duplicate descriptor alive until exec.
+        // Closing our descriptor alone would leave that child holding the lock.
+        if let Err(error) = self.0.unlock() {
+            tracing::warn!(%error, "could not release the host operation lock");
+        }
+    }
+}
+
 fn docker_binary() -> PathBuf {
     std::env::var_os("PATH")
         .and_then(|p| std::env::split_paths(&p).map(|p| p.join("docker")).find(|p| p.is_file()))
@@ -302,7 +314,7 @@ impl LocalHost {
         status
     }
 
-    fn process_lock(&self) -> Result<Option<std::fs::File>, String> {
+    fn process_lock(&self) -> Result<Option<ProcessLock>, String> {
         let Some(journal) = &self.journal else {
             return Ok(None);
         };
@@ -318,7 +330,7 @@ impl LocalHost {
             .map_err(|e| format!("Could not lock the host update: {e}"))?;
         file.try_lock()
             .map_err(|_| "Another Guaca process is managing this host. Wait for it to finish.")?;
-        Ok(Some(file))
+        Ok(Some(ProcessLock(file)))
     }
 
     pub async fn start(&self) -> Result<Connection, String> {
@@ -614,7 +626,6 @@ mod tests {
         failure: &str,
         version: &str,
     ) -> (LocalHost, tempfile::TempDir, tokio::task::JoinHandle<()>, String) {
-        use std::os::unix::fs::PermissionsExt;
         let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = socket.local_addr().unwrap();
         let version = version.to_string();
@@ -631,8 +642,14 @@ mod tests {
         let mut host =
             LocalHost::new("fixture", "fixture:new").with_journal(dir.path().join("update.json"));
         host.binary = dir.path().join("docker");
-        std::fs::write(&host.binary, include_str!("../tests/fixtures/docker-host.py")).unwrap();
-        std::fs::set_permissions(&host.binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // A concurrent fork can inherit a freshly written executable's writer
+        // until exec, causing ETXTBSY. Share the immutable script; __file__ still
+        // names this symlink, so each fixture keeps its own state directory.
+        std::os::unix::fs::symlink(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/docker-host.py"),
+            &host.binary,
+        )
+        .unwrap();
         let value = serde_json::json!({
             "failure":failure, "exists":true,
             "container": {"Mounts":[{"Destination":"/var/lib/guaca", "Type":"volume", "Name":format!("{}-data", host.name)}], "Config":{"Image":"fixture:old", "Labels":{"bot.guaca.desktop":host.name}},
@@ -686,11 +703,12 @@ mod tests {
     async fn failed_replacement_and_wrong_version_leave_recovery_state() {
         for (mode, version) in [("create", env!("CARGO_PKG_VERSION")), ("", "99.0.0")] {
             let (host, dir, task, origin) = simulated(mode, version).await;
-            assert!(host.update(Some(&origin)).await.is_err());
-            let op = host.operation().unwrap().unwrap();
-            assert_eq!(op.stage, "Recovery needed");
+            let update_error = host.update(Some(&origin)).await.err().unwrap();
+            let op = host.operation().unwrap().unwrap_or_else(|| panic!("{mode}: {update_error}"));
+            assert_eq!(op.stage, "Recovery needed", "{mode}: {update_error}");
             assert!(op.backup.is_some());
-            assert!(host.start().await.err().unwrap().contains("needs recovery"));
+            let restart_error = host.start().await.err().unwrap();
+            assert!(restart_error.contains("needs recovery"), "{restart_error}");
             assert!(!calls(&dir).iter().any(|c| c[0] == "start"));
             task.abort();
         }
@@ -756,6 +774,24 @@ mod tests {
         drop(first);
         assert!(host.process_lock().is_ok());
     }
+    #[cfg(unix)]
+    #[test]
+    fn an_inherited_descriptor_does_not_keep_a_finished_operation_locked() {
+        let dir = tempfile::tempdir().unwrap();
+        let host =
+            LocalHost::new("fixture", "fixture:new").with_journal(dir.path().join("update.json"));
+        let operation = host.process_lock().unwrap().unwrap();
+        // A fork inherits the same open file description until exec closes it.
+        let inherited = operation.0.try_clone().unwrap();
+        assert!(host.process_lock().is_err());
+        drop(operation);
+        let next = host.process_lock().expect("the finished operation must release its lock");
+        drop(inherited);
+        assert!(host.process_lock().is_err());
+        drop(next);
+        assert!(host.process_lock().is_ok());
+    }
+
     #[test]
     fn an_older_app_cannot_downgrade_a_newer_host() {
         let value =

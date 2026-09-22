@@ -753,6 +753,10 @@ then archive the journal after verifying the restored workspace; retaining an
 unfinished journal intentionally keeps automatic startup blocked. Do not erase
 an unreadable journal merely to get past the error.
 
+Finishing an operation explicitly unlocks its file before closing it, so a
+descriptor inherited by a concurrently forked child cannot keep the completed
+operation locked.
+
 A failed download leaves the old host running. A failed backup restarts the old
 container and reports separately if that restart fails. Completion requires a
 matching version, image revision (where provided), API generation and successful
