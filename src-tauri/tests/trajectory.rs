@@ -25,7 +25,7 @@ use std::time::Duration;
 use guac_lib::domain::agent::Lifecycle;
 use guac_lib::domain::approval::{ApprovalState, Decision};
 use guac_lib::domain::envelope::NoticeKind;
-use guac_lib::runtime::events::{Activity, UiEvent};
+use guac_lib::runtime::events::UiEvent;
 use guac_lib::runtime::guard::GuardLimits;
 use guac_lib::trajectory::{Anomaly, Record};
 
@@ -377,12 +377,7 @@ async fn deleting_an_agent_that_was_holding_work_still_ends_its_run() {
     let stub = serve(|_| Script::Say("on it".into())).await;
     let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
 
-    h.pause("Chef");
-    let held = h.runtime.send_from_human(h.id("Chef"), "start the prep").unwrap();
-    h.wait_until("Chef parks holding the message", |h| {
-        matches!(h.runtime.activity_snapshot().get(&h.id("Chef")), Some(Activity::Paused))
-    })
-    .await;
+    let held = h.park("Chef", "start the prep").await;
     // A second run's work, still queued behind the one being held. It goes the
     // same way and has to be released the same way.
     let queued = h.runtime.send_from_human(h.id("Chef"), "and the stock").unwrap();
@@ -545,12 +540,7 @@ async fn stopping_a_run_a_paused_agent_is_holding_still_ends_it() {
     let stub = serve(|_| Script::Say("on it".into())).await;
     let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
 
-    h.pause("Chef");
-    let run = h.runtime.send_from_human(h.id("Chef"), "start the prep").unwrap();
-    h.wait_until("Chef parks holding the message", |h| {
-        matches!(h.runtime.activity_snapshot().get(&h.id("Chef")), Some(Activity::Paused))
-    })
-    .await;
+    let run = h.park("Chef", "start the prep").await;
 
     assert!(h.runtime.stop_run(run), "the run is outstanding, so there is something to stop");
     assert!(
@@ -763,12 +753,7 @@ async fn stopping_a_run_queued_behind_another_at_a_paused_agent_still_ends_it() 
     let stub = serve(|_| Script::Say("on it".into())).await;
     let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
 
-    h.pause("Chef");
-    let held = h.runtime.send_from_human(h.id("Chef"), "start the prep").unwrap();
-    h.wait_until("Chef parks holding the first message", |h| {
-        matches!(h.runtime.activity_snapshot().get(&h.id("Chef")), Some(Activity::Paused))
-    })
-    .await;
+    let held = h.park("Chef", "start the prep").await;
 
     // Queued behind the one being held, and belonging to a different run.
     let behind = h.runtime.send_from_human(h.id("Chef"), "and the stock").unwrap();

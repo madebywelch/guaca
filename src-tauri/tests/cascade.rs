@@ -914,17 +914,7 @@ async fn deleting_a_paused_agent_stops_its_actor() {
     let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
     assert_eq!(h.runtime.live_actors(), 2);
 
-    h.pause("Chef");
-    // Give Chef something to hold, so it is parked mid-message rather than
-    // idle on an empty inbox.
-    h.runtime.send_from_human(h.id("Chef"), "you are paused").unwrap();
-    h.wait_until("Chef to park", |h| {
-        matches!(
-            h.runtime.activity_snapshot().get(&h.id("Chef")),
-            Some(guac_lib::runtime::events::Activity::Paused)
-        )
-    })
-    .await;
+    h.park("Chef", "you are paused").await;
 
     h.runtime.store().set_lifecycle(h.id("Chef"), Lifecycle::Terminated).unwrap();
     // Deleting must wake the parked actor by itself. Nothing else can: this
@@ -932,6 +922,7 @@ async fn deleting_a_paused_agent_stops_its_actor() {
     h.runtime.stop_agent(h.id("Chef"));
 
     h.wait_until("Chef's actor to exit", |h| h.runtime.live_actors() == 1).await;
+    assert_eq!(stub.calls.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
