@@ -31,7 +31,7 @@ use guac_lib::domain::envelope::{Envelope, Participant};
 use guac_lib::domain::group::CleanGroup;
 use guac_lib::domain::ids::{AgentId, RunId};
 use guac_lib::llm::openrouter::LlmClient;
-use guac_lib::runtime::events::{RecordingSink, UiEvent};
+use guac_lib::runtime::events::{Activity, RecordingSink, UiEvent};
 use guac_lib::runtime::guard::GuardLimits;
 use guac_lib::runtime::{OnDisk, Runtime};
 use guac_lib::trajectory::{self, Trajectory};
@@ -1046,6 +1046,25 @@ impl Harness {
     pub fn pause(&self, name: &str) {
         self.runtime.store().set_lifecycle(self.id(name), Lifecycle::Paused).unwrap();
         self.runtime.pause_agent(self.id(name));
+    }
+
+    /// Pause an active agent and wait until its actor holds a message.
+    pub async fn park(&self, name: &str, text: &str) -> RunId {
+        let id = self.id(name);
+        let checkpoint = self.sink.snapshot().len();
+        // Do not publish a Paused badge ourselves: the event must come from
+        // the actor after it registers its resume waiter. Delivery may replace
+        // that badge with Queued, so observe the event, not the latest status.
+        self.runtime.store().set_lifecycle(id, Lifecycle::Paused).unwrap();
+        let run = self.runtime.send_from_human(id, text).unwrap();
+        self.wait_until(&format!("{name} to park holding a message"), |h| {
+            h.sink.snapshot().iter().skip(checkpoint).any(|event| {
+                matches!(event, UiEvent::ActivityChanged { agent_id, activity: Activity::Paused }
+                    if *agent_id == id)
+            })
+        })
+        .await;
+        run
     }
 
     pub fn resume(&self, name: &str) {
