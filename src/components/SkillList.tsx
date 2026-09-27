@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
+import { relativeTime } from "../lib/time";
 import {
   errorMessage,
   type Skill,
@@ -162,7 +163,9 @@ export function SkillList({ scope }: Props) {
           <div className="access__item" key={`${skill.scope.kind}:${skill.name}`}>
             <div className="access__row">
               <strong className="access__name">{skill.name}</strong>
-              {readOnly && <span className="access__where">Guaca's own</span>}
+              <span className="access__where">
+                {readOnly ? "Guaca's own" : `edited ${relativeTime(skill.updatedAt, Date.now())}`}
+              </span>
               <button
                 type="button"
                 className="btn btn--small"
