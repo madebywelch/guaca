@@ -55,26 +55,34 @@ the file rather than on the process.
 ## The app
 
 ```sh
-pnpm app                      # tauri dev
+pnpm app                      # scripts/app.sh: host image, then tauri dev
 GUAC_LOG=guac=debug pnpm app  # what you almost always want
 ```
 
 The default filter is `guac=info,warn`, which hides `served a file`, the proxy,
 and every other line you would launch the app to read.
 
-Wait for the readiness line, not for the process: the binary exists long before
-the window does.
+`pnpm app` runs beside an installed Guaca, not inside it: its own bundle
+identifier (`src-tauri/tauri.dev.conf.json`), so its On this Mac is its own
+container and volume, and a host image built from this checkout, so that
+container runs the daemon you are changing. With Docker up, the first run
+builds the image from nothing and takes minutes; after that an unchanged tree
+is every layer cached. Without Docker it skips the image and only Remote host
+works.
+
+Wait for the binary's first line, not for the process: `pnpm` exists long
+before the window does.
 
 ```sh
 (GUAC_LOG=guac=debug pnpm app > /tmp/guac/app.log 2>&1 &)
-until grep -q "guac ready" /tmp/guac/app.log; do sleep 2; done
+until grep -q "adopted the operator's PATH" /tmp/guac/app.log; do sleep 2; done
 ```
 
 Write the log somewhere you own. A stale `/tmp/*.log` from another account
 fails the redirect with `permission denied` and the launch never happens, while
 the old file sits there looking like output.
 
-First build is ~440 crates. After that a relaunch is seconds.
+First build is ~470 crates. After that a relaunch is seconds.
 
 ## It will not start
 
