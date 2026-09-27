@@ -1143,6 +1143,11 @@ export type UiEvent =
    */
   | { type: "workingNotesChanged"; agentId: AgentId }
   /**
+   * The workspace settings changed, from any client or from an agent. Carries
+   * the redacted settings, which every open client needs and nothing more.
+   */
+  | { type: "settingsChanged"; settings: Settings }
+  /**
    * A coding job could not run, for a reason only the operator can fix.
    *
    * The agent that asked is told in its own channel, and that is not enough: a

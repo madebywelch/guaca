@@ -3002,14 +3002,19 @@ pub async fn complete_subscription_signin(state: &AppState, code: DeviceCode) ->
 pub async fn sign_out_subscription(state: &AppState) -> Reply<RedactedConfig> {
     state.subscription.sign_out()?;
 
-    let mut config: AppConfig = state.runtime.config();
-    if config.inference.provider == config::Provider::Chatgpt {
-        config.inference.provider = config::Provider::Compatible;
-        // The endpoint and key were never cleared when the subscription was
-        // chosen, so going back lands on whatever was configured before it.
-        config::save(&state.config_path, &config)?;
-        state.runtime.set_config(config.clone());
+    if state.runtime.config().inference.provider != config::Provider::Chatgpt {
+        return Ok(state.runtime.config().redacted());
     }
+    let config = state.runtime.change_config(|config| {
+        // Read again under the writer: another client may have moved off the
+        // subscription since the check above.
+        if config.inference.provider == config::Provider::Chatgpt {
+            // The endpoint and key were never cleared when the subscription was
+            // chosen, so going back lands on whatever was configured before it.
+            config.inference.provider = config::Provider::Compatible;
+        }
+        Ok::<_, CommandError>(())
+    })?;
     Ok(config.redacted())
 }
 
@@ -3081,10 +3086,8 @@ fn apply_patch(
 }
 
 pub async fn update_settings(state: &AppState, patch: SettingsPatch) -> Reply<RedactedConfig> {
-    let mut config: AppConfig = state.runtime.config();
-    apply_patch(state.deployment.capabilities(), &mut config, patch)?;
-    config::save(&state.config_path, &config)?;
-    state.runtime.set_config(config.clone());
+    let here = state.deployment.capabilities();
+    let config = state.runtime.change_config(|config| apply_patch(here, config, patch))?;
     Ok(config.redacted())
 }
 

@@ -1324,6 +1324,11 @@ export const useStore = create<State>((set, get) => ({
         }));
         break;
       }
+
+      case "settingsChanged": {
+        set({ settings: event.settings });
+        break;
+      }
     }
   },
 

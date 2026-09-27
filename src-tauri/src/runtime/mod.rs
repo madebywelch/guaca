@@ -717,6 +717,11 @@ struct Inner {
     store: Store,
     llm: LlmClient,
     config: RwLock<AppConfig>,
+    /// Where settings changes are written. Set once at boot; absent in a test,
+    /// whose settings live and die in memory.
+    settings_file: std::sync::OnceLock<std::path::PathBuf>,
+    /// Held from the read to the broadcast of one settings change.
+    settings_writer: Mutex<()>,
     guard: Mutex<GuardRegistry>,
     inboxes: Mutex<HashMap<AgentId, Inbox>>,
     activity: Mutex<HashMap<AgentId, Activity>>,
@@ -890,6 +895,8 @@ impl Runtime {
                 store,
                 llm,
                 config: RwLock::new(config),
+                settings_file: std::sync::OnceLock::new(),
+                settings_writer: Mutex::new(()),
                 guard: Mutex::new(GuardRegistry::new()),
                 inboxes: Mutex::new(HashMap::new()),
                 activity: Mutex::new(HashMap::new()),
@@ -1014,6 +1021,36 @@ impl Runtime {
 
     pub fn set_config(&self, config: AppConfig) {
         *self.inner.config.write() = config;
+    }
+
+    /// Where [`Runtime::change_config`] saves. Set once, at boot.
+    pub fn keep_settings_at(&self, path: std::path::PathBuf) {
+        let _ = self.inner.settings_file.set(path);
+    }
+
+    /// Changes the settings as one step, from the read to the broadcast.
+    ///
+    /// Every writer comes through here: the settings pane in any client, a
+    /// sign-out, and an agent. Serialized, because two writers that each read,
+    /// patched and saved would each save the other's change away. Broadcast,
+    /// because a second client still drawing the settings it read when it
+    /// connected would otherwise show, and save back, what is no longer true.
+    pub fn change_config<E>(
+        &self,
+        change: impl FnOnce(&mut AppConfig) -> Result<(), E>,
+    ) -> Result<AppConfig, E>
+    where
+        E: From<crate::config::ConfigError>,
+    {
+        let _writer = self.inner.settings_writer.lock();
+        let mut config = self.config();
+        change(&mut config)?;
+        if let Some(path) = self.inner.settings_file.get() {
+            crate::config::save(path, &config)?;
+        }
+        self.set_config(config.clone());
+        self.emit(UiEvent::SettingsChanged { settings: Box::new(config.redacted()) });
+        Ok(config)
     }
 
     // ---- lifecycle -------------------------------------------------------

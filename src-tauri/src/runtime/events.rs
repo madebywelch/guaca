@@ -347,6 +347,16 @@ pub enum UiEvent {
     WorkingNotesChanged {
         agent_id: AgentId,
     },
+
+    /// The workspace settings changed, whoever changed them.
+    ///
+    /// Carries the redacted settings rather than asking for a refetch, because
+    /// every client that is open needs exactly this and nothing else, and the
+    /// client that made the change is one of them: a second window still
+    /// drawing what it read at connect would save it back over this.
+    SettingsChanged {
+        settings: Box<crate::config::RedactedConfig>,
+    },
 }
 
 pub trait EventSink: Send + Sync + 'static {

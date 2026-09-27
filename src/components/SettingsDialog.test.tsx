@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Prefs } from "../lib/prefs";
@@ -358,21 +358,10 @@ describe("what a save sends", () => {
     expect("kernelApiKey" in patch).toBe(false);
     expect("browserIdleMinutes" in patch).toBe(false);
     expect("requestTimeoutSecs" in patch).toBe(false);
-    expect(patch).toEqual({
-      operatorName: "Robert W",
-      // Both models go every time, and so does the provider. Each model belongs
-      // to one provider, so sending only the active one would leave the other
-      // to be overwritten by whatever the next save happened to be looking at.
-      provider: "compatible",
-      baseUrl: "https://openrouter.ai/api/v1",
-      defaultModel: "anthropic/claude-sonnet-4.5",
-      subscriptionModel: "gpt-5.6-luna",
-      reasoningEffort: "auto",
-      // The one field here that cannot be omitted: a checkbox left alone is a
-      // decision, and off has to be sendable or stealth can never be turned off.
-      browserStealth: false,
-      limits: HELD,
-    });
+    // Only what was changed. A field sent at the value it had when the dialog
+    // opened is a field saved back over whatever another client, or an agent,
+    // has put there since; an omitted one is left alone by the runtime.
+    expect(patch).toEqual({ operatorName: "Robert W" });
   });
 
   it("does not read a box of spaces as a key", async () => {
@@ -456,13 +445,10 @@ describe("what a save sends", () => {
 
     fireEvent.click(save());
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+    // The name typed is the name stored, so it is not a change and not sent.
     expect(sentPatch()).toEqual({
-      operatorName: "Robert",
-      provider: "compatible",
       baseUrl: "http://localhost:1234/v1",
       defaultModel: "qwen3-coder-30b",
-      subscriptionModel: "gpt-5.6-luna",
-      reasoningEffort: "auto",
       apiKey: "sk-or-v1-typed",
       e2bApiKey: "e2b_typed",
       computerIdleMinutes: 45,
@@ -470,8 +456,32 @@ describe("what a save sends", () => {
       browserIdleMinutes: 5,
       browserStealth: true,
       requestTimeoutSecs: 30,
-      limits: HELD,
     });
+  });
+
+  it("follows a change made elsewhere, and never saves the stale value back", async () => {
+    open();
+    pane("Provider");
+    type(/^Inference endpoint/, "http://localhost:1234/v1");
+    // Another window, or an agent, changes two fields while this one is open:
+    // one the operator has edited here and one they have not.
+    act(() =>
+      useStore.getState().applyEvent({
+        type: "settingsChanged",
+        settings: {
+          ...stored(),
+          baseUrl: "https://elsewhere.example/v1",
+          defaultModel: "someone/else",
+        },
+      }),
+    );
+    expect((field(/^Default model/) as HTMLInputElement).value).toBe("someone/else");
+    expect((field(/^Inference endpoint/) as HTMLInputElement).value).toBe(
+      "http://localhost:1234/v1",
+    );
+    fireEvent.click(save());
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+    expect(sentPatch()).toEqual({ baseUrl: "http://localhost:1234/v1" });
   });
 
   it("carries the browser half of Machines on its own, with no computer touched", async () => {
@@ -1177,10 +1187,10 @@ describe("the ChatGPT subscription", () => {
 
     fireEvent.click(save());
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
-    // The endpoint's model is still sent, untouched. An operator who runs out of
-    // quota and switches back has to find it where they left it.
-    expect(sentPatch().defaultModel).toBe("anthropic/claude-sonnet-4.5");
-    expect(sentPatch().subscriptionModel).toBe("gpt-5.6-luna");
+    // Neither model is sent, and an omitted field is one the runtime keeps. An
+    // operator who runs out of quota and switches back finds the endpoint's
+    // model where they left it, not whatever this window read when it opened.
+    expect(sentPatch()).toEqual({ operatorName: "Robert W" });
   });
 
   it("moves off the subscription when an endpoint preset is chosen", async () => {

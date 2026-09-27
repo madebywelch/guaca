@@ -138,3 +138,14 @@ The daemon, a browser as a client, and the boot both hosts share.
   `boot.rs` used to spell two of them itself and the third arrived on `main`
   as a separate argument; a host that built `Workspace` and `FileStore` by
   hand would be pointing part of the runtime at a directory nobody chose.
+- **Every settings write goes through `Runtime::change_config`.** It holds one
+  lock from the read to the broadcast. Two clients that each read, patched and
+  saved on their own put each other's field back, and the suite only saw it on
+  a multi-threaded runtime: on one thread there is no await between the read
+  and the save, so nothing can interleave. `settingsChanged` carries the
+  redacted settings to every client, the one that made the change included.
+- **Save sends what changed, not the form.** The settings pane follows a
+  change made elsewhere into every field its operator has not touched, and
+  sends only fields that differ from the settings as they stand. The form's
+  full `patch` is for a connection test, which has to test what is on screen.
+  Sending the whole form saved each window's stale copy over the other's.

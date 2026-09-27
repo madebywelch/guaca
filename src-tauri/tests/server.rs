@@ -313,6 +313,64 @@ async fn an_event_reaches_a_client_that_is_not_a_webview() {
     let _ = socket.close(None).await;
 }
 
+/// The next event of one kind, skipping whatever else the runtime emits.
+async fn next_of_kind(
+    socket: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    wanted: &str,
+) -> Value {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        assert!(!left.is_zero(), "no {wanted} event arrived");
+        let Ok(Some(Ok(message))) = tokio::time::timeout(left, socket.next()).await else {
+            panic!("the socket closed before {wanted} arrived");
+        };
+        let Ok(text) = message.into_text() else { continue };
+        let Ok(event) = serde_json::from_str::<Value>(&text) else { continue };
+        if event["type"] == wanted {
+            return event;
+        }
+    }
+}
+
+// Several workers, as the daemon has: on one thread two commands with no await
+// between their read and their save cannot interleave, and the race is hidden.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_settings_change_reaches_every_client_and_two_at_once_both_land() {
+    let (addr, _dir) = workspace().await;
+    let (mut other, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/v1/events?token={TOKEN}"))
+            .await
+            .expect("the event socket opens");
+
+    // A client that did not make the change is told, with the settings in it
+    // and never a key: every open settings pane is drawing from this.
+    call(addr, "update_settings", json!({ "patch": { "apiKey": "sk-secret-value" } })).await;
+    let event = next_of_kind(&mut other, "settingsChanged").await;
+    assert_eq!(event["settings"]["apiKeySet"], true);
+    assert!(!event.to_string().contains("sk-secret-value"), "a key crossed the socket: {event}");
+
+    // Two clients patching different fields at the same moment. Each read,
+    // patched and saved on its own before, and the later save put the earlier
+    // one's field back.
+    for round in 0..40 {
+        let name = format!("Operator {round}");
+        let model = format!("vendor/model-{round}");
+        let (a, b) = tokio::join!(
+            call(addr, "update_settings", json!({ "patch": { "operatorName": name } })),
+            call(addr, "update_settings", json!({ "patch": { "defaultModel": model } })),
+        );
+        assert_eq!(a.0, 200, "{a:?}");
+        assert_eq!(b.0, 200, "{b:?}");
+        let (_, now) = call(addr, "get_settings", json!({})).await;
+        assert_eq!(now["ok"]["operatorName"], name, "round {round}: {now}");
+        assert_eq!(now["ok"]["defaultModel"], model, "round {round}: {now}");
+    }
+    let _ = other.close(None).await;
+}
+
 #[tokio::test]
 async fn a_client_on_a_different_build_is_told_which_of_them_is_wrong() {
     let (addr, _dir) = workspace().await;
