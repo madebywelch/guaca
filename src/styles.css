@@ -6,22 +6,30 @@
    Ink on paper, and one amber that only ever means the app wants something
    from a person. There is no second surface color and no tinted panel: what
    carries hierarchy is size, weight and air, which is why the type ladder
-   below is wider than a chat app usually needs and why the reading anchor is
-   17px rather than 15. A transcript with room around it reads as one thing at
-   a time. A dense one reads as a wall, and this app is mostly machines
-   talking, so the wall is the failure mode it falls into by default.
+   below is wider than a chat app usually needs. A transcript with room around
+   it reads as one thing at a time. A dense one reads as a wall, and this app
+   is mostly machines talking, so the wall is the failure mode it falls into
+   by default.
 
-   The accent is the whole color system. `--flesh` is the amber, `--pit` is a
-   cold slate beside it for anything the system says about itself, and
-   everything else on screen is ink, paper or one of three grays. That is the
-   discipline the rest of it hangs off: spend amber on decoration and it stops
-   meaning "answer me", and the one thing this app must never do is ask
-   quietly.
+   The accent is the whole color system. `--attention` is the amber,
+   `--system` is a cold slate beside it for anything the system says about
+   itself, and everything else on screen is ink, paper or one of three grays.
+   That is the discipline the rest of it hangs off: spend amber on decoration
+   and it stops meaning "answer me", and the one thing this app must never do
+   is ask quietly. So a focus ring and a drop target are the slate, a primary
+   button and anything switched on are ink, a running job is the slate, and
+   `styles.test.ts` fails a rule that spends the amber on any of them.
 
-   The token names are the old ones. `--flesh` was ripe avocado and is now the
-   signal amber; 71 rules read it, and renaming a color is a mechanical change
-   worth doing on its own rather than folded into a change of mind about what
-   the color is.
+   Which amber, which grays and how much contrast are the operator's, under
+   Appearance. None of those values is written here by hand: `lib/theme.ts`
+   solves every color from those three choices against a ratio, the blocks
+   below are its default answer, and `theme.test.ts` holds them equal.
+
+   A color is named for its job, not for what it looked like. `--attention`
+   was `--flesh`, `--system` was `--pit`, `--ok` was `--mint` and `--danger`
+   was `--alarm`: avocado names that outlived the avocado, and nobody reading
+   `--flesh` could have guessed it meant "answer me". `--accent` is not one of
+   these. It is an agent's own color, set on whatever that agent draws.
 
    Paper is the default and does not win in a dark room, which is the whole
    reason the reading column is a token block behind `data-surface` rather
@@ -32,11 +40,13 @@
    which is what made the left edge of the app look like a different app from
    the right edge of it.
 
-   Type is three roles, not one. Instrument Sans carries names and titles,
-   where a tight fit at a large size is the point. Inter carries everything
-   you actually read for minutes at a time. JetBrains Mono carries the machine
-   texture: times, hops, routes, code. All three ship with the app, so the
-   window looks the same on every machine and needs no network.
+   Type is three roles. `--font-ui` is the interface, and by default Inter
+   with its optical-size axis, which draws a title from the display cut and a
+   line of text from the text cut, the job a second family used to do.
+   `--font-read` is what agents wrote, the interface face until an operator
+   picks a serif. `--font-mono` is the machine texture: times, states, routes,
+   code. Every face ships with the app, so the window looks the same on every
+   machine and needs no network; the ones nobody picked are never loaded.
    ========================================================================== */
 
 :root {
@@ -52,20 +62,20 @@
 
      They follow the surface now rather than pinning ink under both of them,
      which is why the dark block below redeclares all seven. */
-  --rail-ground: #f5f3ee;
+  --rail-ground: #f2f3f5;
   --rail-raised: #ffffff;
-  --rail-edge: #e5e2da;
-  --rail-text: #0b0b0a;
-  --rail-muted: #54524d;
-  --rail-wire: #ded9d0;
+  --rail-edge: #e1e2e5;
+  --rail-text: #131314;
+  --rail-muted: #4a4b4d;
+  --rail-wire: #d8dadc;
   /* Recessed from a column, which is not the same value as recessed from the
      page: `--sunken` is a hair off white, which is a field on paper and
      nothing at all on an off-white panel. */
-  --rail-sunken: #eae7df;
+  --rail-sunken: #e6e7ea;
   /* A shade under the rail. The crews sit behind the crew, and a column that
      is the same ground as the one it borders needs a rule drawn between them
      to be a second surface at all. */
-  --grail-ground: #eceae2;
+  --grail-ground: #e8eaec;
 
   /* The reading surface, and the only half of the app a surface choice moves.
      Messages are long-form text read for minutes at a time, and paper is the
@@ -77,25 +87,55 @@
      than an oversight: a card here is separated by a rule or by the lift's
      ring, never by being a slightly different white. Two whites a percent
      apart is exactly the kind of thing that accretes into 41 font sizes, and
-     it buys nothing a border does not. `--sunken` is the one recessed value,
-     and it is warm rather than gray so the page does not read as blue. */
+     it buys nothing a border does not. `--sunken` is the one recessed value.
+
+     Every color from here to the end of the block, and every one in the dark
+     block, is the default theme as `lib/theme.ts` solves it, and
+     `theme.test.ts` holds the two equal. These are the first paint and the
+     fallback. What an operator actually sees is the same names written again
+     after this file, from the grays, attention hue and contrast they chose,
+     which is why none of these values is a decision to be nudged here: a hex
+     edited in this block fails the suite, and a hex edited in both fails the
+     gates the solver exists to meet. */
   --ground: #ffffff;
   --raised: #ffffff;
-  --sunken: #f4f3f0;
-  --edge: #e2e0da;
-  --text: #0b0b0a;
-  --muted: #54524d;
-  --faint: #8a877f;
+  --sunken: #f2f3f4;
+  --edge: #dfe0e3;
+  /* The edge of something you type into or press. `--edge` is a divider at
+     1.3 to 1, and a divider is decoration; the boundary of a control is how
+     anybody finds it, and WCAG 1.4.11 asks 3 to 1 of it. */
+  --edge-control: #8b8d8e;
+  --text: #131314;
+  --muted: #4a4b4d;
+  /* Hints and placeholders are text, and held to the ratio text is. This was
+     3.6 to 1 on the page and 3.0 on the crews' column. */
+  --faint: #6e6f72;
 
-  --flesh: #b4530a;
-  --flesh-soft: #fdeed9;
-  --pit: #2f4858;
-  --pit-soft: #e9eff3;
-  --mint: #14713f;
-  --alarm: #c1271b;
+  /* Attention is two colors. `--attention` is the ink, readable as words on
+     every ground. `--attention-fill` is the shape: a badge, a dot, a mark on a
+     face, recognizable as amber and carrying its own text color. An amber
+     dark enough to read as text on white is brown, and one value made to do
+     both jobs was either illegible or unrecognizable. */
+  --attention: #915d00;
+  --attention-wash: #fff1e1;
+  --attention-fill: #ffb346;
+  --on-attention-fill: #161616;
+  --system: #2d495a;
+  --system-wash: #ecf5fb;
+  /* Where the keyboard is, and where a drop will land. The system's voice
+     rather than the amber: a ring in "answer me" around every control tabbed
+     through spent the one signal on "you are here". */
+  --focus: var(--system);
+  --ok: #00774d;
+  --danger: #c52b30;
+  /* Failure as a shape, at a lightness the attention fill is not. They were
+     one luminance apart from nothing: 2.6 under deuteranopia, which is the
+     same color. */
+  --danger-fill: #c21725;
+  --on-danger-fill: #ffffff;
 
-  --font-display: "Instrument Sans Variable", "Inter Variable", system-ui, sans-serif;
   --font-ui: "Inter Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-read: var(--font-ui);
   --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
 
   /* Every length in this file is a rem, so the operator's interface scale is
@@ -111,7 +151,8 @@
   --space-safe-right: env(safe-area-inset-right, 0px);
 
   /* ---- Type ---------------------------------------------------------------
-     Ten roles, whole pixels at scale 1, no two closer than 1px.
+     Nine roles, whole pixels at scale 1, no two closer than 1px, and nothing
+     under 11px.
 
      This was 41 sizes, 38 of them between 8px and 18px: one every 0.27px.
      Nobody chose those. They accreted, one rule at a time, each picked to sit
@@ -124,30 +165,36 @@
      A step is named for the job, not for its rank, because the job is what a
      rule knows about itself.
 
-     The ladder is wider than it was and the whole of it moved up: the bottom
-     four steps are the mono furniture and stayed where they were, because a
-     timestamp is not something anybody reads at length, and everything above
-     them grew. That is the one change that makes hierarchy legible without a
-     panel, a tint or a border doing it, and it is why the four sizes between
-     13px and 17px are four rather than the eleven this file used to have. */
-  --type-mark: 0.5625rem; /* 9px.  Uppercase mono: eyebrows, states, counts. */
-  --type-fine: 0.625rem; /* 10px. Timestamps, keycaps, field labels. */
-  --type-meta: 0.6875rem; /* 11px. Chips, routes, hop lines. */
+     The floor is 11px because the bottom of this ladder used to be 9px
+     uppercase mono, which is 8.1px at the smallest scale: legible to the
+     person who chose it on the screen they chose it on, and to few others.
+     Labels are sentence case in the interface face now, at `--type-meta`, so
+     the step that existed only for them is gone and its counts and states
+     joined `--type-fine`. */
+  --type-fine: 0.6875rem; /* 11px. Timestamps, keycaps, counts, states. */
+  --type-meta: 0.75rem; /* 12px. Labels, chips, routes, hop lines. */
   --type-small: 0.8125rem; /* 13px. Hints, captions, dense secondary text. */
   --type-aside: 0.875rem; /* 14px. Second lines, notes, previews. */
   --type-ui: 0.9375rem; /* 15px. Every control, and names in a list. */
-  --type-body: 1.0625rem; /* 17px. Messages and markdown. The anchor. */
+  --type-body: 1rem; /* 16px. The anchor, and what reading starts at. */
   --type-lede: 1.375rem; /* 22px. Dialog and pane titles. */
   --type-title: 1.75rem; /* 28px. A name standing on its own. */
   --type-display: 2.25rem; /* 36px. The rare big thing. */
 
+  /* What agents wrote and what the operator types, at the size the operator
+     reads at. The ladder's body step until they pick another under
+     Appearance, which writes this one name and nothing else: a reading size
+     that moved the rail, the titles and the controls would be the interface
+     scale under a second name. */
+  --type-read: var(--type-body);
+
   /* Tracking is a function of the step and the case, never a free parameter.
      It was 18 values, six of them the same uppercase-label job at 0.1, 0.11,
-     0.12, 0.14, 0.16 and 0.18em. */
+     0.12, 0.14, 0.16 and 0.18em. Two things are still set in capitals, and
+     neither is a label. */
   --track-tight: -0.02em; /* Display face at title sizes, and agent names. */
   --track-flat: -0.01em; /* Anything read as words. */
-  --track-caps: 0.1em; /* Uppercase labels. The default for caps. */
-  --track-caps-wide: 0.18em; /* Section heads, the wordmark, a typed code. */
+  --track-caps: 0.18em; /* The wordmark, and a code somebody types by hand. */
 
   /* Leading, four steps. `--lead-flush` is a glyph or a single line in a box
      already the right height; it is not typography and it is not 0, which is
@@ -155,8 +202,8 @@
   --lead-flush: 1;
   --lead-tight: 1.2; /* Headings and names. */
   --lead-ui: 1.4; /* Short text that may wrap to a second line. */
-  /* Tighter than it was, because the text under it is two points larger: leading
-     is a ratio and 1.6 of 17px is a gap you read across rather than down. */
+  /* A ratio, so it holds at every reading size an operator can pick: 1.6 of
+     the larger sizes is a gap you read across rather than down. */
   --lead-read: 1.55; /* Paragraphs, code blocks, anything read at length. */
 
   /* ---- Space --------------------------------------------------------------
@@ -284,8 +331,8 @@
 }
 
 /* Ink instead of paper.
-   Seven neutrals, seven column values, four accents, a scrim and three lifts.
-   Nothing else, and every `--rail-*` and `--grail-*` name is in here: the
+   Every color the theme owns, a scrim and three lifts. Nothing else, and
+   every `--rail-*` and `--grail-*` name is in here: the
    columns follow the surface, so one of them declared for paper and not for
    ink is a column that stays the wrong color in a dark room and no DOM
    assertion notices. `styles.test.ts` reads both blocks and fails on a name
@@ -295,37 +342,44 @@
    the page is the brightest thing and its edges step back from it, on ink the
    page is the darkest thing and its edges step up from it. Either way the page
    is the surface you read on and the columns are what frames it.
-   The accents are lifted rather than kept, because both are chosen against
-   white and neither can be read on ink: the amber goes light and loses its
-   burn, the slate goes pale enough to be a color rather than a shadow. They
-   stay recognizably the same two colors; they are not the same values. */
+   The inks are lifted rather than kept, because each is solved against the
+   ground it is read on: the amber goes light and loses its burn, the slate
+   goes pale enough to be a color rather than a shadow. They stay recognizably
+   the same colors; they are not the same values. */
 :root[data-surface="dark"] {
-  --rail-ground: #151513;
-  --rail-raised: #1f1f1c;
-  --rail-edge: #2b2a27;
-  --rail-text: #f7f5f0;
-  --rail-muted: #a8a49c;
-  --rail-wire: #302f2b;
-  --rail-sunken: #0e0e0d;
-  --grail-ground: #0b0b0a;
+  --rail-ground: #141516;
+  --rail-raised: #1e1f20;
+  --rail-edge: #292a2c;
+  --rail-text: #f5f5f6;
+  --rail-muted: #a7a9ab;
+  --rail-wire: #2e2f31;
+  --rail-sunken: #0d0e0f;
+  --grail-ground: #0a0b0d;
 
-  --ground: #0f0f0e;
-  --raised: #171715;
-  --sunken: #0a0a09;
-  --edge: #2a2926;
-  --text: #f7f5f0;
-  --muted: #a8a49c;
+  --ground: #0e0f10;
+  --raised: #161718;
+  --sunken: #090a0b;
+  --edge: #28292b;
+  --edge-control: #68696a;
+  --text: #f5f5f6;
+  --muted: #a7a9ab;
   /* The one gray that barely moves between the surfaces: it is the lightest of
      the three and the one hints are set in, so it has the least contrast to
      spare in either direction. */
-  --faint: #85817a;
+  --faint: #848688;
 
-  --flesh: #f0a63c;
-  --flesh-soft: #33240e;
-  --pit: #8fb4c9;
-  --pit-soft: #16232b;
-  --mint: #46c47c;
-  --alarm: #ff6a55;
+  --attention: #f8a300;
+  --attention-wash: #312008;
+  /* The fills are the same on both surfaces. Each carries its own text color,
+     so neither needs the page to agree with it. */
+  --attention-fill: #ffb346;
+  --on-attention-fill: #161616;
+  --system: #94b3c7;
+  --system-wash: #19232a;
+  --ok: #57c791;
+  --danger: #ff645f;
+  --danger-fill: #c21725;
+  --on-danger-fill: #ffffff;
 
   --scrim: rgb(0 0 0 / 0.66);
   /* The drop layer does almost nothing over a dark page, so the ring carries
@@ -334,6 +388,28 @@
   --lift-1: 0 0.125rem 0.5rem -0.25rem rgb(0 0 0 / 0.45);
   --lift-2: 0 0.5rem 1.25rem -0.625rem rgb(0 0 0 / 0.55), 0 0 0 1px var(--edge);
   --lift-3: 0 1.25rem 2.5rem -1rem rgb(0 0 0 / 0.6), 0 0 0 1px var(--edge);
+}
+
+/* The other two interface faces, each with the monospace drawn to sit beside
+   it. Inter is the default and is the `:root` block above, so it has no rule
+   of its own. `system` names no family at all: `system-ui` is SF Pro on a Mac
+   and Segoe UI on Windows, and whichever it is, it is the face every other
+   window on that machine is drawn in. */
+:root[data-typeface="system"] {
+  --font-ui: system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+:root[data-typeface="legible"] {
+  --font-ui: "Atkinson Hyperlegible Next Variable", system-ui, sans-serif;
+  --font-mono: "Atkinson Hyperlegible Mono Variable", ui-monospace, monospace;
+}
+
+/* What agents wrote, in a serif. `--font-read` is spent only by the
+   transcript and the composer, so the rail and every control stay in the
+   interface face. */
+:root[data-reading="serif"] {
+  --font-read: "Literata Variable", Georgia, serif;
 }
 
 * {
@@ -387,10 +463,9 @@ html {
 body {
   font-family: var(--font-ui);
   font-optical-sizing: auto;
-  /* The 15px this has always been, said in a unit that scales. Every element
-     that resets with `font: inherit` and names no size of its own falls back to
-     this, so leaving it absolute would freeze them while everything around them
-     grew. */
+  /* Said in a unit that scales. Every element that resets with `font: inherit`
+     and names no size of its own falls back to this, so leaving it absolute
+     would freeze them while everything around them grew. */
   font-size: var(--type-body);
   background: var(--ground);
   color: var(--text);
@@ -432,7 +507,7 @@ input[type="file"]::file-selector-button {
 }
 
 :focus-visible {
-  outline: 2px solid var(--flesh);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }
@@ -532,7 +607,7 @@ input[type="file"]::file-selector-button {
 /* A host and this app on different releases is the one fact here worth a
    color: it is the one that breaks commands. */
 .statusbar__host[data-drift] {
-  color: var(--pit);
+  color: var(--system);
 }
 
 .statusbar__actions {
@@ -549,7 +624,7 @@ input[type="file"]::file-selector-button {
 }
 
 .statusbar__button {
-  border-color: var(--edge);
+  border-color: var(--edge-control);
   color: var(--text);
 }
 
@@ -564,7 +639,7 @@ input[type="file"]::file-selector-button {
 
 .statusbar__error {
   flex-basis: 100%;
-  color: var(--alarm);
+  color: var(--danger);
 }
 
 /* Above the bar rather than in it: the form is taller than a row, and the
@@ -624,7 +699,7 @@ input[type="file"]::file-selector-button {
 }
 
 .desk__asker {
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-size: var(--type-aside);
   font-weight: 600;
   color: var(--text);
@@ -648,10 +723,9 @@ input[type="file"]::file-selector-button {
 }
 
 .desk__detail dt {
-  font-family: var(--font-mono);
-  font-size: var(--type-fine);
-  letter-spacing: var(--track-caps);
-  text-transform: uppercase;
+  font-family: var(--font-ui);
+  font-size: var(--type-meta);
+  font-weight: 600;
   color: var(--faint);
 }
 
@@ -694,7 +768,7 @@ input[type="file"]::file-selector-button {
    own: the panel already says everything on it needs the operator, and a second
    alarm color would make the two kinds compete instead of stack. */
 .desk__card[data-kind="stuck"] {
-  border-left: 2px solid var(--alarm);
+  border-left: 2px solid var(--danger);
 }
 
 /* ==========================================================================
@@ -811,8 +885,8 @@ input[type="file"]::file-selector-button {
    Rail
    ========================================================================== */
 
-/* Nothing is pinned here. Both columns used to hold paper values for `--flesh`
-   and `--flesh-soft` — and the crews' column for `--alarm` as well — because
+/* Nothing is pinned here. Both columns used to hold paper values for `--attention`
+   and `--attention-wash` — and the crews' column for `--danger` as well — because
    they were ink under both surfaces and a reading column that went dark would
    otherwise have repainted them silently. They follow the surface now, so the
    one amber in the app is the same amber in all three columns, which is what
@@ -848,10 +922,10 @@ input[type="file"]::file-selector-button {
 }
 
 .rail__wordmark {
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-size: var(--type-lede);
   font-weight: 600;
-  letter-spacing: var(--track-caps-wide);
+  letter-spacing: var(--track-caps);
   text-transform: uppercase;
   color: var(--rail-text);
 }
@@ -882,16 +956,14 @@ input[type="file"]::file-selector-button {
 .rail__new:hover,
 .rail__new:focus-visible,
 .rail__new[aria-expanded="true"] {
-  background: color-mix(in oklab, var(--flesh) 30%, var(--rail-raised));
-  border-color: color-mix(in oklab, var(--flesh) 45%, var(--rail-edge));
+  background: var(--rail-raised);
+  border-color: var(--rail-text);
 }
 
 .rail__section {
-  font-family: var(--font-mono);
-  font-size: var(--type-fine);
-  font-weight: 500;
-  letter-spacing: var(--track-caps-wide);
-  text-transform: uppercase;
+  font-family: var(--font-ui);
+  font-size: var(--type-meta);
+  font-weight: 600;
   color: var(--rail-muted);
   padding: var(--space-5) var(--space-6) var(--space-3);
   display: flex;
@@ -902,11 +974,9 @@ input[type="file"]::file-selector-button {
 /* A group header. Reads as a label, not a control: the primary thing in the
    rail is still the agent. The gear is the only part that acts. */
 .rail__group-head {
-  font-family: var(--font-mono);
-  font-size: var(--type-fine);
-  font-weight: 500;
-  letter-spacing: var(--track-caps-wide);
-  text-transform: uppercase;
+  font-family: var(--font-ui);
+  font-size: var(--type-meta);
+  font-weight: 600;
   color: var(--rail-muted);
   padding: var(--space-5) var(--space-4) var(--space-2) var(--space-6);
   display: flex;
@@ -981,7 +1051,7 @@ input[type="file"]::file-selector-button {
 
 /* The one figure read at a glance, at the size that says so. */
 .spend__total {
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-size: var(--type-lede);
   font-weight: 600;
   letter-spacing: var(--track-tight);
@@ -1024,7 +1094,7 @@ input[type="file"]::file-selector-button {
    readout changing color and at the size it is drawn here was the one figure on
    the card going pale on the surface it is drawn on. */
 .spend[data-busy] .spend__bar {
-  background: var(--flesh-soft);
+  background: var(--system-wash);
 }
 
 /* The split, exact. Two columns rather than a sentence, because these are read
@@ -1146,10 +1216,10 @@ input[type="file"]::file-selector-button {
   height: var(--dot);
   margin-left: calc(var(--dot) / -2);
   border-radius: var(--radius-xs);
-  background: var(--pulse-color, var(--flesh));
+  background: var(--pulse-color, var(--system));
   box-shadow:
-    0 0 0 0.19rem color-mix(in oklab, var(--pulse-color, var(--flesh)) 22%, transparent),
-    0 0 0.64rem color-mix(in oklab, var(--pulse-color, var(--flesh)) 45%, transparent);
+    0 0 0 0.19rem color-mix(in oklab, var(--pulse-color, var(--system)) 22%, transparent),
+    0 0 0.64rem color-mix(in oklab, var(--pulse-color, var(--system)) 45%, transparent);
   pointer-events: none;
   z-index: 2;
   animation: pulse-travel var(--pulse-duration, 620ms) var(--ease-loop) forwards;
@@ -1207,7 +1277,7 @@ input[type="file"]::file-selector-button {
   bottom: 0.25rem;
   width: 2px;
   border-radius: 0 1px 1px 0;
-  background: var(--accent, var(--flesh));
+  background: var(--accent, var(--text));
 }
 
 /* The name and its pin as one cell, rather than a fourth column. A column that
@@ -1221,7 +1291,7 @@ input[type="file"]::file-selector-button {
 }
 
 .agent-row__name {
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-size: var(--type-ui);
   font-weight: 500;
   letter-spacing: var(--track-flat);
@@ -1255,18 +1325,18 @@ input[type="file"]::file-selector-button {
 }
 
 .agent-row__meta[data-state="thinking"] {
-  color: var(--flesh);
+  color: var(--system);
 }
 
 /* Louder than thinking, because it is the only rail state that is asking for
    something. A parked agent stays parked until the operator answers, and the
    request is in a channel they may not have open. */
 .agent-row__meta[data-state="asking"] {
-  /* On the amber rather than beside it, so the text is the page's ground and
-     not the column's: the amber is dark on paper and light on ink, and a
-     column-colored label is unreadable on one of the two. */
-  color: var(--ground);
-  background: var(--flesh);
+  /* On the amber rather than beside it, in the fill's own text color. The
+     fill is the same on both surfaces, so text in the page's ground would be
+     white on pale amber in one of them. */
+  color: var(--on-attention-fill);
+  background: var(--attention-fill);
   border-radius: var(--radius-xs);
   padding: var(--space-1) var(--space-2);
   font-weight: 600;
@@ -1310,8 +1380,8 @@ input[type="file"]::file-selector-button {
   top: -1px;
   height: 2px;
   border-radius: 1px;
-  background: var(--flesh);
-  box-shadow: 0 0 0.375rem color-mix(in oklab, var(--flesh) 55%, transparent);
+  background: var(--focus);
+  box-shadow: 0 0 0.375rem color-mix(in oklab, var(--focus) 55%, transparent);
 }
 
 /* The codebases a crew works in, drawn as headings with their agents under
@@ -1338,11 +1408,9 @@ input[type="file"]::file-selector-button {
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-4) var(--space-4) var(--space-2) var(--column-inset);
-  font-family: var(--font-mono);
-  font-size: var(--type-mark);
+  font-family: var(--font-ui);
+  font-size: var(--type-meta);
   font-weight: 600;
-  letter-spacing: var(--track-caps);
-  text-transform: uppercase;
   color: var(--rail-muted);
   min-width: 0;
 }
@@ -1356,8 +1424,8 @@ input[type="file"]::file-selector-button {
   flex: none;
   width: var(--space-4);
   height: var(--space-4);
-  border-left: 1.5px solid color-mix(in oklab, var(--flesh) 60%, transparent);
-  border-bottom: 1.5px solid color-mix(in oklab, var(--flesh) 60%, transparent);
+  border-left: 1.5px solid color-mix(in oklab, var(--rail-muted) 60%, transparent);
+  border-bottom: 1.5px solid color-mix(in oklab, var(--rail-muted) 60%, transparent);
   margin-bottom: var(--space-1);
 }
 
@@ -1397,8 +1465,8 @@ input[type="file"]::file-selector-button {
   margin: 0 var(--space-6) var(--space-3);
   padding: var(--space-4) var(--space-5);
   border-radius: var(--radius);
-  border: 1px solid color-mix(in oklab, var(--flesh) 28%, transparent);
-  background: color-mix(in oklab, var(--flesh) 7%, transparent);
+  border: 1px solid color-mix(in oklab, var(--system) 28%, transparent);
+  background: color-mix(in oklab, var(--system) 7%, transparent);
 }
 
 /* The cap and the scroll are on the tail, not on the panel. The panel also
@@ -1437,15 +1505,14 @@ input[type="file"]::file-selector-button {
   width: var(--space-3);
   height: var(--space-3);
   border-radius: var(--radius-pill);
-  background: var(--flesh);
+  background: var(--system);
   animation: repo-building 2s var(--ease-loop) infinite;
 }
 
 .coding__title {
-  font-family: var(--font-mono);
-  font-size: var(--type-mark);
-  letter-spacing: var(--track-caps);
-  text-transform: uppercase;
+  font-family: var(--font-ui);
+  font-size: var(--type-meta);
+  font-weight: 600;
   color: color-mix(in oklab, var(--ink) 62%, transparent);
 }
 
@@ -1477,7 +1544,7 @@ input[type="file"]::file-selector-button {
   width: var(--column-face);
   font-family: var(--font-mono);
   font-size: var(--type-fine);
-  color: var(--flesh);
+  color: var(--system);
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -1503,9 +1570,8 @@ input[type="file"]::file-selector-button {
    beside it would read as the same thing when it is deliberately not. */
 .rail__repo-building {
   flex: none;
-  font-size: var(--type-mark);
-  letter-spacing: var(--track-caps);
-  color: var(--flesh);
+  font-size: var(--type-fine);
+  color: var(--system);
   animation: repo-building 2s var(--ease-loop) infinite;
 }
 
@@ -1561,7 +1627,7 @@ input[type="file"]::file-selector-button {
 
 .rail__repo-dirty {
   flex: none;
-  color: color-mix(in oklab, var(--flesh) 82%, var(--rail-text));
+  color: color-mix(in oklab, var(--system) 82%, var(--rail-text));
 }
 
 .rail__repo-prs {
@@ -1583,8 +1649,8 @@ input[type="file"]::file-selector-button {
 .rail__repo[data-over="true"],
 .rail__group[data-over="true"],
 .orb[data-over="true"] .orb__ring {
-  background: color-mix(in oklab, var(--flesh) 12%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--flesh) 45%, transparent);
+  background: color-mix(in oklab, var(--focus) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--focus) 45%, transparent);
 }
 
 /* What the hand is holding, at the pointer. Fixed to the window so nothing it
@@ -1610,7 +1676,7 @@ input[type="file"]::file-selector-button {
 }
 
 .rail__held-name {
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-size: var(--type-aside);
   color: var(--rail-text);
   white-space: nowrap;
@@ -1661,7 +1727,7 @@ input[type="file"]::file-selector-button {
    over for the open channel — a plate under the row and an ink edge on it —
    because it is the same question asked at the other granularity.
 
-   The bar is the accent. It was `--flesh-soft`, which is the *ground* the app
+   The bar is the accent. It was `--attention-wash`, which is the *ground* the app
    fills boxes with rather than an ink: #fdeed9 over a #eceae2 column and
    #33240e over a #0b0b0a one, which is 1.06 to 1 and 1.31 to 1. The one
    permanent statement in the app about where the operator is standing was
@@ -1671,7 +1737,7 @@ input[type="file"]::file-selector-button {
 
    The band is the mark that answers at a glance, which is how the question is
    asked. A 0.2rem edge is findable once you know to look for it, and down a
-   column of twelve nobody looks. `--flesh-soft` is the right name here, because
+   column of twelve nobody looks. `--attention-wash` is the right name here, because
    here it is a ground.
 
    Remapping `--grail-ground` with it is what keeps the two badges hung off the
@@ -1680,9 +1746,9 @@ input[type="file"]::file-selector-button {
    column is the band. Remapped once here for the reason `--sunken` is remapped
    once on the columns themselves, rather than at each rule inside. */
 .orb[aria-current="true"] {
-  --grail-ground: var(--flesh-soft);
+  --grail-ground: var(--rail-ground);
 
-  background: var(--flesh-soft);
+  background: var(--rail-ground);
 }
 
 .orb[aria-current="true"]::before {
@@ -1694,7 +1760,7 @@ input[type="file"]::file-selector-button {
   height: 2rem;
   transform: translateY(-50%);
   border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
-  background: var(--flesh);
+  background: var(--text);
 }
 
 /* Faces, standing in a ring. Where each one goes is `lib/orb.ts`: a crew of
@@ -1770,7 +1836,7 @@ input[type="file"]::file-selector-button {
   right: -0.3rem;
   bottom: -0.2rem;
   font-family: var(--font-mono);
-  font-size: var(--type-mark);
+  font-size: var(--type-fine);
   line-height: var(--lead-flush);
   padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-sm);
@@ -1820,7 +1886,7 @@ input[type="file"]::file-selector-button {
 }
 
 .orb__tag-name {
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-size: var(--type-ui);
   font-weight: 600;
   letter-spacing: var(--track-tight);
@@ -1852,7 +1918,7 @@ input[type="file"]::file-selector-button {
 /* Somebody in this crew is working. After focusing on one group the strip is
    the only place the others are still visible, so it has to carry that. */
 .orb[data-state="working"] .orb__ring {
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--flesh) 60%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--system) 60%, transparent);
   animation: orb-breathe 2.6s var(--ease-loop) infinite;
 }
 
@@ -1869,19 +1935,19 @@ input[type="file"]::file-selector-button {
   min-width: var(--badge);
   padding: 0 var(--space-1);
   font-family: var(--font-mono);
-  font-size: var(--type-mark);
+  font-size: var(--type-fine);
   font-weight: 600;
   line-height: var(--badge);
   text-align: center;
   border-radius: var(--radius-sm);
-  background: var(--alarm);
-  color: #fff;
+  background: var(--danger-fill);
+  color: var(--on-danger-fill);
   box-shadow: 0 0 0 2px var(--grail-ground);
 }
 
 @keyframes orb-breathe {
   50% {
-    box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--flesh) 75%, transparent);
+    box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--system) 75%, transparent);
   }
 }
 
@@ -1904,7 +1970,7 @@ input[type="file"]::file-selector-button {
 }
 
 .rail__open-name {
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-size: var(--type-body);
   font-weight: 600;
   letter-spacing: var(--track-flat);
@@ -2126,13 +2192,13 @@ input[type="file"]::file-selector-button {
   position: absolute;
   top: -0.4rem;
   right: -0.55rem;
-  font-family: var(--font-display);
-  font-size: var(--type-mark);
+  font-family: var(--font-ui);
+  font-size: var(--type-fine);
   font-weight: 700;
   line-height: var(--lead-flush);
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius) var(--radius) var(--radius) 1px;
-  background: var(--accent, var(--flesh));
+  background: var(--accent, var(--text));
   color: #16201a;
   white-space: nowrap;
   pointer-events: none;
@@ -2190,7 +2256,7 @@ input[type="file"]::file-selector-button {
 }
 
 .pane__title {
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-size: var(--type-lede);
   font-weight: 600;
   letter-spacing: var(--track-tight);
@@ -2203,11 +2269,9 @@ input[type="file"]::file-selector-button {
    control to find out a state. */
 .pane__flag {
   font-family: var(--font-mono);
-  font-size: var(--type-mark);
-  letter-spacing: var(--track-caps);
-  text-transform: uppercase;
-  color: var(--pit);
-  background: var(--pit-soft);
+  font-size: var(--type-fine);
+  color: var(--system);
+  background: var(--system-wash);
   border-radius: var(--radius-pill);
   padding: var(--space-1) var(--space-4);
   flex: none;
@@ -2345,7 +2409,7 @@ input[type="file"]::file-selector-button {
 }
 
 .msg__author {
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-size: var(--type-ui);
   font-weight: 600;
   letter-spacing: var(--track-tight);
@@ -2394,7 +2458,6 @@ input[type="file"]::file-selector-button {
   padding: var(--space-5) var(--space-7) var(--space-4);
   font-family: var(--font-mono);
   font-size: var(--type-fine);
-  letter-spacing: var(--track-caps);
   color: var(--faint);
 }
 
@@ -2407,7 +2470,8 @@ input[type="file"]::file-selector-button {
    ========================================================================== */
 
 .md {
-  font-size: var(--type-body);
+  font-family: var(--font-read);
+  font-size: var(--type-read);
   line-height: var(--lead-read);
   color: var(--text);
   overflow-wrap: anywhere;
@@ -2428,7 +2492,7 @@ input[type="file"]::file-selector-button {
 .md h2,
 .md h3,
 .md h4 {
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-weight: 600;
   line-height: var(--lead-tight);
   margin: var(--space-6) 0 var(--space-3);
@@ -2436,8 +2500,8 @@ input[type="file"]::file-selector-button {
 
 .md h1 { font-size: var(--type-lede); }
 .md h2 { font-size: var(--type-lede); }
-.md h3 { font-size: var(--type-body); }
-.md h4 { font-size: var(--type-body); }
+.md h3 { font-size: var(--type-read); }
+.md h4 { font-size: var(--type-read); }
 
 /* Markers restored, because Tailwind's preflight takes them off every list on
    the page and nothing here put them back: an agent's numbered steps arrived
@@ -2465,7 +2529,7 @@ input[type="file"]::file-selector-button {
 }
 
 .md a {
-  color: var(--flesh);
+  color: var(--system);
   text-decoration: underline;
   text-underline-offset: 2px;
   cursor: pointer;
@@ -2550,7 +2614,7 @@ input[type="file"]::file-selector-button {
   height: 0.95em;
   vertical-align: text-bottom;
   margin-left: var(--space-1);
-  background: var(--flesh);
+  background: var(--system);
   animation: caret 1.05s steps(2) infinite;
 }
 
@@ -2588,25 +2652,24 @@ input[type="file"]::file-selector-button {
 }
 
 .md .callout--asks {
-  border-color: color-mix(in oklab, var(--flesh) 45%, var(--edge));
-  background: var(--flesh-soft);
+  border-color: color-mix(in oklab, var(--attention) 45%, var(--edge));
+  background: var(--attention-wash);
 }
 
 /* The label is the app's word, not the model's, so it is drawn as the app's
    own furniture: the same uppercase mono eyebrow every state in this file
    is set in. */
 .md .callout__label {
-  font-family: var(--font-mono);
-  font-size: var(--type-mark);
-  letter-spacing: var(--track-caps);
+  font-family: var(--font-ui);
+  font-size: var(--type-meta);
+  font-weight: 600;
   line-height: var(--lead-ui);
-  text-transform: uppercase;
   color: var(--faint);
   margin: 0 0 var(--space-3);
 }
 
 .md .callout--asks .callout__label {
-  color: var(--flesh);
+  color: var(--attention);
 }
 
 /* ==========================================================================
@@ -2684,7 +2747,7 @@ input[type="file"]::file-selector-button {
   margin: 0;
   padding: 0 var(--space-2);
   font-size: var(--type-aside);
-  color: var(--alarm);
+  color: var(--danger);
 }
 
 .figure__source {
@@ -2694,7 +2757,7 @@ input[type="file"]::file-selector-button {
 /* --- the chart itself --------------------------------------------------- */
 
 .chart__title {
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-size: var(--type-body);
   font-weight: 600;
   margin: 0 0 var(--space-3);
@@ -2798,7 +2861,7 @@ input[type="file"]::file-selector-button {
 .chart__band:focus-visible,
 .chart__mark:focus-visible,
 .chart__wedge:focus-visible {
-  outline: 2px solid var(--flesh);
+  outline: 2px solid var(--focus);
   outline-offset: 1px;
 }
 
@@ -3002,7 +3065,7 @@ input[type="file"]::file-selector-button {
 }
 
 .artifact__answer-note--fault {
-  color: var(--alarm);
+  color: var(--danger);
 }
 
 /* The value goes out under the operator's name, so it is shown before it goes
@@ -3037,8 +3100,8 @@ input[type="file"]::file-selector-button {
   letter-spacing: var(--track-flat);
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-pill);
-  background: var(--flesh-soft);
-  color: color-mix(in oklab, var(--flesh) 82%, var(--text));
+  background: var(--system-wash);
+  color: color-mix(in oklab, var(--system) 82%, var(--text));
   white-space: nowrap;
 }
 
@@ -3089,7 +3152,7 @@ input[type="file"]::file-selector-button {
 }
 
 .flow__name {
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-size: var(--type-fine);
   font-weight: 600;
   color: var(--muted);
@@ -3100,10 +3163,9 @@ input[type="file"]::file-selector-button {
 }
 
 .flow__head-note {
-  font-family: var(--font-mono);
-  font-size: var(--type-mark);
-  letter-spacing: var(--track-caps);
-  text-transform: uppercase;
+  font-family: var(--font-ui);
+  font-size: var(--type-meta);
+  font-weight: 600;
   color: var(--faint);
   padding-bottom: var(--space-1);
 }
@@ -3210,14 +3272,14 @@ input[type="file"]::file-selector-button {
 
 .run__count {
   font-family: var(--font-mono);
-  font-size: var(--type-mark);
+  font-size: var(--type-fine);
   color: var(--faint);
   flex: none;
 }
 
 .run__tokens {
   font-family: var(--font-mono);
-  font-size: var(--type-mark);
+  font-size: var(--type-fine);
   color: var(--faint);
   flex: none;
   font-variant-numeric: tabular-nums;
@@ -3229,9 +3291,7 @@ input[type="file"]::file-selector-button {
 
 .flow__gone {
   font-family: var(--font-mono);
-  font-size: var(--type-mark);
-  letter-spacing: var(--track-caps);
-  text-transform: uppercase;
+  font-size: var(--type-fine);
   color: var(--faint);
 }
 
@@ -3258,7 +3318,7 @@ input[type="file"]::file-selector-button {
 
 .flow__time {
   font-family: var(--font-mono);
-  font-size: var(--type-mark);
+  font-size: var(--type-fine);
   color: var(--faint);
   flex: none;
   width: 3.1rem;
@@ -3274,7 +3334,7 @@ input[type="file"]::file-selector-button {
 }
 
 .flow__who {
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
   font-weight: 600;
   color: var(--text);
@@ -3298,7 +3358,7 @@ input[type="file"]::file-selector-button {
 
 .flow__hop {
   font-family: var(--font-mono);
-  font-size: var(--type-mark);
+  font-size: var(--type-fine);
   color: var(--faint);
   flex: none;
 }
@@ -3364,7 +3424,7 @@ input[type="file"]::file-selector-button {
 }
 
 .wire__arrow {
-  color: var(--accent, var(--flesh));
+  color: var(--accent, var(--text));
   flex: none;
   font-size: var(--type-aside);
   line-height: var(--lead-flush);
@@ -3397,8 +3457,8 @@ input[type="file"]::file-selector-button {
 .wire[data-refused="true"] .wire__chip {
   padding: var(--space-2) var(--space-4);
   background: var(--raised);
-  border-color: color-mix(in oklab, var(--pit) 40%, transparent);
-  color: var(--pit);
+  border-color: color-mix(in oklab, var(--system) 40%, transparent);
+  color: var(--system);
 }
 
 /* A burst: one chip per peer. Several peers is the common case for a fan-out
@@ -3426,13 +3486,13 @@ input[type="file"]::file-selector-button {
 .wire__chip--open:hover {
   padding: var(--space-1) var(--space-4);
   margin: 0 calc(var(--space-2) * -1);
-  background: color-mix(in oklab, var(--accent, var(--flesh)) 8%, var(--raised));
-  border-color: color-mix(in oklab, var(--accent, var(--flesh)) 55%, var(--edge));
+  background: color-mix(in oklab, var(--accent, var(--text)) 8%, var(--raised));
+  border-color: color-mix(in oklab, var(--accent, var(--text)) 55%, var(--edge));
   color: var(--text);
 }
 
 .wire[data-refused="true"] .wire__arrow {
-  color: var(--pit);
+  color: var(--system);
 }
 
 /* A routine coming due.
@@ -3442,7 +3502,7 @@ input[type="file"]::file-selector-button {
    the same glyph the schedule panel draws. */
 .wire--routine .wire__chip {
   max-width: 100%;
-  --accent: var(--mint);
+  --accent: var(--ok);
 }
 
 .wire--routine .routine__mark {
@@ -3594,8 +3654,8 @@ input[type="file"]::file-selector-button {
   flex: none;
   padding: 0 var(--space-2);
   border-radius: var(--radius-pill);
-  background: var(--pit-soft);
-  color: var(--pit);
+  background: var(--system-wash);
+  color: var(--system);
   font-size: var(--type-fine);
 }
 
@@ -3606,9 +3666,9 @@ input[type="file"]::file-selector-button {
 .trail__chip[data-failed] {
   padding: var(--space-1) var(--space-4);
   margin: 0;
-  border-color: color-mix(in oklab, var(--pit) 32%, transparent);
-  background: var(--pit-soft);
-  color: var(--pit);
+  border-color: color-mix(in oklab, var(--system) 32%, transparent);
+  background: var(--system-wash);
+  color: var(--system);
 }
 
 .trail__chip[data-failed] .trail__said {
@@ -3630,7 +3690,7 @@ input[type="file"]::file-selector-button {
 }
 
 .trail__step[data-failed] {
-  color: var(--pit);
+  color: var(--system);
 }
 
 .trail__step-head {
@@ -3649,7 +3709,7 @@ input[type="file"]::file-selector-button {
 
 .trail__step[data-failed] .trail__step-title,
 .trail__step[data-failed] .trail__said {
-  color: var(--pit);
+  color: var(--system);
 }
 
 /* The command, the URL, the memory that was written: exactly as it was.
@@ -3711,12 +3771,12 @@ input[type="file"]::file-selector-button {
 }
 
 .diff__line[data-kind="added"] {
-  background: color-mix(in oklab, var(--mint) 14%, transparent);
+  background: color-mix(in oklab, var(--ok) 14%, transparent);
   color: var(--text);
 }
 
 .diff__line[data-kind="removed"] {
-  background: color-mix(in oklab, var(--alarm) 13%, transparent);
+  background: color-mix(in oklab, var(--danger) 13%, transparent);
   color: var(--text);
 }
 
@@ -3730,11 +3790,11 @@ input[type="file"]::file-selector-button {
 }
 
 .diff__line[data-kind="added"] .diff__mark {
-  color: var(--mint);
+  color: var(--ok);
 }
 
 .diff__line[data-kind="removed"] .diff__mark {
-  color: var(--alarm);
+  color: var(--danger);
 }
 
 /* ==========================================================================
@@ -3755,7 +3815,7 @@ input[type="file"]::file-selector-button {
 }
 
 .ask[data-state="pending"] {
-  border-color: color-mix(in oklab, var(--flesh) 45%, var(--edge));
+  border-color: color-mix(in oklab, var(--attention) 45%, var(--edge));
   box-shadow: var(--lift-1);
 }
 
@@ -3796,10 +3856,9 @@ input[type="file"]::file-selector-button {
 }
 
 .ask__detail dt {
-  font-family: var(--font-mono);
-  font-size: var(--type-fine);
-  letter-spacing: var(--track-caps-wide);
-  text-transform: uppercase;
+  font-family: var(--font-ui);
+  font-size: var(--type-meta);
+  font-weight: 600;
   color: var(--faint);
 }
 
@@ -3860,7 +3919,7 @@ input[type="file"]::file-selector-button {
   min-width: 0;
   min-height: var(--control-h);
   padding: 0 var(--space-4);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--edge-control);
   border-radius: var(--radius-sm);
   background: var(--ground);
   color: var(--text);
@@ -3870,7 +3929,7 @@ input[type="file"]::file-selector-button {
 
 .ask__field:focus-visible,
 .desk__field:focus-visible {
-  outline: 2px solid var(--flesh);
+  outline: 2px solid var(--focus);
   outline-offset: 1px;
 }
 
@@ -3928,15 +3987,15 @@ input[type="file"]::file-selector-button {
 }
 
 .chip--guard {
-  background: var(--pit-soft);
-  border-color: color-mix(in oklab, var(--pit) 35%, transparent);
-  color: var(--pit);
+  background: var(--system-wash);
+  border-color: color-mix(in oklab, var(--system) 35%, transparent);
+  color: var(--system);
 }
 
 .chip--error {
-  background: color-mix(in oklab, var(--alarm) 12%, transparent);
-  border-color: color-mix(in oklab, var(--alarm) 35%, transparent);
-  color: var(--alarm);
+  background: color-mix(in oklab, var(--danger) 12%, transparent);
+  border-color: color-mix(in oklab, var(--danger) 35%, transparent);
+  color: var(--danger);
 }
 
 .chip__text {
@@ -4238,7 +4297,7 @@ input[type="file"]::file-selector-button {
 /* Something on this turn went wrong. The chip that says what is inside the
    panel; this is the mark on the line that says to go and open it. */
 .working__steps[data-failed] {
-  color: var(--pit);
+  color: var(--system);
 }
 
 .working__caret {
@@ -4300,7 +4359,7 @@ input[type="file"]::file-selector-button {
 
 .composer {
   margin: var(--space-4) var(--column-inset) var(--column-inset);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--edge-control);
   border-radius: var(--radius);
   background: var(--raised);
   transition: border-color var(--tempo-tap) var(--ease);
@@ -4308,14 +4367,14 @@ input[type="file"]::file-selector-button {
 }
 
 .composer:focus-within {
-  border-color: color-mix(in oklab, var(--flesh) 55%, var(--edge));
+  border-color: color-mix(in oklab, var(--focus) 55%, var(--edge));
 }
 
 /* A drag is over the window and will land here. The whole window is the drop
    target, so the composer is what says where the file is going. */
 .composer[data-dragging] {
-  border-color: var(--flesh);
-  background: color-mix(in oklab, var(--flesh) 8%, var(--raised));
+  border-color: var(--focus);
+  background: color-mix(in oklab, var(--focus) 8%, var(--raised));
 }
 
 .composer__files {
@@ -4374,7 +4433,7 @@ input[type="file"]::file-selector-button {
 
 .chip__remove:hover {
   opacity: 1;
-  color: var(--alarm);
+  color: var(--danger);
 }
 
 /* ==========================================================================
@@ -4709,7 +4768,7 @@ input[type="file"]::file-selector-button {
 }
 
 .mentions__name {
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-size: var(--type-ui);
   font-weight: 500;
 }
@@ -4791,7 +4850,8 @@ input[type="file"]::file-selector-button {
 .composer__mirror,
 .composer__input {
   font: inherit;
-  font-size: var(--type-body);
+  font-family: var(--font-read);
+  font-size: var(--type-read);
   line-height: var(--lead-read);
   /* A textarea does not inherit these; the layer under it does. Both are said
      out loud so the two cannot come apart on a UA default. */
@@ -4836,13 +4896,13 @@ input[type="file"]::file-selector-button {
    spread shadow, which takes up none. */
 .mention {
   border-radius: var(--radius-xs);
-  background: color-mix(in oklab, var(--flesh) 26%, transparent);
-  box-shadow: 0 0 0 2px color-mix(in oklab, var(--flesh) 26%, transparent);
+  background: color-mix(in oklab, var(--system) 18%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--system) 18%, transparent);
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
 }
 
-/* Round, in the accent, and the size of the line it sits beside. A word-width
+/* Round, in ink, and the size of the line it sits beside. A word-width
    button is a label for something nothing else in the row could be. */
 .composer__send {
   flex: none;
@@ -4854,7 +4914,7 @@ input[type="file"]::file-selector-button {
   place-items: center;
   border: 0;
   border-radius: 50%;
-  background: var(--flesh);
+  background: var(--text);
   color: var(--ground);
   font-size: var(--type-ui);
   line-height: var(--lead-flush);
@@ -4871,7 +4931,7 @@ input[type="file"]::file-selector-button {
   margin-bottom: var(--space-1);
   display: grid;
   place-items: center;
-  border: 1px solid var(--edge);
+  border: 1px solid var(--edge-control);
   border-radius: 50%;
   background: var(--ground);
   color: var(--muted);
@@ -4891,7 +4951,7 @@ input[type="file"]::file-selector-button {
 }
 
 .composer__send:hover:not(:disabled) {
-  background: color-mix(in oklab, var(--flesh) 86%, var(--text));
+  background: color-mix(in oklab, var(--text) 84%, var(--ground));
 }
 
 .composer__send:disabled {
@@ -4918,7 +4978,7 @@ input[type="file"]::file-selector-button {
   display: inline-flex;
   align-items: center;
   gap: var(--space-3);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--edge-control);
   background: var(--raised);
   color: var(--text);
   /* Height is the token and the padding is horizontal only. Vertical padding
@@ -4945,23 +5005,23 @@ input[type="file"]:disabled {
 }
 
 .btn--primary {
-  background: var(--flesh);
-  border-color: var(--flesh);
+  background: var(--text);
+  border-color: var(--text);
   color: var(--ground);
   font-weight: 600;
 }
 
 .btn--primary:hover:not(:disabled) {
-  background: color-mix(in oklab, var(--flesh) 86%, var(--text));
+  background: color-mix(in oklab, var(--text) 84%, var(--ground));
 }
 
 .btn--danger {
-  color: var(--alarm);
-  border-color: color-mix(in oklab, var(--alarm) 40%, var(--edge));
+  color: var(--danger);
+  border-color: color-mix(in oklab, var(--danger) 55%, var(--edge-control));
 }
 
 .btn--danger:hover:not(:disabled) {
-  background: color-mix(in oklab, var(--alarm) 10%, transparent);
+  background: color-mix(in oklab, var(--danger) 10%, transparent);
 }
 
 .btn--ghost {
@@ -4983,7 +5043,7 @@ input[type="file"]:disabled {
   justify-content: flex-start;
   padding: var(--space-3) var(--space-6) var(--space-3) var(--space-4);
   gap: var(--space-2);
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-size: var(--type-ui);
   font-weight: 500;
   border-radius: 0;
@@ -5045,7 +5105,7 @@ input[type="file"]:disabled {
   background: var(--sunken);
   border: 1px solid var(--edge);
   color: var(--mark, var(--muted));
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-size: var(--type-fine);
   font-weight: 700;
   line-height: var(--lead-flush);
@@ -5068,7 +5128,7 @@ input[type="file"]:disabled {
    button because it is an address, and the operator is entitled to read where
    they are about to be sent before they are sent there. */
 .access__docs {
-  color: var(--flesh);
+  color: var(--system);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -5104,7 +5164,7 @@ input[type="file"]:disabled {
 
 .access__where {
   font-family: var(--font-mono);
-  font-size: var(--type-mark);
+  font-size: var(--type-fine);
   color: var(--faint);
   flex: 1;
   min-width: 6rem;
@@ -5115,7 +5175,7 @@ input[type="file"]:disabled {
 
 .access__when {
   font-family: var(--font-mono);
-  font-size: var(--type-mark);
+  font-size: var(--type-fine);
   color: var(--faint);
   margin-left: auto;
 }
@@ -5201,7 +5261,7 @@ input[type="file"]:disabled {
   padding: 0;
   background: none;
   border: 0;
-  color: var(--flesh);
+  color: var(--system);
   font-size: var(--type-fine);
   text-decoration: underline;
   text-underline-offset: 2px;
@@ -5214,11 +5274,11 @@ input[type="file"]:disabled {
 }
 
 .access__ok {
-  color: var(--mint);
+  color: var(--ok);
 }
 
 .access__warn {
-  color: var(--alarm);
+  color: var(--danger);
 }
 
 .input--slim {
@@ -5241,11 +5301,9 @@ input[type="file"]:disabled {
 
 .field__label {
   display: block;
-  font-family: var(--font-mono);
-  font-size: var(--type-fine);
-  font-weight: 500;
-  letter-spacing: var(--track-caps);
-  text-transform: uppercase;
+  font-family: var(--font-ui);
+  font-size: var(--type-meta);
+  font-weight: 600;
   color: var(--muted);
   margin-bottom: var(--space-3);
 }
@@ -5261,7 +5319,7 @@ input[type="file"]:disabled {
 .textarea,
 .select {
   width: 100%;
-  border: 1px solid var(--edge);
+  border: 1px solid var(--edge-control);
   border-radius: var(--radius-sm);
   background: var(--ground);
   color: var(--text);
@@ -5275,7 +5333,7 @@ input[type="file"]:disabled {
 .input:focus,
 .textarea:focus,
 .select:focus {
-  border-color: color-mix(in oklab, var(--flesh) 60%, var(--edge));
+  border-color: color-mix(in oklab, var(--focus) 60%, var(--edge));
 }
 
 .input--mono {
@@ -5368,7 +5426,7 @@ input[type="file"]:disabled {
 }
 
 .dialog__title {
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-size: var(--type-lede);
   font-weight: 600;
   letter-spacing: var(--track-tight);
@@ -5417,8 +5475,8 @@ input[type="file"]:disabled {
 }
 
 .picker__item[aria-pressed="true"] {
-  border-color: var(--accent, var(--flesh));
-  background: color-mix(in oklab, var(--accent, var(--flesh)) 14%, var(--ground));
+  border-color: var(--accent, var(--text));
+  background: color-mix(in oklab, var(--accent, var(--text)) 14%, var(--ground));
 }
 
 .empty {
@@ -5444,7 +5502,7 @@ input[type="file"]:disabled {
 }
 
 .empty__title {
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-size: var(--type-lede);
   font-weight: 600;
   margin: var(--space-5) 0 var(--space-3);
@@ -5461,9 +5519,9 @@ input[type="file"]:disabled {
   margin: var(--space-5) var(--column-inset) 0;
   padding: var(--space-4) var(--space-5);
   border-radius: var(--radius-sm);
-  border: 1px solid color-mix(in oklab, var(--pit) 38%, transparent);
-  background: var(--pit-soft);
-  color: var(--pit);
+  border: 1px solid color-mix(in oklab, var(--system) 38%, transparent);
+  background: var(--system-wash);
+  color: var(--system);
   font-size: var(--type-aside);
   display: flex;
   align-items: center;
@@ -5473,15 +5531,15 @@ input[type="file"]:disabled {
 }
 
 .banner--error {
-  border-color: color-mix(in oklab, var(--alarm) 40%, transparent);
-  background: color-mix(in oklab, var(--alarm) 10%, transparent);
-  color: var(--alarm);
+  border-color: color-mix(in oklab, var(--danger) 40%, transparent);
+  background: color-mix(in oklab, var(--danger) 10%, transparent);
+  color: var(--danger);
 }
 
 .banner--ok {
-  border-color: color-mix(in oklab, var(--mint) 40%, transparent);
-  background: color-mix(in oklab, var(--mint) 10%, transparent);
-  color: var(--mint);
+  border-color: color-mix(in oklab, var(--ok) 40%, transparent);
+  background: color-mix(in oklab, var(--ok) 10%, transparent);
+  color: var(--ok);
 }
 
 /* The animation is charm; someone who has asked the OS to stop moving things
@@ -5542,7 +5600,7 @@ input[type="file"]:disabled {
   flex: 1;
   margin: 0;
   text-align: center;
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-size: var(--type-ui);
   font-weight: 500;
   color: var(--muted);
@@ -5617,7 +5675,7 @@ input[type="file"]:disabled {
 }
 
 .memory__room[data-over] {
-  color: var(--alarm);
+  color: var(--danger);
 }
 
 /* Its own box rather than `.textarea` plus `.input--mono`: those are dialog
@@ -5632,7 +5690,7 @@ input[type="file"]:disabled {
      scrolls: what is under it is a desktop somebody is watching. */
   max-height: 14rem;
   overflow-y: auto;
-  border: 1px solid var(--edge);
+  border: 1px solid var(--edge-control);
   border-radius: var(--radius-sm);
   background: var(--sunken);
   color: var(--text);
@@ -5644,7 +5702,7 @@ input[type="file"]:disabled {
 }
 
 .memory__text:focus {
-  border-color: color-mix(in oklab, var(--flesh) 60%, var(--edge));
+  border-color: color-mix(in oklab, var(--focus) 60%, var(--edge));
 }
 
 .memory__text::placeholder {
@@ -5751,7 +5809,7 @@ input[type="file"]:disabled {
   padding: 0;
   background: none;
   border: 0;
-  color: var(--flesh);
+  color: var(--system);
   font-size: var(--type-fine);
   text-decoration: underline;
   text-underline-offset: 2px;
@@ -5869,7 +5927,7 @@ input[type="file"]:disabled {
 
 .screen__veil:hover,
 .screen__veil:focus-visible {
-  background: color-mix(in oklab, var(--flesh) 8%, transparent);
+  background: color-mix(in oklab, var(--focus) 8%, transparent);
   outline: none;
 }
 
@@ -5891,14 +5949,12 @@ input[type="file"]:disabled {
 
 .screen__state {
   font-family: var(--font-mono);
-  font-size: var(--type-mark);
-  letter-spacing: var(--track-caps);
-  text-transform: uppercase;
+  font-size: var(--type-fine);
   color: var(--faint);
 }
 
 .screen__state[data-state="running"] {
-  color: var(--mint);
+  color: var(--ok);
 }
 
 /* Full screen. Fixed rather than a new subtree, which is what keeps the iframe
@@ -5962,7 +6018,7 @@ input[type="file"]:disabled {
 }
 
 .screen__title {
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-size: var(--type-ui);
 }
 
@@ -6051,7 +6107,7 @@ input[type="file"]:disabled {
   width: 0.85rem;
   height: 0.85rem;
   margin-top: var(--space-1);
-  border: 0.1rem solid var(--mint);
+  border: 0.1rem solid var(--ok);
   border-radius: 50%;
   position: relative;
 }
@@ -6063,7 +6119,7 @@ input[type="file"]:disabled {
   left: 50%;
   bottom: 50%;
   width: 0.1rem;
-  background: var(--mint);
+  background: var(--ok);
   transform-origin: bottom center;
 }
 
@@ -6125,7 +6181,7 @@ input[type="file"]:disabled {
    place in the clock is the wrong thing to say at a glance, and the row beside
    it has no countdown to back the glyph up. */
 .routine__mark[data-waiting] {
-  border-color: var(--flesh);
+  border-color: var(--attention);
   border-style: dashed;
 }
 
@@ -6137,7 +6193,7 @@ input[type="file"]:disabled {
   width: 0.22rem;
   height: 0.22rem;
   border-radius: 50%;
-  background: var(--flesh);
+  background: var(--attention-fill);
   transform: translate(-50%, 50%);
 }
 
@@ -6186,7 +6242,7 @@ input[type="file"]:disabled {
   height: 1.1rem;
   flex: none;
   border-radius: var(--radius-pill);
-  background: var(--edge);
+  background: var(--edge-control);
   transition: background var(--tempo-tap) var(--ease);
 }
 
@@ -6204,7 +6260,7 @@ input[type="file"]:disabled {
 }
 
 .toggle[aria-checked="true"] .toggle__track {
-  background: var(--flesh);
+  background: var(--text);
 }
 
 .toggle[aria-checked="true"] .toggle__track::after {
@@ -6267,11 +6323,9 @@ input[type="file"]:disabled {
 
 .history__kind {
   font-family: var(--font-mono);
-  font-size: var(--type-mark);
-  letter-spacing: var(--track-caps);
-  text-transform: uppercase;
-  color: var(--pit);
-  background: var(--pit-soft);
+  font-size: var(--type-fine);
+  color: var(--system);
+  background: var(--system-wash);
   border-radius: var(--radius-pill);
   padding: var(--space-1) var(--space-3);
 }
@@ -6290,7 +6344,7 @@ input[type="file"]:disabled {
 }
 
 .history__cost {
-  color: color-mix(in oklab, var(--mint) 70%, var(--faint));
+  color: color-mix(in oklab, var(--ok) 70%, var(--faint));
 }
 
 /* Delivered, and nothing ran. Drawn as a state rather than as "0 tokens": a
@@ -6299,9 +6353,7 @@ input[type="file"]:disabled {
 .history__quiet {
   font-family: var(--font-mono);
   font-size: var(--type-fine);
-  letter-spacing: var(--track-caps);
-  text-transform: uppercase;
-  color: var(--pit);
+  color: var(--system);
 }
 
 .history__ago {
@@ -6339,10 +6391,9 @@ input[type="file"]:disabled {
 .menu__head {
   margin: 0;
   padding: var(--space-2) var(--space-4) var(--space-3);
-  font-family: var(--font-mono);
-  font-size: var(--type-mark);
-  letter-spacing: var(--track-caps);
-  text-transform: uppercase;
+  font-family: var(--font-ui);
+  font-size: var(--type-meta);
+  font-weight: 600;
   color: var(--faint);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6368,12 +6419,12 @@ input[type="file"]:disabled {
 }
 
 .menu__item[data-tone="danger"] {
-  color: var(--alarm);
+  color: var(--danger);
 }
 
 .menu__item[data-tone="danger"]:hover,
 .menu__item[data-tone="danger"]:focus-visible {
-  background: color-mix(in oklab, var(--alarm) 10%, transparent);
+  background: color-mix(in oklab, var(--danger) 10%, transparent);
 }
 
 .menu__item {
@@ -6472,7 +6523,7 @@ input[type="file"]:disabled {
   margin: var(--space-1) var(--space-4) var(--space-4);
   min-height: var(--control-h);
   padding: 0 var(--space-4);
-  border: 1px solid var(--rail-edge);
+  border: 1px solid var(--edge-control);
   border-radius: var(--radius-sm);
   background: color-mix(in oklab, var(--rail-raised) 70%, transparent);
   color: var(--rail-muted);
@@ -6482,7 +6533,7 @@ input[type="file"]:disabled {
 
 .rail__search:hover {
   background: var(--rail-raised);
-  border-color: color-mix(in oklab, var(--flesh) 45%, var(--rail-edge));
+  border-color: var(--muted);
   color: var(--rail-text);
 }
 
@@ -6502,7 +6553,6 @@ input[type="file"]:disabled {
 .rail__key {
   font-family: var(--font-mono);
   font-size: var(--type-fine);
-  letter-spacing: var(--track-caps);
   padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-xs);
   border: 1px solid var(--rail-edge);
@@ -6644,7 +6694,7 @@ input[type="file"]:disabled {
 }
 
 .palette__title {
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-size: var(--type-ui);
   font-weight: 600;
   letter-spacing: var(--track-tight);
@@ -6682,17 +6732,17 @@ input[type="file"]:disabled {
    the channel is opened, saying nothing. */
 [data-found="true"] .msg,
 [data-found="true"] .wire {
-  background: color-mix(in oklab, var(--flesh) 14%, transparent);
+  background: color-mix(in oklab, var(--attention) 14%, transparent);
   border-radius: var(--radius-sm);
   animation: found 1.8s var(--ease);
 }
 
 @keyframes found {
   0% {
-    background: color-mix(in oklab, var(--flesh) 34%, transparent);
+    background: color-mix(in oklab, var(--attention) 34%, transparent);
   }
   100% {
-    background: color-mix(in oklab, var(--flesh) 14%, transparent);
+    background: color-mix(in oklab, var(--attention) 14%, transparent);
   }
 }
 
@@ -6743,11 +6793,9 @@ input[type="file"]:disabled {
 }
 
 .cafeteria__station-name {
-  font-family: var(--font-mono);
-  font-size: var(--type-fine);
-  font-weight: 500;
-  letter-spacing: var(--track-caps);
-  text-transform: uppercase;
+  font-family: var(--font-ui);
+  font-size: var(--type-meta);
+  font-weight: 600;
   color: var(--faint);
   margin: 0 0 var(--space-4);
 }
@@ -6804,7 +6852,7 @@ input[type="file"]:disabled {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-size: var(--type-body);
   font-weight: 600;
   letter-spacing: var(--track-tight);
@@ -6816,10 +6864,8 @@ input[type="file"]:disabled {
    about it. */
 .hire__already {
   font-family: var(--font-mono);
-  font-size: var(--type-mark);
+  font-size: var(--type-fine);
   font-weight: 500;
-  letter-spacing: var(--track-caps);
-  text-transform: uppercase;
   color: var(--faint);
   border: 1px solid var(--edge);
   border-radius: var(--radius-pill);
@@ -6893,7 +6939,7 @@ input[type="file"]:disabled {
   display: flex;
   align-items: baseline;
   gap: var(--space-4);
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-size: var(--type-ui);
   font-weight: 600;
   letter-spacing: var(--track-tight);
@@ -6902,19 +6948,15 @@ input[type="file"]:disabled {
 }
 
 .compost__crew {
-  font-family: var(--font-mono);
-  font-size: var(--type-mark);
-  font-weight: 400;
-  letter-spacing: var(--track-caps);
-  text-transform: uppercase;
+  font-family: var(--font-ui);
+  font-size: var(--type-meta);
+  font-weight: 600;
   color: var(--faint);
 }
 
 .compost__clock {
   font-family: var(--font-mono);
   font-size: var(--type-fine);
-  letter-spacing: var(--track-caps);
-  text-transform: uppercase;
   color: var(--faint);
 }
 
@@ -6922,7 +6964,7 @@ input[type="file"]:disabled {
    wrong. Above a week the count of days is warning enough, and marking every
    row marks none of them. */
 .compost__clock[data-soon="true"] {
-  color: var(--alarm);
+  color: var(--danger);
 }
 
 .compost__actions {
@@ -7001,9 +7043,9 @@ input[type="file"]:disabled {
 
 /* A filter, not a tab: picking one narrows what is drawn and picking it again
    is not how you get back — "All crews" is. So it is pressed rather than
-   selected, and the pressed state is the accent's ground rather than the
-   accent, because a row of amber chips would spend the one color that means
-   "answer me" on a filter. */
+   selected, and the pressed state is ink, as every on-state is, because a row
+   of amber chips would spend the one color that means "answer me" on a
+   filter. */
 .calendar__crew {
   display: inline-flex;
   align-items: center;
@@ -7027,20 +7069,19 @@ input[type="file"]:disabled {
 }
 
 .calendar__crew[aria-pressed="true"] {
-  background: var(--flesh-soft);
-  border-color: var(--flesh);
-  color: var(--flesh);
+  background: color-mix(in oklab, var(--text) 5%, var(--raised));
+  border-color: var(--text);
+  color: var(--text);
 }
 
 .calendar__count {
   font-family: var(--font-mono);
-  font-size: var(--type-mark);
-  letter-spacing: var(--track-caps);
+  font-size: var(--type-fine);
   color: var(--faint);
 }
 
 .calendar__crew[aria-pressed="true"] .calendar__count {
-  color: var(--flesh);
+  color: var(--text);
 }
 
 .calendar__body {
@@ -7066,8 +7107,6 @@ input[type="file"]:disabled {
   font-family: var(--font-mono);
   font-size: var(--type-fine);
   font-weight: 500;
-  letter-spacing: var(--track-caps);
-  text-transform: uppercase;
   color: var(--muted);
 }
 
@@ -7138,10 +7177,9 @@ input[type="file"]:disabled {
    cannot touch it. Marked out from the rest of the meta so it reads as the
    thing it belongs to rather than as another detail about it. */
 .occasion__crew {
-  font-family: var(--font-mono);
-  font-size: var(--type-mark);
-  letter-spacing: var(--track-caps);
-  text-transform: uppercase;
+  font-family: var(--font-ui);
+  font-size: var(--type-meta);
+  font-weight: 600;
   color: var(--muted);
 }
 
@@ -7295,7 +7333,7 @@ input[type="file"]:disabled {
 }
 
 .settings__title {
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-size: var(--type-body);
   font-weight: 600;
   margin: 0 0 var(--space-2);
@@ -7356,7 +7394,7 @@ input[type="file"]:disabled {
 }
 
 .api-key__status {
-  color: var(--mint);
+  color: var(--ok);
   font-size: var(--type-ui);
   font-weight: 500;
 }
@@ -7408,7 +7446,7 @@ input[type="file"]:disabled {
 }
 
 .choice {
-  border: 1px solid var(--edge);
+  border: 1px solid var(--edge-control);
   background: var(--raised);
   color: var(--muted);
   border-radius: var(--radius-sm);
@@ -7419,7 +7457,7 @@ input[type="file"]:disabled {
 
 .choice:hover:not([aria-pressed="true"]):not([aria-checked="true"]) {
   color: var(--text);
-  border-color: color-mix(in oklab, var(--flesh) 40%, var(--edge));
+  border-color: var(--muted);
 }
 
 /* A choice you have to see to make: three of the cast, drawn the way the
@@ -7433,6 +7471,22 @@ input[type="file"]:disabled {
 .choice__crew {
   display: inline-flex;
   gap: var(--space-1);
+}
+
+/* A choice whose answer is a color: the color, beside its name. Ringed in a
+   control's own border so a pale gray on a pale button is still a disc. */
+.choice--swatch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.choice__swatch {
+  width: var(--space-5);
+  height: var(--space-5);
+  border-radius: 50%;
+  background: var(--swatch);
+  box-shadow: inset 0 0 0 1px var(--edge-control);
 }
 
 /* Two words in a row that already carries a name and a sentence. The base
@@ -7451,8 +7505,8 @@ input[type="file"]:disabled {
 
 .choice[aria-pressed="true"],
 .choice[aria-checked="true"] {
-  border-color: var(--flesh);
-  background: color-mix(in oklab, var(--flesh) 10%, var(--raised));
+  border-color: var(--text);
+  background: color-mix(in oklab, var(--text) 5%, var(--raised));
   color: var(--text);
   font-weight: 600;
 }
@@ -7507,7 +7561,7 @@ input[type="file"]:disabled {
   gap: var(--space-4);
   width: 100%;
   text-align: left;
-  border: 1px solid var(--edge);
+  border: 1px solid var(--edge-control);
   background: var(--raised);
   border-radius: var(--radius-sm);
   padding: var(--space-3) var(--space-4);
@@ -7516,12 +7570,12 @@ input[type="file"]:disabled {
 }
 
 .preset:hover {
-  border-color: color-mix(in oklab, var(--flesh) 40%, var(--edge));
+  border-color: var(--muted);
 }
 
 .preset[aria-current="true"] {
-  border-color: var(--flesh);
-  background: color-mix(in oklab, var(--flesh) 8%, var(--raised));
+  border-color: var(--text);
+  background: color-mix(in oklab, var(--text) 5%, var(--raised));
 }
 
 .preset__text {
@@ -7557,13 +7611,11 @@ input[type="file"]:disabled {
   flex: none;
   font-family: var(--font-mono);
   font-size: var(--type-fine);
-  letter-spacing: var(--track-caps);
-  text-transform: uppercase;
   color: var(--faint);
 }
 
 .preset__state[data-ready="true"] {
-  color: var(--mint);
+  color: var(--ok);
 }
 
 /* The subscription row. Shaped like a preset because it is the same kind of
@@ -7590,8 +7642,8 @@ input[type="file"]:disabled {
    Large and mono because it is copied by eye, one character at a time, and the
    two failure modes are a mistyped character and giving up. */
 .devicecode {
-  border: 1px solid var(--flesh);
-  background: color-mix(in oklab, var(--flesh) 8%, var(--raised));
+  border: 1px solid var(--attention);
+  background: color-mix(in oklab, var(--attention) 8%, var(--raised));
   border-radius: var(--radius-sm);
   padding: var(--space-5) var(--space-5);
   margin: var(--space-4) 0 var(--space-2);
@@ -7607,7 +7659,7 @@ input[type="file"]:disabled {
   margin: 0 0 var(--space-3);
   font-family: var(--font-mono);
   font-size: var(--type-display);
-  letter-spacing: var(--track-caps-wide);
+  letter-spacing: var(--track-caps);
   color: var(--text);
   /* Selectable on purpose: retyping is where a fifteen-minute code is lost. */
   user-select: all;
@@ -7628,11 +7680,9 @@ input[type="file"]:disabled {
 }
 
 .keys__group {
-  font-family: var(--font-mono);
-  font-size: var(--type-fine);
-  font-weight: 500;
-  letter-spacing: var(--track-caps);
-  text-transform: uppercase;
+  font-family: var(--font-ui);
+  font-size: var(--type-meta);
+  font-weight: 600;
   color: var(--muted);
   margin: var(--space-6) 0 var(--space-3);
 }
@@ -7675,7 +7725,7 @@ input[type="file"]:disabled {
 }
 
 .about__name {
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-size: var(--type-title);
   font-weight: 600;
   margin: 0;
@@ -7713,7 +7763,7 @@ input[type="file"]:disabled {
 /* Preflight draws a link as the text around it, and these are the only way to
    the update and recovery instructions. */
 .host-choice a {
-  color: var(--flesh);
+  color: var(--system);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -7780,7 +7830,7 @@ input[type="file"]:disabled {
 }
 
 .host-status__failure {
-  color: var(--alarm);
+  color: var(--danger);
   overflow-wrap: anywhere;
 }
 
@@ -7814,8 +7864,12 @@ input[type="file"]:disabled {
   cursor: pointer;
 }
 .rail__for-you span:last-child {
-  color: var(--flesh);
+  color: var(--rail-muted);
   font-variant-numeric: tabular-nums;
+}
+.rail__for-you span[data-waiting] {
+  color: var(--attention);
+  font-weight: 600;
 }
 .dialog.for-you {
   height: min(var(--measure-attention), calc(100dvh - var(--space-7) - var(--space-7)));
@@ -7842,11 +7896,11 @@ input[type="file"]:disabled {
   justify-content: space-between;
 }
 .for-you h2 {
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   font-size: var(--type-title);
 }
 .for-you h2 span {
-  color: var(--flesh);
+  color: var(--attention);
 }
 .for-you__tabs {
   margin-top: var(--space-6);
@@ -7882,7 +7936,7 @@ input[type="file"]:disabled {
   margin-bottom: var(--space-4);
 }
 .for-you__due {
-  color: var(--flesh);
+  color: var(--attention);
   font-size: var(--type-small);
 }
 .for-you__actions, .for-you__source {
@@ -7893,7 +7947,7 @@ input[type="file"]:disabled {
   min-width: 0;
 }
 .for-you__receipt {
-  color: var(--mint);
+  color: var(--ok);
   padding: var(--space-4) 0;
 }
 .for-you__foot {
@@ -8007,8 +8061,8 @@ input[type="file"]:disabled {
     top: calc(-1 * var(--space-2));
     padding: 0 var(--space-2);
     border-radius: var(--radius-pill);
-    background: var(--flesh);
-    color: var(--text);
+    background: var(--attention-fill);
+    color: var(--on-attention-fill);
     font-size: var(--type-meta);
   }
 

@@ -840,6 +840,22 @@ describe("an agent that has stopped and said so", () => {
     expect(screen.getByText("stuck 2d")).toBeTruthy();
   });
 
+  // The count is drawn in the attention color only while it counts something.
+  // A zero in amber is the app saying "answer me" about nothing, every time the
+  // window opens on a quiet workspace.
+  it("marks the count for you as waiting only while something is", () => {
+    const { unmount } = draw([group("everyone")], [agent("Manager")]);
+    const quiet = screen.getByRole("button", { name: /For you/ }).lastElementChild;
+    expect(quiet?.textContent).toBe("0");
+    expect(quiet?.hasAttribute("data-waiting")).toBe(false);
+    unmount();
+
+    draw([group("everyone")], [agent("Manager")], {}, [stuckOn("Manager")]);
+    const waiting = screen.getByRole("button", { name: /For you/ }).lastElementChild;
+    expect(waiting?.textContent).toBe("1");
+    expect(waiting?.getAttribute("data-waiting")).toBe("true");
+  });
+
   // The row says the thing the operator can go and watch.
   it("says which machine a typing agent is on, while a call to it is in flight", () => {
     draw([group("everyone")], [agent("Manager")], { Manager: { state: "thinking" } });

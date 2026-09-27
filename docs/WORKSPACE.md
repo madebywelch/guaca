@@ -1026,7 +1026,7 @@ column over.** The row the current crew sits on is filled with the accent's
 ground and an ink bar is drawn down the window edge of it: the same two marks
 `.agent-row` uses for the open channel, because it is the same question asked at
 the other granularity. There was only ever the bar, and it was spelled
-`--flesh-soft`, which is the accent's *ground* rather than an ink: #fdeed9 over
+`--attention-wash`, which is the accent's *ground* rather than an ink: #fdeed9 over
 a #eceae2 column and #33240e over a #0b0b0a one, 1.06 to 1 and 1.31 to 1. So the
 one permanent statement in the app about where the operator is standing was
 drawn in a color neither surface shows, on the column whose entire argument is
@@ -1678,8 +1678,8 @@ words across the wall.
 `styles.css` used to say the surface never follows the OS, and the argument was
 sound as far as it went: a chat log is read for minutes at a time and white wins
 that in a lit room. It does not win it in a dark one. So the reading column is a
-token block behind `data-surface` — the same seven neutrals, four accents, a
-scrim and a shadow, and nothing else.
+token block behind `data-surface`: every color the theme owns, a scrim and a
+shadow, and nothing else.
 
 The two navigation columns are part of that question rather than exempt from it,
 and that is the change. They were ink whichever surface the operator picked, on
@@ -1696,9 +1696,9 @@ What is left with any saturation in it is an agent's own color and the one
 amber. That is the point rather than a side effect: a column that is itself a
 color is a column every agent's color is competing with, and the accent that
 means "answer me" had two values depending on which side of a border it was
-drawn on. Both columns used to pin `--flesh` and `--flesh-soft` — and the crews'
-column `--alarm` as well — because a dark reading column would otherwise have
-repainted them silently. Nothing is pinned now. What replaced the pins is the
+drawn on. Both columns used to pin `--attention` and `--attention-wash`, and the
+crews' column `--danger` as well, because a dark reading column would otherwise
+have repainted them silently. Nothing is pinned now. What replaced the pins is the
 other half of the same trap, asserted in `styles.test.ts`: every `--rail-*` and
 `--grail-*` value that is a color has to be declared in both surface blocks, or
 a column stays off-white in a dark room and no DOM assertion sees it.
@@ -1733,6 +1733,82 @@ leave the reading column narrower than a message can draw.
 Neither preference goes anywhere near the runtime. They are `localStorage`, the
 way the inspector's open-or-closed already is, because the runtime would carry
 them across IPC only to hand them straight back.
+
+## A theme is three choices, and every color in it is solved
+
+The first look an operator gets was one person's taste: cream columns, a
+near-black, and 9px uppercase monospace over every group. Measured, it was also
+wrong in ways taste could not see. Hints were 3.2 to 1 against the page, under
+the 4.5 WCAG asks of text. The border of every input was 1.3 to 1, where a
+control's boundary needs 3. And "answer me" was 2.6 from "failed" under
+simulated deuteranopia, which makes them one color. Some degree of red-green
+colorblindness affects about one man in twelve.
+
+So a theme is not a table of hexes, and nobody writes one. It is three choices
+under Appearance: how warm or cool the grays are, which hue means the app wants
+something from you, and how much contrast. `lib/theme.ts` solves every color
+from those against a ratio: text to 15 to 1 on the darkest ground it is drawn
+on, hints to 4.5, a control's edge to 3, and so on. Lightness is never a
+choice, the operator's or a preset's. That is the whole of what makes the
+system open to change: a combination nobody has looked at clears the same gates
+the default does, because the gates are where the values came from.
+`theme.test.ts` runs every combination the pane can reach on both surfaces, and
+holds the stylesheet's own blocks equal to the default theme, so the first
+paint is not a second set of colors nobody measured.
+
+What an operator cannot choose is as deliberate. There is no field for a hex, a
+radius or a spacing. Those are what the gates hold, and a theme that could set
+any color is a theme that can make the app illegible, after which every bug
+report starts with which theme. Hues were refused on the same grounds: rose and
+teal both fail on ink, where their fill sits at the lightness of a routine's
+green dot and the two are drawn on one mark to mean "waiting on you" and
+"fine".
+
+The attention color is two colors now. `--attention` is an ink, legible as
+words. `--attention-fill` is a shape, a badge or a dot or the mark on a parked
+face, bright enough to be recognized and carrying its own text color in
+`--on-attention-fill`. One value cannot do both: an amber dark enough to be
+read as text on white is brown. Fills are separated from the danger fill by
+lightness, which is the axis red-green colorblindness keeps.
+
+And it is spent only on attention. It had become the focus ring, the primary
+button, the send button, every toggle that was on, every link, a running job
+and the streaming caret, so "you tabbed here" and "answer me" were one ring. A
+focus ring and a drop target are the system's slate. A primary button and
+anything switched on are ink. Something running is the slate. `styles.test.ts`
+fails a focus rule or an on-state spelled from the attention color, and a
+fill whose text is not its own on-color. The crews' waiting count is still red,
+and that is on purpose: it is drawn to match the menu bar's attention glyph,
+which is the macOS convention for "needs you" and not this app's to repaint.
+
+The theme reaches the document as a second pair of token blocks, `:root` and
+`:root[data-surface="dark"]`, in one `<style>` after the stylesheet. Not as
+properties on the root: those would pin the columns to whichever surface was
+current when they were written, and the surface would stop switching in CSS.
+
+## Type is one interface face, one reading face and a reading size
+
+Inter carries the interface, loaded with its optical-size axis so a title comes
+from the display cut and a line of text from the text cut. That is the job a
+second family, Instrument Sans, used to do, so it is gone. An operator can pick
+the system's own face instead, which is SF Pro on a Mac, or Atkinson
+Hyperlegible, whose letters are drawn so no two are easy to mistake. Each brings
+its own monospace.
+
+What agents wrote is `--font-read`, the interface face until an operator picks
+Literata, and `--type-read`, 16px until they pick another. Only the transcript
+and the composer spend either. A reading size that moved the rail and the
+controls would be the interface scale under a second name, and somebody who
+wants long replies at 18px has not asked for an 18px rail.
+
+Labels are sentence case in the interface face at 12px. They were 9px uppercase
+monospace, which is 8.1px at the smallest scale, and the ladder's floor is 11px
+now. Two things are still set in capitals, the wordmark and a code somebody
+types by hand, and neither is a label.
+
+Every face ships with the app and none is fetched until something is drawn in
+it. Literata is most of the weight, at 729 KB across its subsets and italic,
+and an operator who never picks it never loads a byte of it.
 
 ## An interruption has to earn it
 

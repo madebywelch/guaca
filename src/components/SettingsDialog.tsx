@@ -33,11 +33,26 @@ import {
   type Cast,
   NOTIFY_KINDS,
   type NotifyKind,
+  type Prefs,
+  READING_SIZES,
+  READINGS,
+  type Reading,
   type SurfaceMode,
+  TYPEFACES,
+  type Typeface,
   UI_SCALES,
 } from "../lib/prefs";
 import { type Provider as Preset, planLabel } from "../lib/providers";
 import { useStore } from "../lib/store";
+import {
+  ATTENTIONS,
+  type AttentionKey,
+  CONTRASTS,
+  type ContrastLevel,
+  GRAYS,
+  type GrayKey,
+  themeTokens,
+} from "../lib/theme";
 import {
   type AccountConnectors,
   type AccountStatus,
@@ -107,6 +122,22 @@ const SURFACE_LABELS: Record<SurfaceMode, string> = {
   system: "Follow the system",
 };
 
+const TYPEFACE_LABELS: Record<Typeface, string> = {
+  inter: "Inter",
+  system: "System",
+  legible: "Atkinson Hyperlegible",
+};
+
+const READING_LABELS: Record<Reading, string> = {
+  interface: "Same as the interface",
+  serif: "Literata",
+};
+
+const CONTRAST_LABELS: Record<ContrastLevel, string> = {
+  standard: "Standard",
+  more: "More",
+};
+
 /* Not "Paper" and "Ink": those are the surface's names, one field up. */
 const CAST_LABELS: Record<Cast, string> = {
   cut: "Cut",
@@ -165,6 +196,12 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
   const capabilities = useStore((s) => s.capabilities);
   const prefs = useStore((s) => s.prefs);
   const setPrefs = useStore((s) => s.setPrefs);
+  /* Kept, and drawn at once. `App` would redraw on the next render anyway; this
+     is so the pane the choice was made in is already in it. */
+  const setLook = (patch: Partial<Prefs>) => {
+    setPrefs(patch);
+    applyAppearance({ ...prefs, ...patch });
+  };
 
   const [section, setSection] = useState<Section>(opening ?? "general");
   useEffect(() => onSection?.(section), [section, onSection]);
@@ -1209,19 +1246,172 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                         className="choice"
                         aria-label={`Reading surface: ${SURFACE_LABELS[mode]}`}
                         aria-pressed={prefs.surface === mode}
-                        onClick={() => {
-                          setPrefs({ surface: mode });
-                          applyAppearance(prefs.uiScale, mode);
-                        }}
+                        onClick={() => setLook({ surface: mode })}
                       >
                         {SURFACE_LABELS[mode]}
                       </button>
                     ))}
                   </div>
                   <span className="field__hint">
-                    The column you read in. The rail stays dark either way: it is what makes the
-                    column read as a surface rather than as another panel. Currently drawing{" "}
+                    The whole window follows it: the page, both columns and everything drawn on
+                    them. Currently drawing{" "}
                     {resolveSurface(prefs.surface) === "dark" ? "ink" : "paper"}.
+                  </span>
+                </div>
+
+                <div className="field">
+                  <span className="field__label">Grays</span>
+                  <div className="choices">
+                    {(Object.keys(GRAYS) as GrayKey[]).map((grays) => (
+                      <button
+                        key={grays}
+                        type="button"
+                        className="choice choice--swatch"
+                        aria-label={`Grays: ${GRAYS[grays].label}`}
+                        aria-pressed={prefs.grays === grays}
+                        onClick={() => setLook({ grays })}
+                      >
+                        <span
+                          className="choice__swatch"
+                          aria-hidden="true"
+                          style={
+                            {
+                              "--swatch": themeTokens(
+                                { ...prefs, grays },
+                                resolveSurface(prefs.surface),
+                              )["--rail-ground"],
+                            } as React.CSSProperties
+                          }
+                        />
+                        {GRAYS[grays].label}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="field__hint">
+                    The tint in the columns and the rules around the page. Warm is how Guaca looked
+                    before any of this could be chosen.
+                  </span>
+                </div>
+
+                <div className="field">
+                  <span className="field__label">Attention</span>
+                  <div className="choices">
+                    {(Object.keys(ATTENTIONS) as AttentionKey[]).map((attention) => (
+                      <button
+                        key={attention}
+                        type="button"
+                        className="choice choice--swatch"
+                        aria-label={`Attention: ${ATTENTIONS[attention].label}`}
+                        aria-pressed={prefs.attention === attention}
+                        onClick={() => setLook({ attention })}
+                      >
+                        <span
+                          className="choice__swatch"
+                          aria-hidden="true"
+                          style={
+                            {
+                              "--swatch": themeTokens(
+                                { ...prefs, attention },
+                                resolveSurface(prefs.surface),
+                              )["--attention-fill"],
+                            } as React.CSSProperties
+                          }
+                        />
+                        {ATTENTIONS[attention].label}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="field__hint">
+                    The one color that means an agent is waiting on you. Nothing else is drawn in
+                    it, so it never has to compete to be seen.
+                  </span>
+                </div>
+
+                <div className="field">
+                  <span className="field__label">Contrast</span>
+                  <div className="choices">
+                    {CONTRASTS.map((contrast) => (
+                      <button
+                        key={contrast}
+                        type="button"
+                        className="choice"
+                        aria-label={`Contrast: ${CONTRAST_LABELS[contrast]}`}
+                        aria-pressed={prefs.contrast === contrast}
+                        onClick={() => setLook({ contrast })}
+                      >
+                        {CONTRAST_LABELS[contrast]}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="field__hint">
+                    More darkens text, hints and borders to the strictest accessibility level, over
+                    whichever grays and color you chose.
+                  </span>
+                </div>
+
+                <div className="field">
+                  <span className="field__label">Typeface</span>
+                  <div className="choices">
+                    {TYPEFACES.map((typeface) => (
+                      <button
+                        key={typeface}
+                        type="button"
+                        className="choice"
+                        aria-label={`Typeface: ${TYPEFACE_LABELS[typeface]}`}
+                        aria-pressed={prefs.typeface === typeface}
+                        onClick={() => setLook({ typeface })}
+                      >
+                        {TYPEFACE_LABELS[typeface]}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="field__hint">
+                    System is whatever your computer draws its own windows in. Atkinson Hyperlegible
+                    is drawn so that no two letters are easy to mistake for each other.
+                  </span>
+                </div>
+
+                <div className="field">
+                  <span className="field__label">Reading face</span>
+                  <div className="choices">
+                    {READINGS.map((reading) => (
+                      <button
+                        key={reading}
+                        type="button"
+                        className="choice"
+                        aria-label={`Reading face: ${READING_LABELS[reading]}`}
+                        aria-pressed={prefs.reading === reading}
+                        onClick={() => setLook({ reading })}
+                      >
+                        {READING_LABELS[reading]}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="field__hint">
+                    What agents wrote, and what you type to them. Literata is a serif made for
+                    reading at length on a screen.
+                  </span>
+                </div>
+
+                <div className="field">
+                  <span className="field__label">Reading size</span>
+                  <div className="choices">
+                    {READING_SIZES.map((readingSize) => (
+                      <button
+                        key={readingSize}
+                        type="button"
+                        className="choice"
+                        aria-label={`Reading size: ${readingSize}px`}
+                        aria-pressed={prefs.readingSize === readingSize}
+                        onClick={() => setLook({ readingSize })}
+                      >
+                        {readingSize}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="field__hint">
+                    The same text, larger or smaller. The rest of the window keeps its size;
+                    interface scale is the one that moves everything.
                   </span>
                 </div>
 
@@ -1271,10 +1461,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                         className="choice"
                         aria-label={`Interface scale: ${scale}%`}
                         aria-pressed={prefs.uiScale === scale}
-                        onClick={() => {
-                          setPrefs({ uiScale: scale });
-                          applyAppearance(scale, prefs.surface);
-                        }}
+                        onClick={() => setLook({ uiScale: scale })}
                       >
                         {scale}%
                       </button>

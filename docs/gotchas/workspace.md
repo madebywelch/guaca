@@ -72,7 +72,7 @@ of `Runtime::discard_agent` and `Runtime::purge_agent`.
   overview, so the gesture for opening a crew went in and straight back out when
   it was made twice, and there was nothing on screen saying which of the two
   states it had ended in: the mark for the current crew was a bar spelled
-  `--flesh-soft`, which is the accent's ground rather than an ink, at 1.06 to 1
+  `--attention-wash`, which is the accent's ground rather than an ink, at 1.06 to 1
   on paper and 1.31 to 1 in a dark room. Two fixes for one complaint. The way
   out of a crew is the circle at the top of the column, which is on screen for
   the whole of every gesture, so a circle does not have to be its own way out;

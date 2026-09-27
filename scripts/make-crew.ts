@@ -50,7 +50,7 @@ const GAP = 6;
    The relief itself is shared with the app. Amber is still only a request
    for a person. */
 function palette(color: string): string {
-  return [`--accent:${color}`, "--eye:#252824", "--sclera:#fbf8f1", "--flesh:#b4530a"].join(";");
+  return [`--accent:${color}`, "--eye:#252824", "--sclera:#fbf8f1", "--attention-fill:#ffb346", "--on-attention-fill:#161616"].join(";");
 }
 
 function cell(member: (typeof CREW)[number], index: number): string {

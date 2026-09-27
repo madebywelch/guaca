@@ -474,6 +474,8 @@ export function Sidebar({
 
   const held = drag ? agents.find((a) => a.id === drag.id) : undefined;
 
+  const waiting = decisionCount + pending.length + stuck.length;
+
   return (
     // Two columns, one gesture. The crews and the crew are separate surfaces on
     // screen and one drag reaches across both, so they are drawn together
@@ -539,7 +541,9 @@ export function Sidebar({
 
         <button type="button" className="rail__for-you" onClick={() => showForYou(true)}>
           <span>For you</span>
-          <span>{decisionCount + pending.length + stuck.length}</span>
+          {/* Amber only while something is waiting: a zero in the one color that
+            means "answer me" is the app asking about nothing. */}
+          <span data-waiting={waiting > 0 ? "true" : undefined}>{waiting}</span>
         </button>
 
         {/* The wire lives on this wrapper rather than on the scroll container, so
