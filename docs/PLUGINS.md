@@ -9,17 +9,17 @@ A plugin is a server a crew signs in to once. After that, the agents that crew
 chose are offered that server's tools on every turn, and none of them ever holds
 the sign-in.
 
-Six come with the app: Neon, Cloudflare, Linear, Stripe, AgentMail and Google.
-Five of them are the vendor's own server, and every count of "the five" below
-means those; Google is the operator's own account, and *Google is a plugin whose
-sign-in is the account's* is why.
+Seven come with the app: Neon, Cloudflare, Linear, Stripe, AgentMail, Firecrawl
+and Google. Six of them are the vendor's own server, and every count of "the
+six" below means those; Google is the operator's own account, and *Google is a
+plugin whose sign-in is the account's* is why.
 
 A crew can also have a server nobody vouched for. *A server the operator added*
 is the whole of that, and the short version is that it is not a second
 mechanism: the operator supplies the two things the catalog was supplying, and
-everything after those two strings is the code the six go through.
+everything after those two strings is the code the seven go through.
 
-## Why these six, and why the catalog is short
+## Why these seven, and why the catalog is short
 
 The list this replaced was twelve brands and a text box. Each tile filled in an
 environment variable name and a note, and then asked the operator for a token.
@@ -84,14 +84,22 @@ publish protected-resource metadata, and its authorization server has to publish
 a registration endpoint. A vendor that stops has to be withdrawn rather than
 debugged, and `scripts/plugins.sh` is what says so, because nothing offline can.
 
-The five answer that question in three different shapes, which is what the
+The six answer that question in three different shapes, which is what the
 fallbacks in `oauth::discover` are for rather than defensiveness. Neon publishes
-its resource metadata at the bare well-known path and Linear under the
-endpoint's path. Stripe's authorization server is `https://access.stripe.com/mcp`
+its resource metadata at the bare well-known path, and Linear and Firecrawl
+under the endpoint's path. Stripe's authorization server is `https://access.stripe.com/mcp`
 — an issuer with a path, where RFC 8414 puts the well-known segment *before* it
 and everybody's first guess puts it after. AgentMail's authorization server is
 Clerk's, hosted at `clerk.console.agentmail.to`, which is a fair description of
-what Clerk is for.
+what Clerk is for. Firecrawl's is `www.firecrawl.dev`, the marketing site's
+host rather than the MCP server's.
+
+Firecrawl is also the one vendor whose server has an address that does *not*
+sign in. `/v2/mcp` answers an anonymous POST on a keyless tier with a daily
+limit, publishes no resource metadata, and would connect as a public server:
+a tile saying Connected over a crew spending nobody's account, which fails the
+second condition as surely as Clerk did. `/v2/mcp-oauth` is the same tools
+behind a sign-in, and it is the one on the list.
 
 ## The loopback redirect, and why it is allowed here
 
@@ -111,7 +119,7 @@ The port cannot be taken between choosing it and listening on it, because it was
 never chosen: it was allocated. Dynamic registration is what makes the ordering
 possible, and it is the same mechanism that decides who is on the list at all.
 
-The device flow is not an option here anyway. None of the five advertises it,
+The device flow is not an option here anyway. None of the six advertises it,
 and the MCP authorization specification mandates authorization code with PKCE.
 
 **The issuer is recorded before the browser opens, and checked when it comes
@@ -234,7 +242,7 @@ arrive in, and no command that returns one.
 
 ## Google is a plugin whose sign-in is the account's
 
-Five of the six plugins are somebody else's server, and a crew signs in to each
+Six of the seven plugins are somebody else's server, and a crew signs in to each
 one separately because there is nothing else it could do. Google is not a
 server. It is the operator's own account at `guaca.bot`, which already holds the
 Google grant, already refreshes it, and already knows which capabilities were
@@ -297,15 +305,15 @@ means the app needs no new machinery at all — it already speaks MCP.
 
 ## A server the operator added
 
-The catalog is six servers somebody checked. This is the seventh onward, and it
-is the same feature with the checking left out.
+The catalog is seven servers somebody checked. This is the eighth onward, and
+it is the same feature with the checking left out.
 
 An operator gives two things, which are the two things a catalog entry was
 giving: a **name** and an **address**. After those two strings there is no
 second code path. The same era probe, the same sign-in, the same `tools/list`,
 the same `PluginAccess` per agent and per tool, the same refusals in the same
 order, the same grant that reaches no prompt, transcript, event or sandbox.
-`PluginKind::Custom` is a variant beside the other six and every consumer of a
+`PluginKind::Custom` is a variant beside the other seven and every consumer of a
 plugin treats it as one.
 
 ### The name is the only name
@@ -335,7 +343,7 @@ would make which one a call landed on depend on row order.
 
 ### The address is stored on the row, and a vendor's is not
 
-`plugins.endpoint` is empty for the six and set for the rest, and the asymmetry
+`plugins.endpoint` is empty for the seven and set for the rest, and the asymmetry
 is deliberate in both directions.
 
 Where a vendor's server lives is a decision the *build* makes and re-makes on
@@ -350,6 +358,19 @@ address needs no build knowledge at all, and a slug with neither is a row this
 build cannot dial — which is exactly what a newer build's plugin looks like
 after a downgrade, and is skipped rather than raised, for the reason every
 unreadable plugin row is skipped.
+
+That rule has one cost, and it is paid when a vendor joins the catalog: the name
+it takes may already be a crew's own server. Firecrawl was addable by hand
+before it was shipped, and a `firecrawl` row with a pasted key, the keyless
+address or a program behind it would, the day the catalog claimed the slug,
+start dialling the catalog's address with a credential issued for something
+else. Migration 54 splits them on the one thing that tells them apart. A row
+holding an OAuth grant for exactly the catalog's address is what the tile would
+have written, so it becomes the catalog's with nothing to reconnect. Every other
+one is renamed `firecrawl_added` and keeps its address, its credential, its
+agents and its per-tool answers, which all hang off the id; its tools change
+prefix and nothing else does. The next vendor added needs the same migration
+for its own slug.
 
 The address is canonicalized on the way in, because it is two things at once:
 the URL a POST goes to and the RFC 8707 resource indicator the sign-in is
@@ -414,7 +435,7 @@ has been deprecated since `2025-03-26`.
 
 Guaca speaks it, for an added server only. The asymmetry is the catalog's own
 argument rather than an inconsistency in it: a vendor Guaca vouches for is a
-vendor Guaca can hold to the current transport, and refusing one of the six over
+vendor Guaca can hold to the current transport, and refusing one of the seven over
 it would be a message somebody at that vendor would read. A box in an operator's
 own network is not a vendor. Refusing that is not a migration incentive, it is a
 plugin that does not work, on a server the operator can see working in a browser,
@@ -617,7 +638,7 @@ account, and acts on the real world exactly as Stripe does.
 
 The model is told where it is. A model knows what Neon is and has never heard of
 `home_assistant`, so the prompt line for an added server names its host. For the
-six that would be noise — the name says it, and the address is the same on every
+seven that would be noise: the name says it, and the address is the same on every
 install.
 
 ## Signing in is one decision, and handing it out is another
@@ -888,7 +909,7 @@ than something ruled out.
 ## A tool name is `plugin__tool`
 
 Two underscores, because MCP servers use one inside tool names constantly and
-none of the five uses two. Split on the *first* separator, so a server tool
+none of the seven uses two. Split on the *first* separator, so a server tool
 called `run__sql` keeps its own name whole.
 
 A prefixed name that a provider would refuse — anything outside
@@ -994,7 +1015,7 @@ Three layers, and each catches something the others cannot.
   its own body the way the spec requires of it — so a client that skipped a
   mirrored header, sent the wrong version, or fell back when it should not have
   fails here rather than at a vendor.
-- **Live**, `./scripts/plugins.sh`: whether the five vendors still publish what
+- **Live**, `./scripts/plugins.sh`: whether the six vendors still publish what
   this build expects. It runs `oauth::discover` — the same call a sign-in makes
   — rather than rebuilding the metadata URLs beside it, because a test with its
   own copy of RFC 8414 passes on a server this build cannot reach. Reaches the

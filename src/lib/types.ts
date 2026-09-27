@@ -661,14 +661,21 @@ export type PluginId = string;
  * somebody checked that it publishes its own tools, acts on the operator's
  * account and lets an application register itself.
  */
-export type CatalogKind = "neon" | "cloudflare" | "linear" | "stripe" | "agentmail" | "google";
+export type CatalogKind =
+  | "neon"
+  | "cloudflare"
+  | "linear"
+  | "stripe"
+  | "agentmail"
+  | "firecrawl"
+  | "google";
 
 /**
  * What a connected plugin is called, which is also the prefix its tools are
  * called by.
  *
- * One of the six, or the name an operator gave a server they added. Not a union
- * of the six, because the whole point of a custom server is that this side does
+ * One of the seven, or the name an operator gave a server they added. Not a union
+ * of the seven, because the whole point of a custom server is that this side does
  * not know the set: what a plugin is called comes back from Rust with the row,
  * along with a `custom` flag saying whether anybody vouched for it.
  */

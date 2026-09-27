@@ -147,6 +147,17 @@ and `account.rs`.
   that is what migration 26 exists to clean up after. A row with neither a
   catalog slug nor an address is one nothing can dial, which is a newer build's
   plugin after a downgrade, and is skipped. `PluginKind::from_row`.
+- **A vendor added to the catalog takes its name away from any crew that added
+  it by hand.** `from_row` reads a catalog slug and ignores the address beside
+  it, so a `firecrawl` row with a pasted key or a program behind it would start
+  dialling the catalog's address with a credential issued for something else.
+  Migration 54 keeps a row that is exactly what the tile would have written and
+  renames every other one to `firecrawl_added`, address and all. Adding the next
+  vendor means writing the same migration for its slug.
+- **Firecrawl is `/v2/mcp-oauth`, not `/v2/mcp`.** The shorter address answers
+  with no credential, on a keyless daily allowance with no account behind it, so
+  it connects as a public server and spends nobody's credits. Only the longer
+  one publishes resource metadata and signs in.
 - **A header the operator wrote is not a credential, and that is why it
   composes.** It describes how a request *reaches* the server rather than who is
   asking, so it goes on every one — the unauthenticated probe, the handshake,
@@ -183,7 +194,7 @@ and `account.rs`.
   otherwise be unreachable from the panel.
 - **The older transport is offered to a server the operator added and to no
   vendor.** A vendor Guaca vouches for is one it can hold to streamable HTTP,
-  and refusing one of the six over it is a message somebody at that vendor
+  and refusing one of the seven over it is a message somebody at that vendor
   reads. A box in an operator's own network is not a vendor: refusing it is not
   a migration incentive, it is a plugin that does not work on a server they can
   see working in a browser. `Dial::legacy_transport`, set only in
