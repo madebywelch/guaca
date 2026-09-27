@@ -658,7 +658,8 @@ image reference in the app. It does not start a backend during installation.
 Without Docker, installation still produces a client for remote hosts.
 
 On first launch choose **On this Mac** or **Remote host**. Local setup detects
-Docker and offers installation, Open Docker and retry actions. Guaca creates
+Docker and, while Docker cannot be used, offers installation, Open Docker and
+retry actions. Guaca creates
 an unprivileged container, binds a free loopback port, generates an access key
 and connects without exposing the key. The named volume survives app and
 container restarts. Existing containers are reused rather than silently

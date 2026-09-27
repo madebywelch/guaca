@@ -158,3 +158,16 @@ The daemon, a browser as a client, and the boot both hosts share.
   command. `CALLER` is scoped around `ipc::dispatch` in the call route, and
   `page_opener` reads it; a command that spawned the sign-in onto another task
   would lose it and fall back to every window.
+- **A source build run with `pnpm app` offers a host update it cannot
+  download.** With no `GUACA_BACKEND_IMAGE`, `host::IMAGE` names the versioned
+  GHCR tag, and a container that `scripts/install.sh` created runs a local
+  `guacad:<commit>` image, so the two differ and the update is offered. The
+  registry answers the pull with `denied` until that tag is published. Every
+  pull failure used to say "check your connection"; `pull_failure` now names
+  the refusal and the image. Develop the local host through `install.sh`, or
+  export `GUACA_BACKEND_IMAGE` naming an image already on this machine.
+- **The Docker card in host setup is a stack, not a `.preset`.** It was drawn
+  with the provider picker's classes, which lay one line out as a flex row, and
+  its status, update prompt, update log and buttons stood side by side in
+  columns a word wide. A finished update is not drawn at all; only one with an
+  `error` is, and Docker's own buttons appear only while Docker is unusable.

@@ -345,7 +345,10 @@ impl LocalHost {
 
     async fn image_ready(&self) -> Result<(), String> {
         if self.docker(&["image", "inspect", &self.image], 15).await.is_err() {
-            self.docker(&["pull", &self.image], 900).await.map_err(|_| "The Guaca host could not be downloaded. Check your connection and try again. Source installs can build it with scripts/install.sh.".to_string())?;
+            self.docker(&["pull", &self.image], 900).await.map_err(|error| {
+                tracing::warn!(image = %self.image, %error, "could not download the host image");
+                pull_failure(&self.image, &error)
+            })?;
         }
         Ok(())
     }
@@ -580,6 +583,20 @@ impl LocalHost {
     }
 }
 
+/// Why the host image did not arrive, split where the operator's next step
+/// splits. Every failure used to say "check your connection", including a
+/// registry answering 403 for an image this build names but nobody published,
+/// which no connection will fix.
+fn pull_failure(image: &str, error: &str) -> String {
+    let error = error.to_ascii_lowercase();
+    if ["denied", "unauthorized", "manifest unknown", "not found"].iter().any(|s| error.contains(s))
+    {
+        format!("The registry refused Guaca's host image, {image}. It may not be published yet. Source installs can build it with scripts/install.sh.")
+    } else {
+        "The Guaca host could not be downloaded. Check your connection and try again. Source installs can build it with scripts/install.sh.".into()
+    }
+}
+
 fn newer_than_app(value: &Value) -> bool {
     let current = value["Config"]["Labels"]["org.opencontainers.image.version"]
         .as_str()
@@ -681,6 +698,26 @@ mod tests {
             .map(|line| serde_json::from_str(line).unwrap())
             .collect()
     }
+    #[test]
+    fn a_refused_pull_is_not_blamed_on_the_connection() {
+        let image = "ghcr.io/madebywelch/guaca/guacad:0.2.0";
+        for refused in [
+            "Docker could not finish: Error response from daemon: error from registry: denied",
+            "Docker could not finish: Error response from daemon: manifest for ghcr.io/madebywelch/guaca/guacad:9.9.9 not found: manifest unknown",
+            "Docker could not finish: Error response from daemon: Head \"https://ghcr.io/v2/madebywelch/guaca/guacad/manifests/0.2.0\": unauthorized",
+        ] {
+            let said = pull_failure(image, refused);
+            assert!(said.contains("refused") && said.contains(image), "{refused}: {said}");
+            assert!(!said.contains("connection"), "{refused}: {said}");
+        }
+        for offline in [
+            "Docker could not finish: Error response from daemon: Get \"https://ghcr.io/v2/\": dial tcp: lookup ghcr.io: no such host",
+            "Docker took too long to answer. Check Docker and try again.",
+        ] {
+            assert!(pull_failure(image, offline).contains("Check your connection"), "{offline}");
+        }
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn download_and_stop_failures_never_replace_the_container() {

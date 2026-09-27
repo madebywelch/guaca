@@ -177,7 +177,7 @@ export function LegacyGroups() {
   }, []);
   if (!desktop || (!groups.length && !message)) return null;
   return (
-    <details className="field">
+    <details className="field host-legacy">
       <summary>Groups from the previous desktop version</summary>
       <p className="field__hint">
         Your original workspace is still on this Mac. Quit the old Guaca before exporting so its

@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useId, useState } from "react";
 import {
   type DockerStatus,
   type ExistingHost,
@@ -110,6 +110,7 @@ export function HostChoice({
       }
     } catch (cause) {
       setError(errorMessage(cause));
+      void refresh();
     } finally {
       setBusy(false);
     }
@@ -152,54 +153,41 @@ export function HostChoice({
       }
     } catch (cause) {
       setError(errorMessage(cause));
+      // A failed start or update can change what Docker holds. The status
+      // above the error is otherwise the one read before the attempt.
+      if (mode === "local") void refresh();
     } finally {
       setBusy(false);
     }
   };
+  const usable = !!docker && ["ready", "running", "stopped"].includes(docker.state);
+  // A finished update is history. Only one that stopped part way needs reading.
+  const failed = showUpdate && docker?.operation?.error ? docker.operation : null;
 
   return (
     <div className="host-choice">
-      {initialError && (
-        <p className="field__hint">
-          <a href={INSTRUCTIONS} target="_blank" rel="noopener noreferrer">
-            Host update instructions
-          </a>
-          {" · "}
-          <a href={RELEASES} target="_blank" rel="noopener noreferrer">
-            Guaca downloads
-          </a>
-        </p>
-      )}
       <p className="settings__lede">
         Guaca is your desktop interface. Your host runs your agents and keeps their groups,
         conversations and files.
       </p>
-      <fieldset className="access__row" aria-label="Host location">
-        <button
-          type="button"
-          className={`btn ${mode === "local" ? "btn--primary" : ""}`}
-          aria-pressed={mode === "local"}
+      <fieldset className="host-choice__places" aria-label="Host location">
+        <Place
+          label="On this Mac"
+          hint="Runs in Docker here. Agents keep working with Guaca closed, and pause while this Mac sleeps."
+          chosen={mode === "local"}
           disabled={busy}
-          onClick={() => setMode("local")}
-        >
-          On this Mac
-        </button>
-        <button
-          type="button"
-          className={`btn ${mode === "remote" ? "btn--primary" : ""}`}
-          aria-pressed={mode === "remote"}
+          onChoose={() => setMode("local")}
+        />
+        <Place
+          label="Remote host"
+          hint="Runs on a server that stays on. Agents keep working while this Mac sleeps or is offline."
+          chosen={mode === "remote"}
           disabled={busy}
-          onClick={() => setMode("remote")}
-        >
-          Remote host
-        </button>
+          onChoose={() => setMode("remote")}
+        />
       </fieldset>
       {mode === "local" ? (
         <>
-          <p className="field__hint">
-            Runs privately in Docker on this Mac. Agents keep working when you close Guaca, but
-            pause when your Mac sleeps.
-          </p>
           {existing.length > 0 && (
             <section className="field" aria-label="Existing local hosts">
               <span className="field__label">Already running on this Mac</span>
@@ -220,42 +208,21 @@ export function HostChoice({
               ))}
             </section>
           )}
-          <section className="preset preset--plain" aria-label="Docker status">
-            <div className="preset__text">
-              <strong>Docker</strong>
-              <p role="status">{docker?.message ?? "Checking Docker…"}</p>
-              {showUpdate && docker?.updateAvailable && (
-                <div className="field">
-                  <p className="field__hint">
-                    A host update is ready. Updating interrupts current jobs and restarts the host.
-                    Guaca keeps a local data backup first.
-                  </p>
-                  <button
-                    type="button"
-                    className="btn btn--small"
-                    disabled={busy}
-                    onClick={() => void connect(true)}
-                  >
-                    Back up and update host
-                  </button>
-                </div>
-              )}
-              {showUpdate && docker?.operation && (
-                <details>
-                  <summary>Last host update: {docker.operation.stage}</summary>
-                  {docker.operation.backup && (
-                    <p>
-                      Backup volume: <code>{docker.operation.backup}</code>
-                    </p>
-                  )}
-                  {docker.operation.error && <p>{docker.operation.error}</p>}
-                  <a href={INSTRUCTIONS} target="_blank" rel="noopener noreferrer">
-                    Host recovery instructions
-                  </a>
-                </details>
-              )}
+          <section className="host-status" aria-label="Docker status">
+            <p role="status">{docker?.message ?? "Checking Docker…"}</p>
+            {failed && (
+              <>
+                <p className="host-status__failure">
+                  {failed.stage}: {failed.error}
+                </p>
+                <a href={INSTRUCTIONS} target="_blank" rel="noopener noreferrer">
+                  Update and recovery instructions
+                </a>
+              </>
+            )}
+            {docker && !usable && (
               <div className="access__row">
-                {docker?.state === "missing" ? (
+                {docker.state === "missing" ? (
                   <button
                     className="btn btn--small"
                     type="button"
@@ -289,15 +256,28 @@ export function HostChoice({
                   Check again
                 </button>
               </div>
-            </div>
+            )}
+            {showUpdate && docker?.updateAvailable && (
+              <div className="host-status__update">
+                <p>
+                  A host update is ready. Updating stops work in progress and restarts the host.
+                  Guaca backs up its data first.
+                </p>
+                <button
+                  type="button"
+                  className="btn btn--small"
+                  disabled={busy}
+                  onClick={() => void connect(true)}
+                >
+                  Back up and update host
+                </button>
+              </div>
+            )}
           </section>
         </>
       ) : (
         <>
-          <p className="field__hint">
-            An always-on host keeps agents working while this Mac is asleep or offline. Use the
-            address and access key supplied by your host.
-          </p>
+          <p className="field__hint">Use the address and access key supplied by your host.</p>
           <label className="field">
             <span className="field__label">Host address</span>
             <input
@@ -321,15 +301,21 @@ export function HostChoice({
           </label>
         </>
       )}
-      <p className="field__hint">
-        You can change hosts here at any time. Groups stay on their original host. Export a group
-        and import it on another host to move your work. Sign-ins are connected separately on each
-        host.
-      </p>
       {error && (
         <div className="banner banner--error" role="alert">
           {error}
         </div>
+      )}
+      {error && error === initialError && (
+        <p className="field__hint">
+          <a href={INSTRUCTIONS} target="_blank" rel="noopener noreferrer">
+            Host update instructions
+          </a>
+          {" · "}
+          <a href={RELEASES} target="_blank" rel="noopener noreferrer">
+            Guaca downloads
+          </a>
+        </p>
       )}
       <button
         className="btn btn--primary"
@@ -356,6 +342,43 @@ export function HostChoice({
           groups are left in place.
         </p>
       )}
+      <p className="field__hint">
+        You can switch hosts later. Each group stays on the host it was made on; export it and
+        import it on the other host to move it.
+      </p>
     </div>
+  );
+}
+
+/** A place the agents can run, with the tradeoff that decides it written on it. */
+function Place({
+  label,
+  hint,
+  chosen,
+  disabled,
+  onChoose,
+}: {
+  label: string;
+  hint: string;
+  chosen: boolean;
+  disabled: boolean;
+  onChoose: () => void;
+}) {
+  const hintId = useId();
+  return (
+    <button
+      type="button"
+      className="choice choice--place"
+      aria-label={label}
+      aria-describedby={hintId}
+      aria-pressed={chosen}
+      disabled={disabled}
+      onClick={onChoose}
+    >
+      <span className="choice__name">{label}</span>
+      <span className="choice__hint" id={hintId}>
+        {hint}
+      </span>
+    </button>
   );
 }

@@ -7655,6 +7655,94 @@ input[type="file"]:disabled {
   gap: var(--space-4);
 }
 
+/* Stretched by the column, a button is a bar with its label at the left end. */
+.host-choice > .btn {
+  align-self: flex-start;
+}
+
+/* Preflight draws a link as the text around it, and these are the only way to
+   the update and recovery instructions. */
+.host-choice a {
+  color: var(--flesh);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* The way back to a workspace from before hosts. Most operators never had one,
+   so it sits under the decision rather than competing with it. */
+.host-legacy > summary {
+  color: var(--muted);
+  font-size: var(--type-small);
+}
+
+.host-setup > .host-legacy {
+  margin: var(--space-7) 0 0;
+}
+
+/* Where the agents run, as two cards rather than two buttons: the tradeoff is
+   the choice, so each carries its own. They were solid buttons, the same fill
+   as the one that commits, and read as a second action above it. */
+.host-choice__places {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+
+.choice--place {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  text-align: left;
+  padding: var(--space-5) var(--space-6);
+}
+
+.choice__name {
+  font-size: var(--type-ui);
+}
+
+.choice__hint {
+  font-weight: 400;
+  color: var(--muted);
+  line-height: var(--lead-ui);
+}
+
+/* What Docker says about this Mac, and only the actions that answer it. A
+   stack, not a row: it was drawn as a provider preset, which is one line, and
+   its five parts stood side by side in columns a word wide. */
+.host-status {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-5) var(--space-6);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  background: var(--sunken);
+  font-size: var(--type-aside);
+  line-height: var(--lead-ui);
+}
+
+.host-status p {
+  margin: 0;
+}
+
+.host-status__failure {
+  color: var(--alarm);
+  overflow-wrap: anywhere;
+}
+
+.host-status__update {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-4);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--edge);
+}
+
 .workspace-settings {
   display: flex;
   flex-direction: column;
