@@ -10,6 +10,7 @@ import {
   type SkillScope,
   skillScopeKey,
 } from "../lib/types";
+import { SkillDirectory } from "./SkillDirectory";
 
 interface Props {
   scope: SkillScope;
@@ -33,6 +34,7 @@ export function SkillList({ scope }: Props) {
   const [reading, setReading] = useState<Skill | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [browsing, setBrowsing] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
   const crew = scope.kind === "crew";
 
@@ -164,7 +166,9 @@ export function SkillList({ scope }: Props) {
             <div className="access__row">
               <strong className="access__name">{skill.name}</strong>
               <span className="access__where">
-                {readOnly ? "Guaca's own" : `edited ${relativeTime(skill.updatedAt, Date.now())}`}
+                {readOnly
+                  ? "Guaca's own"
+                  : `${skill.origin ? "from skills.sh, " : ""}edited ${relativeTime(skill.updatedAt, Date.now())}`}
               </span>
               <button
                 type="button"
@@ -188,20 +192,43 @@ export function SkillList({ scope }: Props) {
             <p className="field__hint">{skill.description}</p>
             {showing && <pre className="skill__body">{reading.body}</pre>}
             {draft?.previous === skill.name && skill.scope.kind !== "bundled" && editor}
+            {draft?.previous === skill.name && skill.files.length > 0 && (
+              <p className="field__hint">
+                Saving changes the instructions only. It also carries {skill.files.join(", ")},
+                which stay as they are.
+              </p>
+            )}
           </div>
         );
       })}
 
       {draft && !draft.previous && editor}
+      {browsing && (
+        <SkillDirectory
+          scope={scope}
+          taken={new Set((skills ?? []).map((skill) => skill.name))}
+          onAdded={() => void load().catch((caught) => setError(errorMessage(caught)))}
+        />
+      )}
       {!draft && (
-        <button
-          type="button"
-          className="btn btn--small"
-          disabled={busy || skills === null}
-          onClick={() => setDraft({ ...BLANK })}
-        >
-          Write a skill
-        </button>
+        <div className="access__row">
+          <button
+            type="button"
+            className="btn btn--small"
+            disabled={busy || skills === null}
+            onClick={() => setDraft({ ...BLANK })}
+          >
+            Write a skill
+          </button>
+          <button
+            type="button"
+            className="btn btn--small btn--ghost"
+            aria-expanded={browsing}
+            onClick={() => setBrowsing(!browsing)}
+          >
+            {browsing ? "Close skills.sh" : "Browse skills.sh"}
+          </button>
+        </div>
       )}
 
       {error && (

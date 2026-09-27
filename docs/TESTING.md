@@ -62,6 +62,18 @@ machine instead. It authorizes nothing and stores nothing.
 cargo test --manifest-path src-tauri/Cargo.toml --test account -- --ignored
 ```
 
+`tests/skills_sh.rs` is the same shape for skills.sh: a scripted directory that
+answers with the cases that have to be handled rather than drawn (a ranking in
+a shape this build does not know, a skill whose files climb out of it, a skill
+that changes between being read and being added), and the real client writing
+to a temporary disk. Its `#[ignore]`d half asks the live skills.sh, whose
+endpoints this build reads are not its documented API, and adds the top
+addable skill to a temporary directory. It writes nothing anywhere else.
+
+```sh
+cargo test --manifest-path src-tauri/Cargo.toml --test skills_sh -- --ignored
+```
+
 `tests/server.rs` drives the daemon, which is the second host over the same
 library: a workspace opened under a temporary directory, bound to a free port,
 and spoken to over HTTP and the event socket with `reqwest`, entirely offline.

@@ -83,7 +83,8 @@ The operator edits them in **Settings**:
 - **Appearance**: interface size, and light or dark. Kept per window.
 - **Notifications**: what may interrupt the operator. Kept per window.
 - **Shortcuts**: every key the app answers to.
-- **Skills**: the operator's own skills, which every crew can read.
+- **Skills**: the operator's own skills, which every crew can read, and
+  skills.sh, where the operator browses and adds skills other people wrote.
 - **Compost**: deleted agents, kept for thirty days before they are gone.
 - **About**: the build.
 
@@ -145,6 +146,18 @@ worked out how a recurring task is done and the next agent should not have to:
 a deploy, a report format, a customer's quirks. Keep the description to the
 one line that says when to load it. Do not copy this skill or the operator's
 into your crew; point at them instead.
+
+A workspace starts with a handful of the operator's: citing sources, grilling
+a plan, a 1-3-1 decision brief, root-cause debugging, and action items from
+documents and from meetings. The operator can edit or delete any of them. More
+come from skills.sh, a public directory the operator browses in Settings or in
+a crew's settings; only the operator adds from it, and you cannot reach it. If
+a skill from there would help, name it and ask.
+
+Some skills carry files beside their instructions: references, templates,
+examples. `view` lists them and `view` with `file` reads one. Nothing in a
+skill is run for you, so a skill that says to run one of its scripts is
+describing a step you do with the tools you have, or cannot do.
 
 ## Connectors, tools, skills, secrets and sign-ins
 

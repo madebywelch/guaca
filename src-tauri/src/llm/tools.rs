@@ -1087,7 +1087,10 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                  operator and your crew. Your system prompt names the ones you can read and \
                  says when each applies; only those lines are there, not the instructions.\n\n\
                  `view` reads one by name. Read it before starting a task it fits, and follow \
-                 it. `list` shows every skill you can read. `write` creates or replaces one of \
+                 it. Some skills carry files beside their instructions (references, templates, \
+                 examples) and `view` lists them: `view` with `file` reads one when the \
+                 instructions send you to it. Nothing in a skill is run for you. `list` shows \
+                 every skill you can read. `write` creates or replaces one of \
                  your crew's own skills: do it when you have worked out how a recurring task is \
                  done and the next agent should not have to work it out again. `delete` \
                  removes one of your crew's own. Guaca's skills and the operator's are \
@@ -1107,6 +1110,11 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                         "type": "string",
                         "description": "The skill, as your system prompt or `list` names it: \
                                         `deploy-site`."
+                    },
+                    "file": {
+                        "type": "string",
+                        "description": "On `view`: one of the files the skill lists, by the \
+                                        path it lists: `references/api.md`."
                     },
                     "description": {
                         "type": "string",
@@ -1585,9 +1593,19 @@ pub enum SettingsAction {
 #[derive(Debug, Clone, PartialEq)]
 pub enum SkillAction {
     List,
-    View { name: String },
-    Write { name: String, description: String, content: String },
-    Delete { name: String },
+    /// The skill, or with `file` one of the files it carries.
+    View {
+        name: String,
+        file: Option<String>,
+    },
+    Write {
+        name: String,
+        description: String,
+        content: String,
+    },
+    Delete {
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2613,7 +2631,7 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                 "list" => SkillAction::List,
                 // What a model reaches for when it has not read the enum.
                 "view" | "read" | "open" | "load" | "get" => {
-                    SkillAction::View { name: named("view")? }
+                    SkillAction::View { name: named("view")?, file: words(&["file", "path"]) }
                 }
                 "write" | "create" | "update" | "save" | "edit" => SkillAction::Write {
                     name: named("write")?,
@@ -3009,7 +3027,15 @@ mod tests {
     fn a_skill_is_read_by_name_and_written_whole() {
         assert_eq!(
             parse(&call(SKILL, r#"{"action": "view", "name": "guaca"}"#)),
-            Ok(ToolInvocation::Skill { action: SkillAction::View { name: "guaca".into() } })
+            Ok(ToolInvocation::Skill {
+                action: SkillAction::View { name: "guaca".into(), file: None }
+            })
+        );
+        assert_eq!(
+            parse(&call(SKILL, r#"{"action": "view", "name": "pdf", "path": " forms.md "}"#)),
+            Ok(ToolInvocation::Skill {
+                action: SkillAction::View { name: "pdf".into(), file: Some("forms.md".into()) }
+            })
         );
         // `load` and `read` are what a model says when it has not read the enum.
         assert!(matches!(

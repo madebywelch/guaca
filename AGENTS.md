@@ -123,7 +123,10 @@ src-tauri/src/
   workspace.rs        Per-agent memory: one markdown file the agent rewrites.
                       Its counterpart is `domain/worknote.rs` plus one table.
   skills.rs           Skills on disk: the operator's and each crew's. Guaca's
-                      own are compiled in from `src-tauri/skills/`.
+                      own are compiled in from `src-tauri/skills/`, and so are
+                      the six starters every workspace is given once.
+  skills_sh.rs        skills.sh: the directory the operator browses and adds
+                      from, through endpoints that are not its documented API.
   notebook.rs         An agent's own folder of files, named in its prompt and
                       read when needed. The fourth store, and why it is one.
   files.rs            Attachments, addressed by the SHA-256 of their contents.
@@ -244,6 +247,8 @@ repo: the frontend renders state and forwards intent.
 | What an agent changed about its own memory, and where the version before it came from | *A memory rewrite opens as a diff* in `docs/WORKSPACE.md`, then `Workspace::write` and `src/lib/diff.ts` |
 | What an agent currently remembers, and editing it by hand | *An agent's memory is in the panel* in `docs/WORKSPACE.md`, then `src/components/Memory.tsx` and `src-tauri/src/workspace.rs` |
 | Skills: what one is, which crew can read or write it, the `skill` tool, the index in the prompt | `docs/SKILLS.md`, then `domain/skill.rs` and `skills.rs` |
+| The six skills a workspace starts with, and why a deleted one stays deleted | *A workspace starts with six, and is given them once* in `docs/SKILLS.md`, then `skills::STARTERS` and `Skills::offer` |
+| Browsing and adding from skills.sh, what an added skill carries, what an agent may read of it | *skills.sh is where the rest come from, and only the operator adds* and *A skill carries files* in `docs/SKILLS.md`, then `skills_sh.rs` and `src/components/SkillDirectory.tsx`, and run the live half of `tests/skills_sh.rs` |
 | What agents are told about Guaca itself, and the manual they read | *The manual is a skill, and a test keeps it true* in `docs/SKILLS.md`, then `src-tauri/skills/guaca/SKILL.md` and `src/lib/manual.test.ts`, which is the gate |
 | An agent's notebook: what it keeps beyond memory, the `notebook` tool, the index in the prompt | *An agent's notebook is everything else it keeps* in `docs/WORKSPACE.md`, then `src-tauri/src/notebook.rs` |
 | Which of the two stores something belongs in, what `note_progress` is for, why one is a file and the other a table | *An agent's memory is what it knows, and its working notes are what it is doing* in `docs/WORKSPACE.md`, then `src-tauri/src/domain/worknote.rs`, whose header is the argument |
@@ -467,7 +472,7 @@ the gotchas file says what it already cost somebody to change it.
 | A crew's calendar, an occasion, the wall between two crews' dates | `docs/gotchas/calendar.md` |
 | Approvals, questions, escalations, the desk | `docs/gotchas/attention.md` |
 | An agent's memory, its working notes, and the panels for both | `docs/gotchas/memory.md` |
-| Skills, the `skill` tool, the `guaca` manual | `docs/gotchas/skills.md` |
+| Skills, the `skill` tool, the starters, skills.sh, the `guaca` manual | `docs/gotchas/skills.md` |
 | A turn drawn while it runs: the bubble, the trail, the thinking | `docs/gotchas/transcript.md` |
 | Charts, callouts, and a page an agent wrote | `docs/gotchas/figures.md` |
 | Attachments, previews, a file in a reply | `docs/gotchas/files.md` |

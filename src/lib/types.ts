@@ -318,6 +318,54 @@ export interface Skill {
   /** Empty in a listing; read when the skill is opened. */
   body: string;
   updatedAt: number;
+  /** What sits beside its `SKILL.md`, as relative paths. */
+  files: string[];
+  /** The page it was added from, when it came from somewhere. */
+  origin?: string | null;
+}
+
+/** Which of skills.sh's three rankings. */
+export type DirectoryBoard = "allTime" | "trending" | "hot";
+
+/** One skill on skills.sh, without its files. */
+export interface DirectoryListing {
+  /** `{source}/{slug}`, and its path on skills.sh. */
+  id: string;
+  source: string;
+  slug: string;
+  name: string;
+  installs: number;
+  /** Its page on skills.sh. */
+  url: string;
+  /** Whether skills.sh keeps a copy Guaca can add: a GitHub repository's. */
+  addable: boolean;
+}
+
+export interface DirectoryPage {
+  skills: DirectoryListing[];
+  page: number;
+  hasMore: boolean;
+}
+
+export interface SkillAudit {
+  provider: string;
+  verdict: "pass" | "warn" | "fail" | "unknown";
+  summary: string;
+}
+
+/** A skill on skills.sh, opened: what the operator reads before adding it. */
+export interface DirectorySkill {
+  id: string;
+  /** The name it will have here. */
+  name: string;
+  description: string;
+  body: string;
+  files: string[];
+  /** Binds what was read to what gets added. */
+  hash: string;
+  url: string;
+  /** `null` when the audits could not be read, `[]` when none has run. */
+  audits: SkillAudit[] | null;
 }
 
 export interface SkillDraft {

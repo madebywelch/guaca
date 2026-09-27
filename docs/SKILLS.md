@@ -43,6 +43,83 @@ A crew's skill shadows the operator's of the same name, so a crew can keep its
 own variant of a house procedure. Guaca's names are reserved and shadow
 nothing. Disbanding a crew removes its directory.
 
+## A workspace starts with six, and is given them once
+
+`skills::STARTERS` is six general procedures every workspace starts with:
+`grounded-citations`, `grill-me`, `one-three-one`, `systematic-debugging`,
+`document-to-action-items` and `meeting-action-items`. They are adapted from
+Hermes Agent's own (MIT, and `src-tauri/skills/defaults/LICENSE` names the
+commit and the two further upstreams), because Hermes ships a curated set that
+already works and a person who has to curate one from nothing does not do it.
+
+What was left out is the half of Hermes's set that names a program, a platform
+or a tool an agent here does not have: iMessage and Find My, the coding CLIs,
+anything built on its scripts. What was kept was rewritten for this app's tool
+surface, and conditionally where it has to be, since most agents have no
+browser, no repository and no computer. A test fails if a starter names one of
+Hermes's tools, mentions a script or reads as another harness's.
+
+They are copied into the operator's scope rather than compiled in as Guaca's,
+because they are the operator's to edit and delete, and `boot.rs` copies them
+through `Skills::offer`. That writes each name to `skills/.defaults` as it is
+offered, so a starter the operator deleted is not put back on the next start,
+one they already had under that name is left as theirs, and a later build that
+ships a seventh offers only the seventh. Each carries `LICENSE.txt`, so the
+notice travels wherever the skill is copied.
+
+They are copied from the binary, not downloaded. A workspace opened offline on
+a box gets the same six as one opened at a desk, and what reaches every crew
+is a file that was reviewed in this repository.
+
+## skills.sh is where the rest come from, and only the operator adds
+
+skills.sh is Vercel's directory: every skill its CLI installs, ranked by how
+many times, with a copy of each one's files. Settings and a crew's settings
+open it inside the skills section (`SkillDirectory.tsx`): the three rankings
+(most installed, trending, hot), a search, and a skill opened in place with its
+whole `SKILL.md`, the files it carries and what skills.sh's audit partners said
+about it. `skills_sh.rs` is the client.
+
+The documented API needs a Vercel deployment token, so the client calls what
+skills.sh's own pages and its own CLI call without one. The top of
+`skills_sh.rs` lists the four, and `tests/skills_sh.rs` has a live half that
+fails when any of them stops answering the way this build reads it.
+
+Nothing is added unread. The preview carries a SHA-256 over every path and its
+contents, the add sends it back, and the add fetches the skill again and
+refuses when the hash moved: a skill is instructions a crew will follow, and a
+version the operator did not read should not arrive in place of the one they
+did. The hash is computed here rather than taken from skills.sh, whose own
+`hash` field covers something this build cannot check.
+
+An agent cannot reach skills.sh at all. The directory is a public, mostly
+unvetted list (researchers found hundreds of malicious skills in its largest
+neighbor in February 2026), and the likeliest agent to go looking in it is one
+that has just read a page telling it to. The operator browses, reads and adds;
+the manual tells agents to name a skill that would help and ask.
+
+What is added lands in the scope the section belongs to, whole: `SKILL.md`
+exactly as its author wrote it, every file beside it, and `.origin`, the page it
+came from. `Skills::install` assembles it in a hidden directory and renames it
+into place, never over a skill already there. A skill a site publishes itself
+rather than from a GitHub repository is listed and not addable: skills.sh keeps
+no copy of it, and fetching it from the site is a second protocol this does not
+speak yet.
+
+## A skill carries files, and an agent reads the ones it lists
+
+Other harnesses let a skill carry `references/`, `templates/` and `scripts/`
+beside its `SKILL.md`, and most skills worth adding use them. `Skill::files`
+lists them, `view` names them after the instructions, and `view` with `file`
+reads one. Only a listed path is read, the listing does not follow symlinks,
+and a path that climbs is refused before the disk is touched, so nothing a
+skill carries can point a read outside it.
+
+Nothing a skill carries is run. A script is a file an agent can read; running
+it would mean running someone else's code on the operator's machine because a
+document said to, and the door for running code is a repository's (`shell`,
+`code`), which the operator gives on purpose.
+
 ## The manual is a skill, and a test keeps it true
 
 `guaca` is the app described to the agents that run in it: where it runs, what
@@ -69,9 +146,10 @@ skill is not a tool: it is instructions an agent reads with one.
 
 ## What is not built
 
-- **Supporting files.** Other harnesses allow `references/` and `scripts/`
-  beside `SKILL.md`. The directory layout leaves room for them; nothing reads
-  them yet.
+- **Running a skill's scripts.** Read, never run; see above.
+- **Sites that publish their own skills.** Listed from skills.sh, not added.
+- **Updating an added skill.** `.origin` says where it came from; nothing
+  checks it for a newer version. Delete it and add it again.
 - **Per-agent enablement.** Every agent in a crew sees the crew's skills and the
   operator's. An operator who wants a skill for one agent writes it into that
   agent's instructions.

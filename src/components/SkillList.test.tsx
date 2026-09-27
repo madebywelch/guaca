@@ -23,7 +23,7 @@ const GROUP = "00000000-0000-4000-8000-000000000001";
 const CREW: SkillScope = { kind: "crew", groupId: GROUP };
 
 function skill(name: string, scope: SkillScope, body = ""): Skill {
-  return { name, description: `when ${name}`, scope, body, updatedAt: 1 };
+  return { name, description: `when ${name}`, scope, body, updatedAt: 1, files: [] };
 }
 
 describe("SkillList", () => {

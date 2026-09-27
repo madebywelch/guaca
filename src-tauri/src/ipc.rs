@@ -249,6 +249,10 @@ surface! {
     read_skill(scope: crate::domain::skill::Scope, name: String) -> crate::domain::skill::Skill,
     save_skill(scope: crate::domain::skill::Scope, draft: crate::commands::SkillDraft) -> crate::domain::skill::Skill,
     delete_skill(scope: crate::domain::skill::Scope, name: String) -> bool,
+    skill_directory(board: crate::skills_sh::Board, page: u32) -> crate::skills_sh::Page,
+    search_skill_directory(query: String) -> Vec<crate::skills_sh::Listing>,
+    preview_directory_skill(id: String) -> crate::skills_sh::Preview,
+    add_directory_skill(scope: crate::domain::skill::Scope, id: String, hash: String) -> crate::domain::skill::Skill,
 
     agent_computer(id: AgentId) -> Option<Computer>,
     give_agent_computer(id: AgentId) -> (),

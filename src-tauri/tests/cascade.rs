@@ -1794,6 +1794,60 @@ async fn an_agent_cannot_write_guacas_skill_or_delete_the_operators() {
     assert!(h.runtime.skills().read(None, "house-style").is_ok(), "the operator's skill survives");
 }
 
+#[tokio::test]
+async fn a_skill_names_the_files_it_carries_and_an_agent_reads_only_those() {
+    // A skill added from elsewhere arrives with references. `view` names them
+    // after the instructions, `view` with `file` reads one, and a path that
+    // climbs out of the skill is refused with a way forward.
+    let stub = serve(|body| {
+        let who = speaker(body);
+        if has_tool_result(body) {
+            Script::Say("Done.".into())
+        } else if who == "Reader" {
+            Script::Skill(serde_json::json!({ "action": "view", "name": "pdf" }))
+        } else if who == "Filer" {
+            Script::Skill(
+                serde_json::json!({ "action": "view", "name": "pdf", "file": "forms.md" }),
+            )
+        } else {
+            Script::Skill(
+                serde_json::json!({ "action": "view", "name": "pdf", "file": "../../guac.db" }),
+            )
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Reader", "Filer", "Climber"], GuardLimits::default());
+    let package = guac_lib::domain::skill::Package::new(
+        "pdf",
+        vec![
+            (
+                "SKILL.md".into(),
+                "---\nname: pdf\ndescription: When a PDF is involved\n---\nFor forms, read forms.md."
+                    .into(),
+            ),
+            ("forms.md".into(), "Check for fillable fields first. THE-FORM-DETAIL".into()),
+        ],
+    )
+    .unwrap();
+    h.runtime.skills().install(guac_lib::domain::skill::Scope::Workspace, &package, None).unwrap();
+    for name in ["Reader", "Filer", "Climber"] {
+        let run = h.runtime.send_from_human(h.id(name), "A PDF arrived.").unwrap();
+        h.settle(run).await;
+    }
+
+    let results = tool_results(&stub).join("\n");
+    assert!(results.contains("For forms, read forms.md."), "{results}");
+    assert!(results.contains("Files beside it, read with `view` and `file`"), "{results}");
+    assert!(results.contains("THE-FORM-DETAIL"), "the named file is read: {results}");
+    assert!(results.contains("is not a file beside a skill"), "the climb is refused: {results}");
+    assert_eq!(
+        results.matches("THE-FORM-DETAIL").count(),
+        1,
+        "a file is read only when asked for: {results}"
+    );
+}
+
 // ---- the notebook --------------------------------------------------------------
 
 #[tokio::test]
