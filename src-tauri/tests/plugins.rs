@@ -1960,6 +1960,50 @@ mod eras {
 }
 
 #[tokio::test]
+async fn a_connector_run_on_the_host_is_called_with_the_environment_it_was_given() {
+    // The whole path a turn takes, for a program rather than an address: the
+    // environment goes into the store with the row and comes back out of it
+    // onto the process, a fresh one per call.
+    let (_dir, store, group, agent) = workspace();
+    let command =
+        format!("stdio:python3 {}/tests/fixtures/mcp-stdio.py", env!("CARGO_MANIFEST_DIR"));
+    let kind = PluginKind::custom("fixture", &command).unwrap();
+    let env =
+        Headers::parse_env(&[HeaderPair { name: "FIXTURE_TOKEN".into(), value: "abc".into() }])
+            .unwrap();
+
+    let plugin = plugins::connect(
+        &store,
+        group,
+        &kind,
+        kind.endpoint(),
+        plugins::Credential::Discover,
+        &env,
+        &Landing::Loopback,
+        browser(Outcome::Refused),
+    )
+    .await
+    .expect("a program connects without a sign-in");
+    assert_eq!(plugin.tools.len(), 3);
+
+    let answer = plugins::call(
+        &store,
+        plugins::Target {
+            group,
+            agent,
+            kind: &kind,
+            endpoint: kind.endpoint(),
+            account: plugins::Held::Absent,
+        },
+        "whoami",
+        &serde_json::json!({}),
+    )
+    .await
+    .expect("the call goes through");
+    assert!(answer.starts_with("token=abc leaked=False"), "{answer}");
+}
+
+#[tokio::test]
 async fn a_call_on_an_unconnected_plugin_says_who_can_connect_it() {
     let (_dir, store, group, agent) = workspace();
 

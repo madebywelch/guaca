@@ -71,6 +71,11 @@ host, use `host.docker.internal` (the compose file supplies the Linux mapping).
 A model running on a sleeping laptop will still stop answering, even when
 Guaca itself runs on a VPS.
 
+A connector run as a program (`stdio:`) runs on the backend too, inside the
+container on a Docker host: its command is typed as it would be in a terminal
+there. The image has `node`, so `npx` servers run as they are; a `uvx` server
+needs `uv` installed in it first.
+
 The backend may run the official Codex and Claude CLIs under its own user.
 Guaca does not import the laptop's credentials or provide a Claude.ai login
 flow. Configure the CLI on the backend, as described under **Coding inside

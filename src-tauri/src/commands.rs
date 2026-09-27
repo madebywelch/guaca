@@ -1390,7 +1390,7 @@ pub async fn add_plugin(
         }
     }
 
-    let (key, headers) = presented(key, headers)?;
+    let (key, headers) = presented(key, headers, kind.is_stdio())?;
     let credential = match key.as_deref() {
         Some(key) => crate::plugins::Credential::Key(key),
         None => crate::plugins::Credential::Discover,
@@ -1414,10 +1414,26 @@ pub async fn add_plugin(
 fn presented(
     key: Option<String>,
     headers: Option<Vec<HeaderPair>>,
+    stdio: bool,
 ) -> Result<(Option<String>, Headers), CommandError> {
     let key = key.map(|key| key.trim().to_string()).filter(|key| !key.is_empty());
-    let headers = Headers::parse(&headers.unwrap_or_default())
-        .map_err(|err| CommandError::new("validation", err.to_string()))?;
+    let rows = headers.unwrap_or_default();
+    // A program is given its key the way such programs expect, as a variable
+    // in its environment. The rows are that environment, under its own rules.
+    if stdio {
+        if key.is_some() {
+            return Err(CommandError::new(
+                "validation",
+                "a server run on the host takes its key as an environment variable, such as \
+                 GITHUB_TOKEN. Put it there and clear the key.",
+            ));
+        }
+        let env = Headers::parse_env(&rows)
+            .map_err(|err| CommandError::new("validation", err.to_string()))?;
+        return Ok((None, env));
+    }
+    let headers =
+        Headers::parse(&rows).map_err(|err| CommandError::new("validation", err.to_string()))?;
     if key.is_some() && headers.carries_authorization() {
         return Err(CommandError::new(
             "validation",
@@ -1550,7 +1566,7 @@ pub async fn readdress_plugin(
     let kind = PluginKind::custom(&held.name, &url)
         .map_err(|err| CommandError::new("validation", err.to_string()))?;
     let (key, headers) = match headers {
-        Some(rows) => presented(key, Some(rows))?,
+        Some(rows) => presented(key, Some(rows), kind.is_stdio())?,
         // Read back off the row rather than left out of the write, so there is
         // one path into `save_plugin` and one meaning for what it is handed.
         None => {
@@ -1559,8 +1575,11 @@ pub async fn readdress_plugin(
                 .store()
                 .plugin_dial(id)?
                 .map(|dialed| dialed.headers)
+                // Headers are not an environment, nor the other way round: a
+                // server moved between an address and a program starts empty.
+                .filter(|stored| stored.is_env() == kind.is_stdio())
                 .unwrap_or_default();
-            let (key, _) = presented(key, None)?;
+            let (key, _) = presented(key, None, kind.is_stdio())?;
             if key.is_some() && stored.carries_authorization() {
                 return Err(CommandError::new(
                     "validation",
@@ -1605,9 +1624,10 @@ pub async fn probe_server(
     // address that is tested is the address that would be stored. A test run
     // against `https://example.com/mcp/` that passes, followed by a sign-in
     // scoped to `https://example.com/mcp` that fails, is worse than no test.
-    let endpoint = plugin::canonical_url(&url)
+    let endpoint = plugin::canonical_address(&url)
         .map_err(|err| CommandError::new("validation", err.to_string()))?;
-    let (key, headers) = presented(key, headers)?;
+    let stdio = endpoint.starts_with(plugin::STDIO);
+    let (key, headers) = presented(key, headers, stdio)?;
     Ok(crate::plugins::inspect(true, &endpoint, key.as_deref(), &headers).await?)
 }
 

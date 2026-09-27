@@ -1,4 +1,4 @@
-# Plugins, MCP and OAuth
+# Connectors (plugins), MCP and OAuth
 
 Signing a crew in to a server, who may spend that sign-in, which tools they may
 call, and the two protocol eras underneath all of it. `docs/PLUGINS.md`, then
@@ -241,3 +241,15 @@ and `account.rs`.
   is the whole reason a redirect is acceptable here at all, and it is the
   difference between this flow and the one `subscription.rs` argues against:
   `docs/PLUGINS.md`.
+- **A `stdio:` address is split, never shelled.** `command_line` in
+  `domain/plugin.rs` splits it into words with quotes and backslashes, and the
+  first word is the program. A `;` or a `$(...)` in it is an argument. Handing
+  the line to `sh -c` would make every operator-added connector a shell prompt.
+- **An environment is not headers, in the same column.** Header names are
+  lowercased and a variable's are not. `Headers::encode` wraps an environment in
+  `{"env": [...]}` so a row read back is never parsed as headers and its names
+  lowercased into different variables.
+- **A program starts with an empty environment.** `env_clear` is what keeps the
+  host's workspace token and provider keys away from a server somebody found on
+  npm. The stdio test proves it by checking a variable cargo sets is absent;
+  dropping `env_clear` fails it.

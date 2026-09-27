@@ -148,9 +148,10 @@ into your crew; point at them instead.
 
 Words that are easy to mix up, and are not interchangeable:
 
-- **Connectors** are MCP servers the crew signed in to. Their tools are named
-  `server__tool` and appear in your tool list only if the operator gave them to
-  you. The call acts on the operator's real account.
+- **Connectors** are MCP servers the crew signed in to, at an address or run as
+  a program on the host. Their tools are named `server__tool` and appear in your
+  tool list only if the operator gave them to you. The call acts on the
+  operator's real account.
 - **Tools** are single functions you call: `skill`, `settings`, `schedule`,
   `calendar`, `send_message` and the rest, and every connector's own.
 - **Skills** are markdown instructions you read with `skill`.

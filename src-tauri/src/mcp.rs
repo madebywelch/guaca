@@ -85,6 +85,8 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
+mod stdio;
+
 /// The revisions Guaca speaks, newest first.
 ///
 /// Order is the preference order: the first is what a modern request declares,
@@ -208,6 +210,11 @@ pub enum McpError {
     /// to arrive on a stream that is still technically connected.
     #[error("{endpoint} opened an event stream and did not answer {method} on it within {secs}s")]
     Silent { endpoint: String, method: String, secs: u64 },
+    /// A server run as a program on the host that could not be started, died,
+    /// or did not answer. The detail says which, with what it last wrote to
+    /// stderr when it wrote anything.
+    #[error("the connector run as `{}` failed: {detail}", .endpoint.trim_start_matches("stdio:"))]
+    Program { endpoint: String, detail: String },
 }
 
 impl McpError {
@@ -260,6 +267,9 @@ pub enum Transport {
     ///
     /// Only ever reached for a server the operator added. See the module docs.
     Sse,
+    /// A program on the host, one JSON-RPC message per line on its stdin and
+    /// stdout. See `mcp/stdio.rs`.
+    Stdio,
 }
 
 /// Everything needed to open a session, and nothing that comes back from one.
@@ -332,12 +342,21 @@ pub struct Session {
     /// inside every handshake and would have a remembered version overwritten
     /// on the next one anyway.
     negotiated: Option<String>,
+    /// The running program, for a server on the stdio transport. Shared rather
+    /// than owned so a session stays `Clone`; the program ends when the last
+    /// clone is dropped.
+    process: Option<std::sync::Arc<stdio::Process>>,
 }
 
 impl Session {
     /// Whether this session talks over the transport streamable HTTP replaced.
     pub fn sse(&self) -> bool {
         self.transport == Transport::Sse
+    }
+
+    /// Whether this session is a program on the host rather than an address.
+    pub fn stdio(&self) -> bool {
+        self.transport == Transport::Stdio
     }
 
     /// The revision every request on this session declares.
@@ -369,6 +388,11 @@ impl Session {
 /// authorization server is. That happens before the era is known, because a 401
 /// is the same answer in both.
 pub async fn open(dial: Dial<'_>) -> Result<Session, McpError> {
+    // A program on the host has no era to probe and nothing to remember: it
+    // shakes hands on every start, which is every session.
+    if dial.endpoint.starts_with(crate::domain::plugin::STDIO) {
+        return stdio::open(dial).await;
+    }
     let http = client()?;
 
     // What this endpoint was last time. A remembered answer that turns out to
@@ -418,11 +442,15 @@ async fn establish(
         session_id: None,
         server_name: server_name.clone(),
         negotiated,
+        process: None,
     };
     match (&era, &transport) {
         (Era::Modern { .. }, _) => Ok(free(era.clone(), None)),
         (Era::Legacy, Transport::Sse) => Ok(free(Era::Legacy, negotiated)),
         (Era::Legacy, Transport::Streamable) => initialize(http, dial).await,
+        // Never remembered, so never reached from a remembered answer; a
+        // program's session is its own start.
+        (Era::Legacy, Transport::Stdio) => stdio::open(dial).await,
     }
 }
 
@@ -489,6 +517,11 @@ async fn request_mirroring(
     mirrored: Vec<(String, String)>,
     timeout: Duration,
 ) -> Result<serde_json::Value, McpError> {
+    if let Some(process) = &session.process {
+        // Mirroring is a modern HTTP rule, and a program is neither.
+        let _ = (name, mirrored);
+        return stdio::request(process, method, params, timeout).await;
+    }
     let http = client()?;
     if session.sse() {
         // Mirroring is a modern-server rule and a modern server is never on
@@ -804,6 +837,7 @@ async fn initialize(http: &reqwest::Client, dial: Dial<'_>) -> Result<Session, M
             .unwrap_or_default()
             .to_string(),
         negotiated: Some(agreed),
+        process: None,
     };
 
     // A notification, not a request: no id, and the server answers 202 with no

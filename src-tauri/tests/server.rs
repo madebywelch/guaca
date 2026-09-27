@@ -369,6 +369,42 @@ async fn a_settings_change_reaches_every_client_and_two_at_once_both_land() {
 }
 
 #[tokio::test]
+async fn a_connector_run_as_a_program_on_the_host_is_tested_and_added_like_any_other() {
+    let (addr, _dir) = workspace().await;
+    let command =
+        format!("stdio:python3 {}/tests/fixtures/mcp-stdio.py", env!("CARGO_MANIFEST_DIR"));
+    let env = json!([{ "name": "FIXTURE_TOKEN", "value": "a-secret-value" }]);
+
+    let (status, report) =
+        call(addr, "probe_server", json!({ "url": command, "headers": env })).await;
+    assert_eq!(status, 200, "{report}");
+    assert!(report["ok"]["transport"].as_str().unwrap().starts_with("stdio"), "{report}");
+    assert_eq!(report["ok"]["tools"], json!(["echo", "whoami", "fail"]));
+
+    let (_, groups) = call(addr, "list_groups", json!({})).await;
+    let group = groups["ok"][0]["id"].clone();
+    let (status, added) = call(
+        addr,
+        "add_plugin",
+        json!({ "groupId": group, "name": "fixture", "url": command, "headers": env }),
+    )
+    .await;
+    assert_eq!(status, 200, "{added}");
+    assert!(!added.to_string().contains("a-secret-value"), "a value came back: {added}");
+    assert!(added.to_string().contains("FIXTURE_TOKEN"), "the name is shown: {added}");
+
+    // A key is not how a program is given one.
+    let (_, refused) = call(
+        addr,
+        "add_plugin",
+        json!({ "groupId": group, "name": "other", "url": command, "key": "sk-x" }),
+    )
+    .await;
+    assert_eq!(refused["err"]["kind"], "validation", "{refused}");
+    assert!(refused["err"]["message"].as_str().unwrap().contains("environment variable"));
+}
+
+#[tokio::test]
 async fn the_operators_quick_actions_reach_every_window() {
     let (addr, _dir) = workspace().await;
     let (mut other, _) =

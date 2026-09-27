@@ -267,7 +267,9 @@ pub async fn inspect(
     let report =
         |session: &mcp::Session, server: String, tools: Vec<PluginTool>, signin| ServerReport {
             endpoint: endpoint.to_string(),
-            transport: if session.sse() {
+            transport: if session.stdio() {
+                "stdio, a program on this host".to_string()
+            } else if session.sse() {
                 "HTTP+SSE (2024-11-05)".to_string()
             } else {
                 "streamable HTTP".to_string()

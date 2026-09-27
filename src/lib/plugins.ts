@@ -131,7 +131,16 @@ export function nameFor(kind: PluginKind): string {
  * here: what an operator is about to authorize has to be the address that is
  * actually dialled, not a second copy of it that can drift.
  */
+/** The scheme of a server run as a program on the host. `domain::plugin::STDIO`. */
+export const STDIO = "stdio:";
+
 export function hostOf(endpoint: string): string {
+  // A server run as a program has no host to name; the program is what says
+  // which one it is.
+  if (endpoint.startsWith(STDIO)) {
+    const program = endpoint.slice(STDIO.length).trim().split(/\s+/)[0] ?? "";
+    return `${program} on the host`;
+  }
   try {
     return new URL(endpoint).host;
   } catch {

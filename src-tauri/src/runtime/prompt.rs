@@ -377,7 +377,11 @@ pub fn system_prompt(
                     // whose machine is on the other end of the call. For the
                     // six it would be noise: the name already says it, and the
                     // address is the same on every install.
-                    if set.kind.is_custom() {
+                    // A program is described rather than quoted: its command
+                    // line is the operator's to write and can carry a token.
+                    if set.kind.is_stdio() {
+                        " (a program your operator runs on this workspace's host)".to_string()
+                    } else if set.kind.is_custom() {
                         format!(" (your operator's own server at {})", set.kind.endpoint())
                     } else {
                         String::new()
