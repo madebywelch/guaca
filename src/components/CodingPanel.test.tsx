@@ -13,27 +13,12 @@ const messageCodingJob = vi.mocked(api.messageCodingJob);
 const stopCodingJob = vi.mocked(api.stopCodingJob);
 
 const AGENT = "a1";
-const REPO = "r1";
+const REPO = "vision-ios";
 
 function seed(over: Partial<ReturnType<typeof useStore.getState>> = {}) {
   useStore.setState({
     building: {},
     coding: {},
-    repositories: [
-      {
-        id: REPO,
-        groupId: "g1",
-        name: "vision-ios",
-        path: "/Users/you/dev/vision-ios",
-        note: "",
-        harness: "pi",
-        gate: "open",
-        bench: "own",
-        remote: null,
-        createdAt: 0,
-        updatedAt: 0,
-      },
-    ],
     ...over,
   });
 }
@@ -53,10 +38,16 @@ describe("CodingPanel", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("names the repository being worked in", () => {
+  it("names the directory being worked in", () => {
     seed({ building: { [AGENT]: REPO } });
     render(<CodingPanel agent={AGENT} />);
     expect(screen.getByText(/Writing code in vision-ios/)).toBeTruthy();
+  });
+
+  it("says its terminal rather than a dot for a job at the top of it", () => {
+    seed({ building: { [AGENT]: "." } });
+    render(<CodingPanel agent={AGENT} />);
+    expect(screen.getByText(/Writing code in its terminal/)).toBeTruthy();
   });
 
   it("says it is starting before the first tool call arrives", () => {

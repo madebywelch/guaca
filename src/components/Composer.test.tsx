@@ -49,7 +49,6 @@ let roster: AgentCard[] = [];
 /** What the composer reads off the store: the roster, and whether there is a disk. */
 const state = {
   capabilities: {
-    localDirectories: true,
     loopbackEndpoints: true,
     claudeProvider: true,
     claudeCodeHarness: true,
@@ -93,7 +92,9 @@ function anAgent(name: string, group = CREW): AgentCard {
     hasBrowser: false,
     runsErrands: false,
     browserConsent: "open",
-    repositoryId: null,
+    hasTerminal: false,
+    harness: "pi",
+    gate: "open",
     version: 1,
   };
 }

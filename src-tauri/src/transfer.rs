@@ -16,10 +16,11 @@ type Row = Map<String, Value>;
 type Result<T> = std::result::Result<T, String>;
 pub const MAX_ARCHIVE: usize = 64 * 1024 * 1024;
 
-// Order is also insertion order. Nothing from repository or plugin credential stores.
+// Order is also insertion order. Nothing from plugin credential stores, and no grant:
+// a terminal, a computer and a browser are given again on the host a crew lands on.
 const TABLES: &[(&str, &str, &str)] = &[
     ("groups", "id,name,created_at,base_url,default_model,provider,subscription_model,reasoning_effort,request_timeout_secs,max_hops,max_steps_per_run,max_fanout_per_call,max_sends_per_pair,max_tool_rounds", "id = ?1"),
-    ("agents", "id,group_id,name,avatar,color,model,reasoning_effort,system_prompt,skills,lifecycle,version,created_at,updated_at,pinned,rail_order,discarded_at,browser_consent", "group_id = ?1"),
+    ("agents", "id,group_id,name,avatar,color,model,reasoning_effort,system_prompt,skills,lifecycle,version,created_at,updated_at,pinned,rail_order,discarded_at,browser_consent,harness,gate", "group_id = ?1"),
     ("routines", "id,agent_id,name,what,fires,active,next_run_at,last_run_at,created_at,skip_if_working", "agent_id IN (SELECT id FROM agents WHERE group_id = ?1)"),
     ("messages", "id,run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,cause,created_at,intent", "channel_id IN (SELECT id FROM agents WHERE group_id = ?1)"),
     ("occasions", "id,group_id,agent_id,title,detail,place,starts_at,minutes,all_day,created_at,updated_at", "group_id = ?1"),
@@ -147,12 +148,10 @@ pub fn export(
     }
     // Preserve references to services, not their grants, cookies or running machines.
     for (table, fields, kind) in [
-        ("repositories", "id,name,path,remote,note,harness,gate,bench", "repository"),
         ("plugins", "id,kind,endpoint,access", "plugin"),
         ("connectors", "id,service,account,env_var,note", "credential"),
     ] {
         for mut details in read_rows(&tx, table, fields, "group_id = ?1", &group)? {
-            let id = text(&details, "id")?.to_string();
             let name = details
                 .get("name")
                 .or_else(|| details.get("kind"))
@@ -160,23 +159,16 @@ pub fn export(
                 .and_then(Value::as_str)
                 .unwrap_or(kind)
                 .to_string();
-            let agents =
-                if kind == "repository" && columns(&tx, "agents")?.contains("repository_id") {
-                    let mut query = sql(tx.prepare(
-                        "SELECT name FROM agents WHERE repository_id = ?1 AND group_id = ?2",
-                    ))?;
-                    let rows = sql(query.query_map(params![id, group], |r| r.get(0)))?;
-                    sql(rows.collect())?
-                } else {
-                    Vec::new()
-                };
             details.remove("id");
-            for key in ["remote", "endpoint"] {
-                if let Some(value) = details.get_mut(key) {
-                    clean_address(value);
-                }
+            if let Some(value) = details.get_mut("endpoint") {
+                clean_address(value);
             }
-            archive.reconnect.push(Reconnect { kind: kind.into(), name, details, agents });
+            archive.reconnect.push(Reconnect {
+                kind: kind.into(),
+                name,
+                details,
+                agents: Vec::new(),
+            });
         }
     }
     if !columns(&tx, "group_imports")?.is_empty() {
@@ -602,7 +594,8 @@ mod tests {
                 .unwrap();
             conn.execute("INSERT INTO routines (id,agent_id,what,fires,created_at,active) VALUES (?1,?2,'Check tests','once',1,1)", params![uuid::Uuid::new_v4().to_string(),agent.to_string()]).unwrap();
             conn.execute("INSERT INTO occasions (id,group_id,agent_id,title,starts_at,created_at,updated_at) VALUES (?1,?2,?3,'Review',1000,1,1)", params![uuid::Uuid::new_v4().to_string(),group.to_string(),agent.to_string()]).unwrap();
-            conn.execute("INSERT INTO repositories (id,group_id,name,path,harness,created_at,updated_at) VALUES (?1,?2,'Code','/old/code','codex',1,1)",params![uuid::Uuid::new_v4().to_string(),group.to_string()]).unwrap();
+            conn.execute("UPDATE agents SET has_terminal=1, harness='codex', gate='askBeforePushing' WHERE id=?1", [agent.to_string()]).unwrap();
+            conn.execute("INSERT INTO connectors (id,group_id,service,account,env_var,secret,created_at,updated_at) VALUES (?1,?2,'Cloudflare','ops','CLOUDFLARE_API_TOKEN','connector-secret',1,1)", params![uuid::Uuid::new_v4().to_string(),group.to_string()]).unwrap();
             Self { _dir: dir, store, workspace, files, group, agent }
         }
         fn export(&self) -> Archive {
@@ -621,9 +614,15 @@ mod tests {
         assert!(!text.contains("provider-secret"));
         assert!(!text.contains("machine-secret"));
         assert!(!text.contains("rented-machine"));
+        assert!(!text.contains("connector-secret"));
+        assert_eq!(archive.reconnect[0].kind, "credential");
         assert_eq!(archive.tables["groups"].len(), 1);
         assert_eq!(archive.tables["agents"].len(), 1);
-        assert_eq!(archive.reconnect[0].details["harness"], "codex");
+        // How the agent codes travels; that it may is given again on arrival.
+        let agent = &archive.tables["agents"][0];
+        assert_eq!(agent["harness"], "codex");
+        assert_eq!(agent["gate"], "askBeforePushing");
+        assert!(!agent.contains_key("has_terminal"), "{agent:?}");
     }
     #[test]
     fn reasoning_efforts_survive_export_and_invalid_efforts_are_refused() {

@@ -21,7 +21,7 @@ pub(super) const INSTALL: &str = "npm install -g --ignore-scripts @earendil-work
 /// pi's own settings, and a second place to say either is a second place for it
 /// to be wrong. Choosing between *programs* is what the repository's harness
 /// column is for, and it is a different question: see
-/// [`crate::domain::repository::Harness`].
+/// [`crate::domain::terminal::Harness`].
 pub(super) fn argv(task: &str) -> Vec<String> {
     ["--mode", "json", "--append-system-prompt", super::APPENDED_PROMPT, "-p", task]
         .iter()

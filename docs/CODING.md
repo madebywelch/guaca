@@ -1,318 +1,266 @@
 # Coding
 
-An agent can be given a repository: a directory on the operator's own machine
-that is the root of a git work tree. `domain/repository.rs` is the shape and the
-rules that need no disk, `repo.rs` is the disk, and `coding/` is the program that
-does the writing.
+An agent can be given a terminal: a directory of its own on the host, the
+shell that starts there, three file tools, and a coding harness it can hand a
+change to. `domain/terminal.rs` is the shape and the rules that need no disk,
+`terminal.rs` is the disk, `shell.rs` is the small door, and `coding/` is the
+program that does the long work.
 
-Guaca does not write code. It starts something that does, in the directory the
-operator linked, and reads what comes back. There are two of those things, `pi`
-and Claude Code, and the operator installs and signs in to whichever ones they
-use. Why an agent gets a directory rather than a tier, why it gets at most one,
-and why the linked path has to be the root, are in `domain/repository.rs`. What
-follows is what will bite you in the code.
+The host is wherever `guacad` runs: a container on the operator's Mac, or a
+box they connected to. Nothing here runs on the operator's own machine outside
+that, and every path an agent sees is the host's.
 
-## A turn and a coding task are different units of work
+## Why a directory of the agent's own, and not a repository
 
-This is the whole reason there is a harness at all rather than `read` and `edit`
-tools in this runtime.
+A repository used to be a row. The operator linked a directory, or on a box
+the workspace cloned a remote, and the row carried a credential, a commit
+identity, a harness, a push gate and a worktree policy, with at most one agent
+assigned. By the end each agent already worked in a git worktree of its own
+rather than in the operator's checkout, and the host already ran in a
+container, so the row was bookkeeping about a directory the agent owned
+anyway. It was also most of what an operator had to understand before an agent
+could write a line: link, clone, token, identity, harness, gate, bench, assign.
 
-A guaca turn is one model call plus `max_tool_rounds` rounds, twenty-four by
-default, inside a conversation bounded at sixty model calls. A real change to a
-repository is a few hundred tool calls, its own context window and its own
-compaction. Reaching that with tools here means raising both limits to coding
-scale, and both are per group, so the guard that keeps a crew of eight from
-talking forever comes off for every agent in every crew.
+The terminal replaces it, and each part of the row went somewhere simpler.
 
-So the harness keeps its own loop, its own context and its own budget, and Guaca
-spends one tool round starting it. The `code` tool returns as soon as the process
-is up, and the answer arrives minutes later as a message on a fresh run. Awaited
-inside the tool call, the agent would read as `Thinking` for the length of a
-change to a codebase, its inbox would back up behind it, and every routine that
+- **The remote** is the agent's to clone. `git clone` in its own directory,
+  like anybody else.
+- **The credential** is the host's. The desktop's container and a box both
+  hold git and `gh` sign-ins on their persistent volume, and a `GH_TOKEN`
+  secret granted to an agent signs in both for that agent alone. See
+  *Credentials belong to the host* below.
+- **The commit identity** is the host's git config.
+- **The harness and the gate** are the agent's, because they are about how
+  this agent's work happens, and one crew can hold an engineer on each plan.
+- **The worktree policy** is gone. The agent's directory is its own, so there
+  is nothing to share and nothing to reset behind its back.
+- **The footing**, what a job is told about the tree it starts in, stayed
+  exactly as it was.
+
+Migration 54 carried the one decision worth keeping: an agent that was put in
+a repository was trusted with a shell there, so it arrives with a terminal and
+the harness and gate it worked under. What was in the repository stays where
+it was on disk; the agent starts in an empty directory and clones what it
+needs.
+
+## Three doors, sized by the work
+
+**`shell` runs one line and answers in the turn.** `git clone`, `git status`,
+`gh pr view`, `gh pr merge`, one test. It waits, it is killed after
+`shell::PATIENCE`, and its output is clipped to `KEPT` bytes with both ends
+kept. Every call starts in the agent's directory, so a line that needs to be
+inside a repository says `cd guaca && ...` or `git -C guaca ...`.
+
+**`read`, `write` and `edit` look at and change files.** They exist beside the
+shell because a model editing through it writes `sed` expressions and heredocs
+that break on the first quote or dollar sign in the text. Every coding harness
+ships an exact-replacement edit for that reason, and this is the same tool:
+each `old_text` has to appear exactly once, every replacement is matched
+against the file as it was, and if any of them does not match nothing is
+written. `read` pages a file at 2,000 lines or 50 KB, whichever comes first,
+and says where it is in the file. `read` takes an absolute path anywhere,
+because reading changes nothing and the shell can read anywhere anyway;
+`write` and `edit` stay inside the directory, resolved through links, because
+an agent editing a file outside the directory it was given is an agent wrong
+about where it is standing. That is a refusal about the ordinary case and not
+confinement.
+
+The names are pi's and Claude Code's, which is what a model reaches for. They
+sit one word away from `read_file`, which reopens an attachment somebody sent,
+so each description says which one it is in its first sentence.
+
+**`code` hands a change to a coding harness for minutes.** A Guaca turn is one
+model call plus `max_tool_rounds` rounds, twenty-four by default, inside a
+conversation bounded at sixty model calls, and there is no compaction inside a
+turn. A real change to a repository is a few hundred tool calls, its own
+context window and its own compaction. Reaching that with the file tools means
+raising both limits to coding scale, and both are per group, so the guard that
+keeps a crew of eight from talking forever comes off for every agent in every
+crew. So the harness keeps its own loop, its own context and its own budget,
+and Guaca spends one tool round starting it. `code` returns as soon as the
+process is up, and the answer arrives minutes later as a message on a fresh
+run. Awaited inside the tool call, the agent would read as `Thinking` for the
+length of a change, its inbox would back up behind it, and every routine that
 came due would be skipped.
 
-## A repository has two doors, and the small one is `shell`
+The prompt's `## Your terminal` section says which door is for what, because a
+tool list is read while deciding how to do something and the prompt is read
+while deciding whether it can be done at all.
 
-The section above is the argument for the harness. It is not an argument for the
-harness being the *only* way in, and for a while it was, which turned out to be
-the more expensive half.
+## It is not a sandbox, and must never be described as one
 
-An agent given a repository could do exactly one thing with it: hand a brief to
-a coding harness and wait minutes for a message. That is right for a change to a
-codebase and wrong for everything else an agent needs from a directory. `git
-status`. `git log -1`. Reading a file. `gh pr view`. `gh pr merge 98`. Each of
-those is a question with an answer, and each of them cost a whole coding job:
-its own process, its own context window, its own spend on somebody's plan, and
-an answer that arrives after the turn that wanted it has ended.
+The shell, the file tools and the harness all run as the host's user, with that
+user's credentials and network. A command can reach anywhere that user can.
+The directory is where work starts and where an agent's files are kept, not a
+boundary around them. What makes handing it over defensible is that the
+operator decides which agents get one, and git is the undo for what happens in
+a repository.
 
-The failure that made it worth fixing was not the cost. It was what an agent
-does when the one door will not open. A harness refuses to start for ordinary
-reasons — a spent plan, a program not installed, another job already in the work
-tree — and an agent holding a repository, asked to merge a pull request, then
-reports to the operator that it has no shell and no way to reach GitHub. Both
-sentences are true of a design with one door in it, and neither is true of the
-machine it is running on, where `gh` is installed and signed in.
+That is also why there is no second setting per door. The decision was taken
+when the operator gave the agent a terminal; a switch per tool would be a second
+place to say the same thing, and the first agent to find one off would report
+its terminal as broken rather than as fenced.
 
-So `shell` runs one line in the repository and hands back what it printed, in
-the turn that asked. It is offered on exactly the same condition as `code` —
-`Surfaces::repository`, which is the operator having put this agent in a
-directory — and it is the same directory. `src-tauri/src/shell.rs` is the whole
-of the running; `Runtime::run_in_repository` is the gate and the lookup in front
-of it.
+On a desktop the host is a container, so the agent does not see the operator's
+files unless the container mounts them. That is a property of where the host
+runs, not a boundary this code draws.
 
-### It adds directness, not reach
+## Credentials belong to the host
 
-The line runs as the operator, in their directory, with their credentials and
-their network. That is the same sentence *What is not here* writes below, and it
-was already true: a coding job in that directory runs arbitrary commands under
-`--permission-mode bypassPermissions`, with the operator's own MCP servers and
-hooks loaded. Nothing an agent can do through `shell` was out of reach through
-`code`. What is new is that it costs a second instead of ten minutes.
+git and `gh` are signed in where the host runs, once, and every agent's
+terminal uses that. The image configures git system-wide to ask `gh` for
+GitHub credentials (`credential.https://github.com.helper = !gh auth
+git-credential`), so two arrangements work without anything in Guaca holding a
+token:
 
-That is also why there is no new operator setting. The decision was taken when
-they linked the directory and put an agent in it; a second switch would be a
-second place to say the same thing, and the first agent to find the switch off
-would report the repository as broken rather than as fenced.
+- **The host's own sign-in.** `gh auth login` as the host's user, in the
+  container: `docker exec -it <container> gh auth login` on a desktop,
+  `docker compose exec guacad gh auth login` on a box. It lives on the
+  persistent volume.
+- **A secret per agent.** A `GH_TOKEN` secret granted to one agent reaches its
+  shell and its coding jobs as an environment variable, and `gh` and git both
+  read it. That is how one agent can push to a repository another cannot: the
+  scope is the token's, chosen when it was made on GitHub.
 
-### The gate is asked from the same function, and that is the point
+The commit author is the host's git config: `git config --global user.name`
+and `user.email` as the host's user. Secrets cannot set it, because `GIT_*`
+names are reserved against exactly that kind of override (`connector::reserved`).
 
-`Gate::AskBeforePushing` stops a job before a push, a merge, a pull request or a
-release, whether the line says so itself or keeps it in one of the repository's
-own scripts. It stops `shell` at the same commands, decided by the same
-`bridge::outward` call, answered on the same desk through the same
-`Runtime::ask_about_push`. Two doors into one directory that disagreed about
-what counts as outward-facing would be a gate an agent walks around by picking
-the other tool, which is worse than no gate at all: the operator switched it on
-and would be told it was holding.
+What went away is Guaca's own credential plumbing: a plaintext
+credential-store file per repository, reuse of saved tokens across
+repositories, per-repository identity, and a GitHub App broker with its own
+container, private key and `gh` wrapper. Every one of those was a second place
+for a credential to live beside the one the harness programs already read, and
+the programs were the ones pushing.
+
+## The gate is asked from one function, for every door
+
+`Gate::AskBeforePushing` stops a push, a merge, a pull request or a release,
+whether the line says so itself or keeps it in one of the repository's own
+scripts. It stops `shell` and each harness's command tool at the same commands,
+decided by the same `bridge::outward` call, answered on the same desk through
+the same `Runtime::ask_about_push`. Two doors that disagreed about what counts
+as outward-facing would be a gate an agent walks around by picking the other
+tool, which is worse than no gate at all: the operator switched it on and
+would be told it was holding.
 
 `Asker` is everything that differs. A job is not a turn and its agent may be
-idle or answering somebody else, so its request does not move the dot beside the
-agent's name; a `shell` call is a turn genuinely stopped mid-inference and has
-to say so. The card says which it is, because an operator deciding needs to know
-whether they are looking at a job that has been running for ten minutes or at
-the agent they are talking to.
+idle or answering somebody else, so its request does not move the dot beside
+the agent's name; a `shell` call is a turn genuinely stopped mid-inference and
+has to say so.
 
-A denial refuses the *call*, not the outward-facing part of it, exactly as the
+A denial refuses the *call*, not the outward-facing part of it, exactly as a
 hook's `deny` does. `touch a.txt && git push` runs neither half. A refusal that
-ran the first command and stopped at the second would leave the tree in a state
-nobody asked for and nobody was told about.
+ran the first command and stopped at the second would leave the tree in a
+state nobody asked for and nobody was told about.
 
-### Two bounds, and neither is confinement
+### The line is read, and then what the line runs is read
 
-A job gets forty-five minutes because it is its own unit of work. A `shell` call
-happens inside a turn, so it gets `shell::PATIENCE`, and its output is clipped
-to `KEPT` bytes with both ends kept and the middle counted. Those keep one call
-from taking a turn or a context window with it. They are not a boundary and must
-not be described as one: what confines this is the directory the operator chose
-and the fact that git can undo what happens inside it.
+Reading the words alone is what one level of indirection walks straight past.
+`./scripts/ship.sh` is not `git push` and never will be, so a repository whose
+release lives in a script had a gate that was switched on, said it was holding,
+and stopped nothing.
 
-Both bounds say what to do next when they bite, because a tool result an agent
-cannot act on is one it reruns unchanged. A killed line names `code` as the tool
-for work that takes minutes. A clipped stream names `head`, `tail` and `grep` in
-the gap where the middle was.
+So a line that names nothing outward-facing is looked at again, for the scripts
+*in this tree* that it runs: a `package.json` entry behind `npm run release`,
+`pnpm release` or `yarn release`, and a file behind `./scripts/ship.sh` or
+`bash scripts/ship.sh`. Each one is read and asked the same question, three
+deep, with a set carried across the whole walk so that two scripts that run
+each other are read once rather than forever.
 
-### No lock, deliberately
+A `cd` moves where the rest of the line runs, and what comes after it is read
+from there. That is the ordinary shape of a line in a terminal holding several
+repositories, `cd guaca && npm run release`, and read from the top of the
+terminal it named a `package.json` that is not there. A `cd` out of the tree
+leads somewhere nothing is read.
 
-`Runtime::start_job` takes one per work tree, because two harnesses in a
-directory interleave their edits over minutes and nothing downstream could say
-which of them wrote what. One line is not that. It is the same thing as the
-operator typing in their own terminal while a job runs, which nothing here
-prevents and which is ordinary.
+The card carries both halves, because they are not the same sentence:
+*wants to run `git push`, by way of `guaca/package.json "release"`*. What is
+being authorized is the thing that cannot be taken back, and the script is how
+the agent got there. The `Command` detail field holds the line the model
+actually wrote, flags and all, which is the one detail on a card that changes
+the answer.
 
-Refusing it would also take away the read an agent most wants while a job is
-running, which is what the job is doing — and would put back a version of the
-failure the busy refusal already caused once: an agent told to wait for a
-message its own turn was holding up.
+### And what it deliberately does not read
 
-### A shell and a computer are two machines
+A Makefile target, a compiled program, anything it cannot parse as text. Those
+are indirection too, and reading none of them is a decision rather than a gap.
+Treating *there is something here I cannot see through* as a reason to ask
+sounds like the safe direction and is not: the ordinary case for it is
+`./target/release/app` and `./node_modules/.bin/vite`, and a gate that parks a
+turn for running the binary it just compiled is the wrong yes that teaches an
+operator to switch it off.
 
-An agent with both a computer and a repository is holding two tools that run
-shell commands on two unrelated filesystems, which is the `browse`/`use_screen`
-hazard one level up. So each description names the other, and only when the
-other is actually in the list: `run_command` says the repository is not on that
-machine, `shell` says the sandbox is not where the codebase is. A model reads
-one description and takes the nearest shell.
+### One no settles the question for the rest of the run
 
-Secrets granted to the agent now reach both repository doors as environment
-variables, as well as computer commands. Values are scrubbed from Guaca output.
-The storage, grant and process boundaries are described in `docs/SECRETS.md`.
+A model that has just been refused a push tries the push. `Runs::refused`
+holds what each run has already been told no about, keyed by the outward
+action the card named rather than by the line, and `ask_about_push` reads it
+before it parks anything. A no is remembered and nothing else is: an expiry is
+the operator being somewhere else rather than answering. It is per run, so the
+operator's next message starts clean. A standing grant to act on the
+operator's behalf outranks it, because it is the broader answer and the newer
+one.
 
-## There are two harnesses because a subscription is spent by one program
+### It is not a boundary
+
+A shell line is not something anything can parse without a shell, and a
+command that wanted to get around this could. What it buys is that the
+ordinary push, made by an agent doing what it was asked, is one somebody sees
+first.
+
+## The gate and the harness are the agent's
+
+Not the crew's, and not a repository's. The harness is about which plan pays
+for this agent's code, and one crew can hold an engineer on a Claude plan and
+another on OpenRouter. The gate is about whether this agent's pushes need a
+hand on them. Both are columns on the agent, beside `has_terminal`, and both
+survive taking the terminal away: an operator who gives it back means the agent
+they configured.
+
+A job reads both when it starts, and a job already running keeps what it
+started with. The result an agent is told names the harness that actually ran,
+because a conversation about Codex does not prove Codex ran.
+
+The gate is off by default, and that is not caution about a migration.
+`APPENDED_PROMPT` tells every job that it is running unattended and that nobody
+will answer a question. An operator turning it on is an operator saying they
+will be there.
+
+## There are three harnesses because a subscription is spent by one program
 
 This is the part that is not a preference and not a configuration surface.
 
 `pi` can hold an Anthropic OAuth credential and dial the Messages API with it.
 What comes back is a 400 saying *You're out of extra usage*, while `claude` on
-the same machine, signed in to the same account, runs the same work off the plan.
-The same fact is already written down from the other end in `PROTOCOL.md`, where
-it is why Guaca's own turns cannot be paid for with a Claude sign-in: consumer
-OAuth tokens are restricted to the programs they were issued to.
+the same machine, signed in to the same account, runs the same work off the
+plan. The same fact is written down from the other end in `PROTOCOL.md`, where
+it is why Guaca's own turns cannot be paid for with a Claude sign-in except by
+running the program.
 
-So an operator whose ChatGPT plan is spent and whose Claude plan is not cannot be
-helped by any amount of configuration on one harness. They need the other
-program. Two variants of `Harness` are the whole of the answer, and a provider
-flag on a single command line is not: it would produce exactly the refusal above.
+So the three map onto what an operator pays with:
+
+- **A Claude plan** is spent by Claude Code.
+- **A ChatGPT plan** is spent by Codex, signed in with `codex login`. That is
+  a separate sign-in from Guaca's own ChatGPT provider.
+- **An API key**, OpenRouter's or any provider's, is spent by `pi`, configured
+  with that key the way `pi` is configured anywhere.
 
 What is *not* a choice here is everything inside a harness. The model, the
-thinking level, the extensions, the rules file and the sign-in all belong to the
-program and stay there. `coding/pi.rs` passes no `--provider` and no `--model`,
-and `coding/claude_code.rs` passes no `--model`, for the reason the binary is
-found on `PATH` rather than configured: a second place to say something is a
-second place for it to be wrong.
-
-## The choice is on the repository
-
-Not on the workspace, and not on the agent.
-
-Not the workspace, because it is the same shape as the note: a fact about how
-work happens *here*. One codebase can be the one whose plan still pays and
-another can be the one on an API key, and a single global answer cannot say that.
-
-Not the agent, because two agents in one directory running two different programs
-is two coding agents in one work tree, which is what `Runtime::start_job` takes a
-lock to prevent. That lock is per repository and is held for the life of the job:
-two harnesses in one directory interleave their edits and run git against each
-other, and nothing downstream could say which of them wrote what.
-
-The column is `repositories.harness`, added by migration 40 with a default of
-`'pi'`, which is a statement of fact rather than a preference: it is what every
-row written before it was already running. An unrecognized value reads back as
-`pi` rather than failing the row, because the only way to write one is a newer
-build and then a downgrade, and refusing to read it would take the repository off
-the one panel where the operator could fix it.
-
-## Editing one carries no path, and the type is what says so
-
-`update_repository` takes a `RepositoryEdit`: a name, a note and a harness, and
-nothing else. The path is not a parameter because a different directory is a
-different repository, and whoever was given this one was given that directory.
-
-It is a separate type rather than a `RepositoryDraft` with the path left out,
-because that is what it was and it did not work. A draft validates the path
-first, so an edit routed through one has to invent a stand-in, the stand-in was
-`/`, and `/` is the empty string once `clean` takes its trailing separator off.
-Every rename, every note and every harness switch was refused with *a repository
-needs a directory; pick one to link*, about a directory the operator had already
-picked and could read on the row above the box. Neither the panel nor the store
-was wrong, and both have tests, which is why it lasted from the day repositories
-shipped: the only untested seam was the shape being passed between them.
-
-The lesson is not "check the stand-in". It is that a command whose whole rule is
-*this field is not editable* must not take a type with that field on it.
-
-## One process lifecycle, two of what genuinely differs
-
-What the two harnesses share is the shape of a job: one process, in one
-directory, whose stdout is a stream of JSON objects, one per line, that ends. So
-`coding/mod.rs` holds the spawn, the read loop, the ceiling, the kill and the
-exit handling, and each submodule holds the two things that differ: the argument
-vector, and the fold from an event into an `Outcome`.
-
-Three details of the vectors are load-bearing and none of them is guessable.
-
-- **`claude` refuses `--output-format stream-json` without `--verbose`.** The
-  refusal is on the command line, so the failure is a job that never starts
-  rather than a job that fails.
-- **Both run in the mode that does not ask.** `pi` has no permission system of
-  its own and says so in its own documentation; Claude Code is given
-  `--permission-mode bypassPermissions`. There is nobody to answer: the job is
-  started by an agent, runs unattended for many minutes, and reads its stdin from
-  `/dev/null`. A prompt on this path is not a safety control, it is a process
-  that hangs until the ceiling kills it.
-- **Neither is asked for a session-less run.** A session on disk is what lets the
-  operator open the same work in their own terminal with `pi -c` or `claude -c`,
-  which is the difference between a harness the app runs and a black box.
-
-The two tool tables are separate for the same kind of reason. `pi`'s built-ins
-are lowercase and carry `path`; Claude Code's are capitalized and carry
-`file_path`. Merged, one program's field name gets read out of the other's
-arguments, and a wrong guess there prints somebody's file contents into a
-channel. Anything not in a table draws no detail at all, which is what every MCP
-tool the operator has connected falls into.
-
-## Each agent gets a work tree of its own, and Guaca resets it
-
-The linked directory is the operator's own checkout, and until this existed a
-coding job ran in it. That made three things true at once.
-
-The job and the operator shared one branch. Two agents in one codebase could not
-work at the same time, because `Runtime::start_job` takes a lock per work tree
-and there was only ever one. And a job that opened a pull request left the tree
-standing on the branch it made: the work landed, the branch was over, and the
-rail went on naming it for weeks.
-
-`Bench::Own` is a linked git worktree per agent, under the app's data directory,
-one job per agent in it. The operator's checkout is never checked out, never
-switched and never cleaned. Two agents are two directories, so the lock moved
-from the repository to the directory, which is what the invariant was always
-about: two harnesses in one work tree interleave their edits, and two harnesses
-in two work trees cannot see each other.
-
-And because Guaca owns the tree, it can put it back. `repo::prepare` runs before
-every job: fetch, make the tree if it is not there, and reset it to the default
-branch whenever nothing would be lost.
-
-**Whenever nothing would be lost is `Footing::resettable`, and each of its three
-refusals is work that exists in exactly one place.** Uncommitted changes, which
-is what a job killed at the ceiling leaves. Commits that neither the default
-branch nor a remote has. And a repository with no default branch or no commits,
-which are the two states with nowhere to be put back *to*. What is deliberately
-not a reason to hold is a branch that is pushed with a pull request open: its
-work is safe on the remote and the next brief is usually about something else, so
-the tree goes back and a job that needs that branch checks it out again, which is
-one command against a tree that otherwise sits on a landed branch for a month.
-
-**The reset is at the start of a job and never at the end**, which is the same
-argument the next section makes about the footing, for the same reason. A job
-killed at the forty-five minute ceiling never runs its cleanup and a job that
-died on a spent plan never reached it. Preparation at the start always happens.
-
-**It is a choice, and the reason is ignored files.** A worktree is a fresh
-checkout, so it has no `node_modules`, no `target`, no `.venv` and no `.env` —
-which is the exact thing `repo.rs`'s own header says the linked-directory design
-exists to avoid. Long-lived *per agent* rather than per job is what makes the
-trade work: the cost is paid once and the caches survive every later job, and the
-preamble says where the operator's checkout is so a job that needs a gitignored
-file can go and get it. That is a good trade in most repositories and a bad one
-in a few — submodules, LFS, a checkout large enough that a second one is real
-disk — and those keep `Bench::Shared`.
-
-**Three things the preamble says that the job cannot work out from inside the
-directory.** That the tree is its own and nobody else works in it. That on a
-fresh one nothing git ignores is present yet, and where a copy would be. And the
-prohibition: git's stash belongs to the repository rather than to the work tree,
-so it is shared with the operator's own checkout and with every other agent, and
-a pop in any of them takes whatever was pushed last. Nothing about standing in a
-worktree hints at that.
-
-**`shell` moves with `code`.** `Runtime::run_in_repository` resolves the same
-bench, through `repo::ensure_bench` rather than `prepare`: an agent whose job
-works in a worktree and whose `git status` reads the operator's checkout is being
-told about a tree it is not working in, and that read is the one it most wants
-while a job is going. `ensure_bench` is the half that does not fetch and does not
-reset, because a line run inside a turn must not pay for a network round trip and
-must not move a branch somebody asked a question about.
-
-**A tree that could not be made refuses the job.** Falling back to the linked
-directory would put a harness in the operator's own checkout holding a lock taken
-on a path it is not in, so a second agent failing the same way would join it
-there. `CodingError::NoWorkTree` names the directory and the two ways out.
-
-**A new repository gets `Own` and an existing one keeps `Shared`.** This is the
-one setting whose SQL default and Rust default disagree, and migration 44 says
-why: `ALTER TABLE ... DEFAULT` only ever runs against rows that already exist,
-and moving somebody's jobs into a directory with none of their dependencies in
-it, on launch, with no gesture, is not an upgrade's decision to take.
+thinking level, the extensions, the rules file and the sign-in all belong to
+the program and stay there. `coding/pi.rs` passes no `--provider` and no
+`--model`, and `coding/claude_code.rs` passes no `--model`, for the reason the
+binary is found on `PATH` rather than configured: a second place to say
+something is a second place for it to be wrong.
 
 ## A job is told where it is standing before it is told what to do
 
 A harness handed a brief starts editing where it is standing, and where it is
 standing is wherever the last job left the tree. Nothing prompts it to look at
-the branch first, and nothing else in the app will: a job that opens a pull
-request ends on the branch it made, the operator merges it, and every job after
-that starts on a feature branch whose work has already landed. Weeks of work can
-stack on top of it before anybody notices, and the transcript reads correctly
-throughout.
+the branch first: a job that opens a pull request ends on the branch it made,
+the operator merges it, and every job after that starts on a feature branch
+whose work has already landed. Weeks of work can stack on top of it before
+anybody notices, and the transcript reads correctly throughout.
 
 So `repo::footing` reads the tree at the moment a job starts, and
 `Runtime::start_job` puts it in front of the brief: the branch, whether it is
@@ -320,427 +268,230 @@ clean, whether it tracks anything, whether that branch is already contained in
 the default one, and whether a pull request is open for it. Then one rule the
 facts resolve to.
 
-The obvious fix is the other end, a standing rule in `APPENDED_PROMPT` about
-what a job leaves behind, and it does not hold. A job killed at the ceiling
-never runs its cleanup. A job that opened a pull request should still be on its
-branch. Cleanup at the end is a step that sometimes does not happen; the footing
-at the start always does.
+Both halves are load-bearing. Facts alone are not enough: a model handed a
+branch name and a count decides for itself what to do with them, and the
+decision it makes silently is to carry on where it is standing. A rule alone
+cannot be written safely: *start from the default branch* over uncommitted work
+destroys it. The facts are what let the rule be conditional, and uncommitted
+work is checked before anything else and overrides every other case: do not
+switch, do not stash, do not clean, work from here or stop and say why.
 
-Everything here still applies on a bench, and is read from the bench rather than
-from the linked directory. The two are not alternatives: the footing tells the
-harness what to do about a tree it found, and the bench is a tree Guaca can also
-*act* on. `Footing::resettable` is that same question asked from the other end,
-and it is only ever asked of a tree this app owns.
-
-Both halves of the preamble are load-bearing, and this is the part to keep.
-Facts alone are not enough: a model handed a branch name and a count decides for
-itself what to do with them, and the decision it makes silently is to carry on
-where it is standing. A rule alone cannot be written safely, which is the
-sharper half. *Start from the default branch* over uncommitted work destroys it,
-and this is the operator's own machine rather than a sandbox. The facts are what
-let the rule be conditional, and uncommitted work is checked before anything
-else and overrides every other case: do not switch, do not stash, do not clean,
-work from here or stop and say why.
+A directory that is not a repository is said to be one. The standing prompt
+tells every job that commits are its only undo, and a job that believed that
+while standing somewhere git cannot see would edit for forty minutes with no
+checkpoint at all. The brief says to clone the repository the work belongs in,
+or `git init` before the first edit.
 
 Four details are not guesses.
 
 - **The merge test runs against `origin/main`, not `main`.** A branch merged
-  upstream has landed whether or not the local copy was ever pulled, and a local
-  default nobody has updated in a month calls every landed branch work in
-  flight. `default_branch` returns a name for the prose and a ref for the test,
+  upstream has landed whether or not the local copy was ever pulled.
+  `default_branch` returns a name for the prose and a ref for the test,
   because they are two different things.
 - **`origin/HEAD` first, `main` and `master` only after it.** The repository's
   own answer beats a guess, and where nothing published one, the preamble says
-  so and asks the harness to decide rather than sending it to a branch that does
-  not exist.
+  so and asks the harness to decide.
 - **Every count is against the last fetch, and the preamble says so even when
-  they are zero.** Zero is where it misleads rather than where it is safe to
-  drop: a branch merged upstream an hour ago and never fetched reads here as
-  work in flight, level with its upstream. Fetching on the operator's behalf is
-  not this app's call. The harness is the thing standing in the directory with a
-  shell.
+  they are zero.** Fetching on the agent's behalf is not this app's call; the
+  harness is the thing standing in the directory with a shell.
 - **A repository with no commits says so.** Git names an unborn HEAD after the
   branch the first commit will create, so without it the preamble says *on
-  branch `main`* and *there is no `main`* two lines apart, and a model handed a
-  contradiction resolves it by guessing. A fresh `git init` is an ordinary thing
-  to link.
+  branch `main`* and *there is no `main`* two lines apart.
 
-Where the work lands is not decided here. That is already the brief's to say,
-and a standing rule that overrode it would be a second answer to a question that
-has one. What the footing settles is only where the work starts.
+Where the work lands is not decided here. That is the brief's to say.
 
-## A job can be reached while it runs, on one of the two
+## One job per agent, and that is the whole lock
 
-`code` returns the moment the process is up. That is the whole shape of the
-feature and it is right: awaited inside the tool call, the agent reads as
-`Thinking` for the length of a change to a codebase.
+`Runtime::start_job` keeps one running job per agent. Two harnesses in one
+directory interleave their edits and run git against each other, and nothing
+downstream could say which of them wrote what. An agent's terminal is its own,
+so the agent is the thing that can only take one at a time; two changes at
+once are two agents, talking in the crew they share.
 
-The cost used to be paid at the other end. For up to forty-five minutes a job
-was write-only: Guaca read its stdout and could say nothing back. An operator
-watching one go the wrong way at minute three had one move, which was to wait
-thirty-seven more minutes and start another. There was also no way to end one.
-Stopping the conversation that started it does nothing, because that run settled
-minutes earlier and the job is not on it; the ceiling was the only thing that
-ever stopped a job going wrong.
+`shell` takes no lock. One line is the same thing as somebody typing in a
+terminal while a job runs, and refusing it would take away the read an agent
+most wants while a job is running, which is what the job is doing.
 
-`coding/bridge.rs` is the second half. Claude Code has an interface besides its
-stdout: hooks run at fixed points in its own loop, are handed the event on
-stdin, and what they print back is acted on. Guaca writes a settings file and a
-three-line `sh` script per job, passes them with `--settings`, and answers the
-hook over a loopback socket. Three things follow from that.
+## One process lifecycle, three of what genuinely differs
+
+What `pi` and Claude Code share is the shape of a job: one process, in one
+directory, whose stdout is a stream of JSON objects, one per line, that ends.
+So `coding/mod.rs` holds the spawn, the read loop, the ceiling, the kill and
+the exit handling, and each submodule holds the argument vector and the fold
+from an event into an `Outcome`. Codex owns a bidirectional app-server session
+in `coding/codex.rs`, ending its process after the active turn completes.
+
+Three details of the vectors are load-bearing and none of them is guessable.
+
+- **`claude` refuses `--output-format stream-json` without `--verbose`.** The
+  refusal is on the command line, so the failure is a job that never starts
+  rather than a job that fails.
+- **Every harness runs in the mode that does not ask.** `pi` has no permission
+  system of its own; Claude Code is given `--permission-mode
+  bypassPermissions`; Codex runs with `approvalPolicy: "never"` unless the gate
+  is on. There is nobody to answer an ordinary prompt: the job is started by an
+  agent and runs unattended for many minutes.
+- **No harness is asked for a session-less run.** A session on disk is what
+  lets the operator open the same work in their own terminal, which is the
+  difference between a harness the app runs and a black box.
+
+The tool tables are separate per harness for the same kind of reason. `pi`'s
+built-ins are lowercase and carry `path`; Claude Code's are capitalized and
+carry `file_path`. Merged, one program's field name gets read out of the
+other's arguments, and a wrong guess prints somebody's file contents into a
+channel. Anything not in a table draws no detail at all.
+
+## A job can be reached while it runs, on two of the three
+
+`code` returns the moment the process is up. The cost used to be paid at the
+other end: for up to forty-five minutes a job was write-only.
+
+**Claude Code** is reached through `coding/bridge.rs`. Hooks run at fixed
+points in its own loop, are handed the event on stdin, and what they print back
+is acted on. Guaca writes a settings file and a three-line `sh` script per job,
+passes them with `--settings`, and answers the hook over a loopback socket:
 
 - **A mailbox.** `message_coding_job` stages a correction; the `PostToolUse`
-  hook delivers it as `additionalContext` at the job's next tool boundary.
-- **A gate**, when the repository asks for one. Below.
+  hook delivers it as `additionalContext` at the job's next tool boundary, and
+  the `Stop` hook delivers one typed at minute forty-four instead of letting
+  the job finish without it. `take_mail` reads and clears together, because
+  mail delivered twice is an instruction the model was given twice.
+- **A gate**, when the agent asks for one: a `PreToolUse` hook on `Bash` whose
+  `deny` overrides `--permission-mode bypassPermissions`.
 - **Two ways to report**, on a small MCP server passed with `--mcp-config`:
   `note_progress` and `report_pull_request`.
 
-`pi` has none of it and gets none of it. That is a difference between the
-harnesses rather than a gap, and it is why every part of the bridge fails open:
-a bridge that did not start, a `curl` that is not installed and a server that
-already dropped the job all end with an empty answer and an exit status of zero,
-which is the job that worked before any of this existed.
+**Codex** is reached through its own protocol: `turn/steer` with the active
+turn id, acknowledged before Guaca reports it sent, and command approval
+callbacks for the gate.
 
-### The three things it rests on are behavior, not flags
+**`pi`** has neither in this build and gets none of it. Everything the bridge
+adds is an improvement on a job that already worked, which is why every part
+of it fails open: a bridge that did not start, a `curl` that is not installed
+and a server that already dropped the job all end with an empty answer and an
+exit status of zero.
+
+### The three things the Claude bridge rests on are behavior, not flags
 
 None of them can be checked offline, which is why `tests/coding.rs` keeps an
 `#[ignore]`d half that asks the real program. Measured against 2.1.247:
 
 - A `PreToolUse` hook answering `permissionDecision: "deny"` **overrides
-  `--permission-mode bypassPermissions`**, which is the mode every job here runs
-  in. Without that the gate would be a suggestion.
-- A `Stop` hook's `reason` reaches the model, as a synthetic user message
-  reading `Stop hook feedback: …`. That is what lets the `Stop` hook block *and*
-  deliver in one call, which is what makes it terminate: a block that did not
-  deliver would refuse to stop forever and be killed at the ceiling.
-- `additionalContext` from `PostToolUse` is put in front of the model before its
-  next round.
-
-### The mailbox is delivered once, from either end
-
-`take_mail` reads and clears together. Delivered twice is an instruction the
-model was given twice, and a job handed the same correction on four tool calls
-does the thing four times. The `Stop` hook is the other end and exists for one
-case: a correction typed at minute forty-four, which without it lands after the
-job has decided it is done.
+  `--permission-mode bypassPermissions`**. Without that the gate would be a
+  suggestion.
+- A `Stop` hook's `reason` reaches the model, as a synthetic user message. That
+  is what lets the `Stop` hook block *and* deliver in one call, which is what
+  makes it terminate.
+- `additionalContext` from `PostToolUse` is put in front of the model before
+  its next round.
 
 ### Stopping leaves what it committed
 
 The process is killed where it stands. Nothing is reverted, because the commits
 a job is told to make as it goes are the operator's checkpoints and throwing
-them away is not that button's decision. The agent that started the job is told,
-on the same path a finished one takes and for the same reason: an agent never
-told waits forever, and answers "I started that and have not heard back", which
-is true and useless. What it is told is that the work is *partly* done and
-nobody has checked which part, because an agent told only that the job stopped
-reports the work as not done and leaves the operator to discover half of it on a
-branch.
+them away is not that button's decision. The agent that started the job is
+told the work is *partly* done and nobody has checked which part, because an
+agent told only that the job stopped reports the work as not done and leaves
+the operator to discover half of it on a branch. Taking the terminal away and
+deleting the agent both stop its job the same way.
 
 ### The session id is chosen, not read back
 
-`--session-id` takes a UUID, so Guaca picks one before the job starts. One value
-is then the job's address on the bridge, the key of its mailbox, and what an
-operator hands to `claude --resume` to open the same work in their own terminal.
-That last one is the reason: `claude -c` resumes whatever ran last in the
-directory, which after two jobs is the wrong one. Chosen rather than parsed also
-means a job killed at the ceiling, and a job that died before its first event,
-both still have one.
+`--session-id` takes a UUID, so Guaca picks one before a Claude job starts. One
+value is then the job's address on the bridge, the key of its mailbox, and what
+an operator hands to `claude --resume` to open the same work in their own
+terminal.
 
-### A program too old for it still runs the job
-
-`coding::presence` reads `--version` and decides whether to wire a bridge at
-all. Below the floor the job runs exactly as every job ran before the bridge
-existed. The other direction was never on the table: refusing to run would take
-away a harness that works, to protect a feature that is an addition to it. An
-unreadable version string is treated as too old for the same reason, since the
-alternative is wiring a job to a contract nothing has ever checked.
-
-## The gate is a decision the operator takes per repository
-
-`repositories.gate`, added by migration 42, default `'open'`, which is what
-every job did before this existed.
-
-Off by default is not caution about the migration. `APPENDED_PROMPT` tells every
-job that it is running unattended and that nobody will answer a question.
-Switching this on for everybody would make that sentence false in every
-repository at once, and a job that believes it while a hook silently holds it is
-a job that reports a push it never made. An operator turning it on is an
-operator saying they will be there.
-
-What it gates is the handful of things that leave the work tree under the
-operator's own name and cannot be taken back by git: a push, a pull request, a
-merge, a release. `bridge::outward` reads the shell line, and it errs toward
-asking, because a wrong yes costs one card on the desk and a wrong no is the
-behavior the operator switched it on to stop.
-
-### The line is read, and then what the line runs is read
-
-Reading the words alone is what one level of indirection walks straight past.
-`./scripts/ship.sh` is not `git push` and never will be, so a repository whose
-release lives in a script had a gate that was switched on, said it was holding,
-and stopped nothing. That is worse than having no gate: the operator turned it
-on and was told it was working.
-
-So a line that names nothing outward-facing is looked at again, for the scripts
-*in this tree* that it runs. A `package.json` entry behind `npm run release`,
-`pnpm release` or `yarn release`; a file in the work tree behind
-`./scripts/ship.sh` or `bash scripts/ship.sh`. Each one is read and asked the
-same question, three deep, with a set carried across the whole walk so that two
-scripts that run each other are read once rather than forever.
-
-The card then has to carry both halves, because they are not the same sentence.
-`./scripts/ship.sh` is what the agent asked for and says nothing about what it
-does; `git push` is what the operator is being asked to allow. `Reach` is that
-pair, and the summary leads with the push: *wants to run `git push` in guaca, by
-way of `./scripts/ship.sh`*. That order is the emphasis, not a preference. What
-is being authorized is the thing that cannot be taken back, and the script is
-how the agent got there.
-
-The `Command` detail field holds the line the model actually wrote, flags and
-all, which is what it should always have held: it carried the summary instead,
-so an operator was shown `git push` about a `git push --force`, which is the one
-detail on a card that changes the answer.
-
-### And what it deliberately does not read
-
-A Makefile target. A compiled program. Anything it cannot parse as text. Those
-are indirection too, and reading none of them is a decision rather than a gap.
-
-The alternative is to treat *there is something here I cannot see through* as a
-reason to ask, which sounds like the safe direction and is not. The ordinary
-case for it is `./target/release/app` and `./node_modules/.bin/vite`: every
-locally built program in the tree, on every line that runs one. A gate that
-parks a turn for running the binary it just compiled is exactly the wrong yes
-that teaches an operator to switch it off, and a gate that is off holds nothing
-at all. The rule stays what the paragraph below says it is: the ordinary case,
-followed honestly, and not a boundary.
-
-### One no settles the question for the rest of the run
-
-A model that has just been refused a push tries the push. That is ordinary
-rather than confused — the refusal it reads back says the operator did not allow
-it, not that they never will — and the operator is the one who pays for it, in a
-second card and a third, for a question they are sitting there answering.
-
-`Runs::refused` holds what each run has already been told no about, and
-`ask_about_push` reads it before it parks anything. Three things about the shape
-of it are load-bearing:
-
-- **A no is remembered and nothing else is.** An expiry is the operator being
-  somewhere else rather than the operator answering. Held against them, a
-  request nobody saw would refuse the one they would have seen two minutes
-  later.
-- **It is keyed by the outward action the card named, not by the line.**
-  Somebody who refused `git push` refused it whether the next attempt spells it
-  with a different flag or reaches it through a script. A key that told those
-  apart would remember nothing a retry could not walk around.
-- **It is per run, and that is the whole of how it is forgotten.** The
-  operator's next message is a new run, so a no holds for the work it was said
-  about and for nothing after it. Nothing is stored, for the reason a job's lock
-  is not: a refusal that outlived the process would be a repository quietly
-  refusing pushes with no decision anybody could find behind it.
-
-An ordinary run's entry goes when the run settles, on the same line `stopped`
-goes. A job's run never settles, because nothing is ever booked against it, so
-it is dropped where the job ends, beside `release_parked`.
-
-It parks as `ProtectedAction::ActOnBehalf` rather than as a new variant, because
-that is what that one already means. It also means the standing grant means what
-it says: an operator who has told this agent it may act on their behalf is not
-asked again per push, and a grant given after a refusal outranks it. That is the
-one place the run's memory is consulted alongside the store, and it is the right
-way round: the grant is the broader answer and the newer one.
-
-`Runtime::park_with` is `park` with one difference, and it is one thing: whether
-the agent's own activity is this request's to move. A parked turn is an agent
-genuinely stopped mid-inference and the dot beside its name has to say so. A
-coding job is not a turn: it outlived the one that started it by many minutes,
-and the agent that owns it may be idle or answering somebody else. Marking it
-`AwaitingApproval` would put a false state on a working agent. Everything else,
-the row, the waker, the window and the expiry, is shared, because a second copy
-of those is a second place for a request to be left waiting on nobody.
-
-The job's requests are filed against a run of its own, minted in `start_job`.
-That is what makes `release_parked` the way a job ending closes whatever it was
-waiting on, rather than a second sweep written for this.
-
-**It is not a boundary and must never be described as one.** A shell line is not
-something anything can parse without a shell, and a job that wanted to get
-around this could. The process runs as the operator, with their credentials and
-their network, which was true before the gate existed. What it buys is that the
-ordinary push, made by a job doing what it was asked, is one somebody sees
-first.
-
-## A job inherits the operator's own Claude Code setup, and that is deliberate
+## A job inherits the host's own Claude Code setup, and that is deliberate
 
 `coding/claude_code.rs` passes no `--strict-mcp-config` and no
-`--setting-sources`, which is the exact opposite of `llm/claude.rs`, and the two
-are right for opposite reasons. A turn there is answered by a program that
+`--setting-sources`, which is the exact opposite of `llm/claude.rs`, and the
+two are right for opposite reasons. A turn there is answered by a program that
 should have this app's tools and nothing else. A job here is a coding agent
-working in the operator's own repository, where their `CLAUDE.md`, their project
-settings and their MCP servers are the thing that makes it good at the work.
-`--settings` and `--mcp-config` are both additive, so the bridge adds to that
-setup rather than replacing it.
+working in a repository, where the host user's `CLAUDE.md`, the repository's
+own settings and the MCP servers configured there are what make it good at the
+work. `--settings` and `--mcp-config` are both additive.
 
-The cost is real and worth writing down. Measured on one machine on 2026-08-27
-against 2.1.247, a job started this way loaded 16 MCP servers, 229 tools, 100
-slash commands and 8 agent definitions, none of which Guaca chose. That is the
-operator's own configuration doing what they set it up to do, in their own
-repository, and it is not a defect. It does mean a job can reach whatever they
-have connected.
-
-**The one hazard is a blocking `Stop` hook.** The operator's own hooks run in a
-job here, and a `Stop` hook of theirs that answers `{"decision": "block"}` will
-hold a Guaca job against its own completion in a loop nothing in `coding/mod.rs`
-can see, until the forty-five minute ceiling. Guaca cannot fix that from
-outside, and it is not hypothetical: it is the mechanism Warp's own
-`oz-harness-support` plugin uses, and any harness-integration plugin an operator
-has installed may do the same. The ceiling is the backstop.
+Measured on one machine on 2026-08-27 against 2.1.247, a job started this way
+loaded 16 MCP servers, 229 tools, 100 slash commands and 8 agent definitions,
+none of which Guaca chose. The one hazard is a blocking `Stop` hook of the
+host user's own, which holds a Guaca job against its own completion until the
+forty-five minute ceiling. Guaca cannot fix that from outside; the ceiling is
+the backstop.
 
 ## A failed turn is not a job with nothing to do
 
-Both programs report a failed turn *inside* their stream and can still exit zero
-about it, with no content and no answer. Read by exit code and text alone that is
-indistinguishable from a job that found nothing to change.
+Every harness reports a failed turn *inside* its stream and can still exit zero
+about it. Read by exit code and text alone that is indistinguishable from a job
+that found nothing to change.
 
 It cost an afternoon. An expired Codex token turned every coding job in a live
-workspace into a silent no-op, every agent dutifully reported that nothing needed
-doing, and `pi auth check` called the provider ready throughout. So `Outcome`
-carries `failed`, it is taken from the *last* message rather than the first so a
-turn that failed and was retried is not a failed job, and `job_finished` reports
-it before the empty case.
+workspace into a silent no-op, every agent dutifully reported that nothing
+needed doing, and `pi auth check` called the provider ready throughout. So
+`Outcome` carries `failed`, it is taken from the *last* message rather than the
+first so a turn that failed and was retried is not a failed job, and
+`job_finished` reports it before the empty case.
 
-It also reaches the operator and not only the agent. A spent credential on the
-operator's own machine is the operator's problem, and a sentence about it inside
-one agent's transcript is a sentence nobody reads. `CodingJobFailed` raises a
-banner that names the repository, the program that stopped, and the harness's own
-words: with two harnesses, the way out of the commonest failure here is the other
-one, and a banner that does not say which was running leaves the operator
-guessing which sign-in to go and look at.
+It also reaches the operator. `CodingJobFailed` raises a banner that names the
+directory, the program that stopped, and the harness's own words: with three
+harnesses, the way out of the commonest failure here is another one.
 
-The result delivered to the agent also names the harness that actually ran.
-The repository may have changed since that job started, and a conversation
-about Codex does not prove Codex ran. Without that label, a Claude login failure
-was reported back as a Codex login failure. The harness selector renders the
-saved repository row, including while a write is pending or after it fails;
-only the name and note are drafts waiting for Save.
+## Codex runs through its official CLI
+
+`Harness::Codex` starts `codex app-server --listen stdio://` in the job's
+directory. Codex owns model selection and authentication. On a box, as the
+daemon's user, run `codex login --device-auth`. The image pins the CLI version;
+its configuration, credentials and sessions live in the persistent home
+volume. The control contract is measured against Codex 0.153.3.
+
+Before creating a thread, the runner asks that same app-server for
+`account/read`. If its provider requires OpenAI authentication and no account
+is present, the job ends with the sign-in command before any model request.
+
+A correction uses `turn/steer` with the active turn id, and Guaca reports it
+sent only after Codex acknowledges that id. **Ask me before pushing** selects
+Codex's `untrusted` approval policy and user reviewer, verified in the thread
+response before any work starts; command approval callbacks go through the same
+`bridge::outward` and operator decision as the other doors. The CLI keeps its
+own configured command rules, so an allow rule there can bypass its approval
+callback. Keep outward commands out of those rules when relying on this gate.
 
 ## What is not here
 
-Any confinement. The process runs as the operator, in their repository, with
-their credentials and their network, and it may commit, push and open pull
-requests. That was asked for explicitly. The boundary is the directory the
-operator chose and the fact that git can undo what happens inside it. Nothing in
-`coding/` should ever be described as a sandbox.
+Any confinement. See above.
 
-Nor is the spend. Both harnesses read their own auth, and a job's cost does not
+Nor is the spend. Every harness reads its own auth, and a job's cost does not
 appear in this app's usage table because this app did not spend it. What a job
-reports back is what the harness says it cost, which on a subscription is the
-equivalent API price rather than money that moved. Both programs price it that
-way, so the two numbers agree and neither claims to be more than what was said.
+reports back is what the harness says it cost.
 
 ## Testing it
 
 `tests/coding.rs`. The offline half puts real stand-in executables on `PATH`,
-because the thing being tested is a process: a fake in front of the fold would be
-a test of the fold, which already has one beside it in each submodule. Each
-stand-in records the argument vector it was handed, so the suite can assert that
-a repository set to Claude Code starts `claude` with Claude Code's vector, which
-is the seam nothing else can see. Drop the column read in `Runtime::start_job`
-and every other suite in this repo still passes.
+because the thing being tested is a process: a fake in front of the fold would
+be a test of the fold, which already has one beside it in each submodule. Each
+stand-in records the argument vector it was handed into the directory it was
+started in, so the suite can assert that an agent set to Claude Code starts
+`claude` with Claude Code's vector, in the directory `code` named, which is the
+seam nothing else can see.
 
-The four `shell` tests in the same file need no stand-in, because the program
-they run is `bash` and the repository is a real one `git init` made in the temp
-directory. They are the only place the two doors are checked against each other:
-that a line runs in the linked directory and answers inside the turn, that the
-gate stops the same commands through both and that a denial runs no part of the
-line, that an ordinary line is not stopped, and that a work tree with a job in
-it still answers one. `shell.rs` has the rest beside it, against a real shell
-for the reason the stand-ins exist: what a child prints, whether it is still
-running and what happens when it fills a pipe are only observable from outside
-it.
+The runtime tests give an agent a terminal whose directory *is* a test
+repository, so a job started with no directory runs where the stand-in's
+instructions were written. The ordinary arrangement, a repository in a
+directory of its own inside the terminal, has its own test.
+
+The `shell` and file-tool tests need no stand-in, because the programs they run
+are `bash` and the filesystem. They are the only place the doors are checked
+against each other: that a line runs in the terminal and answers inside the
+turn, that the gate stops the same commands through every door and that a
+denial runs no part of the line, that an ordinary line is not stopped, that
+what `write` made `edit` changes and `shell` reads back, and that a line still
+runs while the agent's job is going.
 
 The `#[ignore]`d half asks the real programs whether they still accept those
-vectors and still answer in the shape this build reads. That is the failure no
-offline test can see, and it is the same live half `subscription.rs`,
-`plugins.rs` and `account.rs` each keep for the same reason. It spends the
-operator's own plan.
+vectors and still answer in the shape this build reads. It spends the host
+user's own plan.
 
 ```sh
 cargo test --manifest-path src-tauri/Cargo.toml --test coding
 cargo test --manifest-path src-tauri/Cargo.toml --test coding -- --ignored
 ```
-
-## Codex runs through its official CLI
-
-`Harness::Codex` starts `codex app-server --listen stdio://` in the same
-prepared worktree as the other harnesses. Existing repositories keep their
-harness, assignments and gate. Codex owns model selection and authentication.
-On the backend, as the daemon's user, run `codex login --device-auth`. This
-sign-in is separate from Guaca's ChatGPT provider sign-in. The image pins the
-CLI version; its configuration, credentials and sessions live in the persistent
-home volume. The control contract is measured against Codex 0.153.3; the UI
-requires 0.153 or newer for steering and approvals.
-
-Before creating a thread, the runner asks that same app-server for `account/read`.
-If its provider requires OpenAI authentication and no account is present, the job
-ends with the backend sign-in command before any model request. A provider that
-does not require OpenAI authentication still runs. This checks missing credentials,
-not whether a saved credential is valid or a plan has capacity. The repository
-list shows the CLI's local sign-in status and can refresh it without reopening.
-`tests/codex_auth.rs` checks the missing-account path against the real CLI with
-an isolated credential directory and no model spend.
-
-The runner initializes one thread, starts one turn, and records its id, tool
-activity, answer and failures. It does not turn token counts into a dollar
-cost. A stream ending before `turn/completed` is an interrupted job, even if
-it printed narration. Both output pipes are drained concurrently under the
-job's deadline. Completion kills and reaps the listening app-server before
-the runtime releases the worktree.
-
-A correction uses `turn/steer` with the active turn id. Guaca reports it sent
-only after Codex acknowledges that id. A completed turn rejects a late
-correction visibly; Guaca never silently starts another turn. Steering guides
-the model's next decision and does not undo a command already executed. Stop
-remains available while acknowledgment is pending. An unanswered control
-request stops the job after thirty seconds; partial changes may remain.
-
-**Ask me before pushing** selects Codex's `untrusted` approval policy and user
-reviewer, verified in the thread response before any work starts. Command
-approval callbacks use the same script inspection and operator decision as
-Claude's hooks and the `shell` tool. Each decision applies to that request;
-Guaca never grants a session exemption. The protocol keeps reading corrections
-while an approval waits. As with the existing gate, this covers ordinary shell
-commands, not confinement or arbitrary API calls. The CLI retains its own
-[configured command rules](https://developers.openai.com/codex/rules), so an operator's explicit allow rule can bypass its
-approval callback. Keep outward commands out of those allow rules when relying
-on this gate.
-
-The official Claude Code CLI can also run on an operator's own backend. Its
-local `claude auth login` and Codex's `codex login status` are CLI operations;
-Guaca offers setup instructions and reads only sign-in status, never credential
-files. No model call is needed to check either CLI. This does not introduce a
-Guaca Claude.ai login flow or authorize a managed service to route consumer
-subscriptions. See the provider's current terms before offering such a service.
-
-## A GitHub App authenticates both repository doors
-
-[GitHub App access](GITHUB.md) supplies repository-scoped, renewable credentials
-through Git's helper and a `gh` wrapper. Both coding harnesses and `shell` get
-the wrapper for a connected repository; personal-token and SSH repositories
-retain their existing configuration. The push gate is unchanged: authentication
-answers whether GitHub permits an operation, and the gate answers whether the
-operator allowed this job to perform it.
-
-
-## Commit attribution is independent of access
-
-The repository's Git identity supplies the human author and committer defaults
-for all harnesses. The remote clone form and the repository’s Edit panel let the operator
-set that name and email. GitHub App authentication does not replace it with a
-bot identity. Missing backend identity requires operator configuration before
-committing; Guaca never guesses the installation owner's identity. See
-[GitHub access](GITHUB.md#commit-authorship) for contribution attribution and
-GitHub user sign-in, which sets commit attribution and opens pull requests under
-the user's account. Installation alone grants Git access; PR commands require
-that additional user authorization and never fall back to a bot.

@@ -106,19 +106,19 @@ build expects, which is the failure no offline test can see. It reaches the inte
 `tests/coding.rs` does the same job for the coding harnesses, and its offline
 half puts real stand-in executables on `PATH` rather than mocking: the thing
 being tested is a process, and each stand-in records the argument vector it was
-handed. That is what makes "a repository set to Claude Code starts `claude`" an
+handed. That is what makes "an agent set to Claude Code starts `claude`" an
 assertion rather than a code read; drop the column read in `Runtime::start_job`
 and every other suite in this repo still passes. Its `#[ignore]`d half asks the
 real programs whether they still accept those vectors and still answer in the
-shape this build reads, and it spends the operator's own plan.
+shape this build reads, and it spends the host user's own plan.
 
 The stand-ins are also what makes *where* a job ran an assertion. Each one
-records into whatever directory it was started in, so a repository that gives
-each agent a work tree of its own is checked by there being no recording in the
-operator's own checkout and one in the worktree, and two agents in one codebase
-are checked by there being two. Nothing else in the build can see that: the
-directory a harness is handed is one argument, and a wrong one is a job that
-works perfectly in the wrong tree.
+records into whatever directory it was started in, so a job told to work in
+`guaca` inside an agent's terminal is checked by there being a recording in
+`guaca` and none at the top of the terminal, and two agents coding at once are
+checked by there being one in each terminal. Nothing else in the build can see
+that: the directory a harness is handed is one argument, and a wrong one is a
+job that works perfectly in the wrong tree.
 
 ```sh
 cargo test --manifest-path src-tauri/Cargo.toml --test coding
@@ -130,7 +130,7 @@ suite uses, which answers an errand as "on an errand for" its agent because that
 is how its prompt opens. It holds what is not wording: an errand is offered only
 where the operator switched it on, a fourth is refused, the three withheld tools
 are refused under any name, the last two steps stay with the sending turn, a
-stop reaches an errand mid-call, and two errands that need the repository take
+stop reaches an errand mid-call, and two errands that need the terminal take
 turns with it. Remove the lock or the kept steps and the matching test fails.
 
 ```sh

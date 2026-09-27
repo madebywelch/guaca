@@ -140,103 +140,54 @@ async fn official_harnesses_are_available_on_the_backend_without_a_guaca_api_key
 }
 
 #[tokio::test]
-async fn a_repository_arrives_on_a_box_as_a_clone_of_a_remote() {
+async fn an_agent_is_given_a_terminal_on_the_box_and_keeps_how_it_codes() {
     let (addr, dir) = workspace().await;
 
-    // A bare repository standing in for the forge, so nothing leaves this
-    // machine. What matters is the shape: clone, row, and the clone's removal.
-    let bare = dir.path().join("origin.git");
-    let seed = dir.path().join("seed");
-    for args in [
-        vec!["init", "--bare", "-b", "main", bare.to_str().unwrap()],
-        vec!["init", "-b", "main", seed.to_str().unwrap()],
-    ] {
-        let done = std::process::Command::new("git").args(&args).output().expect("git runs");
-        assert!(done.status.success(), "{args:?}: {done:?}");
-    }
-    std::fs::write(seed.join("a.txt"), "one").unwrap();
-    for args in [
-        vec!["add", "."],
-        vec!["-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "one"],
-        vec!["push", bare.to_str().unwrap(), "main"],
-    ] {
-        let done = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&seed)
-            .args(&args)
-            .output()
-            .expect("git runs");
-        assert!(done.status.success(), "{args:?}: {done:?}");
-    }
-
-    let remote = format!("file://{}", bare.display());
-    let (status, body) = call(
-        addr,
-        "create_repository",
-        json!({ "draft": {
-            "groupId": "00000000-0000-4000-8000-000000000001",
-            "remote": remote,
-        }}),
-    )
-    .await;
-    assert_eq!(status, 200, "{body}");
-    let row = &body["ok"];
-    assert_eq!(row["remote"], remote.as_str(), "{row}");
-    assert_eq!(row["name"], "origin", "named for the repository itself: {row}");
-    let path = row["path"].as_str().expect("the clone's path").to_string();
-    assert!(
-        path.contains("/data/repos/"),
-        "the clone lives in the workspace's own directory: {path}"
-    );
-    assert!(std::path::Path::new(&path).join("a.txt").exists(), "the clone has the history");
-
-    let (_, linked) = call(
-        addr,
-        "create_repository",
-        json!({ "draft": {
-            "groupId": "00000000-0000-4000-8000-000000000001", "path": seed.to_str().unwrap()
-        }}),
-    )
-    .await;
-    let linked_id = linked["ok"]["id"].as_str().expect("a backend directory can be linked");
-    call(addr, "delete_repository", json!({ "id": linked_id })).await;
-    assert!(
-        seed.join("a.txt").exists(),
-        "unlinking a mounted directory must never delete its contents"
-    );
-
-    // Repository creation, engineer assignment and harness changes are the
-    // same public commands used by a remote browser. A switch preserves both
-    // the path and the grant, even when the gate is still enabled.
+    // The same public commands a remote browser uses, which is the whole of
+    // what a box needs: the terminal is a directory the daemon makes in its
+    // own data, and nothing about it names the client's disk.
     let (_, engineer) = call(addr, "create_agent", json!({"draft": {
         "name":"Engineer", "avatar":"avocado", "color":"#7ab55c", "model":"", "systemPrompt":"Test"
     }})).await;
-    let engineer_id = engineer["ok"]["id"].as_str().unwrap();
-    let (_, assigned) =
-        call(addr, "set_agent_repository", json!({"id":engineer_id,"repositoryId":row["id"]}))
-            .await;
-    assert_eq!(assigned["ok"]["repositoryId"], row["id"]);
-    for harness in ["codex", "claude", "pi"] {
-        let (_, edited) = call(addr, "update_repository", json!({"id":row["id"],"name":"Code", "note":"Test", "harness":harness,"gate":"askBeforePushing","bench":"own"})).await;
-        assert_eq!(edited["ok"]["harness"], harness);
-        assert_eq!(edited["ok"]["path"], path);
-        assert_eq!(edited["ok"]["gate"], "askBeforePushing");
-        let (_, agents) = call(addr, "list_agents", json!({})).await;
-        assert!(agents["ok"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|a| a["id"] == engineer_id && a["repositoryId"] == row["id"]));
-    }
-    let (_, connection) = call(addr, "repository_connection", json!({"id":row["id"]})).await;
-    assert_eq!(connection["ok"]["remote"], remote);
-    assert_eq!(connection["ok"]["managedCredential"], false);
+    let id = engineer["ok"]["id"].as_str().unwrap().to_string();
+    assert_eq!(engineer["ok"]["hasTerminal"], false, "nothing is inherited: {engineer}");
 
-    // Unlinking a clone removes it: it was the workspace's, not the operator's.
-    let id = row["id"].as_str().unwrap();
-    let (status, body) = call(addr, "delete_repository", json!({ "id": id })).await;
+    let (status, body) = call(addr, "give_agent_terminal", json!({"id": id})).await;
     assert_eq!(status, 200, "{body}");
-    assert!(!std::path::Path::new(&path).exists(), "the clone is gone");
+    let (_, set) = call(
+        addr,
+        "set_agent_coding",
+        json!({"id": id, "harness": "codex", "gate": "askBeforePushing"}),
+    )
+    .await;
+    assert!(set.get("ok").is_some(), "{set}");
+    let (_, terminal) = call(addr, "agent_terminal", json!({"id": id})).await;
+    let path = terminal["ok"]["path"].as_str().expect("the terminal's path").to_string();
+    let workspace = std::fs::canonicalize(dir.path()).unwrap();
+    assert!(
+        path.starts_with(workspace.to_str().unwrap()) && path.contains("/terminals/"),
+        "the terminal lives in the workspace's own directory: {path}"
+    );
+    assert!(std::path::Path::new(&path).is_dir(), "and it exists once it is asked for");
+
+    let card = |agents: &serde_json::Value| {
+        agents["ok"].as_array().unwrap().iter().find(|a| a["id"] == id.as_str()).cloned().unwrap()
+    };
+    let (_, agents) = call(addr, "list_agents", json!({})).await;
+    let given = card(&agents);
+    assert_eq!(given["hasTerminal"], true, "{given}");
+    assert_eq!(given["harness"], "codex", "{given}");
+    assert_eq!(given["gate"], "askBeforePushing", "{given}");
+
+    // Taking it back keeps the directory and the two answers: a change of mind
+    // about access is not a reason to delete an agent's work.
+    std::fs::write(std::path::Path::new(&path).join("notes.md"), "kept").unwrap();
+    call(addr, "take_agent_terminal", json!({"id": id})).await;
+    let (_, agents) = call(addr, "list_agents", json!({})).await;
+    let taken = card(&agents);
+    assert_eq!(taken["hasTerminal"], false, "{taken}");
+    assert_eq!(taken["harness"], "codex", "{taken}");
+    assert!(std::path::Path::new(&path).join("notes.md").exists());
 }
 
 #[tokio::test]
@@ -994,89 +945,6 @@ async fn groups_transfer_between_hosts_without_copying_identity() {
     assert_ne!(agents["ok"][0]["id"], created["ok"]["id"]);
     let (_, hints) = call(target, "group_reconnect", json!({"id":imported["ok"]["id"]})).await;
     assert_eq!(hints["ok"], json!([]));
-}
-
-#[tokio::test]
-async fn repository_credentials_are_reusable_through_the_api_without_reading_secrets_back() {
-    let (addr, dir) = workspace().await;
-    let mut ids = Vec::new();
-    for name in ["first", "second"] {
-        let path = dir.path().join(name);
-        std::fs::create_dir(&path).unwrap();
-        for args in
-            [vec!["init"], vec!["remote", "add", "origin", "https://forge.example/team/repo.git"]]
-        {
-            assert!(std::process::Command::new("git")
-                .arg("-C")
-                .arg(&path)
-                .args(args)
-                .output()
-                .unwrap()
-                .status
-                .success());
-        }
-        let (status, body) = call(
-            addr,
-            "create_repository",
-            json!({"draft": {
-                "groupId": "00000000-0000-4000-8000-000000000001", "path": path,
-            }}),
-        )
-        .await;
-        assert_eq!(status, 200, "{body}");
-        ids.push(body["ok"]["id"].as_str().unwrap().to_owned());
-    }
-    let (status, body) = call(
-        addr,
-        "set_repository_credential",
-        json!({"id":ids[0], "username":"engineer", "token":"private-token"}),
-    )
-    .await;
-    assert_eq!(status, 200, "{body}");
-    let (status, saved) = call(
-        addr,
-        "saved_repository_credentials",
-        json!({"remote":"https://forge.example/team/other.git"}),
-    )
-    .await;
-    assert_eq!(status, 200, "{saved}");
-    assert!(!saved.to_string().contains("private-token"));
-    let credential_id = &saved["ok"][0]["id"];
-    let (status, reused) = call(
-        addr,
-        "reuse_repository_credential",
-        json!({"id":ids[1], "credentialId":credential_id}),
-    )
-    .await;
-    assert_eq!(status, 200, "{reused}");
-    assert_eq!(reused["ok"]["managedCredential"], true);
-    assert!(!reused.to_string().contains("private-token"));
-
-    // Request-side checks apply before clone tries to contact a remote.
-    for draft in [
-        json!({"remote":"https://other.example/team/repo.git", "credentialId":credential_id}),
-        json!({"remote":"https://forge.example/team/repo.git", "credentialId":credential_id, "credential":"another-token"}),
-    ] {
-        let mut draft = draft;
-        draft["groupId"] = json!("00000000-0000-4000-8000-000000000001");
-        let (status, error) = call(addr, "create_repository", json!({"draft":draft})).await;
-        assert_eq!(status, 200, "{error}");
-        assert!(error.get("err").is_some(), "{error}");
-        assert!(!error.to_string().contains("private-token"));
-        assert!(!error.to_string().contains("another-token"));
-    }
-    call(addr, "clear_repository_credential", json!({"id":ids[0]})).await;
-    let (_, remaining) = call(addr, "repository_connection", json!({"id":ids[1]})).await;
-    assert_eq!(remaining["ok"]["managedCredential"], true);
-    let (status, error) = call(
-        addr,
-        "reuse_repository_credential",
-        json!({"id":ids[1], "credentialId":credential_id}),
-    )
-    .await;
-    assert_eq!(status, 200, "{error}");
-    assert!(error.get("err").is_some(), "{error}");
-    assert!(error.to_string().contains("unavailable"));
 }
 
 #[tokio::test]

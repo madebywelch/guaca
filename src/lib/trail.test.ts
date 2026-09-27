@@ -86,17 +86,32 @@ describe("what one call was", () => {
   });
 
   it("tells the two shells apart, because they run on two machines", () => {
-    // An agent with a computer and a repository draws both in one turn, and the
+    // An agent with a computer and a terminal draws both in one turn, and the
     // chip is the only place an operator finds out which filesystem a command
     // touched.
-    const [inRepo] = steps(
+    const [inTerminal] = steps(
       call("shell", { command: "git status --short" }, ok("exit 0, 12 bytes out")),
     );
-    expect(inRepo?.title).toBe("Ran a command in its repository");
-    expect(inRepo?.target).toBe("git status --short");
+    expect(inTerminal?.title).toBe("Ran a command in its terminal");
+    expect(inTerminal?.target).toBe("git status --short");
 
     const [onSandbox] = steps(call("run_command", { command: "uname -a" }, ok("exit 0")));
     expect(onSandbox?.title).toBe("Ran a command");
+  });
+
+  it("names the file each file tool touched, and says it is a file on disk", () => {
+    // `read` is a disk and `read_file` is an attachment. The chip is where an
+    // operator finds out which one a turn opened.
+    const [read, wrote, edited] = steps(
+      call("read", { path: "guaca/src/main.rs" }, ok("lines 1-40 of 40")),
+      call("write", { path: "notes/plan.md", content: "# Plan" }, ok("Created notes/plan.md")),
+      call("edit", { path: "guaca/src/main.rs", edits: [] }, ok("Edited")),
+    );
+    expect(read?.title).toBe("Read a file");
+    expect(read?.target).toBe("guaca/src/main.rs");
+    expect(wrote?.title).toBe("Wrote a file");
+    expect(wrote?.target).toBe("notes/plan.md");
+    expect(edited?.title).toBe("Edited a file");
   });
 
   it("names the brief a coding agent was started with", () => {

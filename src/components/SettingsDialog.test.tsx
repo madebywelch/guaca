@@ -841,7 +841,6 @@ describe("the provider presets", () => {
     // control that fails only after the field is filled in is worse.
     useStore.setState({
       capabilities: {
-        localDirectories: false,
         loopbackEndpoints: false,
         claudeProvider: false,
         claudeCodeHarness: false,
@@ -863,7 +862,6 @@ describe("the provider presets", () => {
     } finally {
       useStore.setState({
         capabilities: {
-          localDirectories: true,
           loopbackEndpoints: true,
           claudeProvider: true,
           claudeCodeHarness: true,

@@ -65,8 +65,8 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
 src-tauri/src/
   domain/             AgentCard, Envelope, Routine, Connector, Signin, Approval,
                       Search, ids. No I/O.
-    repository.rs     A directory an agent may write code in, which of two
-                      programs writes it, and whether it asks before pushing.
+    terminal.rs       A directory of an agent's own, which of three programs
+                      writes its code, and whether its pushes ask first.
     worknote.rs       A line about work in flight, and why it is not memory.
     skill.rs          A document of instructions for one kind of task, the
                       three places one lives, and who may write each.
@@ -89,7 +89,7 @@ src-tauri/src/
     group.rs          A crew's wall, and the settings its agents run on.
     plugin.rs         The servers a crew can sign in to, what it got, and
                       which of its agents may spend it.
-    deployment.rs     Desktop or server, and the five things that decides.
+    deployment.rs     Desktop or server, and the four things that decides.
                       Nothing about who paid for the box.
   runtime/
     guard.rs          The loop guard. Read this one first.
@@ -109,15 +109,16 @@ src-tauri/src/
   mcp.rs              The client end of MCP, in both of its protocol eras.
   oauth.rs            Signing a crew in to a plugin's server. PKCE, no client id.
   plugins.rs          Where those two meet the store, and a turn spends a grant.
-  repo.rs             Whether a directory is one an agent may be given. Runs git.
-                      Also the work tree each agent gets of its own, and when
-                      that one may be put back on the default branch.
-  shell.rs            One line in that directory, run and answered in the turn
+  terminal.rs         An agent's terminal on disk, and `read`, `write` and
+                      `edit`: what each reaches and why that is not a sandbox.
+  repo.rs             What git says about the directory a job starts in.
+  shell.rs            One line in a terminal, run and answered in the turn
                       that asked. The small door; `coding/` is the big one.
   coding/             Starting something that writes code, and reading it back.
     mod.rs            One process, one ceiling, one prompt. Read this one first.
     pi.rs             `pi`'s argument vector and its stream.
     claude_code.rs    Claude Code's, which are not the same and cannot be.
+    codex.rs          Codex's app-server protocol: one thread, steered in turn.
     bridge.rs         The other end of a job that is still running: what an
                       operator can say to one, and what it may not do alone.
   db/                 SQLite. Plain SQL, numbered migrations.
@@ -191,18 +192,18 @@ repo: the frontend renders state and forwards intent.
 | The status bar, quick actions, a button an agent asked for | *The status bar is data, and an agent's button is the operator's yes* in `docs/WORKSPACE.md`, then `domain/quick.rs` and `src/components/StatusBar.tsx` |
 | An agent reading the settings or asking to change them, the operator's current view | *An agent can read the settings, and what the operator is looking at* in `docs/WORKSPACE.md` and *A settings change is a permission with its own diff* in `docs/ATTENTION.md`, then `config::agent_patch` and `Runtime::use_settings` |
 | Permission prompts, parked turns, acting in the operator's name | *A protected action parks the turn that asked for it* |
-| An agent writing code at all: the repository, the grant, the `code` tool, the job | `docs/CODING.md`, then `domain/repository.rs` and `Runtime::start_job` |
-| An agent running one command in its repository, and which of the two doors a piece of work goes through | *A repository has two doors, and the small one is `shell`* in `docs/CODING.md`, then `src-tauri/src/shell.rs` and `Runtime::run_in_repository` |
-| Which directory a job actually runs in, worktrees, resetting a tree between jobs, two agents working in one codebase at once | *Each agent gets a work tree of its own, and Guaca resets it* in `docs/CODING.md`, then `domain::repository::Bench`, `repo::prepare` and `Footing::resettable` |
-| Which program writes the code, a spent plan, a harness that will not start | *There are two harnesses because a subscription is spent by one program* in `docs/CODING.md`, then `domain::repository::Harness` and `coding/mod.rs` |
+| An agent writing code at all: the terminal, the grant, the `code` tool, the job | `docs/CODING.md`, then `domain/terminal.rs` and `Runtime::start_job` |
+| Why there is no repository row, and where its credential, identity, harness and gate went | *Why a directory of the agent's own, and not a repository* in `docs/CODING.md`, then migration 54 |
+| An agent running one command, reading or editing a file, and which of the three doors a piece of work goes through | *Three doors, sized by the work* in `docs/CODING.md`, then `src-tauri/src/shell.rs`, `src-tauri/src/terminal.rs` and `Runtime::run_in_terminal` |
+| git and GitHub sign-ins, commit identity, a token for one agent | *Credentials belong to the host* in `docs/CODING.md`, then the `git config --system` line in `Dockerfile` |
+| Which program writes the code, a spent plan, a harness that will not start | *There are three harnesses because a subscription is spent by one program* in `docs/CODING.md`, then `domain::terminal::Harness` and `coding/mod.rs` |
 | What branch a coding job starts on, and what it is told about the tree | *A job is told where it is standing before it is told what to do* in `docs/CODING.md`, then `repo::footing` and the brief assembled in `Runtime::start_job` |
-| An argument either harness is started with, or how its stream is read | *One process lifecycle, two of what genuinely differs* in `docs/CODING.md`, then `coding/pi.rs` and `coding/claude_code.rs`, and run the live half of `tests/coding.rs` |
+| An argument a harness is started with, or how its stream is read | *One process lifecycle, three of what genuinely differs* in `docs/CODING.md`, then `coding/pi.rs`, `coding/claude_code.rs` and `coding/codex.rs`, and run the live half of `tests/coding.rs` |
 | Reaching a job that is already running, stopping one, or anything a hook does | *A job can be reached while it runs* in `docs/CODING.md`, then `coding/bridge.rs`, and run the live half of `tests/coding.rs`, which is the only thing that can check any of it |
-| Whether a job stops before it pushes, and what counts as outward-facing | *The gate is a decision the operator takes per repository* in `docs/CODING.md`, then `bridge::outward` and `Runtime::park_with` |
-| Whether a `shell` line stops before it pushes, and which asker the card names | *The gate is asked from the same function* in `docs/CODING.md`, then `Runtime::ask_about_push` and `Asker`, which have to answer for both doors |
-| A push kept in a script, what the gate follows and what it will not | *The line is read, and then what the line runs is read* and *And what it deliberately does not read* in `docs/CODING.md`, then `bridge::outward` and `bridge::Reach` |
+| Whether a job or a `shell` line stops before it pushes, and which asker the card names | *The gate is asked from one function, for every door* in `docs/CODING.md`, then `bridge::outward`, `Runtime::ask_about_push` and `Asker`, which have to answer for every door |
+| A push kept in a script or behind a `cd`, what the gate follows and what it will not | *The line is read, and then what the line runs is read* and *And what it deliberately does not read* in `docs/CODING.md`, then `bridge::outward` and `bridge::Reach` |
 | An operator asked the same thing twice, and how long a no lasts | *One no settles the question for the rest of the run* in `docs/CODING.md`, then `Runs::refused` and `Runtime::ask_about_push` |
-| What a job inherits from the operator's own Claude Code, and what that costs | *A job inherits the operator's own Claude Code setup* in `docs/CODING.md`, which has the measurement and the one hazard in it |
+| What a job inherits from the host's own Claude Code, and what that costs | *A job inherits the host's own Claude Code setup* in `docs/CODING.md`, which has the measurement and the one hazard in it |
 | A program that is installed and reported missing: `claude`, `pi`, `git`, `gh` | *A double-clicked app does not have the operator's `PATH`* below, then `src-tauri/src/programs.rs` |
 | Anything an agent stops to ask a person: the desk, the queue, the two kinds of request, `ask_operator` | `docs/ATTENTION.md`, then `domain/approval.rs` and `Runtime::park` |
 | An agent that cannot go on at all, what reaches the operator without parking a turn, `escalate` | *Three things an agent can do about a person* and *What an escalation is* in `docs/ATTENTION.md`, then `domain/escalation.rs` and `Store::raise_escalation` |
@@ -233,12 +234,12 @@ repo: the frontend renders state and forwards intent.
 | Anything about the wire: protocol versions, the handshake, headers | *Two protocol eras* in `docs/PLUGINS.md`, then `mcp.rs`, whose era probe is the one thing no offline test of a single server can check |
 | Running Guaca somewhere other than the operator's machine: the daemon, the token, a browser as the client | `docs/HOSTING.md`, then `server/mod.rs` and `src/lib/transport.ts`, and run `tests/server.rs` under `--no-default-features --features server` |
 | Updating a host from the app: the button, the updater on a box, the signed manifest, the restore after a failed update | *Updating a remote or externally managed host* in `docs/UPDATES.md`, then `host.rs` and `updater.rs`, and run `scripts/image.sh` and `scripts/box.sh` |
-| What a hosted workspace refuses, and why each refusal is a fact about a machine rather than a missing feature | *Five capabilities, and none of them is a feature nobody finished* in `docs/HOSTING.md`, then `domain/deployment.rs` and every reader of `capabilities` in `src/` |
+| What a hosted workspace refuses, and why each refusal is a fact about a machine rather than a missing feature | *Resources belong to the backend* in `docs/HOSTING.md`, then `domain/deployment.rs` and every reader of `capabilities` in `src/` |
 | A command that works at a desk and fails on a box, or a new command at all | *One list, three readers* in `docs/HOSTING.md`, then the `surface!` block in `src-tauri/src/ipc.rs` and `ipc.contract.test.ts` |
 | An invitation, a token that stopped working, the screen a browser sees before the app | *A browser is admitted by a token, and the token arrives by fragment* in `docs/HOSTING.md`, then `src/components/TokenEntry.tsx` and `adoptInvitation` |
 | A file dropped or picked in a browser, or dropped on a window that is showing a box | *A browser hands a document over as bytes* in `docs/HOSTING.md`, then `onFileDrop` in `src/lib/ipc.ts`, the upload route in `server/mod.rs` and `forward_files` |
 | A plugin or account sign-in from a box: where the redirect lands, the origin it names, the page the browser is shown | *A sign-in comes back through the origin the browser used* in `docs/HOSTING.md`, then `oauth::Landing`, `commands::Reach` and the callback route in `server/mod.rs` |
-| A repository on a box: linking by remote, the clone, its credential, the harness that writes there | *A repository arrives on a box as a clone of a remote* in `docs/HOSTING.md`, then `repo::clone_remote`, `keep_credential` and the remote branch of `create_repository` |
+| An agent's terminal on a box, and signing git and GitHub in there | *An agent's terminal is on the box, and so is its git sign-in* in `docs/HOSTING.md`, then `terminal.rs` and the `Dockerfile` |
 | A page an agent wrote or a computer's screen, drawn in a browser or a window pointed at a box | *Two loopback origins reach a browser through the daemon* in `docs/HOSTING.md`, then the `artifact` and `screen` routes in `server/mod.rs`, `AppState::screened` and `screenUrl` in `src/lib/files.ts` |
 | The desktop app showing a box, the Workspace pane, and what the menu bar draws while it does | *The desktop app can show a box, and the menu bar follows* in `docs/HOSTING.md`, then `attached` in `src/lib/transport.ts`, `src/lib/menubar.ts` and `Tray::feed` |
 | Which transport a server is spoken to over, and who gets the older one | *It speaks the transport that was replaced* in `docs/PLUGINS.md`, then `mcp::probe` and `sse_exchange` |
@@ -337,16 +338,23 @@ plugin refuses to connect and every other part of the app is unchanged. Keep it
 that way: the account is a credential for one plugin, not a thing the runtime,
 the prompt or the guard may consult.
 
-**A coding harness is a second program, and there are two of them because a
+**A coding harness is a second program, and there are three of them because a
 subscription is spent by the program it was issued to.** `pi` holding an
 Anthropic OAuth credential and dialling the Messages API is refused with *You're
 out of extra usage* while `claude` on the same machine and the same account runs
-the work off the plan. So an operator whose one plan is spent needs the other
-*program*, and no amount of configuration on the first reaches it. The choice
-lives on the repository, beside the note, because it is the same shape of fact:
-how work happens in this directory. Everything inside a harness (the model, the
-thinking level, the sign-in) belongs to the harness and is never passed from
-here. `docs/CODING.md`.
+the work off the plan. So a Claude plan is spent by Claude Code, a ChatGPT plan
+by Codex, and an API key by `pi`, and an operator whose one plan is spent needs
+another *program*. The choice lives on the agent, beside its terminal, because
+it is a fact about how this agent's work is paid for. Everything inside a
+harness (the model, the thinking level, the sign-in) belongs to the harness and
+is never passed from here. `docs/CODING.md`.
+
+**An agent's terminal is not a sandbox.** It is a directory of the agent's own
+on the host, and the shell, the file tools and the harness all run as the
+host's user with that user's credentials. The directory is where work starts,
+not a boundary around it. There is no repository row: an agent clones what it
+works on, git and GitHub are signed in on the host or with a `GH_TOKEN` secret,
+and nothing in Guaca stores a git credential of its own. `docs/CODING.md`.
 
 **A Claude subscription pays for a turn by being the program, never by holding
 its token.** Anthropic restricts consumer OAuth tokens to Claude Code and
@@ -487,7 +495,7 @@ the gotchas file says what it already cost somebody to change it.
 | Turns, the inbox, replies, stopping a run, what a run is billed | `docs/gotchas/runtime.md` |
 | A ChatGPT sign-in, the `claude` program, either of their wires | `docs/gotchas/providers.md` |
 | Model suggestions, and whether a model can be shown a picture | `docs/gotchas/models.md` |
-| Repositories, the two doors, the gate, either harness, the bridge | `docs/gotchas/coding.md` |
+| Terminals, the three doors, the gate, the harnesses, the bridge | `docs/gotchas/coding.md` |
 | Connectors (plugins in the code), MCP, and the OAuth they and the account share | `docs/gotchas/plugins.md` |
 | The daemon, the updater beside it on a box, a browser as a client, the boot both hosts share | `docs/gotchas/hosting.md` |
 | Computers, browsers, sandboxes, sign-ins found on them | `docs/gotchas/machines.md` |

@@ -4,9 +4,9 @@ A group has a Secrets tab. The operator saves a service label, its environment
 variable, a value, and the agents allowed to use it. A new secret defaults to
 nobody. Manage replaces the value and the recipient list in one transaction;
 a blank replacement keeps the current value. Forget removes the secret and its
-grants. None of these actions changes a repository's remote or Git sign-in.
-For a deployment, add `CLOUDFLARE_API_TOKEN` and select the deploying agent.
-Repository authentication remains in Repositories.
+grants. For a deployment, add `CLOUDFLARE_API_TOKEN` and select the deploying
+agent. For git and `gh`, a `GH_TOKEN` granted to an agent signs both in for that
+agent's terminal and coding jobs: the image asks `gh` for GitHub credentials.
 
 ## One store, three execution paths
 
@@ -21,10 +21,10 @@ list before committing and rejects agents outside the secret's group. Both
 execution) join against current group membership and discard state. Moving an
 agent cannot carry the former group's secrets with it.
 
-The runtime resolves grants before each repository shell and coding job, and
+The runtime resolves grants before each terminal shell and coding job, and
 when constructing the client for a computer command. It supplies environment
 variables to Bash, Pi, Claude Code, Codex's app-server, or an E2B command. Values
-are not command-line arguments, appended instructions, repository config, or
+are not command-line arguments, appended instructions, git config, or
 files written by Guaca. Coding instructions name the available variables.
 Registered variable names are removed from inherited child environments before
 the selected values are supplied, so an ungranted name cannot silently fall
@@ -60,7 +60,7 @@ service. Protect the backend volume and its backups accordingly. Other existing
 credentials, including provider settings and saved Git credentials, retain
 their existing storage and lifecycle.
 
-A grant controls which environment Guaca constructs. Repository shells and
+A grant controls which environment Guaca constructs. Terminal shells and
 coding harnesses still execute under the backend's OS account. They are trusted
 programs with that account's filesystem and network access, not mutually isolated
 security principals. A coding harness may read its own environment or include
@@ -74,6 +74,6 @@ not promise that environment injection makes that impossible.
 The store tests cover no default grant, cross-group rejection, atomic rotation,
 revocation, moved and discarded agents, deletion, and the legacy migration.
 The hosted IPC test covers write-only creation, update and deletion. Real child
-process tests cover all three harnesses and the repository shell. Chunk tests
+process tests cover all three harnesses and the terminal shell. Chunk tests
 cover Unicode values, overlapping secrets and clipping boundaries. Component
 tests cover explicit selection, rotation, failed saves, and the separate tab.

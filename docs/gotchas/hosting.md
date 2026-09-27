@@ -20,8 +20,8 @@ The daemon, a browser as a client, and the boot both hosts share.
 - **A new command is one line in `surface!`, and its arguments have to be
   spelled the way `commands.rs` spells them.** The macro calls
   `commands::$name(&state, $args)`, so a renamed or added argument fails to
-  compile in the macro rather than at runtime, which is the point: the rebase
-  onto per-agent worktrees was caught there three times. Adding the function
+  compile in the macro rather than at runtime, which is the point: one rebase
+  was caught there three times. Adding the function
   and forgetting the line is caught by `ipc.contract.test.ts` instead.
 - **`is_loopback` matched any hostname beginning `127.`** before it parsed the
   octets, so `127.example.com` was refused as a local endpoint. The test in
@@ -52,9 +52,9 @@ The daemon, a browser as a client, and the boot both hosts share.
   nothing. The harness reason comes from the box (`withheld` on
   `coding_harnesses`), and the panel used to ignore that field and offer an
   install command for a program the box would not run.
-- **A refusal's alternative has to exist.** `Absent::LocalDirectories` said
-  "link the repository by its remote instead" for as long as the flag has,
-  and nothing links a repository by its remote. The build gate checks that a
+- **A refusal's alternative has to exist.** `Absent::LocalDirectories` once
+  said "link the repository by its remote instead" while nothing linked a
+  repository by its remote. The build gate checks that a
   refusal offers a way forward; it cannot check that the way forward is
   built. Read the sentence against the feature list before shipping it.
 - **The store's default capabilities are a desktop's, on purpose.** Nothing

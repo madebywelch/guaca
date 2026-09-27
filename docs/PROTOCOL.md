@@ -271,7 +271,7 @@ carry one. The operator signs in to Claude the way they already did, in their ow
 terminal, and this app spends nothing it was not given.
 
 This is the same fact the coding harness is built on, one level up. There it
-decides which program writes code in a repository, because `pi` holding an
+decides which program writes an agent's code, because `pi` holding an
 Anthropic credential is refused while `claude` on the same account is not:
 `docs/CODING.md`. Here it decides which program answers a turn. Both follow from
 one sentence — a consumer token is spent by the program it was issued to — and in

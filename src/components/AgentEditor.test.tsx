@@ -22,7 +22,6 @@ const api = vi.hoisted(() => ({
   rankedModels: vi.fn(async () => []),
 }));
 vi.mock("../lib/ipc", () => ({ api }));
-vi.mock("./AgentRepositories", () => ({ AgentRepositories: () => null }));
 vi.mock("./GrantList", () => ({ GrantList: () => null }));
 vi.mock("./SigninList", () => ({ SigninList: () => null }));
 
@@ -72,7 +71,9 @@ function card(model = ""): AgentCard {
     hasBrowser: false,
     runsErrands: false,
     browserConsent: "open",
-    repositoryId: null,
+    hasTerminal: false,
+    harness: "pi",
+    gate: "open",
     lifecycle: "active",
     pinned: false,
     railOrder: 0,

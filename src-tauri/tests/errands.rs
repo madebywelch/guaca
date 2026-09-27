@@ -380,9 +380,9 @@ async fn stopping_the_conversation_calls_its_errands_off() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn errands_that_need_the_repository_take_turns_with_it() {
+async fn errands_that_need_the_terminal_take_turns_with_it() {
     // Two errands each writing a start and an end line into one file, with a
-    // pause between. Run at once in one work tree they interleave; an errand
+    // pause between. Run at once in one terminal they interleave; an errand
     // that touches a place holds it until it is done, so they cannot.
     let stub = serve(|body| {
         if speaker(body) == ERRAND {
@@ -390,7 +390,7 @@ async fn errands_that_need_the_repository_take_turns_with_it() {
                 return Script::Say("Marked.".into());
             }
             let mark = if anyone_said(body, "Mark A") { "A" } else { "B" };
-            return Script::InRepository(format!(
+            return Script::Shell(format!(
                 "echo {mark}-start >> order.log && sleep 0.4 && echo {mark}-end >> order.log"
             ));
         }
@@ -402,7 +402,7 @@ async fn errands_that_need_the_repository_take_turns_with_it() {
     .await;
     let h = harness(&stub, &["Writer"], GuardLimits::default());
     grant(&h, "Writer");
-    let root = shared_repository(&h, "Writer");
+    let root = terminal(&h, "Writer");
 
     let run = h.runtime.send_from_human(h.id("Writer"), "Mark both.").unwrap();
     h.settle(run).await;
@@ -418,53 +418,14 @@ async fn errands_that_need_the_repository_take_turns_with_it() {
         } else {
             ["B-start", "B-end", "A-start", "A-end"]
         },
-        "two errands worked one tree at once"
+        "two errands worked one terminal at once"
     );
-    h.expect_normal(run, "errands taking turns with a repository");
+    h.expect_normal(run, "errands taking turns with a terminal");
 }
 
-/// Puts the named agent in a fresh repository it works in directly, and
-/// returns where that is.
-fn shared_repository(h: &Harness, name: &str) -> std::path::PathBuf {
-    use guac_lib::domain::repository::{Bench, CleanRepository, Gate, Harness as Which};
-    let root = h._dir.path().join("repository");
-    std::fs::create_dir_all(&root).unwrap();
-    std::fs::write(root.join("README.md"), b"errands").unwrap();
-    for args in [
-        vec!["init", "-q"],
-        vec!["add", "."],
-        vec![
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.test",
-            "commit",
-            "-qm",
-            "initial",
-        ],
-    ] {
-        assert!(std::process::Command::new("git")
-            .args(args)
-            .current_dir(&root)
-            .status()
-            .unwrap()
-            .success());
-    }
+/// Gives the named agent a terminal, and returns where it is.
+fn terminal(h: &Harness, name: &str) -> std::path::PathBuf {
     let card = h.agent_named(name).unwrap();
-    let repository = h
-        .runtime
-        .store()
-        .create_repository(&CleanRepository {
-            group_id: card.group_id,
-            name: "Ledger".into(),
-            path: root.to_string_lossy().into_owned(),
-            note: String::new(),
-            harness: Which::Claude,
-            gate: Gate::Open,
-            remote: None,
-            bench: Bench::Shared,
-        })
-        .unwrap();
-    h.runtime.store().set_agent_repository(card.id, Some(repository.id)).unwrap();
-    root
+    h.runtime.store().set_has_terminal(card.id, true).unwrap();
+    h.runtime.terminals().ensure(card.id).unwrap()
 }

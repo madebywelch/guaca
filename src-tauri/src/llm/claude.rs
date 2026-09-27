@@ -13,7 +13,7 @@
 //! server-side. Guaca holding one and dialling the Messages API is refused; the
 //! `claude` program on the same machine and the same account runs the work off
 //! the plan. So the way to spend a subscription is to *be* the program, which is
-//! the same fact [`crate::domain::repository::Harness`] is built on, one level
+//! the same fact [`crate::domain::terminal::Harness`] is built on, one level
 //! up: there it decides who writes code, here it decides who answers a turn.
 //! `docs/PROTOCOL.md` has the dates and the sources.
 //!

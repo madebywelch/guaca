@@ -462,86 +462,16 @@ export interface ConnectorDraft {
   agents?: AgentId[];
 }
 
-export type RepositoryId = string;
-
 /**
- * Which program writes the code.
+ * Which program writes the code when an agent calls `code`.
  *
- * Two, because a subscription is spent by the program it was issued to: `pi`
- * holding an Anthropic credential is refused as out of usage while `claude` on
- * the same machine and the same account runs the work off the plan. An operator
- * whose one plan is spent needs the other program, not a different setting on
- * the same one.
+ * Three, because a subscription is spent by the program it was issued to: a
+ * Claude plan pays for work done by `claude`, a ChatGPT plan for work done by
+ * `codex`, and `pi` spends whatever it is signed in to, which is how an
+ * OpenRouter key writes code. An operator whose one plan is spent needs another
+ * program, not a different setting on the same one.
  */
 export type Harness = "pi" | "claude" | "codex";
-
-/**
- * Where a coding job in a repository actually runs.
- *
- * `own` gives every agent a git worktree of its own, off the linked repository,
- * and runs its jobs there. The operator's checkout is never switched, never
- * cleaned and never left standing on a branch that landed a week ago; two
- * agents in one codebase get two directories and can work at the same time; and
- * because Guaca owns the tree it resets it to the default branch before every
- * job, whenever nothing in it would be lost.
- *
- * `shared` runs jobs in the linked directory itself, which is what every
- * repository did before worktrees. It is the right answer where a second
- * checkout is expensive: submodules, LFS, or a tree large enough that another
- * copy is real disk.
- *
- * `own` is the default for anything linked from now on. Repositories linked
- * before it existed stayed `shared`, because moving somebody's jobs into a new
- * directory is not an upgrade's decision to take.
- */
-export type Bench = "own" | "shared";
-
-/** What an operator is shown for each, and what the panel offers in order. */
-export const BENCHES: { readonly id: Bench; readonly label: string; readonly hint: string }[] = [
-  {
-    id: "own",
-    label: "A worktree per agent",
-    hint: "Jobs run in a worktree of their own, reset before each one. Your checkout is never touched, and two agents can work at once.",
-  },
-  {
-    id: "shared",
-    label: "The linked directory",
-    hint: "Jobs run in the directory you linked, one at a time. Choose this where a second checkout is expensive: submodules, LFS, a very large tree.",
-  },
-];
-
-/**
- * A directory on this machine that a crew may write code in.
- *
- * There is no engineer flag beside this and there is not meant to be. An agent
- * in no repository is offered nothing that reaches a working tree, so a second
- * mark saying the same thing would be a second place for the answer to be
- * wrong. Designating an engineer is hiring one and putting it in one of these.
- *
- * Who is in it is not on this type. An agent carries `repositoryId`, so the
- * roster is the answer, and a list here would be the same fact in two places.
- */
-export interface Repository {
-  id: RepositoryId;
-  groupId: GroupId;
-  /** What the operator calls it. Defaults to the directory's own name. */
-  name: string;
-  /** Absolute, canonical, and the root of a git work tree. */
-  path: string;
-  /** One line the agents that have it read on every turn. */
-  note: string;
-  /** Which coding harness a job in this directory starts. */
-  harness: Harness;
-  /** Whether a job here asks before it reaches outside the directory. */
-  gate: Gate;
-  /** Where a job here runs: a worktree of the agent's own, or this directory. */
-  bench: Bench;
-  /** Where this was cloned from, for a repository the workspace cloned for
-   *  itself. Null is a directory the operator picked. */
-  remote: string | null;
-  createdAt: number;
-  updatedAt: number;
-}
 
 /** What an operator is shown for each, and what the panel offers in order. */
 export const HARNESSES: { readonly id: Harness; readonly label: string }[] = [
@@ -551,18 +481,23 @@ export const HARNESSES: { readonly id: Harness; readonly label: string }[] = [
 ];
 
 /**
- * Whether a coding job in a directory stops before it reaches outside it.
+ * Whether an agent's pushes stop on the operator's desk first.
  *
  * A push, a pull request, a merge or a release is the operator's own name going
- * somewhere git cannot take it back from. Everything else a job does is what
- * the directory and the undo already cover, and is never gated.
+ * somewhere git cannot take it back from. Everything else is what the terminal
+ * and git's undo already cover, and is never gated. It holds for every door the
+ * agent has: its own shell and its coding job alike.
  *
- * `open` is the default and is what every job did before a job could be reached
- * at all. It stays the default because the prompt every job is given says
- * nobody will answer a question: an operator turning this on is an operator
- * saying they will be there.
+ * `open` is the default because the prompt every job is given says nobody will
+ * answer a question: an operator turning this on is an operator saying they
+ * will be there.
  */
 export type Gate = "open" | "askBeforePushing";
+
+/** Where an agent's terminal is, on the machine Guaca runs on. */
+export interface TerminalView {
+  path: string;
+}
 
 /**
  * One harness, as the machine reports it.
@@ -579,83 +514,19 @@ export interface HarnessOnMachine {
   /**
    * Whether a job on it can be reached while it runs.
    *
-   * False for `pi`, which has no second interface, and for a Claude Code older
-   * than the one the behavior was measured against. Neither stops a job: both
-   * run exactly as every job ran before any of this, so this is a fact the
-   * panel states rather than a reason to refuse.
+   * False for a program older than the one the behavior was measured against.
+   * That does not stop a job: it runs, and can be stopped, but not steered.
    */
   bridged: boolean;
   install: string;
   /**
-   * Why this workspace will not run it, when it will not.
-   *
-   * Present only where the harness is withheld by where the workspace runs,
-   * which today means Claude Code on a server: it spends a plan signed in to on
-   * the operator's own machine. Drawn as the row's reason rather than by
-   * dropping the row, because a harness that silently vanishes is a panel that
-   * disagrees with the operator's laptop and explains nothing.
+   * Why this workspace will not run it, when it will not. Drawn as the row's
+   * reason rather than by dropping the row, because a harness that silently
+   * vanishes is a panel that explains nothing.
    */
   withheld?: string | null;
   signedIn?: boolean | null;
   signIn?: string;
-}
-
-/**
- * What a repository is doing right now.
- *
- * Read, never stored. Every one of these changes when the operator commits,
- * pulls or opens a pull request, and none of those go through Guaca, so a
- * cached copy would be wrong exactly when somebody looked at it.
- */
-export interface RepoStatus {
-  /** The branch, or a short sha when HEAD is detached. */
-  branch: string;
-  /** At a commit rather than on a branch: a state to get out of, not one to
-   *  work from, so it is drawn differently. */
-  detached: boolean;
-  /** Paths differing from HEAD: modified, staged, untracked, unmerged. */
-  dirty: number;
-  ahead: number;
-  behind: number;
-  /** Whether the branch tracks anything. Without it `ahead` and `behind` are
-   *  both zero, which is not the same as being in sync. */
-  upstream: boolean;
-  /**
-   * Open pull requests, when `gh` is installed and signed in.
-   *
-   * `null` is not zero and must never be drawn as one. It means the question
-   * could not be asked. Zero means somebody asked and there are none.
-   */
-  pullRequests: number | null;
-}
-
-/**
- * `path` is checked against git before anything is stored, so what comes back
- * is the canonical path git agreed to and not always the one that was typed.
- * A blank `name` takes the directory's own.
- */
-export interface GitIdentity {
-  name: string;
-  email: string;
-}
-
-export interface RepositoryDraft {
-  groupId: GroupId;
-  name: string;
-  /** Blank when `remote` is given: a clone's directory is the workspace's. */
-  path: string;
-  note: string;
-  harness: Harness;
-  gate: Gate;
-  bench: Bench;
-  /** A remote to clone instead of a directory to link: how a box gets one. */
-  remote?: string;
-  /** A token for a private https remote. Kept beside the settings, never in
-   *  the clone, and never read back out. */
-  credential?: string;
-  credentialId?: string;
-  username?: string;
-  author?: GitIdentity;
 }
 
 export type PluginId = string;
@@ -930,8 +801,17 @@ export interface AgentCard {
    * brief and its tools, up to three at once. Off unless the operator says so.
    */
   runsErrands: boolean;
-  /** The one repository this agent works in, if it has been put in one. */
-  repositoryId: RepositoryId | null;
+  /**
+   * Whether the operator has given this agent a terminal: a directory of its
+   * own on the machine Guaca runs on, the shell that starts there, and a
+   * coding harness. A decision, like `hasComputer`: taking it away keeps the
+   * directory and the two answers below.
+   */
+  hasTerminal: boolean;
+  /** Which program writes this agent's code. */
+  harness: Harness;
+  /** Whether this agent's pushes ask the operator first. */
+  gate: Gate;
   name: string;
   avatar: string;
   color: string;
@@ -1044,8 +924,6 @@ export interface RankedModel {
  * failure.
  */
 export interface Capabilities {
-  /** Whether a repository may be a directory the operator picked. */
-  localDirectories: boolean;
   /** Whether inference may point at a model server on loopback. */
   loopbackEndpoints: boolean;
   /** Whether a turn may be paid for by a Claude plan. */
@@ -1226,7 +1104,8 @@ export type UiEvent =
         MessageId,
         { channelId: AgentId; agentId: AgentId; runId: RunId; to: Participant; text: string }
       >;
-      building: Record<AgentId, RepositoryId>;
+      /** Which agents have a coding job running, and the directory each is in. */
+      building: Record<AgentId, string>;
     }
   | { type: "agentsChanged" }
   /** `client` is the page whose command asked; absent from an older host. */
@@ -1327,19 +1206,10 @@ export type UiEvent =
   | {
       type: "codingJobFailed";
       agentId: AgentId;
-      repository: string;
+      directory: string;
       harness: string;
       reason: string;
     }
-  /**
-   * A coding job started or ended, and the repository it works in is busy or
-   * free.
-   *
-   * The rail draws this because nothing else would: `code` returns as soon as
-   * the harness is up and the turn ends, so an agent sits idle while a coding
-   * agent works in its repository for twenty minutes, and the crew reads as
-   * stopped at exactly the moment it is building.
-   */
   /**
    * Something moved on one crew's calendar.
    *
@@ -1352,8 +1222,16 @@ export type UiEvent =
    * or by the operator. The crew, for the reason the calendar's is.
    */
   | { type: "artifactsChanged"; groupId: GroupId }
-  | { type: "codingJobStarted"; agentId: AgentId; repositoryId: RepositoryId; repository: string }
-  | { type: "codingJobFinished"; agentId: AgentId; repositoryId: RepositoryId }
+  /**
+   * A coding job started or ended in an agent's terminal.
+   *
+   * The rail draws this because nothing else would: `code` returns as soon as
+   * the harness is up and the turn ends, so an agent sits idle while a coding
+   * agent works for it for twenty minutes, and the crew reads as stopped at
+   * exactly the moment it is building.
+   */
+  | { type: "codingJobStarted"; agentId: AgentId; directory: string }
+  | { type: "codingJobFinished"; agentId: AgentId }
   /**
    * One line of what a running coding job is doing.
    *
@@ -1364,7 +1242,6 @@ export type UiEvent =
   | {
       type: "codingProgress";
       agentId: AgentId;
-      repositoryId: RepositoryId;
       /** A tool name, or empty when the coding agent is talking. */
       tool: string;
       /** The command, the path, or the sentence. */
@@ -1786,30 +1663,6 @@ export interface WorkingNote {
   body: string;
 }
 
-export interface RepositoryConnection {
-  author?: GitIdentity;
-  remote: string | null;
-  pushRemote: string | null;
-  managedCredential: boolean;
-  githubApp?: boolean;
-  githubAvailable?: boolean;
-  acceptsToken: boolean;
-}
-
-export interface GithubUserSignin {
-  flowId: string;
-  userCode: string;
-  verificationUri: string;
-  expiresIn: number;
-  interval: number;
-}
-export interface GithubUserStatus {
-  status: "signedOut" | "pending" | "authorized";
-  login?: string | null;
-  author?: GitIdentity | null;
-  interval?: number | null;
-}
-
 export interface WorkDecision {
   id: string;
   agentId: AgentId;
@@ -1832,11 +1685,4 @@ export interface WorkDecision {
   snoozedUntil: number | null;
   deliveryRun: RunId | null;
   interrupted: boolean;
-}
-
-/** A saved credential description. No secret value crosses this boundary. */
-export interface SavedRepositoryCredential {
-  id: string;
-  remote: string;
-  username: string;
 }

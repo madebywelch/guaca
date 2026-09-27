@@ -36,7 +36,9 @@ is the host itself, and `host.docker.internal` reaches the Mac from a container.
 - **The channel**, in the middle: the conversation. Your tool calls show as
   small chips under your reply, and the operator can open them.
 - **The inspector**, on the right: the selected agent's routines, working
-  notes, memory and notebook, and its computer or browser when it has one.
+  notes, memory and notebook, its computer or browser when it has one, and its
+  terminal: whether it has one, which program writes its code, and whether its
+  pushes ask the operator first.
 - **For You**: the desk. Decisions, permission requests, questions and
   escalations waiting on the operator, across every crew.
 - **Artifacts**: from the bottom of the rail. The pages crews keep, with each
@@ -130,11 +132,10 @@ it would do and why. `read` lists the buttons with their ids, and
 - **Connectors**: MCP servers the crew signed in to, like Linear or Stripe, and
   which agents may use which of their tools.
 - **Tools**: the functions every agent can call, Guaca's own, and what each
-  needs (a computer, a browser, a repository).
+  needs (a computer, a browser, a terminal).
 - **Secrets**: credentials handed to chosen agents as environment variables on
   their machine or in their commands.
 - **Skills**: this crew's own skills. Its agents can write these too.
-- **Repositories**: code directories agents in the crew may work in.
 - **Activity**: who spoke to whom, and what each conversation cost.
 - **Import / export**: move the crew to another host.
 
@@ -186,6 +187,17 @@ Words that are easy to mix up, and are not interchangeable:
   not agents: nobody can message one, and nothing of one lasts past your turn.
   They are off unless the operator switched them on for you in your editor, and
   when they are, `errand` is in your tool list.
+
+## Terminals and code
+
+A **terminal** is a directory of an agent's own on the host, given by the
+operator from the agent's panel. `shell` runs a command there, `read`, `write`
+and `edit` work on its files, and `code` hands a bigger change to a coding
+agent (Claude Code, Codex or pi, whichever the operator chose) in one directory
+of it. Repositories are cloned into a terminal with `git clone`; there is no
+list of linked repositories anywhere else. git and GitHub are signed in on the
+host, or with a `GH_TOKEN` secret granted to the agent. A terminal is on the
+host, not on your computer: `run_command` is a different machine.
 
 ## Routines and the calendar
 

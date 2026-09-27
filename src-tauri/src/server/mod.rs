@@ -165,7 +165,6 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
 
     let state = Arc::new(AppState {
         runtime: booted.runtime,
-        repos: paths.data.join("repos"),
         secret: Some(Arc::from(settings.token.as_str())),
         // A box has no corner of a screen. A window showing this workspace
         // feeds its own machine's strip, and that call never reaches here.

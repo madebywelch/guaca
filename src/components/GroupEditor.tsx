@@ -33,7 +33,6 @@ import { GroupActivity } from "./GroupActivity";
 import { GroupTransfer } from "./GroupTransfer";
 import { PluginList } from "./PluginList";
 import { ProviderPresets, SubscriptionModel } from "./ProviderFields";
-import { RepositoryList } from "./RepositoryList";
 import { SkillList } from "./SkillList";
 import { ToolList } from "./ToolList";
 
@@ -53,7 +52,6 @@ const SECTIONS = [
   "tools",
   "secrets",
   "skills",
-  "repositories",
   "activity",
   "transfer",
 ] as const;
@@ -68,24 +66,16 @@ const SECTION_LABELS: Record<Section, string> = {
   tools: "Tools",
   secrets: "Secrets",
   skills: "Skills",
-  repositories: "Repositories",
   activity: "Activity",
   transfer: "Import / export",
 };
 
 /**
  * The sections that are about something attached to a crew, so a crew has to
- * exist first. A sign-in, a credential and a linked directory all have to
- * belong to something, and there is no row to hang any of them on until the
- * group is created.
+ * exist first. A sign-in and a credential both have to belong to something,
+ * and there is no row to hang either on until the group is created.
  */
-const NEEDS_GROUP: readonly Section[] = [
-  "plugins",
-  "secrets",
-  "skills",
-  "repositories",
-  "activity",
-];
+const NEEDS_GROUP: readonly Section[] = ["plugins", "secrets", "skills", "activity"];
 
 /** What a group says when it has no opinion about who pays. */
 const INHERIT = "inherit";
@@ -195,7 +185,7 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
    * would get lost.
    *
    * What it buys is a foot that offers nothing on the two panes that stage
-   * nothing. A plugin is signed in and a repository is linked at the moment the
+   * nothing. A plugin is signed in and a secret is saved at the moment the
    * operator does it, so a Save under either was a button offering to save work
    * that had already been saved, beside a Cancel implying it could be taken
    * back. A group that does not exist yet is always waiting: there is nothing
@@ -729,7 +719,7 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                 <h3 className="settings__title">Secrets</h3>
                 <p className="settings__lede">
                   Save a service token and choose the agents that can use it. Selected agents get
-                  the variable in repository shells, coding jobs, and computer commands.
+                  the variable in their terminal, their coding jobs, and computer commands.
                 </p>
                 <CredentialList groupId={group.id} crew={members} />
               </>
@@ -743,23 +733,6 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                   work something out, and no other crew can read them.
                 </p>
                 <SkillList scope={{ kind: "crew", groupId: group.id }} />
-              </>
-            )}
-
-            {/* Its own section rather than a third panel under Plugins. A
-                plugin is a server this crew signs in to and a repository is a
-                directory on this machine that it writes in: they share a shape
-                (given to the crew, then handed to named agents) and nothing
-                else, and stacked in one pane the operator scrolled past two
-                sign-in panels to reach the one about their own source. */}
-            {section === "repositories" && group && (
-              <>
-                <h3 className="settings__title">Repositories</h3>
-                <p className="settings__lede">
-                  Add a codebase for this crew, then assign it to an agent in that agent’s profile.
-                  Repositories and coding tools run on the connected backend.
-                </p>
-                <RepositoryList groupId={group.id} crew={members} />
               </>
             )}
 

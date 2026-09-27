@@ -1,7 +1,8 @@
-//! Running a coding harness against a linked repository.
+//! Running a coding harness in an agent's terminal.
 //!
-//! Guaca does not write code. It starts something that does, in a directory the
-//! operator linked, and reads what comes back. Codex, Claude Code and `pi` each
+//! Guaca does not write the code for a change that takes a few hundred tool
+//! calls. It starts something that does, in a directory inside the agent's own
+//! terminal, and reads what comes back. Codex, Claude Code and `pi` each
 //! own their model settings and credentials. The operator installs and signs in to whichever of
 //! them they use.
 //!
@@ -11,10 +12,11 @@
 //! argument. A guaca turn is one model call plus `max_tool_rounds` rounds,
 //! twenty-four by default, inside a conversation bounded at sixty model calls.
 //! A real change to a repository is a few hundred tool calls, its own context
-//! window and its own compaction. Reaching that with `read` and `edit` tools in
-//! this runtime means raising both limits to coding scale, and both are per
-//! group, so the guard that keeps a crew of eight from talking forever comes
-//! off for every agent in every crew.
+//! window and its own compaction. The terminal's own `read`, `write` and `edit`
+//! are for the change a turn can finish; reaching past that with them means
+//! raising both limits to coding scale, and both are per group, so the guard
+//! that keeps a crew of eight from talking forever comes off for every agent in
+//! every crew.
 //!
 //! So the harness keeps its own loop, its own context and its own budget, and
 //! Guaca spends one tool round starting it.
@@ -72,7 +74,7 @@
 //! undo what happens inside it. Nothing in this file should ever be described
 //! as a sandbox.
 //!
-//! [`crate::domain::repository::Gate::AskBeforePushing`] does not change that
+//! [`crate::domain::terminal::Gate::AskBeforePushing`] does not change that
 //! sentence and must not be read as changing it. It reads a shell line and decides
 //! whether it looks like a push, which is a judgment about the ordinary case: a
 //! job that wanted to get around it could, and it was already running as the
@@ -87,7 +89,7 @@ pub mod pi;
 
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
-use crate::domain::repository::Harness;
+use crate::domain::terminal::Harness;
 
 pub use bridge::{Bridge, Signal, Wiring};
 
@@ -132,8 +134,8 @@ last message is the only thing the agent that asked for this will read.";
 pub enum CodingError {
     #[error(
         "the {harness} coding harness is not installed, or is not on this app's PATH. Install it \
-         with `{install}`, or choose the other harness in the repository's settings, then try \
-         again"
+         with `{install}`, or choose the other harness in the agent's terminal settings, then \
+         try again"
     )]
     NotInstalled { harness: &'static str, install: &'static str },
     #[error("the coding harness could not be started: {0}")]
@@ -145,11 +147,6 @@ pub enum CodingError {
     NoAnswer(String),
     #[error("the job ran for {0} minutes without finishing and was stopped")]
     TooLong(u64),
-    #[error(
-        "{repository} gives each agent a git worktree of its own to work in, and one could not \
-         be made at `{at}`: {why}. Or set the repository to work in the linked directory instead"
-    )]
-    NoWorkTree { repository: String, at: String, why: &'static str },
 }
 
 /// What one job did, as the agent that started it is told.
@@ -480,7 +477,6 @@ async fn run_process(
     };
 
     let mut command = tokio::process::Command::new(binary(harness));
-    crate::repo::github::environment(repository, &mut command).await;
     env.apply(&mut command);
     let mut child = command
         .current_dir(repository)
@@ -628,10 +624,10 @@ fn shown(here: &str, detail: &str) -> String {
 
 /// A command with a `cd` back to the directory it is already in taken off it.
 ///
-/// Both harnesses are started in the work tree with `current_dir`, and
-/// [`crate::repo::Prepared::brief`] names that tree by its absolute path, which
-/// a model reads as somewhere to go: it writes `cd "/Users/…/worktrees/<id>/<agent>"
-/// && pnpm test` in front of every command it runs. A work tree path runs to
+/// Every harness is started in its directory with `current_dir`, and the brief
+/// names that directory by its absolute path, which a model reads as somewhere
+/// to go: it writes `cd "/Users/…/terminals/<agent>/<repo>" && pnpm test` in
+/// front of every command it runs. A work tree path runs to
 /// around 110 characters and a line has [`DETAIL`] of them to spend, so the cut
 /// landed inside the path and nine commands drew nine copies of it and none of
 /// what ran. The prefix is worth nothing even when it fits.

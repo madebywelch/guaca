@@ -5,7 +5,7 @@
 #[tokio::test]
 #[ignore = "live: uses Codex login with gpt-5.4-mini, never the configured default model"]
 async fn codex_mini_accepts_steering_and_honors_a_denied_push() {
-    use guac_lib::{coding, domain::repository::Harness};
+    use guac_lib::{coding, domain::terminal::Harness};
     use std::{os::unix::fs::PermissionsExt, process::Command, time::Duration};
     let path = std::env::var_os("PATH").unwrap();
     let binary = std::env::split_paths(&path)
@@ -61,7 +61,7 @@ os.execv(real, args + sys.argv[2:])
     let running = coding::run_with_control(
         Harness::Codex, repo.to_str().unwrap(),
         "First run sleep 3. Then create smoke.txt containing exactly original followed by a newline. Check its contents and commit it with message test: verify Codex runner. Finally push HEAD to origin as branch steering-check. Origin is a disposable local bare repository. If push is denied, do not retry. Do not contact external services, spawn subagents, or change other files. Reply briefly.",
-        None, Some(coding::codex::Control { gate: guac_lib::domain::repository::Gate::AskBeforePushing, steering, signals }),
+        None, Some(coding::codex::Control { gate: guac_lib::domain::terminal::Gate::AskBeforePushing, steering, signals }),
         move |event| { let _ = progress.send(event); },
     );
     tokio::pin!(running);

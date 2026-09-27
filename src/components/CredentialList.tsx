@@ -98,7 +98,7 @@ export function CredentialList({ groupId, crew = [] }: Props) {
       <p className="field__hint">
         Use the service’s variable name, such as CLOUDFLARE_API_TOKEN. Values are never shown after
         saving. Changes apply to new commands and jobs; stop an existing job before revoking its
-        access. Repository authentication is managed under Repositories.
+        access. A GitHub token saved as GH_TOKEN signs in git and gh in the agent’s terminal.
       </p>
       {connectors === null && !error && <p className="field__hint">Loading secrets…</p>}
       {connectors?.map((connector) => (

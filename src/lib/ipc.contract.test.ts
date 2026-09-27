@@ -119,9 +119,9 @@ describe("IPC contract", () => {
     // stores a value the store reads back as `pi`. Neither shows up until
     // somebody's coding job runs the wrong program.
     const rust = new Set(
-      [
-        ...read("src-tauri/src/domain/repository.rs").matchAll(/Harness::(\w+) => "([a-z]+)",/g),
-      ].map((m) => m[2]!),
+      [...read("src-tauri/src/domain/terminal.rs").matchAll(/Harness::(\w+) => "([a-z]+)",/g)].map(
+        (m) => m[2]!,
+      ),
     );
     const web = new Set(
       [...read("src/lib/types.ts").matchAll(/\{ id: "([a-z]+)", label: /g)].map((m) => m[1]!),

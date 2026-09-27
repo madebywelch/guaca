@@ -70,15 +70,13 @@ esac
 
 curl -fsS "${BASE}/" | grep -q '<div id="root">' || fail "the page is not served at /"
 
-# What a remote-linked repository runs on. Asked inside the container, because
-# an image that lost one of these fails only when somebody links a repository.
+# What an agent's terminal runs on. Asked inside the container, because an
+# image that lost one of these fails only when an agent first clones or pushes.
 docker exec "${NAME}" ssh -V >/dev/null 2>&1 || fail "SSH client is not in the image"
 docker exec "${NAME}" git --version >/dev/null || fail "git is not in the image"
 docker exec "${NAME}" gh --version >/dev/null || fail "gh is not in the image"
-[ "$(docker exec "${NAME}" /bin/bash -lc 'command -v gh')" = "/usr/local/bin/gh" ] \
-  || fail "a login shell bypassed the repository-aware GitHub launcher"
-docker exec "${NAME}" /bin/bash -lc 'gh --version' >/dev/null \
-  || fail "the GitHub launcher failed outside a linked repository"
+docker exec "${NAME}" git config --system --get-all credential.https://github.com.helper \
+  | grep -q 'gh auth git-credential' || fail "git does not ask gh for GitHub credentials"
 docker exec "${NAME}" codex --version >/dev/null || fail "codex is not in the image"
 [ "$(docker exec "${NAME}" printenv HOME)" = "/var/lib/guaca" ] || fail "CLI home is not persistent"
 docker exec "${NAME}" claude --version >/dev/null || fail "claude is not in the image"

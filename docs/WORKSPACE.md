@@ -1248,18 +1248,14 @@ It is sectioned on the Settings shell for the same reason Settings is: a group
 now decides who pays for its turns, which model answers them, how long a call may
 take and how far a conversation may run, and one scroll put the name and the
 delete button a page apart. The state lives in the shell, so changing section
-cannot discard a half-typed endpoint. Connectors, Secrets and Repositories are disabled
-until the group exists, because a sign-in, a credential and a linked directory
-all have to belong to something.
+cannot discard a half-typed endpoint. Connectors and Secrets are disabled
+until the group exists, because a sign-in and a credential both have to belong
+to something.
 
-Repositories is a section rather than a third block under Plugins, and the two
-are near-neighbors on purpose rather than by accident: both are a thing given to
-the crew and then handed to named agents, which is the only shape they share. A
-plugin is a server somewhere that this crew signs in to. A repository is a
-directory on this machine that it writes in, and it is the one place in the app
-where the operator hands over their own source. Stacked under Plugins it was
-reached by scrolling past two sign-in panels, and the panel had to draw its own
-heading to be findable at all, which is how a section earns itself.
+There is no Repositories section. Code lives in an agent's own terminal, given
+from the agent's panel beside its computer and browser, and a crew-level list
+of linked directories would be a second answer to where an agent works.
+`docs/CODING.md`.
 
 The plugins section holds two decisions, not one. Connecting is the crew's
 sign-in; under each connected row is who in the crew may use it, which is every

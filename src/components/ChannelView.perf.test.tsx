@@ -81,7 +81,9 @@ function agent(id: string, name: string): AgentCard {
     hasBrowser: false,
     runsErrands: false,
     browserConsent: "open",
-    repositoryId: null,
+    hasTerminal: false,
+    harness: "pi",
+    gate: "open",
     version: 1,
   };
 }

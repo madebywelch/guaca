@@ -84,7 +84,6 @@ const subscriptionStatus = vi.fn<() => Promise<SubscriptionStatus>>(async () => 
 const groupConnectors = vi.fn(async () => []);
 const groupPlugins = vi.fn(async () => []);
 const pluginCatalog = vi.fn(async () => []);
-const groupRepositories = vi.fn(async () => []);
 const codingHarnesses = vi.fn(async () => []);
 const conversationFlow = vi.fn<(group: string, limit?: number) => Promise<Envelope[]>>(
   async () => [],
@@ -112,9 +111,7 @@ vi.mock("../lib/ipc", () => ({
     groupConnectors: () => groupConnectors(),
     groupPlugins: () => groupPlugins(),
     pluginCatalog: () => pluginCatalog(),
-    groupRepositories: () => groupRepositories(),
     codingHarnesses: () => codingHarnesses(),
-    githubAppAvailable: async () => false,
     conversationFlow: (group: string, limit?: number) => conversationFlow(group, limit),
     usageForRuns: () => usageForRuns(),
   },
@@ -266,7 +263,6 @@ describe("who pays for a group's turns", () => {
     // laptop and explains nothing.
     useStore.setState({
       capabilities: {
-        localDirectories: false,
         loopbackEndpoints: false,
         claudeProvider: false,
         claudeCodeHarness: false,
@@ -284,7 +280,6 @@ describe("who pays for a group's turns", () => {
     } finally {
       useStore.setState({
         capabilities: {
-          localDirectories: true,
           loopbackEndpoints: true,
           claudeProvider: true,
           claudeCodeHarness: true,
@@ -362,34 +357,21 @@ describe("what the operator is shown", () => {
     expect(field(/Model calls per conversation/).placeholder).toBe("60");
   });
 
-  it("does not offer plugins or repositories for a group that does not exist yet", () => {
-    // A sign-in, a credential and a linked directory all have to belong to
-    // something, and there is no row to hang any of them on yet.
+  it("does not offer connectors or secrets for a group that does not exist yet", () => {
+    // A sign-in and a credential both have to belong to something, and there
+    // is no row to hang either on yet.
     open(null);
     expect((screen.getByRole("tab", { name: "Connectors" }) as HTMLButtonElement).disabled).toBe(
       true,
     );
     expect((screen.getByRole("tab", { name: "Secrets" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("tab", { name: "Repositories" }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
   });
 
-  it("puts repositories in a section of their own rather than under plugins", async () => {
-    // A plugin is a server this crew signs in to and a repository is a
-    // directory on this machine it writes in. They share a shape and nothing
-    // else, and stacked in one pane the operator scrolled past two sign-in
-    // panels to reach the one about their own source.
+  it("has no repositories pane, because a repository is something an agent clones", () => {
+    // Code lives in an agent's own terminal now. A crew-level list of linked
+    // directories would be a second answer to where an agent works.
     open();
-    pane("Repositories");
-    expect(await screen.findByText("Link a repository")).toBeTruthy();
-
-    pane("Connectors");
-    await waitFor(() => expect(groupPlugins).toHaveBeenCalled());
-    expect(screen.queryByText("Link a repository")).toBeNull();
-    expect(screen.queryByText("Add a secret")).toBeNull();
-    pane("Secrets");
-    expect(await screen.findByText("Add a secret")).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "Repositories" })).toBeNull();
   });
 
   it("refuses to save a group with no name", () => {
@@ -416,23 +398,23 @@ describe("the Save in the foot", () => {
   });
 
   it("offers nothing on the panes that save as the operator goes", async () => {
-    // A plugin is signed in and a repository is linked at the moment it is
-    // done. A Save under either offered to save work that was already saved,
-    // beside a Cancel implying it could be taken back.
+    // A plugin is signed in and a secret is saved at the moment it is done. A
+    // Save under either offered to save work that was already saved, beside a
+    // Cancel implying it could be taken back.
     open();
-    pane("Repositories");
-    expect(await screen.findByText("Link a repository")).toBeTruthy();
+    pane("Secrets");
+    expect(await screen.findByText("Add a secret")).toBeTruthy();
     expect(saveButton()).toBeNull();
   });
 
   it("is still reachable from a pane that stages nothing", async () => {
     // Every pane's state is held by the shell, so a rename is still unsaved
-    // from Repositories. A Save that went missing on the way past is how it
-    // would get lost.
+    // from Secrets. A Save that went missing on the way past is how it would
+    // get lost.
     open();
     type(/Name/, "Kitchenette");
-    pane("Repositories");
-    expect(await screen.findByText("Link a repository")).toBeTruthy();
+    pane("Secrets");
+    expect(await screen.findByText("Add a secret")).toBeTruthy();
     expect(saveButton()).toBeTruthy();
   });
 

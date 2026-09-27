@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::commands::{
     self, AppState, ArtifactAddress, CommandError, FileRef, GroupReset, HarnessOnMachine,
-    RoutineDraft, SettingsPatch, Staged,
+    RoutineDraft, SettingsPatch, Staged, TerminalView,
 };
 use crate::config::RedactedConfig;
 use crate::domain::agent::{AgentCard, AgentDraft};
@@ -21,16 +21,15 @@ use crate::domain::envelope::Envelope;
 use crate::domain::escalation::Escalation;
 use crate::domain::group::{Group, GroupDraft};
 use crate::domain::ids::{
-    AgentId, ApprovalId, ConnectorId, EscalationId, GroupId, MessageId, PluginId, RepositoryId,
-    RoutineId, RunId,
+    AgentId, ApprovalId, ConnectorId, EscalationId, GroupId, MessageId, PluginId, RoutineId, RunId,
 };
 use crate::domain::plugin::{
     HeaderPair, Plugin, PluginAccess, PluginKind, PluginOffer, ServerReport,
 };
-use crate::domain::repository::{Bench, Gate, Harness, Repository, RepositoryDraft};
 use crate::domain::routine::{Routine, RoutineRun};
 use crate::domain::search::SearchHits;
 use crate::domain::signin::Signin;
+use crate::domain::terminal::{Gate, Harness};
 use crate::domain::usage::{GroupUsage, RunUsage};
 use crate::domain::worknote::WorkingNote;
 use crate::e2b::Computer;
@@ -283,10 +282,6 @@ surface! {
     export_group(id: GroupId) -> crate::transfer::Archive,
     import_group(archive: crate::transfer::Archive, name: String) -> Group,
     group_reconnect(id: GroupId) -> Vec<crate::transfer::Reconnect>,
-    begin_repository_github_signin(id: RepositoryId) -> crate::repo::github::UserSignin,
-    poll_repository_github_signin(id: RepositoryId, flow_id: String) -> crate::repo::github::UserStatus,
-    repository_github_user(id: RepositoryId) -> crate::repo::github::UserStatus,
-    sign_out_repository_github_user(id: RepositoryId) -> crate::repo::github::UserStatus,
 
     set_agent_browser_consent(id: AgentId, consent: crate::domain::agent::Consent) -> (),
     set_agent_errands(id: AgentId, given: bool) -> (),
@@ -332,26 +327,13 @@ surface! {
     create_connector(draft: ConnectorDraft) -> Connector,
     update_connector(id: ConnectorId, agents: Vec<AgentId>, secret: Option<String>) -> (),
     delete_connector(id: ConnectorId) -> (),
-    group_repositories(group_id: GroupId) -> Vec<Repository>,
-    repository_statuses() -> std::collections::HashMap<RepositoryId, crate::repo::RepoStatus>,
-    list_repositories() -> Vec<Repository>,
-    create_repository(draft: RepositoryDraft) -> Repository,
-    update_repository(id: RepositoryId, name: String, note: String, harness: Harness, gate: Gate, bench: Bench) -> Repository,
-    github_app_available() -> bool,
+    agent_terminal(id: AgentId) -> TerminalView,
+    give_agent_terminal(id: AgentId) -> (),
+    take_agent_terminal(id: AgentId) -> (),
+    set_agent_coding(id: AgentId, harness: Harness, gate: Gate) -> (),
     coding_harnesses() -> Vec<HarnessOnMachine>,
-    set_repository_author(id: RepositoryId, author: crate::domain::repository::GitIdentity) -> crate::repo::auth::Connection,
-    repository_connection(id: RepositoryId) -> crate::repo::auth::Connection,
-    create_github_repository(draft: RepositoryDraft) -> Repository,
-    set_repository_github(id: RepositoryId) -> crate::repo::auth::Connection,
-    set_repository_credential(id: RepositoryId, username: String, token: String) -> crate::repo::auth::Connection,
-    saved_repository_credentials(remote: String) -> Vec<crate::repo::credentials::Saved>,
-    reuse_repository_credential(id: RepositoryId, credential_id: String) -> crate::repo::auth::Connection,
-    clear_repository_credential(id: RepositoryId) -> crate::repo::auth::Connection,
-    check_repository_connection(id: RepositoryId) -> String,
     message_coding_job(agent_id: AgentId, message: String) -> (),
     stop_coding_job(agent_id: AgentId) -> (),
-    delete_repository(id: RepositoryId) -> (),
-    set_agent_repository(id: AgentId, repository_id: Option<RepositoryId>) -> AgentCard,
     plugin_catalog() -> Vec<PluginOffer>,
     group_plugins(group_id: GroupId) -> Vec<Plugin>,
     connect_plugin(group_id: GroupId, kind: PluginKind, connection: Option<String>) -> Plugin,

@@ -405,15 +405,13 @@ use crate::domain::envelope::{
     Trust,
 };
 use crate::domain::escalation;
-use crate::domain::ids::{
-    AgentId, ApprovalId, EscalationId, GroupId, MessageId, RepositoryId, RunId,
-};
+use crate::domain::ids::{AgentId, ApprovalId, EscalationId, GroupId, MessageId, RunId};
 use crate::domain::now_ms;
 use crate::domain::plugin::PluginKind;
 use crate::domain::promise;
-use crate::domain::repository::{Gate, Harness};
 use crate::domain::routine::{EventTrigger, Routine, RunKind};
 use crate::domain::signin::{self, BrowserState, Signin, Surface};
+use crate::domain::terminal::Harness;
 use crate::domain::worknote;
 use crate::files::FileStore;
 use crate::llm::modality::{self, Modalities};
@@ -461,7 +459,7 @@ const PLACE_CHUNK: usize = 192 * 1024;
 
 /// Failed sends must not leave a colleague expecting a file. Failed attaches
 /// must not leave an answer claiming one. Advice names only a filesystem the
-/// agent can actually reach: repository failures carry shell guidance at the
+/// agent can actually reach: terminal failures carry shell guidance at the
 /// call site, while these cover computers and agents with neither surface.
 const UNSENT_FILE: &str = "The recipient did not get it, so do not tell them it is on the way.";
 const UNSENT_FILE_NO_COMPUTER: &str =
@@ -531,15 +529,27 @@ const SIGNIN_SCAN_EVERY: Duration = Duration::from_secs(120);
 /// forever, because a turn that never ends is a run that never settles.
 const APPROVAL_WINDOW: Duration = Duration::from_secs(10 * 60);
 
+/// What a job is told when the directory it starts in is not a repository.
+///
+/// Said rather than left for it to find. The standing prompt tells every job
+/// that commits are its only undo, and a job that believed that while standing
+/// somewhere git cannot see would edit for forty minutes with no checkpoint at
+/// all. Which of the two ways out is right depends on the work, and the job is
+/// the one holding the brief.
+const NOT_A_REPOSITORY: &str = "This directory is not a git repository, so nothing you change \
+here can be undone. If the work belongs in a repository that already exists, clone it into a \
+directory of its own here and work there. If it is new work, run `git init` before your first \
+edit.\n\n";
+
 /// A coding job, while it is running.
 ///
 /// Everything about a job that outlives the turn that started it and that
-/// something outside the job needs to reach: who owns it, how to stop it, where
-/// to post it a correction, and the run its permission requests are filed
-/// against.
+/// something outside the job needs to reach: where it is working, how to stop
+/// it, and where to post it a correction. Who owns it is the key it is filed
+/// under.
 struct Running {
-    /// Who started it, and who gets the message when it ends.
-    agent: AgentId,
+    /// Where it is working, relative to the agent's terminal.
+    directory: String,
     /// Where the operator's corrections go, once it is known.
     mailbox: Mailbox,
     /// Dropping this kills the process.
@@ -557,7 +567,7 @@ struct Running {
 ///
 /// Three states rather than an `Option`, because the two ways of not being
 /// reachable have opposite answers for the operator: one is worth waiting a
-/// second for, and the other is a fact about the repository that no amount of
+/// second for, and the other is a fact about the harness that no amount of
 /// waiting changes.
 #[derive(Clone)]
 enum Mailbox {
@@ -592,7 +602,7 @@ const COMPOST_TICK: Duration = Duration::from_secs(60 * 60);
 ///
 /// A refusal is not an error and must not be one. The operator answering no is
 /// the gate doing its job, and the agent has to be told so in words it can act
-/// on rather than handed something that reads like a broken repository.
+/// on rather than handed something that reads like a broken terminal.
 enum Line {
     Ran(Ran),
     /// The operator was asked about an outward-facing command and did not
@@ -600,8 +610,8 @@ enum Line {
     Refused,
 }
 
-/// Who wants to reach outside the repository, which is the only thing that
-/// differs between the two askers.
+/// Who wants to push, which is the only thing that differs between the two
+/// askers.
 ///
 /// Both are the same protected action and the same card on the same desk. What
 /// changes is the sentence: an operator deciding needs to know whether they are
@@ -617,47 +627,36 @@ enum Asker {
 
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
-    /// Asked to code with nowhere to do it.
+    /// Asked for a terminal tool with no terminal.
     ///
-    /// Reachable even though the tool is not offered without a repository: an
-    /// agent can be taken out of one between the moment its turn was built and
-    /// the moment it called this, and a model names tools it was never offered.
+    /// Reachable even though the tools are not offered without one: a terminal
+    /// can be taken away between the moment a turn was built and the moment it
+    /// called this, and a model names tools it was never offered.
     #[error(
-        "{0} has not been put in a repository, so there is nowhere to write code. The operator \
-         puts an agent in one by dragging it onto that repository in the rail"
+        "{0} has not been given a terminal, so there is nowhere to run commands or write code. \
+         The operator gives an agent one from its panel"
     )]
-    NoRepository(String),
-    /// A coding job is already running in that work tree.
+    NoTerminal(String),
+    /// This agent already has a coding job running.
     ///
     /// Not a race to retry through: the sentence has to make an agent wait for
     /// the message it is already going to get, because the alternative it will
     /// otherwise reach for is starting the job again.
     #[error(
-        "a coding agent is already working in {repository}, started by {who}. Two harnesses in \
-         one work tree overwrite each other's work. Do not start another: whoever asked for the \
-         first one gets a message when it finishes, and that is when the next piece of work can \
-         begin. Say that it is already in progress"
+        "you already have a coding agent working in {directory}. Two harnesses at once overwrite \
+         each other's work. Do not start another: you get a message when it finishes, and that \
+         is when the next piece of work can begin. Say that it is already in progress"
     )]
-    RepositoryBusy { repository: String, who: String },
-    /// A repository that gives each agent its own work tree, where this agent's
-    /// could not be made.
-    ///
-    /// Refused rather than run in the linked directory. The fallback is what
-    /// this arrangement exists to prevent, and it would happen on the one path
-    /// where nothing on screen says a decision was taken.
-    #[error(
-        "{repository} gives each agent a git worktree of its own to work in, and one could not \
-         be made at `{at}`: {why}. Nothing can run there until it exists. Tell the operator, who \
-         can also set this repository to work in the linked directory instead"
-    )]
-    NoWorkTree { repository: String, at: String, why: &'static str },
-    /// Asked to reach a job in a repository where none is running.
+    JobRunning { directory: String },
+    #[error(transparent)]
+    Terminal(#[from] crate::terminal::TerminalError),
+    /// Asked to reach a job where none is running.
     ///
     /// Reachable in the ordinary course of things rather than only from a
     /// confused caller: a job ends between the panel drawing a button and the
     /// operator pressing it, which for a job that has been running for forty
     /// minutes is exactly when they are most likely to press one.
-    #[error("no coding job is running in that repository. It has already finished")]
+    #[error("no coding job is running for that agent. It has already finished")]
     NoJobRunning,
     #[error(
         "that job has only just started and is not reachable yet. Try again in a moment, or \
@@ -738,7 +737,7 @@ struct Runs {
     /// Per run, which is the whole of how it is forgotten: the operator's next
     /// message is a new run, so a no holds for the work it was said about and
     /// for nothing after it. Nothing is stored, for the reason a job's lock is
-    /// not: a refusal that outlived the process would be a repository quietly
+    /// not: a refusal that outlived the process would be an agent quietly
     /// refusing pushes nobody could find the decision behind.
     ///
     /// Held exactly as long as the run is, on the same path `stopped` is.
@@ -784,33 +783,25 @@ struct Inner {
     /// When each machine was last asked what it is signed in to, so browsing
     /// does not pay for that question on every call.
     last_signin_scan: Mutex<HashMap<AgentId, Instant>>,
-    /// Which work trees have a coding job running in them, by directory.
+    /// Which agents have a coding job running, one each.
     ///
-    /// Keyed by the directory itself, because the directory is the thing that
-    /// can only take one harness. Two `pi` processes in one work tree interleave
-    /// their edits and run git against each other, and nothing downstream would
-    /// say which of them wrote what.
-    ///
-    /// It was keyed by repository, which was the same statement while a
-    /// repository had exactly one work tree. It stopped being one the day
-    /// `Bench::Own` gave each agent a worktree of its own: two agents in one
-    /// codebase are then two directories and two jobs that cannot touch each
-    /// other, and a lock on the repository would refuse the second for a
-    /// collision that cannot happen. The key is now what the invariant is
-    /// actually about.
+    /// One per agent because an agent's terminal is its own, so the agent is
+    /// the thing that can only take one harness at a time: two `pi` processes
+    /// in one directory interleave their edits and run git against each other,
+    /// and nothing downstream would say which of them wrote what. Two changes
+    /// at once are two agents, talking in the crew they share.
     ///
     /// In memory rather than on the row: a job does not survive a restart, and
-    /// a stored flag would come back true forever after a crash and lock a
-    /// directory nobody was working in.
-    coding: Mutex<HashMap<String, Running>>,
-    /// Where the per-agent work trees live, one directory per repository under
-    /// it. `repo::bench_path` is the whole of the naming.
-    benches: std::path::PathBuf,
+    /// a stored flag would come back true forever after a crash and lock an
+    /// agent out of its own terminal.
+    coding: Mutex<HashMap<AgentId, Running>>,
+    /// Each agent's own directory. See `terminal.rs`.
+    terminals: crate::terminal::Terminals,
     /// The loopback end of every running coding job.
     ///
     /// One for the app rather than one per job: it is a socket, and a workspace
-    /// whose repositories all run `pi` never binds it at all. `coding/bridge.rs`
-    /// is the whole of it.
+    /// whose agents all run `pi` never binds it at all. `coding/bridge.rs` is
+    /// the whole of it.
     bridge: crate::coding::Bridge,
     /// Loopback port of the computer viewer. Zero until it is listening.
     viewer_port: AtomicU16,
@@ -900,9 +891,8 @@ pub struct OnDisk {
     pub notebooks: crate::notebook::Notebooks,
     /// Attachments, addressed by the SHA-256 of their contents.
     pub files: FileStore,
-    /// Where the per-agent git work trees live, one directory per repository
-    /// under it. `repo::bench_path` is the whole of the naming.
-    pub benches: std::path::PathBuf,
+    /// Each agent's terminal, one directory each.
+    pub terminals: crate::terminal::Terminals,
 }
 
 impl OnDisk {
@@ -913,7 +903,7 @@ impl OnDisk {
             skills: crate::skills::Skills::new(root.join("skills")),
             notebooks: crate::notebook::Notebooks::new(root.join("notebooks")),
             files: FileStore::new(root.join("files")),
-            benches: root.join("worktrees"),
+            terminals: crate::terminal::Terminals::new(root.join("terminals")),
         }
     }
 }
@@ -938,7 +928,7 @@ impl Runtime {
         disk: OnDisk,
         events: Arc<dyn EventSink>,
     ) -> Self {
-        let OnDisk { workspace, skills, notebooks, files, benches } = disk;
+        let OnDisk { workspace, skills, notebooks, files, terminals } = disk;
         Self {
             inner: Arc::new(Inner {
                 workspace_lease: Mutex::new(None),
@@ -960,7 +950,7 @@ impl Runtime {
                 files,
                 last_signin_scan: Mutex::new(HashMap::new()),
                 coding: Mutex::new(HashMap::new()),
-                benches,
+                terminals,
                 bridge: crate::coding::Bridge::new(),
                 viewer_port: AtomicU16::new(0),
                 webhook_port: AtomicU16::new(0),
@@ -1133,6 +1123,10 @@ impl Runtime {
         &self.inner.notebooks
     }
 
+    pub fn terminals(&self) -> &crate::terminal::Terminals {
+        &self.inner.terminals
+    }
+
     pub fn config(&self) -> AppConfig {
         self.inner.config.read().clone()
     }
@@ -1256,6 +1250,10 @@ impl Runtime {
         let id = card.id;
         self.inner.store.discard_agent(id, now_ms())?;
         self.stop_agent(id);
+        // A coding job is the agent's hands, and an agent in the compost is not
+        // working. Left running it would push under the operator's name for an
+        // agent they have just thrown out, and report back to nobody.
+        let _ = self.stop_job(id);
 
         // The one thing it holds that is not its own. Everything else waits
         // out the thirty days untouched because it belongs to this agent and
@@ -1375,28 +1373,17 @@ impl Runtime {
             }
         }
 
-        // And its work tree, if the repository gave it one. Forced, because a job
-        // killed at the ceiling leaves a dirty tree and this agent is not coming
-        // back to tidy it. Nothing committed is lost: removing a worktree
-        // removes a checkout, and the repository keeps the history and every
-        // branch made in it, which is the only copy of this agent's work the
-        // operator could still want.
-        //
-        // Read before the row is marked, because `agent_repository` asks for a
-        // live agent and a terminated one has no repository to look up.
-        if let Ok(Some(repository)) = self.inner.store.agent_repository(id) {
-            if repository.bench.is_own() {
-                let bench = crate::repo::bench_path(&self.inner.benches, repository.id, id);
-                crate::repo::release_bench(&repository.path, &bench).await;
-            }
-        }
-
         self.inner.store.set_lifecycle(id, Lifecycle::Terminated)?;
         self.stop_agent(id);
         // The transcript survives a deletion, but the agent's private memory is
         // its own and goes with it.
         self.inner.workspace.remove(id);
         self.inner.notebooks.remove_all(id);
+        // And its terminal, whatever it cloned there. What it pushed is on the
+        // remote; what it did not push was only ever this agent's, and a name
+        // is free to reuse the moment an agent is deleted, so whoever takes it
+        // next must not inherit a directory of somebody else's work.
+        self.inner.terminals.remove_all(id);
         // Its schedule goes too, or it would keep coming due for an agent that
         // can no longer act on it.
         let _ = self.inner.store.delete_agent_routines(id);
@@ -1417,11 +1404,6 @@ impl Runtime {
         // for the same reason: a row naming an agent that no longer exists
         // grants nothing and draws as nobody in the panel that lists them.
         let _ = self.inner.store.delete_agent_plugin_access(id);
-        // And its reach into whatever the crew was working in. Same argument,
-        // and one more that only applies here: a repository is the operator's
-        // own source, so a retired agent must not leave one drawn as handed
-        // out.
-        let _ = self.inner.store.clear_agent_repository(id);
         // Last, and only once the rest of it has actually gone: the stamp is
         // what offers the operator a restore, and an agent still offered one
         // after its memory has been deleted is an offer that cannot be kept.
@@ -1834,8 +1816,8 @@ impl Runtime {
     /// Turns the names an agent asked to send into files that can travel.
     ///
     /// A bare name first looks for a saved attachment, which needs no machine
-    /// to forward. A path reads current bytes from the repository worktree or
-    /// the agent's computer, never a saved attachment with the same basename.
+    /// to forward. A path reads current bytes from the agent's terminal or its
+    /// computer, never a saved attachment with the same basename.
     ///
     /// Returns what traveled and, for everything that did not, a line worded
     /// for the model: an agent that believes it attached a document will go on
@@ -1961,16 +1943,11 @@ impl Runtime {
             file.name, file.mime), None))
     }
 
-    /// Repository paths refer to the same worktree as `shell`. Only the
-    /// sandbox fallback can read a path outside that directory.
+    /// Terminal paths refer to the same directory `shell` starts in. Only the
+    /// sandbox fallback can read a path outside it.
     async fn source_file(&self, card: &AgentCard, path: &str) -> Result<Attachment, String> {
-        if let Some(repository) =
-            self.inner.store.agent_repository(card.id).map_err(|err| err.to_string())?
-        {
-            let directory = self
-                .repository_directory(card, &repository)
-                .await
-                .map_err(|err| err.to_string())?;
+        if self.surfaces_for(card).terminal {
+            let directory = self.inner.terminals.ensure(card.id).map_err(|err| err.to_string())?;
             let files = self.inner.files.clone();
             let source = path.to_string();
             let result = tokio::task::spawn_blocking(move || {
@@ -1985,7 +1962,7 @@ impl Runtime {
                     return self
                         .pull_file(card, path)
                         .await
-                        .map_err(|sandbox| format!("Repository: {why}. Computer: {sandbox}"));
+                        .map_err(|sandbox| format!("Terminal: {why}. Computer: {sandbox}"));
                 }
             }
         }
@@ -2315,107 +2292,62 @@ impl Runtime {
         }
     }
 
-    async fn repository_directory(
-        &self,
-        card: &AgentCard,
-        repository: &crate::domain::repository::Repository,
-    ) -> Result<String, RuntimeError> {
-        // The same directory `code` works in, which is the whole of what makes
-        // two doors into one repository one repository. An agent whose job runs
-        // in a worktree and whose `git status` reads the linked directory is an
-        // agent being told about a tree it is not working in, and it is the
-        // read it most wants while a job is going.
-        //
-        // Made if it is not there yet, rather than falling back: the fallback is
-        // the disagreement. `ensure_bench` is the half of the preparation that
-        // does not fetch and does not reset, because a line run inside a turn
-        // must not pay for a network round trip and must not move a branch
-        // somebody asked a question about.
-        Ok(match repository.bench.is_own() {
-            false => repository.path.clone(),
-            true => {
-                let bench = crate::repo::bench_path(&self.inner.benches, repository.id, card.id);
-                crate::repo::ensure_bench(&repository.path, &bench)
-                    .await
-                    .map(|made| made.path)
-                    .map_err(|why| RuntimeError::NoWorkTree {
-                        repository: repository.name.clone(),
-                        at: bench.to_string_lossy().to_string(),
-                        why: why.why(),
-                    })?
-            }
-        })
+    /// The agent's terminal, made if it is not there yet, or why it has none.
+    fn terminal(&self, card: &AgentCard) -> Result<std::path::PathBuf, RuntimeError> {
+        if !card.has_terminal {
+            return Err(RuntimeError::NoTerminal(card.name.clone()));
+        }
+        Ok(self.inner.terminals.ensure(card.id)?)
     }
 
-    /// One shell line in this agent's repository, run and answered here.
+    /// One shell line in this agent's terminal, run and answered here.
     ///
     /// The opposite of [`Runtime::start_job`] in the one way that matters to a
-    /// turn: this waits. That is the point of it. An agent asking what branch
-    /// the tree is on, or merging a pull request it has already been told to
+    /// turn: this waits. That is the point of it. An agent asking what branch a
+    /// clone is on, or merging a pull request it has already been told to
     /// merge, needs the answer in the sentence it is writing, and handing that
     /// to a coding harness costs minutes and a model's whole budget to find out
     /// something `git status` knows. It is also the door that stays open when
-    /// the other one will not: a spent plan, a harness not installed and a work
-    /// tree another job is already in all stop `code` and none of them stop
-    /// this.
+    /// the other one will not: a spent plan, a harness not installed and a job
+    /// already running all stop `code` and none of them stop this.
     ///
     /// ## No lock, deliberately
     ///
-    /// `start_job` takes one per work tree because two harnesses in a directory
-    /// interleave their edits over minutes and nothing downstream could say
-    /// which of them wrote what. One line is not that. It is the same thing as
-    /// the operator typing in their own terminal while a job runs, which
-    /// nothing here prevents and which is ordinary. Refusing it would also take
-    /// away the read an agent most wants while a job is running, which is what
-    /// the job is doing.
+    /// `start_job` allows one job per agent because two harnesses in one
+    /// directory interleave their edits over minutes and nothing downstream
+    /// could say which of them wrote what. One line is not that. It is the same
+    /// thing as somebody typing in a terminal while a job runs, and refusing it
+    /// would take away the read an agent most wants while a job is running,
+    /// which is what the job is doing.
     ///
-    /// ## The gate is asked from the same function the hook asks
+    /// ## The gate is asked from the same function every harness asks
     ///
-    /// A repository set to [`Gate::AskBeforePushing`] stops a job before a
-    /// push, a merge or a release. It has to stop this too, from
+    /// An agent set to [`crate::domain::terminal::Gate::AskBeforePushing`] stops
+    /// a job before a push, a merge or a release. It has to stop this too, from
     /// [`crate::coding::bridge::outward`] rather than from a second reading of
-    /// the same idea: two doors into one directory that disagreed about what
-    /// counts as outward-facing would be a gate an agent walks around by
-    /// picking the other tool. It is a judgment about the ordinary case and not
-    /// a boundary, exactly as it is there, and for exactly the same reason: the
-    /// line runs as the operator either way.
-    async fn run_in_repository(
+    /// the same idea: two doors that disagreed about what counts as
+    /// outward-facing would be a gate an agent walks around by picking the
+    /// other tool. It is a judgment about the ordinary case and not a boundary,
+    /// exactly as it is there, and for exactly the same reason: the line runs
+    /// as the operator either way.
+    async fn run_in_terminal(
         &self,
         card: &AgentCard,
         run_id: RunId,
         command: &str,
     ) -> Result<Line, RuntimeError> {
-        let repository = self
-            .inner
-            .store
-            .agent_repository(card.id)?
-            .ok_or_else(|| RuntimeError::NoRepository(card.name.clone()))?;
+        let directory = self.terminal(card)?;
 
-        let directory = self.repository_directory(card, &repository).await?;
-
-        if repository.gate == Gate::AskBeforePushing {
-            // Rooted at the tree the line will actually run in, so a script the
-            // gate follows is the copy that is about to be executed rather than
-            // the operator's own.
-            let root = std::path::Path::new(&directory);
-            if let Some(reach) = crate::coding::bridge::outward(command, root).await {
-                if !self
-                    .ask_about_push(
-                        card.id,
-                        run_id,
-                        &repository.name,
-                        command,
-                        &reach,
-                        Asker::Agent,
-                    )
-                    .await
-                {
+        if card.gate.asks() {
+            if let Some(reach) = crate::coding::bridge::outward(command, &directory).await {
+                if !self.ask_about_push(card.id, run_id, command, &reach, Asker::Agent).await {
                     return Ok(Line::Refused);
                 }
             }
         }
 
         let env = self.secret_environment(card.id)?;
+        let directory = directory.to_string_lossy();
         Ok(Line::Ran(shell::run_with_env(&directory, command, shell::PATIENCE, &env).await?))
     }
 
@@ -2429,7 +2361,8 @@ impl Runtime {
         })
     }
 
-    /// Starts a coding job and returns the repository it is working in.
+    /// Starts a coding job and returns the directory it is working in,
+    /// relative to the agent's terminal.
     ///
     /// Returns as soon as the process is spawned. The result comes back later
     /// as a message, on the same path a routine firing takes: a fresh run with
@@ -2442,36 +2375,29 @@ impl Runtime {
     /// skipped, and the transcript would show one open chip and nothing else.
     /// Started and reported, the turn ends in seconds and the agent stays
     /// reachable while the work happens.
-    fn start_job(&self, card: &AgentCard, task: &str) -> Result<String, RuntimeError> {
-        let repository = self
-            .inner
-            .store
-            .agent_repository(card.id)?
-            .ok_or_else(|| RuntimeError::NoRepository(card.name.clone()))?;
+    fn start_job(
+        &self,
+        card: &AgentCard,
+        task: &str,
+        directory: Option<&str>,
+    ) -> Result<String, RuntimeError> {
+        if !card.has_terminal {
+            return Err(RuntimeError::NoTerminal(card.name.clone()));
+        }
+        // Resolved before the lock and before anything is spawned, so a
+        // directory that is not there is a refusal the agent reads in this
+        // turn rather than a job that fails a minute later.
+        let (working, shown) = self.inner.terminals.directory(card.id, directory)?;
 
-        // Which directory this job will run in, decided before the lock because
-        // the lock is on the directory. Pure: `bench_path` is two ids joined to
-        // a root, so the answer is knowable here without touching the disk,
-        // which is what lets `start_job` stay synchronous while the work tree
-        // it names is made minutes-of-work later, inside the spawn.
-        let bench = repository
-            .bench
-            .is_own()
-            .then(|| crate::repo::bench_path(&self.inner.benches, repository.id, card.id));
-        let directory = bench
-            .as_ref()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or(repository.path.clone());
-
-        // One harness per work tree. Taken before anything is spawned and held
-        // for the life of the job: two `pi` processes in one directory
-        // interleave their edits and run git against each other, and nothing
-        // downstream could say which of them wrote what.
+        // One harness per agent. Taken before anything is spawned and held for
+        // the life of the job: two `pi` processes in one directory interleave
+        // their edits and run git against each other, and nothing downstream
+        // could say which of them wrote what.
         //
         // Reachable in the ordinary course of things, not just from a confused
         // model: a job takes minutes, the agent that started it goes idle
-        // because its turn ended, and a coordinator reading the lane as free
-        // sends the next brief straight into the same repository.
+        // because its turn ended, and the next message it reads can ask it for
+        // the next piece of work.
         //
         // The stop channel and the job's own run are made before the lock so
         // the map entry is complete the moment it exists: an operator pressing
@@ -2485,39 +2411,22 @@ impl Runtime {
         // makes `release_parked` the way a job ending closes whatever it was
         // waiting on, rather than a second sweep written for this.
         let job_run = RunId::new();
+        let harness = card.harness;
+        let gate = card.gate;
         {
             let mut coding = self.inner.coding.lock();
-            if let Some(busy) = coding.get(&directory) {
-                // Named as themselves when it is themselves. On a bench of its
-                // own the only agent that can collide here is this one, calling
-                // `code` twice before the first job came back, and "another
-                // agent is working here" sends it to look for somebody who does
-                // not exist.
-                let who = match busy.agent == card.id {
-                    true => "you".to_string(),
-                    false => self
-                        .inner
-                        .store
-                        .get_agent(busy.agent)
-                        .ok()
-                        .flatten()
-                        .map(|card| card.name)
-                        .unwrap_or_else(|| "another agent".to_string()),
-                };
-                return Err(RuntimeError::RepositoryBusy {
-                    repository: repository.name.clone(),
-                    who,
-                });
+            if let Some(busy) = coding.get(&card.id) {
+                return Err(RuntimeError::JobRunning { directory: busy.directory.clone() });
             }
             coding.insert(
-                directory.clone(),
+                card.id,
                 Running {
-                    agent: card.id,
-                    mailbox: match repository.harness {
+                    directory: shown.clone(),
+                    mailbox: match harness {
                         Harness::Claude | Harness::Codex => Mailbox::Starting,
                         Harness::Pi => Mailbox::Unreachable(
-                            "pi has no way to be reached while it is working. A repository set \
-                             to Claude Code can be sent one",
+                            "pi has no way to be reached while it is working. An agent set to \
+                             Claude Code or Codex can be sent one",
                         ),
                     },
                     stop: Some(stop),
@@ -2527,85 +2436,27 @@ impl Runtime {
 
         let runtime = self.clone();
         let agent = card.id;
-        let name = repository.name.clone();
-        let path = repository.path.clone();
         let task = task.to_string();
-        let note = repository.note.clone();
-        let repository_id = repository.id;
-        let harness = repository.harness;
-        let gate = repository.gate;
+        let name = shown.clone();
 
-        self.emit(UiEvent::CodingJobStarted {
-            agent_id: card.id,
-            repository_id,
-            repository: name.clone(),
-        });
+        self.emit(UiEvent::CodingJobStarted { agent_id: card.id, directory: shown.clone() });
 
         tokio::spawn(async move {
-            // The work tree, then where it is standing, then the work, then the
-            // operator's note. All four are things the harness cannot see for
-            // itself and would not go looking for.
-            //
-            // Making the tree leads because nothing after it is true until it
-            // exists, and it is done here rather than before the spawn for the
-            // reason the footing is: a fetch and a checkout are subprocesses and
-            // a network round trip, and `start_job` has already returned to a
-            // turn that must not wait on any of it.
-            let prepared = match &bench {
-                None => Ok((path.clone(), String::new())),
-                Some(dir) => match crate::repo::prepare(&path, dir).await {
-                    Ok(ready) => {
-                        let said = ready.brief();
-                        Ok((ready.path, said))
-                    }
-                    // Refused rather than quietly run in the linked directory.
-                    // That fallback would put a harness in the operator's own
-                    // checkout holding a lock taken on a path it is not in, so
-                    // a second agent failing the same way would join it there.
-                    Err(why) => Err(crate::coding::CodingError::NoWorkTree {
-                        repository: name.clone(),
-                        at: dir.to_string_lossy().to_string(),
-                        why: why.why(),
-                    }),
-                },
-            };
-            let (working, preamble) = match prepared {
-                Ok(ready) => ready,
-                Err(err) => {
-                    // The same teardown the ordinary path runs, minus a session
-                    // and a process that were never made. Written out rather
-                    // than shared, because every line of it is about something
-                    // this exit did not do.
-                    runtime.release_parked(job_run);
-                    runtime.forget_refusals(job_run);
-                    runtime.inner.coding.lock().remove(&directory);
-                    runtime.emit(UiEvent::CodingJobFinished { agent_id: agent, repository_id });
-                    runtime.job_finished(agent, &name, harness, Err(err));
-                    return;
-                }
-            };
+            let working = working.to_string_lossy().to_string();
 
-            // The footing comes after the preamble and before the task because
-            // it is read before the first edit or it is not read at all: a
-            // harness handed a brief starts working where it is standing, and
-            // where it is standing is wherever the last job left it.
-            // `repo::footing` is the argument.
-            //
-            // The note is last because it is the one thing the operator wrote
-            // to be read at exactly this moment, and the harness cannot see the
-            // conversation it was attached to.
-            let mut brief = preamble;
-            if let Some(footing) = crate::repo::footing(&working).await {
-                brief.push_str(&footing.brief());
-                brief.push_str("\n\n");
+            // Where it is standing, then the work. The footing is read before
+            // the first edit or it is not read at all: a harness handed a brief
+            // starts working where it is standing, and where it is standing is
+            // wherever the last job left it. `repo::footing` is the argument.
+            let mut brief = String::new();
+            match crate::repo::footing(&working).await {
+                Some(footing) => {
+                    brief.push_str(&footing.brief());
+                    brief.push_str("\n\n");
+                }
+                None => brief.push_str(NOT_A_REPOSITORY),
             }
             brief.push_str(&task);
-            if !note.trim().is_empty() {
-                brief.push_str(&format!(
-                    "\n\nStanding instruction for this repository: {}",
-                    note.trim()
-                ));
-            }
 
             // The job's own end of the bridge, which is what makes it
             // reachable while it runs. Opened here rather than before the spawn
@@ -2619,7 +2470,7 @@ impl Runtime {
             let (signals, mut heard) = tokio::sync::mpsc::channel(32);
             let control = if harness == Harness::Codex {
                 let (sender, steering) = tokio::sync::mpsc::channel(8);
-                if let Some(job) = runtime.inner.coding.lock().get_mut(&directory) {
+                if let Some(job) = runtime.inner.coding.lock().get_mut(&agent) {
                     job.mailbox = Mailbox::Codex(sender);
                 }
                 Some(crate::coding::codex::Control { gate, steering, signals: signals.clone() })
@@ -2635,7 +2486,7 @@ impl Runtime {
                     _ => None,
                 },
             };
-            if let Some(job) = runtime.inner.coding.lock().get_mut(&directory) {
+            if let Some(job) = runtime.inner.coding.lock().get_mut(&agent) {
                 match &session {
                     Some(session) => job.mailbox = Mailbox::At(session.session_id().to_string()),
                     // Only a job that was expecting one. `pi` already carries a
@@ -2664,8 +2515,8 @@ impl Runtime {
                 Err(error) => {
                     runtime.release_parked(job_run);
                     runtime.forget_refusals(job_run);
-                    runtime.inner.coding.lock().remove(&directory);
-                    runtime.emit(UiEvent::CodingJobFinished { agent_id: agent, repository_id });
+                    runtime.inner.coding.lock().remove(&agent);
+                    runtime.emit(UiEvent::CodingJobFinished { agent_id: agent });
                     runtime.job_finished(
                         agent,
                         &name,
@@ -2690,12 +2541,7 @@ impl Runtime {
                         crate::coding::Progress::Using { tool, detail } => (tool, detail),
                         crate::coding::Progress::Said(said) => (String::new(), said),
                     };
-                    watcher.emit(UiEvent::CodingProgress {
-                        agent_id: agent,
-                        repository_id,
-                        tool,
-                        detail,
-                    });
+                    watcher.emit(UiEvent::CodingProgress { agent_id: agent, tool, detail });
                 },
             );
 
@@ -2718,7 +2564,6 @@ impl Runtime {
                     Some(signal) = heard.recv() => match signal {
                         crate::coding::Signal::Note(note) => runtime.emit(UiEvent::CodingProgress {
                             agent_id: agent,
-                            repository_id,
                             tool: String::new(),
                             detail: crate::secrets::redact(&note, &env.values),
                         }),
@@ -2727,7 +2572,6 @@ impl Runtime {
                             let branch = crate::secrets::redact(&branch, &env.values);
                             runtime.emit(UiEvent::CodingProgress {
                                 agent_id: agent,
-                                repository_id,
                                 tool: "pull request".to_string(),
                                 detail: url.clone(),
                             });
@@ -2746,17 +2590,9 @@ impl Runtime {
                                 through: reach.through.map(|text| crate::secrets::redact(&text, &env.values)),
                             };
                             let asking = runtime.clone();
-                            let repository = name.clone();
                             tokio::spawn(async move {
                                 let allowed = asking
-                                    .ask_about_push(
-                                        agent,
-                                        job_run,
-                                        &repository,
-                                        &line,
-                                        &reach,
-                                        Asker::Job,
-                                    )
+                                    .ask_about_push(agent, job_run, &line, &reach, Asker::Job)
                                     .await;
                                 let _ = reply.send(allowed);
                             });
@@ -2772,10 +2608,10 @@ impl Runtime {
             runtime.forget_refusals(job_run);
 
             // Released before the result is delivered, so the turn that reads
-            // "it finished" can start the next job in the same work tree. The
-            // other order is a lane that has to wait a turn to carry on.
-            runtime.inner.coding.lock().remove(&directory);
-            runtime.emit(UiEvent::CodingJobFinished { agent_id: agent, repository_id });
+            // "it finished" can start the next job. The other order is an agent
+            // that has to wait a turn to carry on.
+            runtime.inner.coding.lock().remove(&agent);
+            runtime.emit(UiEvent::CodingJobFinished { agent_id: agent });
 
             // Dropped before the message goes out rather than at the end of the
             // task, so the mailbox and the scratch directory are gone by the
@@ -2796,7 +2632,7 @@ impl Runtime {
             }
         });
 
-        Ok(repository.name)
+        Ok(shown)
     }
 
     /// Hands a finished job back to the agent that started it.
@@ -2813,7 +2649,7 @@ impl Runtime {
     fn job_finished(
         &self,
         agent: AgentId,
-        repository: &str,
+        directory: &str,
         harness: Harness,
         outcome: Result<crate::coding::Outcome, crate::coding::CodingError>,
     ) {
@@ -2833,18 +2669,18 @@ impl Runtime {
                 let why = done.failed.unwrap_or_default();
                 operator_should_know = Some(why.clone());
                 format!(
-                    "The coding agent in {repository} could not finish: {why}. Partial changes may \
-                     remain in its worktree. Say plainly what you asked for and what failed; \
+                    "The coding agent in `{directory}` could not finish: {why}. Partial changes may \
+                     remain there. Say plainly what you asked for and what failed; \
                      do not claim the work finished or that nothing changed."
                 )
             }
             Ok(done) if done.tool_calls == 0 && done.said.trim().is_empty() => format!(
-                "The coding agent in {repository} finished without doing anything or saying \
+                "The coding agent in `{directory}` finished without doing anything or saying \
                  why. Nothing changed. Say so rather than reporting the work as done."
             ),
             Ok(done) => {
                 let mut text = format!(
-                    "The coding agent working in {repository} has finished. In its own words:\n\n\
+                    "The coding agent working in `{directory}` has finished. In its own words:\n\n\
                      {}\n\nIt ran {} tool call{}",
                     done.said.trim(),
                     done.tool_calls,
@@ -2875,21 +2711,22 @@ impl Runtime {
             Err(err) => {
                 operator_should_know = Some(err.to_string());
                 format!(
-                    "The coding agent in {repository} could not finish: {err}. Nothing was \
+                    "The coding agent in `{directory}` could not finish: {err}. Nothing was \
                      necessarily left in a working state, so say what you asked for and what \
                      happened rather than reporting it as done."
                 )
             }
         };
 
-        // Use the job's captured choice: the repository may have switched
-        // while it ran, and a login error alone does not name its provider.
+        // Use the job's captured choice: the agent's harness may have been
+        // switched while it ran, and a login error alone does not name its
+        // provider.
         let text = format!("Coding harness: {}.\n\n{text}", harness.label());
 
         if let Some(reason) = operator_should_know {
             self.emit(UiEvent::CodingJobFailed {
                 agent_id: agent,
-                repository: repository.to_string(),
+                directory: directory.to_string(),
                 harness: harness.label().to_string(),
                 reason,
             });
@@ -3362,14 +3199,13 @@ impl Runtime {
         }
     }
 
-    /// Asks the operator whether something in a repository may reach outside
-    /// it.
+    /// Asks the operator whether an agent may push, merge or release.
     ///
-    /// Two callers, one question. A coding job's `PreToolUse` hook is one and
-    /// [`Runtime::run_in_repository`] is the other, and both arrive here having
+    /// Two kinds of caller, one question. A coding job's harness is one and
+    /// [`Runtime::run_in_terminal`] is the other, and both arrive here having
     /// asked `coding::bridge::outward` the same thing about the same shape of
     /// shell line. One row, one desk, one wording: the gate an operator
-    /// switched on is a fact about the repository, so it cannot mean one thing
+    /// switched on is a fact about the agent, so it cannot mean one thing
     /// through `code` and another through `shell`. [`Asker`] is the whole of
     /// what differs.
     ///
@@ -3398,7 +3234,6 @@ impl Runtime {
         &self,
         agent: AgentId,
         run_id: RunId,
-        repository: &str,
         line: &str,
         reach: &Reach,
         asker: Asker,
@@ -3433,13 +3268,13 @@ impl Runtime {
         };
         let summary = match asker {
             Asker::Job => format!(
-                "The coding agent working in {repository} for {} wants to run `{}`{by_way}. That \
-                 reaches outside the repository under your name.",
+                "{}'s coding agent wants to run `{}`{by_way}. That reaches outside this machine \
+                 under your name.",
                 card.name, reach.what
             ),
             Asker::Agent => format!(
-                "{} wants to run `{}` in {repository}{by_way}. That reaches outside the \
-                 repository under your name.",
+                "{} wants to run `{}` in its terminal{by_way}. That reaches outside this machine \
+                 under your name.",
                 card.name, reach.what
             ),
         };
@@ -3527,9 +3362,9 @@ impl Runtime {
     /// whatever it was in the middle of is not. An agent told only that the job
     /// stopped reports the work as not done, and the operator is left to find
     /// out for themselves that half of it is on a branch.
-    fn job_stopped(&self, agent: AgentId, repository: &str) {
+    fn job_stopped(&self, agent: AgentId, directory: &str) {
         let text = format!(
-            "The operator stopped the coding agent working in {repository} before it \
+            "The operator stopped the coding agent working in `{directory}` before it \
              finished. Whatever it had already committed is still there and whatever it was in \
              the middle of is not, so the work is partly done and nobody has checked which \
              part. Do not report it as finished and do not start it again: the operator \
@@ -3557,52 +3392,17 @@ impl Runtime {
         }
     }
 
-    /// Unlinks a repository, and takes the work trees it handed out with it.
-    ///
-    /// The trees have to go here rather than being left for a sweep, because a
-    /// worktree is a registration in the *operator's own* repository: one left
-    /// behind is an entry in their `git worktree list` pointing into an app
-    /// that has forgotten the directory ever existed. Their own checkout is not
-    /// touched, and neither is anything committed in it, which is the whole of
-    /// what unlinking has always promised.
-    ///
-    /// Read before the row is deleted, for the reason `purge_agent` reads
-    /// before it marks: afterwards there is no path to run git against.
-    pub async fn unlink_repository(&self, id: RepositoryId) -> Result<bool, RuntimeError> {
-        let repository = self.inner.store.get_repository(id)?;
-        let gone = self.inner.store.delete_repository(id)?;
-        if let Some(repository) = repository {
-            crate::repo::release_benches(
-                &repository.path,
-                &self.inner.benches.join(id.to_string()),
-            )
-            .await;
-        }
-        Ok(gone)
-    }
-
     /// Sends a correction into a coding job that is already running.
     ///
     /// Claude reads a staged correction at its next hook boundary. Codex
     /// acknowledges native steering before this call reports success.
     ///
-    /// Addressed by the agent running the job rather than by the repository it
-    /// is in. Those were the same address while a repository had one work tree;
-    /// with a worktree per agent, two jobs can be running in one codebase and a
-    /// repository names neither of them. The agent is the address that stays
-    /// unique, because an agent works in at most one repository and holds at
-    /// most one work tree in it. It is also the address the panel already used:
-    /// `CodingPanel` had to search the map by agent to find the repository to
-    /// send to.
+    /// Addressed by the agent running the job, because an agent runs one job
+    /// at a time in a terminal of its own.
     pub async fn message_job(&self, agent: AgentId, message: &str) -> Result<(), RuntimeError> {
         let mailbox = {
             let coding = self.inner.coding.lock();
-            coding
-                .values()
-                .find(|job| job.agent == agent)
-                .ok_or(RuntimeError::NoJobRunning)?
-                .mailbox
-                .clone()
+            coding.get(&agent).ok_or(RuntimeError::NoJobRunning)?.mailbox.clone()
         };
         match mailbox {
             Mailbox::Starting => Err(RuntimeError::JobStillStarting),
@@ -3638,17 +3438,12 @@ impl Runtime {
     ///
     /// Taking the sender rather than dropping the whole entry: the job's own
     /// task is what removes it, after the process has actually gone, and
-    /// removing it here would free the work tree's lock while a harness was
-    /// still writing in it.
-    ///
-    /// By agent, for [`Runtime::message_job`]'s reason.
+    /// removing it here would let a second job start while a harness was
+    /// still writing.
     pub fn stop_job(&self, agent: AgentId) -> Result<(), RuntimeError> {
         let stop = {
             let mut coding = self.inner.coding.lock();
-            let job = coding
-                .values_mut()
-                .find(|job| job.agent == agent)
-                .ok_or(RuntimeError::NoJobRunning)?;
+            let job = coding.get_mut(&agent).ok_or(RuntimeError::NoJobRunning)?;
             job.stop.take()
         };
 
@@ -4014,14 +3809,23 @@ impl Runtime {
         // two disagreeing is the failure this replaced, where every agent was
         // told it had a machine whether or not a provider was configured and
         // whether or not the operator had given it one.
-        let surfaces = self.surfaces_for(&card);
-        // Read once for the turn, from the same card `surfaces` was decided
-        // from, so the section describing the repository and the tool that
-        // reaches it can never disagree about whether there is one.
-        let repository = self.inner.store.agent_repository(card.id).unwrap_or_else(|err| {
-            tracing::warn!(%err, "could not read this agent's repository for its turn");
-            None
-        });
+        let mut surfaces = self.surfaces_for(&card);
+        // Made once for the turn, from the same card `surfaces` was decided
+        // from, so the section describing the terminal and the tools that reach
+        // it can never disagree about whether there is one. A directory that
+        // could not be made takes the tools with it rather than offering them
+        // into a refusal on every call.
+        let terminal = match surfaces.terminal {
+            false => None,
+            true => match self.inner.terminals.ensure(card.id) {
+                Ok(path) => Some(path.to_string_lossy().into_owned()),
+                Err(err) => {
+                    tracing::warn!(%err, "could not make this agent's terminal for its turn");
+                    surfaces.terminal = false;
+                    None
+                }
+            },
+        };
         // Read from the messages every turn rather than kept anywhere. A
         // coordinator was holding this by hand in its own memory, which drifted
         // three assignments stale and reported work as outstanding that had
@@ -4080,7 +3884,7 @@ impl Runtime {
             mode,
             &waiting_on,
             escalation.as_ref(),
-            repository.as_ref(),
+            terminal.as_deref(),
             surfaces,
             modalities,
         );
@@ -4634,7 +4438,7 @@ impl Runtime {
     /// be read forty minutes later, and a `code` job's result can never reach
     /// the turn that started it, because `code` does not block and its answer
     /// comes back as an envelope the running actor is not free to look at. That
-    /// second one deadlocks: `RepositoryBusy` tells the agent to wait for a
+    /// second one deadlocks: `JobRunning` tells the agent to wait for a
     /// message, and the turn doing the waiting is the thing holding it up.
     ///
     /// ## Context, and never a change of address
@@ -5577,7 +5381,7 @@ impl Runtime {
 
             ToolInvocation::SendMessage { to, text, intent, files } => {
                 let surfaces = self.surfaces_for(card);
-                let consequence = if surfaces.repository || surfaces.computer {
+                let consequence = if surfaces.terminal || surfaces.computer {
                     UNSENT_FILE
                 } else {
                     UNSENT_FILE_NO_COMPUTER
@@ -5651,14 +5455,14 @@ impl Runtime {
                 (rendered, Part::tool_call(tools::SEND_MESSAGE, arguments, outcome))
             }
 
-            ToolInvocation::Code { task } => {
-                let (rendered, outcome) = match self.start_job(card, &task) {
-                    Ok(repository) => {
-                        let summary = format!("started work in {repository}");
+            ToolInvocation::Code { task, directory } => {
+                let (rendered, outcome) = match self.start_job(card, &task, directory.as_deref()) {
+                    Ok(directory) => {
+                        let summary = format!("started work in {directory}");
                         (
                             format!(
-                                "Started. A coding agent is working in {repository} now. It will \
-                                 send you a message when it is done, which may be several \
+                                "Started. A coding agent is working in `{directory}` now. It \
+                                 will send you a message when it is done, which may be several \
                                  minutes. End your turn and say you have started it: there is \
                                  nothing to wait for and nothing to check.",
                             ),
@@ -5673,8 +5477,7 @@ impl Runtime {
             }
 
             ToolInvocation::Shell { command } => {
-                let (rendered, outcome) = match self.run_in_repository(card, run_id, &command).await
-                {
+                let (rendered, outcome) = match self.run_in_terminal(card, run_id, &command).await {
                     Ok(Line::Ran(ran)) => {
                         let summary = match ran.exit_code {
                             None => format!("killed after {}s", shell::PATIENCE.as_secs()),
@@ -5690,7 +5493,7 @@ impl Runtime {
                     // to the same question and an agent that met it through
                     // `code` should not learn a different lesson here.
                     Ok(Line::Refused) => (
-                        "Refused: that command reaches outside the repository under the \
+                        "Refused: that command reaches outside this machine under the \
                              operator's name, and they did not allow it. Nothing ran. Do not try \
                              it again or work around it: finish everything else you can, and say \
                              in your reply that this step is waiting on them."
@@ -5704,6 +5507,73 @@ impl Runtime {
                     }
                 };
                 (rendered, Part::tool_call(tools::SHELL, arguments, outcome))
+            }
+
+            ToolInvocation::Read { path, offset, limit } => {
+                let terminals = self.inner.terminals.clone();
+                let agent = card.id;
+                let read = match self.terminal(card) {
+                    Err(err) => Err(err.to_string()),
+                    Ok(_) => tokio::task::spawn_blocking(move || {
+                        terminals.read(agent, &path, offset, limit)
+                    })
+                    .await
+                    .map_err(|err| err.to_string())
+                    .and_then(|read| read.map_err(|err| err.to_string())),
+                };
+                let (rendered, outcome) = match read {
+                    Ok(page) => {
+                        let summary =
+                            format!("lines {}-{} of {}", page.first, page.last, page.total);
+                        (page.render(), ToolOutcome::Ok { summary })
+                    }
+                    Err(err) => (format!("Error: {err}"), ToolOutcome::Failed { error: err }),
+                };
+                (rendered, Part::tool_call(tools::READ, arguments, outcome))
+            }
+
+            ToolInvocation::Write { path, content } => {
+                let terminals = self.inner.terminals.clone();
+                let agent = card.id;
+                let written = match self.terminal(card) {
+                    Err(err) => Err(err.to_string()),
+                    Ok(_) => {
+                        tokio::task::spawn_blocking(move || terminals.write(agent, &path, &content))
+                            .await
+                            .map_err(|err| err.to_string())
+                            .and_then(|done| done.map_err(|err| err.to_string()))
+                    }
+                };
+                let (rendered, outcome) = match written {
+                    Ok(said) => (said.clone(), ToolOutcome::Ok { summary: said }),
+                    Err(err) => (format!("Error: {err}"), ToolOutcome::Failed { error: err }),
+                };
+                (rendered, Part::tool_call(tools::WRITE, arguments, outcome))
+            }
+
+            ToolInvocation::Edit { path, edits } => {
+                let terminals = self.inner.terminals.clone();
+                let agent = card.id;
+                let edited = match self.terminal(card) {
+                    Err(err) => Err(err.to_string()),
+                    Ok(_) => {
+                        tokio::task::spawn_blocking(move || terminals.edit(agent, &path, &edits))
+                            .await
+                            .map_err(|err| err.to_string())
+                            .and_then(|done| done.map_err(|err| err.to_string()))
+                    }
+                };
+                let (rendered, outcome) = match edited {
+                    Ok(said) => (said.clone(), ToolOutcome::Ok { summary: said }),
+                    // Nothing was written, and the model has to hear that
+                    // before anything else: an edit it believes landed is the
+                    // next edit's wrong `old_text`.
+                    Err(err) => (
+                        format!("Error: {err}. The file was not changed."),
+                        ToolOutcome::Failed { error: err },
+                    ),
+                };
+                (rendered, Part::tool_call(tools::EDIT, arguments, outcome))
             }
 
             ToolInvocation::WriteDocument { name, content } => {
@@ -5744,9 +5614,9 @@ impl Runtime {
 
             ToolInvocation::AttachFile { files } => {
                 let surfaces = self.surfaces_for(card);
-                let consequence = if surfaces.repository {
+                let consequence = if surfaces.terminal {
                     "It is not on your answer, so do not tell them it is attached. Check the \
-                     path in your repository with `shell` and attach it again."
+                     path in your terminal with `shell` and attach it again."
                 } else if surfaces.computer {
                     UNATTACHED_FILE
                 } else {
@@ -6062,16 +5932,16 @@ impl Runtime {
         arguments: serde_json::Value,
     ) -> (String, Part) {
         let surfaces = self.surfaces_for(card);
-        // A repository counts, and was missing here until an agent had a shell
-        // in one: `code` and `shell` both push under the operator's own name,
-        // which is the definition this refusal is written against. An agent
-        // that has one and is told nothing it can call reaches outside the
-        // workspace is told something false about the tool it is holding.
-        if !surfaces.computer && !surfaces.browser && !surfaces.repository {
+        // A terminal counts: `code` and `shell` both push under the
+        // operator's own name, which is the definition this refusal is written
+        // against. An agent that has one and is told nothing it can call
+        // reaches outside the workspace is told something false about the tool
+        // it is holding.
+        if !surfaces.computer && !surfaces.browser && !surfaces.terminal {
             let reason = "nothing this agent can do reaches outside the workspace".to_string();
             return (
                 "Refused, and the operator was not asked: you have no computer, no browser and no \
-                 repository, so nothing you can call reaches outside this workspace and there is \
+                 terminal, so nothing you can call reaches outside this workspace and there is \
                  no action here for them to authorize. What you are missing is access, not \
                  permission, and no answer of theirs would give you any. Say in your reply what \
                  you could not reach and that they can give you a computer or a browser from your \
@@ -6866,18 +6736,18 @@ impl Runtime {
             browser: !config.kernel.api_key.trim().is_empty(),
             // Always. A computer and a browser need a provider the operator has
             // to go and sign up for, and a workspace without one can hand out
-            // neither. A repository needs a directory they already have, so
-            // there is no workspace-level precondition to fail: the only
-            // question is whether this agent was put in one, which is on the
-            // card.
+            // neither. A terminal is a directory on the machine Guaca already
+            // runs on, so there is no workspace-level precondition to fail: the
+            // only question is whether this agent was given one, which is on
+            // the card.
             //
             // Whether the harness is installed is deliberately not asked here.
             // That is a broken installation rather than an absent setting, and
             // it is reported as a failure naming the install command, which an
             // agent can put in its reply and an operator can act on. Asked
             // here it would be a process spawn on the way into every turn.
-            repository: true,
-            // Always, for the reason a repository is: an errand needs nothing
+            terminal: true,
+            // Always, for the reason a terminal is: an errand needs nothing
             // the workspace has to be set up with, only the operator's word
             // on the card.
             errands: true,
@@ -8513,7 +8383,7 @@ impl Runtime {
 /// coding job is the second one, and it deadlocked on exactly this. `code` does
 /// not block, its result is delivered as a fresh envelope, and an actor only
 /// examines the envelope it is holding — so the turn that started the job could
-/// never receive it, and `RepositoryBusy` told the agent to wait for a message
+/// never receive it, and `JobRunning` told the agent to wait for a message
 /// its own turn was the thing blocking.
 ///
 /// Claude Code has the same problem and solves it a level down: a prompt typed
@@ -8924,7 +8794,9 @@ mod tests {
             has_browser: false,
             browser_consent: Consent::default(),
             runs_errands: false,
-            repository_id: None,
+            has_terminal: false,
+            harness: Harness::default(),
+            gate: crate::domain::terminal::Gate::default(),
             browser_id: None,
             lifecycle,
             pinned: false,

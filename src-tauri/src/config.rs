@@ -55,7 +55,7 @@ impl Provider {
     /// A fixed-length array rather than a loose list, so a variant added
     /// without being added here is a compile error rather than a case the
     /// round-trip suite below silently stops covering. The same reason
-    /// [`crate::domain::repository::Harness::ALL`] is one.
+    /// [`crate::domain::terminal::Harness::ALL`] is one.
     pub const ALL: [Provider; 3] = [Provider::Compatible, Provider::Chatgpt, Provider::Claude];
 
     /// How a provider is spelled in SQLite, which is the same as on the wire.

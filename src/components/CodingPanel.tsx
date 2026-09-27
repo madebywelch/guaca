@@ -15,11 +15,10 @@ interface Props {
  * ## Why this exists at all
  *
  * `code` returns as soon as the harness is up and the turn ends, so the channel
- * goes silent while a coding agent works in the repository for twenty minutes.
- * The operator's own words for it: the chat is quiet and the only evidence
- * anything is happening is pull requests appearing on GitHub. The rail says
- * `building` beside the repository, which answers *whether*; this answers
- * *what*.
+ * goes silent while a coding agent works for twenty minutes. The operator's
+ * own words for it: the chat is quiet and the only evidence anything is
+ * happening is pull requests appearing on GitHub. The rail says `writing code`
+ * beside the agent, which answers *whether*; this answers *what*.
  *
  * ## Why it is a filtered line and not the stream
  *
@@ -40,8 +39,7 @@ interface Props {
  */
 export function CodingPanel({ agent }: Props) {
   const lines = useStore((s) => s.coding[agent]);
-  const building = useStore((s) => s.building);
-  const repositories = useStore((s) => s.repositories);
+  const directory = useStore((s) => s.building[agent]);
   const floor = useRef<HTMLDivElement>(null);
   const [correction, setCorrection] = useState("");
   const [sending, setSending] = useState(false);
@@ -61,10 +59,8 @@ export function CodingPanel({ agent }: Props) {
     floor.current?.scrollIntoView({ block: "end" });
   }, []);
 
-  const repositoryId = building[agent];
-  if (!repositoryId) return null;
+  if (directory === undefined) return null;
 
-  const repository = repositories.find((r) => r.id === repositoryId);
   const held = lines ?? [];
 
   const send = async () => {
@@ -102,7 +98,9 @@ export function CodingPanel({ agent }: Props) {
     <section className="coding" aria-label="Coding job in progress">
       <div className="coding__head">
         <span className="coding__pulse" aria-hidden="true" />
-        <span className="coding__title">Writing code in {repository?.name ?? "a repository"}</span>
+        <span className="coding__title">
+          Writing code in {directory === "." ? "its terminal" : directory}
+        </span>
         {confirming ? (
           <>
             <button

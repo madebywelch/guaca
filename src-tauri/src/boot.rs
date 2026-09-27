@@ -99,8 +99,8 @@ pub async fn open(
 
     let db_path = paths.db();
     let config_path = paths.config_file();
-    // Memories as plain markdown, attachments by content hash, and one git
-    // work tree per agent per repository, all under the data directory.
+    // Memories as plain markdown, attachments by content hash, and one
+    // terminal directory per agent, all under the data directory.
     // `OnDisk::under` is the one place that arrangement is decided.
     let disk = OnDisk::under(&paths.data);
     let workspace_dir = disk.workspace.root().to_path_buf();
@@ -165,7 +165,6 @@ pub async fn open(
     );
 
     runtime.keep_settings_at(config_path.clone());
-    crate::repo::github::refresh_helpers(&paths.config).await.map_err(|err| err.to_string())?;
     runtime.hold_workspace_lease(lease);
 
     let started = runtime.start_all().map_err(|err| format!("could not start the crew: {err}"))?;

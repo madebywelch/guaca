@@ -1,6 +1,6 @@
 //! Codex's app-server protocol. One CLI process owns one thread and turn.
 //! Steering uses the active turn id and is acknowledged by the CLI. Approval
-//! callbacks spend the same repository gate as Claude hooks and `shell`.
+//! callbacks spend the same agent gate as Claude hooks and `shell`.
 
 use std::{collections::HashSet, path::Path, process::Stdio, time::Duration};
 
@@ -12,7 +12,7 @@ use tokio::{
 };
 
 use super::{CodingError, Outcome, Progress, Signal};
-use crate::domain::repository::Gate;
+use crate::domain::terminal::Gate;
 
 pub(super) const BINARY: &str = "codex";
 pub(super) const INSTALL: &str = "npm install -g @openai/codex";
@@ -43,7 +43,6 @@ pub async fn run(
     mut watching: impl FnMut(Progress),
 ) -> Result<Outcome, CodingError> {
     let mut command = tokio::process::Command::new(BINARY);
-    crate::repo::github::environment(repository, &mut command).await;
     env.apply(&mut command);
     let mut child = command
         .args(["app-server", "--listen", "stdio://"])
@@ -226,8 +225,8 @@ async fn drive(
                         // login check can disagree with a custom provider.
                         if result["requiresOpenaiAuth"] == true && result["account"].is_null() {
                             return Err(failed(format!(
-                                "Codex is not signed in on this backend. Run `{}` as the backend user, then retry the coding job. Guaca's chat sign-in and repository Git token do not sign in Codex.",
-                                super::sign_in(crate::domain::repository::Harness::Codex)
+                                "Codex is not signed in on this backend. Run `{}` as the backend user, then retry the coding job. Guaca's own ChatGPT sign-in does not sign in Codex.",
+                                super::sign_in(crate::domain::terminal::Harness::Codex)
                             )));
                         }
                         write(&mut stdin, json!({"id":2,"method":"thread/start","params":{
@@ -264,7 +263,7 @@ async fn drive(
 }
 
 /// The CLI handles its ordinary edits. Only outward shell actions spend the
-/// repository gate, through the same signal and decision as Claude's hooks.
+/// agent's gate, through the same signal and decision as Claude's hooks.
 async fn answer_request(
     event: Value,
     gate: Gate,

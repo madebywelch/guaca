@@ -34,6 +34,7 @@ pub mod shell;
 pub mod skills;
 pub mod skills_sh;
 pub mod subscription;
+pub mod terminal;
 pub mod trajectory;
 pub mod transfer;
 /// The other one.

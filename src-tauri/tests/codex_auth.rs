@@ -1,6 +1,6 @@
 //! The real CLI, isolated from the operator's credentials. Run this test binary
 //! alone: its environment belongs to the test process, never the running app.
-use guac_lib::{coding, domain::repository::Harness};
+use guac_lib::{coding, domain::terminal::Harness};
 
 #[tokio::test]
 #[ignore = "live: requires the official Codex CLI; no credentials or model spend"]

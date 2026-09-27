@@ -2,7 +2,7 @@
 //!
 //! The same two functions [`super::pi`] has, against a different program with a
 //! different stream. What makes it worth a second parser rather than a flag on
-//! the first is in [`crate::domain::repository::Harness`]: a Claude
+//! the first is in [`crate::domain::terminal::Harness`]: a Claude
 //! subscription is spent by this program and by nothing else holding its
 //! credential.
 
