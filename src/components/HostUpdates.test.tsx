@@ -64,7 +64,11 @@ beforeEach(() => {
     targetVersion: "0.1.0",
   });
   fetched.mockImplementation((url: string) =>
-    Promise.resolve(new Response(JSON.stringify(url.endsWith("/health") ? health : release))),
+    Promise.resolve(
+      new Response(JSON.stringify(url.endsWith("/health") ? health : release), {
+        headers: { "content-type": "application/json" },
+      }),
+    ),
   );
   vi.stubGlobal("fetch", fetched);
   sessionStorage.clear();
@@ -113,6 +117,22 @@ describe("host updates in either client", () => {
     await screen.findByText("Workspace mounted");
     await screen.findByText("Release service is offline.");
     expect(screen.getByText(/latest check failed/)).toBeTruthy();
+  });
+  it("reads a page served in place of the release route as an older host", async () => {
+    fetched.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.endsWith("/health")
+          ? new Response(JSON.stringify(health), {
+              headers: { "content-type": "application/json" },
+            })
+          : new Response("<!doctype html><title>Guaca</title>", {
+              headers: { "content-type": "text/html" },
+            }),
+      ),
+    );
+    mount();
+    await screen.findByText("Workspace mounted");
+    await screen.findByText(/does not support release checks yet/);
   });
   it("only updates the selected container on an explicit click", async () => {
     mode.mockReturnValue("local");

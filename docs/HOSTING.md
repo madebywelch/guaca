@@ -683,7 +683,8 @@ commit metadata are under More options.
 The desktop compares the managed container's image reference with the one
 built into the application. It offers **Back up and update host** when they
 differ. Updating is explicit because it interrupts jobs. The manager downloads
-the image first, stops the container, copies the whole volume to a new backup
+the image first and refuses, with the old host still running, an image whose
+version label is not the app's own version. Then it stops the container, copies the whole volume to a new backup
 volume, and only then replaces the container. The running port and token are
 preserved. A failed backup cancels the upgrade. A failure after the new binary
 has touched the database leaves the backup available; it never starts an old

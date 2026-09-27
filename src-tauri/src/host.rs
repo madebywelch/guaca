@@ -9,9 +9,12 @@ use serde_json::Value;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 
+/// The host this app installs. Unpinned, it is the published tag of this
+/// app's own version: a spelled-out tag stayed at 0.1.0 after the app moved
+/// on, and offered every source build a downgrade of the host it managed.
 pub const IMAGE: &str = match option_env!("GUACA_BACKEND_IMAGE") {
     Some(image) => image,
-    None => "ghcr.io/madebywelch/guaca/guacad:0.1.0",
+    None => concat!("ghcr.io/madebywelch/guaca/guacad:", env!("CARGO_PKG_VERSION")),
 };
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -408,11 +411,22 @@ impl LocalHost {
         let raw = self.docker(&["image", "inspect", &self.image], 15).await?;
         let image: Vec<Value> =
             serde_json::from_str(&raw).map_err(|_| "Docker returned unreadable image metadata.")?;
-        let revision = image
-            .first()
-            .and_then(|v| v["Config"]["Labels"]["org.opencontainers.image.revision"].as_str())
+        let labels = image.first().map(|v| &v["Config"]["Labels"]);
+        let revision = labels
+            .and_then(|l| l["org.opencontainers.image.revision"].as_str())
             .unwrap_or_default()
             .to_string();
+        // Checked while the old host still runs. After the swap the database
+        // is either migrated by a binary this app cannot vouch for or refused
+        // by an older one, and both end in "Recovery needed".
+        let target =
+            labels.and_then(|l| l["org.opencontainers.image.version"].as_str()).unwrap_or_default();
+        if !target.is_empty() && target != env!("CARGO_PKG_VERSION") {
+            return Err(format!(
+                "The host image this app installs reports version {target}, not {}. The running host was left untouched. Reinstall Guaca so it installs the host built with it.",
+                env!("CARGO_PKG_VERSION")
+            ));
+        }
         op.stage = "Stopping host".into();
         self.record(op)?;
         self.docker(&["stop", &self.name], 60).await?;
@@ -651,7 +665,7 @@ mod tests {
         )
         .unwrap();
         let value = serde_json::json!({
-            "failure":failure, "exists":true,
+            "failure":failure, "exists":true, "image_version": env!("CARGO_PKG_VERSION"),
             "container": {"Mounts":[{"Destination":"/var/lib/guaca", "Type":"volume", "Name":format!("{}-data", host.name)}], "Config":{"Image":"fixture:old", "Labels":{"bot.guaca.desktop":host.name}},
                 "State":{"Running":true},
                 "NetworkSettings":{"Ports":{"8787/tcp":[{"HostIp":"127.0.0.1","HostPort":addr.port().to_string()}]}}}
@@ -733,6 +747,31 @@ mod tests {
         assert_eq!(record.operation().unwrap().unwrap().backup, op.backup);
         task.abort();
     }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_image_from_another_release_is_refused_before_the_host_stops() {
+        let (host, dir, task, origin) = simulated("", env!("CARGO_PKG_VERSION")).await;
+        let path = dir.path().join("docker-state.json");
+        let mut state: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        state["image_version"] = serde_json::json!("0.1.0");
+        std::fs::write(path, state.to_string()).unwrap();
+        let error = host.update(Some(&origin)).await.err().unwrap();
+        assert!(error.contains("reports version 0.1.0"), "{error}");
+        assert!(!calls(&dir).iter().any(|c| c[0] == "stop" || c[0] == "rm" || c[0] == "run"));
+        assert_eq!(host.operation().unwrap().unwrap().stage, "Update canceled");
+        task.abort();
+    }
+
+    #[test]
+    fn an_unpinned_app_installs_the_host_of_its_own_release() {
+        if option_env!("GUACA_BACKEND_IMAGE").is_none() {
+            assert_eq!(
+                IMAGE,
+                format!("ghcr.io/madebywelch/guaca/guacad:{}", env!("CARGO_PKG_VERSION"))
+            );
+        }
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn a_reconfigured_workspace_is_never_backed_up_from_a_guessed_volume() {

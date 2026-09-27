@@ -87,7 +87,12 @@ export function HostMonitor({ children }: { children: ReactNode }) {
             signal: AbortSignal.timeout(15000),
           }).then(async (response) => {
             if (response.status === 401) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
-            if (response.status === 404)
+            // A host older than this route that serves the page answers any
+            // unknown path with index.html, which is a 200 and not the answer.
+            if (
+              response.status === 404 ||
+              (response.ok && !response.headers.get("content-type")?.includes("application/json"))
+            )
               throw new Error(
                 "This host does not support release checks yet. Update it using the host instructions.",
               );

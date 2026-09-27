@@ -28,7 +28,10 @@ elif args[:2] == ["container", "inspect"]:
     print(json.dumps([state["container"]]))
 elif args[:2] == ["image", "inspect"]:
     if mode == "download": fail()
-    print(json.dumps([{"Config": {"Labels": {"org.opencontainers.image.revision": "abcdef1"}}}]))
+    print(json.dumps([{"Config": {"Labels": {
+        "org.opencontainers.image.revision": "abcdef1",
+        "org.opencontainers.image.version": state.get("image_version", ""),
+    }}}]))
 elif args[0] == "pull":
     if mode == "download": fail()
 elif args[0] == "stop":
