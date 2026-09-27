@@ -23,6 +23,20 @@ exchange happened; the pair's thread is what it said*, in `ARCHITECTURE.md`.
 
 ## A turn's own work is chips, not a line per call
 
+**Appearance can show live reasoning and tool calls in chat.** The setting is
+`showReasoning`, off by default and stored with the other local preferences.
+When enabled, `TurnWork` draws the model's published thinking between individual
+calls in arrival order. Thinking starts expanded; a call names its tool and
+state immediately, and opens onto its arguments and outcome. The footer keeps
+the working indicator and Stop button. The compact presentation described below
+remains the default.
+
+The live view follows the transcript only while the operator is at its end.
+Reasoning still lasts only for the current attempt; finishing or retrying drops
+it, and completed tool calls remain in the recorded message. Enabling this view
+does not request extra reasoning from a provider that publishes none.
+
+
 The third thing in a channel, after the operator's conversation and the peer
 traffic. It had the least design and by volume it was the most of it: a turn may
 make two dozen tool calls, because the round limit is twenty-four and a browsing

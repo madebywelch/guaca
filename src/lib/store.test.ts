@@ -322,6 +322,33 @@ describe("what an agent is thinking", () => {
 });
 
 describe("what an agent is reaching for", () => {
+  it("keeps reasoning boundaries aligned when the oldest text exceeds the buffer", () => {
+    apply({
+      type: "streamStarted",
+      messageId: "bounded",
+      channelId: "chef",
+      agentId: "chef",
+      runId: "r1",
+      to: { kind: "human" },
+    });
+    apply({ type: "reasoningDelta", messageId: "bounded", text: "a".repeat(199_999) });
+    apply({
+      type: "toolStarted",
+      messageId: "bounded",
+      callId: "c",
+      name: "directory",
+      arguments: {},
+    });
+    expect(useStore.getState().trail.chef?.[0]?.reasoningOffset).toBe(199_999);
+    apply({ type: "reasoningDelta", messageId: "bounded", text: "bbb" });
+    expect(useStore.getState().reasoning.chef?.length).toBe(200_000);
+    const boundary = useStore.getState().trail.chef?.[0]?.reasoningOffset;
+    expect(boundary).toBe(199_997);
+    expect(useStore.getState().reasoning.chef?.slice(boundary)).toBe("bbb");
+    apply({ type: "reasoningDelta", messageId: "bounded", text: "c".repeat(200_000) });
+    expect(useStore.getState().trail.chef?.[0]?.reasoningOffset).toBe(0);
+  });
+
   const started: UiEvent = {
     type: "streamStarted",
     messageId: "s1",

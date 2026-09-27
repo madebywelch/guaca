@@ -199,7 +199,7 @@ function StepRow({ step }: { step: Step }) {
  * either side of a line are the one distinction a reader may not have, and
  * because it is what makes a copied diff still read as one.
  */
-function DiffBlock({ lines }: { lines: DiffLine[] }) {
+export function DiffBlock({ lines }: { lines: DiffLine[] }) {
   const mark = { same: " ", added: "+", removed: "-" };
   return (
     <pre className="diff">

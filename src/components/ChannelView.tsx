@@ -28,6 +28,7 @@ import { Answering } from "./HtmlArtifact";
 import { MessageItem, StreamingMessage, WhenRow } from "./MessageItem";
 import { PairThread } from "./PairThread";
 import { TrailRow } from "./Trail";
+import { TurnWork } from "./TurnWork";
 import { PeerBurstRow, RefusedRow, WritingRow } from "./WireRow";
 
 interface Props {
@@ -252,6 +253,7 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
             })
           )}
 
+          {agent && <TurnWork key={agent.id} agent={agent.id} follow={follow} />}
           <LiveStreams channel={channel} lookups={lookups} follow={follow} />
         </Answering.Provider>
       </div>
@@ -296,6 +298,9 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
 }
 
 /**
+ * The compact view of a running turn. When inline work is enabled, this keeps
+ * only the working indicator and Stop; TurnWork draws the details in chat.
+ *
  * Everything about the turn that is still going, between the transcript and the
  * box you would type into.
  *
@@ -322,6 +327,7 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
  * exists: both buttons are on the line and the panel is above it.
  */
 function TurnFooter({ agent, state }: { agent: AgentCard; state: Activity | undefined }) {
+  const inline = useStore((s) => s.prefs.showReasoning);
   const [showing, setShowing] = useState<Showing | null>(null);
   const panel = useId();
 
@@ -341,8 +347,8 @@ function TurnFooter({ agent, state }: { agent: AgentCard; state: Activity | unde
 
   return (
     <div className="turn">
-      {showing === "working" && <ThoughtPanel id={panel} agent={agent.id} />}
-      {showing === "steps" && <StepsPanel id={panel} agent={agent.id} />}
+      {!inline && showing === "working" && <ThoughtPanel id={panel} agent={agent.id} />}
+      {!inline && showing === "steps" && <StepsPanel id={panel} agent={agent.id} />}
       <WorkingNote
         agent={agent}
         panel={panel}
@@ -495,7 +501,8 @@ function WorkingNote({
   showing: Showing | null;
   onToggle: (which: Showing) => void;
 }) {
-  const held = useStore((s) => s.reasoning[agent.id]);
+  const inline = useStore((s) => s.prefs.showReasoning);
+  const held = useStore((s) => (s.prefs.showReasoning ? undefined : s.reasoning[agent.id]));
   const calls = useStore((s) => s.trail[agent.id]);
   // One string, so this re-renders when the run changes and not when a token
   // arrives. Subscribing to `streams` here to find it would undo the whole
@@ -511,7 +518,8 @@ function WorkingNote({
   // sixty times a second walks two dozen calls to arrive at the same number.
   const tally = useMemo(() => tallyTrail(liveSteps(calls)), [calls]);
   // At most one: a turn makes its calls one at a time and waits for each.
-  const waiting = calls?.find((call) => call.done === null && now - call.startedAt >= WAITED_MS);
+  const waiting =
+    !inline && calls?.find((call) => call.done === null && now - call.startedAt >= WAITED_MS);
   const saying = Boolean(waiting) || Boolean(thought.heading || thought.line);
 
   const line = waiting ? (
@@ -566,12 +574,13 @@ function WorkingNote({
       <div className="working__end">
         {/* Named, never counted, and never behind the click beside it. The
             value is not here and there is no field it could arrive in. */}
-        {tally.spent.map((credential) => (
-          <span className="trail__spent" key={credential}>
-            {credential}
-          </span>
-        ))}
-        {tally.done > 0 && (
+        {!inline &&
+          tally.spent.map((credential) => (
+            <span className="trail__spent" key={credential}>
+              {credential}
+            </span>
+          ))}
+        {!inline && tally.done > 0 && (
           // Drawn as one of the chips it opens, so the control and its contents
           // read as one thing. Its own text is its name: "12 steps, 1 failed"
           // is what somebody would say out loud about the button.

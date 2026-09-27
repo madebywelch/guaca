@@ -81,6 +81,7 @@ export interface Prefs {
   uiScale: UiScale;
   surface: SurfaceMode;
   cast: Cast;
+  showReasoning: boolean;
   notify: NotifyPrefs;
 }
 
@@ -96,6 +97,7 @@ export const DEFAULT_PREFS: Prefs = Object.freeze({
   uiScale: 100,
   surface: "light",
   cast: "cut",
+  showReasoning: false,
   notify: Object.freeze({
     on: true,
     kinds: Object.freeze({
@@ -150,6 +152,10 @@ export function readPrefs(raw: unknown): Prefs {
     uiScale: isScale(stored.uiScale) ? stored.uiScale : DEFAULT_PREFS.uiScale,
     surface: isSurface(stored.surface) ? stored.surface : DEFAULT_PREFS.surface,
     cast: isCast(stored.cast) ? stored.cast : DEFAULT_PREFS.cast,
+    showReasoning:
+      typeof stored.showReasoning === "boolean"
+        ? stored.showReasoning
+        : DEFAULT_PREFS.showReasoning,
     notify: {
       on: typeof stored.notify?.on === "boolean" ? stored.notify.on : DEFAULT_PREFS.notify.on,
       kinds,
