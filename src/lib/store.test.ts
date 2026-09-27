@@ -21,6 +21,14 @@ vi.mock("./ipc", () => ({
   onRuntimeEvent: vi.fn(),
 }));
 
+// The one thing in the transport that reaches outside the page: opening a
+// sign-in in the system browser. Stubbed, so asserting that a window opens one
+// does not ask a test runner to open a browser.
+vi.mock("./transport", async (original) => ({
+  ...(await original<typeof import("./transport")>()),
+  openExternal: vi.fn(async () => {}),
+}));
+
 const { useStore } = await import("./store");
 const { DEFAULT_PREFS } = await import("./prefs");
 
