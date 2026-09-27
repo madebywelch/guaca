@@ -47,7 +47,7 @@ use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
 use axum::{Json, Router};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::broadcast;
 use tower_http::cors::CorsLayer;
@@ -167,22 +167,7 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
         // feeds its own machine's strip, and that call never reaches here.
         menubar: Arc::new(|_presence| {}),
         deployment: Deployment::Server,
-        open_url: {
-            // Nobody is sitting at this machine. The only browser there is
-            // belongs to whoever is reading the page, so the page is asked.
-            // An `Err` from the send is no client attached, which is a sign-in
-            // nobody could finish anyway: the flow times out on its own.
-            let events = events.clone();
-            Arc::new(move |url: &str| {
-                if events.send(UiEvent::OpenUrl { url: url.to_string() }).is_err() {
-                    return Err("nobody has this workspace open in a browser, so there is \
-                                nowhere to show the sign-in page. Open the workspace and try \
-                                again"
-                        .to_string());
-                }
-                Ok(())
-            })
-        },
+        open_url: page_opener(events.clone()),
         reach: Reach::served(settings.origin.clone()),
         config_path: booted.config_path,
         // Never reached: `save_file` refuses before it looks, because a server
@@ -390,6 +375,32 @@ struct Call {
     client: Option<crate::ipc::Client>,
 }
 
+/// How a sign-in reaches a browser from a box.
+///
+/// Nobody is sitting at this machine. The only browser there is belongs to
+/// whoever is reading the page, so the page is asked, and only the page whose
+/// command asked: the event names it. An `Err` from the send is no client
+/// attached, which is a sign-in nobody could finish anyway: the flow times out
+/// on its own.
+fn page_opener(events: broadcast::Sender<UiEvent>) -> crate::commands::OpenUrl {
+    Arc::new(move |url: &str| {
+        let client = CALLER.try_with(Clone::clone).ok().flatten();
+        if events.send(UiEvent::OpenUrl { url: url.to_string(), client }).is_err() {
+            return Err("nobody has this workspace open in a browser, so there is nowhere to \
+                        show the sign-in page. Open the workspace and try again"
+                .to_string());
+        }
+        Ok(())
+    })
+}
+
+tokio::task_local! {
+    /// The page whose command is running, for the one thing that has to find
+    /// its way back to that page alone: a sign-in's browser tab. Every other
+    /// event is for every window.
+    static CALLER: Option<String>;
+}
+
 /// One command, arriving as JSON instead of over Tauri's IPC.
 async fn call(
     State(serving): State<Serving>,
@@ -406,7 +417,8 @@ async fn call(
     if let Some(origin) = reached_at(&headers) {
         serving.state.reach.note(origin);
     }
-    match crate::ipc::dispatch(&serving.state, &body.name, body.args).await {
+    let page = body.client.as_ref().and_then(crate::ipc::Client::page);
+    match CALLER.scope(page, crate::ipc::dispatch(&serving.state, &body.name, body.args)).await {
         Ok(value) => (StatusCode::OK, Json(json!({ "ok": value }))).into_response(),
         Err(refused) => {
             if matches!(
@@ -946,16 +958,31 @@ fn same(a: &str, b: &str) -> bool {
     a.iter().zip(b).fold(0u8, |differs, (x, y)| differs | (x ^ y)) == 0
 }
 
-/// What a client is told the workspace is.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Greeting {
-    pub deployment: Deployment,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_sign_in_page_is_addressed_to_the_window_that_asked() {
+        // Two windows on one box both opened every sign-in tab. The event now
+        // names the page whose command asked, and a call that named no page
+        // is for every window, as every call was before pages named themselves.
+        let (events, mut heard) = broadcast::channel(4);
+        let open = page_opener(events);
+        CALLER
+            .scope(Some("page-a".to_string()), async { open("https://a.example").unwrap() })
+            .await;
+        open("https://b.example").unwrap();
+        for (url, client) in [("https://a.example", Some("page-a")), ("https://b.example", None)] {
+            match heard.recv().await.unwrap() {
+                UiEvent::OpenUrl { url: sent, client: to } => {
+                    assert_eq!(sent, url);
+                    assert_eq!(to.as_deref(), client);
+                }
+                other => panic!("expected a sign-in page, got {other:?}"),
+            }
+        }
+    }
 
     #[test]
     fn an_invitation_keeps_the_token_out_of_every_log_but_this_one() {

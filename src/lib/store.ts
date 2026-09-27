@@ -12,7 +12,7 @@ import { create } from "zustand";
 import { api } from "./ipc";
 import { loadPrefs, type Prefs, savePrefs } from "./prefs";
 import { type DropTarget, landsBefore, railOrder } from "./rail";
-import { hosted, openExternal } from "./transport";
+import { hosted, openExternal, PAGE_ID } from "./transport";
 
 /**
  * How much of a running coding job's work is kept on screen.
@@ -923,6 +923,9 @@ export const useStore = create<State>((set, get) => ({
       }
 
       case "openUrl": {
+        // Another window's sign-in. Opening it here too put the same consent
+        // page in front of the operator once per open window.
+        if (event.client && event.client !== PAGE_ID) break;
         set({ handoff: event.url });
         void openExternal(event.url);
         break;

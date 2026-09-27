@@ -80,6 +80,10 @@ pub enum UiEvent {
     /// in case the browser refuses a window nobody clicked for.
     OpenUrl {
         url: String,
+        /// The page whose command asked, so only that window opens it. `None`
+        /// from a caller that did not say, which every window then opens, as
+        /// every window did before pages named themselves.
+        client: Option<String>,
     },
 
     /// A complete message was persisted.

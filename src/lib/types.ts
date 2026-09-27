@@ -1154,7 +1154,8 @@ export type UiEvent =
       building: Record<AgentId, RepositoryId>;
     }
   | { type: "agentsChanged" }
-  | { type: "openUrl"; url: string }
+  /** `client` is the page whose command asked; absent from an older host. */
+  | { type: "openUrl"; url: string; client?: string | null }
   | { type: "messageAppended"; message: Envelope }
   | {
       type: "streamStarted";

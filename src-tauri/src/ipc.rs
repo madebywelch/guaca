@@ -114,6 +114,21 @@ pub struct Client {
     pub version: String,
     #[serde(default)]
     pub desktop: bool,
+    /// One page load. What a sign-in's browser tab is addressed to, so the
+    /// window that asked opens it and the others do not.
+    #[serde(default)]
+    pub id: Option<String>,
+}
+
+impl Client {
+    /// The page id, if it is one: a short token, never text to repeat.
+    pub fn page(&self) -> Option<String> {
+        self.id.clone().filter(|id| {
+            !id.is_empty()
+                && id.len() <= 64
+                && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+    }
 }
 
 /// The sentence that says which side of a skew to update.
@@ -399,18 +414,18 @@ mod tests {
     #[test]
     fn a_skewed_client_is_told_which_side_to_update() {
         let host = semver::Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
-        let older = Client { version: "0.0.1".into(), desktop: true };
-        let newer = Client { version: format!("{}.0.0", host.major + 1), desktop: true };
+        let older = Client { version: "0.0.1".into(), desktop: true, id: None };
+        let newer = Client { version: format!("{}.0.0", host.major + 1), desktop: true, id: None };
         let message = Refused::Unknown("x".into()).body_for(Some(&older)).message;
         assert!(message.contains("download the latest Guaca"), "{message}");
         let message = Refused::Unknown("x".into()).body_for(Some(&newer)).message;
         assert!(message.contains("update the host"), "{message}");
-        let page = Client { version: "0.0.1".into(), desktop: false };
+        let page = Client { version: "0.0.1".into(), desktop: false, id: None };
         let message = Refused::Unknown("x".into()).body_for(Some(&page)).message;
         assert!(message.contains("reload the page"), "{message}");
         // A development build at the host's own version, or no claim at all,
         // cannot be ordered, and the message does not pretend otherwise.
-        let same = Client { version: env!("CARGO_PKG_VERSION").into(), desktop: true };
+        let same = Client { version: env!("CARGO_PKG_VERSION").into(), desktop: true, id: None };
         for client in [Some(&same), None] {
             let message = Refused::Unknown("x".into()).body_for(client).message;
             assert!(message.contains("whichever is older"), "{message}");

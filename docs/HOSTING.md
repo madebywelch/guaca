@@ -458,6 +458,20 @@ lock with emission, so a delta cannot be omitted or applied twice. A slow
 client whose feed overflows reconnects for another snapshot. Heartbeats retire
 connections that disappeared without a close frame.
 
+A page redials with a doubling backoff to fifteen seconds, and each wait is
+half the backoff plus a random share of the rest: every window on a host loses
+its socket at the same moment when the host restarts, and without the random
+half they redial in step. The browser's `online` event redials at once, because
+a laptop waking is when the host is most likely to answer. A page still closes
+on the `streamLagged` event older hosts send, so a newer page resynchronizes
+against one.
+
+Every call names its page (`client.id`), and the host keeps it for the length
+of that call. A sign-in the host cannot open itself becomes an `openUrl` event
+addressed to that page, so the window that asked opens the consent page and
+the others do not. An event from an older host names no page, and every window
+opens it as before.
+
 On every connection, including the first, the page refreshes the roster,
 settings, decisions, usage and selected transcript. It keeps the window and
 composer mounted. A transcript refresh merges messages arriving during the

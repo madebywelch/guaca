@@ -150,3 +150,11 @@ The daemon, a browser as a client, and the boot both hosts share.
   sends only fields that differ from the settings as they stand. The form's
   full `patch` is for a connection test, which has to test what is on screen.
   Sending the whole form saved each window's stale copy over the other's.
+- **`streamLagged` is not dead code.** The current host closes a lagging
+  socket itself and never sends it, but older hosts do, and a page newer than
+  its host has to resynchronize on it. The transport test is named for that.
+- **The page id travels in a task-local, not an argument.** A sign-in opens
+  its browser tab from deep inside `oauth::authorize`, many calls below the
+  command. `CALLER` is scoped around `ipc::dispatch` in the call route, and
+  `page_opener` reads it; a command that spawned the sign-in onto another task
+  would lose it and fall back to every window.

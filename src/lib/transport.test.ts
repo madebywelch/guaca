@@ -206,6 +206,7 @@ describe("a call", () => {
     expect(sent.client).toEqual({
       version: expect.stringMatching(/^\d+\.\d+\.\d+/),
       desktop: false,
+      id: expect.stringMatching(/^[a-z0-9-]{8,}$/),
     });
     expect(Object.keys(headers).sort()).toEqual(["authorization", "content-type"]);
   });
@@ -289,6 +290,44 @@ describe("the event connection", () => {
       expect(refresh).toHaveBeenCalledTimes(2);
       sockets[1]!.onmessage?.({ data: JSON.stringify({ type: "agentsChanged" }) });
       expect(changed).toHaveBeenCalledWith({ type: "agentsChanged" });
+    } finally {
+      stop();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("reconnecting", () => {
+  it("waits between half and all of the backoff, so windows do not redial in step", async () => {
+    const { retryDelay } = await import("./transport");
+    expect(retryDelay(1000, () => 0)).toBe(500);
+    expect(retryDelay(1000, () => 1)).toBe(1000);
+    expect(retryDelay(1000, () => 0.5)).toBe(750);
+  });
+
+  it("tries again at once when the network comes back", async () => {
+    vi.useFakeTimers();
+    const sockets: { onclose?: () => void; onopen?: () => void }[] = [];
+    class FakeSocket {
+      onopen?: () => void;
+      onclose?: () => void;
+      onerror?: () => void;
+      onmessage?: (event: { data: string }) => void;
+      constructor() {
+        sockets.push(this);
+      }
+      close() {
+        this.onclose?.();
+      }
+    }
+    vi.stubGlobal("WebSocket", FakeSocket);
+    const { subscribe } = await import("./transport");
+    const stop = await subscribe("unused", vi.fn(), vi.fn());
+    try {
+      sockets[0]!.onclose?.();
+      expect(sockets).toHaveLength(1);
+      window.dispatchEvent(new Event("online"));
+      expect(sockets).toHaveLength(2);
     } finally {
       stop();
       vi.useRealTimers();

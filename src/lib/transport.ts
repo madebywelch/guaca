@@ -7,10 +7,16 @@ import type { UiEvent } from "./types";
 /** Tauri v2 puts this on `window` before any of our code runs. */
 export const desktop = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
-/** Said on every call, so a host of another version can name the older side.
- *  In the body, because a header an older host's CORS does not admit would
- *  fail every preflight. */
-const CLIENT = { version: VERSION, desktop };
+/** This page load, so a sign-in the host opens for one window opens there only. */
+export const PAGE_ID: string =
+  typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : Math.random().toString(36).slice(2);
+
+/** Said on every call, so a host of another version can name the older side
+ *  and a sign-in finds its way back to this page. In the body, because a header
+ *  an older host's CORS does not admit would fail every preflight. */
+const CLIENT = { version: VERSION, desktop, id: PAGE_ID };
 
 /**
  * A box the desktop app is showing instead of its own workspace.
@@ -368,6 +374,18 @@ export function subscribe(
 const RETRY_FLOOR = 500;
 const RETRY_CEILING = 15_000;
 
+/**
+ * The wait before one retry: half the backoff, and a random share of the rest.
+ *
+ * Every window on a host loses the socket at the same moment when the host
+ * restarts, and without the random half they all redial in step and keep
+ * doing so. The fixed half keeps a floor under it, so a host that is starting
+ * is not asked again before it could have answered.
+ */
+export function retryDelay(wait: number, random: () => number = Math.random): number {
+  return Math.round(wait / 2 + (random() * wait) / 2);
+}
+
 function openSocket(handler: (payload: UiEvent) => void, onReconnect?: () => void): Unlisten {
   let socket: WebSocket | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -389,6 +407,8 @@ function openSocket(handler: (payload: UiEvent) => void, onReconnect?: () => voi
     socket.onmessage = (message) => {
       try {
         const event = JSON.parse(message.data as string);
+        // Sent by hosts older than the one that closes a lagging socket itself.
+        // A page newer than its host still has to resynchronize on it.
         if (event.type === "streamLagged") socket?.close();
         else handler(event as UiEvent);
       } catch {
@@ -400,7 +420,7 @@ function openSocket(handler: (payload: UiEvent) => void, onReconnect?: () => voi
     socket.onclose = () => {
       socket = null;
       if (closed) return;
-      timer = setTimeout(connect, wait);
+      timer = setTimeout(connect, retryDelay(wait));
       // Backoff with a ceiling. A box that is rebooting comes back in seconds
       // and a tunnel that is down may be down for an hour, and hammering it
       // helps neither.
@@ -411,10 +431,22 @@ function openSocket(handler: (payload: UiEvent) => void, onReconnect?: () => voi
     socket.onerror = () => {};
   };
 
+  // A laptop waking or a network coming back is the moment the host is most
+  // likely to answer, and a backoff grown long while it slept would sit out
+  // the next fifteen seconds for nothing.
+  const online = () => {
+    if (closed || socket) return;
+    if (timer) clearTimeout(timer);
+    wait = RETRY_FLOOR;
+    connect();
+  };
+  window.addEventListener("online", online);
+
   connect();
 
   return () => {
     closed = true;
+    window.removeEventListener("online", online);
     if (timer) clearTimeout(timer);
     socket?.close();
   };
