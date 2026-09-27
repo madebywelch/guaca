@@ -57,6 +57,16 @@ settings dialogs and fails when a pane is drawn that the manual does not name.
 An agent that sends the operator to a pane that was renamed is worse than one
 that says it does not know.
 
+## Connectors, tools and skills are three sections of a crew's settings
+
+A crew's settings show the three things an agent can use side by side.
+**Connectors** are MCP servers the crew signed in to, each with its own tools
+and per-agent answers. **Tools** is Guaca's own functions, read from the
+definitions agents are sent (`tools::catalog`), each with what an agent has to
+be given before it is offered one; `offered` decides that and `needs` says it,
+and a test holds them together. **Skills** are the documents on this page. A
+skill is not a tool: it is instructions an agent reads with one.
+
 ## What is not built
 
 - **Supporting files.** Other harnesses allow `references/` and `scripts/`

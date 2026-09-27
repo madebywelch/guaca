@@ -123,6 +123,8 @@ it would do and why. `read` lists the buttons with their ids, and
 - **Limits**: this crew's own limits.
 - **Connectors**: MCP servers the crew signed in to, like Linear or Stripe, and
   which agents may use which of their tools.
+- **Tools**: the functions every agent can call, Guaca's own, and what each
+  needs (a computer, a browser, a repository).
 - **Secrets**: credentials handed to chosen agents as environment variables on
   their machine or in their commands.
 - **Skills**: this crew's own skills. Its agents can write these too.

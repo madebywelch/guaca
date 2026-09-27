@@ -35,6 +35,7 @@ import { PluginList } from "./PluginList";
 import { ProviderPresets, SubscriptionModel } from "./ProviderFields";
 import { RepositoryList } from "./RepositoryList";
 import { SkillList } from "./SkillList";
+import { ToolList } from "./ToolList";
 
 interface Props {
   /** Absent means create. */
@@ -49,6 +50,7 @@ const SECTIONS = [
   "provider",
   "limits",
   "plugins",
+  "tools",
   "secrets",
   "skills",
   "repositories",
@@ -63,6 +65,7 @@ const SECTION_LABELS: Record<Section, string> = {
   provider: "Provider",
   limits: "Limits",
   plugins: "Connectors",
+  tools: "Tools",
   secrets: "Secrets",
   skills: "Skills",
   repositories: "Repositories",
@@ -706,6 +709,18 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                   the sign-in.
                 </p>
                 <PluginList groupId={group.id} crew={members} />
+              </>
+            )}
+
+            {section === "tools" && (
+              <>
+                <h3 className="settings__title">Tools</h3>
+                <p className="settings__lede">
+                  The functions every agent can call, Guaca's own, described in the words the agent
+                  is given. Each connector adds its own tools, listed under Connectors. Skills are
+                  not tools: they are instructions an agent reads with one.
+                </p>
+                <ToolList />
               </>
             )}
 

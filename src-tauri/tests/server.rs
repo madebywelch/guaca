@@ -405,6 +405,17 @@ async fn a_connector_run_as_a_program_on_the_host_is_tested_and_added_like_any_o
 }
 
 #[tokio::test]
+async fn the_host_lists_its_own_tools_from_what_agents_are_sent() {
+    let (addr, _dir) = workspace().await;
+    let (status, body) = call(addr, "builtin_tools", json!({})).await;
+    assert_eq!(status, 200, "{body}");
+    let tools = body["ok"].as_array().expect("a list");
+    let named = |name: &str| tools.iter().find(|tool| tool["name"] == name).cloned();
+    assert!(named("notebook").is_some_and(|tool| tool["needs"].is_null()), "{body}");
+    assert_eq!(named("browse").unwrap()["needs"], "a browser");
+}
+
+#[tokio::test]
 async fn the_operators_quick_actions_reach_every_window() {
     let (addr, _dir) = workspace().await;
     let (mut other, _) =

@@ -242,6 +242,7 @@ surface! {
     webhook_address() -> crate::commands::WebhookAddress,
 
     report_view(view: crate::domain::view::OperatorView) -> (),
+    builtin_tools() -> Vec<crate::llm::tools::ToolSummary>,
     add_quick_action(label: String, does: crate::domain::quick::Does) -> RedactedConfig,
     remove_quick_action(id: String) -> RedactedConfig,
     list_skills(scope: crate::domain::skill::Scope) -> Vec<crate::domain::skill::Skill>,

@@ -220,13 +220,57 @@ pub fn plugin_specs(connected: &[PluginToolset]) -> Vec<ToolSpec> {
 pub fn specs(surfaces: Surfaces, modalities: Modalities) -> Vec<ToolSpec> {
     all_specs(surfaces)
         .into_iter()
-        .filter(|spec| match spec.name.as_str() {
-            USE_SCREEN => surfaces.computer && modalities.image,
-            RUN_COMMAND | OPEN_ON_DESKTOP => surfaces.computer,
-            BROWSE => surfaces.browser,
-            CODE | SHELL => surfaces.repository,
-            REQUEST_PERMISSION => surfaces.computer || surfaces.browser || surfaces.repository,
-            _ => true,
+        .filter(|spec| offered(&spec.name, surfaces, modalities))
+        .collect()
+}
+
+/// Whether one tool is offered to an agent with these places and this model.
+fn offered(name: &str, surfaces: Surfaces, modalities: Modalities) -> bool {
+    match name {
+        USE_SCREEN => surfaces.computer && modalities.image,
+        RUN_COMMAND | OPEN_ON_DESKTOP => surfaces.computer,
+        BROWSE => surfaces.browser,
+        CODE | SHELL => surfaces.repository,
+        REQUEST_PERMISSION => surfaces.computer || surfaces.browser || surfaces.repository,
+        _ => true,
+    }
+}
+
+/// What an agent needs before a tool is offered, in the operator's words.
+/// `offered` decides; this says it, and a test holds the two together.
+fn needs(name: &str) -> Option<&'static str> {
+    match name {
+        USE_SCREEN => Some("a computer, and a model that can see"),
+        RUN_COMMAND | OPEN_ON_DESKTOP => Some("a computer"),
+        BROWSE => Some("a browser"),
+        CODE | SHELL => Some("a repository"),
+        REQUEST_PERMISSION => Some("a computer, a browser or a repository"),
+        _ => None,
+    }
+}
+
+/// One of Guaca's own tools, as the operator reads about it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolSummary {
+    pub name: String,
+    /// The first sentence of what the agent is told, in the agent's words.
+    pub summary: String,
+    /// What an agent has to be given before it is offered this one.
+    pub needs: Option<&'static str>,
+}
+
+/// Every tool Guaca itself offers, described from the definitions agents get,
+/// so the list an operator reads cannot drift from the list a model is sent.
+/// A connector's tools are its own and are listed with the connector.
+pub fn catalog() -> Vec<ToolSummary> {
+    let every = Surfaces { computer: true, browser: true, repository: true };
+    all_specs(every)
+        .into_iter()
+        .map(|spec| {
+            let text = spec.description.split_whitespace().collect::<Vec<_>>().join(" ");
+            let first = text.split(". ").next().unwrap_or_default().trim_end_matches('.');
+            ToolSummary { needs: needs(&spec.name), summary: format!("{first}."), name: spec.name }
         })
         .collect()
 }
@@ -4095,6 +4139,26 @@ mod tests {
         assert!(spec.description.contains("books nothing"), "{}", spec.description);
         assert!(spec.description.contains("wakes nobody"), "{}", spec.description);
         assert!(spec.description.contains("`schedule`"), "{}", spec.description);
+    }
+
+    #[test]
+    fn the_operators_list_of_tools_is_the_models_and_says_what_each_needs() {
+        let listed = catalog();
+        let bare = Surfaces { computer: false, browser: false, repository: false };
+        for tool in &listed {
+            assert!(tool.summary.len() > 10 && tool.summary.ends_with('.'), "{tool:?}");
+            assert!(!tool.summary.contains("  "), "{tool:?}");
+            // A tool that needs nothing is offered to an agent given nothing.
+            assert_eq!(
+                tool.needs.is_none(),
+                offered(&tool.name, bare, Modalities::seeing()),
+                "{} is offered and described differently",
+                tool.name
+            );
+        }
+        for name in [SKILL, NOTEBOOK, SETTINGS, SCHEDULE, CODE] {
+            assert!(listed.iter().any(|tool| tool.name == name), "{name} is missing");
+        }
     }
 
     #[test]

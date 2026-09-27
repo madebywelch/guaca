@@ -2061,6 +2061,14 @@ pub async fn disband_group(state: &AppState, id: GroupId) -> Reply<()> {
     outcome
 }
 
+// ---- tools -----------------------------------------------------------------
+
+/// Guaca's own tools, as the operator reads about them. The same on every host
+/// and for every crew; a connector's tools are listed with the connector.
+pub async fn builtin_tools(_state: &AppState) -> Reply<Vec<crate::llm::tools::ToolSummary>> {
+    Ok(crate::llm::tools::catalog())
+}
+
 // ---- the status bar --------------------------------------------------------
 
 /// Puts a button on the status bar. The operator's own: no approval, since the

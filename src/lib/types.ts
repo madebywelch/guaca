@@ -350,6 +350,14 @@ export interface OperatorView {
   groupId: GroupId | null;
 }
 
+/** One of Guaca's own tools, described from what the agent is told. */
+export interface ToolSummary {
+  name: string;
+  summary: string;
+  /** What an agent has to be given before it is offered this one. */
+  needs: string | null;
+}
+
 /** One file in an agent's notebook, as a listing shows it. */
 export interface NotebookEntry {
   path: string;

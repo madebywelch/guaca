@@ -98,6 +98,7 @@ import type {
   SkillScope,
   Staged,
   SubscriptionStatus,
+  ToolSummary,
   UiEvent,
   WebhookAddress,
   WorkDecision,
@@ -187,6 +188,8 @@ export const api = {
   addQuickAction: (label: string, does: QuickDoes) =>
     invoke<Settings>("add_quick_action", { label, does }),
   removeQuickAction: (id: string) => invoke<Settings>("remove_quick_action", { id }),
+
+  builtinTools: () => invoke<ToolSummary[]>("builtin_tools"),
 
   /** Tells the host what this window shows. Only while it has focus. */
   reportView: (view: OperatorView) => invoke<void>("report_view", { view }),
