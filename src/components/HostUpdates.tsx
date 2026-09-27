@@ -44,6 +44,11 @@ interface UpdateState {
   refresh: (manual?: boolean) => Promise<void>;
 }
 const Context = createContext<UpdateState | null>(null);
+
+/** What the host monitor last learned, for a surface that summarizes it. */
+export function useHostState(): UpdateState | null {
+  return useContext(Context);
+}
 const isManaged = () => desktop && hostMode() === "local";
 
 export function HostMonitor({ children }: { children: ReactNode }) {

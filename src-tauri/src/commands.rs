@@ -414,7 +414,7 @@ impl From<KernelError> for CommandError {
 impl From<config::ConfigError> for CommandError {
     fn from(err: config::ConfigError) -> Self {
         let kind = match err {
-            config::ConfigError::Blank { .. } => "validation",
+            config::ConfigError::Blank { .. } | config::ConfigError::Quick(_) => "validation",
             _ => "config",
         };
         CommandError::new(kind, err.to_string())
@@ -2027,6 +2027,58 @@ pub async fn disband_group(state: &AppState, id: GroupId) -> Reply<()> {
     // click on to open channels belonging to agents that are gone.
     state.runtime.emit(UiEvent::AgentsChanged);
     outcome
+}
+
+// ---- the status bar --------------------------------------------------------
+
+/// Puts a button on the status bar. The operator's own: no approval, since the
+/// person clicking it is the person who wrote it.
+pub async fn add_quick_action(
+    state: &AppState,
+    label: String,
+    does: crate::domain::quick::Does,
+) -> Reply<RedactedConfig> {
+    quick_targets_exist(state, &does)?;
+    let action = crate::domain::quick::QuickAction::new(&label, does, "the operator")
+        .map_err(config::ConfigError::from)?;
+    let config = state.runtime.change_config(|config| {
+        crate::domain::quick::add(&mut config.quick_actions, action)
+            .map_err(config::ConfigError::from)?;
+        Ok::<_, config::ConfigError>(())
+    })?;
+    Ok(config.redacted())
+}
+
+pub async fn remove_quick_action(state: &AppState, id: String) -> Reply<RedactedConfig> {
+    let config = state.runtime.change_config(|config| {
+        crate::domain::quick::remove(&mut config.quick_actions, &id)
+            .map_err(config::ConfigError::from)?;
+        Ok::<_, config::ConfigError>(())
+    })?;
+    Ok(config.redacted())
+}
+
+/// Refuses a button pointed at an agent or a crew that is not there, before it
+/// is drawn as one that does nothing.
+fn quick_targets_exist(
+    state: &AppState,
+    does: &crate::domain::quick::Does,
+) -> Result<(), CommandError> {
+    use crate::domain::quick::{Does, Place};
+    let store = state.runtime.store();
+    let missing = match does {
+        Does::Message { agent_id, .. } | Does::Open { place: Place::Channel { agent_id } } => {
+            store.get_agent(*agent_id)?.is_none()
+        }
+        Does::Open { place: Place::CrewSettings { group_id } } => {
+            store.get_group(*group_id)?.is_none()
+        }
+        Does::Open { .. } => false,
+    };
+    if missing {
+        return Err(CommandError::new("notFound", "that agent or crew no longer exists"));
+    }
+    Ok(())
 }
 
 // ---- the operator's view --------------------------------------------------

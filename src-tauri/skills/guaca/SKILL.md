@@ -38,6 +38,9 @@ is the host itself, and `host.docker.internal` reaches the Mac from a container.
   routines, and its computer or browser when it has one.
 - **For You**: the desk. Decisions, permission requests, questions and
   escalations waiting on the operator, across every crew.
+- **The status bar**, along the bottom of the channel: which host this window
+  shows and its version, marked when the app and the host are on different
+  releases, and the operator's quick actions.
 - **Search**: Command-K, over agents, messages and actions.
 - **Settings**: Command-comma. The panes are listed below.
 - **A crew's settings**: from the crew's menu in the rail. The sections are
@@ -98,6 +101,18 @@ limit stops it at a wall, and the agent that hits one is told which:
 
 If a conversation stopped early, one of these is usually why. The operator can
 raise it in **Settings > Limits**, or for one crew in its **Limits** section.
+
+## Quick actions
+
+A quick action is a button on the status bar for something the operator does
+often: sending one agent a fixed message, or opening a place (a channel, the
+calendar, For You, a Settings pane, the crew's settings). A message a button
+sends is sent as the operator, so you never add one yourself: `settings` with
+`add_quick_action` asks them, and they see the whole message before they say
+yes. A button that messages someone can only message your own crew. Suggest one
+when the operator keeps asking for the same thing in the same words; say what
+it would do and why. `read` lists the buttons with their ids, and
+`remove_quick_action` asks to take one off. At most eight fit.
 
 ## A crew's settings
 

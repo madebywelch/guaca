@@ -72,6 +72,7 @@ import type {
   PluginOffer,
   Presence,
   ProtectedAction,
+  QuickDoes,
   RankedModel,
   RepoStatus,
   Repository,
@@ -181,6 +182,10 @@ export const api = {
   updateConnector: (id: ConnectorId, agents: AgentId[], secret: string | null) =>
     invoke<void>("update_connector", { id, agents, secret }),
   deleteConnector: (id: ConnectorId) => invoke<void>("delete_connector", { id }),
+
+  addQuickAction: (label: string, does: QuickDoes) =>
+    invoke<Settings>("add_quick_action", { label, does }),
+  removeQuickAction: (id: string) => invoke<Settings>("remove_quick_action", { id }),
 
   /** Tells the host what this window shows. Only while it has focus. */
   reportView: (view: OperatorView) => invoke<void>("report_view", { view }),

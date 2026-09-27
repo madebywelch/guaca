@@ -1864,7 +1864,7 @@ async fn a_settings_change_happens_only_when_the_operator_allows_it() {
         .has_standing_grant(h.id("Helper"), ProtectedAction::ChangeSettings)
         .unwrap());
     let results = tool_results(&stub).join("\n");
-    assert!(results.contains("Changed: Relay depth"), "{results}");
+    assert!(results.contains("The operator allowed it: changed Relay depth"), "{results}");
 }
 
 #[tokio::test]
@@ -1888,6 +1888,72 @@ async fn an_agent_is_refused_the_endpoint_before_the_operator_is_bothered() {
     assert!(h.runtime.store().pending_approvals(10).unwrap().is_empty(), "nobody was asked");
     let results = tool_results(&stub).join("\n");
     assert!(results.contains("`baseUrl` is the operator's"), "{results}");
+}
+
+#[tokio::test]
+async fn a_button_an_agent_asks_for_reaches_the_status_bar_only_once_approved() {
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Asked for the button.".into())
+        } else {
+            Script::Settings(serde_json::json!({
+                "action": "add_quick_action",
+                "quick_action": {
+                    "label": "Morning brief",
+                    "send": "Give me the morning brief.",
+                    "to": "Scout",
+                },
+            }))
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Helper", "Scout"], GuardLimits::default());
+    h.runtime.send_from_human(h.id("Helper"), "Give me a button for the brief.").unwrap();
+    let request = h.awaited_request().await;
+    assert!(h.runtime.config().quick_actions.is_empty(), "nothing is added while asked");
+    let asked = h.runtime.store().get_approval(request).unwrap().unwrap();
+    assert!(
+        asked.detail.iter().any(|field| field.label == "Status bar"
+            && field.value.contains("sends Scout: \u{201c}Give me the morning brief.\u{201d}")),
+        "the operator sees the whole message it will send as them: {:?}",
+        asked.detail
+    );
+
+    h.runtime.decide_approval(request, Decision::Allow).unwrap();
+    h.wait_until("the button lands", |h| !h.runtime.config().quick_actions.is_empty()).await;
+    let added = &h.runtime.config().quick_actions[0];
+    assert_eq!(added.label, "Morning brief");
+    assert_eq!(added.added_by, "Helper");
+    assert!(matches!(
+        &added.does,
+        guac_lib::domain::quick::Does::Message { agent_id, .. } if *agent_id == h.id("Scout")
+    ));
+}
+
+#[tokio::test]
+async fn a_button_cannot_speak_to_another_crew() {
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("I cannot.".into())
+        } else {
+            Script::Settings(serde_json::json!({
+                "action": "add_quick_action",
+                "quick_action": { "label": "Poke", "send": "Do the thing.", "to": "Outsider" },
+            }))
+        }
+    })
+    .await;
+    let h = harness_in_groups(
+        &stub,
+        &[("Helper", None), ("Outsider", Some("Elsewhere"))],
+        GuardLimits::default(),
+    );
+    let run = h.runtime.send_from_human(h.id("Helper"), "Button for Outsider.").unwrap();
+    h.settle(run).await;
+    assert!(h.runtime.store().pending_approvals(10).unwrap().is_empty(), "nobody was asked");
+    assert!(h.runtime.config().quick_actions.is_empty());
+    let results = tool_results(&stub).join("\n");
+    assert!(results.contains("nobody in your crew is called Outsider"), "{results}");
 }
 
 // ---- the calendar --------------------------------------------------------
@@ -2741,6 +2807,7 @@ async fn a_group_can_pin_a_model_without_touching_the_other_group() {
         e2b: Default::default(),
         kernel: Default::default(),
         webhook: Default::default(),
+        quick_actions: Vec::new(),
     };
     let sink = RecordingSink::new();
     let runtime = Runtime::new(
@@ -2833,6 +2900,7 @@ async fn a_group_runs_on_its_own_budget_and_leaves_the_next_group_alone() {
         e2b: Default::default(),
         kernel: Default::default(),
         webhook: Default::default(),
+        quick_actions: Vec::new(),
     };
     let sink = RecordingSink::new();
     let runtime = Runtime::new(

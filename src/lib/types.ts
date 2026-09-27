@@ -998,6 +998,34 @@ export interface Settings {
   limits: GuardLimits;
   /** Initial choices while the signed-in account's model catalog loads. */
   subscriptionModels: string[];
+  /** The status bar's buttons. Absent from a host older than them. */
+  quickActions?: QuickAction[];
+}
+
+/** Somewhere a quick action can open. */
+export type QuickPlace =
+  | { kind: "channel"; agentId: AgentId }
+  | { kind: "calendar" }
+  | { kind: "forYou" }
+  | { kind: "settings"; section?: string | null }
+  | { kind: "crewSettings"; groupId: GroupId };
+
+/** What pressing a quick action does: a closed set the app draws and runs. */
+export type QuickDoes =
+  | { kind: "message"; agentId: AgentId; text: string }
+  | { kind: "open"; place: QuickPlace };
+
+/**
+ * One button on the status bar. An agent's is only there because the operator
+ * approved it, with the whole message shown, since a message it sends is sent
+ * as the operator.
+ */
+export interface QuickAction {
+  id: string;
+  label: string;
+  does: QuickDoes;
+  /** "the operator", or the agent that asked for it. */
+  addedBy: string;
 }
 
 /** Absent fields are left unchanged. An empty `apiKey` clears the key. */

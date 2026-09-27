@@ -1615,6 +1615,26 @@ pushed into every prompt: the screen changes far more often than a turn starts,
 and a line that changed on every click would cost the prompt cache on every
 turn for a fact most turns do not need.
 
+## The status bar is data, and an agent's button is the operator's yes
+
+The last row of the reading column says which host this window shows, marked
+when this app and the host are on different releases, and holds the
+operator's quick actions. A quick action is data from a closed set
+(`domain/quick.rs`): send one agent a fixed message, or open a channel, the
+calendar, For You, a Settings pane or a crew's settings. The app draws and
+runs each one. Hermes lets an agent write JavaScript that runs in the window
+with the app's whole authority; its own loader says that is not a capability
+boundary, and in this app it would be a way around every other one.
+
+The buttons are a setting on the host, so every window draws the same bar and
+a change reaches them through `settingsChanged`. The operator's own need
+nobody's approval. An agent's go through `settings` and the same card as any
+settings change, because a message a button sends arrives as `[OPERATOR]`, on
+a click made without reading the text again. The card quotes the whole
+message, and an agent may only aim one at its own crew, since a button is the
+operator's voice and one that spoke to another crew would carry an agent's
+words across the wall.
+
 ## The page is the only white thing, and both edges are the same off-white
 
 `styles.css` used to say the surface never follows the OS, and the argument was

@@ -1093,6 +1093,11 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                           changed on its own. The operator sees each change with its before and \
                           after, and nothing changes unless they allow it. Say why in your reply, \
                           since that is what they will weigh.\n\n\
+                          `add_quick_action` asks to put a button on the operator's status bar \
+                          for something they do often: sending one of your crew a fixed message, \
+                          or opening a place in the app. They approve it the same way, with the \
+                          whole message shown. `remove_quick_action` asks to take one off by the \
+                          id `read` lists.\n\n\
                           The provider, its endpoint and every key are the operator's to change in \
                           Settings, and no key is ever shown to you. The `guaca` skill says what \
                           each setting means."
@@ -1100,7 +1105,40 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["read", "update"] },
+                    "action": {
+                        "type": "string",
+                        "enum": ["read", "update", "add_quick_action", "remove_quick_action"]
+                    },
+                    "quick_action": {
+                        "type": "object",
+                        "description": "On `add_quick_action`: a `label` of two or three words, \
+                                        and either `send` with `to` (a message and the name of \
+                                        the agent in your crew it goes to) or `open` (a place).",
+                        "properties": {
+                            "label": { "type": "string" },
+                            "send": { "type": "string" },
+                            "to": { "type": "string" },
+                            "open": {
+                                "type": "string",
+                                "enum": ["channel", "calendar", "for_you", "settings",
+                                         "crew_settings"]
+                            },
+                            "agent": {
+                                "type": "string",
+                                "description": "For `open: channel`: whose channel."
+                            },
+                            "section": {
+                                "type": "string",
+                                "description": "For `open: settings`: which pane, such as `limits`."
+                            }
+                        },
+                        "required": ["label"],
+                        "additionalProperties": false
+                    },
+                    "id": {
+                        "type": "string",
+                        "description": "On `remove_quick_action`: the button's id, from `read`."
+                    },
                     "changes": {
                         "type": "object",
                         "description": "On `update`: the settings to change and their new values.",
@@ -1427,6 +1465,19 @@ pub enum SettingsAction {
     Update {
         changes: serde_json::Value,
     },
+    /// A button for the status bar, as the model described it. Names are
+    /// resolved against the caller's own crew at dispatch.
+    AddQuickAction {
+        label: String,
+        send: Option<String>,
+        to: Option<String>,
+        open: Option<String>,
+        agent: Option<String>,
+        section: Option<String>,
+    },
+    RemoveQuickAction {
+        id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1535,6 +1586,8 @@ pub enum ToolParseError {
     UnknownSkillAction,
     #[error("settings needs a known `action`")]
     UnknownSettingsAction,
+    #[error("settings needs {needs}")]
+    IncompleteSettings { needs: String },
     #[error("skill needs {needs}")]
     IncompleteSkill { needs: String },
     #[error("use_screen {action} needs {needs}")]
@@ -1595,6 +1648,14 @@ impl ToolParseError {
                  {\"limits\": {\"maxHops\": 12}}} to ask the operator for a change."
                     .to_string()
             }
+            ToolParseError::IncompleteSettings { needs } => format!(
+                "Error: that `settings` call needs {needs}. A button that sends a message: \
+                 {{\"action\": \"add_quick_action\", \"quick_action\": {{\"label\": \
+                 \"Morning brief\", \"send\": \"Give me the morning brief.\", \"to\": \
+                 \"Scout\"}}}}. One that opens a place: {{\"action\": \"add_quick_action\", \
+                 \"quick_action\": {{\"label\": \"Limits\", \"open\": \"settings\", \
+                 \"section\": \"limits\"}}}}."
+            ),
             ToolParseError::UnknownSkillAction => {
                 "Error: `action` must be view, list, write or delete. Use {\"action\": \"list\"} \
                  to see the skills you can read."
@@ -2330,6 +2391,45 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                     };
                     SettingsAction::Update { changes }
                 }
+                "add_quick_action" | "add_button" => {
+                    let spec = value.get("quick_action").cloned().unwrap_or_else(|| value.clone());
+                    let text = |key: &str| {
+                        spec.get(key)
+                            .and_then(|v| v.as_str())
+                            .map(str::trim)
+                            .filter(|text| !text.is_empty())
+                            .map(str::to_string)
+                    };
+                    let label =
+                        text("label").ok_or_else(|| ToolParseError::IncompleteSettings {
+                            needs: "a `label` for the button".to_string(),
+                        })?;
+                    let (send, open) = (text("send").or_else(|| text("message")), text("open"));
+                    if send.is_none() && open.is_none() {
+                        return Err(ToolParseError::IncompleteSettings {
+                            needs: "either `send` with `to`, or `open`".to_string(),
+                        });
+                    }
+                    SettingsAction::AddQuickAction {
+                        label,
+                        send,
+                        to: text("to"),
+                        open,
+                        agent: text("agent"),
+                        section: text("section"),
+                    }
+                }
+                "remove_quick_action" | "remove_button" => SettingsAction::RemoveQuickAction {
+                    id: value
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .map(str::trim)
+                        .filter(|id| !id.is_empty())
+                        .ok_or_else(|| ToolParseError::IncompleteSettings {
+                            needs: "the `id` of the quick action, which `read` lists".to_string(),
+                        })?
+                        .to_string(),
+                },
                 _ => return Err(ToolParseError::UnknownSettingsAction),
             };
             Ok(ToolInvocation::Settings { action })
@@ -2716,6 +2816,18 @@ mod tests {
             parse(&call(SETTINGS, r#"{"action": "reset"}"#)),
             Err(ToolParseError::UnknownSettingsAction)
         );
+        let button = r#"{"action": "add_quick_action",
+            "quick_action": {"label": "Brief", "send": "Brief me.", "to": "Scout"}}"#;
+        assert!(matches!(
+            parse(&call(SETTINGS, button)),
+            Ok(ToolInvocation::Settings { action: SettingsAction::AddQuickAction { .. } })
+        ));
+        let refused = parse(&call(
+            SETTINGS,
+            r#"{"action": "add_quick_action", "quick_action": {"label": "x"}}"#,
+        ))
+        .unwrap_err();
+        assert!(refused.guidance().contains("\"send\""), "{}", refused.guidance());
     }
 
     #[test]

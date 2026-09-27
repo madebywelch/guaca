@@ -504,6 +504,7 @@ fn signed_in_where(
         e2b: Default::default(),
         kernel: Default::default(),
         webhook: Default::default(),
+        quick_actions: Vec::new(),
     };
 
     let sink = RecordingSink::new();
@@ -925,6 +926,7 @@ async fn a_real_subscription_answers_a_real_turn() {
         e2b: Default::default(),
         kernel: Default::default(),
         webhook: Default::default(),
+        quick_actions: Vec::new(),
     };
 
     let sink = RecordingSink::new();

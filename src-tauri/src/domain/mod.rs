@@ -12,6 +12,7 @@ pub mod ids;
 pub mod occasion;
 pub mod plugin;
 pub mod promise;
+pub mod quick;
 pub mod repository;
 pub mod routine;
 pub mod search;

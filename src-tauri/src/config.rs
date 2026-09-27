@@ -246,6 +246,11 @@ pub struct AppConfig {
     pub kernel: KernelConfig,
     #[serde(default)]
     pub webhook: WebhookConfig,
+    /// The status bar's buttons, in the order they are drawn. A setting like
+    /// the rest, so every window draws the same bar and a change reaches them
+    /// through the same event.
+    #[serde(default)]
+    pub quick_actions: Vec<crate::domain::quick::QuickAction>,
 }
 
 /// Where an event is posted to fire a routine, and what the post has to carry.
@@ -401,6 +406,9 @@ pub struct RedactedConfig {
     pub limits: GuardLimits,
     /// A safe initial choice while the account's live catalog is loading.
     pub subscription_models: Vec<String>,
+    /// Nothing secret in one, so it crosses whole.
+    #[serde(default)]
+    pub quick_actions: Vec<crate::domain::quick::QuickAction>,
 }
 
 impl AppConfig {
@@ -424,6 +432,7 @@ impl AppConfig {
             request_timeout_secs: self.inference.request_timeout_secs,
             limits: self.limits,
             subscription_models: vec![crate::llm::codex::DEFAULT_MODEL.to_string()],
+            quick_actions: self.quick_actions.clone(),
         }
     }
 }
@@ -457,6 +466,8 @@ pub enum ConfigError {
     BadBaseUrl { got: String },
     #[error("{field} must not be blank")]
     Blank { field: &'static str },
+    #[error(transparent)]
+    Quick(#[from] crate::domain::quick::QuickError),
 }
 
 /// Normalizes and validates an operator-supplied base URL.

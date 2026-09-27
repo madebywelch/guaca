@@ -81,6 +81,11 @@ const SECTIONS = [
 
 export type Section = (typeof SECTIONS)[number];
 
+/** A pane name from elsewhere (a quick action, a route), if it is one. */
+export function asSection(name: string | null | undefined): Section | undefined {
+  return SECTIONS.find((section) => section === name);
+}
+
 const SECTION_LABELS: Record<Section, string> = {
   general: "General",
   workspace: "Workspace",

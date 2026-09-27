@@ -763,6 +763,7 @@ fn build(
         e2b,
         kernel,
         webhook: Default::default(),
+        quick_actions: Vec::new(),
     };
 
     let sink = RecordingSink::new();

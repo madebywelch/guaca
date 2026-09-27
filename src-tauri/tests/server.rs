@@ -369,6 +369,42 @@ async fn a_settings_change_reaches_every_client_and_two_at_once_both_land() {
 }
 
 #[tokio::test]
+async fn the_operators_quick_actions_reach_every_window() {
+    let (addr, _dir) = workspace().await;
+    let (mut other, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/v1/events?token={TOKEN}"))
+            .await
+            .expect("the event socket opens");
+
+    let (status, body) = call(
+        addr,
+        "add_quick_action",
+        json!({ "label": "Calendar", "does": { "kind": "open", "place": { "kind": "calendar" } } }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let id = body["ok"]["quickActions"][0]["id"].as_str().expect("an id").to_string();
+    assert_eq!(body["ok"]["quickActions"][0]["addedBy"], "the operator");
+    let event = next_of_kind(&mut other, "settingsChanged").await;
+    assert_eq!(event["settings"]["quickActions"][0]["label"], "Calendar");
+
+    // A button pointed at an agent that is not there is refused, not drawn dead.
+    let (_, refused) = call(
+        addr,
+        "add_quick_action",
+        json!({ "label": "Ghost", "does": {
+            "kind": "message", "agentId": uuid::Uuid::new_v4(), "text": "hello",
+        }}),
+    )
+    .await;
+    assert_eq!(refused["err"]["kind"], "notFound", "{refused}");
+
+    let (_, removed) = call(addr, "remove_quick_action", json!({ "id": id })).await;
+    assert_eq!(removed["ok"]["quickActions"], json!([]));
+    let _ = other.close(None).await;
+}
+
+#[tokio::test]
 async fn skills_are_written_read_and_announced_over_the_hosted_surface() {
     let (addr, _dir) = workspace().await;
     let (mut socket, _) =

@@ -352,6 +352,22 @@ const CALL_BACKOFF: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs
 /// move is to stop and let the operator decide.
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(20);
 
+/// A settings change an agent asked for, ready to put to the operator.
+struct Proposal {
+    /// What the card shows, in the pane's own words.
+    detail: Vec<DetailField>,
+    /// What the agent is told happened, once it has.
+    said: String,
+    apply: SettingsEdit,
+}
+
+/// What an allowed [`Proposal`] does to the settings.
+enum SettingsEdit {
+    Patch(crate::config::SettingsPatch),
+    AddQuick(crate::domain::quick::QuickAction),
+    RemoveQuick(String),
+}
+
 /// What the operator said, from the point of view of the parked turn.
 ///
 /// A refusal and a silence are separate because they are separate to the agent:
@@ -7043,27 +7059,6 @@ impl Runtime {
         }
     }
 
-    /// One of this agent's own routines, by the id it was given.
-    ///
-    /// Only its own, and that is the point rather than tidiness. An id can
-    /// arrive from anywhere an agent reads — a peer's message, a page, a file —
-    /// and a schedule is not shared, so one agent must never be able to retime
-    /// or cancel another's.
-    /// The crew's calendar, read and written by one of its agents.
-    ///
-    /// The group is taken from the card and never from the call, which is the
-    /// whole of the wall: every store call below is scoped to `card.group_id`,
-    /// so an id belonging to another crew comes back as nothing. What the agent
-    /// is then told is "you have no occasion with that id", not "that is not
-    /// yours" — the second sentence confirms the row exists and hints at whose
-    /// it is, which is the leak the wall is for.
-    ///
-    /// Every answer restates the occasion through `Occasion::describe`, and
-    /// that is load-bearing rather than tidy. A date is the one argument a
-    /// model gets wrong silently: `2026-09-14 15:00` written when it meant the
-    /// 15th, or a zone it did not intend. Told back the local wall clock that
-    /// was stored, it reads its own mistake in the same turn instead of the
-    /// operator finding it a week later.
     /// An agent reading the settings, or asking the operator to change them.
     async fn use_settings(
         &self,
@@ -7075,80 +7070,84 @@ impl Runtime {
         let answer = |rendered: String, outcome: ToolOutcome, arguments: serde_json::Value| {
             (rendered, Part::tool_call(tools::SETTINGS, arguments, outcome))
         };
-        let changes = match action {
+        let refused = |why: String, arguments: serde_json::Value| {
+            answer(
+                format!("Error: {why}. Nothing was changed and the operator was not asked."),
+                ToolOutcome::Failed { error: why },
+                arguments,
+            )
+        };
+        let proposal = match action {
             tools::SettingsAction::Read => {
                 let rendered = self.settings_for(card);
                 let summary = "read the settings".to_string();
                 return answer(rendered, ToolOutcome::Ok { summary }, arguments);
             }
-            tools::SettingsAction::Update { changes } => changes,
-        };
-
-        let before = self.config();
-        let patch = match crate::config::agent_patch(&changes, &before) {
-            Ok(patch) => patch,
-            Err(why) => {
-                return answer(
-                    format!("Error: {why} Nothing was changed and the operator was not asked."),
-                    ToolOutcome::Failed { error: why },
-                    arguments,
-                )
+            tools::SettingsAction::Update { changes } => self.propose_update(&changes),
+            tools::SettingsAction::AddQuickAction { label, send, to, open, agent, section } => {
+                self.propose_quick_action(card, &label, send, to, open, agent, section)
+            }
+            tools::SettingsAction::RemoveQuickAction { id } => {
+                let config = self.config();
+                match config.quick_actions.iter().find(|action| action.id == id) {
+                    Some(found) => {
+                        let said = found.describe(|agent| self.agent_name(agent));
+                        Ok(Some(Proposal {
+                            detail: vec![DetailField::new("Status bar", format!("remove {said}"))],
+                            said: format!("removed {said} from the status bar"),
+                            apply: SettingsEdit::RemoveQuick(id),
+                        }))
+                    }
+                    None => Err(format!("no quick action has the id `{id}`; `read` lists them")),
+                }
             }
         };
-        // Checked before the operator is asked, for the reason a duplicate
-        // agent name is: a refusal after they pressed Allow spends their
-        // attention on nothing.
-        let mut after = before.clone();
-        if let Err(err) = after.apply(patch.clone()) {
-            return answer(
-                format!("Error: {err}. Nothing was changed and the operator was not asked."),
-                ToolOutcome::Failed { error: err.to_string() },
-                arguments,
-            );
-        }
-        let asked = crate::config::changes(&before, &after);
-        if asked.is_empty() {
-            let rendered = "Nothing to change: those are already the values in force.".to_string();
-            let summary = "nothing to change".to_string();
-            return answer(rendered, ToolOutcome::Ok { summary }, arguments);
-        }
-        let detail = asked
-            .iter()
-            .map(|change| {
-                DetailField::new(&change.label, format!("{} → {}", change.from, change.to))
-            })
-            .collect();
+        let proposal = match proposal {
+            Ok(Some(proposal)) => proposal,
+            Ok(None) => {
+                let rendered =
+                    "Nothing to change: those are already the values in force.".to_string();
+                let summary = "nothing to change".to_string();
+                return answer(rendered, ToolOutcome::Ok { summary }, arguments);
+            }
+            Err(why) => return refused(why, arguments),
+        };
+
         let permission = self
             .ask_permission(
                 card,
                 run_id,
                 ProtectedAction::ChangeSettings,
                 format!("{} wants to change the workspace's settings", card.name),
-                detail,
+                proposal.detail,
             )
             .await;
         match permission {
             Permission::Granted => {
                 // Applied to the settings as they are now rather than as they
                 // were when the operator was asked: another window may have
-                // saved something in between, and this patch names only what
-                // the agent asked for.
-                match self.change_config(|config| config.apply(patch)) {
+                // saved something in between, and this names only what the
+                // agent asked for.
+                let applied = self.change_config(|config| match proposal.apply {
+                    SettingsEdit::Patch(patch) => config.apply(patch),
+                    SettingsEdit::AddQuick(action) => {
+                        Ok(crate::domain::quick::add(&mut config.quick_actions, action)?)
+                    }
+                    SettingsEdit::RemoveQuick(id) => {
+                        crate::domain::quick::remove(&mut config.quick_actions, &id)?;
+                        Ok(())
+                    }
+                });
+                match applied {
                     Ok(_) => {
-                        let said = asked
-                            .iter()
-                            .map(|change| {
-                                format!("{} {} → {}", change.label, change.from, change.to)
-                            })
-                            .collect::<Vec<_>>()
-                            .join("; ");
+                        let said = proposal.said;
                         tracing::info!(agent = %card.name, changed = %said, "an agent changed settings");
                         answer(
                             format!(
-                                "The operator allowed it. Changed: {said}. Every open window \
-                                 shows it now, and it applies from the next model call."
+                                "The operator allowed it: {said}. Every open window shows it now, \
+                                 and a setting applies from the next model call."
                             ),
-                            ToolOutcome::Ok { summary: format!("changed {said}") },
+                            ToolOutcome::Ok { summary: said },
                             arguments,
                         )
                     }
@@ -7185,6 +7184,109 @@ impl Runtime {
         }
     }
 
+    /// A settings patch, checked before the operator is asked, for the reason a
+    /// duplicate agent name is: a refusal after they pressed Allow spends their
+    /// attention on nothing. `None` when it would change nothing.
+    fn propose_update(&self, changes: &serde_json::Value) -> Result<Option<Proposal>, String> {
+        let before = self.config();
+        let patch = crate::config::agent_patch(changes, &before)?;
+        let mut after = before.clone();
+        after.apply(patch.clone()).map_err(|err| err.to_string())?;
+        let asked = crate::config::changes(&before, &after);
+        if asked.is_empty() {
+            return Ok(None);
+        }
+        let said = asked
+            .iter()
+            .map(|change| format!("{} {} → {}", change.label, change.from, change.to))
+            .collect::<Vec<_>>()
+            .join("; ");
+        Ok(Some(Proposal {
+            detail: asked
+                .iter()
+                .map(|change| {
+                    DetailField::new(&change.label, format!("{} → {}", change.from, change.to))
+                })
+                .collect(),
+            said: format!("changed {said}"),
+            apply: SettingsEdit::Patch(patch),
+        }))
+    }
+
+    /// A button for the status bar, with names resolved against the asking
+    /// agent's own crew: a button is the operator's voice, and one that spoke
+    /// to another crew would carry an agent's words across the wall.
+    #[allow(clippy::too_many_arguments)]
+    fn propose_quick_action(
+        &self,
+        card: &AgentCard,
+        label: &str,
+        send: Option<String>,
+        to: Option<String>,
+        open: Option<String>,
+        agent: Option<String>,
+        section: Option<String>,
+    ) -> Result<Option<Proposal>, String> {
+        use crate::domain::quick::{Does, Place, QuickAction, MAX_ACTIONS};
+        let crew: Vec<AgentCard> = self
+            .inner
+            .store
+            .list_agents()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|a| a.group_id == card.group_id && a.lifecycle != Lifecycle::Terminated)
+            .collect();
+        let named = |name: Option<String>, what: &str| -> Result<AgentId, String> {
+            let name =
+                name.ok_or_else(|| format!("{what} needs the name of an agent in your crew"))?;
+            crew.iter().find(|a| a.name.eq_ignore_ascii_case(name.trim())).map(|a| a.id).ok_or_else(
+                || format!("nobody in your crew is called {name}; `directory` lists them"),
+            )
+        };
+        let does = match (send, open.as_deref()) {
+            (Some(text), _) => Does::Message { agent_id: named(to, "`send`")?, text },
+            (None, Some("channel")) => {
+                Does::Open { place: Place::Channel { agent_id: named(agent, "`open: channel`")? } }
+            }
+            (None, Some("calendar")) => Does::Open { place: Place::Calendar },
+            (None, Some("for_you")) => Does::Open { place: Place::ForYou },
+            (None, Some("settings")) => Does::Open { place: Place::Settings { section } },
+            (None, Some("crew_settings")) => {
+                Does::Open { place: Place::CrewSettings { group_id: card.group_id } }
+            }
+            (None, other) => {
+                return Err(format!(
+                    "`open` must be channel, calendar, for_you, settings or crew_settings, not {}",
+                    other.unwrap_or("nothing")
+                ))
+            }
+        };
+        let action = QuickAction::new(label, does, &card.name).map_err(|err| err.to_string())?;
+        if self.config().quick_actions.len() >= MAX_ACTIONS {
+            return Err(crate::domain::quick::QuickError::Full.to_string());
+        }
+        let said = action.describe(|agent| self.agent_name(agent));
+        Ok(Some(Proposal {
+            detail: vec![
+                DetailField::new("Status bar", format!("add {said}")),
+                DetailField::new("Asked for by", &card.name),
+            ],
+            said: format!("added {said} to the status bar"),
+            apply: SettingsEdit::AddQuick(action),
+        }))
+    }
+
+    /// An agent's name for a sentence, or what to say when it is gone.
+    fn agent_name(&self, id: AgentId) -> String {
+        self.inner
+            .store
+            .get_agent(id)
+            .ok()
+            .flatten()
+            .map(|card| card.name)
+            .unwrap_or_else(|| "a deleted agent".to_string())
+    }
+
     /// The settings as an agent may see them: no key, no fragment of one, and
     /// no credentials inside an address.
     fn settings_for(&self, card: &AgentCard) -> String {
@@ -7216,13 +7318,19 @@ impl Runtime {
                 "requestTimeoutSecs": group.inference.request_timeout_secs,
                 "limits": group.limits,
             })),
+            "quickActions": config.quick_actions.iter().map(|action| serde_json::json!({
+                "id": action.id,
+                "does": action.describe(|agent| self.agent_name(agent)),
+                "addedBy": action.added_by,
+            })).collect::<Vec<_>>(),
             "host": { "guacaVersion": env!("CARGO_PKG_VERSION") },
             "operatorView": self.describe_view(),
         });
         format!(
             "The settings every agent runs on, unless its crew sets its own; a crew's null means \
              it uses the setting above. Change one with `update`, and the operator approves it. \
-             Anything under operatorOnly is theirs to change in Settings.\n{}",
+             Anything under operatorOnly is theirs to change in Settings. quickActions are the \
+             buttons on their status bar.\n{}",
             serde_json::to_string_pretty(&value).unwrap_or_default()
         )
     }
@@ -7285,6 +7393,27 @@ impl Runtime {
         }
     }
 
+    /// One of this agent's own routines, by the id it was given.
+    ///
+    /// Only its own, and that is the point rather than tidiness. An id can
+    /// arrive from anywhere an agent reads — a peer's message, a page, a file —
+    /// and a schedule is not shared, so one agent must never be able to retime
+    /// or cancel another's.
+    /// The crew's calendar, read and written by one of its agents.
+    ///
+    /// The group is taken from the card and never from the call, which is the
+    /// whole of the wall: every store call below is scoped to `card.group_id`,
+    /// so an id belonging to another crew comes back as nothing. What the agent
+    /// is then told is "you have no occasion with that id", not "that is not
+    /// yours" — the second sentence confirms the row exists and hints at whose
+    /// it is, which is the leak the wall is for.
+    ///
+    /// Every answer restates the occasion through `Occasion::describe`, and
+    /// that is load-bearing rather than tidy. A date is the one argument a
+    /// model gets wrong silently: `2026-09-14 15:00` written when it meant the
+    /// 15th, or a zone it did not intend. Told back the local wall clock that
+    /// was stored, it reads its own mistake in the same turn instead of the
+    /// operator finding it a week later.
     fn keep_calendar(
         &self,
         card: &AgentCard,
