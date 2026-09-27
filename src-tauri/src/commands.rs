@@ -2029,6 +2029,15 @@ pub async fn disband_group(state: &AppState, id: GroupId) -> Reply<()> {
     outcome
 }
 
+// ---- the operator's view --------------------------------------------------
+
+/// What the window with focus is showing, for an agent asked about "this".
+/// Every host answers it the same way; the page only reports while focused.
+pub async fn report_view(state: &AppState, view: crate::domain::view::OperatorView) -> Reply<()> {
+    state.runtime.report_view(view);
+    Ok(())
+}
+
 // ---- skills --------------------------------------------------------------
 
 /// A skill the operator is writing, in Settings or in a crew's settings.

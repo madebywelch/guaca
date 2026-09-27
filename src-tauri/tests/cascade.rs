@@ -1794,6 +1794,102 @@ async fn an_agent_cannot_write_guacas_skill_or_delete_the_operators() {
     assert!(h.runtime.skills().read(None, "house-style").is_ok(), "the operator's skill survives");
 }
 
+// ---- settings --------------------------------------------------------------
+
+#[tokio::test]
+async fn an_agent_reads_the_settings_and_what_the_operator_is_looking_at_and_never_a_key() {
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("That pane holds the limits.".into())
+        } else {
+            Script::Settings(serde_json::json!({ "action": "read" }))
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Helper"], GuardLimits::default());
+    h.runtime.report_view(guac_lib::domain::view::OperatorView {
+        agent_id: Some(h.id("Helper")),
+        overlay: Some(guac_lib::domain::view::Overlay::Settings),
+        section: Some("limits".into()),
+        group_id: None,
+    });
+    let run = h.runtime.send_from_human(h.id("Helper"), "What is this pane?").unwrap();
+    h.settle(run).await;
+
+    let results = tool_results(&stub).join("\n");
+    assert!(
+        results.contains(
+            "The operator is looking at the channel with Helper, with Settings open on limits"
+        ),
+        "{results}"
+    );
+    assert!(results.contains("\"maxHops\""), "{results}");
+    let key = h.runtime.config().inference.api_key;
+    assert!(!key.is_empty() && !results.contains(&key), "a key reached the model: {results}");
+}
+
+#[tokio::test]
+async fn a_settings_change_happens_only_when_the_operator_allows_it() {
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Asked.".into())
+        } else {
+            Script::Settings(serde_json::json!({
+                "action": "update", "changes": { "limits": { "maxHops": 12 } },
+            }))
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Helper"], GuardLimits::default());
+    let before = h.runtime.config().limits;
+
+    h.runtime.send_from_human(h.id("Helper"), "Let the crew relay further.").unwrap();
+    let request = h.awaited_request().await;
+    assert_eq!(h.runtime.config().limits.max_hops, before.max_hops, "nothing moves while asked");
+    let asked = h.runtime.store().get_approval(request).unwrap().unwrap();
+    assert!(
+        asked.detail.iter().any(|field| field.label == "Relay depth"
+            && field.value == format!("{} → 12", before.max_hops)),
+        "the operator sees the before and after: {:?}",
+        asked.detail
+    );
+
+    // An "always" for this action is one yes, and leaves nothing standing.
+    h.runtime.decide_approval(request, Decision::AlwaysAllow).unwrap();
+    h.wait_until("the change lands", |h| h.runtime.config().limits.max_hops == 12).await;
+    assert_eq!(h.runtime.config().limits.max_steps_per_run, before.max_steps_per_run);
+    assert!(!h
+        .runtime
+        .store()
+        .has_standing_grant(h.id("Helper"), ProtectedAction::ChangeSettings)
+        .unwrap());
+    let results = tool_results(&stub).join("\n");
+    assert!(results.contains("Changed: Relay depth"), "{results}");
+}
+
+#[tokio::test]
+async fn an_agent_is_refused_the_endpoint_before_the_operator_is_bothered() {
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("I cannot.".into())
+        } else {
+            Script::Settings(serde_json::json!({
+                "action": "update", "changes": { "baseUrl": "https://attacker.example/v1" },
+            }))
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Helper"], GuardLimits::default());
+    let endpoint = h.runtime.config().inference.base_url;
+    let run = h.runtime.send_from_human(h.id("Helper"), "Switch our endpoint.").unwrap();
+    h.settle(run).await;
+
+    assert_eq!(h.runtime.config().inference.base_url, endpoint);
+    assert!(h.runtime.store().pending_approvals(10).unwrap().is_empty(), "nobody was asked");
+    let results = tool_results(&stub).join("\n");
+    assert!(results.contains("`baseUrl` is the operator's"), "{results}");
+}
+
 // ---- the calendar --------------------------------------------------------
 
 #[tokio::test]

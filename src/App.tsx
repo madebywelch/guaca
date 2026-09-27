@@ -22,7 +22,8 @@ import { FEED_COALESCE_MS, presenceOf, samePresence } from "./lib/menubar";
 import { away, burst, markQuiet, quiet, shouldNotify } from "./lib/notify";
 import { useLiveAgents, useStore } from "./lib/store";
 import { attached, hosted } from "./lib/transport";
-import { type AgentCard, errorMessage, type Group, type UiEvent } from "./lib/types";
+import { type AgentCard, errorMessage, type Group, type Overlay, type UiEvent } from "./lib/types";
+import { useReportView } from "./lib/view";
 import { followViewport } from "./lib/viewport";
 
 export default function App() {
@@ -87,6 +88,8 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [showCafeteria, setShowCafeteria] = useState(false);
   const [showCalendar, setShowCalendar] = useState(false);
+  // The pane inside whichever settings dialog is open, reported by the dialog.
+  const [openSection, setOpenSection] = useState<string | null>(null);
   const [mobilePane, setMobilePane] = useState<"agents" | "conversation" | "details">(
     "conversation",
   );
@@ -317,6 +320,31 @@ export default function App() {
   };
 
   const openAgent = selected ? agents.find((a) => a.id === selected) : undefined;
+
+  // What is on screen, most specific first: a dialog covers the desk, and the
+  // desk covers the channel.
+  const overlay: Overlay | null = showSettings
+    ? "settings"
+    : editingGroup
+      ? "crewSettings"
+      : editing
+        ? "agentEditor"
+        : searching
+          ? "search"
+          : showCafeteria
+            ? "cafeteria"
+            : showCalendar
+              ? "calendar"
+              : forYou
+                ? "forYou"
+                : null;
+  useReportView({
+    agentId: selected ?? null,
+    overlay,
+    section: overlay === "settings" || overlay === "crewSettings" ? openSection : null,
+    groupId:
+      overlay === "crewSettings" && editingGroup !== "new" ? (editingGroup?.id ?? null) : null,
+  });
   const currentGroup = groups.find((group) => group.id === (openAgent?.groupId ?? railGroup));
   // Read the same group-over-workspace provider and key choices as the backend.
   const needsKey =
@@ -496,6 +524,7 @@ export default function App() {
         <GroupEditor
           group={editingGroup === "new" ? undefined : editingGroup}
           onClose={() => setEditingGroup(null)}
+          onSection={setOpenSection}
         />
       )}
       {showCafeteria && <Cafeteria onClose={() => setShowCafeteria(false)} />}
@@ -504,6 +533,7 @@ export default function App() {
         <SettingsDialog
           onClose={() => setShowSettings(null)}
           section={showSettings === true ? undefined : showSettings}
+          onSection={setOpenSection}
         />
       )}
       {searching && (

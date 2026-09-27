@@ -60,6 +60,8 @@ interface Props {
   /** Which pane to open on. The palette and the missing-key banner both point
    *  at a specific one, and landing on General to hunt for it is a step. */
   section?: Section;
+  /** Told which pane is open, so the host can tell an agent what is on screen. */
+  onSection?: (section: Section) => void;
 }
 
 const SECTIONS = [
@@ -152,7 +154,7 @@ const NOTIFY_COPY: Record<NotifyKind, { label: string; hint: string }> = {
 const differs = (text: string, stored: number | undefined) =>
   text.trim() !== "" && Number(text) !== stored;
 
-export function SettingsDialog({ onClose, section: opening }: Props) {
+export function SettingsDialog({ onClose, section: opening, onSection }: Props) {
   const settings = useStore((s) => s.settings);
   const setSettings = useStore((s) => s.setSettings);
   const capabilities = useStore((s) => s.capabilities);
@@ -160,6 +162,7 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
   const setPrefs = useStore((s) => s.setPrefs);
 
   const [section, setSection] = useState<Section>(opening ?? "general");
+  useEffect(() => onSection?.(section), [section, onSection]);
   const [operatorName, setOperatorName] = useState(settings?.operatorName ?? "");
   const [provider, setProvider] = useState<ProviderKind>(settings?.provider ?? "compatible");
   const [baseUrl, setBaseUrl] = useState(settings?.baseUrl ?? "");

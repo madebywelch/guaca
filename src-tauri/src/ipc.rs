@@ -226,6 +226,7 @@ surface! {
     delete_occasion(id: crate::domain::ids::OccasionId) -> (),
     webhook_address() -> crate::commands::WebhookAddress,
 
+    report_view(view: crate::domain::view::OperatorView) -> (),
     list_skills(scope: crate::domain::skill::Scope) -> Vec<crate::domain::skill::Skill>,
     read_skill(scope: crate::domain::skill::Scope, name: String) -> crate::domain::skill::Skill,
     save_skill(scope: crate::domain::skill::Scope, draft: crate::commands::SkillDraft) -> crate::domain::skill::Skill,

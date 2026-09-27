@@ -66,6 +66,8 @@ src-tauri/src/
     worknote.rs       A line about work in flight, and why it is not memory.
     skill.rs          A document of instructions for one kind of task, the
                       three places one lives, and who may write each.
+    view.rs           What the operator is looking at, as a sentence an agent
+                      can read. Reported by the focused window, kept in memory.
     occasion.rs       A date the crew is answerable for. It fires nothing, which
                       is the whole of what separates it from a routine.
     promise.rs        A closing sentence that says the work is still coming,
@@ -162,6 +164,7 @@ repo: the frontend renders state and forwards intent.
 | A sign-in that stopped working, refreshing, expiry, signing out | *A token's `exp` is a floor on its life, not a ceiling* in `docs/ARCHITECTURE.md`, then `Subscription::renew` and the 401 path in `codex::stream` |
 | What a group decides for itself: provider, models, timeout, limits | *A group chooses its own provider*, *Nothing about who pays is inferred* and *A run is measured against the limits of the group it happens in*, then `domain/group.rs` |
 | Stopping a conversation: what a stop marks, wakes, and must never release | *A stop marks the run and releases nothing*, then `Runtime::stop_run` |
+| An agent reading the settings or asking to change them, the operator's current view | *An agent can read the settings, and what the operator is looking at* in `docs/WORKSPACE.md` and *A settings change is a permission with its own diff* in `docs/ATTENTION.md`, then `config::agent_patch` and `Runtime::use_settings` |
 | Permission prompts, parked turns, acting in the operator's name | *A protected action parks the turn that asked for it* |
 | An agent writing code at all: the repository, the grant, the `code` tool, the job | `docs/CODING.md`, then `domain/repository.rs` and `Runtime::start_job` |
 | An agent running one command in its repository, and which of the two doors a piece of work goes through | *A repository has two doors, and the small one is `shell`* in `docs/CODING.md`, then `src-tauri/src/shell.rs` and `Runtime::run_in_repository` |

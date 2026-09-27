@@ -565,6 +565,167 @@ impl AppConfig {
     }
 }
 
+/// The settings an agent may ask to change, as `settings` names them.
+///
+/// Everything here changes what agents run on and nothing here reaches outside
+/// the workspace. The operator approves each change, with its before and after.
+pub const AGENT_WRITABLE: &[&str] = &[
+    "operatorName",
+    "defaultModel",
+    "subscriptionModel",
+    "reasoningEffort",
+    "requestTimeoutSecs",
+    "limits",
+    "computerIdleMinutes",
+    "browserIdleMinutes",
+    "browserStealth",
+];
+
+/// What an agent may never change, even with approval. The endpoint decides
+/// where the API key is sent, so an agent that could move it could send the
+/// key anywhere; the keys themselves are never shown to it at all.
+pub const OPERATOR_ONLY: &[&str] = &["provider", "baseUrl", "apiKey", "e2bApiKey", "kernelApiKey"];
+
+/// The five limits, as the settings pane labels them. `limits.ts` holds the same
+/// words for the pane, and `manual.test.ts` checks the two agree.
+pub const LIMIT_LABELS: &[(&str, &str)] = &[
+    ("maxStepsPerRun", "Model calls per conversation"),
+    ("maxToolRounds", "Tool calls per turn"),
+    ("maxHops", "Relay depth"),
+    ("maxSendsPerPair", "Messages between any two agents"),
+    ("maxFanoutPerCall", "Recipients per send"),
+];
+
+/// Reads the changes an agent asked for into a patch, refusing what it may
+/// not touch with a sentence that says what it may.
+///
+/// Limits are merged over the ones in force, because an agent raising one
+/// limit sends that one, and a patch replaces all five.
+pub fn agent_patch(
+    changes: &serde_json::Value,
+    current: &AppConfig,
+) -> Result<SettingsPatch, String> {
+    let Some(asked) = changes.as_object().filter(|asked| !asked.is_empty()) else {
+        return Err("`changes` must name the settings to change, for example \
+                    {\"limits\": {\"maxHops\": 12}}. `read` shows their names."
+            .into());
+    };
+    let mut value = serde_json::Map::new();
+    for (key, wanted) in asked {
+        if OPERATOR_ONLY.contains(&key.as_str()) {
+            return Err(format!(
+                "`{key}` is the operator's to change in Settings, and no agent can change it, \
+                 even with approval. Tell them what you would change and why."
+            ));
+        }
+        if !AGENT_WRITABLE.contains(&key.as_str()) {
+            return Err(format!(
+                "there is no setting called `{key}` that an agent can change. The ones you can: {}.",
+                AGENT_WRITABLE.join(", ")
+            ));
+        }
+        if key == "limits" {
+            let Some(limits) = wanted.as_object() else {
+                return Err("`limits` must be an object, for example {\"maxHops\": 12}.".into());
+            };
+            let mut merged = serde_json::to_value(current.limits).unwrap_or_default();
+            for (limit, number) in limits {
+                if !LIMIT_LABELS.iter().any(|(name, _)| name == limit) {
+                    return Err(format!(
+                        "there is no limit called `{limit}`. The five are: {}.",
+                        LIMIT_LABELS.iter().map(|(name, _)| *name).collect::<Vec<_>>().join(", ")
+                    ));
+                }
+                merged[limit] = number.clone();
+            }
+            value.insert(key.clone(), merged);
+        } else {
+            value.insert(key.clone(), wanted.clone());
+        }
+    }
+    serde_json::from_value(serde_json::Value::Object(value)).map_err(|err| {
+        format!("those values could not be read ({err}). `read` shows each setting's type.")
+    })
+}
+
+/// One setting, before and after, in the words the settings pane uses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Change {
+    pub label: String,
+    pub from: String,
+    pub to: String,
+}
+
+/// What differs between two settings, among the ones an agent can change.
+pub fn changes(before: &AppConfig, after: &AppConfig) -> Vec<Change> {
+    let mut out = Vec::new();
+    let mut compare = |label: &str, from: String, to: String| {
+        if from != to {
+            out.push(Change { label: label.to_string(), from, to });
+        }
+    };
+    compare("Your name", before.operator_name.clone(), after.operator_name.clone());
+    compare(
+        "Default model",
+        before.inference.default_model.clone(),
+        after.inference.default_model.clone(),
+    );
+    compare(
+        "ChatGPT model",
+        before.inference.subscription_model.clone(),
+        after.inference.subscription_model.clone(),
+    );
+    compare(
+        "Reasoning effort",
+        before.inference.reasoning_effort.as_str().to_string(),
+        after.inference.reasoning_effort.as_str().to_string(),
+    );
+    compare(
+        "Give up on a model call after",
+        format!("{}s", before.inference.request_timeout_secs),
+        format!("{}s", after.inference.request_timeout_secs),
+    );
+    let (was, now) = (
+        serde_json::to_value(before.limits).unwrap_or_default(),
+        serde_json::to_value(after.limits).unwrap_or_default(),
+    );
+    for (name, label) in LIMIT_LABELS {
+        compare(label, was[name].to_string(), now[name].to_string());
+    }
+    compare(
+        "Sleep computers after",
+        format!("{} min", before.e2b.idle_minutes),
+        format!("{} min", after.e2b.idle_minutes),
+    );
+    compare(
+        "Close browsers after",
+        format!("{} min", before.kernel.idle_minutes),
+        format!("{} min", after.kernel.idle_minutes),
+    );
+    compare(
+        "Hide that browsers are automated",
+        if before.kernel.stealth { "on" } else { "off" }.to_string(),
+        if after.kernel.stealth { "on" } else { "off" }.to_string(),
+    );
+    out
+}
+
+/// An address with any `user:password@` taken out, for showing to a model.
+pub fn without_userinfo(url: &str) -> String {
+    match url.split_once("://") {
+        Some((scheme, rest)) => {
+            let (authority, path) = rest.split_once('/').map_or((rest, ""), |(a, p)| (a, p));
+            let host = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+            if path.is_empty() && !rest.contains('/') {
+                format!("{scheme}://{host}")
+            } else {
+                format!("{scheme}://{host}/{path}")
+            }
+        }
+        None => url.to_string(),
+    }
+}
+
 /// Reads stored settings, migrating and rewriting them if they are outdated.
 pub fn load(path: &Path) -> Result<AppConfig, ConfigError> {
     let mut config = match fs::read_to_string(path) {
@@ -623,6 +784,57 @@ fn restrict_permissions(_path: &Path) -> Result<(), ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_agent_may_ask_for_a_limit_and_never_for_the_endpoint_or_a_key() {
+        let current = AppConfig::default();
+        for key in OPERATOR_ONLY {
+            let asked = serde_json::json!({ *key: "https://attacker.example" });
+            let refused = agent_patch(&asked, &current).unwrap_err();
+            assert!(refused.contains("the operator's"), "{key}: {refused}");
+        }
+        let refused = agent_patch(&serde_json::json!({ "webhook": {} }), &current).unwrap_err();
+        assert!(refused.contains("operatorName"), "lists what it may change: {refused}");
+        assert!(agent_patch(&serde_json::json!({}), &current).is_err());
+
+        // One limit, merged over the four in force rather than resetting them.
+        let patch =
+            agent_patch(&serde_json::json!({ "limits": { "maxHops": 12 } }), &current).unwrap();
+        let limits = patch.limits.unwrap();
+        assert_eq!(limits.max_hops, 12);
+        assert_eq!(limits.max_steps_per_run, current.limits.max_steps_per_run);
+        let refused =
+            agent_patch(&serde_json::json!({ "limits": { "maxEverything": 1 } }), &current);
+        assert!(refused.unwrap_err().contains("maxHops"));
+    }
+
+    #[test]
+    fn a_change_reads_as_the_pane_labels_it_before_and_after() {
+        let before = AppConfig::default();
+        let mut after = before.clone();
+        after
+            .apply(
+                agent_patch(&serde_json::json!({ "limits": { "maxHops": 12 } }), &before).unwrap(),
+            )
+            .unwrap();
+        let listed = changes(&before, &after);
+        assert_eq!(
+            listed,
+            vec![Change {
+                label: "Relay depth".into(),
+                from: before.limits.max_hops.to_string(),
+                to: "12".into(),
+            }]
+        );
+        assert!(changes(&before, &before).is_empty());
+    }
+
+    #[test]
+    fn an_address_shown_to_a_model_carries_no_credentials() {
+        assert_eq!(without_userinfo("https://u:p@host.example/v1"), "https://host.example/v1");
+        assert_eq!(without_userinfo("https://host.example/v1"), "https://host.example/v1");
+        assert_eq!(without_userinfo("http://u@localhost:1234"), "http://localhost:1234");
+    }
 
     #[test]
     fn a_provider_is_spelled_the_same_way_in_sqlite_and_on_the_wire() {

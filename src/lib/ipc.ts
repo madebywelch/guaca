@@ -65,6 +65,7 @@ import type {
   Occasion,
   OccasionDraft,
   OccasionId,
+  OperatorView,
   Plugin,
   PluginAccess,
   PluginId,
@@ -180,6 +181,9 @@ export const api = {
   updateConnector: (id: ConnectorId, agents: AgentId[], secret: string | null) =>
     invoke<void>("update_connector", { id, agents, secret }),
   deleteConnector: (id: ConnectorId) => invoke<void>("delete_connector", { id }),
+
+  /** Tells the host what this window shows. Only while it has focus. */
+  reportView: (view: OperatorView) => invoke<void>("report_view", { view }),
 
   listSkills: (scope: SkillScope) => invoke<Skill[]>("list_skills", { scope }),
   readSkill: (scope: SkillScope, name: string) => invoke<Skill>("read_skill", { scope, name }),

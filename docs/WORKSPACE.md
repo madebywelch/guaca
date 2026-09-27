@@ -1592,6 +1592,29 @@ produce the build in front of them. And a build made outside a repository at all
 draws a dash: it is the same answer the pane already gave for a version it could
 not read, and it is still a thing to say rather than a failure worth a banner.
 
+## An agent can read the settings, and what the operator is looking at
+
+`settings` with `read` hands an agent the settings every agent runs on, its
+crew's overrides, the host's version and one sentence about the screen: which
+channel is open and which pane of Settings or a crew's settings. No key and no
+fragment of one is in it, and an endpoint is shown without any credentials in
+its address. Changing a value goes through the operator; *A settings change is
+a permission with its own diff* in `docs/ATTENTION.md` is that half.
+
+The sentence about the screen comes from `report_view`, which the page sends
+from `useReportView` whenever what it shows settles, and only while its window
+has focus. Several windows can show one host, and the one the operator touched
+last is the one they mean by "this". The host keeps it in memory: it describes a
+moment, and a restart ends that moment. A pane name reaches a prompt, so the
+host keeps only a single lowercase word and drops anything else rather than
+quoting it. A host too old for the command says so once and the page stops
+asking.
+
+This is the pull half of what Hermes does with its desktop tools. Nothing is
+pushed into every prompt: the screen changes far more often than a turn starts,
+and a line that changed on every click would cost the prompt cache on every
+turn for a fact most turns do not need.
+
 ## The page is the only white thing, and both edges are the same off-white
 
 `styles.css` used to say the surface never follows the OS, and the argument was

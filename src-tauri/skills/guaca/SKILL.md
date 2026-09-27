@@ -12,8 +12,8 @@ point them at the right place instead of guessing.
 
 Use it for questions like "where do I change the model", "why did it stop after
 eight messages", "is the host up to date", or "can you remember how we deploy".
-When the answer depends on the current state (a setting's value, a version),
-say what you know from this skill and where the operator can see the live value.
+When the answer depends on the current state (a setting's value, a version, the
+pane the operator has open), read it with `settings` rather than guessing.
 
 ## Where it runs
 
@@ -46,7 +46,24 @@ is the host itself, and `host.docker.internal` reaches the Mac from a container.
 ## Settings
 
 Settings are the workspace's, on the host, and every open window sees a change
-at once. The operator edits them in **Settings**:
+at once.
+
+`settings` with `read` shows every value, your crew's overrides, the host's
+version, and what the operator is looking at right now: which channel, and
+which pane of Settings or a crew's settings is open. When they ask about "this"
+or "here", read it first.
+
+`settings` with `update` asks the operator to change something. They see each
+change with its before and after on their desk and nothing changes until they
+allow it; each change is asked about separately, and there is no standing yes.
+Say why in your reply, since that is what they will weigh. You can ask for:
+their name, the default model, the ChatGPT model, the reasoning effort, the
+model-call timeout, any of the five limits, how long computers and browsers may
+sit idle, and whether browsers hide that they are automated. The provider, its
+endpoint and every key are theirs alone, in **Settings**; tell them what to
+change and why.
+
+The operator edits them in **Settings**:
 
 - **General**: the operator's name, which is what agents call them.
 - **Workspace**: which host this app shows, its version and this app's, and

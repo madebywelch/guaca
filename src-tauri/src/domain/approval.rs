@@ -94,15 +94,33 @@ pub enum ProtectedAction {
     /// instruction in another channel, which is the operator doing the
     /// routing by hand.
     ActOnBehalf,
+    /// Changing the workspace's settings: a model, a timeout, a limit.
+    ///
+    /// Protected because the settings are what every agent runs inside, and
+    /// the limits among them are the guard that ends a cascade. An agent that
+    /// could raise its own relay depth has no limit. Each change is shown with
+    /// its before and after, and none of them stands: see [`Self::stands`].
+    ChangeSettings,
 }
 
 impl ProtectedAction {
+    /// Whether a yes can be made standing, so the agent is not asked again.
+    ///
+    /// Not for a settings change. "Always" is scoped to an agent and an action,
+    /// and this action is "any setting, to any value", so a standing yes would
+    /// cover a limit raised to its ceiling as readily as the timeout it was
+    /// given for. Enforced where a verdict is recorded, not only in the UI.
+    pub fn stands(self) -> bool {
+        !matches!(self, ProtectedAction::ChangeSettings)
+    }
+
     /// The stored form. Identical to the serialized form on purpose: two
     /// spellings of one token is a mapping table waiting to go wrong.
     pub fn as_str(self) -> &'static str {
         match self {
             ProtectedAction::CreateAgent => "createAgent",
             ProtectedAction::ActOnBehalf => "actOnBehalf",
+            ProtectedAction::ChangeSettings => "changeSettings",
         }
     }
 
@@ -110,6 +128,7 @@ impl ProtectedAction {
         match value {
             "createAgent" => Some(ProtectedAction::CreateAgent),
             "actOnBehalf" => Some(ProtectedAction::ActOnBehalf),
+            "changeSettings" => Some(ProtectedAction::ChangeSettings),
             _ => None,
         }
     }

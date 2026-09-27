@@ -128,7 +128,7 @@ export type ToolCallPart = Extract<Part, { type: "toolCall" }>;
 export type ApprovalId = string;
 
 /** Something an agent may not do without being told it can. */
-export type ProtectedAction = "createAgent" | "actOnBehalf";
+export type ProtectedAction = "createAgent" | "actOnBehalf" | "changeSettings";
 
 /**
  * What an agent stopped its turn to put to the operator.
@@ -326,6 +326,28 @@ export interface SkillDraft {
   body: string;
   /** The name it had, when the edit renames it. */
   previous?: string;
+}
+
+/** What is open over the channel, as the host is told it. */
+export type Overlay =
+  | "settings"
+  | "crewSettings"
+  | "calendar"
+  | "forYou"
+  | "search"
+  | "cafeteria"
+  | "agentEditor";
+
+/**
+ * What the operator is looking at, reported by the window with focus so an
+ * agent asked about "this pane" can read what it is.
+ */
+export interface OperatorView {
+  agentId: AgentId | null;
+  overlay: Overlay | null;
+  /** The pane inside the overlay, as the app names it: `limits`, `skills`. */
+  section: string | null;
+  groupId: GroupId | null;
 }
 
 /** One key per scope, for the counter a list redraws on. */

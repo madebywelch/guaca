@@ -14,6 +14,9 @@ const PHRASE: Record<ProtectedAction, string> = {
   // future send and purchase rather than the one being asked about. Listed
   // anyway: a grant that exists and cannot be seen is worse than one that can.
   actOnBehalf: "Acts outside this workspace in your name without asking.",
+  // Never granted: a settings change is asked about every time. Named so an
+  // older build's row, if there is one, still reads as something.
+  changeSettings: "Changes the workspace's settings without asking.",
 };
 
 /**

@@ -722,6 +722,9 @@ struct Inner {
     settings_file: std::sync::OnceLock<std::path::PathBuf>,
     /// Held from the read to the broadcast of one settings change.
     settings_writer: Mutex<()>,
+    /// What the operator's focused window last said it shows, and when. In
+    /// memory only: it describes a moment, and a restart ends that moment.
+    operator_view: Mutex<Option<(crate::domain::view::OperatorView, i64)>>,
     guard: Mutex<GuardRegistry>,
     inboxes: Mutex<HashMap<AgentId, Inbox>>,
     activity: Mutex<HashMap<AgentId, Activity>>,
@@ -903,6 +906,7 @@ impl Runtime {
                 config: RwLock::new(config),
                 settings_file: std::sync::OnceLock::new(),
                 settings_writer: Mutex::new(()),
+                operator_view: Mutex::new(None),
                 guard: Mutex::new(GuardRegistry::new()),
                 inboxes: Mutex::new(HashMap::new()),
                 activity: Mutex::new(HashMap::new()),
@@ -1032,6 +1036,33 @@ impl Runtime {
 
     pub fn set_config(&self, config: AppConfig) {
         *self.inner.config.write() = config;
+    }
+
+    /// Keeps what the operator's window says it is showing.
+    pub fn report_view(&self, view: crate::domain::view::OperatorView) {
+        *self.inner.operator_view.lock() = Some((view.clean(), crate::domain::now_ms()));
+    }
+
+    /// What the operator is looking at, as a sentence, with how old it is.
+    pub fn describe_view(&self) -> String {
+        let Some((view, at)) = self.inner.operator_view.lock().clone() else {
+            return "No window has said what it shows since this host started.".to_string();
+        };
+        let agent = view
+            .agent_id
+            .and_then(|id| self.inner.store.get_agent(id).ok().flatten())
+            .map(|card| card.name);
+        let crew = view
+            .group_id
+            .and_then(|id| self.inner.store.get_group(id).ok().flatten())
+            .map(|group| group.name);
+        let minutes = (crate::domain::now_ms() - at).max(0) / 60_000;
+        let age = match minutes {
+            0 => "just now".to_string(),
+            1 => "a minute ago".to_string(),
+            n => format!("{n} minutes ago"),
+        };
+        format!("{} (as of {age})", view.describe(agent.as_deref(), crew.as_deref()))
     }
 
     /// Where [`Runtime::change_config`] saves. Set once, at boot.
@@ -2996,9 +3027,17 @@ impl Runtime {
         // it would hand the agent an approval state where it is expecting a
         // value, and `ask_question` reads back `answer`, so the turn would
         // resume having been told nothing at all.
-        if self.inner.store.get_approval(id)?.is_some_and(|it| it.request.action().is_none()) {
+        let stored = self.inner.store.get_approval(id)?;
+        if stored.as_ref().is_some_and(|it| it.request.action().is_none()) {
             return Err(RuntimeError::NotAVerdict);
         }
+        // An "always" for an action that cannot stand is recorded as the yes
+        // it is for this once. The card does not offer it; a client that sends
+        // it anyway must not leave a standing grant behind.
+        let decision = match (decision, stored.and_then(|it| it.request.action())) {
+            (Decision::AlwaysAllow, Some(action)) if !action.stands() => Decision::Allow,
+            (decision, _) => decision,
+        };
 
         let approval = self.inner.store.settle_approval(id, decision.into())?;
         if let Some(waiter) = self.inner.waiting.lock().remove(&id) {
@@ -3191,10 +3230,14 @@ impl Runtime {
     ) -> Permission {
         // The only shortcut either kind has, and it belongs to this one alone:
         // a standing yes is about an action, and a question asks for nothing.
-        match self.inner.store.has_standing_grant(card.id, action) {
-            Ok(true) => return Permission::Granted,
-            Ok(false) => {}
-            Err(err) => return Permission::Failed(err.to_string()),
+        // An action that cannot stand is asked about every time, whatever an
+        // older build may have recorded.
+        if action.stands() {
+            match self.inner.store.has_standing_grant(card.id, action) {
+                Ok(true) => return Permission::Granted,
+                Ok(false) => {}
+                Err(err) => return Permission::Failed(err.to_string()),
+            }
         }
 
         let settled =
@@ -4935,6 +4978,11 @@ impl Runtime {
             return (rendered, part, None);
         }
 
+        if let ToolInvocation::Settings { action } = invocation {
+            let (rendered, part) = self.use_settings(card, run_id, action, arguments).await;
+            return (rendered, part, None);
+        }
+
         if let ToolInvocation::AskOperator { question, options } = invocation {
             let (rendered, part) =
                 self.put_to_operator(card, run_id, question, options, arguments).await;
@@ -4947,6 +4995,7 @@ impl Runtime {
             | ToolInvocation::UseScreen { .. }
             | ToolInvocation::CreateAgent { .. }
             | ToolInvocation::RequestPermission { .. }
+            | ToolInvocation::Settings { .. }
             | ToolInvocation::AskOperator { .. } => {
                 unreachable!("taken by the branches above")
             }
@@ -7015,6 +7064,169 @@ impl Runtime {
     /// 15th, or a zone it did not intend. Told back the local wall clock that
     /// was stored, it reads its own mistake in the same turn instead of the
     /// operator finding it a week later.
+    /// An agent reading the settings, or asking the operator to change them.
+    async fn use_settings(
+        &self,
+        card: &AgentCard,
+        run_id: RunId,
+        action: tools::SettingsAction,
+        arguments: serde_json::Value,
+    ) -> (String, Part) {
+        let answer = |rendered: String, outcome: ToolOutcome, arguments: serde_json::Value| {
+            (rendered, Part::tool_call(tools::SETTINGS, arguments, outcome))
+        };
+        let changes = match action {
+            tools::SettingsAction::Read => {
+                let rendered = self.settings_for(card);
+                let summary = "read the settings".to_string();
+                return answer(rendered, ToolOutcome::Ok { summary }, arguments);
+            }
+            tools::SettingsAction::Update { changes } => changes,
+        };
+
+        let before = self.config();
+        let patch = match crate::config::agent_patch(&changes, &before) {
+            Ok(patch) => patch,
+            Err(why) => {
+                return answer(
+                    format!("Error: {why} Nothing was changed and the operator was not asked."),
+                    ToolOutcome::Failed { error: why },
+                    arguments,
+                )
+            }
+        };
+        // Checked before the operator is asked, for the reason a duplicate
+        // agent name is: a refusal after they pressed Allow spends their
+        // attention on nothing.
+        let mut after = before.clone();
+        if let Err(err) = after.apply(patch.clone()) {
+            return answer(
+                format!("Error: {err}. Nothing was changed and the operator was not asked."),
+                ToolOutcome::Failed { error: err.to_string() },
+                arguments,
+            );
+        }
+        let asked = crate::config::changes(&before, &after);
+        if asked.is_empty() {
+            let rendered = "Nothing to change: those are already the values in force.".to_string();
+            let summary = "nothing to change".to_string();
+            return answer(rendered, ToolOutcome::Ok { summary }, arguments);
+        }
+        let detail = asked
+            .iter()
+            .map(|change| {
+                DetailField::new(&change.label, format!("{} → {}", change.from, change.to))
+            })
+            .collect();
+        let permission = self
+            .ask_permission(
+                card,
+                run_id,
+                ProtectedAction::ChangeSettings,
+                format!("{} wants to change the workspace's settings", card.name),
+                detail,
+            )
+            .await;
+        match permission {
+            Permission::Granted => {
+                // Applied to the settings as they are now rather than as they
+                // were when the operator was asked: another window may have
+                // saved something in between, and this patch names only what
+                // the agent asked for.
+                match self.change_config(|config| config.apply(patch)) {
+                    Ok(_) => {
+                        let said = asked
+                            .iter()
+                            .map(|change| {
+                                format!("{} {} → {}", change.label, change.from, change.to)
+                            })
+                            .collect::<Vec<_>>()
+                            .join("; ");
+                        tracing::info!(agent = %card.name, changed = %said, "an agent changed settings");
+                        answer(
+                            format!(
+                                "The operator allowed it. Changed: {said}. Every open window \
+                                 shows it now, and it applies from the next model call."
+                            ),
+                            ToolOutcome::Ok { summary: format!("changed {said}") },
+                            arguments,
+                        )
+                    }
+                    Err(err) => answer(
+                        format!(
+                            "Error: the operator allowed it but it could not be saved ({err})."
+                        ),
+                        ToolOutcome::Failed { error: err.to_string() },
+                        arguments,
+                    ),
+                }
+            }
+            Permission::Refused => answer(
+                "The operator said no, so nothing changed. That is final for this request: do \
+                 not ask again this turn. If it still matters, say in your reply what you would \
+                 change and why."
+                    .to_string(),
+                ToolOutcome::Refused { reason: "the operator declined".to_string() },
+                arguments,
+            ),
+            Permission::Unanswered => answer(
+                "Nobody answered, so nothing changed. The operator is away rather than opposed: \
+                 say in your reply what you wanted to change and why, so they can decide when \
+                 they are back."
+                    .to_string(),
+                ToolOutcome::Refused { reason: "the operator did not answer".to_string() },
+                arguments,
+            ),
+            Permission::Failed(err) => answer(
+                format!("Error: the request could not be put to the operator ({err})."),
+                ToolOutcome::Failed { error: err },
+                arguments,
+            ),
+        }
+    }
+
+    /// The settings as an agent may see them: no key, no fragment of one, and
+    /// no credentials inside an address.
+    fn settings_for(&self, card: &AgentCard) -> String {
+        let config = self.config();
+        let crew = self.inner.store.get_group(card.group_id).ok().flatten();
+        let endpoint = crate::config::without_userinfo(&config.inference.base_url);
+        let value = serde_json::json!({
+            "operatorName": config.operator_name,
+            "defaultModel": config.inference.default_model,
+            "subscriptionModel": config.inference.subscription_model,
+            "reasoningEffort": config.inference.reasoning_effort,
+            "requestTimeoutSecs": config.inference.request_timeout_secs,
+            "limits": config.limits,
+            "computerIdleMinutes": config.e2b.idle_minutes,
+            "browserIdleMinutes": config.kernel.idle_minutes,
+            "browserStealth": config.kernel.stealth,
+            "operatorOnly": {
+                "provider": config.inference.provider,
+                "endpoint": endpoint,
+                "apiKeySet": !config.inference.api_key.trim().is_empty(),
+                "computerKeySet": !config.e2b.api_key.trim().is_empty(),
+                "browserKeySet": !config.kernel.api_key.trim().is_empty(),
+            },
+            "yourCrew": crew.map(|group| serde_json::json!({
+                "name": group.name,
+                "provider": group.inference.provider,
+                "defaultModel": group.inference.default_model,
+                "reasoningEffort": group.inference.reasoning_effort,
+                "requestTimeoutSecs": group.inference.request_timeout_secs,
+                "limits": group.limits,
+            })),
+            "host": { "guacaVersion": env!("CARGO_PKG_VERSION") },
+            "operatorView": self.describe_view(),
+        });
+        format!(
+            "The settings every agent runs on, unless its crew sets its own; a crew's null means \
+             it uses the setting above. Change one with `update`, and the operator approves it. \
+             Anything under operatorOnly is theirs to change in Settings.\n{}",
+            serde_json::to_string_pretty(&value).unwrap_or_default()
+        )
+    }
+
     /// An agent reading or writing a skill. Writes reach only its own crew.
     fn use_skill(
         &self,

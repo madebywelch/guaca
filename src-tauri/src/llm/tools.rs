@@ -30,6 +30,7 @@ pub const BROWSE: &str = "browse";
 pub const SCHEDULE: &str = "schedule";
 pub const CALENDAR: &str = "calendar";
 pub const SKILL: &str = "skill";
+pub const SETTINGS: &str = "settings";
 pub const CREATE_AGENT: &str = "create_agent";
 pub const REQUEST_PERMISSION: &str = "request_permission";
 pub const DECISION: &str = "decision";
@@ -1077,6 +1078,65 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: SETTINGS.to_string(),
+            // Approval is said before the keys, because it is what decides how
+            // a model should use the tool: to propose, not to fiddle. The
+            // endpoint and the keys are named as untouchable so a model asked
+            // to "switch us to Groq" says so rather than trying three spellings.
+            description: "The workspace's settings, and what the operator is looking at right \
+                          now. `read` shows the settings every agent runs on, your crew's own \
+                          overrides, this host's version and the operator's current screen: \
+                          read it before answering a question about the app or a pane they \
+                          have open.\n\n\
+                          `update` asks the operator to approve a change. Pass `changes` with \
+                          only the keys to change, named as `read` names them; a limit can be \
+                          changed on its own. The operator sees each change with its before and \
+                          after, and nothing changes unless they allow it. Say why in your reply, \
+                          since that is what they will weigh.\n\n\
+                          The provider, its endpoint and every key are the operator's to change in \
+                          Settings, and no key is ever shown to you. The `guaca` skill says what \
+                          each setting means."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["read", "update"] },
+                    "changes": {
+                        "type": "object",
+                        "description": "On `update`: the settings to change and their new values.",
+                        "properties": {
+                            "operatorName": { "type": "string" },
+                            "defaultModel": { "type": "string" },
+                            "subscriptionModel": { "type": "string" },
+                            "reasoningEffort": {
+                                "type": "string",
+                                "enum": ["auto", "none", "minimal", "low", "medium", "high",
+                                         "xhigh", "max", "ultra"]
+                            },
+                            "requestTimeoutSecs": { "type": "integer" },
+                            "limits": {
+                                "type": "object",
+                                "properties": {
+                                    "maxStepsPerRun": { "type": "integer" },
+                                    "maxToolRounds": { "type": "integer" },
+                                    "maxHops": { "type": "integer" },
+                                    "maxSendsPerPair": { "type": "integer" },
+                                    "maxFanoutPerCall": { "type": "integer" }
+                                },
+                                "additionalProperties": false
+                            },
+                            "computerIdleMinutes": { "type": "integer" },
+                            "browserIdleMinutes": { "type": "integer" },
+                            "browserStealth": { "type": "boolean" }
+                        },
+                        "additionalProperties": false
+                    }
+                },
+                "required": ["action"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
             name: READ_FILE.to_string(),
             description: "Reopen a saved attachment by file name, including documents you wrote \
                           with `write_document` on earlier turns and files you sent to peers. \
@@ -1279,6 +1339,10 @@ pub enum ToolInvocation {
     Skill {
         action: SkillAction,
     },
+    /// Reading the settings, or asking the operator to approve a change to them.
+    Settings {
+        action: SettingsAction,
+    },
     CreateAgent {
         draft: NewAgent,
     },
@@ -1355,6 +1419,16 @@ pub enum ScheduleAction {
 /// fires and one does not — but they are the two lists an agent keeps, and an
 /// agent that has learned `list`/`add`/`update`/`cancel` on one should not have
 /// to learn a second vocabulary for the other.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SettingsAction {
+    Read,
+    /// The changes as the model sent them. Read against the settings in force
+    /// at dispatch, where what may be changed is decided.
+    Update {
+        changes: serde_json::Value,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum SkillAction {
     List,
@@ -1459,6 +1533,8 @@ pub enum ToolParseError {
     IncompleteCalendar { needs: String },
     #[error("skill needs a known `action`")]
     UnknownSkillAction,
+    #[error("settings needs a known `action`")]
+    UnknownSettingsAction,
     #[error("skill needs {needs}")]
     IncompleteSkill { needs: String },
     #[error("use_screen {action} needs {needs}")]
@@ -1513,6 +1589,12 @@ impl ToolParseError {
                  To move one your crew already has: {{\"action\": \"update\", \"id\": \
                  \"...\", \"starts_at\": \"2026-09-15 10:00\"}}."
             ),
+            ToolParseError::UnknownSettingsAction => {
+                "Error: `action` must be read or update. Use {\"action\": \"read\"} to see the \
+                 settings and their names, then {\"action\": \"update\", \"changes\": \
+                 {\"limits\": {\"maxHops\": 12}}} to ask the operator for a change."
+                    .to_string()
+            }
             ToolParseError::UnknownSkillAction => {
                 "Error: `action` must be view, list, write or delete. Use {\"action\": \"list\"} \
                  to see the skills you can read."
@@ -2227,6 +2309,31 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                 _ => Err(ToolParseError::UnknownCalendarAction),
             }
         }
+        SETTINGS => {
+            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                name: SETTINGS.to_string(),
+                detail: e.to_string(),
+            })?;
+            let action = match value.get("action").and_then(|v| v.as_str()).unwrap_or("read") {
+                "read" | "get" | "show" | "list" => SettingsAction::Read,
+                "update" | "change" | "set" | "write" => {
+                    // A model that forgets the wrapper sends the keys beside
+                    // `action`. What it meant is not in doubt, and a refusal
+                    // would cost a round trip to learn a nesting.
+                    let changes = match value.get("changes") {
+                        Some(changes) => changes.clone(),
+                        None => {
+                            let mut rest = value.as_object().cloned().unwrap_or_default();
+                            rest.remove("action");
+                            serde_json::Value::Object(rest)
+                        }
+                    };
+                    SettingsAction::Update { changes }
+                }
+                _ => return Err(ToolParseError::UnknownSettingsAction),
+            };
+            Ok(ToolInvocation::Settings { action })
+        }
         SKILL => {
             let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
                 name: SKILL.to_string(),
@@ -2584,6 +2691,31 @@ mod tests {
     /// are not made to say they do not.
     fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
         super::parse(call, &[])
+    }
+
+    #[test]
+    fn a_settings_change_is_read_with_or_without_its_wrapper() {
+        assert_eq!(
+            parse(&call(SETTINGS, "{}")),
+            Ok(ToolInvocation::Settings { action: SettingsAction::Read })
+        );
+        let wrapped = r#"{"action": "update", "changes": {"limits": {"maxHops": 12}}}"#;
+        let bare = r#"{"action": "update", "limits": {"maxHops": 12}}"#;
+        for text in [wrapped, bare] {
+            assert_eq!(
+                parse(&call(SETTINGS, text)),
+                Ok(ToolInvocation::Settings {
+                    action: SettingsAction::Update {
+                        changes: serde_json::json!({ "limits": { "maxHops": 12 } })
+                    }
+                }),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            parse(&call(SETTINGS, r#"{"action": "reset"}"#)),
+            Err(ToolParseError::UnknownSettingsAction)
+        );
     }
 
     #[test]
@@ -3727,9 +3859,9 @@ mod tests {
         let specs = specs(Surfaces::both(), Modalities::seeing());
         assert_eq!(
             specs.len(),
-            21,
+            22,
             "directory, run_command, open_on_desktop, use_screen, browse, code, shell, schedule, \
-             calendar, skill, create_agent, request_permission, ask_operator, decision, escalate, \
+             calendar, skill, settings, create_agent, request_permission, ask_operator, decision, escalate, \
              send_message, read_file, write_document, attach_file, update_memory, note_progress"
         );
         for spec in &specs {

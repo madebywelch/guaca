@@ -94,6 +94,8 @@ pub enum Script {
     Move { action: String, id: String, starts_at: String },
     /// Emit a `skill` tool call with these arguments.
     Skill(serde_json::Value),
+    /// Emit a `settings` tool call with these arguments.
+    Settings(serde_json::Value),
     /// Emit a `request_permission` tool call.
     AskPermission { action: String, because: String },
     /// Emit an `ask_operator` tool call. Empty options is a written answer.
@@ -435,10 +437,11 @@ pub fn render(script: &Script) -> String {
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
             ));
         }
-        Script::Skill(arguments) => {
+        Script::Skill(arguments) | Script::Settings(arguments) => {
+            let name = if matches!(script, Script::Skill(_)) { "skill" } else { "settings" };
             body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"index":0,"id":"call_skill","type":"function",
-                 "function":{"name":"skill","arguments":arguments.to_string()}}
+                 "function":{"name":name,"arguments":arguments.to_string()}}
             ]}}]})));
             body.push_str(&frame(
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),

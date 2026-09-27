@@ -40,6 +40,8 @@ interface Props {
   /** Absent means create. */
   group?: Group;
   onClose: () => void;
+  /** Told which section is open, so the host can tell an agent what is on screen. */
+  onSection?: (section: string) => void;
 }
 
 const SECTIONS = [
@@ -89,13 +91,14 @@ const INHERIT = "inherit";
 const asText = (value: number | null | undefined) => (value === null ? "" : String(value ?? ""));
 const asNumber = (text: string) => (text.trim() ? Number(text) : null);
 
-export function GroupEditor({ group, onClose }: Props) {
+export function GroupEditor({ group, onClose, onSection }: Props) {
   const refreshAgents = useStore((s) => s.refreshAgents);
   const settings = useStore((s) => s.settings);
   const capabilities = useStore((s) => s.capabilities);
   const agents = useStore((s) => s.agents);
 
   const [section, setSection] = useState<Section>("general");
+  useEffect(() => onSection?.(section), [section, onSection]);
   const [name, setName] = useState(group?.name ?? "");
   const [provider, setProvider] = useState<Provider | typeof INHERIT>(
     group?.inference.provider ?? INHERIT,
