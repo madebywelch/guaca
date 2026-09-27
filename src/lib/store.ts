@@ -1015,11 +1015,24 @@ export const useStore = create<State>((set, get) => ({
           // gone is dropped, exactly as its text would be.
           const stream = state.streams[event.messageId];
           if (!stream) return state;
+          const before = state.reasoning[stream.agentId] ?? "";
+          const next = keepThought(before, event.text);
+          const dropped = before.length + event.text.length - next.length;
           return {
-            reasoning: {
-              ...state.reasoning,
-              [stream.agentId]: keepThought(state.reasoning[stream.agentId], event.text),
-            },
+            reasoning: { ...state.reasoning, [stream.agentId]: next },
+            // The buffer keeps its tail. Move call boundaries with it so long
+            // turns cannot attach a later thought to an earlier tool call.
+            ...(dropped > 0 && state.trail[stream.agentId]
+              ? {
+                  trail: {
+                    ...state.trail,
+                    [stream.agentId]: state.trail[stream.agentId]!.map((call) => ({
+                      ...call,
+                      reasoningOffset: Math.max(0, (call.reasoningOffset ?? 0) - dropped),
+                    })),
+                  },
+                }
+              : {}),
           };
         });
         break;
@@ -1041,6 +1054,7 @@ export const useStore = create<State>((set, get) => ({
             // long the operator has been waiting, and the operator's clock is
             // the one they are waiting by.
             startedAt: Date.now(),
+            reasoningOffset: state.reasoning[stream.agentId]?.length ?? 0,
           };
           return {
             trail: {

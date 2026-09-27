@@ -647,8 +647,10 @@ is what the operator's "Try again" sends again, as a new run at the original hop
 A turn can spend ten minutes working through tool results before it writes a
 word. For that time the operator had a pulsing avatar and the sentence "Manager
 is working", which says a turn is alive and nothing about what it is doing.
-Where the provider publishes the model's own working, that is what the line
-above the composer shows.
+Where the provider publishes the model's own working, the line above the
+composer shows it by default. The Appearance setting can instead draw it in the
+scrolling chat, interleaved with individual tool calls (`TurnWork`). Both views
+read the same ephemeral buffer.
 
 Three things keep it from becoming a fourth kind of message.
 
@@ -682,7 +684,7 @@ Three things keep it from becoming a fourth kind of message.
   with that subscription any higher, a single token re-rendered every message in
   the transcript. `ChannelView.perf.test.tsx` counts both.
 
-**The whole turn is held, and one line of it is drawn.** Those are separate
+**The whole turn is held, and the compact view draws one line.** Those are separate
 decisions and the line used to be both. Holding 240 characters made the tail the
 only thing there was, which is fine for a wait of thirty seconds and no use at
 all for one of ten minutes: the question stops being "is it alive" and becomes
@@ -700,6 +702,13 @@ can actually read. Waiting for the period costs a second or two of staleness and
 is the difference between a line and a blur. Models that publish nothing
 (Anthropic's, over OpenRouter, unless thinking is asked for) leave it exactly as
 it was.
+
+The inline view records each call's position in that reasoning buffer when
+`ToolStarted` arrives. New reasoning can then follow the call instead of moving
+all the thinking ahead of every tool. If the 200,000-character ceiling removes
+old text, those positions move back by the same amount. There is one reasoning
+buffer, no second copy, and the same end-of-stream cleanup. Tool cards are
+memoized so reasoning tokens do not redraw finished calls.
 
 ## A turn's own work is watched while it happens, on the same terms
 

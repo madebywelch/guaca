@@ -1415,6 +1415,19 @@ describe("the Guaca account", () => {
 });
 
 describe("appearance", () => {
+  it("applies and persists the inline reasoning preference immediately", () => {
+    open();
+    pane("Appearance");
+    const toggle = screen.getByRole("switch", { name: "Show reasoning and tool calls" });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(toggle);
+    expect(useStore.getState().prefs.showReasoning).toBe(true);
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(JSON.parse(localStorage.getItem("guac.prefs")!).showReasoning).toBe(true);
+    fireEvent.click(toggle);
+    expect(useStore.getState().prefs.showReasoning).toBe(false);
+  });
+
   /**
    * One of the choice buttons.
    *

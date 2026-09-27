@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { DEFAULT_PREFS } from "../lib/prefs";
 import { useStore } from "../lib/store";
 import type { AgentCard, Envelope, MessageId, UiEvent } from "../lib/types";
 import { ChannelView } from "./ChannelView";
@@ -36,6 +37,10 @@ vi.mock("./MessageItem", () => ({
 }));
 
 vi.mock("./Trail", () => ({
+  DiffBlock: () => {
+    rendersOfTrail += 1;
+    return <div />;
+  },
   TrailRow: () => {
     rendersOfTrail += 1;
     return <div />;
@@ -127,6 +132,7 @@ describe("ChannelView under streaming load", () => {
     rendersOfTrail = 0;
     latestBubble = "";
     useStore.setState({
+      prefs: DEFAULT_PREFS,
       agents: [agent(AGENT, "Manager"), agent(OTHER, "Chef")],
       messages: { [AGENT]: Array.from({ length: 30 }, (_, i) => message(i)) },
       streams: {},
@@ -248,6 +254,48 @@ describe("ChannelView under streaming load", () => {
       })),
     );
 
+    expect(rendersOfTrail).toBe(chips);
+  });
+
+  it("keeps inline reasoning updates out of settled messages, bubbles and tool cards", async () => {
+    useStore.setState({ prefs: { ...DEFAULT_PREFS, showReasoning: true } });
+    draw();
+    const id = "inline-load";
+    await feed([
+      ...stream(id, AGENT, AGENT, 1),
+      {
+        type: "toolStarted",
+        messageId: id,
+        callId: "call",
+        name: "update_memory",
+        arguments: { content: "New memory" },
+      },
+      {
+        type: "toolFinished",
+        messageId: id,
+        callId: "call",
+        part: {
+          type: "toolCall",
+          name: "update_memory",
+          arguments: { content: "New memory" },
+          outcome: { status: "ok", summary: "Memory updated" },
+          replaced: "Old memory",
+        },
+      },
+    ]);
+    const chips = rendersOfTrail;
+    const bubbles = rendersOfBubbles;
+    expect(chips).toBeGreaterThan(0);
+    rendersOfMessages = 0;
+    await feed(
+      Array.from({ length: 200 }, () => ({
+        type: "reasoningDelta",
+        messageId: id,
+        text: "thinking ",
+      })),
+    );
+    expect(rendersOfMessages).toBe(0);
+    expect(rendersOfBubbles).toBe(bubbles);
     expect(rendersOfTrail).toBe(chips);
   });
 

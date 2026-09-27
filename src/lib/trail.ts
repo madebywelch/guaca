@@ -58,6 +58,8 @@ export interface LiveCall {
    */
   done: ToolCallPart | null;
   startedAt: number;
+  /** Position in the retained reasoning where this call began. */
+  reasoningOffset?: number;
 }
 
 /** One tool call, as the row draws it. */

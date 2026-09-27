@@ -1174,10 +1174,30 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
             {section === "appearance" && (
               <>
                 <h3 className="settings__title">Appearance</h3>
+
                 <p className="settings__lede">
                   Applied as you choose, and kept on this machine. None of these is sent anywhere or
                   known to an agent.
                 </p>
+
+                <div className="switch-row">
+                  <span className="switch-row__text">
+                    <span className="switch-row__label">Show reasoning and tool calls</span>
+                    <span className="switch-row__hint">
+                      Show the model's published thinking and each tool call in chat while it works.
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    className="choice"
+                    role="switch"
+                    aria-label="Show reasoning and tool calls"
+                    aria-checked={prefs.showReasoning}
+                    onClick={() => setPrefs({ showReasoning: !prefs.showReasoning })}
+                  >
+                    {prefs.showReasoning ? "On" : "Off"}
+                  </button>
+                </div>
 
                 <div className="field">
                   <span className="field__label">Reading surface</span>

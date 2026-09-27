@@ -46,6 +46,7 @@ const DEFAULTS: Prefs = {
   uiScale: 100,
   surface: "light",
   cast: "cut",
+  showReasoning: false,
   notify: {
     on: true,
     kinds: {
@@ -109,6 +110,7 @@ describe("a blob that cannot be trusted", () => {
       uiScale: 100,
       surface: "light",
       cast: "cut",
+      showReasoning: false,
       notify: {
         on: false,
         kinds: {
@@ -214,6 +216,7 @@ describe("a preference that outlives the window", () => {
       uiScale: 125,
       surface: "dark",
       cast: "drawn",
+      showReasoning: true,
       notify: {
         on: false,
         kinds: {
@@ -261,4 +264,11 @@ describe("a preference that outlives the window", () => {
       expect(readPrefs({ cast }).cast).toBe(DEFAULTS.cast);
     }
   });
+});
+
+it("validates the reasoning display preference without coercing old or malformed values", () => {
+  expect(readPrefs({ showReasoning: true }).showReasoning).toBe(true);
+  for (const showReasoning of [undefined, null, "true", 1, false]) {
+    expect(readPrefs({ showReasoning }).showReasoning).toBe(false);
+  }
 });

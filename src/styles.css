@@ -4028,6 +4028,56 @@ input[type="file"]::file-selector-button {
   flex: none;
 }
 
+/* Opt-in live work belongs to the scrolling conversation. */
+.turn-work {
+  margin: var(--space-4) var(--column-inset);
+  padding-left: var(--space-5);
+  border-left: 1px solid var(--edge);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--type-small);
+}
+
+.turn-work summary {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.turn-work__thinking > .thought__text {
+  margin-top: var(--space-3);
+}
+
+.turn-work__call {
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  background: var(--sunken);
+}
+
+.turn-work__name {
+  font-family: var(--font-mono);
+}
+
+.turn-work__status {
+  margin-left: var(--space-4);
+}
+
+.turn-work__call[data-failed] {
+  border-color: var(--alarm);
+}
+
+.turn-work__call[data-failed] .turn-work__status {
+  color: var(--alarm);
+}
+
+.turn-work__description {
+  margin: var(--space-3) 0;
+  overflow-wrap: anywhere;
+}
+
 /* The slot. Whichever of the two is open takes the same bounds, so the
    transcript above gives up the same height either way, and neither can push
    the conversation off the top of the pane. */

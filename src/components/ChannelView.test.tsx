@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { DEFAULT_PREFS } from "../lib/prefs";
 import { useStore } from "../lib/store";
 import type { LiveCall } from "../lib/trail";
 import type { Activity, AgentCard, Envelope, MessageId, Part, ToolOutcome } from "../lib/types";
@@ -102,6 +103,7 @@ function record(part: Part): Envelope {
 
 function open(messages: Envelope[]) {
   useStore.setState({
+    prefs: DEFAULT_PREFS,
     agents: [card(MANAGER, "Manager"), card(CHEF, "Chef")],
     messages: { [MANAGER]: messages },
     streams: {},
@@ -724,5 +726,125 @@ describe("a transcript scrolled up", () => {
     });
 
     expect(box.at()).toBe(3600);
+  });
+});
+
+describe("inline reasoning and tool calls", () => {
+  const messageId = "inline-stream";
+  function start(agentId = MANAGER) {
+    useStore.getState().applyEvent({
+      type: "streamStarted",
+      messageId,
+      agentId,
+      channelId: MANAGER,
+      runId: "inline-run",
+      to: { kind: "human" },
+    });
+  }
+  function think(text: string) {
+    useStore.getState().applyEvent({ type: "reasoningDelta", messageId, text });
+  }
+  function call() {
+    useStore.getState().applyEvent({
+      type: "toolStarted",
+      messageId,
+      callId: "command",
+      name: "run_command",
+      arguments: { command: "pnpm test" },
+    });
+  }
+
+  it("puts full thinking and each running call in chat in arrival order", () => {
+    open([envelope({})]);
+    act(() => {
+      useStore.getState().setPrefs({ showReasoning: true });
+      start();
+      think("Check the existing tests.\nRead every failure.");
+      call();
+      think("Now inspect the result.");
+    });
+    const log = screen.getByRole("log");
+    const work = screen.getByRole("region", { name: "Reasoning and tool calls" });
+    expect(log.contains(work)).toBe(true);
+    const entries = work.querySelectorAll("details");
+    expect(entries[0]?.textContent).toContain("Read every failure.");
+    expect(entries[1]?.textContent).toContain("run_command");
+    expect(entries[1]?.textContent).toContain("Running");
+    expect(entries[2]?.textContent).toContain("Now inspect the result.");
+    expect(entries[1]?.querySelector("pre")?.textContent).toContain("pnpm test");
+    expect(work.getAttribute("aria-live")).toBe("off");
+    expect(document.querySelector(".thought")).toBeNull();
+  });
+
+  it.each([
+    [{ status: "failed", error: "Command timed out" }, "Failed", "Command timed out"],
+    [{ status: "refused", reason: "Permission denied" }, "Refused", "Permission denied"],
+    [
+      { status: "partial", summary: "One delivered", refused: [] },
+      "Partially completed",
+      "One delivered",
+    ],
+    [{ status: "ok", summary: "All tests passed" }, "Done", "All tests passed"],
+  ] as const)(
+    "shows the actual outcome %j without requiring reasoning",
+    (outcome, label, detail) => {
+      open([]);
+      act(() => {
+        useStore.getState().setPrefs({ showReasoning: true });
+        start();
+        call();
+        useStore.getState().applyEvent({
+          type: "toolFinished",
+          messageId,
+          callId: "command",
+          part: {
+            type: "toolCall",
+            name: "run_command",
+            arguments: { command: "pnpm test" },
+            outcome: outcome as ToolOutcome,
+          },
+        });
+      });
+      expect(document.querySelector(".turn-work__status")?.textContent).toBe(label);
+      expect(document.querySelector(".turn-work__description")?.textContent).toContain(detail);
+      expect(document.querySelector(".turn-work__thinking")).toBeNull();
+    },
+  );
+
+  it("honors toggling mid-turn and clears work on retry and completion", () => {
+    open([]);
+    act(() => {
+      start();
+      think("First attempt.");
+      call();
+    });
+    expect(document.querySelector(".turn-work")).toBeNull();
+    act(() => useStore.getState().setPrefs({ showReasoning: true }));
+    expect(document.querySelector(".turn-work")?.textContent).toContain("First attempt.");
+    act(() => useStore.getState().setPrefs({ showReasoning: false }));
+    expect(document.querySelector(".turn-work")).toBeNull();
+    act(() => {
+      useStore.getState().setPrefs({ showReasoning: true });
+      useStore.getState().applyEvent({ type: "streamEnded", messageId, channelId: MANAGER });
+      start();
+      think("Retry working.");
+    });
+    expect(document.querySelector(".turn-work")?.textContent).not.toContain("First attempt.");
+    expect(document.querySelector(".turn-work")?.textContent).toContain("Retry working.");
+    act(() =>
+      useStore.getState().applyEvent({ type: "streamEnded", messageId, channelId: MANAGER }),
+    );
+    expect(document.querySelector(".turn-work")).toBeNull();
+  });
+
+  it("shows the channel owner's work, even when another agent writes here", () => {
+    open([]);
+    act(() => {
+      useStore.getState().setPrefs({ showReasoning: true });
+      start(CHEF);
+      think("Chef's working.");
+      call();
+    });
+    expect(document.querySelector(".turn-work")).toBeNull();
   });
 });
