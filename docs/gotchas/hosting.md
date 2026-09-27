@@ -92,12 +92,13 @@ The daemon, a browser as a client, and the boot both hosts share.
   Read off `X-Forwarded-Host` and `X-Forwarded-Proto` before `Host`, because
   a tunnel rewrites both and the browser saw the tunnel's name. A box called
   by two names gets `GUACA_ORIGIN`.
-- **`hosted` is true in a window pointed at a box, and `attached()` is how
-  the two hosted cases are told apart.** The reveal channel, the drop and the
-  menu bar feed are the three places a window still has something a browser
-  does not, and each checks `attached()` rather than `hosted`. A fourth that
-  checks `hosted` alone is a desktop feature that vanishes when the window
-  shows a box.
+- **`hosted` is always true, so it tells nothing apart.** Every window has
+  called a host since the runtime left it. A window and a browser are told
+  apart by `desktop`, and a window before setup by `attached()`. The drop
+  branched on `hosted` and sent every window down the browser's DOM
+  listeners, where Tauri's own drop events arrive and nothing listened; a
+  file dropped on the desktop went nowhere. The reveal channel, the drop and
+  the menu bar feed are the places a window has something a browser does not.
 - **The tray keeps what it was fed across page loads.** The process outlives
   the page. A window that comes back showing this machine sends
   `report_presence(null)` once at boot; without it the strip keeps drawing a

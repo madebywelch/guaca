@@ -31,7 +31,6 @@ const uploads = vi.fn<(files: File[]) => Promise<Staged>>();
 
 vi.mock("../lib/ipc", () => ({
   api: {
-    stageFiles: (paths: string[]) => staging(paths),
     stageUploads: (files: File[]) => uploads(files),
   },
   onFileDrop: async (handlers: {

@@ -2337,33 +2337,6 @@ pub struct Staged {
     pub refused: Vec<String>,
 }
 
-/// Takes what the operator dropped on the window into the store, there and then.
-///
-/// On the drop rather than on the send, for two reasons they feel. A file too
-/// big to send is refused while they are still holding it, instead of failing a
-/// message they have since written; and a picture that is already stored has an
-/// address, so it can be shown back to them before it goes. What is staged and
-/// never sent is the same leftover as a file whose message was deleted, and the
-/// store has always kept those.
-///
-/// `paths` are on the operator's own disk, never bytes: this side reads them,
-/// so a document never crosses IPC and never sits in the renderer's memory.
-pub async fn stage_files(state: &AppState, paths: Vec<String>) -> Reply<Staged> {
-    state.deployment.capabilities().require(Absent::LocalFiles)?;
-
-    let mut staged = Staged::default();
-    for path in &paths {
-        match state.runtime.files().take(std::path::Path::new(path)) {
-            Ok(file) => staged.attached.push(file),
-            // One file out of five failing does not refuse the other four. The
-            // operator picked all of them deliberately, and the one that cannot
-            // go is named so they know which it was.
-            Err(err) => staged.refused.push(err.to_string()),
-        }
-    }
-    Ok(staged)
-}
-
 /// A ticket for one sandbox's screen, or `None` where the screen needs none.
 ///
 /// `sha256(secret ":" sandbox)`, so it can be checked without being stored and
@@ -2400,11 +2373,10 @@ impl AppState {
 
 /// Sends files from this machine's disk to a workspace somewhere else.
 ///
-/// The desktop app can show a box's workspace, and a file dropped on that
-/// window is still a path on this disk that the box has never seen. So the
-/// same read `stage_files` does happens here, and the bytes go to the box's
-/// upload route instead of into this machine's store. One file at a time,
-/// with the box's own sentence for each one it refuses.
+/// A file dropped on the desktop window is a path on this disk that the host,
+/// local container or remote box, has never seen. So it is read here and the
+/// bytes go to the host's upload route, one file at a time, with the host's
+/// own sentence for each one it refuses. A document never enters the renderer.
 pub async fn forward_files(
     state: &AppState,
     origin: String,

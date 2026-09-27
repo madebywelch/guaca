@@ -1014,7 +1014,7 @@ The prompt states the mistake rather than the feature (*Handing over a
 document*), because the tool schema alone was not enough: a model that has just
 saved a file has no reason to go looking for a tool it does not know it needs.
 
-**A drop is taken into the store before anything is sent.** `stage_files` runs
+**A drop is taken into the store before anything is sent.** The upload runs
 on the drop, which is what lets the app refuse a 40 MB archive while the
 operator is still holding it rather than failing the message they went on to
 write, and lets it show a picture back to them, since by then it has an address.

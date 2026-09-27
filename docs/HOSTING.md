@@ -146,16 +146,17 @@ plain HTTP address entered through this form.
 
 ## A browser hands a document over as bytes
 
-The desktop's `stage_files` takes a path, because Tauri hands the window the
-path of a dropped file and the Rust side reads it: a document never enters
-the renderer. A browser is the renderer, and it has bytes rather than a path,
-so `POST /v1/upload?name=…` takes one file per request and puts it in the
-same store by the same digest. `stageUploads` on the frontend loops and
-collects refusals exactly as `stage_files` does, one line per file in the
-store's own words, so the composer sees one answer shape from either door.
-The drop is DOM events when hosted and Tauri's when not, and `onFileDrop`
-hides which; a browser also gets an attach button, because a drop is not the
-only way a person has a file.
+Tauri hands the desktop window the path of a dropped file, and the native
+side reads it and posts the bytes to the host's `POST /v1/upload?name=…`: a
+document never enters the renderer. A browser is the renderer, and it has
+bytes rather than a path, so it posts them to the same route, one file per
+request, into the same store by the same digest. `stageUploads` and the
+native forward both collect refusals one line per file in the store's own
+words, so the composer sees one answer shape from either door. The drop is
+DOM events in a browser and Tauri's in a window, decided by `desktop` and
+never by `hosted`, which is true for both; `onFileDrop` hides which. Both
+also get an attach button, because a drop is not the only way a person has
+a file.
 
 The body limit on the route is four times the store's, on purpose. Under it a
 file the store refuses is refused with the store's sentence, which names the

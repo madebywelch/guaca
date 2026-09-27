@@ -313,7 +313,6 @@ surface! {
     pair_messages(a: AgentId, b: AgentId, limit: Option<u32>) -> Vec<Envelope>,
     conversation_flow(group: GroupId, limit: Option<u32>) -> Vec<Envelope>,
     search(query: String, limit: Option<u32>) -> SearchHits,
-    stage_files(paths: Vec<String>) -> Staged,
     send_message(agent_id: AgentId, text: String, files: Option<Vec<FileRef>>) -> RunId,
     save_file(digest: String, name: String) -> String,
     frame_artifact(html: String) -> ArtifactAddress,

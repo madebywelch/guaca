@@ -264,9 +264,9 @@ export function workspaceOrigin(): string {
  * carries.
  *
  * Bytes rather than a path, because a browser has no path to give. The
- * desktop's `stage_files` reads the path this side of IPC so a document never
- * enters the renderer; here the renderer is where the document already is,
- * and it crosses once. Refusals come back in the store's own words: the
+ * desktop reads a dropped path natively and posts it to the same route, so a
+ * document never enters its renderer; here the renderer is where the document
+ * already is, and it crosses once. Refusals come back in the store's own words: the
  * file, its size, and the limit.
  */
 export async function upload<T>(file: File): Promise<T> {

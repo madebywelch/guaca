@@ -105,10 +105,7 @@ async fn a_server_refuses_what_it_cannot_do_and_says_what_to_do_instead() {
     // Every one of these is something on the operator's own machine. The
     // refusal is what turns "the button did nothing" into a sentence, and each
     // has to name an alternative: a refusal that only says no gets retried.
-    let refusals = [
-        ("stage_files", json!({ "paths": ["/etc/hosts"] })),
-        ("save_file", json!({ "digest": "0".repeat(64), "name": "notes.txt" })),
-    ];
+    let refusals = [("save_file", json!({ "digest": "0".repeat(64), "name": "notes.txt" }))];
 
     for (name, args) in refusals {
         let (status, body) = call(addr, name, args).await;

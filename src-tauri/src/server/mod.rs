@@ -220,8 +220,8 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
         .route("/v1/file/:digest/:name", get(file))
         // A document a browser hands over. The bytes are the body and the name
         // is on the query, which is the smallest possible shape: one file per
-        // request, and `stage_files` on the desktop already answers one path
-        // at a time inside its loop. The body limit is well above the store's
+        // request, and the desktop's forwarded drop already sends one file at
+        // a time inside its loop. The body limit is well above the store's
         // own, so a file a person plausibly drops is refused with the store's
         // sentence, which names the file and the limit, rather than with the
         // framework's bare 413. Past four times the limit nobody dropped it by
@@ -454,8 +454,8 @@ struct Upload {
 
 /// One document, arriving as bytes because a browser has no path to give.
 ///
-/// The desktop's `stage_files` reads a path this side of IPC so a document
-/// never enters the renderer; a browser is the renderer, and its bytes have to
+/// The desktop reads a dropped path natively and posts it here, so a document
+/// never enters its renderer; a browser is the renderer, and its bytes have to
 /// cross once. They land in the same store by the same digest, and what comes
 /// back is what a message carries.
 async fn upload(
