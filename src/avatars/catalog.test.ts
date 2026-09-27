@@ -175,10 +175,11 @@ describe("the cast", () => {
 
   /* Against the character's own silhouette rather than against a circle: a
      drop is narrower at the sides than at the top, so a pair of eyes that fits
-     one shape is not a pair that fits all five. */
+     one shape is not a pair that fits all five. `r` is the whole ball, which
+     is the most of an eye either cast draws. */
   it("seats both eyes inside the body", () => {
     for (const c of CHARACTERS) {
-      const out = Math.abs(c.eye.x ?? 0) + c.eye.spread + c.eye.r * (c.eye.one ? 1.5 : 1);
+      const out = Math.abs(c.eye.x ?? 0) + c.eye.spread + c.eye.r;
       const down = c.eye.y ?? 0;
       const edge = SILHOUETTES[c.form](Math.atan2(down, out)) * FORM.radius;
       expect(Math.hypot(out, down), c.key).toBeLessThan(edge * 0.8);

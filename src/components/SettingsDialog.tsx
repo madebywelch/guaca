@@ -21,12 +21,21 @@
 
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 
+import { AgentAvatar } from "../avatars/AgentAvatar";
+import { ACCENTS, DEFAULT_ACCENT } from "../avatars/catalog";
 import { applyAppearance, resolveSurface } from "../lib/appearance";
 import { buildLabel } from "../lib/build";
 import { api, openExternal } from "../lib/ipc";
 import { BINDINGS, comboLabel, SURFACES } from "../lib/keybinds";
 import { LIMITS } from "../lib/limits";
-import { NOTIFY_KINDS, type NotifyKind, type SurfaceMode, UI_SCALES } from "../lib/prefs";
+import {
+  CASTS,
+  type Cast,
+  NOTIFY_KINDS,
+  type NotifyKind,
+  type SurfaceMode,
+  UI_SCALES,
+} from "../lib/prefs";
 import { type Provider as Preset, planLabel } from "../lib/providers";
 import { useStore } from "../lib/store";
 import {
@@ -87,6 +96,22 @@ const SURFACE_LABELS: Record<SurfaceMode, string> = {
   dark: "Ink",
   system: "Follow the system",
 };
+
+/* Not "Paper" and "Ink": those are the surface's names, one field up. */
+const CAST_LABELS: Record<Cast, string> = {
+  cut: "Cut",
+  drawn: "Drawn",
+};
+
+/** Three of the cast in three pigments, drawn inside each choice so it can be seen before it is made. */
+const CAST_SAMPLE = [
+  { avatar: "orb", color: "Olive" },
+  { avatar: "slab", color: "Slate" },
+  { avatar: "lobe", color: "Terracotta" },
+].map((one) => ({
+  avatar: one.avatar,
+  color: ACCENTS.find((accent) => accent.name === one.color)?.value ?? DEFAULT_ACCENT,
+}));
 
 const NOTIFY_COPY: Record<NotifyKind, { label: string; hint: string }> = {
   decision: {
@@ -1082,8 +1107,8 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
               <>
                 <h3 className="settings__title">Appearance</h3>
                 <p className="settings__lede">
-                  Applied as you choose, and kept on this machine. Neither of these is sent anywhere
-                  or known to an agent.
+                  Applied as you choose, and kept on this machine. None of these is sent anywhere or
+                  known to an agent.
                 </p>
 
                 <div className="field">
@@ -1109,6 +1134,42 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
                     The column you read in. The rail stays dark either way: it is what makes the
                     column read as a surface rather than as another panel. Currently drawing{" "}
                     {resolveSurface(prefs.surface) === "dark" ? "ink" : "paper"}.
+                  </span>
+                </div>
+
+                <div className="field">
+                  <span className="field__label">Characters</span>
+                  <div className="choices">
+                    {CASTS.map((cast) => (
+                      <button
+                        key={cast}
+                        type="button"
+                        className="choice choice--cast"
+                        aria-label={`Characters: ${CAST_LABELS[cast]}`}
+                        aria-pressed={prefs.cast === cast}
+                        onClick={() => setPrefs({ cast })}
+                      >
+                        <span className="choice__crew" aria-hidden="true">
+                          {CAST_SAMPLE.map((one) => (
+                            <AgentAvatar
+                              key={one.avatar}
+                              avatar={one.avatar}
+                              color={one.color}
+                              size="xs"
+                              mood="idle"
+                              cast={cast}
+                              seed={`settings-${one.avatar}`}
+                            />
+                          ))}
+                        </span>
+                        {CAST_LABELS[cast]}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="field__hint">
+                    How every agent is drawn. Cut is paper, with eyes that have a pupil and lids.
+                    Drawn is a brush line at twelve drawings a second, with brows, and a mouth where
+                    there is room for one. Which character each agent is stays the same.
                   </span>
                 </div>
 

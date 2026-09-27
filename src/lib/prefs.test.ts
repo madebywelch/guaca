@@ -15,6 +15,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  CASTS,
   DEFAULT_PREFS,
   loadPrefs,
   NOTIFY_KINDS,
@@ -36,13 +37,15 @@ const KEY = "guac.prefs";
 /**
  * The defaults, written out independently of the module's own constant.
  *
- * 100 and light are what the app has always drawn, and every notification is on
- * because a blob that cannot be read must not be able to switch interruptions
- * off. Asserting against the module constant would pass whatever it said.
+ * 100, light and the cut cast are what the app has always drawn, and every
+ * notification is on because a blob that cannot be read must not be able to
+ * switch interruptions off. Asserting against the module constant would pass
+ * whatever it said.
  */
 const DEFAULTS: Prefs = {
   uiScale: 100,
   surface: "light",
+  cast: "cut",
   notify: {
     on: true,
     kinds: {
@@ -99,11 +102,13 @@ describe("a blob that cannot be trusted", () => {
       readPrefs({
         uiScale: "110",
         surface: 1,
+        cast: true,
         notify: { on: false, kinds: { approval: 0, settled: "yes", routine: false } },
       }),
     ).toEqual({
       uiScale: 100,
       surface: "light",
+      cast: "cut",
       notify: {
         on: false,
         kinds: {
@@ -208,6 +213,7 @@ describe("a preference that outlives the window", () => {
     const chosen: Prefs = {
       uiScale: 125,
       surface: "dark",
+      cast: "drawn",
       notify: {
         on: false,
         kinds: {
@@ -240,6 +246,19 @@ describe("a preference that outlives the window", () => {
     // light, and the operator's window stops following the OS at every launch.
     for (const surface of ["light", "dark", "system"] as const) {
       expect(readPrefs({ surface }).surface).toBe(surface);
+    }
+  });
+
+  it("keeps both casts and refuses a name nobody offers", () => {
+    // `isCast` and `CASTS` are two lists that have to stay one, and a cast the
+    // reader does not know is the default rather than a creature with no
+    // drawing: `ink` is the dark surface's name, not a cast's, and the one an
+    // operator editing the file by hand is likeliest to type.
+    for (const cast of CASTS) {
+      expect(readPrefs({ cast }).cast).toBe(cast);
+    }
+    for (const cast of ["ink", "Drawn", "", null]) {
+      expect(readPrefs({ cast }).cast).toBe(DEFAULTS.cast);
     }
   });
 });

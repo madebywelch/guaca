@@ -6,6 +6,7 @@ import React, { useMemo } from "react";
 import ReactDOM from "react-dom/client";
 
 import App from "./App";
+import { CastContext } from "./avatars/cast";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { HostSetup } from "./components/HostSetup";
 import { HostMonitor } from "./components/HostUpdates";
@@ -87,14 +88,20 @@ if (!root) throw new Error("missing #root");
  * is history, and an agent that has since been let go was still an agent when
  * somebody wrote to it. The composer answers the other question, which is who
  * a message can be delivered to, so it completes against the live crew.
+ *
+ * The cast is here for the same reason: an agent is drawn on fifteen surfaces,
+ * and every one of them draws it the way the operator chose.
  */
 function Guaca() {
   const everyone = useStore((state) => state.agents);
   const roster = useMemo(() => everyone.map((agent) => agent.name), [everyone]);
+  const cast = useStore((state) => state.prefs.cast);
 
   return (
     <Roster.Provider value={roster}>
-      <App />
+      <CastContext.Provider value={cast}>
+        <App />
+      </CastContext.Provider>
     </Roster.Provider>
   );
 }
