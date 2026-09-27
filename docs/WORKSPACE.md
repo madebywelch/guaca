@@ -253,6 +253,30 @@ that was never in danger. Both sides compiled, both suites passed, and the only
 symptom was a sentence on screen that was not true. The number is only worth
 drawing while it is the runtime's number.
 
+## An agent's notebook is everything else it keeps, and only its index is read
+
+Memory is bounded because every turn pays for it, and what an agent wanted to
+keep beyond that page had nowhere to go: a tracker, a log of what was tried, a
+customer's history, a draft. Hermes gives its agent the host's file tools; the
+useful half of that is the space, not the host. So each agent has a notebook
+(`notebook.rs`): a private folder it shapes itself, with folders up to four
+deep, text files up to 64,000 characters, two hundred of them at most.
+
+Only the list of files is in the prompt, and only once there is one, so an
+agent that never uses it pays nothing. A file is read with `notebook` when the
+turn needs it, which keeps the property memory was built around: the prompt is
+small and the agent decides what matters. `append` exists because a log should
+never need reading before it is added to.
+
+Four stores, each answering one question: memory is what an agent needs every
+turn, working notes are where its work stands, the notebook is anything longer
+it wants to come back to, and a skill is how its crew does something. Nothing
+in a notebook expires, because unlike a working note it is something the agent
+chose to keep; the tool says what a stale file costs. The operator reads it in
+the inspector and may delete a file, and nothing else, for the reason working
+notes are read-only there. A path is plain names inside the agent's own folder,
+checked for links on the way, and the folder goes when the agent is purged.
+
 ## An agent's memory is what it knows, and its working notes are what it is doing
 
 Two stores, because one cannot have both lifetimes.

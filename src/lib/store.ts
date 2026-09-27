@@ -327,6 +327,8 @@ export interface State {
   memoryVersion: Record<AgentId, number | undefined>;
   /** Its own counter, because notes move far more often than memory does. */
   workingNotesVersion: Record<AgentId, number | undefined>;
+  /** Its own counter per agent, for the notebook panel. */
+  notebookVersion: Record<AgentId, number | undefined>;
   /** One counter per skill scope, by `skillScopeKey`: a list redraws on its own. */
   skillsVersion: Record<string, number | undefined>;
 
@@ -554,6 +556,7 @@ export const useStore = create<State>((set, get) => ({
   memoryVersion: {},
   workingNotesVersion: {},
   skillsVersion: {},
+  notebookVersion: {},
   banner: null,
   handoff: null,
   sessionSpend: { prompt: 0, completion: 0, cost: null, calls: 0 },
@@ -1330,6 +1333,16 @@ export const useStore = create<State>((set, get) => ({
 
       case "settingsChanged": {
         set({ settings: event.settings });
+        break;
+      }
+
+      case "notebookChanged": {
+        set((state) => ({
+          notebookVersion: {
+            ...state.notebookVersion,
+            [event.agentId]: (state.notebookVersion[event.agentId] ?? 0) + 1,
+          },
+        }));
         break;
       }
 

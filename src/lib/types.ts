@@ -350,6 +350,13 @@ export interface OperatorView {
   groupId: GroupId | null;
 }
 
+/** One file in an agent's notebook, as a listing shows it. */
+export interface NotebookEntry {
+  path: string;
+  chars: number;
+  updatedAt: number;
+}
+
 /** One key per scope, for the counter a list redraws on. */
 export function skillScopeKey(scope: SkillScope): string {
   return scope.kind === "crew" ? `crew:${scope.groupId}` : scope.kind;
@@ -1230,6 +1237,8 @@ export type UiEvent =
    * the redacted settings, which every open client needs and nothing more.
    */
   | { type: "settingsChanged"; settings: Settings }
+  /** One agent changed a file in its own notebook. */
+  | { type: "notebookChanged"; agentId: AgentId }
   /** A skill was written or deleted, by the operator or by an agent. */
   | { type: "skillsChanged"; scope: SkillScope }
   /**

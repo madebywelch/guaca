@@ -365,6 +365,13 @@ pub enum UiEvent {
     SkillsChanged {
         scope: crate::domain::skill::Scope,
     },
+
+    /// One agent wrote, moved or deleted a file in its own notebook. Same
+    /// argument as `MemoryChanged`: the operator may be reading it beside the
+    /// agent while it works.
+    NotebookChanged {
+        agent_id: AgentId,
+    },
 }
 
 pub trait EventSink: Send + Sync + 'static {

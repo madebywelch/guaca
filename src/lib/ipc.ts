@@ -62,6 +62,7 @@ import type {
   HeaderPair,
   MenubarAsk,
   MessageId,
+  NotebookEntry,
   Occasion,
   OccasionDraft,
   OccasionId,
@@ -575,6 +576,10 @@ export const api = {
     invoke<string>("set_agent_memory", { id, content }),
 
   /** What an agent is in the middle of, oldest first. */
+  agentNotebook: (id: AgentId) => invoke<NotebookEntry[]>("agent_notebook", { id }),
+  readNotebook: (id: AgentId, path: string) => invoke<string>("read_notebook", { id, path }),
+  deleteNotebookFile: (id: AgentId, path: string) =>
+    invoke<boolean>("delete_notebook_file", { id, path }),
   agentWorkingNotes: (id: AgentId) => invoke<WorkingNote[]>("agent_working_notes", { id }),
 
   /** Drops every note an agent holds. The operator's only write here. */

@@ -31,6 +31,7 @@ pub const SCHEDULE: &str = "schedule";
 pub const CALENDAR: &str = "calendar";
 pub const SKILL: &str = "skill";
 pub const SETTINGS: &str = "settings";
+pub const NOTEBOOK: &str = "notebook";
 pub const CREATE_AGENT: &str = "create_agent";
 pub const REQUEST_PERMISSION: &str = "request_permission";
 pub const DECISION: &str = "decision";
@@ -1078,6 +1079,48 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: NOTEBOOK.to_string(),
+            // Placed against memory in its first sentence, because the two are
+            // what a model confuses: one is in front of it every turn and one
+            // is read when needed, and which to use is the whole decision.
+            description: format!(
+                "Your notebook: a private folder of your own files that lasts between \
+                 conversations. Memory is the page in front of you on every turn; the notebook \
+                 is for anything longer or more particular you want to keep and come back to: a \
+                 running log, a tracker of leads or tickets, research, a customer's history, a \
+                 draft. Only the list of files is in your prompt, so `read` a file when the work \
+                 needs it.\n\n\
+                 Shape it as you like, with folders up to four deep: `write` creates or replaces \
+                 a file, `append` adds to the end of one (a log never needs reading first), \
+                 `move` renames, `delete` removes. Files are markdown by default (.md, .txt, \
+                 .json or .csv), up to {} characters each, {} at most. Nobody else in your crew \
+                 reads it; the operator can. Delete what you no longer need: a stale file steers \
+                 the next turn wrong.",
+                crate::notebook::MAX_FILE,
+                crate::notebook::MAX_FILES
+            ),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["list", "read", "write", "append", "move", "delete"]
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "A relative path such as `leads/acme.md`."
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "On `write`, the whole file; on `append`, what to add."
+                    },
+                    "to": { "type": "string", "description": "On `move`, the new path." }
+                },
+                "required": ["action"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
             name: SETTINGS.to_string(),
             // Approval is said before the keys, because it is what decides how
             // a model should use the tool: to propose, not to fiddle. The
@@ -1381,6 +1424,11 @@ pub enum ToolInvocation {
     Settings {
         action: SettingsAction,
     },
+    /// A read or write of the calling agent's own notebook. Whose is read off
+    /// the card at dispatch, never from the call.
+    Notebook {
+        action: NotebookAction,
+    },
     CreateAgent {
         draft: NewAgent,
     },
@@ -1457,6 +1505,16 @@ pub enum ScheduleAction {
 /// fires and one does not — but they are the two lists an agent keeps, and an
 /// agent that has learned `list`/`add`/`update`/`cancel` on one should not have
 /// to learn a second vocabulary for the other.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NotebookAction {
+    List,
+    Read { path: String },
+    Write { path: String, content: String },
+    Append { path: String, content: String },
+    Move { path: String, to: String },
+    Delete { path: String },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum SettingsAction {
     Read,
@@ -1586,6 +1644,10 @@ pub enum ToolParseError {
     UnknownSkillAction,
     #[error("settings needs a known `action`")]
     UnknownSettingsAction,
+    #[error("notebook needs a known `action`")]
+    UnknownNotebookAction,
+    #[error("notebook needs {needs}")]
+    IncompleteNotebook { needs: String },
     #[error("settings needs {needs}")]
     IncompleteSettings { needs: String },
     #[error("skill needs {needs}")]
@@ -1641,6 +1703,16 @@ impl ToolParseError {
                  \"2026-09-14 15:00\", \"minutes\": 60}}. A date on its own is a whole day. \
                  To move one your crew already has: {{\"action\": \"update\", \"id\": \
                  \"...\", \"starts_at\": \"2026-09-15 10:00\"}}."
+            ),
+            ToolParseError::UnknownNotebookAction => {
+                "Error: `action` must be list, read, write, append, move or delete. Use \
+                 {\"action\": \"list\"} to see what your notebook holds."
+                    .to_string()
+            }
+            ToolParseError::IncompleteNotebook { needs } => format!(
+                "Error: that `notebook` call needs {needs}. To keep a log: {{\"action\": \
+                 \"append\", \"path\": \"log.md\", \"content\": \"- tried the API\"}}. To \
+                 read a file: {{\"action\": \"read\", \"path\": \"leads/acme.md\"}}."
             ),
             ToolParseError::UnknownSettingsAction => {
                 "Error: `action` must be read or update. Use {\"action\": \"read\"} to see the \
@@ -2370,6 +2442,45 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                 _ => Err(ToolParseError::UnknownCalendarAction),
             }
         }
+        NOTEBOOK => {
+            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                name: NOTEBOOK.to_string(),
+                detail: e.to_string(),
+            })?;
+            let text = |keys: &[&str]| {
+                keys.iter()
+                    .find_map(|key| value.get(*key).and_then(|v| v.as_str()).map(str::to_string))
+            };
+            let needs = |what: &str| ToolParseError::IncompleteNotebook { needs: what.to_string() };
+            let path = || {
+                text(&["path", "file", "name"])
+                    .filter(|path| !path.trim().is_empty())
+                    .ok_or_else(|| needs("a `path`, such as `leads/acme.md`"))
+            };
+            // Content may be empty on purpose only when clearing a file, which
+            // is `write` with nothing; a missing field is a model that forgot.
+            let content =
+                || text(&["content", "text", "body"]).ok_or_else(|| needs("the `content`"));
+            let action = match value.get("action").and_then(|v| v.as_str()).unwrap_or("list") {
+                "list" | "ls" => NotebookAction::List,
+                "read" | "view" | "open" | "cat" => NotebookAction::Read { path: path()? },
+                "write" | "create" | "save" | "replace" => {
+                    NotebookAction::Write { path: path()?, content: content()? }
+                }
+                "append" | "add" | "log" => {
+                    NotebookAction::Append { path: path()?, content: content()? }
+                }
+                "move" | "rename" | "mv" => NotebookAction::Move {
+                    path: path()?,
+                    to: text(&["to", "destination", "new_path"])
+                        .filter(|to| !to.trim().is_empty())
+                        .ok_or_else(|| needs("the new path in `to`"))?,
+                },
+                "delete" | "remove" | "rm" => NotebookAction::Delete { path: path()? },
+                _ => return Err(ToolParseError::UnknownNotebookAction),
+            };
+            Ok(ToolInvocation::Notebook { action })
+        }
         SETTINGS => {
             let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
                 name: SETTINGS.to_string(),
@@ -2791,6 +2902,26 @@ mod tests {
     /// are not made to say they do not.
     fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
         super::parse(call, &[])
+    }
+
+    #[test]
+    fn a_notebook_call_is_read_in_the_words_a_model_reaches_for() {
+        assert_eq!(
+            parse(&call(NOTEBOOK, r#"{"action": "append", "path": "log.md", "content": "- x"}"#)),
+            Ok(ToolInvocation::Notebook {
+                action: NotebookAction::Append { path: "log.md".into(), content: "- x".into() }
+            })
+        );
+        assert!(matches!(
+            parse(&call(NOTEBOOK, r#"{"action": "rename", "file": "a.md", "to": "b.md"}"#)),
+            Ok(ToolInvocation::Notebook { action: NotebookAction::Move { .. } })
+        ));
+        let refused = parse(&call(NOTEBOOK, r#"{"action": "write", "path": "a"}"#)).unwrap_err();
+        assert!(refused.guidance().contains("\"append\""), "{}", refused.guidance());
+        assert_eq!(
+            parse(&call(NOTEBOOK, r#"{"action": "chmod"}"#)),
+            Err(ToolParseError::UnknownNotebookAction)
+        );
     }
 
     #[test]
@@ -3971,9 +4102,9 @@ mod tests {
         let specs = specs(Surfaces::both(), Modalities::seeing());
         assert_eq!(
             specs.len(),
-            22,
+            23,
             "directory, run_command, open_on_desktop, use_screen, browse, code, shell, schedule, \
-             calendar, skill, settings, create_agent, request_permission, ask_operator, decision, escalate, \
+             calendar, skill, notebook, settings, create_agent, request_permission, ask_operator, decision, escalate, \
              send_message, read_file, write_document, attach_file, update_memory, note_progress"
         );
         for spec in &specs {

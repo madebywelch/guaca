@@ -19,6 +19,7 @@ pub mod kernel;
 pub mod llm;
 pub mod mcp;
 pub mod menubar;
+pub mod notebook;
 pub mod oauth;
 pub mod plugins;
 pub mod programs;

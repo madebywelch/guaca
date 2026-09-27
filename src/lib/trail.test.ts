@@ -63,6 +63,19 @@ describe("what one call was", () => {
     expect(callInFlight("skill", {})).toBe("Reading its skills");
   });
 
+  it("names the notebook file a turn touched", () => {
+    const [wrote, added, read] = steps(
+      call("notebook", { action: "write", path: "leads/acme.md", content: "x" }),
+      call("notebook", { action: "append", path: "log.md", content: "- tried it" }),
+      call("notebook", { action: "read", path: "log.md" }),
+    );
+    expect(wrote?.title).toBe("Wrote leads/acme.md in its notebook");
+    expect(added?.title).toBe("Added to log.md in its notebook");
+    expect(added?.target).toBe("- tried it");
+    expect(read?.title).toBe("Read log.md from its notebook");
+    expect(callInFlight("notebook", {})).toBe("Working in its notebook");
+  });
+
   it("keeps the command, which is the only interesting part of running one", () => {
     const [step] = steps(
       call("run_command", { command: "curl -s wttr.in" }, ok("exit 0, 8 bytes out")),

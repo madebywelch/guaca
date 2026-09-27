@@ -755,6 +755,8 @@ struct Inner {
     /// Skills on disk: the operator's and each crew's. Guaca's own are
     /// compiled in and never touch it.
     skills: crate::skills::Skills,
+    /// Each agent's own folder of files. See `notebook.rs`.
+    notebooks: crate::notebook::Notebooks,
     /// The bytes of everything anybody has attached. Shared, because one file
     /// sent to four agents is one file.
     files: FileStore,
@@ -873,6 +875,8 @@ pub struct OnDisk {
     pub workspace: Workspace,
     /// Skills, one directory each: the operator's and each crew's.
     pub skills: crate::skills::Skills,
+    /// Each agent's own folder of files, read on demand.
+    pub notebooks: crate::notebook::Notebooks,
     /// Attachments, addressed by the SHA-256 of their contents.
     pub files: FileStore,
     /// Where the per-agent git work trees live, one directory per repository
@@ -886,6 +890,7 @@ impl OnDisk {
         Self {
             workspace: Workspace::new(root.join("workspace")),
             skills: crate::skills::Skills::new(root.join("skills")),
+            notebooks: crate::notebook::Notebooks::new(root.join("notebooks")),
             files: FileStore::new(root.join("files")),
             benches: root.join("worktrees"),
         }
@@ -912,7 +917,7 @@ impl Runtime {
         disk: OnDisk,
         events: Arc<dyn EventSink>,
     ) -> Self {
-        let OnDisk { workspace, skills, files, benches } = disk;
+        let OnDisk { workspace, skills, notebooks, files, benches } = disk;
         Self {
             inner: Arc::new(Inner {
                 workspace_lease: Mutex::new(None),
@@ -930,6 +935,7 @@ impl Runtime {
                 waiting: Mutex::new(HashMap::new()),
                 workspace,
                 skills,
+                notebooks,
                 files,
                 last_signin_scan: Mutex::new(HashMap::new()),
                 coding: Mutex::new(HashMap::new()),
@@ -1044,6 +1050,10 @@ impl Runtime {
 
     pub fn skills(&self) -> &crate::skills::Skills {
         &self.inner.skills
+    }
+
+    pub fn notebooks(&self) -> &crate::notebook::Notebooks {
+        &self.inner.notebooks
     }
 
     pub fn config(&self) -> AppConfig {
@@ -1309,6 +1319,7 @@ impl Runtime {
         // The transcript survives a deletion, but the agent's private memory is
         // its own and goes with it.
         self.inner.workspace.remove(id);
+        self.inner.notebooks.remove_all(id);
         // Its schedule goes too, or it would keep coming due for an agent that
         // can no longer act on it.
         let _ = self.inner.store.delete_agent_routines(id);
@@ -4003,6 +4014,7 @@ impl Runtime {
         // one line each, read from disk every turn so a skill a crewmate wrote
         // a moment ago is offered on this one.
         prompt::add_skills(&mut messages, &self.inner.skills.visible(card.group_id));
+        prompt::add_notebook(&mut messages, &self.inner.notebooks.list(card.id));
         match self.inner.store.decisions(Some(card.id)) {
             Ok(decisions) => prompt::add_decisions(&mut messages, &decisions),
             Err(err) => tracing::warn!(%err, "could not read the agent's decisions"),
@@ -5260,6 +5272,21 @@ impl Runtime {
                     }
                 };
                 (rendered, Part::tool_call(tools::SCHEDULE, arguments, outcome))
+            }
+
+            ToolInvocation::Notebook { action } => {
+                let (rendered, outcome) = match self.use_notebook(card, &action) {
+                    // The chip says what happened; a file read in full is the
+                    // model's to read, not the transcript's to keep twice.
+                    Ok(rendered) => {
+                        let summary = rendered.lines().next().unwrap_or_default().to_string();
+                        (rendered, ToolOutcome::Ok { summary })
+                    }
+                    Err(err) => {
+                        (format!("Error: {err}"), ToolOutcome::Failed { error: err.to_string() })
+                    }
+                };
+                (rendered, Part::tool_call(tools::NOTEBOOK, arguments, outcome))
             }
 
             ToolInvocation::Skill { action } => {
@@ -7333,6 +7360,64 @@ impl Runtime {
              buttons on their status bar.\n{}",
             serde_json::to_string_pretty(&value).unwrap_or_default()
         )
+    }
+
+    /// An agent working its own notebook. Whose is the card's, never the call's.
+    fn use_notebook(
+        &self,
+        card: &AgentCard,
+        action: &tools::NotebookAction,
+    ) -> Result<String, crate::notebook::NotebookError> {
+        use tools::NotebookAction;
+        let books = &self.inner.notebooks;
+        let changed = |said: String| {
+            self.emit(UiEvent::NotebookChanged { agent_id: card.id });
+            said
+        };
+        Ok(match action {
+            NotebookAction::List => {
+                let entries = books.list(card.id);
+                if entries.is_empty() {
+                    "Your notebook is empty.".to_string()
+                } else {
+                    let lines: Vec<String> = entries
+                        .iter()
+                        .map(|entry| format!("- {} ({} characters)", entry.path, entry.chars))
+                        .collect();
+                    format!("{} file(s) in your notebook:\n{}", entries.len(), lines.join("\n"))
+                }
+            }
+            NotebookAction::Read { path } => {
+                let text = books.read(card.id, path)?;
+                let clean = crate::notebook::clean_path(path)?;
+                format!("{clean} ({} characters):\n\n{text}", text.chars().count())
+            }
+            NotebookAction::Write { path, content } => {
+                let written = books.write(card.id, path, content)?;
+                changed(format!(
+                    "{} {} ({} characters).",
+                    if written.created { "Wrote" } else { "Replaced" },
+                    written.path,
+                    written.chars
+                ))
+            }
+            NotebookAction::Append { path, content } => {
+                let written = books.append(card.id, path, content)?;
+                changed(format!("Added to {} ({} characters now).", written.path, written.chars))
+            }
+            NotebookAction::Move { path, to } => {
+                let moved = books.rename(card.id, path, to)?;
+                changed(format!("Moved it to {moved}."))
+            }
+            NotebookAction::Delete { path } => {
+                let clean = crate::notebook::clean_path(path)?;
+                if books.delete(card.id, path)? {
+                    changed(format!("Deleted {clean}."))
+                } else {
+                    format!("There was no {clean} to delete.")
+                }
+            }
+        })
     }
 
     /// An agent reading or writing a skill. Writes reach only its own crew.

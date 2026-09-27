@@ -363,6 +363,18 @@ impl From<crate::repo::RepoError> for CommandError {
     }
 }
 
+impl From<crate::notebook::NotebookError> for CommandError {
+    fn from(err: crate::notebook::NotebookError) -> Self {
+        use crate::notebook::NotebookError;
+        let kind = match &err {
+            NotebookError::NotFound(_) => "notFound",
+            NotebookError::Io { .. } => "storage",
+            _ => "validation",
+        };
+        CommandError::new(kind, err.to_string())
+    }
+}
+
 impl From<crate::skills::SkillsError> for CommandError {
     fn from(err: crate::skills::SkillsError) -> Self {
         use crate::skills::SkillsError;
@@ -2407,6 +2419,25 @@ pub async fn set_agent_memory(state: &AppState, id: AgentId, content: String) ->
 }
 
 /// What an agent is in the middle of: the other half of what it carries.
+/// What an agent keeps in its notebook, for the operator to read.
+pub async fn agent_notebook(state: &AppState, id: AgentId) -> Reply<Vec<crate::notebook::Entry>> {
+    Ok(state.runtime.notebooks().list(id))
+}
+
+pub async fn read_notebook(state: &AppState, id: AgentId, path: String) -> Reply<String> {
+    Ok(state.runtime.notebooks().read(id, &path)?)
+}
+
+/// The operator's one write: taking a file away. The notebook is the agent's
+/// account of its own work, for the reason working notes are.
+pub async fn delete_notebook_file(state: &AppState, id: AgentId, path: String) -> Reply<bool> {
+    let deleted = state.runtime.notebooks().delete(id, &path)?;
+    if deleted {
+        state.runtime.emit(UiEvent::NotebookChanged { agent_id: id });
+    }
+    Ok(deleted)
+}
+
 pub async fn agent_working_notes(state: &AppState, id: AgentId) -> Reply<Vec<WorkingNote>> {
     Ok(state.runtime.store().working_notes(id)?)
 }

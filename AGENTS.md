@@ -124,6 +124,8 @@ src-tauri/src/
                       Its counterpart is `domain/worknote.rs` plus one table.
   skills.rs           Skills on disk: the operator's and each crew's. Guaca's
                       own are compiled in from `src-tauri/skills/`.
+  notebook.rs         An agent's own folder of files, named in its prompt and
+                      read when needed. The fourth store, and why it is one.
   files.rs            Attachments, addressed by the SHA-256 of their contents.
   eval.rs             Reads a run and says whether it communicated sensibly.
   trajectory.rs       Reads a run's events and says whether the machinery did.
@@ -243,6 +245,7 @@ repo: the frontend renders state and forwards intent.
 | What an agent currently remembers, and editing it by hand | *An agent's memory is in the panel* in `docs/WORKSPACE.md`, then `src/components/Memory.tsx` and `src-tauri/src/workspace.rs` |
 | Skills: what one is, which crew can read or write it, the `skill` tool, the index in the prompt | `docs/SKILLS.md`, then `domain/skill.rs` and `skills.rs` |
 | What agents are told about Guaca itself, and the manual they read | *The manual is a skill, and a test keeps it true* in `docs/SKILLS.md`, then `src-tauri/skills/guaca/SKILL.md` and `src/lib/manual.test.ts`, which is the gate |
+| An agent's notebook: what it keeps beyond memory, the `notebook` tool, the index in the prompt | *An agent's notebook is everything else it keeps* in `docs/WORKSPACE.md`, then `src-tauri/src/notebook.rs` |
 | Which of the two stores something belongs in, what `note_progress` is for, why one is a file and the other a table | *An agent's memory is what it knows, and its working notes are what it is doing* in `docs/WORKSPACE.md`, then `src-tauri/src/domain/worknote.rs`, whose header is the argument |
 | An `@` that names an agent: what resolves, and what it draws in either place | *A mention is one thing, in the box and in the message* in `docs/WORKSPACE.md`, then `src/lib/mentions.ts` and the layer under `Composer`'s textarea |
 | A size, a space, a radius, a duration or a shadow, anywhere in the app | *Every length is named* below, then the token block at the top of `src/styles.css`, and the closed-set suite in `styles.test.ts`, which is the gate |

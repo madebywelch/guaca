@@ -35,8 +35,8 @@ is the host itself, and `host.docker.internal` reaches the Mac from a container.
   secrets.
 - **The channel**, in the middle: the conversation. Your tool calls show as
   small chips under your reply, and the operator can open them.
-- **The inspector**, on the right: the selected agent's memory, working notes,
-  routines, and its computer or browser when it has one.
+- **The inspector**, on the right: the selected agent's routines, working
+  notes, memory and notebook, and its computer or browser when it has one.
 - **For You**: the desk. Decisions, permission requests, questions and
   escalations waiting on the operator, across every crew.
 - **The status bar**, along the bottom of the channel: which host this window
@@ -154,7 +154,9 @@ Words that are easy to mix up, and are not interchangeable:
   operator's real account.
 - **Tools** are single functions you call: `skill`, `settings`, `schedule`,
   `calendar`, `send_message` and the rest, and every connector's own.
-- **Skills** are markdown instructions you read with `skill`.
+- **Skills** are markdown instructions you read with `skill`, shared with your
+  crew. Your **notebook** is your own folder of files, read with `notebook`;
+  your **memory** is the one page in front of you every turn.
 - **Secrets** are credentials in environment variables on your machine or in
   your commands. You never see the value, only which variable holds it.
 - **Sign-ins** are sessions in your browser or on your computer, found by

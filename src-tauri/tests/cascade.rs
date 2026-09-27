@@ -1794,6 +1794,44 @@ async fn an_agent_cannot_write_guacas_skill_or_delete_the_operators() {
     assert!(h.runtime.skills().read(None, "house-style").is_ok(), "the operator's skill survives");
 }
 
+// ---- the notebook --------------------------------------------------------------
+
+#[tokio::test]
+async fn a_file_an_agent_keeps_is_named_on_its_next_turn_and_read_only_when_asked() {
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Kept.".into())
+        } else if anyone_said(body, "Track the lead") {
+            Script::Notebook(serde_json::json!({
+                "action": "write",
+                "path": "leads/acme",
+                "content": "# Acme\nWants a demo in October. THE-PRIVATE-DETAIL",
+            }))
+        } else {
+            Script::Say("Nothing to do.".into())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Seller", "Peer"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Seller"), "Track the lead from Acme.").unwrap();
+    h.settle(run).await;
+    let run = h.runtime.send_from_human(h.id("Seller"), "Anything new?").unwrap();
+    h.settle(run).await;
+
+    let prompts = prompts_by_agent(&stub);
+    let seller = prompts.get("Seller").expect("the seller was prompted");
+    assert!(seller.contains("## Your notebook"), "{seller}");
+    assert!(seller.contains("- leads/acme.md ("), "{seller}");
+    assert!(!seller.contains("THE-PRIVATE-DETAIL"), "a file is named, never read out: {seller}");
+    assert_eq!(h.runtime.notebooks().list(h.id("Peer")), vec![], "the folder is the agent's own");
+    assert!(h
+        .runtime
+        .notebooks()
+        .read(h.id("Seller"), "leads/acme.md")
+        .unwrap()
+        .contains("October"));
+}
+
 // ---- settings --------------------------------------------------------------
 
 #[tokio::test]

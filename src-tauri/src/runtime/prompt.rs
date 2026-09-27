@@ -1217,6 +1217,39 @@ pub fn skills_section(skills: &[crate::domain::skill::Skill]) -> String {
     out
 }
 
+/// What is in this agent's notebook, named and never read out.
+///
+/// Omitted when it is empty, so an agent that never uses one pays nothing and
+/// the tool's own description is what tells it the folder exists.
+pub fn notebook_section(entries: &[crate::notebook::Entry]) -> String {
+    use crate::notebook::LISTED;
+    if entries.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(
+        "\n## Your notebook\n\
+         Files you kept, which only you read. Not their contents: `notebook` with `read` opens \
+         one when the work needs it.\n",
+    );
+    for entry in entries.iter().take(LISTED) {
+        out.push_str(&format!("- {} ({} characters)\n", entry.path, entry.chars));
+    }
+    if entries.len() > LISTED {
+        out.push_str(&format!(
+            "({} more; `notebook` with `list` shows them all.)\n",
+            entries.len() - LISTED
+        ));
+    }
+    out
+}
+
+/// Appends [`notebook_section`] to the system message a turn was built with.
+pub fn add_notebook(messages: &mut [ChatMessage], entries: &[crate::notebook::Entry]) {
+    if let Some(ChatMessage::System { content }) = messages.first_mut() {
+        content.push_str(&notebook_section(entries));
+    }
+}
+
 /// Appends [`skills_section`] to the system message a turn was built with.
 pub fn add_skills(messages: &mut [ChatMessage], skills: &[crate::domain::skill::Skill]) {
     if let Some(ChatMessage::System { content }) = messages.first_mut() {
