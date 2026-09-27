@@ -46,6 +46,7 @@ describe("nameFor", () => {
 describe("hostOf", () => {
   it("falls back to the address when it is not one", () => {
     expect(hostOf("https://mcp.neon.tech/mcp")).toBe("mcp.neon.tech");
+    expect(hostOf("stdio:npx -y @modelcontextprotocol/server-github")).toBe("npx on the host");
     expect(hostOf("not a url")).toBe("not a url");
   });
 });

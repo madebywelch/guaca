@@ -128,7 +128,7 @@ export type ToolCallPart = Extract<Part, { type: "toolCall" }>;
 export type ApprovalId = string;
 
 /** Something an agent may not do without being told it can. */
-export type ProtectedAction = "createAgent" | "actOnBehalf";
+export type ProtectedAction = "createAgent" | "actOnBehalf" | "changeSettings";
 
 /**
  * What an agent stopped its turn to put to the operator.
@@ -299,6 +299,76 @@ export interface GroupDraft {
 }
 
 export type ConnectorId = string;
+
+/**
+ * Where a skill lives, which is who may write it. Guaca's own are read-only,
+ * the operator's are read by every crew, and a crew's own can be written by
+ * its agents as well as by the operator.
+ */
+export type SkillScope =
+  | { kind: "bundled" }
+  | { kind: "workspace" }
+  | { kind: "crew"; groupId: GroupId };
+
+/** A markdown document of instructions for one kind of task. */
+export interface Skill {
+  name: string;
+  description: string;
+  scope: SkillScope;
+  /** Empty in a listing; read when the skill is opened. */
+  body: string;
+  updatedAt: number;
+}
+
+export interface SkillDraft {
+  name: string;
+  description: string;
+  body: string;
+  /** The name it had, when the edit renames it. */
+  previous?: string;
+}
+
+/** What is open over the channel, as the host is told it. */
+export type Overlay =
+  | "settings"
+  | "crewSettings"
+  | "calendar"
+  | "forYou"
+  | "search"
+  | "cafeteria"
+  | "agentEditor";
+
+/**
+ * What the operator is looking at, reported by the window with focus so an
+ * agent asked about "this pane" can read what it is.
+ */
+export interface OperatorView {
+  agentId: AgentId | null;
+  overlay: Overlay | null;
+  /** The pane inside the overlay, as the app names it: `limits`, `skills`. */
+  section: string | null;
+  groupId: GroupId | null;
+}
+
+/** One of Guaca's own tools, described from what the agent is told. */
+export interface ToolSummary {
+  name: string;
+  summary: string;
+  /** What an agent has to be given before it is offered this one. */
+  needs: string | null;
+}
+
+/** One file in an agent's notebook, as a listing shows it. */
+export interface NotebookEntry {
+  path: string;
+  chars: number;
+  updatedAt: number;
+}
+
+/** One key per scope, for the counter a list redraws on. */
+export function skillScopeKey(scope: SkillScope): string {
+  return scope.kind === "crew" ? `crew:${scope.groupId}` : scope.kind;
+}
 
 /**
  * A credential granted to selected agents in one group.
@@ -943,6 +1013,34 @@ export interface Settings {
   limits: GuardLimits;
   /** Initial choices while the signed-in account's model catalog loads. */
   subscriptionModels: string[];
+  /** The status bar's buttons. Absent from a host older than them. */
+  quickActions?: QuickAction[];
+}
+
+/** Somewhere a quick action can open. */
+export type QuickPlace =
+  | { kind: "channel"; agentId: AgentId }
+  | { kind: "calendar" }
+  | { kind: "forYou" }
+  | { kind: "settings"; section?: string | null }
+  | { kind: "crewSettings"; groupId: GroupId };
+
+/** What pressing a quick action does: a closed set the app draws and runs. */
+export type QuickDoes =
+  | { kind: "message"; agentId: AgentId; text: string }
+  | { kind: "open"; place: QuickPlace };
+
+/**
+ * One button on the status bar. An agent's is only there because the operator
+ * approved it, with the whole message shown, since a message it sends is sent
+ * as the operator.
+ */
+export interface QuickAction {
+  id: string;
+  label: string;
+  does: QuickDoes;
+  /** "the operator", or the agent that asked for it. */
+  addedBy: string;
 }
 
 /** Absent fields are left unchanged. An empty `apiKey` clears the key. */
@@ -1064,7 +1162,8 @@ export type UiEvent =
       building: Record<AgentId, RepositoryId>;
     }
   | { type: "agentsChanged" }
-  | { type: "openUrl"; url: string }
+  /** `client` is the page whose command asked; absent from an older host. */
+  | { type: "openUrl"; url: string; client?: string | null }
   | { type: "messageAppended"; message: Envelope }
   | {
       type: "streamStarted";
@@ -1142,6 +1241,15 @@ export type UiEvent =
    * them together would have every note refetch a memory that has not moved.
    */
   | { type: "workingNotesChanged"; agentId: AgentId }
+  /**
+   * The workspace settings changed, from any client or from an agent. Carries
+   * the redacted settings, which every open client needs and nothing more.
+   */
+  | { type: "settingsChanged"; settings: Settings }
+  /** One agent changed a file in its own notebook. */
+  | { type: "notebookChanged"; agentId: AgentId }
+  /** A skill was written or deleted, by the operator or by an agent. */
+  | { type: "skillsChanged"; scope: SkillScope }
   /**
    * A coding job could not run, for a reason only the operator can fix.
    *

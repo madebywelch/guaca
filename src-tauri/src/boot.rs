@@ -157,6 +157,7 @@ pub async fn open(
         sink,
     );
 
+    runtime.keep_settings_at(config_path.clone());
     crate::repo::github::refresh_helpers(&paths.config).await.map_err(|err| err.to_string())?;
     runtime.hold_workspace_lease(lease);
 

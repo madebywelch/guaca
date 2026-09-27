@@ -137,8 +137,10 @@ pub fn system_prompt(
     // and two clocks a few lines apart could disagree across a midnight.
     let now = crate::domain::now_ms();
 
+    // Not "local": the host this runs on may be a container on the operator's
+    // Mac or a machine somewhere else, and the agent is told which in `guaca`.
     out.push_str(&format!(
-        "You are {name}, an agent in a local multi-agent workspace called Guaca.\n",
+        "You are {name}, an agent in a multi-agent workspace called Guaca.\n",
         name = card.name
     ));
 
@@ -351,7 +353,8 @@ pub fn system_prompt(
         // has Neon behave differently when asked "can we check the database".
         if !plugins.is_empty() {
             out.push_str(
-                "Your crew has these plugins connected. The sign-in behind each one is the \
+                "Your crew has these connectors: MCP servers it signed in to. The sign-in behind \
+                 each one is the \
                  operator's, held by Guaca: there is nothing for you to authenticate, no key to \
                  find, and no command to run. These tools do not depend on a browser being \
                  signed in. The available names below come from this turn's tool definitions; \
@@ -374,7 +377,11 @@ pub fn system_prompt(
                     // whose machine is on the other end of the call. For the
                     // six it would be noise: the name already says it, and the
                     // address is the same on every install.
-                    if set.kind.is_custom() {
+                    // A program is described rather than quoted: its command
+                    // line is the operator's to write and can carry a token.
+                    if set.kind.is_stdio() {
+                        " (a program your operator runs on this workspace's host)".to_string()
+                    } else if set.kind.is_custom() {
                         format!(" (your operator's own server at {})", set.kind.endpoint())
                     } else {
                         String::new()
@@ -417,7 +424,7 @@ pub fn system_prompt(
                 // level up.
                 if !set.elsewhere.is_empty() {
                     out.push_str(&format!(
-                        "  Someone else's on this plugin, not yours: {}. Hand that part to the \
+                        "  Someone else's on this connector, not yours: {}. Hand that part to the \
                          peer your roster names for it rather than reporting it cannot be \
                          done.\n",
                         set.elsewhere.join(", "),
@@ -1181,6 +1188,75 @@ pub fn build_messages(
     messages
 }
 
+/// The skills this agent can read, named at the end of its system prompt.
+///
+/// Names and the one line saying when, never bodies: a body is read with the
+/// `skill` tool when a task fits, which is what keeps forty procedures from
+/// costing forty procedures on every turn. `guaca` is always among them, and
+/// the section says what it is for, because "how do I change the model" is a
+/// question an agent answers before it would think to look for a tool.
+pub fn skills_section(skills: &[crate::domain::skill::Skill]) -> String {
+    use crate::domain::skill::LISTED;
+    let mut out = String::from(
+        "\n## Skills\n\
+         A skill is a document of instructions for one kind of task. Only each one's name and \
+         when to load it are here. When a task fits one, read it with `skill` (`view`) before \
+         you start, and follow it. Questions about Guaca itself, its settings, where it runs or \
+         how it is set up are what `guaca` is for.\n",
+    );
+    for found in skills.iter().take(LISTED) {
+        out.push_str(&found.index_line());
+        out.push('\n');
+    }
+    if skills.len() > LISTED {
+        out.push_str(&format!(
+            "({} more; `skill` with `list` shows them all.)\n",
+            skills.len() - LISTED
+        ));
+    }
+    out
+}
+
+/// What is in this agent's notebook, named and never read out.
+///
+/// Omitted when it is empty, so an agent that never uses one pays nothing and
+/// the tool's own description is what tells it the folder exists.
+pub fn notebook_section(entries: &[crate::notebook::Entry]) -> String {
+    use crate::notebook::LISTED;
+    if entries.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(
+        "\n## Your notebook\n\
+         Files you kept, which only you read. Not their contents: `notebook` with `read` opens \
+         one when the work needs it.\n",
+    );
+    for entry in entries.iter().take(LISTED) {
+        out.push_str(&format!("- {} ({} characters)\n", entry.path, entry.chars));
+    }
+    if entries.len() > LISTED {
+        out.push_str(&format!(
+            "({} more; `notebook` with `list` shows them all.)\n",
+            entries.len() - LISTED
+        ));
+    }
+    out
+}
+
+/// Appends [`notebook_section`] to the system message a turn was built with.
+pub fn add_notebook(messages: &mut [ChatMessage], entries: &[crate::notebook::Entry]) {
+    if let Some(ChatMessage::System { content }) = messages.first_mut() {
+        content.push_str(&notebook_section(entries));
+    }
+}
+
+/// Appends [`skills_section`] to the system message a turn was built with.
+pub fn add_skills(messages: &mut [ChatMessage], skills: &[crate::domain::skill::Skill]) {
+    if let Some(ChatMessage::System { content }) = messages.first_mut() {
+        content.push_str(&skills_section(skills));
+    }
+}
+
 /// A bounded index of durable decisions. Full context is available through the
 /// decision tool; the model sees existing ids before it can duplicate a request.
 pub fn add_decisions(
@@ -1254,6 +1330,44 @@ mod tests {
             Surfaces::both(),
             Modalities::seeing(),
         )
+    }
+
+    #[test]
+    fn skills_are_named_with_when_to_load_them_and_never_with_their_bodies() {
+        use crate::domain::skill::{Scope, Skill, LISTED};
+        let skill = |name: &str, scope| Skill {
+            name: name.into(),
+            description: format!("when {name}"),
+            scope,
+            body: "THE BODY".into(),
+            updated_at: 0,
+        };
+        let section = skills_section(&[
+            skill("guaca", Scope::Bundled),
+            skill("deploy", Scope::Crew { group_id: crate::domain::ids::GroupId::new() }),
+        ]);
+        assert!(section.contains("- guaca (Guaca): when guaca"), "{section}");
+        assert!(section.contains("- deploy (your crew): when deploy"), "{section}");
+        assert!(section.contains("`guaca` is for"), "{section}");
+        assert!(!section.contains("THE BODY"), "a body is read on demand: {section}");
+
+        let many: Vec<Skill> =
+            (0..LISTED + 3).map(|n| skill(&format!("s{n}"), Scope::Workspace)).collect();
+        assert!(skills_section(&many).contains("(3 more; `skill` with `list`"));
+
+        let mut messages = vec![ChatMessage::system("You are Pip."), ChatMessage::user("hi")];
+        add_skills(&mut messages, &many[..1]);
+        let ChatMessage::System { content } = &messages[0] else { panic!("no system message") };
+        assert!(content.starts_with("You are Pip.") && content.contains("- s0 (operator)"));
+    }
+
+    #[test]
+    fn an_agent_is_not_told_its_workspace_is_local() {
+        // The host may be a machine on the other side of the world, and an
+        // agent told "local" reasons about the operator's disk as its own.
+        let prompt = prompt_for(&card("Pip"), &[], "", ReplyMode::ToOperator);
+        assert!(prompt.contains("a multi-agent workspace called Guaca"), "{prompt}");
+        assert!(!prompt.contains("local multi-agent"), "{prompt}");
     }
 
     fn note(at: i64, body: &str) -> WorkingNote {
@@ -1752,7 +1866,7 @@ mod tests {
 
         assert!(prompt.contains("Switched off by the operator"), "{prompt}");
         assert!(prompt.contains("delete_inbox"), "{prompt}");
-        assert!(prompt.contains("Someone else's on this plugin"), "{prompt}");
+        assert!(prompt.contains("Someone else's on this connector"), "{prompt}");
         assert!(prompt.contains("send"), "{prompt}");
         // The one that decides which way the agent goes: a peer for one, the
         // operator for the other, and never the same sentence for both.
@@ -1795,7 +1909,7 @@ mod tests {
         // pays for on every turn.
         let c = card("Researcher");
         let prompt = prompt_for(&c, &[], "", ReplyMode::ToOperator);
-        assert!(!prompt.contains("plugins connected"), "{prompt}");
+        assert!(!prompt.contains("these connectors"), "{prompt}");
     }
 
     #[test]

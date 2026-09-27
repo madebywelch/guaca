@@ -19,6 +19,7 @@ pub mod kernel;
 pub mod llm;
 pub mod mcp;
 pub mod menubar;
+pub mod notebook;
 pub mod oauth;
 pub mod plugins;
 pub mod programs;
@@ -30,6 +31,7 @@ pub mod secrets;
 #[cfg(feature = "server")]
 pub mod server;
 pub mod shell;
+pub mod skills;
 pub mod subscription;
 pub mod trajectory;
 pub mod transfer;

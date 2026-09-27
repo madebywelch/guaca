@@ -352,6 +352,22 @@ const CALL_BACKOFF: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs
 /// move is to stop and let the operator decide.
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(20);
 
+/// A settings change an agent asked for, ready to put to the operator.
+struct Proposal {
+    /// What the card shows, in the pane's own words.
+    detail: Vec<DetailField>,
+    /// What the agent is told happened, once it has.
+    said: String,
+    apply: SettingsEdit,
+}
+
+/// What an allowed [`Proposal`] does to the settings.
+enum SettingsEdit {
+    Patch(crate::config::SettingsPatch),
+    AddQuick(crate::domain::quick::QuickAction),
+    RemoveQuick(String),
+}
+
 /// What the operator said, from the point of view of the parked turn.
 ///
 /// A refusal and a silence are separate because they are separate to the agent:
@@ -717,6 +733,14 @@ struct Inner {
     store: Store,
     llm: LlmClient,
     config: RwLock<AppConfig>,
+    /// Where settings changes are written. Set once at boot; absent in a test,
+    /// whose settings live and die in memory.
+    settings_file: std::sync::OnceLock<std::path::PathBuf>,
+    /// Held from the read to the broadcast of one settings change.
+    settings_writer: Mutex<()>,
+    /// What the operator's focused window last said it shows, and when. In
+    /// memory only: it describes a moment, and a restart ends that moment.
+    operator_view: Mutex<Option<(crate::domain::view::OperatorView, i64)>>,
     guard: Mutex<GuardRegistry>,
     inboxes: Mutex<HashMap<AgentId, Inbox>>,
     activity: Mutex<HashMap<AgentId, Activity>>,
@@ -728,6 +752,11 @@ struct Inner {
     waiting: Mutex<HashMap<ApprovalId, tokio::sync::oneshot::Sender<()>>>,
     /// Per-agent notes on disk.
     workspace: Workspace,
+    /// Skills on disk: the operator's and each crew's. Guaca's own are
+    /// compiled in and never touch it.
+    skills: crate::skills::Skills,
+    /// Each agent's own folder of files. See `notebook.rs`.
+    notebooks: crate::notebook::Notebooks,
     /// The bytes of everything anybody has attached. Shared, because one file
     /// sent to four agents is one file.
     files: FileStore,
@@ -844,6 +873,10 @@ pub struct Runtime {
 pub struct OnDisk {
     /// Per-agent memory, one markdown file each.
     pub workspace: Workspace,
+    /// Skills, one directory each: the operator's and each crew's.
+    pub skills: crate::skills::Skills,
+    /// Each agent's own folder of files, read on demand.
+    pub notebooks: crate::notebook::Notebooks,
     /// Attachments, addressed by the SHA-256 of their contents.
     pub files: FileStore,
     /// Where the per-agent git work trees live, one directory per repository
@@ -856,6 +889,8 @@ impl OnDisk {
     pub fn under(root: &std::path::Path) -> Self {
         Self {
             workspace: Workspace::new(root.join("workspace")),
+            skills: crate::skills::Skills::new(root.join("skills")),
+            notebooks: crate::notebook::Notebooks::new(root.join("notebooks")),
             files: FileStore::new(root.join("files")),
             benches: root.join("worktrees"),
         }
@@ -882,7 +917,7 @@ impl Runtime {
         disk: OnDisk,
         events: Arc<dyn EventSink>,
     ) -> Self {
-        let OnDisk { workspace, files, benches } = disk;
+        let OnDisk { workspace, skills, notebooks, files, benches } = disk;
         Self {
             inner: Arc::new(Inner {
                 workspace_lease: Mutex::new(None),
@@ -890,12 +925,17 @@ impl Runtime {
                 store,
                 llm,
                 config: RwLock::new(config),
+                settings_file: std::sync::OnceLock::new(),
+                settings_writer: Mutex::new(()),
+                operator_view: Mutex::new(None),
                 guard: Mutex::new(GuardRegistry::new()),
                 inboxes: Mutex::new(HashMap::new()),
                 activity: Mutex::new(HashMap::new()),
                 runs: Mutex::new(Runs::default()),
                 waiting: Mutex::new(HashMap::new()),
                 workspace,
+                skills,
+                notebooks,
                 files,
                 last_signin_scan: Mutex::new(HashMap::new()),
                 coding: Mutex::new(HashMap::new()),
@@ -1008,12 +1048,77 @@ impl Runtime {
         &self.inner.workspace
     }
 
+    pub fn skills(&self) -> &crate::skills::Skills {
+        &self.inner.skills
+    }
+
+    pub fn notebooks(&self) -> &crate::notebook::Notebooks {
+        &self.inner.notebooks
+    }
+
     pub fn config(&self) -> AppConfig {
         self.inner.config.read().clone()
     }
 
     pub fn set_config(&self, config: AppConfig) {
         *self.inner.config.write() = config;
+    }
+
+    /// Keeps what the operator's window says it is showing.
+    pub fn report_view(&self, view: crate::domain::view::OperatorView) {
+        *self.inner.operator_view.lock() = Some((view.clean(), crate::domain::now_ms()));
+    }
+
+    /// What the operator is looking at, as a sentence, with how old it is.
+    pub fn describe_view(&self) -> String {
+        let Some((view, at)) = self.inner.operator_view.lock().clone() else {
+            return "No window has said what it shows since this host started.".to_string();
+        };
+        let agent = view
+            .agent_id
+            .and_then(|id| self.inner.store.get_agent(id).ok().flatten())
+            .map(|card| card.name);
+        let crew = view
+            .group_id
+            .and_then(|id| self.inner.store.get_group(id).ok().flatten())
+            .map(|group| group.name);
+        let minutes = (crate::domain::now_ms() - at).max(0) / 60_000;
+        let age = match minutes {
+            0 => "just now".to_string(),
+            1 => "a minute ago".to_string(),
+            n => format!("{n} minutes ago"),
+        };
+        format!("{} (as of {age})", view.describe(agent.as_deref(), crew.as_deref()))
+    }
+
+    /// Where [`Runtime::change_config`] saves. Set once, at boot.
+    pub fn keep_settings_at(&self, path: std::path::PathBuf) {
+        let _ = self.inner.settings_file.set(path);
+    }
+
+    /// Changes the settings as one step, from the read to the broadcast.
+    ///
+    /// Every writer comes through here: the settings pane in any client, a
+    /// sign-out, and an agent. Serialized, because two writers that each read,
+    /// patched and saved would each save the other's change away. Broadcast,
+    /// because a second client still drawing the settings it read when it
+    /// connected would otherwise show, and save back, what is no longer true.
+    pub fn change_config<E>(
+        &self,
+        change: impl FnOnce(&mut AppConfig) -> Result<(), E>,
+    ) -> Result<AppConfig, E>
+    where
+        E: From<crate::config::ConfigError>,
+    {
+        let _writer = self.inner.settings_writer.lock();
+        let mut config = self.config();
+        change(&mut config)?;
+        if let Some(path) = self.inner.settings_file.get() {
+            crate::config::save(path, &config)?;
+        }
+        self.set_config(config.clone());
+        self.emit(UiEvent::SettingsChanged { settings: Box::new(config.redacted()) });
+        Ok(config)
     }
 
     // ---- lifecycle -------------------------------------------------------
@@ -1214,6 +1319,7 @@ impl Runtime {
         // The transcript survives a deletion, but the agent's private memory is
         // its own and goes with it.
         self.inner.workspace.remove(id);
+        self.inner.notebooks.remove_all(id);
         // Its schedule goes too, or it would keep coming due for an agent that
         // can no longer act on it.
         let _ = self.inner.store.delete_agent_routines(id);
@@ -2948,9 +3054,17 @@ impl Runtime {
         // it would hand the agent an approval state where it is expecting a
         // value, and `ask_question` reads back `answer`, so the turn would
         // resume having been told nothing at all.
-        if self.inner.store.get_approval(id)?.is_some_and(|it| it.request.action().is_none()) {
+        let stored = self.inner.store.get_approval(id)?;
+        if stored.as_ref().is_some_and(|it| it.request.action().is_none()) {
             return Err(RuntimeError::NotAVerdict);
         }
+        // An "always" for an action that cannot stand is recorded as the yes
+        // it is for this once. The card does not offer it; a client that sends
+        // it anyway must not leave a standing grant behind.
+        let decision = match (decision, stored.and_then(|it| it.request.action())) {
+            (Decision::AlwaysAllow, Some(action)) if !action.stands() => Decision::Allow,
+            (decision, _) => decision,
+        };
 
         let approval = self.inner.store.settle_approval(id, decision.into())?;
         if let Some(waiter) = self.inner.waiting.lock().remove(&id) {
@@ -3143,10 +3257,14 @@ impl Runtime {
     ) -> Permission {
         // The only shortcut either kind has, and it belongs to this one alone:
         // a standing yes is about an action, and a question asks for nothing.
-        match self.inner.store.has_standing_grant(card.id, action) {
-            Ok(true) => return Permission::Granted,
-            Ok(false) => {}
-            Err(err) => return Permission::Failed(err.to_string()),
+        // An action that cannot stand is asked about every time, whatever an
+        // older build may have recorded.
+        if action.stands() {
+            match self.inner.store.has_standing_grant(card.id, action) {
+                Ok(true) => return Permission::Granted,
+                Ok(false) => {}
+                Err(err) => return Permission::Failed(err.to_string()),
+            }
         }
 
         let settled =
@@ -3892,6 +4010,11 @@ impl Runtime {
         // After assembly, because what a file becomes depends on things the
         // prompt cannot reach: bytes on disk, a model that may not be able to
         // see one, and a machine that may have to be started to hold them.
+        // Beside the system prompt rather than threaded through it: names and
+        // one line each, read from disk every turn so a skill a crewmate wrote
+        // a moment ago is offered on this one.
+        prompt::add_skills(&mut messages, &self.inner.skills.visible(card.group_id));
+        prompt::add_notebook(&mut messages, &self.inner.notebooks.list(card.id));
         match self.inner.store.decisions(Some(card.id)) {
             Ok(decisions) => prompt::add_decisions(&mut messages, &decisions),
             Err(err) => tracing::warn!(%err, "could not read the agent's decisions"),
@@ -4883,6 +5006,11 @@ impl Runtime {
             return (rendered, part, None);
         }
 
+        if let ToolInvocation::Settings { action } = invocation {
+            let (rendered, part) = self.use_settings(card, run_id, action, arguments).await;
+            return (rendered, part, None);
+        }
+
         if let ToolInvocation::AskOperator { question, options } = invocation {
             let (rendered, part) =
                 self.put_to_operator(card, run_id, question, options, arguments).await;
@@ -4895,6 +5023,7 @@ impl Runtime {
             | ToolInvocation::UseScreen { .. }
             | ToolInvocation::CreateAgent { .. }
             | ToolInvocation::RequestPermission { .. }
+            | ToolInvocation::Settings { .. }
             | ToolInvocation::AskOperator { .. } => {
                 unreachable!("taken by the branches above")
             }
@@ -5143,6 +5272,36 @@ impl Runtime {
                     }
                 };
                 (rendered, Part::tool_call(tools::SCHEDULE, arguments, outcome))
+            }
+
+            ToolInvocation::Notebook { action } => {
+                let (rendered, outcome) = match self.use_notebook(card, &action) {
+                    // The chip says what happened; a file read in full is the
+                    // model's to read, not the transcript's to keep twice.
+                    Ok(rendered) => {
+                        let summary = rendered.lines().next().unwrap_or_default().to_string();
+                        (rendered, ToolOutcome::Ok { summary })
+                    }
+                    Err(err) => {
+                        (format!("Error: {err}"), ToolOutcome::Failed { error: err.to_string() })
+                    }
+                };
+                (rendered, Part::tool_call(tools::NOTEBOOK, arguments, outcome))
+            }
+
+            ToolInvocation::Skill { action } => {
+                let (rendered, outcome) = match self.use_skill(card, &action) {
+                    // The chip says what happened; a skill's body is the
+                    // model's to read, not the transcript's to keep twice.
+                    Ok(rendered) => {
+                        let summary = rendered.lines().next().unwrap_or_default().to_string();
+                        (rendered, ToolOutcome::Ok { summary })
+                    }
+                    Err(err) => {
+                        (format!("Error: {err}"), ToolOutcome::Failed { error: err.to_string() })
+                    }
+                };
+                (rendered, Part::tool_call(tools::SKILL, arguments, outcome))
             }
 
             ToolInvocation::Calendar { action } => {
@@ -6927,6 +7086,398 @@ impl Runtime {
         }
     }
 
+    /// An agent reading the settings, or asking the operator to change them.
+    async fn use_settings(
+        &self,
+        card: &AgentCard,
+        run_id: RunId,
+        action: tools::SettingsAction,
+        arguments: serde_json::Value,
+    ) -> (String, Part) {
+        let answer = |rendered: String, outcome: ToolOutcome, arguments: serde_json::Value| {
+            (rendered, Part::tool_call(tools::SETTINGS, arguments, outcome))
+        };
+        let refused = |why: String, arguments: serde_json::Value| {
+            answer(
+                format!("Error: {why}. Nothing was changed and the operator was not asked."),
+                ToolOutcome::Failed { error: why },
+                arguments,
+            )
+        };
+        let proposal = match action {
+            tools::SettingsAction::Read => {
+                let rendered = self.settings_for(card);
+                let summary = "read the settings".to_string();
+                return answer(rendered, ToolOutcome::Ok { summary }, arguments);
+            }
+            tools::SettingsAction::Update { changes } => self.propose_update(&changes),
+            tools::SettingsAction::AddQuickAction { label, send, to, open, agent, section } => {
+                self.propose_quick_action(card, &label, send, to, open, agent, section)
+            }
+            tools::SettingsAction::RemoveQuickAction { id } => {
+                let config = self.config();
+                match config.quick_actions.iter().find(|action| action.id == id) {
+                    Some(found) => {
+                        let said = found.describe(|agent| self.agent_name(agent));
+                        Ok(Some(Proposal {
+                            detail: vec![DetailField::new("Status bar", format!("remove {said}"))],
+                            said: format!("removed {said} from the status bar"),
+                            apply: SettingsEdit::RemoveQuick(id),
+                        }))
+                    }
+                    None => Err(format!("no quick action has the id `{id}`; `read` lists them")),
+                }
+            }
+        };
+        let proposal = match proposal {
+            Ok(Some(proposal)) => proposal,
+            Ok(None) => {
+                let rendered =
+                    "Nothing to change: those are already the values in force.".to_string();
+                let summary = "nothing to change".to_string();
+                return answer(rendered, ToolOutcome::Ok { summary }, arguments);
+            }
+            Err(why) => return refused(why, arguments),
+        };
+
+        let permission = self
+            .ask_permission(
+                card,
+                run_id,
+                ProtectedAction::ChangeSettings,
+                format!("{} wants to change the workspace's settings", card.name),
+                proposal.detail,
+            )
+            .await;
+        match permission {
+            Permission::Granted => {
+                // Applied to the settings as they are now rather than as they
+                // were when the operator was asked: another window may have
+                // saved something in between, and this names only what the
+                // agent asked for.
+                let applied = self.change_config(|config| match proposal.apply {
+                    SettingsEdit::Patch(patch) => config.apply(patch),
+                    SettingsEdit::AddQuick(action) => {
+                        Ok(crate::domain::quick::add(&mut config.quick_actions, action)?)
+                    }
+                    SettingsEdit::RemoveQuick(id) => {
+                        crate::domain::quick::remove(&mut config.quick_actions, &id)?;
+                        Ok(())
+                    }
+                });
+                match applied {
+                    Ok(_) => {
+                        let said = proposal.said;
+                        tracing::info!(agent = %card.name, changed = %said, "an agent changed settings");
+                        answer(
+                            format!(
+                                "The operator allowed it: {said}. Every open window shows it now, \
+                                 and a setting applies from the next model call."
+                            ),
+                            ToolOutcome::Ok { summary: said },
+                            arguments,
+                        )
+                    }
+                    Err(err) => answer(
+                        format!(
+                            "Error: the operator allowed it but it could not be saved ({err})."
+                        ),
+                        ToolOutcome::Failed { error: err.to_string() },
+                        arguments,
+                    ),
+                }
+            }
+            Permission::Refused => answer(
+                "The operator said no, so nothing changed. That is final for this request: do \
+                 not ask again this turn. If it still matters, say in your reply what you would \
+                 change and why."
+                    .to_string(),
+                ToolOutcome::Refused { reason: "the operator declined".to_string() },
+                arguments,
+            ),
+            Permission::Unanswered => answer(
+                "Nobody answered, so nothing changed. The operator is away rather than opposed: \
+                 say in your reply what you wanted to change and why, so they can decide when \
+                 they are back."
+                    .to_string(),
+                ToolOutcome::Refused { reason: "the operator did not answer".to_string() },
+                arguments,
+            ),
+            Permission::Failed(err) => answer(
+                format!("Error: the request could not be put to the operator ({err})."),
+                ToolOutcome::Failed { error: err },
+                arguments,
+            ),
+        }
+    }
+
+    /// A settings patch, checked before the operator is asked, for the reason a
+    /// duplicate agent name is: a refusal after they pressed Allow spends their
+    /// attention on nothing. `None` when it would change nothing.
+    fn propose_update(&self, changes: &serde_json::Value) -> Result<Option<Proposal>, String> {
+        let before = self.config();
+        let patch = crate::config::agent_patch(changes, &before)?;
+        let mut after = before.clone();
+        after.apply(patch.clone()).map_err(|err| err.to_string())?;
+        let asked = crate::config::changes(&before, &after);
+        if asked.is_empty() {
+            return Ok(None);
+        }
+        let said = asked
+            .iter()
+            .map(|change| format!("{} {} → {}", change.label, change.from, change.to))
+            .collect::<Vec<_>>()
+            .join("; ");
+        Ok(Some(Proposal {
+            detail: asked
+                .iter()
+                .map(|change| {
+                    DetailField::new(&change.label, format!("{} → {}", change.from, change.to))
+                })
+                .collect(),
+            said: format!("changed {said}"),
+            apply: SettingsEdit::Patch(patch),
+        }))
+    }
+
+    /// A button for the status bar, with names resolved against the asking
+    /// agent's own crew: a button is the operator's voice, and one that spoke
+    /// to another crew would carry an agent's words across the wall.
+    #[allow(clippy::too_many_arguments)]
+    fn propose_quick_action(
+        &self,
+        card: &AgentCard,
+        label: &str,
+        send: Option<String>,
+        to: Option<String>,
+        open: Option<String>,
+        agent: Option<String>,
+        section: Option<String>,
+    ) -> Result<Option<Proposal>, String> {
+        use crate::domain::quick::{Does, Place, QuickAction, MAX_ACTIONS};
+        let crew: Vec<AgentCard> = self
+            .inner
+            .store
+            .list_agents()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|a| a.group_id == card.group_id && a.lifecycle != Lifecycle::Terminated)
+            .collect();
+        let named = |name: Option<String>, what: &str| -> Result<AgentId, String> {
+            let name =
+                name.ok_or_else(|| format!("{what} needs the name of an agent in your crew"))?;
+            crew.iter().find(|a| a.name.eq_ignore_ascii_case(name.trim())).map(|a| a.id).ok_or_else(
+                || format!("nobody in your crew is called {name}; `directory` lists them"),
+            )
+        };
+        let does = match (send, open.as_deref()) {
+            (Some(text), _) => Does::Message { agent_id: named(to, "`send`")?, text },
+            (None, Some("channel")) => {
+                Does::Open { place: Place::Channel { agent_id: named(agent, "`open: channel`")? } }
+            }
+            (None, Some("calendar")) => Does::Open { place: Place::Calendar },
+            (None, Some("for_you")) => Does::Open { place: Place::ForYou },
+            (None, Some("settings")) => Does::Open { place: Place::Settings { section } },
+            (None, Some("crew_settings")) => {
+                Does::Open { place: Place::CrewSettings { group_id: card.group_id } }
+            }
+            (None, other) => {
+                return Err(format!(
+                    "`open` must be channel, calendar, for_you, settings or crew_settings, not {}",
+                    other.unwrap_or("nothing")
+                ))
+            }
+        };
+        let action = QuickAction::new(label, does, &card.name).map_err(|err| err.to_string())?;
+        if self.config().quick_actions.len() >= MAX_ACTIONS {
+            return Err(crate::domain::quick::QuickError::Full.to_string());
+        }
+        let said = action.describe(|agent| self.agent_name(agent));
+        Ok(Some(Proposal {
+            detail: vec![
+                DetailField::new("Status bar", format!("add {said}")),
+                DetailField::new("Asked for by", &card.name),
+            ],
+            said: format!("added {said} to the status bar"),
+            apply: SettingsEdit::AddQuick(action),
+        }))
+    }
+
+    /// An agent's name for a sentence, or what to say when it is gone.
+    fn agent_name(&self, id: AgentId) -> String {
+        self.inner
+            .store
+            .get_agent(id)
+            .ok()
+            .flatten()
+            .map(|card| card.name)
+            .unwrap_or_else(|| "a deleted agent".to_string())
+    }
+
+    /// The settings as an agent may see them: no key, no fragment of one, and
+    /// no credentials inside an address.
+    fn settings_for(&self, card: &AgentCard) -> String {
+        let config = self.config();
+        let crew = self.inner.store.get_group(card.group_id).ok().flatten();
+        let endpoint = crate::config::without_userinfo(&config.inference.base_url);
+        let value = serde_json::json!({
+            "operatorName": config.operator_name,
+            "defaultModel": config.inference.default_model,
+            "subscriptionModel": config.inference.subscription_model,
+            "reasoningEffort": config.inference.reasoning_effort,
+            "requestTimeoutSecs": config.inference.request_timeout_secs,
+            "limits": config.limits,
+            "computerIdleMinutes": config.e2b.idle_minutes,
+            "browserIdleMinutes": config.kernel.idle_minutes,
+            "browserStealth": config.kernel.stealth,
+            "operatorOnly": {
+                "provider": config.inference.provider,
+                "endpoint": endpoint,
+                "apiKeySet": !config.inference.api_key.trim().is_empty(),
+                "computerKeySet": !config.e2b.api_key.trim().is_empty(),
+                "browserKeySet": !config.kernel.api_key.trim().is_empty(),
+            },
+            "yourCrew": crew.map(|group| serde_json::json!({
+                "name": group.name,
+                "provider": group.inference.provider,
+                "defaultModel": group.inference.default_model,
+                "reasoningEffort": group.inference.reasoning_effort,
+                "requestTimeoutSecs": group.inference.request_timeout_secs,
+                "limits": group.limits,
+            })),
+            "quickActions": config.quick_actions.iter().map(|action| serde_json::json!({
+                "id": action.id,
+                "does": action.describe(|agent| self.agent_name(agent)),
+                "addedBy": action.added_by,
+            })).collect::<Vec<_>>(),
+            "host": { "guacaVersion": env!("CARGO_PKG_VERSION") },
+            "operatorView": self.describe_view(),
+        });
+        format!(
+            "The settings every agent runs on, unless its crew sets its own; a crew's null means \
+             it uses the setting above. Change one with `update`, and the operator approves it. \
+             Anything under operatorOnly is theirs to change in Settings. quickActions are the \
+             buttons on their status bar.\n{}",
+            serde_json::to_string_pretty(&value).unwrap_or_default()
+        )
+    }
+
+    /// An agent working its own notebook. Whose is the card's, never the call's.
+    fn use_notebook(
+        &self,
+        card: &AgentCard,
+        action: &tools::NotebookAction,
+    ) -> Result<String, crate::notebook::NotebookError> {
+        use tools::NotebookAction;
+        let books = &self.inner.notebooks;
+        let changed = |said: String| {
+            self.emit(UiEvent::NotebookChanged { agent_id: card.id });
+            said
+        };
+        Ok(match action {
+            NotebookAction::List => {
+                let entries = books.list(card.id);
+                if entries.is_empty() {
+                    "Your notebook is empty.".to_string()
+                } else {
+                    let lines: Vec<String> = entries
+                        .iter()
+                        .map(|entry| format!("- {} ({} characters)", entry.path, entry.chars))
+                        .collect();
+                    format!("{} file(s) in your notebook:\n{}", entries.len(), lines.join("\n"))
+                }
+            }
+            NotebookAction::Read { path } => {
+                let text = books.read(card.id, path)?;
+                let clean = crate::notebook::clean_path(path)?;
+                format!("{clean} ({} characters):\n\n{text}", text.chars().count())
+            }
+            NotebookAction::Write { path, content } => {
+                let written = books.write(card.id, path, content)?;
+                changed(format!(
+                    "{} {} ({} characters).",
+                    if written.created { "Wrote" } else { "Replaced" },
+                    written.path,
+                    written.chars
+                ))
+            }
+            NotebookAction::Append { path, content } => {
+                let written = books.append(card.id, path, content)?;
+                changed(format!("Added to {} ({} characters now).", written.path, written.chars))
+            }
+            NotebookAction::Move { path, to } => {
+                let moved = books.rename(card.id, path, to)?;
+                changed(format!("Moved it to {moved}."))
+            }
+            NotebookAction::Delete { path } => {
+                let clean = crate::notebook::clean_path(path)?;
+                if books.delete(card.id, path)? {
+                    changed(format!("Deleted {clean}."))
+                } else {
+                    format!("There was no {clean} to delete.")
+                }
+            }
+        })
+    }
+
+    /// An agent reading or writing a skill. Writes reach only its own crew.
+    fn use_skill(
+        &self,
+        card: &AgentCard,
+        action: &tools::SkillAction,
+    ) -> Result<String, crate::skills::SkillsError> {
+        use crate::domain::skill::{Clean, Scope};
+        use crate::skills::SkillsError;
+        let own = Scope::Crew { group_id: card.group_id };
+        match action {
+            tools::SkillAction::List => {
+                let visible = self.inner.skills.visible(card.group_id);
+                let lines: Vec<String> = visible.iter().map(|found| found.index_line()).collect();
+                Ok(format!(
+                    "{} skill(s) you can read. `view` one by name before a task it fits.\n{}",
+                    visible.len(),
+                    lines.join("\n")
+                ))
+            }
+            tools::SkillAction::View { name } => {
+                let found = self.inner.skills.read(Some(card.group_id), name)?;
+                Ok(format!(
+                    "Skill `{}` ({}): {}\n\n{}",
+                    found.name,
+                    found.scope.label(),
+                    found.description,
+                    found.body
+                ))
+            }
+            tools::SkillAction::Write { name, description, content } => {
+                let clean = Clean::new(name, description, content)?;
+                let existed = self.inner.skills.load(own, &clean.name).is_ok();
+                let written = self.inner.skills.write(own, &clean)?;
+                self.emit(UiEvent::SkillsChanged { scope: own });
+                tracing::info!(agent = %card.name, skill = %written.name, "an agent wrote a skill");
+                Ok(format!(
+                    "{} `{}` for your crew. Every agent in it is offered it from its next turn.",
+                    if existed { "Replaced" } else { "Wrote" },
+                    written.name
+                ))
+            }
+            tools::SkillAction::Delete { name } => {
+                if self.inner.skills.delete(own, name)? {
+                    self.emit(UiEvent::SkillsChanged { scope: own });
+                    return Ok(format!("Deleted `{name}` from your crew's skills."));
+                }
+                // Said precisely, because "not found" about a skill the agent
+                // can read reads as a bug and gets retried.
+                match self.inner.skills.read(Some(card.group_id), name) {
+                    Ok(found) => {
+                        Err(SkillsError::NotYours { name: found.name, owner: found.scope.owner() })
+                    }
+                    Err(err) => Err(err),
+                }
+            }
+        }
+    }
+
     /// One of this agent's own routines, by the id it was given.
     ///
     /// Only its own, and that is the point rather than tidiness. An id can
@@ -7228,7 +7779,7 @@ impl Runtime {
                     if theirs.is_empty() {
                         continue;
                     }
-                    format!("the {} plugin's {}", plugin.kind.label(), theirs.join(", "))
+                    format!("the {} connector's {}", plugin.kind.label(), theirs.join(", "))
                 } else {
                     // Not on the plugin at all, so every tool this peer holds
                     // is one this agent lacks. A plugin where that is none is a
@@ -7236,7 +7787,7 @@ impl Runtime {
                     if !plugin.tools.iter().any(|tool| tool.access.allows(card.id)) {
                         continue;
                     }
-                    format!("the {} plugin", plugin.kind.label())
+                    format!("the {} connector", plugin.kind.label())
                 };
                 reaches.entry(card.id).or_default().push(entry);
             }

@@ -486,6 +486,107 @@ input[type="file"]::file-selector-button {
 }
 
 /* ==========================================================================
+   The status bar
+
+   The last row of the reading column: the host this window shows, and the
+   operator's quick actions. `components/StatusBar.tsx` says why a button is
+   data rather than code, and why an agent's needs the operator's yes.
+   ========================================================================== */
+
+.statusbar {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--column-inset);
+  border-top: 1px solid var(--edge);
+  background: var(--ground);
+  font-size: var(--type-small);
+  color: var(--muted);
+}
+
+.statusbar__host,
+.statusbar__button,
+.statusbar__edit,
+.statusbar__remove {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-3);
+  cursor: pointer;
+  transition: background var(--tempo-tap) var(--ease), color var(--tempo-tap) var(--ease);
+}
+
+.statusbar__host:hover,
+.statusbar__button:hover,
+.statusbar__edit:hover,
+.statusbar__remove:hover {
+  background: var(--sunken);
+  color: var(--text);
+}
+
+/* A host and this app on different releases is the one fact here worth a
+   color: it is the one that breaks commands. */
+.statusbar__host[data-drift] {
+  color: var(--pit);
+}
+
+.statusbar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.statusbar__action {
+  display: inline-flex;
+  align-items: center;
+}
+
+.statusbar__button {
+  border-color: var(--edge);
+  color: var(--text);
+}
+
+.statusbar__button:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.statusbar__edit {
+  color: var(--faint);
+}
+
+.statusbar__error {
+  flex-basis: 100%;
+  color: var(--alarm);
+}
+
+/* Above the bar rather than in it: the form is taller than a row, and the
+   conversation it would otherwise push is what the operator was reading. */
+.statusbar__form {
+  position: absolute;
+  right: var(--column-inset);
+  bottom: 100%;
+  width: min(22rem, 100%);
+  margin-bottom: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  background: var(--raised);
+  box-shadow: var(--lift-2);
+  color: var(--text);
+  z-index: 5;
+  /* It grows out of the corner of the bar it hangs from. */
+  --pop-origin: bottom right;
+}
+
+/* ==========================================================================
    The desk
 
    Everything waiting on the operator, in the corner, wherever they are.
@@ -5199,7 +5300,8 @@ input[type="file"]:disabled {
 .menu,
 .menu__sub,
 .orb__tag,
-.spend {
+.spend,
+.statusbar__form {
   animation: pop var(--tempo-enter) var(--ease) both;
   transform-origin: var(--pop-origin);
 }
@@ -5497,6 +5599,27 @@ input[type="file"]:disabled {
 
 .memory__text::placeholder {
   color: var(--faint);
+}
+
+/* A skill is markdown an agent reads verbatim, so it is edited and read in
+   the monospace the memory panel uses, and a long one scrolls in place. */
+.textarea--code {
+  font-family: var(--font-mono);
+  font-size: var(--type-aside);
+}
+
+.skill__body {
+  max-height: 20rem;
+  overflow: auto;
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  font-family: var(--font-mono);
+  font-size: var(--type-small);
+  line-height: var(--lead-ui);
+  white-space: pre-wrap;
 }
 
 .memory__actions {

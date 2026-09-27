@@ -1960,6 +1960,50 @@ mod eras {
 }
 
 #[tokio::test]
+async fn a_connector_run_on_the_host_is_called_with_the_environment_it_was_given() {
+    // The whole path a turn takes, for a program rather than an address: the
+    // environment goes into the store with the row and comes back out of it
+    // onto the process, a fresh one per call.
+    let (_dir, store, group, agent) = workspace();
+    let command =
+        format!("stdio:python3 {}/tests/fixtures/mcp-stdio.py", env!("CARGO_MANIFEST_DIR"));
+    let kind = PluginKind::custom("fixture", &command).unwrap();
+    let env =
+        Headers::parse_env(&[HeaderPair { name: "FIXTURE_TOKEN".into(), value: "abc".into() }])
+            .unwrap();
+
+    let plugin = plugins::connect(
+        &store,
+        group,
+        &kind,
+        kind.endpoint(),
+        plugins::Credential::Discover,
+        &env,
+        &Landing::Loopback,
+        browser(Outcome::Refused),
+    )
+    .await
+    .expect("a program connects without a sign-in");
+    assert_eq!(plugin.tools.len(), 3);
+
+    let answer = plugins::call(
+        &store,
+        plugins::Target {
+            group,
+            agent,
+            kind: &kind,
+            endpoint: kind.endpoint(),
+            account: plugins::Held::Absent,
+        },
+        "whoami",
+        &serde_json::json!({}),
+    )
+    .await
+    .expect("the call goes through");
+    assert!(answer.starts_with("token=abc leaked=False"), "{answer}");
+}
+
+#[tokio::test]
 async fn a_call_on_an_unconnected_plugin_says_who_can_connect_it() {
     let (_dir, store, group, agent) = workspace();
 
@@ -2379,7 +2423,7 @@ async fn an_agent_the_plugin_was_narrowed_away_from_is_neither_told_nor_allowed(
     // read for exactly this reason: an agent told its crew has Neon and offered
     // no Neon tools spends the turn looking for them.
     let prompt = harness::prompts_by_agent(&model).remove("Scribe").expect("Scribe had a turn");
-    assert!(!prompt.contains("plugins connected"), "{prompt}");
+    assert!(!prompt.contains("these connectors"), "{prompt}");
 
     // The call it made anyway was refused here rather than at Neon, and the
     // refusal points at the peer who can, not at the operator.
@@ -2503,13 +2547,13 @@ async fn a_narrowed_plugin_shows_up_as_a_peer_who_can_do_it() {
     h.settle(run).await;
     let scribe = harness::prompts_by_agent(&model).remove("Scribe").expect("Scribe had a turn");
     assert!(scribe.contains("Revenue"), "{scribe}");
-    assert!(scribe.contains("the Neon plugin"), "{scribe}");
+    assert!(scribe.contains("the Neon connector"), "{scribe}");
 
     // And the agent that holds it is not told to go and ask itself.
     let run = h.runtime.send_from_human(h.id("Revenue"), "Anything to report?").unwrap();
     h.settle(run).await;
     let revenue = harness::prompts_by_agent(&model).remove("Revenue").expect("Revenue had a turn");
-    assert!(!revenue.contains("the Neon plugin"), "{revenue}");
+    assert!(!revenue.contains("the Neon connector"), "{revenue}");
 }
 
 #[tokio::test]
@@ -2587,12 +2631,12 @@ async fn two_agents_on_one_plugin_are_offered_different_tools_and_told_whose_is_
     // And told whose the other half is, in the sentence that sends it to a
     // peer rather than to the operator.
     let prompt = harness::prompts_by_agent(&model).remove("Reader").expect("Reader had a turn");
-    assert!(prompt.contains("Someone else's on this plugin"), "{prompt}");
+    assert!(prompt.contains("Someone else's on this connector"), "{prompt}");
     assert!(prompt.contains("run_sql"), "{prompt}");
     assert!(!prompt.contains("Switched off by the operator"), "{prompt}");
     // The roster names who, because a peer nobody can name is not a way
     // forward. The plugin line alone cannot say this: Reader has Neon.
-    assert!(prompt.contains("the Neon plugin's run_sql"), "{prompt}");
+    assert!(prompt.contains("the Neon connector's run_sql"), "{prompt}");
 }
 
 #[tokio::test]
@@ -2700,7 +2744,7 @@ async fn a_plugin_with_everything_switched_off_is_not_a_peer_worth_asking() {
     let run = h.runtime.send_from_human(h.id("Scribe"), "Anything to report?").unwrap();
     h.settle(run).await;
     let scribe = harness::prompts_by_agent(&model).remove("Scribe").expect("Scribe had a turn");
-    assert!(!scribe.contains("the Neon plugin"), "{scribe}");
+    assert!(!scribe.contains("the Neon connector"), "{scribe}");
 }
 
 #[tokio::test]

@@ -21,6 +21,14 @@ vi.mock("./ipc", () => ({
   onRuntimeEvent: vi.fn(),
 }));
 
+// The one thing in the transport that reaches outside the page: opening a
+// sign-in in the system browser. Stubbed, so asserting that a window opens one
+// does not ask a test runner to open a browser.
+vi.mock("./transport", async (original) => ({
+  ...(await original<typeof import("./transport")>()),
+  openExternal: vi.fn(async () => {}),
+}));
+
 const { useStore } = await import("./store");
 const { DEFAULT_PREFS } = await import("./prefs");
 
@@ -809,5 +817,22 @@ describe("reconnecting to a running workspace", () => {
     finish([envelope()]);
     await loading;
     expect(useStore.getState().messages.chef?.map((m) => m.id)).toEqual(["m1", "new"]);
+  });
+});
+
+describe("a sign-in page", () => {
+  it("opens in the window that asked for it, and in no other", async () => {
+    const { PAGE_ID } = await import("./transport");
+    useStore.setState({ handoff: null });
+    const apply = (client: string | null | undefined) =>
+      useStore.getState().applyEvent({ type: "openUrl", url: "https://signin.example", client });
+    apply("another-window");
+    expect(useStore.getState().handoff).toBeNull();
+    apply(PAGE_ID);
+    expect(useStore.getState().handoff).toBe("https://signin.example");
+    // An older host names no window, and every window opens it as before.
+    useStore.setState({ handoff: null });
+    apply(undefined);
+    expect(useStore.getState().handoff).toBe("https://signin.example");
   });
 });

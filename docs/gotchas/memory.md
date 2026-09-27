@@ -79,3 +79,10 @@ and `components/WorkingNotes.tsx` are the code.
   draws as a page that is all new. A truthiness check collapses the first two
   and loses the only write where the whole page is the news. `Part::ToolCall`
   in `domain/envelope.rs`, then `trailStep`.
+- **The notebook's index is appended after assembly, and only when it has
+  something in it.** `prompt::add_notebook` follows `add_skills`; an empty
+  notebook adds nothing, so a crew that never uses one sees no prompt change.
+- **A notebook path is checked for links, not only for `..`.** `clean_path`
+  refuses names that could leave the folder, and `Notebooks::locate` refuses a
+  path that runs through a link somebody left there. An agent cannot make a
+  link; an operator's stray one must not become a way out.

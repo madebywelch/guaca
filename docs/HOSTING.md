@@ -71,6 +71,11 @@ host, use `host.docker.internal` (the compose file supplies the Linux mapping).
 A model running on a sleeping laptop will still stop answering, even when
 Guaca itself runs on a VPS.
 
+A connector run as a program (`stdio:`) runs on the backend too, inside the
+container on a Docker host: its command is typed as it would be in a terminal
+there. The image has `node`, so `npx` servers run as they are; a `uvx` server
+needs `uv` installed in it first.
+
 The backend may run the official Codex and Claude CLIs under its own user.
 Guaca does not import the laptop's credentials or provide a Claude.ai login
 flow. Configure the CLI on the backend, as described under **Coding inside
@@ -146,16 +151,17 @@ plain HTTP address entered through this form.
 
 ## A browser hands a document over as bytes
 
-The desktop's `stage_files` takes a path, because Tauri hands the window the
-path of a dropped file and the Rust side reads it: a document never enters
-the renderer. A browser is the renderer, and it has bytes rather than a path,
-so `POST /v1/upload?name=…` takes one file per request and puts it in the
-same store by the same digest. `stageUploads` on the frontend loops and
-collects refusals exactly as `stage_files` does, one line per file in the
-store's own words, so the composer sees one answer shape from either door.
-The drop is DOM events when hosted and Tauri's when not, and `onFileDrop`
-hides which; a browser also gets an attach button, because a drop is not the
-only way a person has a file.
+Tauri hands the desktop window the path of a dropped file, and the native
+side reads it and posts the bytes to the host's `POST /v1/upload?name=…`: a
+document never enters the renderer. A browser is the renderer, and it has
+bytes rather than a path, so it posts them to the same route, one file per
+request, into the same store by the same digest. `stageUploads` and the
+native forward both collect refusals one line per file in the store's own
+words, so the composer sees one answer shape from either door. The drop is
+DOM events in a browser and Tauri's in a window, decided by `desktop` and
+never by `hosted`, which is true for both; `onFileDrop` hides which. Both
+also get an attach button, because a drop is not the only way a person has
+a file.
 
 The body limit on the route is four times the store's, on purpose. Under it a
 file the store refuses is refused with the store's sentence, which names the
@@ -452,6 +458,20 @@ lock with emission, so a delta cannot be omitted or applied twice. A slow
 client whose feed overflows reconnects for another snapshot. Heartbeats retire
 connections that disappeared without a close frame.
 
+A page redials with a doubling backoff to fifteen seconds, and each wait is
+half the backoff plus a random share of the rest: every window on a host loses
+its socket at the same moment when the host restarts, and without the random
+half they redial in step. The browser's `online` event redials at once, because
+a laptop waking is when the host is most likely to answer. A page still closes
+on the `streamLagged` event older hosts send, so a newer page resynchronizes
+against one.
+
+Every call names its page (`client.id`), and the host keeps it for the length
+of that call. A sign-in the host cannot open itself becomes an `openUrl` event
+addressed to that page, so the window that asked opens the consent page and
+the others do not. An event from an older host names no page, and every window
+opens it as before.
+
 On every connection, including the first, the page refreshes the roster,
 settings, decisions, usage and selected transcript. It keeps the window and
 composer mounted. A transcript refresh merges messages arriving during the
@@ -683,7 +703,8 @@ commit metadata are under More options.
 The desktop compares the managed container's image reference with the one
 built into the application. It offers **Back up and update host** when they
 differ. Updating is explicit because it interrupts jobs. The manager downloads
-the image first, stops the container, copies the whole volume to a new backup
+the image first and refuses, with the old host still running, an image whose
+version label is not the app's own version. Then it stops the container, copies the whole volume to a new backup
 volume, and only then replaces the container. The running port and token are
 preserved. A failed backup cancels the upgrade. A failure after the new binary
 has touched the database leaves the backup available; it never starts an old
@@ -711,6 +732,16 @@ retry interval. Set `GUACA_UPDATE_CHECKS=off` to disable automatic release
 lookups; an explicit Check for updates still works. No workspace contents,
 access keys or Guaca account credentials are sent to the release service.
 The cache lasts for the backend process; a restart starts a fresh check.
+
+The desktop app and its host are updated separately, so either can be ahead.
+When their versions differ the notice says which runs what and which one to
+update, before any news of a newer published release: a skew breaks commands,
+and a release is only news. A desktop also learns of a release newer than
+itself, even from a source-built host that is never claimed to be behind.
+Every call names the client's version in its JSON body, so a host that cannot
+answer a command says which side is older instead of "whichever is older". It
+is not a header, because an older host's CORS refuses a header it does not
+know and every call from a newer client would fail its preflight.
 
 A browser whose frontend and backend are both old can detect a new release.
 A stale open page offers to preserve its current text and uploaded attachment

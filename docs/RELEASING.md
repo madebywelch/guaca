@@ -59,9 +59,11 @@ For a new version, update these together in a version-bump PR:
   and inspect the diff for unintended dependency updates.
 
 `pnpm-lock.yaml` currently has no root package version. Keep its dependency
-resolution unchanged. The backend image tag is a separate deployment input;
-search `GUACA_BACKEND_IMAGE` and the default in `src-tauri/src/host.rs` rather
-than assuming a desktop version bump updates it. Pin the image as described below.
+resolution unchanged. The three versions above must agree, and
+`scripts/release-manifest.test.mjs` fails CI when they do not. An unpinned
+build installs `ghcr.io/madebywelch/guaca/guacad:<its own version>`, so a
+version bump moves the default host image with it. A distributable app still
+pins `GUACA_BACKEND_IMAGE` to a digest as described below.
 
 Merge the version bump before building a release from `main`. A draft refresh
 can retain its unpublished version. Record the full commit SHA and build it in

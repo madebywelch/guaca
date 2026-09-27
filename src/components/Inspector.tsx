@@ -5,6 +5,7 @@ import type { AgentCard, RoutineId } from "../lib/types";
 import { BrowserScreen } from "./BrowserScreen";
 import { ComputerScreen } from "./ComputerScreen";
 import { Memory } from "./Memory";
+import { Notebook } from "./Notebook";
 import { RoutineDetail } from "./RoutineDetail";
 import { RoutineList } from "./RoutineList";
 import { WorkingNotes } from "./WorkingNotes";
@@ -230,6 +231,7 @@ export function Inspector({
           <RoutineList agentId={agent.id} onOpen={setRoutine} />
           <WorkingNotes agentId={agent.id} />
           <Memory agentId={agent.id} />
+          <Notebook agentId={agent.id} />
         </div>
 
         {routine !== null && (

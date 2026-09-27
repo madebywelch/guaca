@@ -13,15 +13,23 @@ export function manifest(version, commit, image, protocol) {
   return {schema: 1, version, commit, image, apiGeneration: generation, clientMinimum: minimum, clientMaximum: maximum, notes: `https://github.com/madebywelch/guaca/releases/tag/v${version}`};
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const root = fileURLToPath(new URL("../", import.meta.url));
-  const git = (...args) => execFileSync("git", args, {cwd: root, encoding: "utf8"}).trim();
-  if (git("status", "--porcelain")) throw new Error("Build release metadata from a clean checkout.");
-  const read = name => readFileSync(resolve(root, name), "utf8");
+const root = fileURLToPath(new URL("../", import.meta.url));
+const read = name => readFileSync(resolve(root, name), "utf8");
+
+/** The one version all three builds carry. The page, the desktop and the host
+ *  each report their own, and the host manager refuses an image whose label
+ *  disagrees with the app, so a drift here is an update that cannot finish. */
+export function sharedVersion() {
   const { version } = JSON.parse(read("package.json"));
   const cargoVersion = read("src-tauri/Cargo.toml").match(/^version = "([^"]+)"/m)?.[1];
   if (JSON.parse(read("src-tauri/tauri.conf.json")).version !== version || cargoVersion !== version) throw new Error("Frontend, desktop and backend versions must match.");
-  const value = manifest(version, git("rev-parse", "HEAD"), process.env.GUACA_BACKEND_IMAGE ?? "", JSON.parse(read("release-protocol.json")));
+  return version;
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const git = (...args) => execFileSync("git", args, {cwd: root, encoding: "utf8"}).trim();
+  if (git("status", "--porcelain")) throw new Error("Build release metadata from a clean checkout.");
+  const value = manifest(sharedVersion(), git("rev-parse", "HEAD"), process.env.GUACA_BACKEND_IMAGE ?? "", JSON.parse(read("release-protocol.json")));
   if (!process.argv[2]) throw new Error("Usage: GUACA_BACKEND_IMAGE=... node scripts/release-manifest.mjs /path/to/guaca-release.json");
   writeFileSync(process.argv[2], `${JSON.stringify(value, null, 2)}\n`);
 }

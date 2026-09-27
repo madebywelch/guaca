@@ -39,13 +39,13 @@ use crate::domain::repository::{
 use crate::domain::routine::{self, Routine, RoutineRun, Trigger};
 use crate::domain::search::SearchHits;
 use crate::domain::signin::Signin;
+use crate::domain::skill::{Scope as SkillScope, Skill};
 use crate::domain::usage::{GroupUsage, RunUsage};
 use crate::domain::worknote::WorkingNote;
 use crate::e2b::{Computer, E2bClient, E2bError};
 use crate::kernel::{Browser, KernelClient, KernelError};
 use crate::llm::catalog::{Catalog, CatalogError, RankedModel};
 use crate::runtime::events::{Activity, UiEvent};
-use crate::runtime::guard::GuardLimits;
 use crate::runtime::Runtime;
 use crate::subscription::{DeviceCode, SigninError, Status, Subscription};
 
@@ -363,6 +363,31 @@ impl From<crate::repo::RepoError> for CommandError {
     }
 }
 
+impl From<crate::notebook::NotebookError> for CommandError {
+    fn from(err: crate::notebook::NotebookError) -> Self {
+        use crate::notebook::NotebookError;
+        let kind = match &err {
+            NotebookError::NotFound(_) => "notFound",
+            NotebookError::Io { .. } => "storage",
+            _ => "validation",
+        };
+        CommandError::new(kind, err.to_string())
+    }
+}
+
+impl From<crate::skills::SkillsError> for CommandError {
+    fn from(err: crate::skills::SkillsError) -> Self {
+        use crate::skills::SkillsError;
+        let kind = match &err {
+            SkillsError::NotFound(_) => "notFound",
+            SkillsError::ReadOnly(_) | SkillsError::NotYours { .. } => "readOnly",
+            SkillsError::Invalid(_) => "validation",
+            SkillsError::Io { .. } => "storage",
+        };
+        CommandError::new(kind, err.to_string())
+    }
+}
+
 impl From<crate::plugins::PluginError> for CommandError {
     fn from(err: crate::plugins::PluginError) -> Self {
         // Its own kind, because the UI can offer the one thing that fixes it:
@@ -400,7 +425,11 @@ impl From<KernelError> for CommandError {
 
 impl From<config::ConfigError> for CommandError {
     fn from(err: config::ConfigError) -> Self {
-        CommandError::new("config", err.to_string())
+        let kind = match err {
+            config::ConfigError::Blank { .. } | config::ConfigError::Quick(_) => "validation",
+            _ => "config",
+        };
+        CommandError::new(kind, err.to_string())
     }
 }
 
@@ -1373,7 +1402,7 @@ pub async fn add_plugin(
         }
     }
 
-    let (key, headers) = presented(key, headers)?;
+    let (key, headers) = presented(key, headers, kind.is_stdio())?;
     let credential = match key.as_deref() {
         Some(key) => crate::plugins::Credential::Key(key),
         None => crate::plugins::Credential::Discover,
@@ -1397,10 +1426,26 @@ pub async fn add_plugin(
 fn presented(
     key: Option<String>,
     headers: Option<Vec<HeaderPair>>,
+    stdio: bool,
 ) -> Result<(Option<String>, Headers), CommandError> {
     let key = key.map(|key| key.trim().to_string()).filter(|key| !key.is_empty());
-    let headers = Headers::parse(&headers.unwrap_or_default())
-        .map_err(|err| CommandError::new("validation", err.to_string()))?;
+    let rows = headers.unwrap_or_default();
+    // A program is given its key the way such programs expect, as a variable
+    // in its environment. The rows are that environment, under its own rules.
+    if stdio {
+        if key.is_some() {
+            return Err(CommandError::new(
+                "validation",
+                "a server run on the host takes its key as an environment variable, such as \
+                 GITHUB_TOKEN. Put it there and clear the key.",
+            ));
+        }
+        let env = Headers::parse_env(&rows)
+            .map_err(|err| CommandError::new("validation", err.to_string()))?;
+        return Ok((None, env));
+    }
+    let headers =
+        Headers::parse(&rows).map_err(|err| CommandError::new("validation", err.to_string()))?;
     if key.is_some() && headers.carries_authorization() {
         return Err(CommandError::new(
             "validation",
@@ -1515,7 +1560,7 @@ pub async fn readdress_plugin(
         .group_plugins(group_id)?
         .into_iter()
         .find(|held| held.id == id)
-        .ok_or_else(|| CommandError::new("validation", "that plugin is not in this group"))?;
+        .ok_or_else(|| CommandError::new("validation", "that connector is not in this crew"))?;
     if !held.custom {
         return Err(CommandError::new(
             "validation",
@@ -1533,7 +1578,7 @@ pub async fn readdress_plugin(
     let kind = PluginKind::custom(&held.name, &url)
         .map_err(|err| CommandError::new("validation", err.to_string()))?;
     let (key, headers) = match headers {
-        Some(rows) => presented(key, Some(rows))?,
+        Some(rows) => presented(key, Some(rows), kind.is_stdio())?,
         // Read back off the row rather than left out of the write, so there is
         // one path into `save_plugin` and one meaning for what it is handed.
         None => {
@@ -1542,8 +1587,11 @@ pub async fn readdress_plugin(
                 .store()
                 .plugin_dial(id)?
                 .map(|dialed| dialed.headers)
+                // Headers are not an environment, nor the other way round: a
+                // server moved between an address and a program starts empty.
+                .filter(|stored| stored.is_env() == kind.is_stdio())
                 .unwrap_or_default();
-            let (key, _) = presented(key, None)?;
+            let (key, _) = presented(key, None, kind.is_stdio())?;
             if key.is_some() && stored.carries_authorization() {
                 return Err(CommandError::new(
                     "validation",
@@ -1588,9 +1636,10 @@ pub async fn probe_server(
     // address that is tested is the address that would be stored. A test run
     // against `https://example.com/mcp/` that passes, followed by a sign-in
     // scoped to `https://example.com/mcp` that fails, is worse than no test.
-    let endpoint = plugin::canonical_url(&url)
+    let endpoint = plugin::canonical_address(&url)
         .map_err(|err| CommandError::new("validation", err.to_string()))?;
-    let (key, headers) = presented(key, headers)?;
+    let stdio = endpoint.starts_with(plugin::STDIO);
+    let (key, headers) = presented(key, headers, stdio)?;
     Ok(crate::plugins::inspect(true, &endpoint, key.as_deref(), &headers).await?)
 }
 
@@ -1607,7 +1656,7 @@ pub async fn check_plugin(state: &AppState, id: PluginId) -> Reply<ServerReport>
         .runtime
         .store()
         .plugin_dial(id)?
-        .ok_or_else(|| CommandError::new("validation", "that plugin is not connected"))?;
+        .ok_or_else(|| CommandError::new("validation", "that connector is not connected"))?;
 
     // The same two-line resolution `connect_plugin` does, and for the same
     // reason: an account-backed plugin's server is the operator's own account
@@ -1998,6 +2047,9 @@ pub async fn disband_group(state: &AppState, id: GroupId) -> Reply<()> {
             state.runtime.purge_agent(&card).await?;
         }
         state.runtime.store().delete_group(id)?;
+        // What the crew's agents wrote down for each other goes with them. A
+        // new crew never reuses the id, so nothing else would ever read it.
+        state.runtime.skills().forget_crew(id);
         Ok(())
     }
     .await;
@@ -2007,6 +2059,134 @@ pub async fn disband_group(state: &AppState, id: GroupId) -> Reply<()> {
     // click on to open channels belonging to agents that are gone.
     state.runtime.emit(UiEvent::AgentsChanged);
     outcome
+}
+
+// ---- tools -----------------------------------------------------------------
+
+/// Guaca's own tools, as the operator reads about them. The same on every host
+/// and for every crew; a connector's tools are listed with the connector.
+pub async fn builtin_tools(_state: &AppState) -> Reply<Vec<crate::llm::tools::ToolSummary>> {
+    Ok(crate::llm::tools::catalog())
+}
+
+// ---- the status bar --------------------------------------------------------
+
+/// Puts a button on the status bar. The operator's own: no approval, since the
+/// person clicking it is the person who wrote it.
+pub async fn add_quick_action(
+    state: &AppState,
+    label: String,
+    does: crate::domain::quick::Does,
+) -> Reply<RedactedConfig> {
+    quick_targets_exist(state, &does)?;
+    let action = crate::domain::quick::QuickAction::new(&label, does, "the operator")
+        .map_err(config::ConfigError::from)?;
+    let config = state.runtime.change_config(|config| {
+        crate::domain::quick::add(&mut config.quick_actions, action)
+            .map_err(config::ConfigError::from)?;
+        Ok::<_, config::ConfigError>(())
+    })?;
+    Ok(config.redacted())
+}
+
+pub async fn remove_quick_action(state: &AppState, id: String) -> Reply<RedactedConfig> {
+    let config = state.runtime.change_config(|config| {
+        crate::domain::quick::remove(&mut config.quick_actions, &id)
+            .map_err(config::ConfigError::from)?;
+        Ok::<_, config::ConfigError>(())
+    })?;
+    Ok(config.redacted())
+}
+
+/// Refuses a button pointed at an agent or a crew that is not there, before it
+/// is drawn as one that does nothing.
+fn quick_targets_exist(
+    state: &AppState,
+    does: &crate::domain::quick::Does,
+) -> Result<(), CommandError> {
+    use crate::domain::quick::{Does, Place};
+    let store = state.runtime.store();
+    let missing = match does {
+        Does::Message { agent_id, .. } | Does::Open { place: Place::Channel { agent_id } } => {
+            store.get_agent(*agent_id)?.is_none()
+        }
+        Does::Open { place: Place::CrewSettings { group_id } } => {
+            store.get_group(*group_id)?.is_none()
+        }
+        Does::Open { .. } => false,
+    };
+    if missing {
+        return Err(CommandError::new("notFound", "that agent or crew no longer exists"));
+    }
+    Ok(())
+}
+
+// ---- the operator's view --------------------------------------------------
+
+/// What the window with focus is showing, for an agent asked about "this".
+/// Every host answers it the same way; the page only reports while focused.
+pub async fn report_view(state: &AppState, view: crate::domain::view::OperatorView) -> Reply<()> {
+    state.runtime.report_view(view);
+    Ok(())
+}
+
+// ---- skills --------------------------------------------------------------
+
+/// A skill the operator is writing, in Settings or in a crew's settings.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillDraft {
+    pub name: String,
+    pub description: String,
+    pub body: String,
+    /// The name it had, when the edit renamed it. The old one is removed only
+    /// after the new one is written, so a failed rename loses nothing.
+    #[serde(default)]
+    pub previous: Option<String>,
+}
+
+/// The scope, once a crew named in it is known to exist. Nothing is written
+/// under the id of a crew that was disbanded while its settings were open.
+fn skill_scope(state: &AppState, scope: SkillScope) -> Result<SkillScope, CommandError> {
+    if let SkillScope::Crew { group_id } = scope {
+        state
+            .runtime
+            .store()
+            .get_group(group_id)?
+            .ok_or_else(|| CommandError::new("notFound", "that crew no longer exists"))?;
+    }
+    Ok(scope)
+}
+
+pub async fn list_skills(state: &AppState, scope: SkillScope) -> Reply<Vec<Skill>> {
+    let scope = skill_scope(state, scope)?;
+    Ok(state.runtime.skills().in_scope(scope))
+}
+
+pub async fn read_skill(state: &AppState, scope: SkillScope, name: String) -> Reply<Skill> {
+    let scope = skill_scope(state, scope)?;
+    Ok(state.runtime.skills().load(scope, &name)?)
+}
+
+pub async fn save_skill(state: &AppState, scope: SkillScope, draft: SkillDraft) -> Reply<Skill> {
+    let scope = skill_scope(state, scope)?;
+    let clean = crate::domain::skill::Clean::new(&draft.name, &draft.description, &draft.body)
+        .map_err(crate::skills::SkillsError::from)?;
+    let written = state.runtime.skills().write(scope, &clean)?;
+    if let Some(previous) = draft.previous.filter(|previous| *previous != written.name) {
+        state.runtime.skills().delete(scope, &previous)?;
+    }
+    state.runtime.emit(UiEvent::SkillsChanged { scope });
+    Ok(written)
+}
+
+pub async fn delete_skill(state: &AppState, scope: SkillScope, name: String) -> Reply<bool> {
+    let scope = skill_scope(state, scope)?;
+    let deleted = state.runtime.skills().delete(scope, &name)?;
+    if deleted {
+        state.runtime.emit(UiEvent::SkillsChanged { scope });
+    }
+    Ok(deleted)
 }
 
 // ---- agents --------------------------------------------------------------
@@ -2247,6 +2427,25 @@ pub async fn set_agent_memory(state: &AppState, id: AgentId, content: String) ->
 }
 
 /// What an agent is in the middle of: the other half of what it carries.
+/// What an agent keeps in its notebook, for the operator to read.
+pub async fn agent_notebook(state: &AppState, id: AgentId) -> Reply<Vec<crate::notebook::Entry>> {
+    Ok(state.runtime.notebooks().list(id))
+}
+
+pub async fn read_notebook(state: &AppState, id: AgentId, path: String) -> Reply<String> {
+    Ok(state.runtime.notebooks().read(id, &path)?)
+}
+
+/// The operator's one write: taking a file away. The notebook is the agent's
+/// account of its own work, for the reason working notes are.
+pub async fn delete_notebook_file(state: &AppState, id: AgentId, path: String) -> Reply<bool> {
+    let deleted = state.runtime.notebooks().delete(id, &path)?;
+    if deleted {
+        state.runtime.emit(UiEvent::NotebookChanged { agent_id: id });
+    }
+    Ok(deleted)
+}
+
 pub async fn agent_working_notes(state: &AppState, id: AgentId) -> Reply<Vec<WorkingNote>> {
     Ok(state.runtime.store().working_notes(id)?)
 }
@@ -2337,33 +2536,6 @@ pub struct Staged {
     pub refused: Vec<String>,
 }
 
-/// Takes what the operator dropped on the window into the store, there and then.
-///
-/// On the drop rather than on the send, for two reasons they feel. A file too
-/// big to send is refused while they are still holding it, instead of failing a
-/// message they have since written; and a picture that is already stored has an
-/// address, so it can be shown back to them before it goes. What is staged and
-/// never sent is the same leftover as a file whose message was deleted, and the
-/// store has always kept those.
-///
-/// `paths` are on the operator's own disk, never bytes: this side reads them,
-/// so a document never crosses IPC and never sits in the renderer's memory.
-pub async fn stage_files(state: &AppState, paths: Vec<String>) -> Reply<Staged> {
-    state.deployment.capabilities().require(Absent::LocalFiles)?;
-
-    let mut staged = Staged::default();
-    for path in &paths {
-        match state.runtime.files().take(std::path::Path::new(path)) {
-            Ok(file) => staged.attached.push(file),
-            // One file out of five failing does not refuse the other four. The
-            // operator picked all of them deliberately, and the one that cannot
-            // go is named so they know which it was.
-            Err(err) => staged.refused.push(err.to_string()),
-        }
-    }
-    Ok(staged)
-}
-
 /// A ticket for one sandbox's screen, or `None` where the screen needs none.
 ///
 /// `sha256(secret ":" sandbox)`, so it can be checked without being stored and
@@ -2400,11 +2572,10 @@ impl AppState {
 
 /// Sends files from this machine's disk to a workspace somewhere else.
 ///
-/// The desktop app can show a box's workspace, and a file dropped on that
-/// window is still a path on this disk that the box has never seen. So the
-/// same read `stage_files` does happens here, and the bytes go to the box's
-/// upload route instead of into this machine's store. One file at a time,
-/// with the box's own sentence for each one it refuses.
+/// A file dropped on the desktop window is a path on this disk that the host,
+/// local container or remote box, has never seen. So it is read here and the
+/// bytes go to the host's upload route, one file at a time, with the host's
+/// own sentence for each one it refuses. A document never enters the renderer.
 pub async fn forward_files(
     state: &AppState,
     origin: String,
@@ -2875,27 +3046,7 @@ pub struct GroupReset {
 
 // ---- settings ------------------------------------------------------------
 
-/// Absent fields are left alone. `apiKey: ""` clears the key; omitting it
-/// keeps the existing one, which is what lets the UI show a redacted value
-/// without ever round-tripping the secret.
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct SettingsPatch {
-    pub operator_name: Option<String>,
-    pub provider: Option<config::Provider>,
-    pub base_url: Option<String>,
-    pub api_key: Option<String>,
-    pub default_model: Option<String>,
-    pub subscription_model: Option<String>,
-    pub reasoning_effort: Option<crate::domain::effort::ReasoningEffort>,
-    pub request_timeout_secs: Option<u64>,
-    pub limits: Option<GuardLimits>,
-    pub e2b_api_key: Option<String>,
-    pub computer_idle_minutes: Option<u32>,
-    pub kernel_api_key: Option<String>,
-    pub browser_idle_minutes: Option<u32>,
-    pub browser_stealth: Option<bool>,
-}
+pub use crate::config::SettingsPatch;
 
 /// What this workspace can do, which is a property of where it runs.
 ///
@@ -3002,89 +3153,37 @@ pub async fn complete_subscription_signin(state: &AppState, code: DeviceCode) ->
 pub async fn sign_out_subscription(state: &AppState) -> Reply<RedactedConfig> {
     state.subscription.sign_out()?;
 
-    let mut config: AppConfig = state.runtime.config();
-    if config.inference.provider == config::Provider::Chatgpt {
-        config.inference.provider = config::Provider::Compatible;
-        // The endpoint and key were never cleared when the subscription was
-        // chosen, so going back lands on whatever was configured before it.
-        config::save(&state.config_path, &config)?;
-        state.runtime.set_config(config.clone());
+    if state.runtime.config().inference.provider != config::Provider::Chatgpt {
+        return Ok(state.runtime.config().redacted());
     }
+    let config = state.runtime.change_config(|config| {
+        // Read again under the writer: another client may have moved off the
+        // subscription since the check above.
+        if config.inference.provider == config::Provider::Chatgpt {
+            // The endpoint and key were never cleared when the subscription was
+            // chosen, so going back lands on whatever was configured before it.
+            config.inference.provider = config::Provider::Compatible;
+        }
+        Ok::<_, CommandError>(())
+    })?;
     Ok(config.redacted())
 }
 
-/// Applies a patch to a config in memory. Shared by saving and testing, so a
-/// tested configuration and a saved one can never diverge.
+/// Applies a patch to a config in memory, after the checks that belong to this
+/// boundary. Shared by saving and testing, so a tested configuration and a
+/// saved one can never diverge; the rules themselves are `AppConfig::apply`.
 fn apply_patch(
     here: Capabilities,
     config: &mut AppConfig,
     patch: SettingsPatch,
 ) -> Result<(), CommandError> {
     honorable(here, patch.provider, patch.base_url.as_deref())?;
-    if let Some(name) = patch.operator_name {
-        config.operator_name = name.trim().to_string();
-    }
-    if let Some(provider) = patch.provider {
-        config.inference.provider = provider;
-    }
-    if let Some(base_url) = patch.base_url {
-        config.inference.base_url = config::normalize_base_url(&base_url)?;
-    }
-    if let Some(key) = patch.e2b_api_key {
-        config.e2b.api_key = key.trim().to_string();
-    }
-    if let Some(minutes) = patch.computer_idle_minutes {
-        // A machine that sleeps after zero minutes can never be used, and one
-        // that never sleeps is a bill nobody chose.
-        config.e2b.idle_minutes = minutes.clamp(1, 24 * 60);
-    }
-    if let Some(key) = patch.kernel_api_key {
-        config.kernel.api_key = key.trim().to_string();
-    }
-    if let Some(minutes) = patch.browser_idle_minutes {
-        // Wider at the top than the machine's, because a browser on standby
-        // costs nothing and the provider allows three days. Wider at the bottom
-        // is not possible: ten seconds is its floor, which is a fifth of a
-        // minute, so one minute is as short as this can offer.
-        config.kernel.idle_minutes = minutes.clamp(1, 72 * 60);
-    }
-    if let Some(stealth) = patch.browser_stealth {
-        config.kernel.stealth = stealth;
-    }
-    if let Some(api_key) = patch.api_key {
-        config.inference.api_key = api_key.trim().to_string();
-    }
-    if let Some(model) = patch.default_model {
-        let trimmed = model.trim();
-        if trimmed.is_empty() {
-            return Err(CommandError::new("validation", "default model must not be blank"));
-        }
-        config.inference.default_model = trimmed.to_string();
-    }
-    if let Some(effort) = patch.reasoning_effort {
-        config.inference.reasoning_effort = effort;
-    }
-    if let Some(model) = patch.subscription_model {
-        let trimmed = model.trim();
-        if trimmed.is_empty() {
-            return Err(CommandError::new("validation", "subscription model must not be blank"));
-        }
-        config.inference.subscription_model = trimmed.to_string();
-    }
-    if let Some(timeout) = patch.request_timeout_secs {
-        config.inference.request_timeout_secs = timeout.clamp(5, 900);
-    }
-    if let Some(limits) = patch.limits {
-        config.limits = limits.sanitized();
-    }
-    Ok(())
+    Ok(config.apply(patch)?)
 }
 
 pub async fn update_settings(state: &AppState, patch: SettingsPatch) -> Reply<RedactedConfig> {
-    let mut config: AppConfig = state.runtime.config();
-    apply_patch(state.deployment.capabilities(), &mut config, patch)?;
-    config::save(&state.config_path, &config)?;
-    state.runtime.set_config(config.clone());
+    let here = state.deployment.capabilities();
+    let config = state.runtime.change_config(|config| apply_patch(here, config, patch))?;
     Ok(config.redacted())
 }
 

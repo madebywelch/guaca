@@ -5,7 +5,7 @@
 
 use crate::domain::decision::WorkDecision;
 use crate::domain::ids::DecisionId;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::commands::{
@@ -76,20 +76,22 @@ impl Refused {
 
     /// What the client is told, in the shape it already parses.
     pub fn body(&self) -> CommandError {
+        self.body_for(None)
+    }
+
+    /// The same, naming which side to update when the client said what it is.
+    pub fn body_for(&self, client: Option<&Client>) -> CommandError {
         match self {
             Refused::Unknown(name) => CommandError::new(
                 "unknownCommand",
-                format!(
-                    "this build has no command called `{name}`. The app and the workspace it is \
-                     connected to are different versions; update whichever is older"
-                ),
+                format!("this build has no command called `{name}`. {}", skew(client)),
             ),
             Refused::Arguments { command, why } => CommandError::new(
                 "badArguments",
                 format!(
                     "`{command}` was called with arguments this build does not recognize ({why}). \
-                     The app and the workspace it is connected to are different versions; update \
-                     whichever is older"
+                     {}",
+                    skew(client)
                 ),
             ),
             Refused::Command(err) => CommandError::new(err.kind, err.message.clone()),
@@ -98,6 +100,68 @@ impl Refused {
                 format!("the answer could not be encoded to send back ({why})"),
             ),
         }
+    }
+}
+
+/// What a client says it is, on every call.
+///
+/// In the body rather than a header: a header an older host's CORS does not
+/// admit fails the preflight of every call, which turns a version skew into a
+/// workspace that cannot be reached at all.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Client {
+    pub version: String,
+    #[serde(default)]
+    pub desktop: bool,
+    /// One page load. What a sign-in's browser tab is addressed to, so the
+    /// window that asked opens it and the others do not.
+    #[serde(default)]
+    pub id: Option<String>,
+}
+
+impl Client {
+    /// The page id, if it is one: a short token, never text to repeat.
+    pub fn page(&self) -> Option<String> {
+        self.id.clone().filter(|id| {
+            !id.is_empty()
+                && id.len() <= 64
+                && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+    }
+}
+
+/// The sentence that says which side of a skew to update.
+///
+/// Only a comparable release is ordered. Equal versions with different
+/// commands are two development builds, and a guess about which is older is
+/// worse than saying both are possible.
+pub fn skew(client: Option<&Client>) -> String {
+    use std::cmp::Ordering;
+    let host = env!("CARGO_PKG_VERSION");
+    let order = client.and_then(|c| {
+        let theirs = semver::Version::parse(&c.version).ok()?;
+        Some(theirs.cmp(&semver::Version::parse(host).ok()?))
+    });
+    match (client, order) {
+        (Some(c), Some(Ordering::Less)) => format!(
+            "This {} is Guaca {} and the host is {host}; {}",
+            if c.desktop { "app" } else { "page" },
+            c.version,
+            if c.desktop {
+                "download the latest Guaca for this computer"
+            } else {
+                "reload the page to load the host's own version"
+            }
+        ),
+        (Some(c), Some(Ordering::Greater)) => format!(
+            "This {} is Guaca {} and the host is {host}; update the host",
+            if c.desktop { "app" } else { "page" },
+            c.version
+        ),
+        _ => "The app and the workspace it is connected to are different versions; update \
+              whichever is older"
+            .into(),
     }
 }
 
@@ -176,6 +240,15 @@ surface! {
     update_occasion(id: crate::domain::ids::OccasionId, draft: crate::commands::OccasionDraft) -> crate::domain::occasion::Occasion,
     delete_occasion(id: crate::domain::ids::OccasionId) -> (),
     webhook_address() -> crate::commands::WebhookAddress,
+
+    report_view(view: crate::domain::view::OperatorView) -> (),
+    builtin_tools() -> Vec<crate::llm::tools::ToolSummary>,
+    add_quick_action(label: String, does: crate::domain::quick::Does) -> RedactedConfig,
+    remove_quick_action(id: String) -> RedactedConfig,
+    list_skills(scope: crate::domain::skill::Scope) -> Vec<crate::domain::skill::Skill>,
+    read_skill(scope: crate::domain::skill::Scope, name: String) -> crate::domain::skill::Skill,
+    save_skill(scope: crate::domain::skill::Scope, draft: crate::commands::SkillDraft) -> crate::domain::skill::Skill,
+    delete_skill(scope: crate::domain::skill::Scope, name: String) -> bool,
 
     agent_computer(id: AgentId) -> Option<Computer>,
     give_agent_computer(id: AgentId) -> (),
@@ -257,6 +330,9 @@ surface! {
     agent_activity() -> HashMap<AgentId, Activity>,
     agent_memory(id: AgentId) -> String,
     set_agent_memory(id: AgentId, content: String) -> String,
+    agent_notebook(id: AgentId) -> Vec<crate::notebook::Entry>,
+    read_notebook(id: AgentId, path: String) -> String,
+    delete_notebook_file(id: AgentId, path: String) -> bool,
     agent_working_notes(id: AgentId) -> Vec<WorkingNote>,
     clear_agent_working_notes(id: AgentId) -> (),
     agent_last_active() -> HashMap<AgentId, i64>,
@@ -264,7 +340,6 @@ surface! {
     pair_messages(a: AgentId, b: AgentId, limit: Option<u32>) -> Vec<Envelope>,
     conversation_flow(group: GroupId, limit: Option<u32>) -> Vec<Envelope>,
     search(query: String, limit: Option<u32>) -> SearchHits,
-    stage_files(paths: Vec<String>) -> Staged,
     send_message(agent_id: AgentId, text: String, files: Option<Vec<FileRef>>) -> RunId,
     save_file(digest: String, name: String) -> String,
     frame_artifact(html: String) -> ArtifactAddress,
@@ -335,6 +410,27 @@ mod tests {
         assert_eq!(body.kind, "unknownCommand");
         assert!(body.message.contains("summon_kraken"), "{}", body.message);
         assert!(body.message.contains("update"), "{}", body.message);
+    }
+
+    #[test]
+    fn a_skewed_client_is_told_which_side_to_update() {
+        let host = semver::Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
+        let older = Client { version: "0.0.1".into(), desktop: true, id: None };
+        let newer = Client { version: format!("{}.0.0", host.major + 1), desktop: true, id: None };
+        let message = Refused::Unknown("x".into()).body_for(Some(&older)).message;
+        assert!(message.contains("download the latest Guaca"), "{message}");
+        let message = Refused::Unknown("x".into()).body_for(Some(&newer)).message;
+        assert!(message.contains("update the host"), "{message}");
+        let page = Client { version: "0.0.1".into(), desktop: false, id: None };
+        let message = Refused::Unknown("x".into()).body_for(Some(&page)).message;
+        assert!(message.contains("reload the page"), "{message}");
+        // A development build at the host's own version, or no claim at all,
+        // cannot be ordered, and the message does not pretend otherwise.
+        let same = Client { version: env!("CARGO_PKG_VERSION").into(), desktop: true, id: None };
+        for client in [Some(&same), None] {
+            let message = Refused::Unknown("x".into()).body_for(client).message;
+            assert!(message.contains("whichever is older"), "{message}");
+        }
     }
 
     #[test]

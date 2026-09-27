@@ -1717,6 +1717,283 @@ async fn agents_run_concurrently_rather_than_one_after_another() {
     );
 }
 
+// ---- skills --------------------------------------------------------------
+
+#[tokio::test]
+async fn a_skill_one_agent_writes_is_offered_to_its_crew_on_the_next_turn() {
+    // The whole loop: a write through the tool, stored for the crew, named in
+    // the next prompt of a crewmate, and read back whole by `view`.
+    let stub = serve(|body| {
+        let who = speaker(body);
+        if who == "Writer" {
+            if has_tool_result(body) {
+                Script::Say("Written down.".into())
+            } else {
+                Script::Skill(serde_json::json!({
+                    "action": "write",
+                    "name": "release-notes",
+                    "description": "When writing release notes",
+                    "content": "# Release notes\n\nLead with what changed for the reader.",
+                }))
+            }
+        } else if has_tool_result(body) {
+            Script::Say("Read it.".into())
+        } else {
+            Script::Skill(serde_json::json!({ "action": "view", "name": "release-notes" }))
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Writer", "Reader"], GuardLimits::default());
+    let run =
+        h.runtime.send_from_human(h.id("Writer"), "Write down how we do release notes.").unwrap();
+    h.settle(run).await;
+    let run = h.runtime.send_from_human(h.id("Reader"), "Draft the notes.").unwrap();
+    h.settle(run).await;
+
+    let prompts = prompts_by_agent(&stub);
+    let reader = prompts.get("Reader").expect("the reader was prompted");
+    assert!(
+        reader.contains("- release-notes (your crew): When writing release notes"),
+        "the crewmate is not offered the skill: {reader}"
+    );
+    assert!(reader.contains("- guaca (Guaca):"), "Guaca's own is always offered: {reader}");
+    let results = tool_results(&stub).join("\n");
+    assert!(results.contains("Wrote `release-notes` for your crew"), "{results}");
+    assert!(results.contains("Lead with what changed for the reader."), "{results}");
+}
+
+#[tokio::test]
+async fn an_agent_cannot_write_guacas_skill_or_delete_the_operators() {
+    let stub = serve(|body| {
+        let who = speaker(body);
+        if has_tool_result(body) {
+            Script::Say("Understood.".into())
+        } else if who == "Writer" {
+            Script::Skill(serde_json::json!({
+                "action": "write", "name": "guaca", "description": "Mine now", "content": "x",
+            }))
+        } else {
+            Script::Skill(serde_json::json!({ "action": "delete", "name": "house-style" }))
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Writer", "Deleter"], GuardLimits::default());
+    let house =
+        guac_lib::domain::skill::Clean::new("house-style", "When writing", "Plain.").unwrap();
+    h.runtime.skills().write(guac_lib::domain::skill::Scope::Workspace, &house).unwrap();
+    for name in ["Writer", "Deleter"] {
+        let run = h.runtime.send_from_human(h.id(name), "Go.").unwrap();
+        h.settle(run).await;
+    }
+
+    let results = tool_results(&stub).join("\n");
+    assert!(results.contains("`guaca` is Guaca's own skill and is read-only"), "{results}");
+    assert!(results.contains("`house-style` belongs to the operator"), "{results}");
+    assert!(h.runtime.skills().read(None, "house-style").is_ok(), "the operator's skill survives");
+}
+
+// ---- the notebook --------------------------------------------------------------
+
+#[tokio::test]
+async fn a_file_an_agent_keeps_is_named_on_its_next_turn_and_read_only_when_asked() {
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Kept.".into())
+        } else if anyone_said(body, "Track the lead") {
+            Script::Notebook(serde_json::json!({
+                "action": "write",
+                "path": "leads/acme",
+                "content": "# Acme\nWants a demo in October. THE-PRIVATE-DETAIL",
+            }))
+        } else {
+            Script::Say("Nothing to do.".into())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Seller", "Peer"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Seller"), "Track the lead from Acme.").unwrap();
+    h.settle(run).await;
+    let run = h.runtime.send_from_human(h.id("Seller"), "Anything new?").unwrap();
+    h.settle(run).await;
+
+    let prompts = prompts_by_agent(&stub);
+    let seller = prompts.get("Seller").expect("the seller was prompted");
+    assert!(seller.contains("## Your notebook"), "{seller}");
+    assert!(seller.contains("- leads/acme.md ("), "{seller}");
+    assert!(!seller.contains("THE-PRIVATE-DETAIL"), "a file is named, never read out: {seller}");
+    assert_eq!(h.runtime.notebooks().list(h.id("Peer")), vec![], "the folder is the agent's own");
+    assert!(h
+        .runtime
+        .notebooks()
+        .read(h.id("Seller"), "leads/acme.md")
+        .unwrap()
+        .contains("October"));
+}
+
+// ---- settings --------------------------------------------------------------
+
+#[tokio::test]
+async fn an_agent_reads_the_settings_and_what_the_operator_is_looking_at_and_never_a_key() {
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("That pane holds the limits.".into())
+        } else {
+            Script::Settings(serde_json::json!({ "action": "read" }))
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Helper"], GuardLimits::default());
+    h.runtime.report_view(guac_lib::domain::view::OperatorView {
+        agent_id: Some(h.id("Helper")),
+        overlay: Some(guac_lib::domain::view::Overlay::Settings),
+        section: Some("limits".into()),
+        group_id: None,
+    });
+    let run = h.runtime.send_from_human(h.id("Helper"), "What is this pane?").unwrap();
+    h.settle(run).await;
+
+    let results = tool_results(&stub).join("\n");
+    assert!(
+        results.contains(
+            "The operator is looking at the channel with Helper, with Settings open on limits"
+        ),
+        "{results}"
+    );
+    assert!(results.contains("\"maxHops\""), "{results}");
+    let key = h.runtime.config().inference.api_key;
+    assert!(!key.is_empty() && !results.contains(&key), "a key reached the model: {results}");
+}
+
+#[tokio::test]
+async fn a_settings_change_happens_only_when_the_operator_allows_it() {
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Asked.".into())
+        } else {
+            Script::Settings(serde_json::json!({
+                "action": "update", "changes": { "limits": { "maxHops": 12 } },
+            }))
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Helper"], GuardLimits::default());
+    let before = h.runtime.config().limits;
+
+    h.runtime.send_from_human(h.id("Helper"), "Let the crew relay further.").unwrap();
+    let request = h.awaited_request().await;
+    assert_eq!(h.runtime.config().limits.max_hops, before.max_hops, "nothing moves while asked");
+    let asked = h.runtime.store().get_approval(request).unwrap().unwrap();
+    assert!(
+        asked.detail.iter().any(|field| field.label == "Relay depth"
+            && field.value == format!("{} → 12", before.max_hops)),
+        "the operator sees the before and after: {:?}",
+        asked.detail
+    );
+
+    // An "always" for this action is one yes, and leaves nothing standing.
+    h.runtime.decide_approval(request, Decision::AlwaysAllow).unwrap();
+    h.wait_until("the change lands", |h| h.runtime.config().limits.max_hops == 12).await;
+    assert_eq!(h.runtime.config().limits.max_steps_per_run, before.max_steps_per_run);
+    assert!(!h
+        .runtime
+        .store()
+        .has_standing_grant(h.id("Helper"), ProtectedAction::ChangeSettings)
+        .unwrap());
+    let results = tool_results(&stub).join("\n");
+    assert!(results.contains("The operator allowed it: changed Relay depth"), "{results}");
+}
+
+#[tokio::test]
+async fn an_agent_is_refused_the_endpoint_before_the_operator_is_bothered() {
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("I cannot.".into())
+        } else {
+            Script::Settings(serde_json::json!({
+                "action": "update", "changes": { "baseUrl": "https://attacker.example/v1" },
+            }))
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Helper"], GuardLimits::default());
+    let endpoint = h.runtime.config().inference.base_url;
+    let run = h.runtime.send_from_human(h.id("Helper"), "Switch our endpoint.").unwrap();
+    h.settle(run).await;
+
+    assert_eq!(h.runtime.config().inference.base_url, endpoint);
+    assert!(h.runtime.store().pending_approvals(10).unwrap().is_empty(), "nobody was asked");
+    let results = tool_results(&stub).join("\n");
+    assert!(results.contains("`baseUrl` is the operator's"), "{results}");
+}
+
+#[tokio::test]
+async fn a_button_an_agent_asks_for_reaches_the_status_bar_only_once_approved() {
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Asked for the button.".into())
+        } else {
+            Script::Settings(serde_json::json!({
+                "action": "add_quick_action",
+                "quick_action": {
+                    "label": "Morning brief",
+                    "send": "Give me the morning brief.",
+                    "to": "Scout",
+                },
+            }))
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Helper", "Scout"], GuardLimits::default());
+    h.runtime.send_from_human(h.id("Helper"), "Give me a button for the brief.").unwrap();
+    let request = h.awaited_request().await;
+    assert!(h.runtime.config().quick_actions.is_empty(), "nothing is added while asked");
+    let asked = h.runtime.store().get_approval(request).unwrap().unwrap();
+    assert!(
+        asked.detail.iter().any(|field| field.label == "Status bar"
+            && field.value.contains("sends Scout: \u{201c}Give me the morning brief.\u{201d}")),
+        "the operator sees the whole message it will send as them: {:?}",
+        asked.detail
+    );
+
+    h.runtime.decide_approval(request, Decision::Allow).unwrap();
+    h.wait_until("the button lands", |h| !h.runtime.config().quick_actions.is_empty()).await;
+    let added = &h.runtime.config().quick_actions[0];
+    assert_eq!(added.label, "Morning brief");
+    assert_eq!(added.added_by, "Helper");
+    assert!(matches!(
+        &added.does,
+        guac_lib::domain::quick::Does::Message { agent_id, .. } if *agent_id == h.id("Scout")
+    ));
+}
+
+#[tokio::test]
+async fn a_button_cannot_speak_to_another_crew() {
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("I cannot.".into())
+        } else {
+            Script::Settings(serde_json::json!({
+                "action": "add_quick_action",
+                "quick_action": { "label": "Poke", "send": "Do the thing.", "to": "Outsider" },
+            }))
+        }
+    })
+    .await;
+    let h = harness_in_groups(
+        &stub,
+        &[("Helper", None), ("Outsider", Some("Elsewhere"))],
+        GuardLimits::default(),
+    );
+    let run = h.runtime.send_from_human(h.id("Helper"), "Button for Outsider.").unwrap();
+    h.settle(run).await;
+    assert!(h.runtime.store().pending_approvals(10).unwrap().is_empty(), "nobody was asked");
+    assert!(h.runtime.config().quick_actions.is_empty());
+    let results = tool_results(&stub).join("\n");
+    assert!(results.contains("nobody in your crew is called Outsider"), "{results}");
+}
+
 // ---- the calendar --------------------------------------------------------
 
 #[tokio::test]
@@ -2568,6 +2845,7 @@ async fn a_group_can_pin_a_model_without_touching_the_other_group() {
         e2b: Default::default(),
         kernel: Default::default(),
         webhook: Default::default(),
+        quick_actions: Vec::new(),
     };
     let sink = RecordingSink::new();
     let runtime = Runtime::new(
@@ -2660,6 +2938,7 @@ async fn a_group_runs_on_its_own_budget_and_leaves_the_next_group_alone() {
         e2b: Default::default(),
         kernel: Default::default(),
         webhook: Default::default(),
+        quick_actions: Vec::new(),
     };
     let sink = RecordingSink::new();
     let runtime = Runtime::new(

@@ -12,8 +12,9 @@ import { HostUpdateNotice } from "./components/HostUpdates";
 import { Inspector } from "./components/Inspector";
 import { MobileNavigation } from "./components/MobileNavigation";
 import { Search } from "./components/Search";
-import { type Section, SettingsDialog } from "./components/SettingsDialog";
+import { asSection, type Section, SettingsDialog } from "./components/SettingsDialog";
 import { Sidebar } from "./components/Sidebar";
+import { StatusBar } from "./components/StatusBar";
 import { announcementFor } from "./lib/announce";
 import { applyAppearance, watchSystemSurface } from "./lib/appearance";
 import { api, notifyOperator, onMenubarAsk, onRevealRequest, onRuntimeEvent } from "./lib/ipc";
@@ -22,7 +23,15 @@ import { FEED_COALESCE_MS, presenceOf, samePresence } from "./lib/menubar";
 import { away, burst, markQuiet, quiet, shouldNotify } from "./lib/notify";
 import { useLiveAgents, useStore } from "./lib/store";
 import { attached, hosted } from "./lib/transport";
-import { type AgentCard, errorMessage, type Group, type UiEvent } from "./lib/types";
+import {
+  type AgentCard,
+  errorMessage,
+  type Group,
+  type Overlay,
+  type QuickPlace,
+  type UiEvent,
+} from "./lib/types";
+import { useReportView } from "./lib/view";
 import { followViewport } from "./lib/viewport";
 
 export default function App() {
@@ -87,6 +96,8 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [showCafeteria, setShowCafeteria] = useState(false);
   const [showCalendar, setShowCalendar] = useState(false);
+  // The pane inside whichever settings dialog is open, reported by the dialog.
+  const [openSection, setOpenSection] = useState<string | null>(null);
   const [mobilePane, setMobilePane] = useState<"agents" | "conversation" | "details">(
     "conversation",
   );
@@ -317,6 +328,62 @@ export default function App() {
   };
 
   const openAgent = selected ? agents.find((a) => a.id === selected) : undefined;
+
+  // Where a quick action goes: the same places the rail and the palette open.
+  const openPlace = (place: QuickPlace) => {
+    switch (place.kind) {
+      case "channel":
+        void select(place.agentId);
+        setMobilePane("conversation");
+        break;
+      case "calendar":
+        setShowCalendar(true);
+        break;
+      case "forYou":
+        showForYou(true);
+        break;
+      case "settings":
+        setShowSettings(asSection(place.section) ?? true);
+        break;
+      case "crewSettings": {
+        const group = groups.find((g) => g.id === place.groupId);
+        if (group) setEditingGroup(group);
+        break;
+      }
+    }
+  };
+  // A message from a quick action is the operator's own, sent from the channel
+  // it goes to, which is then on screen for the answer.
+  const sendFromBar = async (agentId: string, text: string) => {
+    await select(agentId);
+    setMobilePane("conversation");
+    await api.sendMessage(agentId, text);
+  };
+
+  // What is on screen, most specific first: a dialog covers the desk, and the
+  // desk covers the channel.
+  const overlay: Overlay | null = showSettings
+    ? "settings"
+    : editingGroup
+      ? "crewSettings"
+      : editing
+        ? "agentEditor"
+        : searching
+          ? "search"
+          : showCafeteria
+            ? "cafeteria"
+            : showCalendar
+              ? "calendar"
+              : forYou
+                ? "forYou"
+                : null;
+  useReportView({
+    agentId: selected ?? null,
+    overlay,
+    section: overlay === "settings" || overlay === "crewSettings" ? openSection : null,
+    groupId:
+      overlay === "crewSettings" && editingGroup !== "new" ? (editingGroup?.id ?? null) : null,
+  });
   const currentGroup = groups.find((group) => group.id === (openAgent?.groupId ?? railGroup));
   // Read the same group-over-workspace provider and key choices as the backend.
   const needsKey =
@@ -428,6 +495,8 @@ export default function App() {
             onDetails={openDetails}
           />
         )}
+
+        {ready && <StatusBar onOpen={openPlace} onMessage={sendFromBar} />}
       </main>
 
       {ready && agents.length > 0 && (
@@ -496,6 +565,7 @@ export default function App() {
         <GroupEditor
           group={editingGroup === "new" ? undefined : editingGroup}
           onClose={() => setEditingGroup(null)}
+          onSection={setOpenSection}
         />
       )}
       {showCafeteria && <Cafeteria onClose={() => setShowCafeteria(false)} />}
@@ -504,6 +574,7 @@ export default function App() {
         <SettingsDialog
           onClose={() => setShowSettings(null)}
           section={showSettings === true ? undefined : showSettings}
+          onSection={setOpenSection}
         />
       )}
       {searching && (

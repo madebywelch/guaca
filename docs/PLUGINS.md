@@ -1,4 +1,9 @@
-# Plugins
+# Connectors
+
+The app calls these **connectors**; the code, the commands and the tables
+still call them plugins, and this document uses the code's word below. The
+command names are the wire contract with a desktop on an older release, and
+renaming them would cut that desktop off from a newer host for a word.
 
 A plugin is a server a crew signs in to once. After that, the agents that crew
 chose are offered that server's tools on every turn, and none of them ever holds
@@ -514,6 +519,38 @@ those unreachable. But the key box sends `Authorization: Bearer` and there is
 one such header on a request: both given, one would silently overwrite the
 other. `commands::presented` refuses the pair in a sentence that says they are
 one slot rather than two.
+
+### It can be a program on the host rather than an address
+
+Most MCP servers people run for themselves ship as a package started as a
+program: `npx` one, `uvx` another, hand it a token in an environment variable.
+The operator writes the command instead of an address, and it is stored as the
+address `stdio:<command>`, so everything past that string (the per-agent and
+per-tool answers, the tool list, the call) is the code an address goes through.
+`mcp/stdio.rs` is the transport: the command is split into words the way a
+shell would and never given to one, and the program speaks JSON-RPC a line at a
+time on its stdin and stdout.
+
+Three decisions in it are not obvious:
+
+- **A process per call.** The rule every transport here follows: nothing is
+  kept between calls, so nothing goes stale between them. It costs a program's
+  start, a second or two for `npx` with a warm cache, and that is the
+  measurement to take before pooling: a pool is a second lifecycle to supervise,
+  and a server that keeps state between calls is the one this shape cannot serve.
+- **An empty environment.** A program starts with a small baseline (`PATH`,
+  `HOME`, `LANG` and a few others) and the variables the operator wrote,
+  nothing else. The host's own environment holds its workspace token and any
+  provider keys it was started with. The variables are stored in the headers
+  column under their own rules, because `GITHUB_TOKEN` keeps its case, and they
+  are write-only exactly as headers are.
+- **It runs where the workspace runs.** On a box that is the container or the
+  server, whose image has `node` for `npx` servers and no `uv`; the command is
+  typed as it would be in a terminal there. The prompt describes such a server as a program the
+  operator runs on the host and never quotes its command, which can carry a
+  token.
+
+A key is refused for one, with the sentence that says to put it in a variable.
 
 ### Changing the address is a reconnection
 

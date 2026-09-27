@@ -127,8 +127,8 @@ export function GroupTransfer({ group }: { group?: Group }) {
           </p>
           <p className="field__hint">
             This creates a separate group. Routines arrive paused. Reconnect providers,
-            repositories, plugins and agent computers before resuming work. The original group stays
-            in place.
+            repositories, connectors and agent computers before resuming work. The original group
+            stays in place.
           </p>
           <Connections items={archive.reconnect} />
           <button

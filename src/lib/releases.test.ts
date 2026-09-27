@@ -8,6 +8,8 @@ import {
   parseReleaseStatus,
   type ReleaseStatus,
   sameBuild,
+  skew,
+  updateNotice,
 } from "./releases";
 
 const health: Health = {
@@ -69,5 +71,68 @@ describe("release detection", () => {
     }
     expect(() => parseHealth({ service: "another-service" })).toThrow();
     expect(() => parseReleaseStatus({})).toThrow();
+  });
+});
+
+describe("a desktop and its host, updated separately", () => {
+  const facts = (over: Partial<Parameters<typeof updateNotice>[0]> = {}) =>
+    updateNotice({
+      desktop: true,
+      client: { version: "0.1.0", commit: "aaaaaaa" },
+      health,
+      release: null,
+      localUpdate: null,
+      ...over,
+    });
+  it("orders a client and its host only by stable releases", () => {
+    expect(skew("0.1.0", health)).toBe("same");
+    expect(skew("0.2.0", health)).toBe("hostBehind");
+    expect(skew("0.0.9", health)).toBe("clientBehind");
+    expect(skew("0.1.0", { ...health, version: undefined })).toBe("unknown");
+    expect(skew("0.1.0-dev", health)).toBe("unknown");
+    expect(skew("0.1.0", null)).toBe("unknown");
+  });
+  it("says which side to update when they differ, before any release news", () => {
+    const ahead = facts({ client: { version: "0.3.0", commit: "b" }, release: status });
+    expect(ahead?.text).toBe(
+      "This host runs Guaca 0.1.0 and this app is 0.3.0. Update the host to match.",
+    );
+    const behind = facts({ health: { ...health, version: "0.2.0" }, release: status });
+    expect(behind?.text).toBe(
+      "This host runs Guaca 0.2.0 and this app is 0.1.0. Update this app to match.",
+    );
+    expect(ahead?.key).not.toBe(behind?.key);
+  });
+  it("names both when a release is newer than each of them", () => {
+    expect(facts({ release: status })?.text).toBe(
+      "Guaca 0.2.0 is available for this app and its host.",
+    );
+    expect(facts({ desktop: false, release: status })?.text).toBe(
+      "Host update available: Guaca 0.2.0.",
+    );
+  });
+  it("tells a desktop about its own release even when the host cannot be ordered", () => {
+    const current = { ...health, version: "0.2.0" };
+    const app = { version: "0.2.0", commit: "a" };
+    expect(facts({ client: app, health: current, release: status })).toBeNull();
+    const release = { ...status, latest: { ...status.latest!, version: "0.3.0" } };
+    expect(facts({ client: app, health: current, release })?.text).toBe(
+      "Guaca 0.3.0 is available for this app and its host.",
+    );
+    // A source-built host is never claimed to be behind, and the app still is.
+    const source = { ...current, release: false };
+    expect(facts({ client: app, health: source, release })?.text).toBe(
+      "Guaca 0.3.0 is available for this app.",
+    );
+  });
+  it("puts a stale page first, and never judges a development page stale", () => {
+    const page = { desktop: false, client: { version: "0.1.0", commit: "bbbbbbb" } };
+    expect(facts({ ...page, release: status })?.key).toBe("page:aaaaaaa");
+    const dirty = { desktop: false, client: { version: "0.1.0", commit: "bbbbbbb-dirty" } };
+    expect(facts(dirty)).toBeNull();
+  });
+  it("offers a managed host's own image only when nothing more specific applies", () => {
+    expect(facts({ localUpdate: "guacad:new" })?.text).toBe("Host update available.");
+    expect(facts({ localUpdate: null })).toBeNull();
   });
 });

@@ -253,6 +253,30 @@ that was never in danger. Both sides compiled, both suites passed, and the only
 symptom was a sentence on screen that was not true. The number is only worth
 drawing while it is the runtime's number.
 
+## An agent's notebook is everything else it keeps, and only its index is read
+
+Memory is bounded because every turn pays for it, and what an agent wanted to
+keep beyond that page had nowhere to go: a tracker, a log of what was tried, a
+customer's history, a draft. Hermes gives its agent the host's file tools; the
+useful half of that is the space, not the host. So each agent has a notebook
+(`notebook.rs`): a private folder it shapes itself, with folders up to four
+deep, text files up to 64,000 characters, two hundred of them at most.
+
+Only the list of files is in the prompt, and only once there is one, so an
+agent that never uses it pays nothing. A file is read with `notebook` when the
+turn needs it, which keeps the property memory was built around: the prompt is
+small and the agent decides what matters. `append` exists because a log should
+never need reading before it is added to.
+
+Four stores, each answering one question: memory is what an agent needs every
+turn, working notes are where its work stands, the notebook is anything longer
+it wants to come back to, and a skill is how its crew does something. Nothing
+in a notebook expires, because unlike a working note it is something the agent
+chose to keep; the tool says what a stale file costs. The operator reads it in
+the inspector and may delete a file, and nothing else, for the reason working
+notes are read-only there. A path is plain names inside the agent's own folder,
+checked for links on the way, and the folder goes when the agent is purged.
+
 ## An agent's memory is what it knows, and its working notes are what it is doing
 
 Two stores, because one cannot have both lifetimes.
@@ -1106,7 +1130,7 @@ It is sectioned on the Settings shell for the same reason Settings is: a group
 now decides who pays for its turns, which model answers them, how long a call may
 take and how far a conversation may run, and one scroll put the name and the
 delete button a page apart. The state lives in the shell, so changing section
-cannot discard a half-typed endpoint. Plugins, Secrets and Repositories are disabled
+cannot discard a half-typed endpoint. Connectors, Secrets and Repositories are disabled
 until the group exists, because a sign-in, a credential and a linked directory
 all have to belong to something.
 
@@ -1591,6 +1615,49 @@ unqualified hash sends whoever reads it to check out a commit that did not
 produce the build in front of them. And a build made outside a repository at all
 draws a dash: it is the same answer the pane already gave for a version it could
 not read, and it is still a thing to say rather than a failure worth a banner.
+
+## An agent can read the settings, and what the operator is looking at
+
+`settings` with `read` hands an agent the settings every agent runs on, its
+crew's overrides, the host's version and one sentence about the screen: which
+channel is open and which pane of Settings or a crew's settings. No key and no
+fragment of one is in it, and an endpoint is shown without any credentials in
+its address. Changing a value goes through the operator; *A settings change is
+a permission with its own diff* in `docs/ATTENTION.md` is that half.
+
+The sentence about the screen comes from `report_view`, which the page sends
+from `useReportView` whenever what it shows settles, and only while its window
+has focus. Several windows can show one host, and the one the operator touched
+last is the one they mean by "this". The host keeps it in memory: it describes a
+moment, and a restart ends that moment. A pane name reaches a prompt, so the
+host keeps only a single lowercase word and drops anything else rather than
+quoting it. A host too old for the command says so once and the page stops
+asking.
+
+This is the pull half of what Hermes does with its desktop tools. Nothing is
+pushed into every prompt: the screen changes far more often than a turn starts,
+and a line that changed on every click would cost the prompt cache on every
+turn for a fact most turns do not need.
+
+## The status bar is data, and an agent's button is the operator's yes
+
+The last row of the reading column says which host this window shows, marked
+when this app and the host are on different releases, and holds the
+operator's quick actions. A quick action is data from a closed set
+(`domain/quick.rs`): send one agent a fixed message, or open a channel, the
+calendar, For You, a Settings pane or a crew's settings. The app draws and
+runs each one. Hermes lets an agent write JavaScript that runs in the window
+with the app's whole authority; its own loader says that is not a capability
+boundary, and in this app it would be a way around every other one.
+
+The buttons are a setting on the host, so every window draws the same bar and
+a change reaches them through `settingsChanged`. The operator's own need
+nobody's approval. An agent's go through `settings` and the same card as any
+settings change, because a message a button sends arrives as `[OPERATOR]`, on
+a click made without reading the text again. The card quotes the whole
+message, and an agent may only aim one at its own crew, since a button is the
+operator's voice and one that spoke to another crew would carry an agent's
+words across the wall.
 
 ## The page is the only white thing, and both edges are the same off-white
 

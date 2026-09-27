@@ -119,6 +119,16 @@ pub enum CustomError {
     #[error("a server needs an address: the URL its MCP endpoint answers on, such as https://example.com/mcp.")]
     NoUrl,
     #[error(
+        "a server run on the host needs its command: the program and its arguments, such as \
+         `npx -y @modelcontextprotocol/server-github`."
+    )]
+    NoCommand,
+    #[error(
+        "`{0}` has a quote that is never closed. Close it, or drop it: the command is split into \
+         words the way a shell would, and no shell ever sees it."
+    )]
+    BadCommand(String),
+    #[error(
         "{0} is not a URL Guaca can dial. It needs a scheme and a host, such as \
          https://example.com/mcp."
     )]
@@ -162,7 +172,16 @@ pub const MAX_CUSTOM_NAME: usize = 32;
 /// a value, which is the same boundary a connector's secret has: the panel can
 /// say what this server is being sent, and cannot say what it is worth.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Headers(Vec<(String, String)>);
+pub struct Headers {
+    pairs: Vec<(String, String)>,
+    /// True when these are a program's environment rather than HTTP headers.
+    ///
+    /// A server run as a program on the host is handed its key the way such
+    /// servers expect, as an environment variable, and that is the same secret
+    /// in the same column under different rules: a variable's name keeps its
+    /// case, because `GITHUB_TOKEN` and `github_token` are two variables.
+    env: bool,
+}
 
 /// One header, as it crosses IPC and as it is stored.
 ///
@@ -209,6 +228,16 @@ pub enum HeaderError {
     #[error("{0} is given twice. A header has one value; remove the row you did not mean.")]
     Repeated(String),
     #[error(
+        "{0} is not an environment variable name. Use letters, digits and underscores, starting \
+         with a letter or an underscore, such as GITHUB_TOKEN."
+    )]
+    BadEnvName(String),
+    #[error(
+        "that is more than {MAX_ENV} variables. A program needing more than that is one being \
+         configured through Guaca rather than run by it: point it at a config file instead."
+    )]
+    TooManyEnv,
+    #[error(
         "that is more than {MAX_HEADERS} headers. A server needing more than that is one being \
          configured through Guaca rather than reached through it."
     )]
@@ -234,6 +263,78 @@ pub const MAX_HEADERS: usize = 8;
 /// budget of every proxy between here and the server.
 pub const MAX_HEADER_VALUE: usize = 4096;
 
+/// How many variables a program may be given. More than headers, because a
+/// program reads its whole configuration this way; fewer than a `.env` file,
+/// because this is not one.
+pub const MAX_ENV: usize = 16;
+
+/// The scheme of a server run as a program on the host rather than dialed.
+pub const STDIO: &str = "stdio:";
+
+/// What an operator typed as a server's address, in the form it is stored and
+/// dialed: a canonical URL, or a `stdio:` command whose words parse.
+pub fn canonical_address(typed: &str) -> Result<String, CustomError> {
+    let Some(command) = typed.trim().strip_prefix(STDIO) else {
+        return canonical_url(typed);
+    };
+    let endpoint = format!("{STDIO}{}", command.trim());
+    if command.trim().is_empty() {
+        return Err(CustomError::NoCommand);
+    }
+    if command_line(&endpoint).is_none() {
+        return Err(CustomError::BadCommand(command.trim().to_string()));
+    }
+    Ok(endpoint)
+}
+
+/// The program and arguments a `stdio:` address names.
+///
+/// Split the way a shell splits words, with quotes and backslashes, and never
+/// handed to one: the first word is the program and the rest are its arguments,
+/// so a `;` or a `$(...)` is a character in an argument and nothing more. `None`
+/// for an address that is not one, an empty one, or an unclosed quote.
+pub fn command_line(endpoint: &str) -> Option<Vec<String>> {
+    let rest = endpoint.strip_prefix(STDIO)?;
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut started = false;
+    let mut quote: Option<char> = None;
+    let mut chars = rest.chars();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some(open), c) if c == open => quote = None,
+            (Some('"'), '\\') | (None, '\\') => {
+                if let Some(next) = chars.next() {
+                    word.push(next);
+                }
+                started = true;
+            }
+            (Some(_), c) => word.push(c),
+            (None, '\'' | '"') => {
+                quote = Some(c);
+                started = true;
+            }
+            (None, c) if c.is_whitespace() => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                }
+            }
+            (None, c) => {
+                word.push(c);
+                started = true;
+            }
+        }
+    }
+    if quote.is_some() {
+        return None;
+    }
+    if started {
+        words.push(word);
+    }
+    (!words.is_empty()).then_some(words)
+}
+
 /// The headers this client builds from the request it is on.
 ///
 /// Written here rather than checked against what `mcp.rs` happens to send,
@@ -247,7 +348,7 @@ const RESERVED: [&str; 5] = ["accept", "content-type", "content-length", "host",
 impl Headers {
     /// None, which is what a catalog server and most added ones send.
     pub fn none() -> Headers {
-        Headers(Vec::new())
+        Headers::default()
     }
 
     /// What the operator typed, if every row of it holds up.
@@ -292,17 +393,65 @@ impl Headers {
             }
             out.push((name, value));
         }
-        Ok(Headers(out))
+        Ok(Headers { pairs: out, env: false })
+    }
+
+    /// What the operator typed as a program's environment, if every row holds.
+    ///
+    /// The header rules where they carry over, and a variable's own where they
+    /// do not: the name keeps its case and is letters, digits and underscores,
+    /// and there is room for more of them, since a program reads its whole
+    /// configuration this way.
+    pub fn parse_env(rows: &[HeaderPair]) -> Result<Headers, HeaderError> {
+        if rows.len() > MAX_ENV {
+            return Err(HeaderError::TooManyEnv);
+        }
+        let mut out: Vec<(String, String)> = Vec::new();
+        for row in rows {
+            let name = row.name.trim().to_string();
+            let value = row.value.trim().to_string();
+            if name.is_empty() {
+                return Err(HeaderError::NoName);
+            }
+            let valid = name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
+            if !valid {
+                return Err(HeaderError::BadEnvName(name));
+            }
+            if value.is_empty() {
+                return Err(HeaderError::NoValue(name));
+            }
+            if value.len() > MAX_HEADER_VALUE {
+                return Err(HeaderError::LongValue(name));
+            }
+            if value.chars().any(char::is_control) {
+                return Err(HeaderError::BadValue(name));
+            }
+            if out.iter().any(|(held, _)| held == &name) {
+                return Err(HeaderError::Repeated(name));
+            }
+            out.push((name, value));
+        }
+        Ok(Headers { pairs: out, env: true })
+    }
+
+    /// Whether these are a program's environment rather than headers.
+    pub fn is_env(&self) -> bool {
+        self.env
     }
 
     /// The stored form: JSON, in the one column that holds it.
     pub fn encode(&self) -> String {
         let rows: Vec<HeaderPair> = self
-            .0
+            .pairs
             .iter()
             .map(|(name, value)| HeaderPair { name: name.clone(), value: value.clone() })
             .collect();
-        serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string())
+        // An environment is wrapped, so a row read back is never mistaken for
+        // headers and its names lowercased into different variables.
+        let value =
+            if self.env { serde_json::json!({ "env": rows }) } else { serde_json::json!(rows) };
+        serde_json::to_string(&value).unwrap_or_else(|_| "[]".to_string())
     }
 
     /// A stored row, back as headers.
@@ -313,6 +462,13 @@ impl Headers {
     /// is a plugin that stops working with a message the operator can act on,
     /// where a raised error is every agent in the crew losing its turn.
     pub fn decode(stored: &str) -> Headers {
+        #[derive(Deserialize)]
+        struct Env {
+            env: Vec<HeaderPair>,
+        }
+        if let Ok(Env { env }) = serde_json::from_str::<Env>(stored) {
+            return Headers::parse_env(&env).unwrap_or_default();
+        }
         serde_json::from_str::<Vec<HeaderPair>>(stored)
             .ok()
             .and_then(|rows| Headers::parse(&rows).ok())
@@ -321,7 +477,7 @@ impl Headers {
 
     /// What the panel is allowed to know: which headers, never their values.
     pub fn names(&self) -> Vec<String> {
-        self.0.iter().map(|(name, _)| name.clone()).collect()
+        self.pairs.iter().map(|(name, _)| name.clone()).collect()
     }
 
     /// Whether the operator supplied the credential themselves.
@@ -331,16 +487,17 @@ impl Headers {
     /// collides with a pasted key, which goes in the same slot. The caller that
     /// has both refuses rather than picking one: see `commands::add_plugin`.
     pub fn carries_authorization(&self) -> bool {
-        self.0.iter().any(|(name, _)| name == "authorization")
+        !self.env && self.pairs.iter().any(|(name, _)| name == "authorization")
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.pairs.is_empty()
     }
 
-    /// The pairs, for the one caller that puts them on a request.
+    /// The pairs, for the one caller that puts them on a request, or in a
+    /// program's environment.
     pub fn wire(&self) -> &[(String, String)] {
-        &self.0
+        &self.pairs
     }
 }
 
@@ -389,7 +546,12 @@ impl PluginKind {
         if PluginKind::from_slug(&slug).is_some() {
             return Err(CustomError::TakenName(slug));
         }
-        Ok(PluginKind::Custom { slug, endpoint: canonical_url(url)? })
+        Ok(PluginKind::Custom { slug, endpoint: canonical_address(url)? })
+    }
+
+    /// Whether this server is run as a program on the host rather than dialed.
+    pub fn is_stdio(&self) -> bool {
+        self.endpoint().starts_with(STDIO)
     }
 
     /// The stored form, and the prefix every one of its tools is offered under.
@@ -1000,6 +1162,62 @@ pub struct Plugin {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_command_is_split_into_words_the_way_a_shell_would_and_never_run_by_one() {
+        let split = |text: &str| command_line(&format!("{STDIO}{text}"));
+        assert_eq!(
+            split("npx -y @modelcontextprotocol/server-github").unwrap(),
+            ["npx", "-y", "@modelcontextprotocol/server-github"]
+        );
+        assert_eq!(
+            split(r#"uvx "my server" --flag='a b'"#).unwrap(),
+            ["uvx", "my server", "--flag=a b"]
+        );
+        assert_eq!(split(r"run a\ b").unwrap(), ["run", "a b"]);
+        // A metacharacter is a character in an argument: there is no shell.
+        assert_eq!(split("echo hi; rm -rf /").unwrap(), ["echo", "hi;", "rm", "-rf", "/"]);
+        assert_eq!(split("   "), None);
+        assert_eq!(split("unclosed 'quote"), None);
+        assert_eq!(command_line("https://example.com/mcp"), None);
+    }
+
+    #[test]
+    fn a_server_run_on_the_host_is_named_by_its_command() {
+        let kind = PluginKind::custom("github", "  stdio:  npx -y server-github ").unwrap();
+        assert_eq!(kind.endpoint(), "stdio:npx -y server-github");
+        assert!(kind.is_stdio());
+        assert!(!PluginKind::custom("web", "https://example.com/mcp").unwrap().is_stdio());
+        assert_eq!(PluginKind::custom("x", "stdio:"), Err(CustomError::NoCommand));
+        assert!(matches!(PluginKind::custom("x", "stdio:a 'b"), Err(CustomError::BadCommand(_))));
+    }
+
+    #[test]
+    fn a_programs_environment_keeps_its_case_and_survives_the_column() {
+        let rows = [
+            HeaderPair { name: "GITHUB_TOKEN".into(), value: "ghp_x".into() },
+            HeaderPair { name: "_private".into(), value: "1".into() },
+        ];
+        let env = Headers::parse_env(&rows).unwrap();
+        assert!(env.is_env());
+        assert_eq!(env.names(), ["GITHUB_TOKEN", "_private"]);
+        let back = Headers::decode(&env.encode());
+        assert_eq!(back, env, "an environment read back is still one, with its case");
+        // Headers are unchanged by it, lowercased as before.
+        let header = [HeaderPair { name: "X-API-Key".into(), value: "k".into() }];
+        let headers = Headers::decode(&Headers::parse(&header).unwrap().encode());
+        assert_eq!(headers.names(), ["x-api-key"]);
+        assert!(!headers.is_env());
+        // An `authorization` variable is a variable, not the header a key collides with.
+        let auth = [HeaderPair { name: "authorization".into(), value: "x".into() }];
+        assert!(!Headers::parse_env(&auth).unwrap().carries_authorization());
+        for bad in ["1TOKEN", "MY-TOKEN", "A B"] {
+            let row = [HeaderPair { name: bad.into(), value: "v".into() }];
+            assert!(matches!(Headers::parse_env(&row), Err(HeaderError::BadEnvName(_))), "{bad}");
+        }
+        let newline = [HeaderPair { name: "T".into(), value: "a\nb".into() }];
+        assert!(matches!(Headers::parse_env(&newline), Err(HeaderError::BadValue(_))));
+    }
     use super::*;
 
     #[test]

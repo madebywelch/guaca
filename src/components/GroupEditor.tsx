@@ -34,11 +34,15 @@ import { GroupTransfer } from "./GroupTransfer";
 import { PluginList } from "./PluginList";
 import { ProviderPresets, SubscriptionModel } from "./ProviderFields";
 import { RepositoryList } from "./RepositoryList";
+import { SkillList } from "./SkillList";
+import { ToolList } from "./ToolList";
 
 interface Props {
   /** Absent means create. */
   group?: Group;
   onClose: () => void;
+  /** Told which section is open, so the host can tell an agent what is on screen. */
+  onSection?: (section: string) => void;
 }
 
 const SECTIONS = [
@@ -46,7 +50,9 @@ const SECTIONS = [
   "provider",
   "limits",
   "plugins",
+  "tools",
   "secrets",
+  "skills",
   "repositories",
   "activity",
   "transfer",
@@ -58,8 +64,10 @@ const SECTION_LABELS: Record<Section, string> = {
   general: "General",
   provider: "Provider",
   limits: "Limits",
-  plugins: "Plugins",
+  plugins: "Connectors",
+  tools: "Tools",
   secrets: "Secrets",
+  skills: "Skills",
   repositories: "Repositories",
   activity: "Activity",
   transfer: "Import / export",
@@ -71,7 +79,13 @@ const SECTION_LABELS: Record<Section, string> = {
  * belong to something, and there is no row to hang any of them on until the
  * group is created.
  */
-const NEEDS_GROUP: readonly Section[] = ["plugins", "secrets", "repositories", "activity"];
+const NEEDS_GROUP: readonly Section[] = [
+  "plugins",
+  "secrets",
+  "skills",
+  "repositories",
+  "activity",
+];
 
 /** What a group says when it has no opinion about who pays. */
 const INHERIT = "inherit";
@@ -80,13 +94,14 @@ const INHERIT = "inherit";
 const asText = (value: number | null | undefined) => (value === null ? "" : String(value ?? ""));
 const asNumber = (text: string) => (text.trim() ? Number(text) : null);
 
-export function GroupEditor({ group, onClose }: Props) {
+export function GroupEditor({ group, onClose, onSection }: Props) {
   const refreshAgents = useStore((s) => s.refreshAgents);
   const settings = useStore((s) => s.settings);
   const capabilities = useStore((s) => s.capabilities);
   const agents = useStore((s) => s.agents);
 
   const [section, setSection] = useState<Section>("general");
+  useEffect(() => onSection?.(section), [section, onSection]);
   const [name, setName] = useState(group?.name ?? "");
   const [provider, setProvider] = useState<Provider | typeof INHERIT>(
     group?.inference.provider ?? INHERIT,
@@ -686,13 +701,26 @@ export function GroupEditor({ group, onClose }: Props) {
                 holding the account that issues refunds. Secrets have their own pane and agent grants. */}
             {section === "plugins" && group && (
               <>
-                <h3 className="settings__title">Plugins</h3>
+                <h3 className="settings__title">Connectors</h3>
                 <p className="settings__lede">
-                  Sign in once, on behalf of this group, then choose which agents get it. Every
-                  agent is the default; narrow the ones that reach money or production. None of them
-                  ever holds the sign-in.
+                  MCP servers this crew can reach. Sign in once, on behalf of the crew, then choose
+                  which agents get each one and which of its tools they may call. Every agent is the
+                  default; narrow the ones that reach money or production. None of them ever holds
+                  the sign-in.
                 </p>
                 <PluginList groupId={group.id} crew={members} />
+              </>
+            )}
+
+            {section === "tools" && (
+              <>
+                <h3 className="settings__title">Tools</h3>
+                <p className="settings__lede">
+                  The functions every agent can call, Guaca's own, described in the words the agent
+                  is given. Each connector adds its own tools, listed under Connectors. Skills are
+                  not tools: they are instructions an agent reads with one.
+                </p>
+                <ToolList />
               </>
             )}
 
@@ -704,6 +732,17 @@ export function GroupEditor({ group, onClose }: Props) {
                   the variable in repository shells, coding jobs, and computer commands.
                 </p>
                 <CredentialList groupId={group.id} crew={members} />
+              </>
+            )}
+
+            {section === "skills" && group && (
+              <>
+                <h3 className="settings__title">Skills</h3>
+                <p className="settings__lede">
+                  Instructions for kinds of work this crew does. Its agents can write these as they
+                  work something out, and no other crew can read them.
+                </p>
+                <SkillList scope={{ kind: "crew", groupId: group.id }} />
               </>
             )}
 

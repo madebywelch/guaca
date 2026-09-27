@@ -64,7 +64,11 @@ beforeEach(() => {
     targetVersion: "0.1.0",
   });
   fetched.mockImplementation((url: string) =>
-    Promise.resolve(new Response(JSON.stringify(url.endsWith("/health") ? health : release))),
+    Promise.resolve(
+      new Response(JSON.stringify(url.endsWith("/health") ? health : release), {
+        headers: { "content-type": "application/json" },
+      }),
+    ),
   );
   vi.stubGlobal("fetch", fetched);
   sessionStorage.clear();
@@ -84,7 +88,7 @@ describe("host updates in either client", () => {
     platform.desktop = false;
     mount();
     expect(screen.queryByText("Workspace mounted")).toBeNull();
-    await screen.findByText("Host update available.");
+    await screen.findByText("Host update available: Guaca 0.2.0.");
     expect(screen.getByText("Workspace mounted")).toBeTruthy();
     expect(docker).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "Back up and update host" })).toBeNull();
@@ -113,6 +117,22 @@ describe("host updates in either client", () => {
     await screen.findByText("Workspace mounted");
     await screen.findByText("Release service is offline.");
     expect(screen.getByText(/latest check failed/)).toBeTruthy();
+  });
+  it("reads a page served in place of the release route as an older host", async () => {
+    fetched.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.endsWith("/health")
+          ? new Response(JSON.stringify(health), {
+              headers: { "content-type": "application/json" },
+            })
+          : new Response("<!doctype html><title>Guaca</title>", {
+              headers: { "content-type": "text/html" },
+            }),
+      ),
+    );
+    mount();
+    await screen.findByText("Workspace mounted");
+    await screen.findByText(/does not support release checks yet/);
   });
   it("only updates the selected container on an explicit click", async () => {
     mode.mockReturnValue("local");
@@ -152,7 +172,7 @@ describe("host updates in either client", () => {
   it("preserves failures and dismisses only the current release notice", async () => {
     mount();
     fireEvent.click(await screen.findByRole("button", { name: "Later" }));
-    expect(screen.queryByText("Host update available.")).toBeNull();
+    expect(screen.queryByText(/is available for this app and its host/)).toBeNull();
     release = {
       ...published,
       latest: {
@@ -167,6 +187,28 @@ describe("host updates in either client", () => {
       ).toBe(false),
     );
     fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
-    await screen.findByText("Host update available.");
+    await screen.findByText("Guaca 0.3.0 is available for this app and its host.");
+  });
+  it("tells a desktop that its host has moved ahead of it, and where to get the app", async () => {
+    health.version = "0.2.0";
+    mount();
+    await screen.findByText(
+      "This host runs Guaca 0.2.0 and this app is 0.1.0. Update this app to match.",
+    );
+    expect(screen.getByText("This app runs an older Guaca than its host.")).toBeTruthy();
+    expect(
+      screen.getByRole("link", { name: "Download the latest Guaca desktop app" }),
+    ).toBeTruthy();
+  });
+  it("tells a desktop that its host is behind it", async () => {
+    health.version = "0.0.9";
+    release = { ...published, latest: null };
+    mount();
+    await screen.findByText(
+      "This host runs Guaca 0.0.9 and this app is 0.1.0. Update the host to match.",
+    );
+    expect(
+      screen.queryByRole("link", { name: "Download the latest Guaca desktop app" }),
+    ).toBeNull();
   });
 });

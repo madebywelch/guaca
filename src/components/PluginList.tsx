@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { api, openExternal } from "../lib/ipc";
-import { hostOf, markFor, reportLine } from "../lib/plugins";
+import { hostOf, markFor, reportLine, STDIO } from "../lib/plugins";
 import { useStore } from "../lib/store";
 import {
   type AccountConnection,
@@ -90,23 +90,27 @@ function HeaderFields({
   rows,
   onChange,
   disabled,
+  env = false,
 }: {
   rows: HeaderDraft[];
   onChange: (rows: HeaderDraft[]) => void;
   disabled: boolean;
+  /** A program's environment rather than headers: the same secret, other words. */
+  env?: boolean;
 }) {
+  const noun = env ? "Variable" : "Header";
   const edit = (id: number, part: Partial<HeaderPair>) =>
     onChange(rows.map((was) => (was.id === id ? { ...was, ...part } : was)));
 
   return (
     <div className="field">
-      <span className="field__label">Headers (optional)</span>
+      <span className="field__label">{env ? "Environment (optional)" : "Headers (optional)"}</span>
       {rows.map((row, at) => (
         <div className="choices" key={row.id}>
           <input
             className="input"
-            placeholder="X-API-Key"
-            aria-label={`Header ${at + 1} name`}
+            placeholder={env ? "GITHUB_TOKEN" : "X-API-Key"}
+            aria-label={`${noun} ${at + 1} name`}
             value={row.name}
             disabled={disabled}
             onChange={(event) => edit(row.id, { name: event.target.value })}
@@ -115,7 +119,7 @@ function HeaderFields({
             className="input"
             type="password"
             placeholder="value"
-            aria-label={`Header ${at + 1} value`}
+            aria-label={`${noun} ${at + 1} value`}
             value={row.value}
             disabled={disabled}
             onChange={(event) => edit(row.id, { value: event.target.value })}
@@ -123,7 +127,7 @@ function HeaderFields({
           <button
             type="button"
             className="btn btn--small btn--ghost"
-            aria-label={`Remove header ${at + 1}`}
+            aria-label={`Remove ${noun.toLowerCase()} ${at + 1}`}
             disabled={disabled}
             onClick={() => onChange(rows.filter((was) => was.id !== row.id))}
           >
@@ -137,13 +141,12 @@ function HeaderFields({
         disabled={disabled}
         onClick={() => onChange([...rows, blankHeader()])}
       >
-        Add a header
+        {env ? "Add a variable" : "Add a header"}
       </button>
       <span className="field__hint">
-        Sent on every request to this server, whatever else authorizes it: an API key the server
-        reads from a header it named, or the pair a gate in front of it wants. They stay here — a
-        value never reaches a model, a transcript or an agent's machine, and never comes back to
-        this panel.
+        {env
+          ? "Set in the program's environment, which starts empty apart from what it needs to find its own files: usually its token, under the name its instructions give. A value never reaches a model, a transcript or an agent's machine, and never comes back to this panel."
+          : "Sent on every request to this server, whatever else authorizes it: an API key the server reads from a header it named, or the pair a gate in front of it wants. They stay here: a value never reaches a model, a transcript or an agent's machine, and never comes back to this panel."}
       </span>
     </div>
   );
@@ -218,14 +221,14 @@ function callers(plugin: Plugin, tool: PluginToolCard, crew: AgentCard[]): strin
       ? "switched off: nobody in this group can call it"
       : `nobody can call it: ${named.map((agent) => agent.name).join(", ")} ${
           named.length === 1 ? "is" : "are"
-        } not on this plugin`;
+        } not on this connector`;
   }
   const short = reach.map((agent) => agent.name).join(", ");
   const lost = named.filter((agent) => !allows(plugin.access, agent.id));
   if (lost.length === 0) return `called by ${short}`;
   return `called by ${short}; ${lost.map((agent) => agent.name).join(", ")} ${
     lost.length === 1 ? "is" : "are"
-  } not on this plugin`;
+  } not on this connector`;
 }
 
 /**
@@ -359,7 +362,13 @@ export function PluginList({ groupId, crew }: Props) {
     url: string;
     key: string;
     headers: HeaderDraft[];
-  }>({ name: "", url: "", key: "", headers: [] });
+    /** Run as a program on the host rather than dialed at an address. */
+    program: boolean;
+    command: string;
+  }>({ name: "", url: "", key: "", headers: [], program: false, command: "" });
+  // What the host is told to dial or run, whichever the operator chose.
+  const address = draft.program ? `${STDIO}${draft.command.trim()}` : draft.url;
+  const addressed = draft.program ? draft.command.trim() !== "" : draft.url.trim() !== "";
   const [adding, setAdding] = useState(false);
   // Keyed by plugin id, and absent until the operator opens the control: an
   // address box standing open under every added server is an invitation to
@@ -447,7 +456,8 @@ export function PluginList({ groupId, crew }: Props) {
     }
   };
 
-  if (offers === null || connected === null) return <p className="field__hint">Loading plugins…</p>;
+  if (offers === null || connected === null)
+    return <p className="field__hint">Loading connectors…</p>;
 
   return (
     <div className="access">
@@ -1023,20 +1033,60 @@ export function PluginList({ groupId, crew }: Props) {
                 become underscores.
               </span>
             </label>
-            <label className="field">
-              <span className="field__label">Address</span>
-              <input
-                className="input"
-                value={draft.url}
-                placeholder="https://example.com/mcp"
+            {/* Two shapes of the same thing. Most servers people run for
+                themselves are a package started as a program, and the rest are
+                an address; after this choice the path is the same. */}
+            <fieldset className="choices" aria-label="How Guaca reaches it">
+              <button
+                type="button"
+                className="choice"
+                aria-pressed={!draft.program}
                 disabled={busy !== null}
-                onChange={(event) => setDraft((was) => ({ ...was, url: event.target.value }))}
-              />
-              <span className="field__hint">
-                The URL its MCP endpoint answers on. HTTPS, unless it is on this machine.
-              </span>
-            </label>
-            <label className="field">
+                onClick={() => setDraft((was) => ({ ...was, program: false, headers: [] }))}
+              >
+                At an address
+              </button>
+              <button
+                type="button"
+                className="choice"
+                aria-pressed={draft.program}
+                disabled={busy !== null}
+                onClick={() => setDraft((was) => ({ ...was, program: true, headers: [], key: "" }))}
+              >
+                A program on the host
+              </button>
+            </fieldset>
+            {draft.program ? (
+              <label className="field">
+                <span className="field__label">Command</span>
+                <input
+                  className="input input--mono"
+                  value={draft.command}
+                  placeholder="npx -y @modelcontextprotocol/server-github"
+                  disabled={busy !== null}
+                  onChange={(event) => setDraft((was) => ({ ...was, command: event.target.value }))}
+                />
+                <span className="field__hint">
+                  The program and its arguments, as you would type them in a terminal on the machine
+                  this workspace runs on. It is started for each call and never given to a shell.
+                </span>
+              </label>
+            ) : (
+              <label className="field">
+                <span className="field__label">Address</span>
+                <input
+                  className="input"
+                  value={draft.url}
+                  placeholder="https://example.com/mcp"
+                  disabled={busy !== null}
+                  onChange={(event) => setDraft((was) => ({ ...was, url: event.target.value }))}
+                />
+                <span className="field__hint">
+                  The URL its MCP endpoint answers on. HTTPS, unless it is on this machine.
+                </span>
+              </label>
+            )}
+            <label className="field" hidden={draft.program}>
               <span className="field__label">Key (optional)</span>
               <input
                 className="input"
@@ -1058,26 +1108,34 @@ export function PluginList({ groupId, crew }: Props) {
             <HeaderFields
               rows={draft.headers}
               disabled={busy !== null}
+              env={draft.program}
               onChange={(headers) => setDraft((was) => ({ ...was, headers }))}
             />
             <div className="choices">
               <button
                 type="button"
                 className="btn btn--small btn--primary"
-                disabled={busy !== null || !draft.name.trim() || !draft.url.trim()}
+                disabled={busy !== null || !draft.name.trim() || !addressed}
                 onClick={() =>
                   void run("add", async () => {
                     await api.addPlugin(
                       groupId,
                       draft.name,
-                      draft.url,
+                      address,
                       draft.key || undefined,
                       sent(draft.headers),
                     );
                     // Cleared only once it worked. A refused address the
                     // operator has to retype is a refusal that costs more than
                     // the mistake did.
-                    setDraft({ name: "", url: "", key: "", headers: [] });
+                    setDraft({
+                      name: "",
+                      url: "",
+                      key: "",
+                      headers: [],
+                      program: false,
+                      command: "",
+                    });
                     setAdding(false);
                   })
                 }
@@ -1091,10 +1149,10 @@ export function PluginList({ groupId, crew }: Props) {
               <button
                 type="button"
                 className="btn btn--small btn--ghost"
-                disabled={busy !== null || !draft.url.trim()}
+                disabled={busy !== null || !addressed}
                 onClick={() =>
                   void test("add-test", () =>
-                    api.probeServer(draft.url, draft.key || undefined, draft.headers))
+                    api.probeServer(address, draft.key || undefined, draft.headers))
                 }
               >
                 {busy === "add-test" ? "Testing…" : "Test"}

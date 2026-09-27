@@ -11,6 +11,7 @@ import type { GroupArchive, Reconnect } from "./transfer";
 
 import {
   attached,
+  desktop,
   hosted,
   invoke,
   invokeLocal,
@@ -61,15 +62,18 @@ import type {
   HeaderPair,
   MenubarAsk,
   MessageId,
+  NotebookEntry,
   Occasion,
   OccasionDraft,
   OccasionId,
+  OperatorView,
   Plugin,
   PluginAccess,
   PluginId,
   PluginOffer,
   Presence,
   ProtectedAction,
+  QuickDoes,
   RankedModel,
   RepoStatus,
   Repository,
@@ -89,8 +93,12 @@ import type {
   Settings,
   SettingsPatch,
   Signin,
+  Skill,
+  SkillDraft,
+  SkillScope,
   Staged,
   SubscriptionStatus,
+  ToolSummary,
   UiEvent,
   WebhookAddress,
   WorkDecision,
@@ -176,6 +184,22 @@ export const api = {
   updateConnector: (id: ConnectorId, agents: AgentId[], secret: string | null) =>
     invoke<void>("update_connector", { id, agents, secret }),
   deleteConnector: (id: ConnectorId) => invoke<void>("delete_connector", { id }),
+
+  addQuickAction: (label: string, does: QuickDoes) =>
+    invoke<Settings>("add_quick_action", { label, does }),
+  removeQuickAction: (id: string) => invoke<Settings>("remove_quick_action", { id }),
+
+  builtinTools: () => invoke<ToolSummary[]>("builtin_tools"),
+
+  /** Tells the host what this window shows. Only while it has focus. */
+  reportView: (view: OperatorView) => invoke<void>("report_view", { view }),
+
+  listSkills: (scope: SkillScope) => invoke<Skill[]>("list_skills", { scope }),
+  readSkill: (scope: SkillScope, name: string) => invoke<Skill>("read_skill", { scope, name }),
+  saveSkill: (scope: SkillScope, draft: SkillDraft) =>
+    invoke<Skill>("save_skill", { scope, draft }),
+  deleteSkill: (scope: SkillScope, name: string) =>
+    invoke<boolean>("delete_skill", { scope, name }),
 
   /**
    * The directories a crew has linked, and who in it may work in each.
@@ -555,6 +579,10 @@ export const api = {
     invoke<string>("set_agent_memory", { id, content }),
 
   /** What an agent is in the middle of, oldest first. */
+  agentNotebook: (id: AgentId) => invoke<NotebookEntry[]>("agent_notebook", { id }),
+  readNotebook: (id: AgentId, path: string) => invoke<string>("read_notebook", { id, path }),
+  deleteNotebookFile: (id: AgentId, path: string) =>
+    invoke<boolean>("delete_notebook_file", { id, path }),
   agentWorkingNotes: (id: AgentId) => invoke<WorkingNote[]>("agent_working_notes", { id }),
 
   /** Drops every note an agent holds. The operator's only write here. */
@@ -591,16 +619,6 @@ export const api = {
   search: (query: string, limit?: number) => invoke<SearchHits>("search", { query, limit }),
 
   /**
-   * Takes dropped files into the store, before anything is sent.
-   *
-   * `paths` are absolute paths from a drop; the bytes never cross IPC, and what
-   * comes back is what a message would carry. A file that could not be taken is
-   * named in `refused` rather than failing the drop, so one document over the
-   * limit does not cost the operator the four beside it.
-   */
-  stageFiles: (paths: string[]) => invoke<Staged>("stage_files", { paths }),
-
-  /**
    * Sends files from this machine's disk to the box this window is showing.
    *
    * A drop on the desktop app is a path, and a box has never seen this disk,
@@ -622,7 +640,7 @@ export const api = {
   /**
    * Takes documents a browser is holding into the store, one request each.
    *
-   * The hosted counterpart of `stageFiles`, with the same answer shape: one
+   * The browser's counterpart of `forwardFiles`, with the same answer shape: one
    * file out of five failing does not refuse the other four, and the one that
    * cannot go is named in the words the store used.
    */
@@ -895,7 +913,11 @@ export async function onFileDrop(handlers: {
   // and hands over bytes instead, which is a different mechanism and a
   // different route; both end in the same store, and the caller sees one
   // answer shape either way.
-  if (hosted) {
+  //
+  // Decided by `desktop`, not `hosted`. Every window is hosted since the
+  // runtime left it, and a test on `hosted` sent the desktop down the browser's
+  // branch, where Tauri's own drop events arrive and nothing is listening.
+  if (!desktop) {
     // Counted rather than toggled: a drag crosses every child element on the
     // way through the window, and each crossing is an enter and a leave.
     let depth = 0;
@@ -941,12 +963,9 @@ export async function onFileDrop(handlers: {
     events.listen<{ paths: string[] }>(events.TauriEvent.DRAG_DROP, (message) => {
       handlers.over(false);
       const paths = message.payload.paths ?? [];
-      // A window showing a box: the path is on this disk and the store is on
-      // the box, so the runtime here reads and forwards.
-      const box = attached();
-      handlers.dropped(
-        box ? api.forwardFiles(box.origin, box.token, paths) : api.stageFiles(paths),
-      );
+      // The path is on this disk and the store is on the host, local container
+      // or remote box alike, so the native side reads and forwards.
+      handlers.dropped(api.forwardFiles(workspaceOrigin(), token(), paths));
     }),
   ]);
   return () => {

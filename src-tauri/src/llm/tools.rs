@@ -29,6 +29,9 @@ pub const USE_SCREEN: &str = "use_screen";
 pub const BROWSE: &str = "browse";
 pub const SCHEDULE: &str = "schedule";
 pub const CALENDAR: &str = "calendar";
+pub const SKILL: &str = "skill";
+pub const SETTINGS: &str = "settings";
+pub const NOTEBOOK: &str = "notebook";
 pub const CREATE_AGENT: &str = "create_agent";
 pub const REQUEST_PERMISSION: &str = "request_permission";
 pub const DECISION: &str = "decision";
@@ -189,9 +192,9 @@ pub fn plugin_specs(connected: &[PluginToolset]) -> Vec<ToolSpec> {
                 // tool descriptions has no other signal that `run_sql` reaches
                 // the operator's real database rather than a local one.
                 description: if tool.description.trim().is_empty() {
-                    format!("From the {} plugin.", kind.label())
+                    format!("From the {} connector.", kind.label())
                 } else {
-                    format!("{} plugin. {}", kind.label(), tool.description.trim())
+                    format!("{} connector. {}", kind.label(), tool.description.trim())
                 },
                 // Passed through untouched. It is the server's schema, the
                 // server validates against it, and anything Guaca did to it
@@ -217,13 +220,57 @@ pub fn plugin_specs(connected: &[PluginToolset]) -> Vec<ToolSpec> {
 pub fn specs(surfaces: Surfaces, modalities: Modalities) -> Vec<ToolSpec> {
     all_specs(surfaces)
         .into_iter()
-        .filter(|spec| match spec.name.as_str() {
-            USE_SCREEN => surfaces.computer && modalities.image,
-            RUN_COMMAND | OPEN_ON_DESKTOP => surfaces.computer,
-            BROWSE => surfaces.browser,
-            CODE | SHELL => surfaces.repository,
-            REQUEST_PERMISSION => surfaces.computer || surfaces.browser || surfaces.repository,
-            _ => true,
+        .filter(|spec| offered(&spec.name, surfaces, modalities))
+        .collect()
+}
+
+/// Whether one tool is offered to an agent with these places and this model.
+fn offered(name: &str, surfaces: Surfaces, modalities: Modalities) -> bool {
+    match name {
+        USE_SCREEN => surfaces.computer && modalities.image,
+        RUN_COMMAND | OPEN_ON_DESKTOP => surfaces.computer,
+        BROWSE => surfaces.browser,
+        CODE | SHELL => surfaces.repository,
+        REQUEST_PERMISSION => surfaces.computer || surfaces.browser || surfaces.repository,
+        _ => true,
+    }
+}
+
+/// What an agent needs before a tool is offered, in the operator's words.
+/// `offered` decides; this says it, and a test holds the two together.
+fn needs(name: &str) -> Option<&'static str> {
+    match name {
+        USE_SCREEN => Some("a computer, and a model that can see"),
+        RUN_COMMAND | OPEN_ON_DESKTOP => Some("a computer"),
+        BROWSE => Some("a browser"),
+        CODE | SHELL => Some("a repository"),
+        REQUEST_PERMISSION => Some("a computer, a browser or a repository"),
+        _ => None,
+    }
+}
+
+/// One of Guaca's own tools, as the operator reads about it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolSummary {
+    pub name: String,
+    /// The first sentence of what the agent is told, in the agent's words.
+    pub summary: String,
+    /// What an agent has to be given before it is offered this one.
+    pub needs: Option<&'static str>,
+}
+
+/// Every tool Guaca itself offers, described from the definitions agents get,
+/// so the list an operator reads cannot drift from the list a model is sent.
+/// A connector's tools are its own and are listed with the connector.
+pub fn catalog() -> Vec<ToolSummary> {
+    let every = Surfaces { computer: true, browser: true, repository: true };
+    all_specs(every)
+        .into_iter()
+        .map(|spec| {
+            let text = spec.description.split_whitespace().collect::<Vec<_>>().join(" ");
+            let first = text.split(". ").next().unwrap_or_default().trim_end_matches('.');
+            ToolSummary { needs: needs(&spec.name), summary: format!("{first}."), name: spec.name }
         })
         .collect()
 }
@@ -1031,6 +1078,190 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: SKILL.to_string(),
+            // Read before write, in the description as in the design: the
+            // point of a skill is the agent that loads one before a task, and
+            // a model shown `write` first treats the tool as a notebook.
+            description: format!(
+                "Skills are documents of instructions for one kind of task, kept by Guaca, the \
+                 operator and your crew. Your system prompt names the ones you can read and \
+                 says when each applies; only those lines are there, not the instructions.\n\n\
+                 `view` reads one by name. Read it before starting a task it fits, and follow \
+                 it. `list` shows every skill you can read. `write` creates or replaces one of \
+                 your crew's own skills: do it when you have worked out how a recurring task is \
+                 done and the next agent should not have to work it out again. `delete` \
+                 removes one of your crew's own. Guaca's skills and the operator's are \
+                 read-only.\n\n\
+                 A skill has a `name` (lowercase words joined by dashes), a `description` (the \
+                 one line that says when to load it, at most {} characters) and `content` \
+                 (markdown instructions, at most {} characters). Every agent in your crew \
+                 reads what you write, and no other crew can.",
+                crate::domain::skill::MAX_DESCRIPTION,
+                crate::domain::skill::MAX_BODY
+            ),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["view", "list", "write", "delete"] },
+                    "name": {
+                        "type": "string",
+                        "description": "The skill, as your system prompt or `list` names it: \
+                                        `deploy-site`."
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "On `write`: when an agent should load it, in one line."
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "On `write`: the whole skill, in markdown. It replaces \
+                                        what was there."
+                    }
+                },
+                "required": ["action"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
+            name: NOTEBOOK.to_string(),
+            // Placed against memory in its first sentence, because the two are
+            // what a model confuses: one is in front of it every turn and one
+            // is read when needed, and which to use is the whole decision.
+            description: format!(
+                "Your notebook: a private folder of your own files that lasts between \
+                 conversations. Memory is the page in front of you on every turn; the notebook \
+                 is for anything longer or more particular you want to keep and come back to: a \
+                 running log, a tracker of leads or tickets, research, a customer's history, a \
+                 draft. Only the list of files is in your prompt, so `read` a file when the work \
+                 needs it.\n\n\
+                 Shape it as you like, with folders up to four deep: `write` creates or replaces \
+                 a file, `append` adds to the end of one (a log never needs reading first), \
+                 `move` renames, `delete` removes. Files are markdown by default (.md, .txt, \
+                 .json or .csv), up to {} characters each, {} at most. Nobody else in your crew \
+                 reads it; the operator can. Delete what you no longer need: a stale file steers \
+                 the next turn wrong.",
+                crate::notebook::MAX_FILE,
+                crate::notebook::MAX_FILES
+            ),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["list", "read", "write", "append", "move", "delete"]
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "A relative path such as `leads/acme.md`."
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "On `write`, the whole file; on `append`, what to add."
+                    },
+                    "to": { "type": "string", "description": "On `move`, the new path." }
+                },
+                "required": ["action"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
+            name: SETTINGS.to_string(),
+            // Approval is said before the keys, because it is what decides how
+            // a model should use the tool: to propose, not to fiddle. The
+            // endpoint and the keys are named as untouchable so a model asked
+            // to "switch us to Groq" says so rather than trying three spellings.
+            description: "The workspace's settings, and what the operator is looking at right \
+                          now. `read` shows the settings every agent runs on, your crew's own \
+                          overrides, this host's version and the operator's current screen: \
+                          read it before answering a question about the app or a pane they \
+                          have open.\n\n\
+                          `update` asks the operator to approve a change. Pass `changes` with \
+                          only the keys to change, named as `read` names them; a limit can be \
+                          changed on its own. The operator sees each change with its before and \
+                          after, and nothing changes unless they allow it. Say why in your reply, \
+                          since that is what they will weigh.\n\n\
+                          `add_quick_action` asks to put a button on the operator's status bar \
+                          for something they do often: sending one of your crew a fixed message, \
+                          or opening a place in the app. They approve it the same way, with the \
+                          whole message shown. `remove_quick_action` asks to take one off by the \
+                          id `read` lists.\n\n\
+                          The provider, its endpoint and every key are the operator's to change in \
+                          Settings, and no key is ever shown to you. The `guaca` skill says what \
+                          each setting means."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["read", "update", "add_quick_action", "remove_quick_action"]
+                    },
+                    "quick_action": {
+                        "type": "object",
+                        "description": "On `add_quick_action`: a `label` of two or three words, \
+                                        and either `send` with `to` (a message and the name of \
+                                        the agent in your crew it goes to) or `open` (a place).",
+                        "properties": {
+                            "label": { "type": "string" },
+                            "send": { "type": "string" },
+                            "to": { "type": "string" },
+                            "open": {
+                                "type": "string",
+                                "enum": ["channel", "calendar", "for_you", "settings",
+                                         "crew_settings"]
+                            },
+                            "agent": {
+                                "type": "string",
+                                "description": "For `open: channel`: whose channel."
+                            },
+                            "section": {
+                                "type": "string",
+                                "description": "For `open: settings`: which pane, such as `limits`."
+                            }
+                        },
+                        "required": ["label"],
+                        "additionalProperties": false
+                    },
+                    "id": {
+                        "type": "string",
+                        "description": "On `remove_quick_action`: the button's id, from `read`."
+                    },
+                    "changes": {
+                        "type": "object",
+                        "description": "On `update`: the settings to change and their new values.",
+                        "properties": {
+                            "operatorName": { "type": "string" },
+                            "defaultModel": { "type": "string" },
+                            "subscriptionModel": { "type": "string" },
+                            "reasoningEffort": {
+                                "type": "string",
+                                "enum": ["auto", "none", "minimal", "low", "medium", "high",
+                                         "xhigh", "max", "ultra"]
+                            },
+                            "requestTimeoutSecs": { "type": "integer" },
+                            "limits": {
+                                "type": "object",
+                                "properties": {
+                                    "maxStepsPerRun": { "type": "integer" },
+                                    "maxToolRounds": { "type": "integer" },
+                                    "maxHops": { "type": "integer" },
+                                    "maxSendsPerPair": { "type": "integer" },
+                                    "maxFanoutPerCall": { "type": "integer" }
+                                },
+                                "additionalProperties": false
+                            },
+                            "computerIdleMinutes": { "type": "integer" },
+                            "browserIdleMinutes": { "type": "integer" },
+                            "browserStealth": { "type": "boolean" }
+                        },
+                        "additionalProperties": false
+                    }
+                },
+                "required": ["action"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
             name: READ_FILE.to_string(),
             description: "Reopen a saved attachment by file name, including documents you wrote \
                           with `write_document` on earlier turns and files you sent to peers. \
@@ -1228,6 +1459,20 @@ pub enum ToolInvocation {
     Calendar {
         action: CalendarAction,
     },
+    /// A read or write of a skill. The crew is read off the calling agent's
+    /// card at dispatch, like the calendar's, so a call cannot name another.
+    Skill {
+        action: SkillAction,
+    },
+    /// Reading the settings, or asking the operator to approve a change to them.
+    Settings {
+        action: SettingsAction,
+    },
+    /// A read or write of the calling agent's own notebook. Whose is read off
+    /// the card at dispatch, never from the call.
+    Notebook {
+        action: NotebookAction,
+    },
     CreateAgent {
         draft: NewAgent,
     },
@@ -1304,6 +1549,47 @@ pub enum ScheduleAction {
 /// fires and one does not — but they are the two lists an agent keeps, and an
 /// agent that has learned `list`/`add`/`update`/`cancel` on one should not have
 /// to learn a second vocabulary for the other.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NotebookAction {
+    List,
+    Read { path: String },
+    Write { path: String, content: String },
+    Append { path: String, content: String },
+    Move { path: String, to: String },
+    Delete { path: String },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SettingsAction {
+    Read,
+    /// The changes as the model sent them. Read against the settings in force
+    /// at dispatch, where what may be changed is decided.
+    Update {
+        changes: serde_json::Value,
+    },
+    /// A button for the status bar, as the model described it. Names are
+    /// resolved against the caller's own crew at dispatch.
+    AddQuickAction {
+        label: String,
+        send: Option<String>,
+        to: Option<String>,
+        open: Option<String>,
+        agent: Option<String>,
+        section: Option<String>,
+    },
+    RemoveQuickAction {
+        id: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SkillAction {
+    List,
+    View { name: String },
+    Write { name: String, description: String, content: String },
+    Delete { name: String },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum CalendarAction {
     List,
@@ -1398,6 +1684,18 @@ pub enum ToolParseError {
     UnknownCalendarAction,
     #[error("calendar needs {needs}")]
     IncompleteCalendar { needs: String },
+    #[error("skill needs a known `action`")]
+    UnknownSkillAction,
+    #[error("settings needs a known `action`")]
+    UnknownSettingsAction,
+    #[error("notebook needs a known `action`")]
+    UnknownNotebookAction,
+    #[error("notebook needs {needs}")]
+    IncompleteNotebook { needs: String },
+    #[error("settings needs {needs}")]
+    IncompleteSettings { needs: String },
+    #[error("skill needs {needs}")]
+    IncompleteSkill { needs: String },
     #[error("use_screen {action} needs {needs}")]
     IncompleteScreenAction { action: String, needs: String },
     #[error("create_agent needs {needs}")]
@@ -1449,6 +1747,41 @@ impl ToolParseError {
                  \"2026-09-14 15:00\", \"minutes\": 60}}. A date on its own is a whole day. \
                  To move one your crew already has: {{\"action\": \"update\", \"id\": \
                  \"...\", \"starts_at\": \"2026-09-15 10:00\"}}."
+            ),
+            ToolParseError::UnknownNotebookAction => {
+                "Error: `action` must be list, read, write, append, move or delete. Use \
+                 {\"action\": \"list\"} to see what your notebook holds."
+                    .to_string()
+            }
+            ToolParseError::IncompleteNotebook { needs } => format!(
+                "Error: that `notebook` call needs {needs}. To keep a log: {{\"action\": \
+                 \"append\", \"path\": \"log.md\", \"content\": \"- tried the API\"}}. To \
+                 read a file: {{\"action\": \"read\", \"path\": \"leads/acme.md\"}}."
+            ),
+            ToolParseError::UnknownSettingsAction => {
+                "Error: `action` must be read or update. Use {\"action\": \"read\"} to see the \
+                 settings and their names, then {\"action\": \"update\", \"changes\": \
+                 {\"limits\": {\"maxHops\": 12}}} to ask the operator for a change."
+                    .to_string()
+            }
+            ToolParseError::IncompleteSettings { needs } => format!(
+                "Error: that `settings` call needs {needs}. A button that sends a message: \
+                 {{\"action\": \"add_quick_action\", \"quick_action\": {{\"label\": \
+                 \"Morning brief\", \"send\": \"Give me the morning brief.\", \"to\": \
+                 \"Scout\"}}}}. One that opens a place: {{\"action\": \"add_quick_action\", \
+                 \"quick_action\": {{\"label\": \"Limits\", \"open\": \"settings\", \
+                 \"section\": \"limits\"}}}}."
+            ),
+            ToolParseError::UnknownSkillAction => {
+                "Error: `action` must be view, list, write or delete. Use {\"action\": \"list\"} \
+                 to see the skills you can read."
+                    .to_string()
+            }
+            ToolParseError::IncompleteSkill { needs } => format!(
+                "Error: that `skill` call needs {needs}. To read one: {{\"action\": \"view\", \
+                 \"name\": \"guaca\"}}. To write one for your crew: {{\"action\": \"write\", \
+                 \"name\": \"deploy-site\", \"description\": \"When deploying the marketing \
+                 site\", \"content\": \"# Deploy\\n1. ...\"}}."
             ),
             ToolParseError::UnknownBrowseAction => {
                 "Error: `action` must be one of open, read, click, type, scroll or back. \
@@ -2153,6 +2486,153 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                 _ => Err(ToolParseError::UnknownCalendarAction),
             }
         }
+        NOTEBOOK => {
+            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                name: NOTEBOOK.to_string(),
+                detail: e.to_string(),
+            })?;
+            let text = |keys: &[&str]| {
+                keys.iter()
+                    .find_map(|key| value.get(*key).and_then(|v| v.as_str()).map(str::to_string))
+            };
+            let needs = |what: &str| ToolParseError::IncompleteNotebook { needs: what.to_string() };
+            let path = || {
+                text(&["path", "file", "name"])
+                    .filter(|path| !path.trim().is_empty())
+                    .ok_or_else(|| needs("a `path`, such as `leads/acme.md`"))
+            };
+            // Content may be empty on purpose only when clearing a file, which
+            // is `write` with nothing; a missing field is a model that forgot.
+            let content =
+                || text(&["content", "text", "body"]).ok_or_else(|| needs("the `content`"));
+            let action = match value.get("action").and_then(|v| v.as_str()).unwrap_or("list") {
+                "list" | "ls" => NotebookAction::List,
+                "read" | "view" | "open" | "cat" => NotebookAction::Read { path: path()? },
+                "write" | "create" | "save" | "replace" => {
+                    NotebookAction::Write { path: path()?, content: content()? }
+                }
+                "append" | "add" | "log" => {
+                    NotebookAction::Append { path: path()?, content: content()? }
+                }
+                "move" | "rename" | "mv" => NotebookAction::Move {
+                    path: path()?,
+                    to: text(&["to", "destination", "new_path"])
+                        .filter(|to| !to.trim().is_empty())
+                        .ok_or_else(|| needs("the new path in `to`"))?,
+                },
+                "delete" | "remove" | "rm" => NotebookAction::Delete { path: path()? },
+                _ => return Err(ToolParseError::UnknownNotebookAction),
+            };
+            Ok(ToolInvocation::Notebook { action })
+        }
+        SETTINGS => {
+            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                name: SETTINGS.to_string(),
+                detail: e.to_string(),
+            })?;
+            let action = match value.get("action").and_then(|v| v.as_str()).unwrap_or("read") {
+                "read" | "get" | "show" | "list" => SettingsAction::Read,
+                "update" | "change" | "set" | "write" => {
+                    // A model that forgets the wrapper sends the keys beside
+                    // `action`. What it meant is not in doubt, and a refusal
+                    // would cost a round trip to learn a nesting.
+                    let changes = match value.get("changes") {
+                        Some(changes) => changes.clone(),
+                        None => {
+                            let mut rest = value.as_object().cloned().unwrap_or_default();
+                            rest.remove("action");
+                            serde_json::Value::Object(rest)
+                        }
+                    };
+                    SettingsAction::Update { changes }
+                }
+                "add_quick_action" | "add_button" => {
+                    let spec = value.get("quick_action").cloned().unwrap_or_else(|| value.clone());
+                    let text = |key: &str| {
+                        spec.get(key)
+                            .and_then(|v| v.as_str())
+                            .map(str::trim)
+                            .filter(|text| !text.is_empty())
+                            .map(str::to_string)
+                    };
+                    let label =
+                        text("label").ok_or_else(|| ToolParseError::IncompleteSettings {
+                            needs: "a `label` for the button".to_string(),
+                        })?;
+                    let (send, open) = (text("send").or_else(|| text("message")), text("open"));
+                    if send.is_none() && open.is_none() {
+                        return Err(ToolParseError::IncompleteSettings {
+                            needs: "either `send` with `to`, or `open`".to_string(),
+                        });
+                    }
+                    SettingsAction::AddQuickAction {
+                        label,
+                        send,
+                        to: text("to"),
+                        open,
+                        agent: text("agent"),
+                        section: text("section"),
+                    }
+                }
+                "remove_quick_action" | "remove_button" => SettingsAction::RemoveQuickAction {
+                    id: value
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .map(str::trim)
+                        .filter(|id| !id.is_empty())
+                        .ok_or_else(|| ToolParseError::IncompleteSettings {
+                            needs: "the `id` of the quick action, which `read` lists".to_string(),
+                        })?
+                        .to_string(),
+                },
+                _ => return Err(ToolParseError::UnknownSettingsAction),
+            };
+            Ok(ToolInvocation::Settings { action })
+        }
+        SKILL => {
+            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                name: SKILL.to_string(),
+                detail: e.to_string(),
+            })?;
+            let words = |keys: &[&str]| {
+                keys.iter().find_map(|key| {
+                    value
+                        .get(*key)
+                        .and_then(|v| v.as_str())
+                        .map(str::trim)
+                        .filter(|text| !text.is_empty())
+                        .map(str::to_string)
+                })
+            };
+            let named = |action: &str| {
+                words(&["name", "skill"]).ok_or_else(|| ToolParseError::IncompleteSkill {
+                    needs: format!("the `name` of the skill to {action}"),
+                })
+            };
+            let action = match value.get("action").and_then(|v| v.as_str()).unwrap_or("list") {
+                "list" => SkillAction::List,
+                // What a model reaches for when it has not read the enum.
+                "view" | "read" | "open" | "load" | "get" => {
+                    SkillAction::View { name: named("view")? }
+                }
+                "write" | "create" | "update" | "save" | "edit" => SkillAction::Write {
+                    name: named("write")?,
+                    description: words(&["description", "when"]).ok_or_else(|| {
+                        ToolParseError::IncompleteSkill {
+                            needs: "a `description`: one line saying when to load it".to_string(),
+                        }
+                    })?,
+                    content: words(&["content", "body", "text", "instructions"]).ok_or_else(
+                        || ToolParseError::IncompleteSkill {
+                            needs: "the whole skill in `content`".to_string(),
+                        },
+                    )?,
+                },
+                "delete" | "remove" => SkillAction::Delete { name: named("delete")? },
+                _ => return Err(ToolParseError::UnknownSkillAction),
+            };
+            Ok(ToolInvocation::Skill { action })
+        }
         SEND_MESSAGE => {
             let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
                 name: SEND_MESSAGE.to_string(),
@@ -2466,6 +2946,106 @@ mod tests {
     /// are not made to say they do not.
     fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
         super::parse(call, &[])
+    }
+
+    #[test]
+    fn a_notebook_call_is_read_in_the_words_a_model_reaches_for() {
+        assert_eq!(
+            parse(&call(NOTEBOOK, r#"{"action": "append", "path": "log.md", "content": "- x"}"#)),
+            Ok(ToolInvocation::Notebook {
+                action: NotebookAction::Append { path: "log.md".into(), content: "- x".into() }
+            })
+        );
+        assert!(matches!(
+            parse(&call(NOTEBOOK, r#"{"action": "rename", "file": "a.md", "to": "b.md"}"#)),
+            Ok(ToolInvocation::Notebook { action: NotebookAction::Move { .. } })
+        ));
+        let refused = parse(&call(NOTEBOOK, r#"{"action": "write", "path": "a"}"#)).unwrap_err();
+        assert!(refused.guidance().contains("\"append\""), "{}", refused.guidance());
+        assert_eq!(
+            parse(&call(NOTEBOOK, r#"{"action": "chmod"}"#)),
+            Err(ToolParseError::UnknownNotebookAction)
+        );
+    }
+
+    #[test]
+    fn a_settings_change_is_read_with_or_without_its_wrapper() {
+        assert_eq!(
+            parse(&call(SETTINGS, "{}")),
+            Ok(ToolInvocation::Settings { action: SettingsAction::Read })
+        );
+        let wrapped = r#"{"action": "update", "changes": {"limits": {"maxHops": 12}}}"#;
+        let bare = r#"{"action": "update", "limits": {"maxHops": 12}}"#;
+        for text in [wrapped, bare] {
+            assert_eq!(
+                parse(&call(SETTINGS, text)),
+                Ok(ToolInvocation::Settings {
+                    action: SettingsAction::Update {
+                        changes: serde_json::json!({ "limits": { "maxHops": 12 } })
+                    }
+                }),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            parse(&call(SETTINGS, r#"{"action": "reset"}"#)),
+            Err(ToolParseError::UnknownSettingsAction)
+        );
+        let button = r#"{"action": "add_quick_action",
+            "quick_action": {"label": "Brief", "send": "Brief me.", "to": "Scout"}}"#;
+        assert!(matches!(
+            parse(&call(SETTINGS, button)),
+            Ok(ToolInvocation::Settings { action: SettingsAction::AddQuickAction { .. } })
+        ));
+        let refused = parse(&call(
+            SETTINGS,
+            r#"{"action": "add_quick_action", "quick_action": {"label": "x"}}"#,
+        ))
+        .unwrap_err();
+        assert!(refused.guidance().contains("\"send\""), "{}", refused.guidance());
+    }
+
+    #[test]
+    fn a_skill_is_read_by_name_and_written_whole() {
+        assert_eq!(
+            parse(&call(SKILL, r#"{"action": "view", "name": "guaca"}"#)),
+            Ok(ToolInvocation::Skill { action: SkillAction::View { name: "guaca".into() } })
+        );
+        // `load` and `read` are what a model says when it has not read the enum.
+        assert!(matches!(
+            parse(&call(SKILL, r#"{"action": "load", "skill": "deploy"}"#)),
+            Ok(ToolInvocation::Skill { action: SkillAction::View { .. } })
+        ));
+        assert_eq!(
+            parse(&call(SKILL, "{}")),
+            Ok(ToolInvocation::Skill { action: SkillAction::List })
+        );
+        let written = parse(&call(
+            SKILL,
+            r##"{"action": "write", "name": "deploy", "description": "When deploying", "body": "# Deploy"}"##,
+        ));
+        assert_eq!(
+            written,
+            Ok(ToolInvocation::Skill {
+                action: SkillAction::Write {
+                    name: "deploy".into(),
+                    description: "When deploying".into(),
+                    content: "# Deploy".into(),
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn an_incomplete_skill_write_says_what_is_missing_and_shows_one() {
+        let refused =
+            parse(&call(SKILL, r#"{"action": "write", "name": "x", "content": "y"}"#)).unwrap_err();
+        assert!(refused.to_string().contains("`description`"), "{refused}");
+        assert!(refused.guidance().contains("\"action\": \"write\""), "{}", refused.guidance());
+        assert_eq!(
+            parse(&call(SKILL, r#"{"action": "summon"}"#)),
+            Err(ToolParseError::UnknownSkillAction)
+        );
     }
 
     #[test]
@@ -3562,14 +4142,34 @@ mod tests {
     }
 
     #[test]
+    fn the_operators_list_of_tools_is_the_models_and_says_what_each_needs() {
+        let listed = catalog();
+        let bare = Surfaces { computer: false, browser: false, repository: false };
+        for tool in &listed {
+            assert!(tool.summary.len() > 10 && tool.summary.ends_with('.'), "{tool:?}");
+            assert!(!tool.summary.contains("  "), "{tool:?}");
+            // A tool that needs nothing is offered to an agent given nothing.
+            assert_eq!(
+                tool.needs.is_none(),
+                offered(&tool.name, bare, Modalities::seeing()),
+                "{} is offered and described differently",
+                tool.name
+            );
+        }
+        for name in [SKILL, NOTEBOOK, SETTINGS, SCHEDULE, CODE] {
+            assert!(listed.iter().any(|tool| tool.name == name), "{name} is missing");
+        }
+    }
+
+    #[test]
     fn every_tool_is_offered_with_a_strict_schema() {
         let specs = specs(Surfaces::both(), Modalities::seeing());
         assert_eq!(
             specs.len(),
-            20,
+            23,
             "directory, run_command, open_on_desktop, use_screen, browse, code, shell, schedule, \
-             calendar, create_agent, request_permission, ask_operator, decision, escalate, send_message, \
-             read_file, write_document, attach_file, update_memory, note_progress"
+             calendar, skill, notebook, settings, create_agent, request_permission, ask_operator, decision, escalate, \
+             send_message, read_file, write_document, attach_file, update_memory, note_progress"
         );
         for spec in &specs {
             assert_eq!(
@@ -4215,7 +4815,7 @@ mod tests {
         // The description says where the call reaches. A model reading twenty
         // of these has no other signal that `run_sql` is somebody's real
         // database rather than a scratch one.
-        assert!(specs[0].description.starts_with("Neon plugin."), "{}", specs[0].description);
+        assert!(specs[0].description.starts_with("Neon connector."), "{}", specs[0].description);
     }
 
     #[test]

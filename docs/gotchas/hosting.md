@@ -92,12 +92,13 @@ The daemon, a browser as a client, and the boot both hosts share.
   Read off `X-Forwarded-Host` and `X-Forwarded-Proto` before `Host`, because
   a tunnel rewrites both and the browser saw the tunnel's name. A box called
   by two names gets `GUACA_ORIGIN`.
-- **`hosted` is true in a window pointed at a box, and `attached()` is how
-  the two hosted cases are told apart.** The reveal channel, the drop and the
-  menu bar feed are the three places a window still has something a browser
-  does not, and each checks `attached()` rather than `hosted`. A fourth that
-  checks `hosted` alone is a desktop feature that vanishes when the window
-  shows a box.
+- **`hosted` is always true, so it tells nothing apart.** Every window has
+  called a host since the runtime left it. A window and a browser are told
+  apart by `desktop`, and a window before setup by `attached()`. The drop
+  branched on `hosted` and sent every window down the browser's DOM
+  listeners, where Tauri's own drop events arrive and nothing listened; a
+  file dropped on the desktop went nowhere. The reveal channel, the drop and
+  the menu bar feed are the places a window has something a browser does not.
 - **The tray keeps what it was fed across page loads.** The process outlives
   the page. A window that comes back showing this machine sends
   `report_presence(null)` once at boot; without it the strip keeps drawing a
@@ -138,3 +139,22 @@ The daemon, a browser as a client, and the boot both hosts share.
   `boot.rs` used to spell two of them itself and the third arrived on `main`
   as a separate argument; a host that built `Workspace` and `FileStore` by
   hand would be pointing part of the runtime at a directory nobody chose.
+- **Every settings write goes through `Runtime::change_config`.** It holds one
+  lock from the read to the broadcast. Two clients that each read, patched and
+  saved on their own put each other's field back, and the suite only saw it on
+  a multi-threaded runtime: on one thread there is no await between the read
+  and the save, so nothing can interleave. `settingsChanged` carries the
+  redacted settings to every client, the one that made the change included.
+- **Save sends what changed, not the form.** The settings pane follows a
+  change made elsewhere into every field its operator has not touched, and
+  sends only fields that differ from the settings as they stand. The form's
+  full `patch` is for a connection test, which has to test what is on screen.
+  Sending the whole form saved each window's stale copy over the other's.
+- **`streamLagged` is not dead code.** The current host closes a lagging
+  socket itself and never sends it, but older hosts do, and a page newer than
+  its host has to resynchronize on it. The transport test is named for that.
+- **The page id travels in a task-local, not an argument.** A sign-in opens
+  its browser tab from deep inside `oauth::authorize`, many calls below the
+  command. `CALLER` is scoped around `ipc::dispatch` in the call route, and
+  `page_opener` reads it; a command that spawned the sign-in onto another task
+  would lose it and fall back to every window.

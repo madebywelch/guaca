@@ -96,6 +96,27 @@ read full records with `list`. Questions and choices remain agent-authored
 context. Answer deliveries use system envelopes that distinguish that context
 from the operator's answer and explicitly grant no new permission.
 
+## A settings change is a permission with its own diff
+
+`settings` with `update` parks the turn on `ProtectedAction::ChangeSettings`.
+The card lists each setting an agent asked to change, before and after, in the
+words the settings pane uses (`config::LIMIT_LABELS`, checked against
+`limits.ts` by `manual.test.ts`). Nothing changes until the operator allows it,
+and the patch is applied to the settings as they are at that moment, so an edit
+another window saved while the card was open is not undone.
+
+It is the one protected action with no standing yes. "Always" is scoped to an
+agent and an action, and this action is any setting to any value: a standing
+yes given for a timeout would cover a relay depth raised to its ceiling, and
+the limits are the guard that ends a cascade. `ProtectedAction::stands` says
+so, `decide_approval` records an "always" as a single allow, and
+`ask_permission` never consults a standing grant for it.
+
+What an agent may ask for at all is `config::AGENT_WRITABLE`. The provider, the
+endpoint and every key are `OPERATOR_ONLY` and refused before anyone is asked:
+the endpoint decides where the API key is sent, so an agent that could move it,
+even with a click of approval, could send the key anywhere.
+
 ## An answer is not completion
 
 `pending → answered → completed` is the normal lifecycle. An obsolete pending

@@ -105,10 +105,7 @@ async fn a_server_refuses_what_it_cannot_do_and_says_what_to_do_instead() {
     // Every one of these is something on the operator's own machine. The
     // refusal is what turns "the button did nothing" into a sentence, and each
     // has to name an alternative: a refusal that only says no gets retried.
-    let refusals = [
-        ("stage_files", json!({ "paths": ["/etc/hosts"] })),
-        ("save_file", json!({ "digest": "0".repeat(64), "name": "notes.txt" })),
-    ];
+    let refusals = [("save_file", json!({ "digest": "0".repeat(64), "name": "notes.txt" }))];
 
     for (name, args) in refusals {
         let (status, body) = call(addr, name, args).await;
@@ -313,6 +310,204 @@ async fn an_event_reaches_a_client_that_is_not_a_webview() {
     let _ = socket.close(None).await;
 }
 
+/// The next event of one kind, skipping whatever else the runtime emits.
+async fn next_of_kind(
+    socket: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    wanted: &str,
+) -> Value {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        assert!(!left.is_zero(), "no {wanted} event arrived");
+        let Ok(Some(Ok(message))) = tokio::time::timeout(left, socket.next()).await else {
+            panic!("the socket closed before {wanted} arrived");
+        };
+        let Ok(text) = message.into_text() else { continue };
+        let Ok(event) = serde_json::from_str::<Value>(&text) else { continue };
+        if event["type"] == wanted {
+            return event;
+        }
+    }
+}
+
+// Several workers, as the daemon has: on one thread two commands with no await
+// between their read and their save cannot interleave, and the race is hidden.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_settings_change_reaches_every_client_and_two_at_once_both_land() {
+    let (addr, _dir) = workspace().await;
+    let (mut other, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/v1/events?token={TOKEN}"))
+            .await
+            .expect("the event socket opens");
+
+    // A client that did not make the change is told, with the settings in it
+    // and never a key: every open settings pane is drawing from this.
+    call(addr, "update_settings", json!({ "patch": { "apiKey": "sk-secret-value" } })).await;
+    let event = next_of_kind(&mut other, "settingsChanged").await;
+    assert_eq!(event["settings"]["apiKeySet"], true);
+    assert!(!event.to_string().contains("sk-secret-value"), "a key crossed the socket: {event}");
+
+    // Two clients patching different fields at the same moment. Each read,
+    // patched and saved on its own before, and the later save put the earlier
+    // one's field back.
+    for round in 0..40 {
+        let name = format!("Operator {round}");
+        let model = format!("vendor/model-{round}");
+        let (a, b) = tokio::join!(
+            call(addr, "update_settings", json!({ "patch": { "operatorName": name } })),
+            call(addr, "update_settings", json!({ "patch": { "defaultModel": model } })),
+        );
+        assert_eq!(a.0, 200, "{a:?}");
+        assert_eq!(b.0, 200, "{b:?}");
+        let (_, now) = call(addr, "get_settings", json!({})).await;
+        assert_eq!(now["ok"]["operatorName"], name, "round {round}: {now}");
+        assert_eq!(now["ok"]["defaultModel"], model, "round {round}: {now}");
+    }
+    let _ = other.close(None).await;
+}
+
+#[tokio::test]
+async fn a_connector_run_as_a_program_on_the_host_is_tested_and_added_like_any_other() {
+    let (addr, _dir) = workspace().await;
+    let command =
+        format!("stdio:python3 {}/tests/fixtures/mcp-stdio.py", env!("CARGO_MANIFEST_DIR"));
+    let env = json!([{ "name": "FIXTURE_TOKEN", "value": "a-secret-value" }]);
+
+    let (status, report) =
+        call(addr, "probe_server", json!({ "url": command, "headers": env })).await;
+    assert_eq!(status, 200, "{report}");
+    assert!(report["ok"]["transport"].as_str().unwrap().starts_with("stdio"), "{report}");
+    assert_eq!(report["ok"]["tools"], json!(["echo", "whoami", "fail"]));
+
+    let (_, groups) = call(addr, "list_groups", json!({})).await;
+    let group = groups["ok"][0]["id"].clone();
+    let (status, added) = call(
+        addr,
+        "add_plugin",
+        json!({ "groupId": group, "name": "fixture", "url": command, "headers": env }),
+    )
+    .await;
+    assert_eq!(status, 200, "{added}");
+    assert!(!added.to_string().contains("a-secret-value"), "a value came back: {added}");
+    assert!(added.to_string().contains("FIXTURE_TOKEN"), "the name is shown: {added}");
+
+    // A key is not how a program is given one.
+    let (_, refused) = call(
+        addr,
+        "add_plugin",
+        json!({ "groupId": group, "name": "other", "url": command, "key": "sk-x" }),
+    )
+    .await;
+    assert_eq!(refused["err"]["kind"], "validation", "{refused}");
+    assert!(refused["err"]["message"].as_str().unwrap().contains("environment variable"));
+}
+
+#[tokio::test]
+async fn the_host_lists_its_own_tools_from_what_agents_are_sent() {
+    let (addr, _dir) = workspace().await;
+    let (status, body) = call(addr, "builtin_tools", json!({})).await;
+    assert_eq!(status, 200, "{body}");
+    let tools = body["ok"].as_array().expect("a list");
+    let named = |name: &str| tools.iter().find(|tool| tool["name"] == name).cloned();
+    assert!(named("notebook").is_some_and(|tool| tool["needs"].is_null()), "{body}");
+    assert_eq!(named("browse").unwrap()["needs"], "a browser");
+}
+
+#[tokio::test]
+async fn the_operators_quick_actions_reach_every_window() {
+    let (addr, _dir) = workspace().await;
+    let (mut other, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/v1/events?token={TOKEN}"))
+            .await
+            .expect("the event socket opens");
+
+    let (status, body) = call(
+        addr,
+        "add_quick_action",
+        json!({ "label": "Calendar", "does": { "kind": "open", "place": { "kind": "calendar" } } }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let id = body["ok"]["quickActions"][0]["id"].as_str().expect("an id").to_string();
+    assert_eq!(body["ok"]["quickActions"][0]["addedBy"], "the operator");
+    let event = next_of_kind(&mut other, "settingsChanged").await;
+    assert_eq!(event["settings"]["quickActions"][0]["label"], "Calendar");
+
+    // A button pointed at an agent that is not there is refused, not drawn dead.
+    let (_, refused) = call(
+        addr,
+        "add_quick_action",
+        json!({ "label": "Ghost", "does": {
+            "kind": "message", "agentId": uuid::Uuid::new_v4(), "text": "hello",
+        }}),
+    )
+    .await;
+    assert_eq!(refused["err"]["kind"], "notFound", "{refused}");
+
+    let (_, removed) = call(addr, "remove_quick_action", json!({ "id": id })).await;
+    assert_eq!(removed["ok"]["quickActions"], json!([]));
+    let _ = other.close(None).await;
+}
+
+#[tokio::test]
+async fn skills_are_written_read_and_announced_over_the_hosted_surface() {
+    let (addr, _dir) = workspace().await;
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/v1/events?token={TOKEN}"))
+            .await
+            .expect("the event socket opens");
+
+    let workspace = json!({ "kind": "workspace" });
+    let (status, body) = call(
+        addr,
+        "save_skill",
+        json!({ "scope": workspace, "draft": {
+            "name": "house-style", "description": "When writing anything", "body": "Plain words.",
+        }}),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["ok"]["scope"]["kind"], "workspace");
+    let event = next_of_kind(&mut socket, "skillsChanged").await;
+    assert_eq!(event["scope"]["kind"], "workspace");
+
+    // A listing carries no bodies; a read does.
+    let (_, listed) = call(addr, "list_skills", json!({ "scope": workspace })).await;
+    assert_eq!(listed["ok"][0]["name"], "house-style");
+    assert_eq!(listed["ok"][0]["body"], "");
+    let (_, read) =
+        call(addr, "read_skill", json!({ "scope": workspace, "name": "house-style" })).await;
+    assert_eq!(read["ok"]["body"], "Plain words.");
+
+    // Guaca's own is listed and cannot be written over, from any client.
+    let (_, bundled) = call(addr, "list_skills", json!({ "scope": { "kind": "bundled" } })).await;
+    assert!(bundled["ok"].as_array().unwrap().iter().any(|s| s["name"] == "guaca"));
+    let (_, refused) = call(
+        addr,
+        "save_skill",
+        json!({ "scope": workspace, "draft": { "name": "guaca", "description": "x", "body": "y" }}),
+    )
+    .await;
+    assert_eq!(refused["err"]["kind"], "validation", "{refused}");
+
+    // Nothing is written under the id of a crew that does not exist.
+    let ghost = json!({ "kind": "crew", "groupId": uuid::Uuid::new_v4() });
+    let (_, refused) = call(
+        addr,
+        "save_skill",
+        json!({ "scope": ghost, "draft": { "name": "x", "description": "x", "body": "y" }}),
+    )
+    .await;
+    assert_eq!(refused["err"]["kind"], "notFound", "{refused}");
+
+    let (_, deleted) =
+        call(addr, "delete_skill", json!({ "scope": workspace, "name": "house-style" })).await;
+    assert_eq!(deleted["ok"], true);
+    let _ = socket.close(None).await;
+}
+
 #[tokio::test]
 async fn a_client_on_a_different_build_is_told_which_of_them_is_wrong() {
     let (addr, _dir) = workspace().await;
@@ -334,6 +529,25 @@ async fn a_client_on_a_different_build_is_told_which_of_them_is_wrong() {
         body["err"]["message"].as_str().unwrap_or_default().contains("agent_memory"),
         "it does not name the command: {body}"
     );
+
+    // A client that says what it is gets told which of the two to update.
+    let body: Value = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/call"))
+        .bearer_auth(TOKEN)
+        .json(&json!({
+            "name": "summon_kraken",
+            "args": {},
+            "client": { "version": "0.0.1", "desktop": true },
+        }))
+        .send()
+        .await
+        .expect("the daemon answers")
+        .json()
+        .await
+        .expect("the answer is JSON");
+    let said = body["err"]["message"].as_str().unwrap_or_default();
+    assert!(said.contains("Guaca 0.0.1"), "it does not name the app's version: {said}");
+    assert!(said.contains("download the latest Guaca"), "it does not say which side: {said}");
 }
 
 #[tokio::test]

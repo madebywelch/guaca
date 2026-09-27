@@ -80,6 +80,10 @@ pub enum UiEvent {
     /// in case the browser refuses a window nobody clicked for.
     OpenUrl {
         url: String,
+        /// The page whose command asked, so only that window opens it. `None`
+        /// from a caller that did not say, which every window then opens, as
+        /// every window did before pages named themselves.
+        client: Option<String>,
     },
 
     /// A complete message was persisted.
@@ -345,6 +349,31 @@ pub enum UiEvent {
     /// Notes are written far more often than memory, which is the whole design,
     /// so the cheap one must not drag the expensive one behind it.
     WorkingNotesChanged {
+        agent_id: AgentId,
+    },
+
+    /// The workspace settings changed, whoever changed them.
+    ///
+    /// Carries the redacted settings rather than asking for a refetch, because
+    /// every client that is open needs exactly this and nothing else, and the
+    /// client that made the change is one of them: a second window still
+    /// drawing what it read at connect would save it back over this.
+    SettingsChanged {
+        settings: Box<crate::config::RedactedConfig>,
+    },
+
+    /// A skill was written or deleted, by the operator or by an agent.
+    ///
+    /// The scope rather than the skill, because what redraws is a list: the
+    /// operator's in Settings, or one crew's in its settings.
+    SkillsChanged {
+        scope: crate::domain::skill::Scope,
+    },
+
+    /// One agent wrote, moved or deleted a file in its own notebook. Same
+    /// argument as `MemoryChanged`: the operator may be reading it beside the
+    /// agent while it works.
+    NotebookChanged {
         agent_id: AgentId,
     },
 }

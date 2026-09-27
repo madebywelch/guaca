@@ -12,11 +12,14 @@ pub mod ids;
 pub mod occasion;
 pub mod plugin;
 pub mod promise;
+pub mod quick;
 pub mod repository;
 pub mod routine;
 pub mod search;
 pub mod signin;
+pub mod skill;
 pub mod usage;
+pub mod view;
 pub mod worknote;
 
 use std::sync::atomic::{AtomicI64, Ordering};

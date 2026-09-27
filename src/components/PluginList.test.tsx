@@ -464,7 +464,7 @@ describe("PluginList", () => {
     render(<PluginList groupId={GROUP} crew={CREW} />);
 
     fireEvent.click(await screen.findByText("Show all 1"));
-    expect(screen.getByText(/nobody can call it: Scribe is not on this plugin/)).toBeTruthy();
+    expect(screen.getByText(/nobody can call it: Scribe is not on this connector/)).toBeTruthy();
   });
 
   it("says when a connected plugin has nothing left switched on", async () => {
@@ -768,6 +768,39 @@ describe("a server the operator added", () => {
     // Cleared only once it worked, and the row it produced is what is drawn.
     expect(await screen.findByText("home_assistant")).toBeTruthy();
     expect(screen.queryByPlaceholderText("Home Assistant")).toBeNull();
+  });
+
+  it("adds a program on the host, handed its environment and no key", async () => {
+    const program = added({ name: "github", endpoint: "stdio:npx -y server-github" });
+    addPlugin.mockResolvedValue(program);
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+    fireEvent.click(await screen.findByText("Add a server"));
+    fireEvent.change(screen.getByPlaceholderText("Home Assistant"), {
+      target: { value: "github" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "A program on the host" }));
+    // The key is how an address is given one; a program is given a variable.
+    expect(screen.getByText("Key (optional)").closest("label")?.hidden).toBe(true);
+    fireEvent.change(screen.getByPlaceholderText("npx -y @modelcontextprotocol/server-github"), {
+      target: { value: "npx -y server-github" },
+    });
+    fireEvent.click(screen.getByText("Add a variable"));
+    fireEvent.change(screen.getByLabelText("Variable 1 name"), {
+      target: { value: "GITHUB_TOKEN" },
+    });
+    fireEvent.change(screen.getByLabelText("Variable 1 value"), { target: { value: "ghp_x" } });
+    groupPlugins.mockResolvedValue([program]);
+    fireEvent.click(screen.getByText("Add and connect"));
+    await waitFor(() =>
+      expect(addPlugin).toHaveBeenLastCalledWith(
+        GROUP,
+        "github",
+        "stdio:npx -y server-github",
+        undefined,
+        [{ name: "GITHUB_TOKEN", value: "ghp_x" }],
+      ),
+    );
+    expect(await screen.findByText("npx on the host")).toBeTruthy();
   });
 
   it("sends a pasted key only when there is one", async () => {

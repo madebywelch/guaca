@@ -17,6 +17,7 @@ interface Props {
 const NOTHING_YET: Record<ProtectedAction, string> = {
   createAgent: "Nothing has been created yet.",
   actOnBehalf: "Nothing has been sent yet.",
+  changeSettings: "Nothing has been changed yet.",
 };
 
 const SETTLED: Record<string, string> = {

@@ -211,7 +211,7 @@ work.
 ## How an agent actually reaches it
 
 As a plugin. `guaca.bot` serves an MCP server at `/mcp`, authenticated by the
-same account token, and Google appears in a group's Plugins list like any other.
+same account token, and Google appears in a crew's Connectors list like any other.
 `docs/PLUGINS.md`, *Google is a plugin whose sign-in is the account's*, has the
 argument; the short version is that it makes per-agent reach, the trust boundary
 and the tool plumbing all work without a line of new machinery.

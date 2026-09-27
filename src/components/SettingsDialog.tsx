@@ -53,12 +53,15 @@ import { GroupTransfer, LegacyGroups } from "./GroupTransfer";
 import { HostChoice } from "./HostSetup";
 import { HostUpdatePanel } from "./HostUpdates";
 import { ProviderPresets, SubscriptionModel } from "./ProviderFields";
+import { SkillList } from "./SkillList";
 
 interface Props {
   onClose: () => void;
   /** Which pane to open on. The palette and the missing-key banner both point
    *  at a specific one, and landing on General to hunt for it is a step. */
   section?: Section;
+  /** Told which pane is open, so the host can tell an agent what is on screen. */
+  onSection?: (section: Section) => void;
 }
 
 const SECTIONS = [
@@ -71,11 +74,17 @@ const SECTIONS = [
   "appearance",
   "notifications",
   "shortcuts",
+  "skills",
   "compost",
   "about",
 ] as const;
 
 export type Section = (typeof SECTIONS)[number];
+
+/** A pane name from elsewhere (a quick action, a route), if it is one. */
+export function asSection(name: string | null | undefined): Section | undefined {
+  return SECTIONS.find((section) => section === name);
+}
 
 const SECTION_LABELS: Record<Section, string> = {
   general: "General",
@@ -87,6 +96,7 @@ const SECTION_LABELS: Record<Section, string> = {
   appearance: "Appearance",
   notifications: "Notifications",
   shortcuts: "Shortcuts",
+  skills: "Skills",
   compost: "Compost",
   about: "About",
 };
@@ -149,7 +159,7 @@ const NOTIFY_COPY: Record<NotifyKind, { label: string; hint: string }> = {
 const differs = (text: string, stored: number | undefined) =>
   text.trim() !== "" && Number(text) !== stored;
 
-export function SettingsDialog({ onClose, section: opening }: Props) {
+export function SettingsDialog({ onClose, section: opening, onSection }: Props) {
   const settings = useStore((s) => s.settings);
   const setSettings = useStore((s) => s.setSettings);
   const capabilities = useStore((s) => s.capabilities);
@@ -157,6 +167,7 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
   const setPrefs = useStore((s) => s.setPrefs);
 
   const [section, setSection] = useState<Section>(opening ?? "general");
+  useEffect(() => onSection?.(section), [section, onSection]);
   const [operatorName, setOperatorName] = useState(settings?.operatorName ?? "");
   const [provider, setProvider] = useState<ProviderKind>(settings?.provider ?? "compatible");
   const [baseUrl, setBaseUrl] = useState(settings?.baseUrl ?? "");
@@ -189,6 +200,34 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
   );
   const [busy, setBusy] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+
+  // Settings change under an open dialog: another window, a browser on the
+  // same host, or an agent. A field the operator has not touched follows the
+  // change; one they have edited keeps their edit. Without this the form keeps
+  // what it read on open, and Save writes it back over the change.
+  const base = useRef(settings);
+  useEffect(() => {
+    const was = base.current;
+    base.current = settings;
+    if (!settings || !was || was === settings) return;
+    const follow =
+      <T,>(before: T, after: T) =>
+      (mine: T) =>
+        mine === before ? after : mine;
+    setOperatorName(follow(was.operatorName, settings.operatorName));
+    setProvider(follow(was.provider, settings.provider));
+    setBaseUrl(follow(was.baseUrl, settings.baseUrl));
+    setModel(follow(was.defaultModel, settings.defaultModel));
+    setReasoningEffort(follow(was.reasoningEffort, settings.reasoningEffort));
+    setSubscriptionModel(follow(was.subscriptionModel, settings.subscriptionModel));
+    setStealth(follow(was.browserStealth, settings.browserStealth));
+    setLimits((mine) => {
+      const next = { ...mine };
+      for (const { key } of LIMITS)
+        next[key] = follow(was.limits[key], settings.limits[key])(mine[key]);
+      return next;
+    });
+  }, [settings]);
 
   // The sign-in, which is three states rather than a boolean: not signed in,
   // waiting for the operator to enter a code in a browser, and signed in. All
@@ -299,11 +338,40 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
     differs(timeout, settings?.requestTimeoutSecs) ||
     LIMITS.some((field) => limits[field.key] !== settings?.limits[field.key]);
 
+  /**
+   * What Save sends: only what differs from the settings as they stand now.
+   *
+   * `patch` is the whole form, which is right for a connection test and wrong
+   * for a save: a field this operator never touched would carry the value it
+   * had on open, over whatever another client saved since.
+   */
+  const changes = (): SettingsPatch => {
+    const all: SettingsPatch = { operatorName, limits, ...patch() };
+    if (!settings) return all;
+    const now: Partial<Record<keyof SettingsPatch, unknown>> = {
+      operatorName: settings.operatorName,
+      provider: settings.provider,
+      baseUrl: settings.baseUrl,
+      defaultModel: settings.defaultModel,
+      reasoningEffort: settings.reasoningEffort,
+      subscriptionModel: settings.subscriptionModel,
+      browserStealth: settings.browserStealth,
+    };
+    const sent = Object.fromEntries(
+      Object.entries(all).filter(([key, value]) =>
+        key === "limits"
+          ? LIMITS.some((field) => limits[field.key] !== settings.limits[field.key])
+          : !(key in now) || now[key as keyof SettingsPatch] !== value,
+      ),
+    );
+    return sent as SettingsPatch;
+  };
+
   const save = async () => {
     setBusy(true);
     setStatus(null);
     try {
-      const next = await api.updateSettings({ operatorName, limits, ...patch() });
+      const next = await api.updateSettings(changes());
       setSettings(next);
       // Read the limits back rather than leaving what was typed. The `max` on a
       // number input is advisory — a pasted or typed value sails past it — and
@@ -1328,6 +1396,17 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
                     );
                   })}
                 </div>
+              </>
+            )}
+
+            {section === "skills" && (
+              <>
+                <h3 className="settings__title">Skills</h3>
+                <p className="settings__lede">
+                  Your instructions for kinds of work, read by every crew. A crew's own skills are
+                  in its settings.
+                </p>
+                <SkillList scope={{ kind: "workspace" }} />
               </>
             )}
 

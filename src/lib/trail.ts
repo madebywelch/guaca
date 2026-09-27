@@ -272,6 +272,38 @@ function describe(tool: string, args: Args): Described {
       };
     }
 
+    // Named by file, because which file is the thing an operator opens the
+    // chip to find out; the words are about its own notebook.
+    case "notebook": {
+      const action = text(args, "action") ?? "list";
+      const path = text(args, "path");
+      if (!path || action === "list" || action === "ls")
+        return { title: "Checked its notebook", target: null };
+      const file = clip(path, 40);
+      if (["write", "create", "save", "replace"].includes(action))
+        return { title: `Wrote ${file} in its notebook`, target: null };
+      if (["append", "add", "log"].includes(action))
+        return { title: `Added to ${file} in its notebook`, target: text(args, "content") };
+      if (["move", "rename", "mv"].includes(action))
+        return { title: `Moved ${file} in its notebook`, target: text(args, "to") };
+      if (["delete", "remove", "rm"].includes(action))
+        return { title: `Deleted ${file} from its notebook`, target: null };
+      return { title: `Read ${file} from its notebook`, target: null };
+    }
+
+    // Named, because which skill an agent read is the thing an operator opens
+    // the chip to find out: it says which instructions the turn was following.
+    case "skill": {
+      const action = text(args, "action") ?? "list";
+      const name = text(args, "name");
+      if (!name || action === "list") return { title: "Checked its skills", target: null };
+      if (["write", "create", "update", "save", "edit"].includes(action))
+        return { title: `Wrote the ${clip(name, 40)} skill`, target: text(args, "description") };
+      if (action === "delete" || action === "remove")
+        return { title: `Deleted the ${clip(name, 40)} skill`, target: null };
+      return { title: `Read the ${clip(name, 40)} skill`, target: null };
+    }
+
     case "schedule": {
       const action = text(args, "action");
       if (action === "cancel") return { title: "Canceled a routine", target: null };
@@ -433,6 +465,10 @@ export function callInFlight(name: string, raw: unknown): string {
       return "Checking who is available";
     case "schedule":
       return "Changing its schedule";
+    case "skill":
+      return "Reading its skills";
+    case "notebook":
+      return "Working in its notebook";
     case "create_agent":
       return "Asking to add an agent";
     case "request_permission":
@@ -473,6 +509,10 @@ function manyLabel(group: TrailGroup): string {
       return `Opened ${count} programs`;
     case "schedule":
       return `${count} changes to its schedule`;
+    case "skill":
+      return `Used its skills ${count} times`;
+    case "notebook":
+      return `Used its notebook ${count} times`;
     case "attach_file":
       return `Attached ${count} files`;
     case "update_memory":
