@@ -127,14 +127,16 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // The scale and the surface, written to the root element. Done here rather
-  // than where they are chosen so a reload draws them before the first paint of
-  // anything else, and re-run when the OS changes its mind, which only matters
-  // while the surface is set to follow it.
+  // The appearance, written to the root element. Done here rather than where
+  // it is chosen so a reload draws it before the first paint of anything else,
+  // and re-run when the OS changes its mind, which only matters while the
+  // surface is set to follow it.
+  const { uiScale, surface, grays, attention, contrast, typeface, reading, readingSize } = prefs;
   useEffect(() => {
-    applyAppearance(prefs.uiScale, prefs.surface);
-    return watchSystemSurface(() => applyAppearance(prefs.uiScale, prefs.surface));
-  }, [prefs.uiScale, prefs.surface]);
+    const look = { uiScale, surface, grays, attention, contrast, typeface, reading, readingSize };
+    applyAppearance(look);
+    return watchSystemSurface(() => applyAppearance(look));
+  }, [uiScale, surface, grays, attention, contrast, typeface, reading, readingSize]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;

@@ -45,7 +45,9 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/menubar.ts      The strip's view of the store, for a window showing a
                       box. One projection, and the test beside it is the gate.
   lib/prefs.ts        What the operator sets and the runtime never reads.
-  lib/appearance.ts   Scale and surface, as one write to the root element.
+  lib/appearance.ts   Scale, surface, faces and theme, each one write to the document.
+  lib/theme.ts        A theme as three choices, and every color solved from them.
+  lib/color.ts        Contrast, OKLCH and colorblind distance. The arithmetic only.
   lib/follow.ts       Whether a transcript may move under the operator.
   lib/notify.ts       When an interruption is warranted. Mostly when it is not.
   lib/announce.ts     What that interruption would say. One event in, one line out.
@@ -255,6 +257,8 @@ repo: the frontend renders state and forwards intent.
 | An `@` that names an agent: what resolves, and what it draws in either place | *A mention is one thing, in the box and in the message* in `docs/WORKSPACE.md`, then `src/lib/mentions.ts` and the layer under `Composer`'s textarea |
 | A size, a space, a radius, a duration or a shadow, anywhere in the app | *Every length is named* below, then the token block at the top of `src/styles.css`, and the closed-set suite in `styles.test.ts`, which is the gate |
 | What color a column is, a surface a panel is drawn on, anything about light or dark | *The page is the only white thing, and both edges are the same off-white* in `docs/WORKSPACE.md`, then the two token blocks in `src/styles.css` and the columns suite in `styles.test.ts` |
+| Any color the interface draws in, a theme, the grays, the attention hue, contrast, what may be drawn in amber | *A theme is three choices, and every color in it is solved* in `docs/WORKSPACE.md`, then `src/lib/theme.ts` and `theme.test.ts`, which is the gate. The hexes in `styles.css` are its output, not a place to edit |
+| A typeface, the reading face or size, a label's case, the smallest size on screen | *Type is one interface face, one reading face and a reading size* in `docs/WORKSPACE.md`, then the type ladder and the `data-typeface` blocks in `src/styles.css` |
 | Anything announced to a screen reader, or a live region | *A transcript is a log, and says one thing out loud* in `docs/WORKSPACE.md` |
 | Scrolling a transcript, following the newest line, when the view may move | *A transcript follows the end for whoever is at the end, and nobody else* in `docs/WORKSPACE.md`, then `src/lib/follow.ts` |
 | The menu bar: the glyph, the count, what the menu offers, closing the window | *The menu bar is Guaca with the window shut* in `docs/WORKSPACE.md`, then `src-tauri/src/menubar.rs` |
@@ -262,7 +266,7 @@ repo: the frontend renders state and forwards intent.
 | Deleting an agent, putting one back, what the thirty days hold | *Deleting an agent is a thirty-day hold* in `docs/WORKSPACE.md`, then `Runtime::discard_agent` and `Runtime::purge_agent`, which are the two halves of what used to be one act |
 | Deleting a group, and why a disband does not use the compost | *Deleting a group deletes the crew, and the machines they were renting* in `docs/WORKSPACE.md`, then `disband_group` in `src-tauri/src/commands.rs` |
 | Preset agents, hiring a crew | *The cafeteria is a copy machine* in `docs/WORKSPACE.md`, then `src/lib/cafeteria.ts` |
-| Settings, the surface, the scale, what may interrupt the operator | *Settings is nine places*, *The page is the only white thing, and both edges are the same off-white* and *An interruption has to earn it* in `docs/WORKSPACE.md` |
+| Settings, the surface, the scale, the theme, what may interrupt the operator | *Settings is nine places*, *The page is the only white thing, and both edges are the same off-white*, *A theme is three choices, and every color in it is solved* and *An interruption has to earn it* in `docs/WORKSPACE.md` |
 | What About says this build is, and where that string comes from | *About says which commit it is* in `docs/WORKSPACE.md`, then `src/lib/build.ts` and the `define` in `vite.config.ts` |
 | The group editor: what a crew overrides and what it inherits | *A group's settings are the app's, with the crew's answer on top* in `docs/WORKSPACE.md`, then `src/components/GroupEditor.tsx` |
 | What model an agent is offered, and how its job is guessed at | *The model field suggests three, and is still a text box* in `docs/WORKSPACE.md`, then `src/lib/roles.ts` and `llm/catalog.rs`, whose twelve use cases have to agree |

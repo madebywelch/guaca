@@ -80,7 +80,9 @@ The operator edits them in **Settings**:
 - **Machines**: the E2B key for computers and the Kernel key for browsers, and
   how long each may sit idle before it sleeps.
 - **Account**: the optional Guaca account, used only by the Google connector.
-- **Appearance**: interface size, and light or dark. Kept per window.
+- **Appearance**: light or dark, the grays, the one color that means an
+  agent is waiting, contrast, the typeface, the face and size replies are
+  read in, interface size and how agents are drawn. Kept per window.
 - **Notifications**: what may interrupt the operator. Kept per window.
 - **Shortcuts**: every key the app answers to.
 - **Skills**: the operator's own skills, which every crew can read, and

@@ -126,7 +126,7 @@ describe("the columns that are not the page", () => {
    * value they are drawn from has to be declared for both of them.
    *
    * They used to be ink whichever surface the operator picked, which meant they
-   * pinned their own `--flesh`, `--flesh-soft` and `--alarm` against a reading
+   * pinned their own `--attention`, `--attention-wash` and `--danger` against a reading
    * column that could go dark underneath them. That is gone: the left edge of
    * the app and the right edge of it are now the same ground, a shade off the
    * page rather than opposite it. What is left to keep true is the other half
@@ -195,7 +195,7 @@ describe("the columns that are not the page", () => {
   it.each([".rail", ".grail"])("pins no accent of its own (%s)", (scope) => {
     for (const token of declared(scope)) {
       expect(
-        /^--(?:flesh|pit|mint|alarm)/.test(token),
+        /^--(?:attention|system|ok|danger)/.test(token),
         `${scope} pins ${token}, which the reading column owns`,
       ).toBe(false);
     }
@@ -237,7 +237,7 @@ describe("the columns that are not the page", () => {
    * The mark saying which crew the rail is inside has to be visible on the
    * column it is drawn on, on both surfaces.
    *
-   * It was `--flesh-soft` for as long as the column existed, which is the
+   * It was `--attention-wash` for as long as the column existed, which is the
    * accent's *ground* rather than an ink: #fdeed9 over a #eceae2 column and
    * #33240e over a #0b0b0a one, 1.06 to 1 and 1.31 to 1. So the one permanent
    * statement in the app about where the operator is standing was drawn in a
@@ -761,6 +761,75 @@ describe("every length is named, not spelled", () => {
       // is claiming height off the page.
       .filter((d) => !/^0 0 /.test(d.value));
     expect(bad.map((d) => `${d.selector} { box-shadow: ${d.value} }`)).toEqual([]);
+  });
+});
+
+describe("what the attention color is spent on", () => {
+  /**
+   * Amber means the app wants something from a person, and it only keeps
+   * meaning that while nothing else is drawn in it.
+   *
+   * It was the focus ring, the primary button, the send button, every toggle
+   * that was on, every link, a running job and the streaming caret as well as
+   * the parked turn it existed for, so "answer me" and "you tabbed here" were
+   * the same ring. Focus and a drop target say where something is, which is
+   * the system's voice; what is chosen or primary is ink.
+   */
+  it("draws no focus ring, focused field or drop target in it", () => {
+    const bad = declarations()
+      .filter((d) => /:focus|data-over|data-dragging/.test(d.selector))
+      .filter((d) => d.value.includes("var(--attention"));
+    expect(bad.map((d) => `${d.selector} { ${d.property}: ${d.value} }`)).toEqual([]);
+  });
+
+  it("draws no primary control or on-state in it", () => {
+    const bad = declarations()
+      .filter((d) =>
+        /\.btn--primary|\.composer__send|aria-checked="true"|aria-pressed="true"/.test(d.selector),
+      )
+      .filter((d) => d.value.includes("var(--attention"));
+    expect(bad.map((d) => `${d.selector} { ${d.property}: ${d.value} }`)).toEqual([]);
+  });
+
+  /**
+   * A fill carries its own text color, because the fill is the same on both
+   * surfaces and the page is not.
+   *
+   * The asking chip in the rail set its text in `--ground`, which was right
+   * while the amber under it was dark on paper and light on ink and is exactly
+   * wrong for a fill that is light on both: white on a pale amber.
+   */
+  it("sets text on a fill in that fill's own text color", () => {
+    const rules = new Map<string, Map<string, string>>();
+    for (const d of declarations()) {
+      const rule = rules.get(d.selector) ?? new Map<string, string>();
+      rule.set(d.property, d.value);
+      rules.set(d.selector, rule);
+    }
+    const bad: string[] = [];
+    for (const [selector, rule] of rules) {
+      const fill = rule.get("background")?.match(/^var\(--([a-z]+)-fill\)$/)?.[1];
+      const color = rule.get("color");
+      if (fill && color && color !== `var(--on-${fill}-fill)`)
+        bad.push(`${selector} { color: ${color} }`);
+    }
+    expect(bad).toEqual([]);
+  });
+
+  /**
+   * The boundary of something you type into or press is how anybody finds it,
+   * and WCAG 1.4.11 asks 3 to 1 of it. `--edge` is a divider at 1.3.
+   */
+  it.each([
+    'input[type="file"]::file-selector-button',
+    ".input, .textarea, .select",
+    ".composer",
+    ".choice",
+  ])("borders %s in a control's edge", (selector) => {
+    const border = declarations().find(
+      (d) => d.selector.endsWith(selector) && d.property === "border",
+    );
+    expect(border?.value).toBe("1px solid var(--edge-control)");
   });
 });
 

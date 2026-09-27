@@ -20,10 +20,14 @@ import {
   loadPrefs,
   NOTIFY_KINDS,
   type Prefs,
+  READING_SIZES,
+  READINGS,
   readPrefs,
   savePrefs,
+  TYPEFACES,
   UI_SCALES,
 } from "./prefs";
+import { ATTENTIONS, CONTRASTS, GRAYS } from "./theme";
 
 /**
  * The key the blob lives under, written out again rather than imported.
@@ -37,7 +41,8 @@ const KEY = "guac.prefs";
 /**
  * The defaults, written out independently of the module's own constant.
  *
- * 100, light and the cut cast are what the app has always drawn, and every
+ * 100, light and the cut cast are what the app has always drawn. Neutral grays,
+ * amber, Inter and 16px reading are the first look a new operator gets. Every
  * notification is on because a blob that cannot be read must not be able to
  * switch interruptions off. Asserting against the module constant would pass
  * whatever it said.
@@ -45,6 +50,12 @@ const KEY = "guac.prefs";
 const DEFAULTS: Prefs = {
   uiScale: 100,
   surface: "light",
+  grays: "neutral",
+  attention: "amber",
+  contrast: "standard",
+  typeface: "inter",
+  reading: "interface",
+  readingSize: 16,
   cast: "cut",
   showReasoning: false,
   notify: {
@@ -103,14 +114,17 @@ describe("a blob that cannot be trusted", () => {
       readPrefs({
         uiScale: "110",
         surface: 1,
+        grays: 3,
+        attention: ["amber"],
+        contrast: true,
+        typeface: {},
+        reading: null,
+        readingSize: "18",
         cast: true,
         notify: { on: false, kinds: { approval: 0, settled: "yes", routine: false } },
       }),
     ).toEqual({
-      uiScale: 100,
-      surface: "light",
-      cast: "cut",
-      showReasoning: false,
+      ...DEFAULTS,
       notify: {
         on: false,
         kinds: {
@@ -215,6 +229,12 @@ describe("a preference that outlives the window", () => {
     const chosen: Prefs = {
       uiScale: 125,
       surface: "dark",
+      grays: "avocado",
+      attention: "violet",
+      contrast: "more",
+      typeface: "legible",
+      reading: "serif",
+      readingSize: 20,
       cast: "drawn",
       showReasoning: true,
       notify: {
@@ -249,6 +269,40 @@ describe("a preference that outlives the window", () => {
     // light, and the operator's window stops following the OS at every launch.
     for (const surface of ["light", "dark", "system"] as const) {
       expect(readPrefs({ surface }).surface).toBe(surface);
+    }
+  });
+
+  it("keeps every theme and type choice the pane offers, and refuses the rest", () => {
+    // Each list the pane draws buttons from and the reader that checks what
+    // comes back are two lists that have to stay one. A value the pane offers
+    // and the reader drops is a button that does not hold across a restart.
+    // The refusals are the ones that actually arrive: a hue this build no
+    // longer offers, a reading size that is a scale, a face by its label.
+    const offered = {
+      grays: Object.keys(GRAYS),
+      attention: Object.keys(ATTENTIONS),
+      contrast: CONTRASTS,
+      typeface: TYPEFACES,
+      reading: READINGS,
+      readingSize: READING_SIZES,
+    } as const;
+    const refused = {
+      grays: ["Neutral", "gray"],
+      attention: ["rose", "teal", "#ffb346"],
+      contrast: ["high", "More"],
+      typeface: ["Inter", "atkinson"],
+      reading: ["literata", "serif "],
+      readingSize: [14, 110, 16.5],
+    };
+    for (const [field, values] of Object.entries(offered)) {
+      for (const value of values) {
+        expect(readPrefs({ [field]: value })[field as keyof typeof offered]).toBe(value);
+      }
+      for (const value of refused[field as keyof typeof refused]) {
+        expect(readPrefs({ [field]: value })[field as keyof typeof offered]).toBe(
+          DEFAULTS[field as keyof typeof offered],
+        );
+      }
     }
   });
 

@@ -4,23 +4,26 @@ import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  type Appearance,
   applyAppearance,
   prefersDark,
   ROOT_PX,
   resolveSurface,
   watchSystemSurface,
 } from "./appearance";
-import type { UiScale } from "./prefs";
+import { DEFAULT_PREFS, type SurfaceMode, type UiScale } from "./prefs";
+import { THEME_TOKENS, themeCss } from "./theme";
 
 /**
- * Appearance, as the three things the root element is asked to carry.
+ * Appearance, as the things the root element and the head are asked to carry.
  *
  * jsdom resolves no `var()` and does no layout, so nothing here can be asked
  * what color it drew. What it can be asked is what `styles.css` is keyed on:
- * the `data-surface` attribute, the `--ui-scale` multiplier, and the
- * `color-scheme` the engine reads for its own controls. Those three are the
- * whole contract between this file and the stylesheet, and each has a wrong
- * value that still draws a window.
+ * the `data-surface`, `data-typeface` and `data-reading` attributes, the
+ * `--ui-scale` multiplier and the `--type-read` length, the `color-scheme` the
+ * engine reads for its own controls, and the theme's token blocks. Those are
+ * the whole contract between this file and the stylesheet, and each has a
+ * wrong value that still draws a window.
  *
  * Two of them are load-bearing past the obvious. `system` must never reach the
  * attribute, because the stylesheet has one dark block and it is keyed on
@@ -29,6 +32,16 @@ import type { UiScale } from "./prefs";
  * columns follow the surface through the stylesheet's own dark block, so an
  * inline override from here would pin them to one surface and look deliberate.
  */
+
+/** The appearance a first launch draws, with the two fields most tests turn. */
+function look(uiScale: UiScale, surface: SurfaceMode): Appearance {
+  return { ...DEFAULT_PREFS, uiScale, surface };
+}
+
+/** The element the theme is written into, if it has been. */
+function themeStyle(): HTMLStyleElement | null {
+  return document.getElementById("guac-theme") as HTMLStyleElement | null;
+}
 
 /** The stub `test-setup.ts` installs, so a test that replaces it can put it back. */
 const REAL_MATCH_MEDIA = globalThis.matchMedia;
@@ -83,6 +96,9 @@ beforeEach(() => {
   const root = document.documentElement;
   root.removeAttribute("style");
   root.removeAttribute("data-surface");
+  root.removeAttribute("data-typeface");
+  root.removeAttribute("data-reading");
+  themeStyle()?.remove();
 });
 
 afterEach(() => {
@@ -109,7 +125,7 @@ describe("a webview with no media queries", () => {
 
   it("still resolves system, and lands the operator on paper", () => {
     withoutMatchMedia();
-    expect(applyAppearance(100, "system")).toBe("light");
+    expect(applyAppearance(look(100, "system"))).toBe("light");
     expect(document.documentElement.dataset.surface).toBe("light");
   });
 });
@@ -140,36 +156,95 @@ describe("resolving a mode", () => {
 });
 
 describe("what applying an appearance writes", () => {
-  it("writes no --rail property, so a surface cannot repaint the rail", () => {
-    applyAppearance(125, "dark");
+  it("writes no color onto the root, so a surface cannot pin the columns", () => {
+    applyAppearance({ ...look(125, "dark"), grays: "avocado", attention: "violet" });
 
-    // The columns follow the surface through the stylesheet's own dark block.
-    // A `--rail-*` override written from here would pin them to one surface and
-    // look like a design decision, and no color assertion in jsdom could catch it.
-    expect(inlineProperties().filter((name) => name.startsWith("--rail"))).toEqual([]);
+    // The columns follow the surface through a `data-surface` rule, the
+    // stylesheet's own or the theme's. A `--rail-*` value written inline from
+    // here would pin them to one surface and look like a design decision, and
+    // no color assertion in jsdom could catch it. The theme is not an
+    // exception: it is written as blocks, not as properties.
+    const inline = inlineProperties();
+    expect(inline.filter((name) => (THEME_TOKENS as readonly string[]).includes(name))).toEqual([]);
     expect(document.documentElement.getAttribute("style")).not.toContain("--rail");
   });
 
+  it("writes the theme as both surfaces' blocks, after everything else in the head", () => {
+    // After, because the blocks match with the stylesheet's own specificity and
+    // order is all that makes them win. Both surfaces, so a surface change is
+    // the stylesheet's `data-surface` rule and never a rewrite from here.
+    const chosen = { ...look(100, "light"), grays: "slate" as const, attention: "blue" as const };
+    applyAppearance(chosen);
+
+    expect(themeStyle()?.textContent).toBe(themeCss(chosen));
+    expect(themeStyle()?.textContent).toContain(":root {");
+    expect(themeStyle()?.textContent).toContain(':root[data-surface="dark"] {');
+    expect(document.head.lastElementChild).toBe(themeStyle());
+  });
+
+  it("moves the theme back to the end when something was added after it", () => {
+    // Vite adds a lazily loaded chunk's stylesheet to the head when the chunk
+    // arrives, which is after the theme was first written.
+    applyAppearance(look(100, "light"));
+    const late = document.createElement("style");
+    document.head.append(late);
+
+    applyAppearance(look(100, "dark"));
+    expect(document.head.lastElementChild).toBe(themeStyle());
+    expect(document.querySelectorAll("#guac-theme")).toHaveLength(1);
+    late.remove();
+  });
+
+  it("leaves the theme's text alone when the theme did not change", () => {
+    // Every write restyles the whole document, and a surface flip or a scale
+    // change re-runs this with the same theme.
+    applyAppearance(look(100, "light"));
+    const text = themeStyle()?.firstChild;
+
+    applyAppearance(look(110, "dark"));
+    expect(themeStyle()?.firstChild).toBe(text);
+  });
+
+  it("names the typeface and the reading face for the stylesheet to key on", () => {
+    applyAppearance({ ...look(100, "light"), typeface: "legible", reading: "serif" });
+    expect(document.documentElement.dataset.typeface).toBe("legible");
+    expect(document.documentElement.dataset.reading).toBe("serif");
+
+    applyAppearance({ ...look(100, "light"), typeface: "system", reading: "interface" });
+    expect(document.documentElement.dataset.typeface).toBe("system");
+    expect(document.documentElement.dataset.reading).toBe("interface");
+  });
+
+  it("sets the reading size in rem, so the interface scale still multiplies it", () => {
+    // A px here would hold the transcript at one size while every other rem in
+    // the window grew with the scale.
+    applyAppearance({ ...look(125, "light"), readingSize: 18 });
+    expect(document.documentElement.style.getPropertyValue("--type-read")).toBe("1.125rem");
+
+    applyAppearance({ ...look(100, "light"), readingSize: 16 });
+    expect(document.documentElement.style.getPropertyValue("--type-read")).toBe("1rem");
+  });
+
   it("never writes the word system, because no rule is keyed on it", () => {
-    expect(applyAppearance(100, "system", true)).toBe("dark");
+    expect(applyAppearance(look(100, "system"), true)).toBe("dark");
     expect(document.documentElement.getAttribute("data-surface")).toBe("dark");
 
-    expect(applyAppearance(100, "system", false)).toBe("light");
+    expect(applyAppearance(look(100, "system"), false)).toBe("light");
     expect(document.documentElement.getAttribute("data-surface")).toBe("light");
   });
 
   it("writes the surface the operator named, whatever the OS thinks", () => {
-    applyAppearance(100, "dark", false);
+    applyAppearance(look(100, "dark"), false);
     expect(document.documentElement.dataset.surface).toBe("dark");
 
-    applyAppearance(100, "light", true);
+    applyAppearance(look(100, "light"), true);
     expect(document.documentElement.dataset.surface).toBe("light");
   });
 
   it("reports the surface that won, so the caller need not resolve it again", () => {
-    expect(applyAppearance(90, "light", true)).toBe("light");
-    expect(applyAppearance(90, "dark", false)).toBe("dark");
-    expect(applyAppearance(90, "system", true)).toBe("dark");
+    expect(applyAppearance(look(90, "light"), true)).toBe("light");
+    expect(applyAppearance(look(90, "dark"), false)).toBe("dark");
+    expect(applyAppearance(look(90, "system"), true)).toBe("dark");
   });
 
   it("sets the scale as a unitless multiplier, not a percentage and not a length", () => {
@@ -184,7 +259,7 @@ describe("what applying an appearance writes", () => {
     ];
 
     for (const [scale, expected] of cases) {
-      applyAppearance(scale, "light");
+      applyAppearance(look(scale, "light"));
       expect(document.documentElement.style.getPropertyValue("--ui-scale")).toBe(expected);
     }
   });
@@ -192,10 +267,10 @@ describe("what applying an appearance writes", () => {
   it("tells the engine which scheme to draw its own controls in", () => {
     // Nothing in the stylesheet reads this, so a wrong value shows up only as a
     // white scrollbar down the side of a dark window.
-    applyAppearance(100, "system", true);
+    applyAppearance(look(100, "system"), true);
     expect(document.documentElement.style.colorScheme).toBe("dark");
 
-    applyAppearance(100, "system", false);
+    applyAppearance(look(100, "system"), false);
     expect(document.documentElement.style.colorScheme).toBe("light");
   });
 });

@@ -4,9 +4,10 @@
  * Everything else the operator can change lives in `config.json` and reaches
  * the webview as `Settings`, because the runtime acts on it: an endpoint, a
  * key, a limit. None of what is here means anything to an agent. How large the
- * interface draws, whether the reading column is paper or ink, how the agents
- * are drawn, which of four things is worth interrupting you for: the runtime
- * would carry these across IPC only to hand them straight back.
+ * interface draws, whether the reading column is paper or ink, what colors and
+ * faces it is drawn in, how the agents are drawn, which of four things is worth
+ * interrupting you for: the runtime would carry these across IPC only to hand
+ * them straight back.
  *
  * So they stay on this side, in `localStorage`, the way the inspector's
  * open-or-closed already does. That is a deliberate exception to "the frontend
@@ -19,6 +20,17 @@
  * have written, and a preference that cannot be read should cost the default
  * rather than the window.
  */
+
+import {
+  ATTENTIONS,
+  type AttentionKey,
+  CONTRASTS,
+  type ContrastLevel,
+  DEFAULT_THEME,
+  GRAYS,
+  type GrayKey,
+  type Theme,
+} from "./theme";
 
 export type SurfaceMode = "light" | "dark" | "system";
 
@@ -77,9 +89,48 @@ export type Cast = "cut" | "drawn";
 
 export const CASTS: readonly Cast[] = ["cut", "drawn"];
 
-export interface Prefs {
+/**
+ * The face the interface is set in. Each is a closed stack in `styles.css`,
+ * keyed on `data-typeface`, and each brings its own monospace so a timestamp
+ * and the name beside it were drawn to sit together.
+ *
+ * `system` is whatever the operating system draws its own windows in, which on
+ * a Mac is SF Pro and on Windows is Segoe UI. `legible` is Atkinson
+ * Hyperlegible, drawn for readers with low vision: its letters are built to be
+ * told apart, which is a different job from being pleasant.
+ */
+export type Typeface = "inter" | "system" | "legible";
+
+export const TYPEFACES: readonly Typeface[] = ["inter", "system", "legible"];
+
+/**
+ * The face what agents wrote is set in. `interface` is the typeface above;
+ * `serif` is Literata, drawn for reading at length on a screen. Only the
+ * transcript and the composer change, because that is the only text anybody
+ * reads for minutes at a time.
+ */
+export type Reading = "interface" | "serif";
+
+export const READINGS: readonly Reading[] = ["interface", "serif"];
+
+/**
+ * Sizes for that same text, in pixels at interface scale 100.
+ *
+ * Separate from the scale because they answer different questions. The scale
+ * is how large the whole app draws, rail and controls and all; this is how
+ * large the part you read is. Somebody who wants long replies in 18px has not
+ * asked for an 18px rail.
+ */
+export const READING_SIZES = [15, 16, 17, 18, 20] as const;
+
+export type ReadingSize = (typeof READING_SIZES)[number];
+
+export interface Prefs extends Theme {
   uiScale: UiScale;
   surface: SurfaceMode;
+  typeface: Typeface;
+  reading: Reading;
+  readingSize: ReadingSize;
   cast: Cast;
   showReasoning: boolean;
   notify: NotifyPrefs;
@@ -96,6 +147,10 @@ export interface Prefs {
 export const DEFAULT_PREFS: Prefs = Object.freeze({
   uiScale: 100,
   surface: "light",
+  ...DEFAULT_THEME,
+  typeface: "inter",
+  reading: "interface",
+  readingSize: 16,
   cast: "cut",
   showReasoning: false,
   notify: Object.freeze({
@@ -127,6 +182,14 @@ function isCast(value: unknown): value is Cast {
   return CASTS.some((cast) => cast === value);
 }
 
+/** Whether `value` is one of `options`, narrowed to it. */
+function oneOf<T extends string | number>(options: readonly T[], value: unknown): value is T {
+  return options.some((option) => option === value);
+}
+
+const GRAY_KEYS = Object.keys(GRAYS) as GrayKey[];
+const ATTENTION_KEYS = Object.keys(ATTENTIONS) as AttentionKey[];
+
 /**
  * Reads one stored blob, keeping whatever is legible and defaulting the rest.
  *
@@ -148,9 +211,21 @@ export function readPrefs(raw: unknown): Prefs {
     }
   }
 
+  const pick = <T extends string | number>(
+    options: readonly T[],
+    value: unknown,
+    fallback: T,
+  ): T => (oneOf(options, value) ? value : fallback);
+
   return {
     uiScale: isScale(stored.uiScale) ? stored.uiScale : DEFAULT_PREFS.uiScale,
     surface: isSurface(stored.surface) ? stored.surface : DEFAULT_PREFS.surface,
+    grays: pick(GRAY_KEYS, stored.grays, DEFAULT_PREFS.grays),
+    attention: pick(ATTENTION_KEYS, stored.attention, DEFAULT_PREFS.attention),
+    contrast: pick<ContrastLevel>(CONTRASTS, stored.contrast, DEFAULT_PREFS.contrast),
+    typeface: pick(TYPEFACES, stored.typeface, DEFAULT_PREFS.typeface),
+    reading: pick(READINGS, stored.reading, DEFAULT_PREFS.reading),
+    readingSize: pick(READING_SIZES, stored.readingSize, DEFAULT_PREFS.readingSize),
     cast: isCast(stored.cast) ? stored.cast : DEFAULT_PREFS.cast,
     showReasoning:
       typeof stored.showReasoning === "boolean"

@@ -1,6 +1,13 @@
-import "@fontsource-variable/inter";
-import "@fontsource-variable/instrument-sans";
+// Inter with its optical-size axis, so a title is drawn from the display
+// cut and a line of text from the text cut without a second family. The
+// other faces are registered here and fetched only if a preference names
+// them: a font file is loaded when something is drawn in it, not before.
+import "@fontsource-variable/inter/opsz.css";
 import "@fontsource-variable/jetbrains-mono";
+import "@fontsource-variable/atkinson-hyperlegible-next";
+import "@fontsource-variable/atkinson-hyperlegible-mono";
+import "@fontsource-variable/literata/opsz.css";
+import "@fontsource-variable/literata/opsz-italic.css";
 
 import React, { useMemo } from "react";
 import ReactDOM from "react-dom/client";
@@ -18,7 +25,7 @@ import { useStore } from "./lib/store";
 import "./styles.css";
 
 /**
- * The operator's scale and surface, before anything is drawn.
+ * The operator's appearance, before anything is drawn.
  *
  * `App` applies these too, and has to: it is what a change while the window is
  * open goes through, and what follows the OS when the surface is set to. But an
@@ -28,7 +35,7 @@ import "./styles.css";
  * nothing to snap from.
  */
 const stored = loadPrefs();
-applyAppearance(stored.uiScale, stored.surface);
+applyAppearance(stored);
 
 /**
  * Paints a failure that happened before or outside React.

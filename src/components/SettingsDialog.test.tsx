@@ -187,6 +187,7 @@ const transport = await import("../lib/transport");
 const { DEFAULT_PREFS, NOTIFY_KINDS } = await import("../lib/prefs");
 const { BINDINGS, SURFACES } = await import("../lib/keybinds");
 const { PROVIDERS } = await import("../lib/providers");
+const { themeCss, themeTokens } = await import("../lib/theme");
 
 const onClose = vi.fn();
 
@@ -1481,6 +1482,65 @@ describe("appearance", () => {
     expect(choice("Characters: Cut").querySelectorAll('[data-cast="cut"]')).toHaveLength(3);
     // And the surface is left alone: this is not a third way to write it.
     expect(useStore.getState().prefs.surface).toBe(DEFAULT_PREFS.surface);
+  });
+
+  it("keeps a chosen theme and writes it where the stylesheet will lose to it", () => {
+    open();
+    pane("Appearance");
+    fireEvent.click(choice("Grays: Avocado"));
+    fireEvent.click(choice("Attention: Violet"));
+    fireEvent.click(choice("Contrast: More"));
+
+    const { grays, attention, contrast } = useStore.getState().prefs;
+    expect({ grays, attention, contrast }).toEqual({
+      grays: "avocado",
+      attention: "violet",
+      contrast: "more",
+    });
+    // The pane draws in the theme it just chose rather than waiting on `App`.
+    expect(document.getElementById("guac-theme")?.textContent).toBe(
+      themeCss({ grays: "avocado", attention: "violet", contrast: "more" }),
+    );
+    expect(choice("Grays: Avocado").getAttribute("aria-pressed")).toBe("true");
+    expect(choice("Grays: Neutral").getAttribute("aria-pressed")).toBe("false");
+    // A theme is colors. It is not a third way to write the surface.
+    expect(useStore.getState().prefs.surface).toBe(DEFAULT_PREFS.surface);
+  });
+
+  it("shows each gray and each attention hue before it is chosen", () => {
+    open();
+    pane("Appearance");
+    // A swatch per choice, in that choice's own color, so the one not chosen
+    // can still be looked at. Drawn from the solver rather than a table of
+    // hexes, which would be a second list of colors to keep equal to the first.
+    const warm = choice("Grays: Warm").querySelector<HTMLElement>(".choice__swatch");
+    expect(warm?.style.getPropertyValue("--swatch")).toBe(
+      themeTokens({ ...DEFAULT_PREFS, grays: "warm" }, "light")["--rail-ground"],
+    );
+    const blue = choice("Attention: Blue").querySelector<HTMLElement>(".choice__swatch");
+    expect(blue?.style.getPropertyValue("--swatch")).toBe(
+      themeTokens({ ...DEFAULT_PREFS, attention: "blue" }, "light")["--attention-fill"],
+    );
+  });
+
+  it("keeps a typeface, a reading face and a reading size, and names them to the stylesheet", () => {
+    open();
+    pane("Appearance");
+    fireEvent.click(choice("Typeface: Atkinson Hyperlegible"));
+    fireEvent.click(choice("Reading face: Literata"));
+    fireEvent.click(choice("Reading size: 18px"));
+
+    const { typeface, reading, readingSize } = useStore.getState().prefs;
+    expect({ typeface, reading, readingSize }).toEqual({
+      typeface: "legible",
+      reading: "serif",
+      readingSize: 18,
+    });
+    expect(document.documentElement.dataset.typeface).toBe("legible");
+    expect(document.documentElement.dataset.reading).toBe("serif");
+    expect(document.documentElement.style.getPropertyValue("--type-read")).toBe("1.125rem");
+    // Reading size is not the interface scale under a second name.
+    expect(useStore.getState().prefs.uiScale).toBe(DEFAULT_PREFS.uiScale);
   });
 
   it("keeps a chosen scale without disturbing the surface", () => {
