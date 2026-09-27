@@ -137,8 +137,10 @@ pub fn system_prompt(
     // and two clocks a few lines apart could disagree across a midnight.
     let now = crate::domain::now_ms();
 
+    // Not "local": the host this runs on may be a container on the operator's
+    // Mac or a machine somewhere else, and the agent is told which in `guaca`.
     out.push_str(&format!(
-        "You are {name}, an agent in a local multi-agent workspace called Guaca.\n",
+        "You are {name}, an agent in a multi-agent workspace called Guaca.\n",
         name = card.name
     ));
 
@@ -1181,6 +1183,42 @@ pub fn build_messages(
     messages
 }
 
+/// The skills this agent can read, named at the end of its system prompt.
+///
+/// Names and the one line saying when, never bodies: a body is read with the
+/// `skill` tool when a task fits, which is what keeps forty procedures from
+/// costing forty procedures on every turn. `guaca` is always among them, and
+/// the section says what it is for, because "how do I change the model" is a
+/// question an agent answers before it would think to look for a tool.
+pub fn skills_section(skills: &[crate::domain::skill::Skill]) -> String {
+    use crate::domain::skill::LISTED;
+    let mut out = String::from(
+        "\n## Skills\n\
+         A skill is a document of instructions for one kind of task. Only each one's name and \
+         when to load it are here. When a task fits one, read it with `skill` (`view`) before \
+         you start, and follow it. Questions about Guaca itself, its settings, where it runs or \
+         how it is set up are what `guaca` is for.\n",
+    );
+    for found in skills.iter().take(LISTED) {
+        out.push_str(&found.index_line());
+        out.push('\n');
+    }
+    if skills.len() > LISTED {
+        out.push_str(&format!(
+            "({} more; `skill` with `list` shows them all.)\n",
+            skills.len() - LISTED
+        ));
+    }
+    out
+}
+
+/// Appends [`skills_section`] to the system message a turn was built with.
+pub fn add_skills(messages: &mut [ChatMessage], skills: &[crate::domain::skill::Skill]) {
+    if let Some(ChatMessage::System { content }) = messages.first_mut() {
+        content.push_str(&skills_section(skills));
+    }
+}
+
 /// A bounded index of durable decisions. Full context is available through the
 /// decision tool; the model sees existing ids before it can duplicate a request.
 pub fn add_decisions(
@@ -1254,6 +1292,44 @@ mod tests {
             Surfaces::both(),
             Modalities::seeing(),
         )
+    }
+
+    #[test]
+    fn skills_are_named_with_when_to_load_them_and_never_with_their_bodies() {
+        use crate::domain::skill::{Scope, Skill, LISTED};
+        let skill = |name: &str, scope| Skill {
+            name: name.into(),
+            description: format!("when {name}"),
+            scope,
+            body: "THE BODY".into(),
+            updated_at: 0,
+        };
+        let section = skills_section(&[
+            skill("guaca", Scope::Bundled),
+            skill("deploy", Scope::Crew { group_id: crate::domain::ids::GroupId::new() }),
+        ]);
+        assert!(section.contains("- guaca (Guaca): when guaca"), "{section}");
+        assert!(section.contains("- deploy (your crew): when deploy"), "{section}");
+        assert!(section.contains("`guaca` is for"), "{section}");
+        assert!(!section.contains("THE BODY"), "a body is read on demand: {section}");
+
+        let many: Vec<Skill> =
+            (0..LISTED + 3).map(|n| skill(&format!("s{n}"), Scope::Workspace)).collect();
+        assert!(skills_section(&many).contains("(3 more; `skill` with `list`"));
+
+        let mut messages = vec![ChatMessage::system("You are Pip."), ChatMessage::user("hi")];
+        add_skills(&mut messages, &many[..1]);
+        let ChatMessage::System { content } = &messages[0] else { panic!("no system message") };
+        assert!(content.starts_with("You are Pip.") && content.contains("- s0 (operator)"));
+    }
+
+    #[test]
+    fn an_agent_is_not_told_its_workspace_is_local() {
+        // The host may be a machine on the other side of the world, and an
+        // agent told "local" reasons about the operator's disk as its own.
+        let prompt = prompt_for(&card("Pip"), &[], "", ReplyMode::ToOperator);
+        assert!(prompt.contains("a multi-agent workspace called Guaca"), "{prompt}");
+        assert!(!prompt.contains("local multi-agent"), "{prompt}");
     }
 
     fn note(at: i64, body: &str) -> WorkingNote {

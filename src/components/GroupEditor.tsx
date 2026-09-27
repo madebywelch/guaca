@@ -34,6 +34,7 @@ import { GroupTransfer } from "./GroupTransfer";
 import { PluginList } from "./PluginList";
 import { ProviderPresets, SubscriptionModel } from "./ProviderFields";
 import { RepositoryList } from "./RepositoryList";
+import { SkillList } from "./SkillList";
 
 interface Props {
   /** Absent means create. */
@@ -47,6 +48,7 @@ const SECTIONS = [
   "limits",
   "plugins",
   "secrets",
+  "skills",
   "repositories",
   "activity",
   "transfer",
@@ -60,6 +62,7 @@ const SECTION_LABELS: Record<Section, string> = {
   limits: "Limits",
   plugins: "Plugins",
   secrets: "Secrets",
+  skills: "Skills",
   repositories: "Repositories",
   activity: "Activity",
   transfer: "Import / export",
@@ -71,7 +74,13 @@ const SECTION_LABELS: Record<Section, string> = {
  * belong to something, and there is no row to hang any of them on until the
  * group is created.
  */
-const NEEDS_GROUP: readonly Section[] = ["plugins", "secrets", "repositories", "activity"];
+const NEEDS_GROUP: readonly Section[] = [
+  "plugins",
+  "secrets",
+  "skills",
+  "repositories",
+  "activity",
+];
 
 /** What a group says when it has no opinion about who pays. */
 const INHERIT = "inherit";
@@ -704,6 +713,17 @@ export function GroupEditor({ group, onClose }: Props) {
                   the variable in repository shells, coding jobs, and computer commands.
                 </p>
                 <CredentialList groupId={group.id} crew={members} />
+              </>
+            )}
+
+            {section === "skills" && group && (
+              <>
+                <h3 className="settings__title">Skills</h3>
+                <p className="settings__lede">
+                  Instructions for kinds of work this crew does. Its agents can write these as they
+                  work something out, and no other crew can read them.
+                </p>
+                <SkillList scope={{ kind: "crew", groupId: group.id }} />
               </>
             )}
 

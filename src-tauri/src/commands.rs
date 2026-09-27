@@ -39,6 +39,7 @@ use crate::domain::repository::{
 use crate::domain::routine::{self, Routine, RoutineRun, Trigger};
 use crate::domain::search::SearchHits;
 use crate::domain::signin::Signin;
+use crate::domain::skill::{Scope as SkillScope, Skill};
 use crate::domain::usage::{GroupUsage, RunUsage};
 use crate::domain::worknote::WorkingNote;
 use crate::e2b::{Computer, E2bClient, E2bError};
@@ -360,6 +361,19 @@ impl From<crate::repo::RepoError> for CommandError {
         // `git init`, install git. Reported as validation so it lands beside
         // the field rather than in a banner about storage.
         CommandError::new("validation", err.to_string())
+    }
+}
+
+impl From<crate::skills::SkillsError> for CommandError {
+    fn from(err: crate::skills::SkillsError) -> Self {
+        use crate::skills::SkillsError;
+        let kind = match &err {
+            SkillsError::NotFound(_) => "notFound",
+            SkillsError::ReadOnly(_) | SkillsError::NotYours { .. } => "readOnly",
+            SkillsError::Invalid(_) => "validation",
+            SkillsError::Io { .. } => "storage",
+        };
+        CommandError::new(kind, err.to_string())
     }
 }
 
@@ -1998,6 +2012,9 @@ pub async fn disband_group(state: &AppState, id: GroupId) -> Reply<()> {
             state.runtime.purge_agent(&card).await?;
         }
         state.runtime.store().delete_group(id)?;
+        // What the crew's agents wrote down for each other goes with them. A
+        // new crew never reuses the id, so nothing else would ever read it.
+        state.runtime.skills().forget_crew(id);
         Ok(())
     }
     .await;
@@ -2007,6 +2024,65 @@ pub async fn disband_group(state: &AppState, id: GroupId) -> Reply<()> {
     // click on to open channels belonging to agents that are gone.
     state.runtime.emit(UiEvent::AgentsChanged);
     outcome
+}
+
+// ---- skills --------------------------------------------------------------
+
+/// A skill the operator is writing, in Settings or in a crew's settings.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillDraft {
+    pub name: String,
+    pub description: String,
+    pub body: String,
+    /// The name it had, when the edit renamed it. The old one is removed only
+    /// after the new one is written, so a failed rename loses nothing.
+    #[serde(default)]
+    pub previous: Option<String>,
+}
+
+/// The scope, once a crew named in it is known to exist. Nothing is written
+/// under the id of a crew that was disbanded while its settings were open.
+fn skill_scope(state: &AppState, scope: SkillScope) -> Result<SkillScope, CommandError> {
+    if let SkillScope::Crew { group_id } = scope {
+        state
+            .runtime
+            .store()
+            .get_group(group_id)?
+            .ok_or_else(|| CommandError::new("notFound", "that crew no longer exists"))?;
+    }
+    Ok(scope)
+}
+
+pub async fn list_skills(state: &AppState, scope: SkillScope) -> Reply<Vec<Skill>> {
+    let scope = skill_scope(state, scope)?;
+    Ok(state.runtime.skills().in_scope(scope))
+}
+
+pub async fn read_skill(state: &AppState, scope: SkillScope, name: String) -> Reply<Skill> {
+    let scope = skill_scope(state, scope)?;
+    Ok(state.runtime.skills().load(scope, &name)?)
+}
+
+pub async fn save_skill(state: &AppState, scope: SkillScope, draft: SkillDraft) -> Reply<Skill> {
+    let scope = skill_scope(state, scope)?;
+    let clean = crate::domain::skill::Clean::new(&draft.name, &draft.description, &draft.body)
+        .map_err(crate::skills::SkillsError::from)?;
+    let written = state.runtime.skills().write(scope, &clean)?;
+    if let Some(previous) = draft.previous.filter(|previous| *previous != written.name) {
+        state.runtime.skills().delete(scope, &previous)?;
+    }
+    state.runtime.emit(UiEvent::SkillsChanged { scope });
+    Ok(written)
+}
+
+pub async fn delete_skill(state: &AppState, scope: SkillScope, name: String) -> Reply<bool> {
+    let scope = skill_scope(state, scope)?;
+    let deleted = state.runtime.skills().delete(scope, &name)?;
+    if deleted {
+        state.runtime.emit(UiEvent::SkillsChanged { scope });
+    }
+    Ok(deleted)
 }
 
 // ---- agents --------------------------------------------------------------

@@ -1717,6 +1717,83 @@ async fn agents_run_concurrently_rather_than_one_after_another() {
     );
 }
 
+// ---- skills --------------------------------------------------------------
+
+#[tokio::test]
+async fn a_skill_one_agent_writes_is_offered_to_its_crew_on_the_next_turn() {
+    // The whole loop: a write through the tool, stored for the crew, named in
+    // the next prompt of a crewmate, and read back whole by `view`.
+    let stub = serve(|body| {
+        let who = speaker(body);
+        if who == "Writer" {
+            if has_tool_result(body) {
+                Script::Say("Written down.".into())
+            } else {
+                Script::Skill(serde_json::json!({
+                    "action": "write",
+                    "name": "release-notes",
+                    "description": "When writing release notes",
+                    "content": "# Release notes\n\nLead with what changed for the reader.",
+                }))
+            }
+        } else if has_tool_result(body) {
+            Script::Say("Read it.".into())
+        } else {
+            Script::Skill(serde_json::json!({ "action": "view", "name": "release-notes" }))
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Writer", "Reader"], GuardLimits::default());
+    let run =
+        h.runtime.send_from_human(h.id("Writer"), "Write down how we do release notes.").unwrap();
+    h.settle(run).await;
+    let run = h.runtime.send_from_human(h.id("Reader"), "Draft the notes.").unwrap();
+    h.settle(run).await;
+
+    let prompts = prompts_by_agent(&stub);
+    let reader = prompts.get("Reader").expect("the reader was prompted");
+    assert!(
+        reader.contains("- release-notes (your crew): When writing release notes"),
+        "the crewmate is not offered the skill: {reader}"
+    );
+    assert!(reader.contains("- guaca (Guaca):"), "Guaca's own is always offered: {reader}");
+    let results = tool_results(&stub).join("\n");
+    assert!(results.contains("Wrote `release-notes` for your crew"), "{results}");
+    assert!(results.contains("Lead with what changed for the reader."), "{results}");
+}
+
+#[tokio::test]
+async fn an_agent_cannot_write_guacas_skill_or_delete_the_operators() {
+    let stub = serve(|body| {
+        let who = speaker(body);
+        if has_tool_result(body) {
+            Script::Say("Understood.".into())
+        } else if who == "Writer" {
+            Script::Skill(serde_json::json!({
+                "action": "write", "name": "guaca", "description": "Mine now", "content": "x",
+            }))
+        } else {
+            Script::Skill(serde_json::json!({ "action": "delete", "name": "house-style" }))
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Writer", "Deleter"], GuardLimits::default());
+    let house =
+        guac_lib::domain::skill::Clean::new("house-style", "When writing", "Plain.").unwrap();
+    h.runtime.skills().write(guac_lib::domain::skill::Scope::Workspace, &house).unwrap();
+    for name in ["Writer", "Deleter"] {
+        let run = h.runtime.send_from_human(h.id(name), "Go.").unwrap();
+        h.settle(run).await;
+    }
+
+    let results = tool_results(&stub).join("\n");
+    assert!(results.contains("`guaca` is Guaca's own skill and is read-only"), "{results}");
+    assert!(results.contains("`house-style` belongs to the operator"), "{results}");
+    assert!(h.runtime.skills().read(None, "house-style").is_ok(), "the operator's skill survives");
+}
+
 // ---- the calendar --------------------------------------------------------
 
 #[tokio::test]

@@ -16,6 +16,7 @@ pub mod repository;
 pub mod routine;
 pub mod search;
 pub mod signin;
+pub mod skill;
 pub mod usage;
 pub mod worknote;
 

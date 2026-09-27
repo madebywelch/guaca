@@ -50,6 +50,19 @@ describe("what one call was", () => {
     expect(step?.title).toBe("Opened cnn.com");
   });
 
+  it("names the skill a turn read or wrote, which is what the chip is opened for", () => {
+    const [read, wrote, listed] = steps(
+      call("skill", { action: "view", name: "release-notes" }),
+      call("skill", { action: "write", name: "deploy", description: "When deploying" }),
+      call("skill", { action: "list" }),
+    );
+    expect(read?.title).toBe("Read the release-notes skill");
+    expect(wrote?.title).toBe("Wrote the deploy skill");
+    expect(wrote?.target).toBe("When deploying");
+    expect(listed?.title).toBe("Checked its skills");
+    expect(callInFlight("skill", {})).toBe("Reading its skills");
+  });
+
   it("keeps the command, which is the only interesting part of running one", () => {
     const [step] = steps(
       call("run_command", { command: "curl -s wttr.in" }, ok("exit 0, 8 bytes out")),

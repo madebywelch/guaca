@@ -62,7 +62,7 @@ import type {
   UiEvent,
   WorkDecision,
 } from "./types";
-import { errorMessage } from "./types";
+import { errorMessage, skillScopeKey } from "./types";
 
 /**
  * A channel is an agent, and nothing else is one.
@@ -327,6 +327,8 @@ export interface State {
   memoryVersion: Record<AgentId, number | undefined>;
   /** Its own counter, because notes move far more often than memory does. */
   workingNotesVersion: Record<AgentId, number | undefined>;
+  /** One counter per skill scope, by `skillScopeKey`: a list redraws on its own. */
+  skillsVersion: Record<string, number | undefined>;
 
   /** Non-blocking surface for the last thing that went wrong. */
   banner: { tone: "error" | "info" | "ok"; text: string } | null;
@@ -551,6 +553,7 @@ export const useStore = create<State>((set, get) => ({
   calendarVersion: 0,
   memoryVersion: {},
   workingNotesVersion: {},
+  skillsVersion: {},
   banner: null,
   handoff: null,
   sessionSpend: { prompt: 0, completion: 0, cost: null, calls: 0 },
@@ -1327,6 +1330,14 @@ export const useStore = create<State>((set, get) => ({
 
       case "settingsChanged": {
         set({ settings: event.settings });
+        break;
+      }
+
+      case "skillsChanged": {
+        const key = skillScopeKey(event.scope);
+        set((state) => ({
+          skillsVersion: { ...state.skillsVersion, [key]: (state.skillsVersion[key] ?? 0) + 1 },
+        }));
         break;
       }
     }

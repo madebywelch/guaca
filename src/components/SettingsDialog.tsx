@@ -53,6 +53,7 @@ import { GroupTransfer, LegacyGroups } from "./GroupTransfer";
 import { HostChoice } from "./HostSetup";
 import { HostUpdatePanel } from "./HostUpdates";
 import { ProviderPresets, SubscriptionModel } from "./ProviderFields";
+import { SkillList } from "./SkillList";
 
 interface Props {
   onClose: () => void;
@@ -71,6 +72,7 @@ const SECTIONS = [
   "appearance",
   "notifications",
   "shortcuts",
+  "skills",
   "compost",
   "about",
 ] as const;
@@ -87,6 +89,7 @@ const SECTION_LABELS: Record<Section, string> = {
   appearance: "Appearance",
   notifications: "Notifications",
   shortcuts: "Shortcuts",
+  skills: "Skills",
   compost: "Compost",
   about: "About",
 };
@@ -1385,6 +1388,17 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
                     );
                   })}
                 </div>
+              </>
+            )}
+
+            {section === "skills" && (
+              <>
+                <h3 className="settings__title">Skills</h3>
+                <p className="settings__lede">
+                  Your instructions for kinds of work, read by every crew. A crew's own skills are
+                  in its settings.
+                </p>
+                <SkillList scope={{ kind: "workspace" }} />
               </>
             )}
 

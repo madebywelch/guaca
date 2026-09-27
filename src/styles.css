@@ -5499,6 +5499,27 @@ input[type="file"]:disabled {
   color: var(--faint);
 }
 
+/* A skill is markdown an agent reads verbatim, so it is edited and read in
+   the monospace the memory panel uses, and a long one scrolls in place. */
+.textarea--code {
+  font-family: var(--font-mono);
+  font-size: var(--type-aside);
+}
+
+.skill__body {
+  max-height: 20rem;
+  overflow: auto;
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  font-family: var(--font-mono);
+  font-size: var(--type-small);
+  line-height: var(--lead-ui);
+  white-space: pre-wrap;
+}
+
 .memory__actions {
   display: flex;
   gap: var(--space-3);

@@ -357,6 +357,14 @@ pub enum UiEvent {
     SettingsChanged {
         settings: Box<crate::config::RedactedConfig>,
     },
+
+    /// A skill was written or deleted, by the operator or by an agent.
+    ///
+    /// The scope rather than the skill, because what redraws is a list: the
+    /// operator's in Settings, or one crew's in its settings.
+    SkillsChanged {
+        scope: crate::domain::skill::Scope,
+    },
 }
 
 pub trait EventSink: Send + Sync + 'static {

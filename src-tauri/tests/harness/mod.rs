@@ -92,6 +92,8 @@ pub enum Script {
     /// A `calendar` call aimed at an occasion by id: what a model plays when it
     /// has been told one exists, whether or not the id is its crew's.
     Move { action: String, id: String, starts_at: String },
+    /// Emit a `skill` tool call with these arguments.
+    Skill(serde_json::Value),
     /// Emit a `request_permission` tool call.
     AskPermission { action: String, because: String },
     /// Emit an `ask_operator` tool call. Empty options is a written answer.
@@ -428,6 +430,15 @@ pub fn render(script: &Script) -> String {
             body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"index":0,"id":"call_plugin","type":"function",
                  "function":{"name":name,"arguments":arguments.to_string()}}
+            ]}}]})));
+            body.push_str(&frame(
+                serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+            ));
+        }
+        Script::Skill(arguments) => {
+            body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"call_skill","type":"function",
+                 "function":{"name":"skill","arguments":arguments.to_string()}}
             ]}}]})));
             body.push_str(&frame(
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),

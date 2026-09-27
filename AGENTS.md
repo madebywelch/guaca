@@ -64,6 +64,8 @@ src-tauri/src/
     repository.rs     A directory an agent may write code in, which of two
                       programs writes it, and whether it asks before pushing.
     worknote.rs       A line about work in flight, and why it is not memory.
+    skill.rs          A document of instructions for one kind of task, the
+                      three places one lives, and who may write each.
     occasion.rs       A date the crew is answerable for. It fires nothing, which
                       is the whole of what separates it from a routine.
     promise.rs        A closing sentence that says the work is still coming,
@@ -116,6 +118,8 @@ src-tauri/src/
   cdp.rs              The DevTools protocol. Asks a page instead of looking.
   workspace.rs        Per-agent memory: one markdown file the agent rewrites.
                       Its counterpart is `domain/worknote.rs` plus one table.
+  skills.rs           Skills on disk: the operator's and each crew's. Guaca's
+                      own are compiled in from `src-tauri/skills/`.
   files.rs            Attachments, addressed by the SHA-256 of their contents.
   eval.rs             Reads a run and says whether it communicated sensibly.
   trajectory.rs       Reads a run's events and says whether the machinery did.
@@ -231,6 +235,8 @@ repo: the frontend renders state and forwards intent.
 | A turn's tool calls in a channel: what folds, what a chip says, what opens | *A turn's own work is chips* in `docs/WORKSPACE.md`, then `src/lib/trail.ts` |
 | What an agent changed about its own memory, and where the version before it came from | *A memory rewrite opens as a diff* in `docs/WORKSPACE.md`, then `Workspace::write` and `src/lib/diff.ts` |
 | What an agent currently remembers, and editing it by hand | *An agent's memory is in the panel* in `docs/WORKSPACE.md`, then `src/components/Memory.tsx` and `src-tauri/src/workspace.rs` |
+| Skills: what one is, which crew can read or write it, the `skill` tool, the index in the prompt | `docs/SKILLS.md`, then `domain/skill.rs` and `skills.rs` |
+| What agents are told about Guaca itself, and the manual they read | *The manual is a skill, and a test keeps it true* in `docs/SKILLS.md`, then `src-tauri/skills/guaca/SKILL.md` and `src/lib/manual.test.ts`, which is the gate |
 | Which of the two stores something belongs in, what `note_progress` is for, why one is a file and the other a table | *An agent's memory is what it knows, and its working notes are what it is doing* in `docs/WORKSPACE.md`, then `src-tauri/src/domain/worknote.rs`, whose header is the argument |
 | An `@` that names an agent: what resolves, and what it draws in either place | *A mention is one thing, in the box and in the message* in `docs/WORKSPACE.md`, then `src/lib/mentions.ts` and the layer under `Composer`'s textarea |
 | A size, a space, a radius, a duration or a shadow, anywhere in the app | *Every length is named* below, then the token block at the top of `src/styles.css`, and the closed-set suite in `styles.test.ts`, which is the gate |
@@ -441,6 +447,7 @@ the gotchas file says what it already cost somebody to change it.
 | A crew's calendar, an occasion, the wall between two crews' dates | `docs/gotchas/calendar.md` |
 | Approvals, questions, escalations, the desk | `docs/gotchas/attention.md` |
 | An agent's memory, its working notes, and the panels for both | `docs/gotchas/memory.md` |
+| Skills, the `skill` tool, the `guaca` manual | `docs/gotchas/skills.md` |
 | A turn drawn while it runs: the bubble, the trail, the thinking | `docs/gotchas/transcript.md` |
 | Charts, callouts, and a page an agent wrote | `docs/gotchas/figures.md` |
 | Attachments, previews, a file in a reply | `docs/gotchas/files.md` |

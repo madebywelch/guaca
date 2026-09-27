@@ -226,6 +226,11 @@ surface! {
     delete_occasion(id: crate::domain::ids::OccasionId) -> (),
     webhook_address() -> crate::commands::WebhookAddress,
 
+    list_skills(scope: crate::domain::skill::Scope) -> Vec<crate::domain::skill::Skill>,
+    read_skill(scope: crate::domain::skill::Scope, name: String) -> crate::domain::skill::Skill,
+    save_skill(scope: crate::domain::skill::Scope, draft: crate::commands::SkillDraft) -> crate::domain::skill::Skill,
+    delete_skill(scope: crate::domain::skill::Scope, name: String) -> bool,
+
     agent_computer(id: AgentId) -> Option<Computer>,
     give_agent_computer(id: AgentId) -> (),
     take_agent_computer(id: AgentId) -> (),

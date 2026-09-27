@@ -272,6 +272,19 @@ function describe(tool: string, args: Args): Described {
       };
     }
 
+    // Named, because which skill an agent read is the thing an operator opens
+    // the chip to find out: it says which instructions the turn was following.
+    case "skill": {
+      const action = text(args, "action") ?? "list";
+      const name = text(args, "name");
+      if (!name || action === "list") return { title: "Checked its skills", target: null };
+      if (["write", "create", "update", "save", "edit"].includes(action))
+        return { title: `Wrote the ${clip(name, 40)} skill`, target: text(args, "description") };
+      if (action === "delete" || action === "remove")
+        return { title: `Deleted the ${clip(name, 40)} skill`, target: null };
+      return { title: `Read the ${clip(name, 40)} skill`, target: null };
+    }
+
     case "schedule": {
       const action = text(args, "action");
       if (action === "cancel") return { title: "Canceled a routine", target: null };
@@ -433,6 +446,8 @@ export function callInFlight(name: string, raw: unknown): string {
       return "Checking who is available";
     case "schedule":
       return "Changing its schedule";
+    case "skill":
+      return "Reading its skills";
     case "create_agent":
       return "Asking to add an agent";
     case "request_permission":
@@ -473,6 +488,8 @@ function manyLabel(group: TrailGroup): string {
       return `Opened ${count} programs`;
     case "schedule":
       return `${count} changes to its schedule`;
+    case "skill":
+      return `Used its skills ${count} times`;
     case "attach_file":
       return `Attached ${count} files`;
     case "update_memory":

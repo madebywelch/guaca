@@ -369,6 +369,63 @@ async fn a_settings_change_reaches_every_client_and_two_at_once_both_land() {
 }
 
 #[tokio::test]
+async fn skills_are_written_read_and_announced_over_the_hosted_surface() {
+    let (addr, _dir) = workspace().await;
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/v1/events?token={TOKEN}"))
+            .await
+            .expect("the event socket opens");
+
+    let workspace = json!({ "kind": "workspace" });
+    let (status, body) = call(
+        addr,
+        "save_skill",
+        json!({ "scope": workspace, "draft": {
+            "name": "house-style", "description": "When writing anything", "body": "Plain words.",
+        }}),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["ok"]["scope"]["kind"], "workspace");
+    let event = next_of_kind(&mut socket, "skillsChanged").await;
+    assert_eq!(event["scope"]["kind"], "workspace");
+
+    // A listing carries no bodies; a read does.
+    let (_, listed) = call(addr, "list_skills", json!({ "scope": workspace })).await;
+    assert_eq!(listed["ok"][0]["name"], "house-style");
+    assert_eq!(listed["ok"][0]["body"], "");
+    let (_, read) =
+        call(addr, "read_skill", json!({ "scope": workspace, "name": "house-style" })).await;
+    assert_eq!(read["ok"]["body"], "Plain words.");
+
+    // Guaca's own is listed and cannot be written over, from any client.
+    let (_, bundled) = call(addr, "list_skills", json!({ "scope": { "kind": "bundled" } })).await;
+    assert!(bundled["ok"].as_array().unwrap().iter().any(|s| s["name"] == "guaca"));
+    let (_, refused) = call(
+        addr,
+        "save_skill",
+        json!({ "scope": workspace, "draft": { "name": "guaca", "description": "x", "body": "y" }}),
+    )
+    .await;
+    assert_eq!(refused["err"]["kind"], "validation", "{refused}");
+
+    // Nothing is written under the id of a crew that does not exist.
+    let ghost = json!({ "kind": "crew", "groupId": uuid::Uuid::new_v4() });
+    let (_, refused) = call(
+        addr,
+        "save_skill",
+        json!({ "scope": ghost, "draft": { "name": "x", "description": "x", "body": "y" }}),
+    )
+    .await;
+    assert_eq!(refused["err"]["kind"], "notFound", "{refused}");
+
+    let (_, deleted) =
+        call(addr, "delete_skill", json!({ "scope": workspace, "name": "house-style" })).await;
+    assert_eq!(deleted["ok"], true);
+    let _ = socket.close(None).await;
+}
+
+#[tokio::test]
 async fn a_client_on_a_different_build_is_told_which_of_them_is_wrong() {
     let (addr, _dir) = workspace().await;
 

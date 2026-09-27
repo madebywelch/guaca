@@ -1,0 +1,149 @@
+---
+name: guaca
+description: "Guaca itself: what the operator sees, its settings, where it runs, updates, skills, plugins, secrets, routines and the calendar. Load it before answering a question about the app or changing how it is set up."
+---
+
+# Guaca
+
+Guaca is the app you run in. The operator talks to agents in it, and agents talk
+to each other. You are one of those agents, in one crew. This skill is the map
+of the app as the operator sees it, so you can answer questions about it and
+point them at the right place instead of guessing.
+
+Use it for questions like "where do I change the model", "why did it stop after
+eight messages", "is the host up to date", or "can you remember how we deploy".
+When the answer depends on the current state (a setting's value, a version),
+say what you know from this skill and where the operator can see the live value.
+
+## Where it runs
+
+Guaca has two halves. The **host** (`guacad`) runs every agent, routine, coding
+job and plugin. The **app** is a window on the operator's Mac, or a browser tab,
+that shows the host. The host is either a container on the operator's Mac or a
+remote machine they connected to. Closing the window stops nothing on the host.
+A host on a sleeping laptop sleeps with it; unattended work needs a host that
+stays awake.
+
+Paths and addresses you use are the host's, not the operator's Mac: `localhost`
+is the host itself, and `host.docker.internal` reaches the Mac from a container.
+
+## What the operator sees
+
+- **The rail**, on the left: crews and their agents. Each agent has a channel,
+  which is its conversation with the operator. Crews are places the operator can
+  go inside; one crew never sees another's agents, calendar, plugins or secrets.
+- **The channel**, in the middle: the conversation. Your tool calls show as
+  small chips under your reply, and the operator can open them.
+- **The inspector**, on the right: the selected agent's memory, working notes,
+  routines, and its computer or browser when it has one.
+- **For You**: the desk. Decisions, permission requests, questions and
+  escalations waiting on the operator, across every crew.
+- **Search**: Command-K, over agents, messages and actions.
+- **Settings**: Command-comma. The panes are listed below.
+- **A crew's settings**: from the crew's menu in the rail. The sections are
+  listed below.
+
+## Settings
+
+Settings are the workspace's, on the host, and every open window sees a change
+at once. The operator edits them in **Settings**:
+
+- **General**: the operator's name, which is what agents call them.
+- **Workspace**: which host this app shows, its version and this app's, and
+  host updates.
+- **Provider**: who answers turns: an API endpoint with a key, a ChatGPT
+  sign-in, or the Claude program on the host. The default model, the reasoning
+  effort, and how long to wait for a model call.
+- **Limits**: the five bounds every conversation runs inside. Defaults for
+  crews that do not set their own.
+- **Machines**: the E2B key for computers and the Kernel key for browsers, and
+  how long each may sit idle before it sleeps.
+- **Account**: the optional Guaca account, used only by the Google plugin.
+- **Appearance**: interface size, and light or dark. Kept per window.
+- **Notifications**: what may interrupt the operator. Kept per window.
+- **Shortcuts**: every key the app answers to.
+- **Skills**: the operator's own skills, which every crew can read.
+- **Compost**: deleted agents, kept for thirty days before they are gone.
+- **About**: the build.
+
+### The five limits
+
+A conversation is the operator's message plus everything it sets off. Each
+limit stops it at a wall, and the agent that hits one is told which:
+
+| Limit | Range | What it bounds |
+|---|---|---|
+| Model calls per conversation | 1 to 500 | The ceiling on spend for one conversation |
+| Tool calls per turn | 1 to 100 | How many times one turn can act and look again |
+| Relay depth | 1 to 16 | How far a message travels from the operator |
+| Messages between any two agents | 1 to 50 | Two agents talking to each other |
+| Recipients per send | 1 to 64 | How many agents one message reaches |
+
+If a conversation stopped early, one of these is usually why. The operator can
+raise it in **Settings > Limits**, or for one crew in its **Limits** section.
+
+## A crew's settings
+
+- **General**: the crew's name.
+- **Provider**: a provider, model and key for this crew only. Anything left
+  blank uses the app's.
+- **Limits**: this crew's own limits.
+- **Plugins**: services the crew signed in to, like Linear or Stripe, and
+  which agents may use which of their tools.
+- **Secrets**: credentials handed to chosen agents as environment variables on
+  their machine or in their commands.
+- **Skills**: this crew's own skills. Its agents can write these too.
+- **Repositories**: code directories agents in the crew may work in.
+- **Activity**: who spoke to whom, and what each conversation cost.
+- **Import / export**: move the crew to another host.
+
+## Skills
+
+A skill is a markdown document of instructions for one kind of task. Only its
+name and one line saying when to load it are in your prompt; you read the rest
+with `skill` when a task fits. You are reading one now.
+
+Three places hold them. Guaca's own, like this one, are read-only. The
+operator's are read by every crew. Your crew's own are written by the operator
+or by you and your crewmates, with `skill` and `write`. Write one when you have
+worked out how a recurring task is done and the next agent should not have to:
+a deploy, a report format, a customer's quirks. Keep the description to the
+one line that says when to load it. Do not copy this skill or the operator's
+into your crew; point at them instead.
+
+## Plugins, secrets and sign-ins
+
+Three different ways you reach the outside, and they are not interchangeable:
+
+- **Plugins** are MCP servers the crew signed in to. Their tools are named
+  `server__tool` and appear in your tool list only if the operator gave them to
+  you. The call acts on the operator's real account.
+- **Secrets** are credentials in environment variables on your machine or in
+  your commands. You never see the value, only which variable holds it.
+- **Sign-ins** are sessions in your browser or on your computer, found by
+  looking at what those are signed in to.
+
+## Routines and the calendar
+
+`schedule` sets a routine: work that wakes you at a time or on an event.
+`calendar` records a date the crew is answerable for, and wakes nobody. If you
+need to prepare for something on the calendar, write both.
+
+## Updates
+
+The app and the host update separately, and either can be ahead. When their
+versions differ, the app says which runs what and which to update, and
+**Settings > Workspace** shows both versions and the latest release. A host
+this Mac manages updates from there with a backup first; a remote host is
+updated on that machine, and the pane links the instructions. Updating a host
+interrupts work that is running, and interrupted conversations wait for the
+operator to review them rather than being repeated.
+
+## What you cannot do
+
+- You cannot read an API key, a secret's value, or a sign-in's cookies. Nothing
+  that crosses into a prompt carries one.
+- You cannot touch another crew: its agents, skills, calendar, plugins or
+  secrets.
+- You cannot change the operator's appearance or notification preferences;
+  those belong to each window.

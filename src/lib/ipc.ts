@@ -90,6 +90,9 @@ import type {
   Settings,
   SettingsPatch,
   Signin,
+  Skill,
+  SkillDraft,
+  SkillScope,
   Staged,
   SubscriptionStatus,
   UiEvent,
@@ -177,6 +180,13 @@ export const api = {
   updateConnector: (id: ConnectorId, agents: AgentId[], secret: string | null) =>
     invoke<void>("update_connector", { id, agents, secret }),
   deleteConnector: (id: ConnectorId) => invoke<void>("delete_connector", { id }),
+
+  listSkills: (scope: SkillScope) => invoke<Skill[]>("list_skills", { scope }),
+  readSkill: (scope: SkillScope, name: string) => invoke<Skill>("read_skill", { scope, name }),
+  saveSkill: (scope: SkillScope, draft: SkillDraft) =>
+    invoke<Skill>("save_skill", { scope, draft }),
+  deleteSkill: (scope: SkillScope, name: string) =>
+    invoke<boolean>("delete_skill", { scope, name }),
 
   /**
    * The directories a crew has linked, and who in it may work in each.

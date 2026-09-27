@@ -733,6 +733,9 @@ struct Inner {
     waiting: Mutex<HashMap<ApprovalId, tokio::sync::oneshot::Sender<()>>>,
     /// Per-agent notes on disk.
     workspace: Workspace,
+    /// Skills on disk: the operator's and each crew's. Guaca's own are
+    /// compiled in and never touch it.
+    skills: crate::skills::Skills,
     /// The bytes of everything anybody has attached. Shared, because one file
     /// sent to four agents is one file.
     files: FileStore,
@@ -849,6 +852,8 @@ pub struct Runtime {
 pub struct OnDisk {
     /// Per-agent memory, one markdown file each.
     pub workspace: Workspace,
+    /// Skills, one directory each: the operator's and each crew's.
+    pub skills: crate::skills::Skills,
     /// Attachments, addressed by the SHA-256 of their contents.
     pub files: FileStore,
     /// Where the per-agent git work trees live, one directory per repository
@@ -861,6 +866,7 @@ impl OnDisk {
     pub fn under(root: &std::path::Path) -> Self {
         Self {
             workspace: Workspace::new(root.join("workspace")),
+            skills: crate::skills::Skills::new(root.join("skills")),
             files: FileStore::new(root.join("files")),
             benches: root.join("worktrees"),
         }
@@ -887,7 +893,7 @@ impl Runtime {
         disk: OnDisk,
         events: Arc<dyn EventSink>,
     ) -> Self {
-        let OnDisk { workspace, files, benches } = disk;
+        let OnDisk { workspace, skills, files, benches } = disk;
         Self {
             inner: Arc::new(Inner {
                 workspace_lease: Mutex::new(None),
@@ -903,6 +909,7 @@ impl Runtime {
                 runs: Mutex::new(Runs::default()),
                 waiting: Mutex::new(HashMap::new()),
                 workspace,
+                skills,
                 files,
                 last_signin_scan: Mutex::new(HashMap::new()),
                 coding: Mutex::new(HashMap::new()),
@@ -1013,6 +1020,10 @@ impl Runtime {
 
     pub fn workspace(&self) -> &Workspace {
         &self.inner.workspace
+    }
+
+    pub fn skills(&self) -> &crate::skills::Skills {
+        &self.inner.skills
     }
 
     pub fn config(&self) -> AppConfig {
@@ -3929,6 +3940,10 @@ impl Runtime {
         // After assembly, because what a file becomes depends on things the
         // prompt cannot reach: bytes on disk, a model that may not be able to
         // see one, and a machine that may have to be started to hold them.
+        // Beside the system prompt rather than threaded through it: names and
+        // one line each, read from disk every turn so a skill a crewmate wrote
+        // a moment ago is offered on this one.
+        prompt::add_skills(&mut messages, &self.inner.skills.visible(card.group_id));
         match self.inner.store.decisions(Some(card.id)) {
             Ok(decisions) => prompt::add_decisions(&mut messages, &decisions),
             Err(err) => tracing::warn!(%err, "could not read the agent's decisions"),
@@ -5180,6 +5195,21 @@ impl Runtime {
                     }
                 };
                 (rendered, Part::tool_call(tools::SCHEDULE, arguments, outcome))
+            }
+
+            ToolInvocation::Skill { action } => {
+                let (rendered, outcome) = match self.use_skill(card, &action) {
+                    // The chip says what happened; a skill's body is the
+                    // model's to read, not the transcript's to keep twice.
+                    Ok(rendered) => {
+                        let summary = rendered.lines().next().unwrap_or_default().to_string();
+                        (rendered, ToolOutcome::Ok { summary })
+                    }
+                    Err(err) => {
+                        (format!("Error: {err}"), ToolOutcome::Failed { error: err.to_string() })
+                    }
+                };
+                (rendered, Part::tool_call(tools::SKILL, arguments, outcome))
             }
 
             ToolInvocation::Calendar { action } => {
@@ -6985,6 +7015,64 @@ impl Runtime {
     /// 15th, or a zone it did not intend. Told back the local wall clock that
     /// was stored, it reads its own mistake in the same turn instead of the
     /// operator finding it a week later.
+    /// An agent reading or writing a skill. Writes reach only its own crew.
+    fn use_skill(
+        &self,
+        card: &AgentCard,
+        action: &tools::SkillAction,
+    ) -> Result<String, crate::skills::SkillsError> {
+        use crate::domain::skill::{Clean, Scope};
+        use crate::skills::SkillsError;
+        let own = Scope::Crew { group_id: card.group_id };
+        match action {
+            tools::SkillAction::List => {
+                let visible = self.inner.skills.visible(card.group_id);
+                let lines: Vec<String> = visible.iter().map(|found| found.index_line()).collect();
+                Ok(format!(
+                    "{} skill(s) you can read. `view` one by name before a task it fits.\n{}",
+                    visible.len(),
+                    lines.join("\n")
+                ))
+            }
+            tools::SkillAction::View { name } => {
+                let found = self.inner.skills.read(Some(card.group_id), name)?;
+                Ok(format!(
+                    "Skill `{}` ({}): {}\n\n{}",
+                    found.name,
+                    found.scope.label(),
+                    found.description,
+                    found.body
+                ))
+            }
+            tools::SkillAction::Write { name, description, content } => {
+                let clean = Clean::new(name, description, content)?;
+                let existed = self.inner.skills.load(own, &clean.name).is_ok();
+                let written = self.inner.skills.write(own, &clean)?;
+                self.emit(UiEvent::SkillsChanged { scope: own });
+                tracing::info!(agent = %card.name, skill = %written.name, "an agent wrote a skill");
+                Ok(format!(
+                    "{} `{}` for your crew. Every agent in it is offered it from its next turn.",
+                    if existed { "Replaced" } else { "Wrote" },
+                    written.name
+                ))
+            }
+            tools::SkillAction::Delete { name } => {
+                if self.inner.skills.delete(own, name)? {
+                    self.emit(UiEvent::SkillsChanged { scope: own });
+                    return Ok(format!("Deleted `{name}` from your crew's skills."));
+                }
+                // Said precisely, because "not found" about a skill the agent
+                // can read reads as a bug and gets retried.
+                match self.inner.skills.read(Some(card.group_id), name) {
+                    Ok(found) => {
+                        Err(SkillsError::NotYours { name: found.name, owner: found.scope.owner() })
+                    }
+                    Err(err) => Err(err),
+                }
+            }
+        }
+    }
+
     fn keep_calendar(
         &self,
         card: &AgentCard,

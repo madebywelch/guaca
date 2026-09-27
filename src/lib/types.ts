@@ -301,6 +301,39 @@ export interface GroupDraft {
 export type ConnectorId = string;
 
 /**
+ * Where a skill lives, which is who may write it. Guaca's own are read-only,
+ * the operator's are read by every crew, and a crew's own can be written by
+ * its agents as well as by the operator.
+ */
+export type SkillScope =
+  | { kind: "bundled" }
+  | { kind: "workspace" }
+  | { kind: "crew"; groupId: GroupId };
+
+/** A markdown document of instructions for one kind of task. */
+export interface Skill {
+  name: string;
+  description: string;
+  scope: SkillScope;
+  /** Empty in a listing; read when the skill is opened. */
+  body: string;
+  updatedAt: number;
+}
+
+export interface SkillDraft {
+  name: string;
+  description: string;
+  body: string;
+  /** The name it had, when the edit renames it. */
+  previous?: string;
+}
+
+/** One key per scope, for the counter a list redraws on. */
+export function skillScopeKey(scope: SkillScope): string {
+  return scope.kind === "crew" ? `crew:${scope.groupId}` : scope.kind;
+}
+
+/**
  * A credential granted to selected agents in one group.
  *
  * The value is never on this side of the boundary: there is no command that
@@ -1147,6 +1180,8 @@ export type UiEvent =
    * the redacted settings, which every open client needs and nothing more.
    */
   | { type: "settingsChanged"; settings: Settings }
+  /** A skill was written or deleted, by the operator or by an agent. */
+  | { type: "skillsChanged"; scope: SkillScope }
   /**
    * A coding job could not run, for a reason only the operator can fix.
    *

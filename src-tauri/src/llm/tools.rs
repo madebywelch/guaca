@@ -29,6 +29,7 @@ pub const USE_SCREEN: &str = "use_screen";
 pub const BROWSE: &str = "browse";
 pub const SCHEDULE: &str = "schedule";
 pub const CALENDAR: &str = "calendar";
+pub const SKILL: &str = "skill";
 pub const CREATE_AGENT: &str = "create_agent";
 pub const REQUEST_PERMISSION: &str = "request_permission";
 pub const DECISION: &str = "decision";
@@ -1031,6 +1032,51 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: SKILL.to_string(),
+            // Read before write, in the description as in the design: the
+            // point of a skill is the agent that loads one before a task, and
+            // a model shown `write` first treats the tool as a notebook.
+            description: format!(
+                "Skills are documents of instructions for one kind of task, kept by Guaca, the \
+                 operator and your crew. Your system prompt names the ones you can read and \
+                 says when each applies; only those lines are there, not the instructions.\n\n\
+                 `view` reads one by name. Read it before starting a task it fits, and follow \
+                 it. `list` shows every skill you can read. `write` creates or replaces one of \
+                 your crew's own skills: do it when you have worked out how a recurring task is \
+                 done and the next agent should not have to work it out again. `delete` \
+                 removes one of your crew's own. Guaca's skills and the operator's are \
+                 read-only.\n\n\
+                 A skill has a `name` (lowercase words joined by dashes), a `description` (the \
+                 one line that says when to load it, at most {} characters) and `content` \
+                 (markdown instructions, at most {} characters). Every agent in your crew \
+                 reads what you write, and no other crew can.",
+                crate::domain::skill::MAX_DESCRIPTION,
+                crate::domain::skill::MAX_BODY
+            ),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["view", "list", "write", "delete"] },
+                    "name": {
+                        "type": "string",
+                        "description": "The skill, as your system prompt or `list` names it: \
+                                        `deploy-site`."
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "On `write`: when an agent should load it, in one line."
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "On `write`: the whole skill, in markdown. It replaces \
+                                        what was there."
+                    }
+                },
+                "required": ["action"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
             name: READ_FILE.to_string(),
             description: "Reopen a saved attachment by file name, including documents you wrote \
                           with `write_document` on earlier turns and files you sent to peers. \
@@ -1228,6 +1274,11 @@ pub enum ToolInvocation {
     Calendar {
         action: CalendarAction,
     },
+    /// A read or write of a skill. The crew is read off the calling agent's
+    /// card at dispatch, like the calendar's, so a call cannot name another.
+    Skill {
+        action: SkillAction,
+    },
     CreateAgent {
         draft: NewAgent,
     },
@@ -1304,6 +1355,14 @@ pub enum ScheduleAction {
 /// fires and one does not — but they are the two lists an agent keeps, and an
 /// agent that has learned `list`/`add`/`update`/`cancel` on one should not have
 /// to learn a second vocabulary for the other.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SkillAction {
+    List,
+    View { name: String },
+    Write { name: String, description: String, content: String },
+    Delete { name: String },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum CalendarAction {
     List,
@@ -1398,6 +1457,10 @@ pub enum ToolParseError {
     UnknownCalendarAction,
     #[error("calendar needs {needs}")]
     IncompleteCalendar { needs: String },
+    #[error("skill needs a known `action`")]
+    UnknownSkillAction,
+    #[error("skill needs {needs}")]
+    IncompleteSkill { needs: String },
     #[error("use_screen {action} needs {needs}")]
     IncompleteScreenAction { action: String, needs: String },
     #[error("create_agent needs {needs}")]
@@ -1449,6 +1512,17 @@ impl ToolParseError {
                  \"2026-09-14 15:00\", \"minutes\": 60}}. A date on its own is a whole day. \
                  To move one your crew already has: {{\"action\": \"update\", \"id\": \
                  \"...\", \"starts_at\": \"2026-09-15 10:00\"}}."
+            ),
+            ToolParseError::UnknownSkillAction => {
+                "Error: `action` must be view, list, write or delete. Use {\"action\": \"list\"} \
+                 to see the skills you can read."
+                    .to_string()
+            }
+            ToolParseError::IncompleteSkill { needs } => format!(
+                "Error: that `skill` call needs {needs}. To read one: {{\"action\": \"view\", \
+                 \"name\": \"guaca\"}}. To write one for your crew: {{\"action\": \"write\", \
+                 \"name\": \"deploy-site\", \"description\": \"When deploying the marketing \
+                 site\", \"content\": \"# Deploy\\n1. ...\"}}."
             ),
             ToolParseError::UnknownBrowseAction => {
                 "Error: `action` must be one of open, read, click, type, scroll or back. \
@@ -2153,6 +2227,50 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                 _ => Err(ToolParseError::UnknownCalendarAction),
             }
         }
+        SKILL => {
+            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                name: SKILL.to_string(),
+                detail: e.to_string(),
+            })?;
+            let words = |keys: &[&str]| {
+                keys.iter().find_map(|key| {
+                    value
+                        .get(*key)
+                        .and_then(|v| v.as_str())
+                        .map(str::trim)
+                        .filter(|text| !text.is_empty())
+                        .map(str::to_string)
+                })
+            };
+            let named = |action: &str| {
+                words(&["name", "skill"]).ok_or_else(|| ToolParseError::IncompleteSkill {
+                    needs: format!("the `name` of the skill to {action}"),
+                })
+            };
+            let action = match value.get("action").and_then(|v| v.as_str()).unwrap_or("list") {
+                "list" => SkillAction::List,
+                // What a model reaches for when it has not read the enum.
+                "view" | "read" | "open" | "load" | "get" => {
+                    SkillAction::View { name: named("view")? }
+                }
+                "write" | "create" | "update" | "save" | "edit" => SkillAction::Write {
+                    name: named("write")?,
+                    description: words(&["description", "when"]).ok_or_else(|| {
+                        ToolParseError::IncompleteSkill {
+                            needs: "a `description`: one line saying when to load it".to_string(),
+                        }
+                    })?,
+                    content: words(&["content", "body", "text", "instructions"]).ok_or_else(
+                        || ToolParseError::IncompleteSkill {
+                            needs: "the whole skill in `content`".to_string(),
+                        },
+                    )?,
+                },
+                "delete" | "remove" => SkillAction::Delete { name: named("delete")? },
+                _ => return Err(ToolParseError::UnknownSkillAction),
+            };
+            Ok(ToolInvocation::Skill { action })
+        }
         SEND_MESSAGE => {
             let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
                 name: SEND_MESSAGE.to_string(),
@@ -2466,6 +2584,49 @@ mod tests {
     /// are not made to say they do not.
     fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
         super::parse(call, &[])
+    }
+
+    #[test]
+    fn a_skill_is_read_by_name_and_written_whole() {
+        assert_eq!(
+            parse(&call(SKILL, r#"{"action": "view", "name": "guaca"}"#)),
+            Ok(ToolInvocation::Skill { action: SkillAction::View { name: "guaca".into() } })
+        );
+        // `load` and `read` are what a model says when it has not read the enum.
+        assert!(matches!(
+            parse(&call(SKILL, r#"{"action": "load", "skill": "deploy"}"#)),
+            Ok(ToolInvocation::Skill { action: SkillAction::View { .. } })
+        ));
+        assert_eq!(
+            parse(&call(SKILL, "{}")),
+            Ok(ToolInvocation::Skill { action: SkillAction::List })
+        );
+        let written = parse(&call(
+            SKILL,
+            r##"{"action": "write", "name": "deploy", "description": "When deploying", "body": "# Deploy"}"##,
+        ));
+        assert_eq!(
+            written,
+            Ok(ToolInvocation::Skill {
+                action: SkillAction::Write {
+                    name: "deploy".into(),
+                    description: "When deploying".into(),
+                    content: "# Deploy".into(),
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn an_incomplete_skill_write_says_what_is_missing_and_shows_one() {
+        let refused =
+            parse(&call(SKILL, r#"{"action": "write", "name": "x", "content": "y"}"#)).unwrap_err();
+        assert!(refused.to_string().contains("`description`"), "{refused}");
+        assert!(refused.guidance().contains("\"action\": \"write\""), "{}", refused.guidance());
+        assert_eq!(
+            parse(&call(SKILL, r#"{"action": "summon"}"#)),
+            Err(ToolParseError::UnknownSkillAction)
+        );
     }
 
     #[test]
@@ -3566,10 +3727,10 @@ mod tests {
         let specs = specs(Surfaces::both(), Modalities::seeing());
         assert_eq!(
             specs.len(),
-            20,
+            21,
             "directory, run_command, open_on_desktop, use_screen, browse, code, shell, schedule, \
-             calendar, create_agent, request_permission, ask_operator, decision, escalate, send_message, \
-             read_file, write_document, attach_file, update_memory, note_progress"
+             calendar, skill, create_agent, request_permission, ask_operator, decision, escalate, \
+             send_message, read_file, write_document, attach_file, update_memory, note_progress"
         );
         for spec in &specs {
             assert_eq!(
