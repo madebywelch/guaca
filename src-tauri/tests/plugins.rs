@@ -48,7 +48,7 @@ const NOBODY: PluginAccess = PluginAccess::Chosen { agents: Vec::new() };
 #[derive(Debug, Clone)]
 struct Rules {
     /// False is a server that authorizes everybody and asks for nothing. None
-    /// of the five on the list does today, and the row must not claim a
+    /// of the six on the list does today, and the row must not claim a
     /// sign-in if one starts.
     needs_token: bool,
     /// False is a server that publishes no RFC 7591 registration endpoint.
@@ -1409,7 +1409,7 @@ mod added {
         // are two questions, and the second one has the useful answer in it: a
         // peer has this. Resolved against the agent's own plugins, the name
         // would not resolve at all and the turn would be told the tool does not
-        // exist — which names no way forward and is not what the six say.
+        // exist, which names no way forward and is not what the seven say.
         let server = serve(Rules::default()).await;
         let (_dir, store, group, chosen) = workspace();
         let left_out = crew(&store, group, "Scribe");
@@ -2818,7 +2818,7 @@ async fn a_plugin_call_from_an_agent_outside_the_crew_is_refused() {
 /// behind whatever their company puts in front of things. The catalog answers
 /// neither question because a catalog server is one somebody checked.
 ///
-/// Scripted separately from `serve` on purpose. That server is the five
+/// Scripted separately from `serve` on purpose. That server is the six
 /// vendors' shape — OAuth metadata, registration, a token endpoint — and this
 /// one is a box with a key taped to it. Merging them would put an `if` in front
 /// of every route for a case the other never reaches.

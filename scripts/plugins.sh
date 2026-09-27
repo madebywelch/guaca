@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# The live plugin test: whether the five vendors still publish what this build
+# The live plugin test: whether the six vendors still publish what this build
 # expects to find.
 #
 # CI cannot answer this. Everything in the offline suite is a scripted server

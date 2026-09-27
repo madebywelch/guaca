@@ -563,7 +563,7 @@ pub struct Discovered {
 /// Steps 1 and 2 of the dance, on their own.
 ///
 /// Split out because the live vendor test needs exactly this and nothing after
-/// it: whether the five servers still publish what this build knows how to
+/// it: whether the six servers still publish what this build knows how to
 /// read. A test that rebuilt the metadata URLs beside these ones would pass
 /// while an operator could not connect, which is the only failure it exists to
 /// catch.

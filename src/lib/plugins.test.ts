@@ -1,6 +1,8 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { hostOf, markFor, nameFor, reportLine } from "./plugins";
+import { BRANDS, hostOf, markFor, nameFor, reportLine } from "./plugins";
 import type { ServerReport } from "./types";
 
 function report(over: Partial<ServerReport> = {}): ServerReport {
@@ -27,8 +29,42 @@ describe("markFor", () => {
   });
 });
 
+/**
+ * The catalog as Rust ships it: every `PluginKind::X => "..."` arm of one
+ * method, read out of `domain/plugin.rs`.
+ *
+ * Read from the source rather than listed again here, because a server added
+ * to the Rust catalog and not to `BRANDS` compiles on both sides and draws as a
+ * plug with a lowercase name: a vendor Guaca vouches for, shown as one nobody
+ * did.
+ */
+function rustArms(method: string): Map<string, string> {
+  const source = readFileSync(resolve(__dirname, "../../src-tauri/src/domain/plugin.rs"), "utf8");
+  const body = source.match(
+    new RegExp(`pub fn ${method}\\(&self\\) -> &str \\{([\\s\\S]*?)\\n    \\}`),
+  );
+  if (!body) throw new Error(`could not find PluginKind::${method} in domain/plugin.rs`);
+  return new Map(
+    [...body[1]!.matchAll(/PluginKind::(\w+) => "([^"]+)"/g)].map((m) => [m[1]!, m[2]!]),
+  );
+}
+
+describe("the catalog", () => {
+  it("draws and names every server Rust ships, and nothing else", () => {
+    const slugs = rustArms("slug");
+    const labels = rustArms("label");
+    // A regex that stopped matching would pass the rest vacuously.
+    expect(slugs.size).toBeGreaterThan(5);
+    expect(labels.size).toBe(slugs.size);
+    expect(Object.keys(BRANDS).sort()).toEqual([...slugs.values()].sort());
+    for (const [variant, slug] of slugs) {
+      expect(nameFor(slug)).toBe(labels.get(variant));
+    }
+  });
+});
+
 describe("nameFor", () => {
-  it("spells the six the way their vendors do", () => {
+  it("spells the seven the way their vendors do", () => {
     // The one thing a slug cannot supply. A transcript is the only place that
     // needs this, because it is the only place with no row to read a name off.
     expect(nameFor("agentmail")).toBe("AgentMail");

@@ -10,9 +10,10 @@
  * path data rather than pulled as a dependency: a handful of glyphs do not
  * justify a package carrying three thousand. Trademarks belong to their owners.
  *
- * AgentMail is the exception and is drawn here, because it is not in that set.
- * A generic envelope rather than an approximation of their logo: a mark nobody
- * can check against the original is a mark that quietly becomes wrong.
+ * AgentMail and Firecrawl are the exceptions and are drawn here, because
+ * neither is in that set. A generic envelope and a generic flame rather than an
+ * approximation of either logo: a mark nobody can check against the original is
+ * a mark that quietly becomes wrong.
  *
  * Google is the one row whose server is not the vendor's: the tools come from
  * the operator's own Guaca account, which holds the grant. The mark is still
@@ -60,6 +61,10 @@ export const BRANDS: Record<CatalogKind, Brand> = {
     path: "M21.9 4.1H2.1L12 10.9ZM1.2 6.4v11.9a1.6 1.6 0 0 0 1.6 1.6h18.4a1.6 1.6 0 0 0 1.6-1.6V6.4L12 13.5Z",
     color: "#0a0a0a",
   },
+  firecrawl: {
+    path: "M12 1.5c.6 3.5 5.5 6.1 6.6 10.9 1.1 4.9-2.2 10.1-6.6 10.1-4.4 0-7.6-3.3-6.9-7.9.4-2.6 1.9-4.4 3.3-5.6-.1 2 .8 3.6 2.2 4.2C10 9.5 11.5 5 12 1.5Z",
+    color: "#fa5d19",
+  },
   google: {
     path: "M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .307 5.387.307 12s5.56 12 12.173 12c3.573 0 6.267-1.173 8.373-3.36 2.16-2.16 2.84-5.213 2.84-7.667 0-.76-.053-1.467-.173-2.053H12.48z",
     color: "#4285f4",
@@ -81,8 +86,8 @@ const ADDED: Brand = {
 /**
  * Its mark, whichever kind it turns out to be.
  *
- * Keyed on what the backend said rather than on the shape of the slug: the six
- * are the six, and everything else is a server somebody added. A lookup that
+ * Keyed on what the backend said rather than on the shape of the slug: the
+ * seven are the seven, and everything else is a server somebody added. A lookup that
  * missed would otherwise draw an empty square, which reads as a broken row.
  *
  * `Object.hasOwn` rather than a lookup with a fallback, because a name here is
@@ -95,11 +100,11 @@ export function markFor(kind: PluginKind): Brand {
 }
 
 /**
- * The six, spelled the way their vendors spell them.
+ * The seven, spelled the way their vendors spell them.
  *
  * The spelling is the whole of what this adds: `agentmail` is AgentMail, and a
  * slug run through a capitalizer is a claim about somebody's name that nobody
- * checked. Six strings, and the day one of them is wrong is the day the mark
+ * checked. Seven strings, and the day one of them is wrong is the day the mark
  * beside it is wrong too.
  */
 const NAMES: Record<CatalogKind, string> = {
@@ -108,6 +113,7 @@ const NAMES: Record<CatalogKind, string> = {
   linear: "Linear",
   stripe: "Stripe",
   agentmail: "AgentMail",
+  firecrawl: "Firecrawl",
   google: "Google",
 };
 
