@@ -1,10 +1,16 @@
 /** One backend transport for browsers and the native desktop client. */
 
+import { VERSION } from "./build";
 import { compatibility, parseHealth } from "./releases";
 import type { UiEvent } from "./types";
 
 /** Tauri v2 puts this on `window` before any of our code runs. */
 export const desktop = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+/** Said on every call, so a host of another version can name the older side.
+ *  In the body, because a header an older host's CORS does not admit would
+ *  fail every preflight. */
+const CLIENT = { version: VERSION, desktop };
 
 /**
  * A box the desktop app is showing instead of its own workspace.
@@ -305,7 +311,7 @@ export async function invoke<T>(name: string, args?: Record<string, unknown>): P
     response = await fetch(`${origin()}/v1/call`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token()}` },
-      body: JSON.stringify({ name, args: args ?? {} }),
+      body: JSON.stringify({ name, args: args ?? {}, client: CLIENT }),
     });
   } catch (cause) {
     // The box is off, asleep, or the tunnel is down. Its own kind, because it

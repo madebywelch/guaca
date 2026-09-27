@@ -334,6 +334,25 @@ async fn a_client_on_a_different_build_is_told_which_of_them_is_wrong() {
         body["err"]["message"].as_str().unwrap_or_default().contains("agent_memory"),
         "it does not name the command: {body}"
     );
+
+    // A client that says what it is gets told which of the two to update.
+    let body: Value = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/call"))
+        .bearer_auth(TOKEN)
+        .json(&json!({
+            "name": "summon_kraken",
+            "args": {},
+            "client": { "version": "0.0.1", "desktop": true },
+        }))
+        .send()
+        .await
+        .expect("the daemon answers")
+        .json()
+        .await
+        .expect("the answer is JSON");
+    let said = body["err"]["message"].as_str().unwrap_or_default();
+    assert!(said.contains("Guaca 0.0.1"), "it does not name the app's version: {said}");
+    assert!(said.contains("download the latest Guaca"), "it does not say which side: {said}");
 }
 
 #[tokio::test]

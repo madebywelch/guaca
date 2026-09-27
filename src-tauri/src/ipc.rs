@@ -5,7 +5,7 @@
 
 use crate::domain::decision::WorkDecision;
 use crate::domain::ids::DecisionId;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::commands::{
@@ -76,20 +76,22 @@ impl Refused {
 
     /// What the client is told, in the shape it already parses.
     pub fn body(&self) -> CommandError {
+        self.body_for(None)
+    }
+
+    /// The same, naming which side to update when the client said what it is.
+    pub fn body_for(&self, client: Option<&Client>) -> CommandError {
         match self {
             Refused::Unknown(name) => CommandError::new(
                 "unknownCommand",
-                format!(
-                    "this build has no command called `{name}`. The app and the workspace it is \
-                     connected to are different versions; update whichever is older"
-                ),
+                format!("this build has no command called `{name}`. {}", skew(client)),
             ),
             Refused::Arguments { command, why } => CommandError::new(
                 "badArguments",
                 format!(
                     "`{command}` was called with arguments this build does not recognize ({why}). \
-                     The app and the workspace it is connected to are different versions; update \
-                     whichever is older"
+                     {}",
+                    skew(client)
                 ),
             ),
             Refused::Command(err) => CommandError::new(err.kind, err.message.clone()),
@@ -98,6 +100,53 @@ impl Refused {
                 format!("the answer could not be encoded to send back ({why})"),
             ),
         }
+    }
+}
+
+/// What a client says it is, on every call.
+///
+/// In the body rather than a header: a header an older host's CORS does not
+/// admit fails the preflight of every call, which turns a version skew into a
+/// workspace that cannot be reached at all.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Client {
+    pub version: String,
+    #[serde(default)]
+    pub desktop: bool,
+}
+
+/// The sentence that says which side of a skew to update.
+///
+/// Only a comparable release is ordered. Equal versions with different
+/// commands are two development builds, and a guess about which is older is
+/// worse than saying both are possible.
+pub fn skew(client: Option<&Client>) -> String {
+    use std::cmp::Ordering;
+    let host = env!("CARGO_PKG_VERSION");
+    let order = client.and_then(|c| {
+        let theirs = semver::Version::parse(&c.version).ok()?;
+        Some(theirs.cmp(&semver::Version::parse(host).ok()?))
+    });
+    match (client, order) {
+        (Some(c), Some(Ordering::Less)) => format!(
+            "This {} is Guaca {} and the host is {host}; {}",
+            if c.desktop { "app" } else { "page" },
+            c.version,
+            if c.desktop {
+                "download the latest Guaca for this computer"
+            } else {
+                "reload the page to load the host's own version"
+            }
+        ),
+        (Some(c), Some(Ordering::Greater)) => format!(
+            "This {} is Guaca {} and the host is {host}; update the host",
+            if c.desktop { "app" } else { "page" },
+            c.version
+        ),
+        _ => "The app and the workspace it is connected to are different versions; update \
+              whichever is older"
+            .into(),
     }
 }
 
@@ -335,6 +384,27 @@ mod tests {
         assert_eq!(body.kind, "unknownCommand");
         assert!(body.message.contains("summon_kraken"), "{}", body.message);
         assert!(body.message.contains("update"), "{}", body.message);
+    }
+
+    #[test]
+    fn a_skewed_client_is_told_which_side_to_update() {
+        let host = semver::Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
+        let older = Client { version: "0.0.1".into(), desktop: true };
+        let newer = Client { version: format!("{}.0.0", host.major + 1), desktop: true };
+        let message = Refused::Unknown("x".into()).body_for(Some(&older)).message;
+        assert!(message.contains("download the latest Guaca"), "{message}");
+        let message = Refused::Unknown("x".into()).body_for(Some(&newer)).message;
+        assert!(message.contains("update the host"), "{message}");
+        let page = Client { version: "0.0.1".into(), desktop: false };
+        let message = Refused::Unknown("x".into()).body_for(Some(&page)).message;
+        assert!(message.contains("reload the page"), "{message}");
+        // A development build at the host's own version, or no claim at all,
+        // cannot be ordered, and the message does not pretend otherwise.
+        let same = Client { version: env!("CARGO_PKG_VERSION").into(), desktop: true };
+        for client in [Some(&same), None] {
+            let message = Refused::Unknown("x".into()).body_for(client).message;
+            assert!(message.contains("whichever is older"), "{message}");
+        }
     }
 
     #[test]

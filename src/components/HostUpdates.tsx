@@ -11,14 +11,17 @@ import { COMMIT, VERSION } from "../lib/build";
 import { type DockerStatus, hostMode, localHost } from "../lib/host";
 import {
   available,
+  clientUpdate,
   compatibility,
   type Health,
   INSTRUCTIONS,
+  pageStale,
   parseHealth,
   parseReleaseStatus,
   RELEASES,
   type ReleaseStatus,
-  sameBuild,
+  skew,
+  updateNotice,
 } from "../lib/releases";
 import { useStore } from "../lib/store";
 import {
@@ -182,28 +185,25 @@ export function HostUpdateNotice({ onReview }: { onReview: () => void }) {
   const state = useContext(Context);
   const [dismissed, setDismissed] = useState("");
   if (!state?.health) return null;
-  const newer = available(state.health, state.release);
-  const pageChanged =
-    !desktop &&
-    !!state.health.build &&
-    !sameBuild(COMMIT, state.health.build) &&
-    !COMMIT.endsWith("-dirty");
-  const local = isManaged() && state.docker?.updateAvailable;
-  const key = `${workspaceOrigin()}:${pageChanged ? state.health.build : newer ? state.release?.latest?.version : state.docker?.targetImage}`;
+  const notice = updateNotice({
+    desktop,
+    client: { version: VERSION, commit: COMMIT },
+    health: state.health,
+    release: state.release,
+    localUpdate:
+      isManaged() && state.docker?.updateAvailable ? (state.docker.targetImage ?? "") : null,
+  });
+  const key = `${workspaceOrigin()}:${notice?.key}`;
   let saved = dismissed;
   try {
     saved = sessionStorage.getItem("guaca.update.dismissed") ?? dismissed;
   } catch {
     /* Session-only fallback. */
   }
-  if ((!newer && !pageChanged && !local) || saved === key) return null;
+  if (!notice || saved === key) return null;
   return (
     <div className="banner" role="status">
-      <span>
-        {pageChanged
-          ? "This page has an older Guaca build. Reload when you are ready."
-          : "Host update available."}
-      </span>
+      <span>{notice.text}</span>
       <button className="btn" type="button" onClick={onReview}>
         Review update
       </button>
@@ -246,8 +246,9 @@ export function HostUpdatePanel() {
   const newer = available(health, release);
   const managed = isManaged() && docker?.origin === workspaceOrigin();
   const canUpdate = managed && docker?.updateAvailable;
-  const pageChanged =
-    !desktop && !!health?.build && !sameBuild(COMMIT, health.build) && !COMMIT.endsWith("-dirty");
+  const pageChanged = pageStale(desktop, COMMIT, health);
+  const drift = desktop ? skew(VERSION, health) : "unknown";
+  const appBehind = desktop && (drift === "clientBehind" || clientUpdate(VERSION, release));
   const title =
     match === "hostOld"
       ? "This host needs an update"
@@ -284,23 +285,33 @@ export function HostUpdatePanel() {
             ? "Update the host before opening this workspace."
             : match === "clientOld"
               ? "This frontend cannot use the host API. Update Guaca to reconnect."
-              : newer
-                ? "A newer host release is available."
-                : release?.error
-                  ? "Could not check for updates."
-                  : !health.release
-                    ? "This is an unverified or development build."
-                    : !release?.latest
-                      ? "Release status has not been checked."
-                      : "No newer stable host release was found."}
+              : drift === "hostBehind"
+                ? "This host runs an older Guaca than this app."
+                : drift === "clientBehind"
+                  ? "This app runs an older Guaca than its host."
+                  : newer
+                    ? "A newer host release is available."
+                    : release?.error
+                      ? "Could not check for updates."
+                      : !health.release
+                        ? "This is an unverified or development build."
+                        : !release?.latest
+                          ? "Release status has not been checked."
+                          : "No newer stable host release was found."}
       </p>
       {health && (
         <dl className="host-update-facts">
-          <dt>Installed</dt>
+          <dt>Host</dt>
           <dd>
             {health.version ?? "Unknown release"}
             {!health.release && " (unverified)"}
           </dd>
+          {desktop && (
+            <>
+              <dt>This app</dt>
+              <dd>{VERSION}</dd>
+            </>
+          )}
           <dt>Available</dt>
           <dd>{release?.latest?.version ?? "Not verified"}</dd>
           <dt>Compatibility</dt>
@@ -379,12 +390,12 @@ export function HostUpdatePanel() {
           {docker.operation.error && <p>{docker.operation.error}</p>}
         </details>
       )}
-      {((newer && managed && !canUpdate) || match === "clientOld") && desktop && (
+      {desktop && (appBehind || match === "clientOld" || (newer && managed && !canUpdate)) && (
         <p>
           <a href={RELEASES} target="_blank" rel="noopener noreferrer">
             Download the latest Guaca desktop app
-          </a>{" "}
-          before updating its local host.
+          </a>
+          {managed ? " before updating its local host." : "."}
         </p>
       )}
       {pageChanged && (

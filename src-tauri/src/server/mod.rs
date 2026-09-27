@@ -385,6 +385,9 @@ struct Call {
     name: String,
     #[serde(default)]
     args: Value,
+    /// Absent from a client older than the field, which is itself a skew.
+    #[serde(default)]
+    client: Option<crate::ipc::Client>,
 }
 
 /// One command, arriving as JSON instead of over Tauri's IPC.
@@ -406,9 +409,20 @@ async fn call(
     match crate::ipc::dispatch(&serving.state, &body.name, body.args).await {
         Ok(value) => (StatusCode::OK, Json(json!({ "ok": value }))).into_response(),
         Err(refused) => {
+            if matches!(
+                refused,
+                crate::ipc::Refused::Unknown(_) | crate::ipc::Refused::Arguments { .. }
+            ) {
+                tracing::warn!(
+                    command = %body.name,
+                    client = body.client.as_ref().map(|c| c.version.as_str()).unwrap_or("unstated"),
+                    host = env!("CARGO_PKG_VERSION"),
+                    "a client of another build called a command this host cannot answer"
+                );
+            }
             let status =
                 StatusCode::from_u16(refused.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            (status, Json(json!({ "err": refused.body() }))).into_response()
+            (status, Json(json!({ "err": refused.body_for(body.client.as_ref()) }))).into_response()
         }
     }
 }

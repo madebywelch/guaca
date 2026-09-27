@@ -88,7 +88,7 @@ describe("host updates in either client", () => {
     platform.desktop = false;
     mount();
     expect(screen.queryByText("Workspace mounted")).toBeNull();
-    await screen.findByText("Host update available.");
+    await screen.findByText("Host update available: Guaca 0.2.0.");
     expect(screen.getByText("Workspace mounted")).toBeTruthy();
     expect(docker).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "Back up and update host" })).toBeNull();
@@ -172,7 +172,7 @@ describe("host updates in either client", () => {
   it("preserves failures and dismisses only the current release notice", async () => {
     mount();
     fireEvent.click(await screen.findByRole("button", { name: "Later" }));
-    expect(screen.queryByText("Host update available.")).toBeNull();
+    expect(screen.queryByText(/is available for this app and its host/)).toBeNull();
     release = {
       ...published,
       latest: {
@@ -187,6 +187,28 @@ describe("host updates in either client", () => {
       ).toBe(false),
     );
     fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
-    await screen.findByText("Host update available.");
+    await screen.findByText("Guaca 0.3.0 is available for this app and its host.");
+  });
+  it("tells a desktop that its host has moved ahead of it, and where to get the app", async () => {
+    health.version = "0.2.0";
+    mount();
+    await screen.findByText(
+      "This host runs Guaca 0.2.0 and this app is 0.1.0. Update this app to match.",
+    );
+    expect(screen.getByText("This app runs an older Guaca than its host.")).toBeTruthy();
+    expect(
+      screen.getByRole("link", { name: "Download the latest Guaca desktop app" }),
+    ).toBeTruthy();
+  });
+  it("tells a desktop that its host is behind it", async () => {
+    health.version = "0.0.9";
+    release = { ...published, latest: null };
+    mount();
+    await screen.findByText(
+      "This host runs Guaca 0.0.9 and this app is 0.1.0. Update the host to match.",
+    );
+    expect(
+      screen.queryByRole("link", { name: "Download the latest Guaca desktop app" }),
+    ).toBeNull();
   });
 });

@@ -55,6 +55,86 @@ export function available(health: Health | null, status: ReleaseStatus | null): 
     compareVersions(health.version, status.latest.version) === -1
   );
 }
+/**
+ * How this client and its host differ, by release version.
+ *
+ * A desktop and its host are updated separately, so either can be ahead. Only
+ * stable versions are ordered; a development build or a legacy host with no
+ * version is `unknown`, never assumed current.
+ */
+export type Skew = "same" | "clientBehind" | "hostBehind" | "unknown";
+export function skew(client: string, health: Health | null): Skew {
+  const order = health?.version ? compareVersions(client, health.version) : null;
+  if (order === null) return "unknown";
+  return order === 0 ? "same" : order < 0 ? "clientBehind" : "hostBehind";
+}
+
+/** Whether a published release is newer than this client's own version. */
+export function clientUpdate(client: string, status: ReleaseStatus | null): boolean {
+  return !!status?.latest && compareVersions(client, status.latest.version) === -1;
+}
+
+/** A browser page is the host's own bundle, so a different commit is a stale page. */
+export function pageStale(desktop: boolean, commit: string, health: Health | null): boolean {
+  return (
+    !desktop && !!health?.build && !sameBuild(commit, health.build) && !commit.endsWith("-dirty")
+  );
+}
+
+export interface UpdateFacts {
+  desktop: boolean;
+  client: { version: string; commit: string };
+  health: Health | null;
+  release: ReleaseStatus | null;
+  /** The image a host this desktop manages would be replaced with, when it differs. */
+  localUpdate: string | null;
+}
+export interface UpdateNotice {
+  /** What a dismissal hides: this message about these versions, and no later one. */
+  key: string;
+  text: string;
+}
+
+/**
+ * The one line worth drawing above the conversation, most urgent first.
+ *
+ * A stale page comes first because every other fact on it is stale too. A
+ * skew between a desktop and its host comes next, because it is the one that
+ * breaks commands; a newer published release is only news.
+ */
+export function updateNotice(facts: UpdateFacts): UpdateNotice | null {
+  const { desktop, client, health, release, localUpdate } = facts;
+  if (!health) return null;
+  if (pageStale(desktop, client.commit, health))
+    return {
+      key: `page:${health.build}`,
+      text: "This page has an older Guaca build. Reload when you are ready.",
+    };
+  const latest = release?.latest?.version;
+  const appBehindRelease = desktop && clientUpdate(client.version, release);
+  if (desktop) {
+    const drift = skew(client.version, health);
+    if (drift === "hostBehind" || drift === "clientBehind")
+      return {
+        key: `${drift}:${health.version}:${client.version}`,
+        text: `This host runs Guaca ${health.version} and this app is ${client.version}. ${
+          drift === "hostBehind" ? "Update the host to match." : "Update this app to match."
+        }`,
+      };
+  }
+  if (available(health, release))
+    return {
+      key: `host:${latest}`,
+      text: appBehindRelease
+        ? `Guaca ${latest} is available for this app and its host.`
+        : `Host update available: Guaca ${latest}.`,
+    };
+  if (localUpdate) return { key: `local:${localUpdate}`, text: "Host update available." };
+  if (appBehindRelease)
+    return { key: `app:${latest}`, text: `Guaca ${latest} is available for this app.` };
+  return null;
+}
+
 export function sameBuild(a: string, b: string): boolean {
   return (
     /^[a-f0-9]{7,40}$/.test(a) && /^[a-f0-9]{7,40}$/.test(b) && (a.startsWith(b) || b.startsWith(a))

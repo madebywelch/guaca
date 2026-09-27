@@ -199,7 +199,15 @@ describe("a call", () => {
     expect(String(url)).toBe(`${window.location.origin}/v1/call`);
     const headers = init!.headers as Record<string, string>;
     expect(headers.authorization).toBe("Bearer abc123");
-    expect(JSON.parse(String(init!.body))).toEqual({ name: "capabilities", args: {} });
+    const sent = JSON.parse(String(init!.body));
+    expect(sent).toMatchObject({ name: "capabilities", args: {} });
+    // In the body and never a header: an older host's CORS would refuse the
+    // preflight of every call that carried one it does not know.
+    expect(sent.client).toEqual({
+      version: expect.stringMatching(/^\d+\.\d+\.\d+/),
+      desktop: false,
+    });
+    expect(Object.keys(headers).sort()).toEqual(["authorization", "content-type"]);
   });
 
   it("says once, on the window, that the token was turned away", async () => {
