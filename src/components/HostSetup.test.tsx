@@ -114,6 +114,71 @@ describe("desktop host setup", () => {
     expect(screen.queryByText("Workspace mounted")).toBeNull();
     expect(activate).not.toHaveBeenCalled();
   });
+  it("reads Docker again after a failed start instead of showing what it said before", async () => {
+    status.mockResolvedValueOnce({
+      state: "stopped",
+      message: "Docker is ready. Your local host is stopped.",
+      updateAvailable: false,
+    });
+    status.mockResolvedValueOnce({
+      state: "ready",
+      message: "Docker is ready. Guaca can set up your local host.",
+      updateAvailable: false,
+    });
+    start.mockRejectedValue("The registry refused Guaca's host image.");
+    render(<HostChoice />);
+    await screen.findByText("Docker is ready. Your local host is stopped.");
+    fireEvent.click(screen.getByRole("button", { name: "Use this Mac" }));
+    await screen.findByRole("alert");
+    await screen.findByText("Docker is ready. Guaca can set up your local host.");
+    expect(status).toHaveBeenCalledTimes(2);
+  });
+  it("shows an update that stopped part way, and not one that finished", async () => {
+    const operation = {
+      backup: "guac-host-backup-1",
+      previousImage: "guacad:old",
+      targetImage: "guacad:new",
+    };
+    status.mockResolvedValueOnce({
+      state: "running",
+      message: "Docker is running. Your local host is available.",
+      updateAvailable: false,
+      operation: { ...operation, stage: "Host updated", error: null },
+    });
+    const first = render(<HostChoice />);
+    await screen.findByText("Docker is running. Your local host is available.");
+    expect(screen.queryByText(/Host updated/)).toBeNull();
+    expect(screen.queryByText(/guac-host-backup-1/)).toBeNull();
+    expect(screen.queryByRole("link", { name: /recovery instructions/ })).toBeNull();
+    first.unmount();
+
+    status.mockResolvedValueOnce({
+      state: "running",
+      message: "Docker is running. Your local host is available.",
+      updateAvailable: true,
+      operation: { ...operation, stage: "Update canceled", error: "The registry refused it." },
+    });
+    render(<HostChoice />);
+    await screen.findByText("Update canceled: The registry refused it.");
+    expect(screen.getByRole("link", { name: /recovery instructions/ })).toBeTruthy();
+  });
+  it("offers Docker's own actions only while Docker cannot be used", async () => {
+    const ready = render(<HostChoice />);
+    await screen.findByText("Docker is ready.");
+    expect(screen.queryByRole("button", { name: "Open Docker" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
+    ready.unmount();
+
+    status.mockResolvedValueOnce({
+      state: "unavailable",
+      message: "Docker is installed but is not ready.",
+      updateAvailable: false,
+    });
+    render(<HostChoice />);
+    await screen.findByText("Docker is installed but is not ready.");
+    expect(screen.getByRole("button", { name: "Open Docker" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Check again" })).toBeTruthy();
+  });
   it("gives missing Docker an installation action and a retry", async () => {
     status.mockResolvedValueOnce({
       state: "missing",
@@ -163,7 +228,7 @@ describe("desktop host setup", () => {
     update.mockResolvedValue({ origin: "http://127.0.0.1:54321", token: "private" });
     render(<HostChoice />);
     const button = await screen.findByRole("button", { name: "Back up and update host" });
-    expect(screen.getByText(/Updating interrupts current jobs/)).toBeTruthy();
+    expect(screen.getByText(/Updating stops work in progress/)).toBeTruthy();
     fireEvent.click(button);
     await waitFor(() => expect(restart).toHaveBeenCalled());
     expect(update).toHaveBeenCalledOnce();
