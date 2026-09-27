@@ -146,7 +146,7 @@ function HeaderFields({
       <span className="field__hint">
         {env
           ? "Set in the program's environment, which starts empty apart from what it needs to find its own files: usually its token, under the name its instructions give. A value never reaches a model, a transcript or an agent's machine, and never comes back to this panel."
-          : "Sent on every request to this server, whatever else authorizes it: an API key the server reads from a header it named, or the pair a gate in front of it wants. They stay here — a value never reaches a model, a transcript or an agent's machine, and never comes back to this panel."}
+          : "Sent on every request to this server, whatever else authorizes it: an API key the server reads from a header it named, or the pair a gate in front of it wants. They stay here: a value never reaches a model, a transcript or an agent's machine, and never comes back to this panel."}
       </span>
     </div>
   );
