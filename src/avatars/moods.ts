@@ -7,8 +7,8 @@
  * single place a runtime signal becomes an expression.
  *
  * The body amplitudes are small everywhere on purpose. What separates two moods
- * is the eyes; the body only breathes, leans and settles. `form.ts` has the
- * argument.
+ * is the eyes, and in the eyes it is the lids; the body only breathes, leans
+ * and settles. `form.ts` has the argument.
  */
 
 import type { LiveCall } from "../lib/trail";
@@ -42,16 +42,43 @@ export interface Expression {
   dim?: boolean;
 }
 
+/** An eye at rest: open, level, the lid just over the top of the pupil. */
+const REST: Eye = {
+  open: 0.16,
+  tilt: 0,
+  arch: 0.3,
+  low: 0.05,
+  smile: 0,
+  pupil: 0.5,
+  size: 1,
+  skew: 0,
+};
+
+/* Working reads. Short steps to the right along a line, one long return, and
+   the next line a little lower: the one saccade pattern everybody recognizes
+   without knowing they do. */
+const READING: [number, number, number][] = [
+  [-0.2, 0.12, 0.42],
+  [-0.08, 0.12, 0.3],
+  [0.04, 0.12, 0.34],
+  [0.16, 0.13, 0.4],
+  [-0.2, 0.16, 0.46],
+  [-0.06, 0.16, 0.28],
+  [0.08, 0.16, 0.36],
+  [0.18, 0.17, 0.52],
+];
+
 export const MOODS: Record<Mood, Expression> = {
   /* Still in the body and busy in the eyes. It had a breath and a wobble, and
      beside a face that blinks and looks about a body that also pulsed read as
      a second animation rather than as a creature at rest. What an idle
-     creature does is look: mostly glances, and now and then a look the whole
-     way to one side, which is the one thing that moves the body at all. */
+     creature does is look: mostly glances, which the pupil takes on its own,
+     and now and then a look the whole way to one side, which is the one thing
+     that moves the body at all. */
   idle: {
     shape: {},
-    eye: { w: 0.02, h: 2 },
-    watch: { blink: true, gaze: { range: 0.4, hz: 0.32, cross: 0.26, far: 0.3 } },
+    eye: REST,
+    watch: { blink: true, gaze: { range: 0.4, hz: 0.32, cross: 0.22, far: 0.3 } },
   },
 
   listening: {
@@ -60,34 +87,34 @@ export const MOODS: Record<Mood, Expression> = {
       knead: { amp: 0.025, hz: 0.5 },
       press: [{ th: 0.76, w: 0.5, amp: 0.035, beat: 2.4 }],
     },
-    /* Raised: the dot lifted off its resting line is a pair of brows up. */
-    eye: { w: 0.02, h: 2.45, sep: 0.3, dy: -0.5 },
-    watch: {
-      blink: true,
-      gaze: { range: 0.07, hz: 0.5, cross: 0.3 },
-      breath: { amp: 0.35, hz: 0.5 },
-    },
+    /* Lids pulled back and the pupils opened: interest, held on you. */
+    eye: { ...REST, open: -0.04, tilt: -4, arch: 0.4, low: 0, pupil: 0.6, size: 1.06 },
+    watch: { blink: true, gaze: { range: 0.05, hz: 0.5, cross: 0.28 } },
   },
 
-  /* One brow up and the other eye in a squint. The pair used to be a mirror
-     here and read as mild; the two disagreeing is what turns mild into
-     weighing something up. */
+  /* One lid lower than the other and the look up and away. The pair used to
+     be a mirror here and read as mild; the two disagreeing is what turns mild
+     into weighing something up. */
   thinking: {
     shape: { knead: { amp: 0.024, hz: 0.34 }, wob: [{ k: 3, amp: 0.014, spd: 1.2 }] },
-    eye: { w: 0.4, h: 1.6, a: -12, skew: 0.42, lop: 0.4 },
+    eye: { ...REST, open: 0.3, tilt: -6, arch: 0.18, low: 0.16, pupil: 0.46, skew: 0.3 },
     watch: {
       blink: true,
-      gaze: { range: 0.22, hz: 0.68, cross: 0.22, bias: [-0.15, -0.14], far: 0.25 },
+      gaze: { range: 0.2, hz: 0.55, cross: 0.2, bias: [-0.22, -0.2], far: 0.25 },
     },
     mark: "dots",
   },
 
+  /* Level lids half down, reading. Not tilted: a tilt is an opinion, and a
+     creature at work has not got one yet. */
   working: {
     shape: { knead: { amp: 0.075, hz: 1.1, sharp: true } },
-    eye: { w: 1.3, h: 0.85, a: 20, dy: 0.25 },
-    watch: { blink: true, gaze: { range: 0.14, hz: 2.2, cross: 0.1, bias: [0, 0.07] } },
+    eye: { ...REST, open: 0.42, arch: 0.1, low: 0.26, pupil: 0.46 },
+    watch: { blink: true, gaze: { cross: 0.07, script: READING } },
   },
 
+  /* Inner ends down hard and the lower lids up under them: a glare, off to
+     one side now and then, which is where the body follows it. */
   frustrated: {
     shape: {
       aspect: [1.045, 0.965],
@@ -97,32 +124,38 @@ export const MOODS: Record<Mood, Expression> = {
         { k: 4, amp: 0.008, spd: 5 },
       ],
     },
-    /* The eye has become the brow: raised, thinned and tilted in until the
-       stroke is nothing but a scowl. It glares off to one side now and then,
-       which is where the body follows it. */
-    eye: { w: 1.65, h: 0.78, a: 40, c: -0.1, dy: -0.5 },
+    eye: {
+      ...REST,
+      open: 0.4,
+      tilt: 30,
+      arch: -0.06,
+      low: 0.32,
+      smile: -0.12,
+      pupil: 0.36,
+      size: 0.97,
+    },
     watch: {
       blink: "slow",
-      gaze: { range: 0.36, hz: 1.6, cross: 0.1, far: 0.22, near: 0.12 },
-      jitter: 0.065,
+      gaze: { range: 0.34, hz: 1.3, cross: 0.09, far: 0.25, near: 0.12 },
+      jitter: 0.05,
     },
   },
 
   /* The one mood that acts rather than holds a pose: it looks up at its own
-     badge, narrows at it, and comes back to you. A fixed face over a pulsing
-     body is what this replaced, and it read as a loading spinner. */
+     badge, narrows one eye at it, and comes back to you. A fixed face over a
+     pulsing body is what this replaced, and it read as a loading spinner. */
   blocked: {
     shape: { knead: { amp: 0.03, hz: 0.24 } },
-    eye: { w: 0.02, h: 2.5, sep: 0.2 },
+    eye: { ...REST, open: 0.06, tilt: -10, low: 0.04, size: 1.03 },
     watch: {
       blink: "slow",
-      squint: { at: 0.3, w: 0.8, h: -0.62, a: 20, skew: 0.36, lop: 0.3 },
+      squint: { at: 0.28, open: 0.32, tilt: 22, skew: 0.34, low: 0.18 },
       gaze: {
-        cross: 0.34,
+        cross: 0.3,
         script: [
           [0, 0.02, 1.7],
-          [0.24, -0.24, 1.2],
-          [0.28, -0.29, 0.9],
+          [0.24, -0.26, 1.2],
+          [0.28, -0.3, 0.9],
           [0, 0.02, 1.5],
         ],
       },
@@ -130,14 +163,21 @@ export const MOODS: Record<Mood, Expression> = {
     mark: "bang",
   },
 
+  /* The lower lids pushed up and bowed: the white is a crescent over them,
+     which is a smile with no mouth in it. */
   pleased: {
     shape: { knead: { amp: 0.075, hz: 0.42, sharp: true } },
-    eye: { w: 1.05, h: 0.8, c: -0.8, dy: -0.2 },
-    watch: {
-      blink: "slow",
-      gaze: { range: 0.1, hz: 0.3, cross: 0.42, bias: [0, -0.05] },
-      breath: { amp: 0.3, hz: 0.42 },
+    eye: {
+      ...REST,
+      open: 0.24,
+      tilt: -3,
+      arch: 0.26,
+      low: 0.86,
+      smile: 1.05,
+      pupil: 0.52,
+      size: 1.04,
     },
+    watch: { blink: "slow", gaze: { range: 0.08, hz: 0.3, cross: 0.4, bias: [0, -0.06] } },
   },
 
   paused: {
@@ -148,8 +188,9 @@ export const MOODS: Record<Mood, Expression> = {
       knead: { amp: 0.025, hz: 0.13 },
       rise: 1,
     },
-    eye: { w: 1.35, h: 0.5, c: 0.16 },
-    watch: { blink: false, breath: { amp: 0.12, hz: 0.13 } },
+    /* Shut onto a lower lid that sags in the middle: asleep, not blank. */
+    eye: { ...REST, open: 1, low: 0.4, smile: -0.32 },
+    watch: { blink: false },
     mark: "z",
     dim: true,
   },
@@ -163,30 +204,36 @@ export const MOODS: Record<Mood, Expression> = {
       knead: { amp: 0.045, hz: 0.1 },
       heave: { amp: 0.05, hz: 0.12 },
     },
-    /* Worried rather than blank: inner ends up, one higher than the other,
+    /* Worried rather than blank: inner ends up, one lid lower than the other,
        and the eyes darting where the body cannot go. What this replaced was a
        pair of small dots staring at nothing, which read as sleepy beside
        `paused` rather than as a creature that needs somebody. */
-    eye: { w: 1.1, h: 0.7, a: -28, c: 0.14, dy: 0.35, sep: -0.15, skew: 0.24 },
+    eye: {
+      ...REST,
+      open: 0.26,
+      tilt: -24,
+      arch: 0.12,
+      low: 0.12,
+      smile: -0.08,
+      pupil: 0.4,
+      skew: 0.12,
+    },
     watch: {
       blink: "slow",
-      gaze: { range: 0.14, hz: 1.3, cross: 0.1, bias: [0, 0.05] },
-      jitter: 0.03,
+      gaze: { range: 0.16, hz: 1.2, cross: 0.08, bias: [0, 0.08] },
+      jitter: 0.02,
     },
   },
 
+  /* Lids retracted clear of the ball and the pupils pinned: shock. */
   surprised: {
     shape: {
       aspect: [0.965, 1.055],
       knead: { amp: 0.04, hz: 1.9 },
       wob: [{ k: 5, amp: 0.018, spd: 6 }],
     },
-    eye: { w: 0.02, h: 2.85, sep: 0.55 },
-    watch: {
-      blink: false,
-      gaze: { range: 0.02, hz: 3, cross: 0.06 },
-      breath: { amp: 0.3, hz: 1.6 },
-    },
+    eye: { ...REST, open: -0.12, tilt: -3, arch: 0.5, low: -0.08, pupil: 0.27, size: 1.2 },
+    watch: { blink: false, gaze: { range: 0.015, hz: 3, cross: 0.05 } },
   },
 };
 
@@ -212,6 +259,13 @@ export function markFor(mood: Mood): string {
       return "";
   }
 }
+
+/**
+ * How long one mood takes to become another, in seconds. The cut cast morphs
+ * over it; the drawn cast gets there in five drawings instead, and only the
+ * gaze, which both share, is blended across it.
+ */
+export const MORPH = 0.6;
 
 /** How long a finished turn keeps looking pleased about it. */
 export const PLEASED_MS = 2600;

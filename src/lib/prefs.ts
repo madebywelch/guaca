@@ -4,9 +4,9 @@
  * Everything else the operator can change lives in `config.json` and reaches
  * the webview as `Settings`, because the runtime acts on it: an endpoint, a
  * key, a limit. None of what is here means anything to an agent. How large the
- * interface draws, whether the reading column is paper or ink, which of four
- * things is worth interrupting you for: the runtime would carry these across
- * IPC only to hand them straight back.
+ * interface draws, whether the reading column is paper or ink, how the agents
+ * are drawn, which of four things is worth interrupting you for: the runtime
+ * would carry these across IPC only to hand them straight back.
  *
  * So they stay on this side, in `localStorage`, the way the inspector's
  * open-or-closed already does. That is a deliberate exception to "the frontend
@@ -66,9 +66,21 @@ export const UI_SCALES = [90, 100, 110, 125] as const;
 
 export type UiScale = (typeof UI_SCALES)[number];
 
+/**
+ * How the agents are drawn. Two casts of the same creatures: `cut` is paper
+ * with an eye that has a pupil and lids, `drawn` is a brush line on twos with
+ * brows and, where there is room, a mouth. Nothing about an agent changes with
+ * it, which is why it is here and not on the agent: an agent stores which
+ * character it is, and this says how every character is drawn.
+ */
+export type Cast = "cut" | "drawn";
+
+export const CASTS: readonly Cast[] = ["cut", "drawn"];
+
 export interface Prefs {
   uiScale: UiScale;
   surface: SurfaceMode;
+  cast: Cast;
   notify: NotifyPrefs;
 }
 
@@ -83,6 +95,7 @@ export interface Prefs {
 export const DEFAULT_PREFS: Prefs = Object.freeze({
   uiScale: 100,
   surface: "light",
+  cast: "cut",
   notify: Object.freeze({
     on: true,
     kinds: Object.freeze({
@@ -106,6 +119,10 @@ function isScale(value: unknown): value is UiScale {
 
 function isSurface(value: unknown): value is SurfaceMode {
   return SURFACES.some((mode) => mode === value);
+}
+
+function isCast(value: unknown): value is Cast {
+  return CASTS.some((cast) => cast === value);
 }
 
 /**
@@ -132,6 +149,7 @@ export function readPrefs(raw: unknown): Prefs {
   return {
     uiScale: isScale(stored.uiScale) ? stored.uiScale : DEFAULT_PREFS.uiScale,
     surface: isSurface(stored.surface) ? stored.surface : DEFAULT_PREFS.surface,
+    cast: isCast(stored.cast) ? stored.cast : DEFAULT_PREFS.cast,
     notify: {
       on: typeof stored.notify?.on === "boolean" ? stored.notify.on : DEFAULT_PREFS.notify.on,
       kinds,

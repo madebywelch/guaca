@@ -14,9 +14,11 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   avatars/            An agent's character. Five shapes, drawn from numbers.
     silhouette.ts     The five, as one radius function each, and what sizes them.
     form.ts           The body, as a function of a character and a mood.
-    eyes.ts           One stroke, four numbers, and where it is looking.
+    eyes.ts           A ball, a pupil, two lids, and where it is looking.
     catalog.ts        The cast, and every key an older build wrote.
     moods.ts          Ten expressions, and the one place a signal becomes one.
+    drawn.ts          The same creatures drawn with a brush, on twos. No DOM.
+    frame.ts          The one frame decided per creature, and what crosses to a cast.
     clock.ts          The clock every creature shares, and the one each keeps.
   lib/transcript.ts   What a channel shows, and what it collapses. Read first.
   lib/rail.ts         What order the rail draws agents in, and where a drop lands.
@@ -211,14 +213,15 @@ repo: the frontend renders state and forwards intent.
 | Which of a plugin's tools which agents may call | *And which of its tools, for which of them, which is a third decision* in `docs/PLUGINS.md`, then `Store::set_plugin_tool` and both readers of `plugin_tool_access` |
 | The guaca.bot account: signing in, what it is for, why it is optional | `docs/ACCOUNT.md`, then `account.rs` |
 | Channels, the rail, search: what the operator sees | `docs/WORKSPACE.md`, then `src/lib/transcript.ts` |
-| An agent's character: the drawing, a new one, or why there are no eyebrows | `docs/CHARACTERS.md`, then `src/avatars/form.ts` |
+| An agent's character: the drawing, a new one, or why the cut cast has no eyebrows | `docs/CHARACTERS.md`, then `src/avatars/form.ts` |
 | A sixth shape, a shape that lost its corners, or why the drop is not bigger | *Five shapes, one weight* in `docs/CHARACTERS.md`, then `src/avatars/silhouette.ts` and the suite beside it, which is the gate |
 | A new expression, or what the app reads one from | *Moods* in `docs/CHARACTERS.md`, then `moods.ts`, whose table and `moodFor` are the whole of it |
 | Anything that moves on a creature: a look, a blink, a message landing | *The gaze moves the body* in `docs/CHARACTERS.md`, then `AgentAvatar.tsx`, which is the only place the three meet |
 | How hard the body follows a look, when it moves against the eyes, an idle rail that will not sit still, or a frame past `FORM.reach` | *Together, not after*, *The body answers a stare, not a glance* and *The outline is bounded whatever it is handed* in `docs/CHARACTERS.md`, then `settle` in `src/avatars/eyes.ts`, `PULL` and `grip` in `form.ts`, and the sixteen-direction suite in `form.test.ts`, which is the gate |
-| A brow, a cocked brow, one eye narrowed or smaller than the other | *A mirror can be calm, cross or afraid, but never doubtful* in `docs/CHARACTERS.md`, then `skew`, `lop` and `PEEK` in `src/avatars/eyes.ts` |
+| A lid, a pupil, a shut eye, one lid lower than the other or one eye smaller | *The eye is a ball, a pupil and two lids* and *A mirror can be calm, cross or afraid, but never doubtful* in `docs/CHARACTERS.md`, then `Eye`, `skew` and `PEEK` in `src/avatars/eyes.ts`, and the containment suite in `form.test.ts`, which is the gate |
+| The drawn cast: the brush line, drawing on twos, a brow, a mouth, the mark on a head, the operator's choice of cast | *Two casts* in `docs/CHARACTERS.md`, then `src/avatars/drawn.ts` and the suite beside it, which holds every face inside every body, and `Cast` in `src/lib/prefs.ts` |
 | The shape a look pulls, or an idle body that moves | *A look pulls a pear, not a bulge* and *An idle body is still* in `docs/CHARACTERS.md`, then the pear block in `bodyPoints` |
-| An agent aimed at a peer: how far a look carries, what it does to the eye, why up and down are not the same size | *An aimed look* in `docs/CHARACTERS.md`, then `AIM` and `aimedEye` in `src/avatars/eyes.ts`, and the containment suite in `form.test.ts`, which is the gate |
+| An agent aimed at a peer: how far a look carries, what it does to the eye, why up and down are not the same size | *An aimed look* in `docs/CHARACTERS.md`, then `AIM` and the lids that ride the pupil in `eyesAt` in `src/avatars/eyes.ts`, and the containment suite in `form.test.ts`, which is the gate |
 | A crew that moves as one animal, a tempo, a phase, `--gait` | *No two of them keep time together* in `docs/CHARACTERS.md`, then `gaitOf` in `src/avatars/clock.ts` and the suite beside it |
 | Charts, tables, a page an agent wrote: what a reply can be drawn as | *A reply can be a figure* in `docs/WORKSPACE.md`, then `src/lib/figure.ts` and `src/lib/chart.ts` |
 | A box round the part of a reply that needs the operator, and which marker draws which one | *A reply can mark the one part that needs a person* in `docs/WORKSPACE.md`, then `src/lib/callout.ts` |
@@ -359,9 +362,15 @@ No path is ever drawn by hand and no transform is ever put on the drawing: a
 character that slides around inside its own box reads as a sprite being moved,
 and one whose outline changes reads as a thing that is alive. The body only
 breathes, leans and settles, because a body that acts as hard as a face is a
-body nobody can read a face on; what acts is two eyes, each one stroke with four
-numbers on it. Four casts of hand-drawn characters preceded this and every one
-of them failed the same way. `docs/CHARACTERS.md`.
+body nobody can read a face on; what acts is two eyes, each a ball with a pupil
+and two lids. Four casts of hand-drawn characters preceded this and every one of
+them failed the same way. `docs/CHARACTERS.md`.
+
+There are two casts of these creatures, cut from paper or drawn with a brush,
+and the operator picks one. Both are drawn from the same body, the same moods
+and the same gaze, decided once a frame in `AgentAvatar`; what differs is only
+how that is put on screen. Keep it that way: a decision made in one cast and not
+the other is a mood that means two things.
 
 Nothing below `silhouette.ts` knows how many shapes there are: a shape is the
 first term of the resting radius and a mood is what gets added to it, so a cloud

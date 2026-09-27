@@ -96,12 +96,12 @@ export interface Lump {
   eye: {
     /** Half the gap between the eyes, in viewBox units. */
     spread: number;
-    /** Eye radius. A dot is a stroke this thick with no length. */
+    /** The eyeball's radius, before any lid covers it, in viewBox units. */
     r: number;
     /** Offsets from the middle of the body, in viewBox units. */
     x?: number;
     y?: number;
-    /** One eye instead of two. Drawn half again as large. */
+    /** One eye instead of two. */
     one?: boolean;
   };
 }

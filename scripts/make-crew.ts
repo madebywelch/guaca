@@ -20,7 +20,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { CHARACTERS } from "../src/avatars/catalog";
-import { eyePath, eyesAt } from "../src/avatars/eyes";
+import { eyesAt, LASH_REACH, pathOf } from "../src/avatars/eyes";
 import { bodyPoints, FORM, outline, type Point } from "../src/avatars/form";
 import { markFor, MOODS, type Mood } from "../src/avatars/moods";
 import { Skin } from "../src/avatars/Skin";
@@ -50,7 +50,7 @@ const GAP = 6;
    The relief itself is shared with the app. Amber is still only a request
    for a person. */
 function palette(color: string): string {
-  return [`--accent:${color}`, "--eye:#252824", "--flesh:#b4530a"].join(";");
+  return [`--accent:${color}`, "--eye:#252824", "--sclera:#fbf8f1", "--flesh:#b4530a"].join(";");
 }
 
 function cell(member: (typeof CREW)[number], index: number): string {
@@ -59,10 +59,27 @@ function cell(member: (typeof CREW)[number], index: number): string {
   const mood = MOODS[member.mood];
 
   const body = outline(bodyPoints(lump, mood.shape, member.t, member.gaze).pts);
-  /* Not live: a still picture must not be caught mid-blink, and the jitter and
-     the breath are motion with nothing to show for themselves in one frame. */
-  const eyes = eyesAt(lump, mood.eye, mood.watch, member.t, false, member.gaze)
-    .map((e) => `<path d="${eyePath(e)}" stroke-width="${e.h.toFixed(2)}"/>`)
+  /* Not live: a still picture must not be caught mid-blink, and the jitter is
+     motion with nothing to show for itself in one frame. What is drawn is what
+     `CutArt` draws: the white between the lids, the pupil and the lid's shadow
+     clipped to it, and the lid line clipped to a circle round the ball. */
+  const at = { t: member.t, live: false, gaze: member.gaze };
+  const eyes = eyesAt(lump, mood.eye, mood.watch, at)
+    .map((e, i) => {
+      const open = `crew-${index}-open-${i}`;
+      const lid = `crew-${index}-lid-${i}`;
+      const opening = pathOf(e.opening, true);
+      return [
+        `<defs><clipPath id="${open}"><path d="${opening}"/></clipPath>`,
+        `<clipPath id="${lid}"><circle cx="${e.x.toFixed(2)}" cy="${e.y.toFixed(2)}" r="${(e.r * LASH_REACH).toFixed(2)}"/></clipPath></defs>`,
+        `<path d="${opening}" fill="var(--sclera)"/>`,
+        `<g clip-path="url(#${open})"><circle cx="${e.pupil.x.toFixed(2)}" cy="${e.pupil.y.toFixed(2)}" r="${e.pupil.r.toFixed(2)}" fill="var(--eye)"/>`,
+        `<path d="${pathOf(e.shade, true)}" fill="var(--eye)" opacity="0.16"/></g>`,
+        `<g clip-path="url(#${lid})" fill="none" stroke="var(--eye)" stroke-linecap="round" stroke-linejoin="round">`,
+        `<path d="${pathOf(e.lash, false)}" stroke-width="${e.lashWidth.toFixed(2)}"/>`,
+        `<path d="${pathOf(e.under, false)}" stroke-width="${e.underWidth.toFixed(2)}" opacity="${e.underOpacity.toFixed(2)}"/></g>`,
+      ].join("");
+    })
     .join("");
 
   /* What `.avatar[data-mood="paused"]` does in the app, which is the one mood
@@ -76,7 +93,7 @@ function cell(member: (typeof CREW)[number], index: number): string {
   return [
     `  <g transform="translate(${x} 0)" style="${palette(member.color)}${dim}">`,
     skin,
-    `<g fill="none" stroke="var(--eye)" stroke-linecap="round">${eyes}</g>`,
+    eyes,
     markFor(member.mood),
     `</g>`,
   ].join("");

@@ -1829,14 +1829,22 @@ input[type="file"]::file-selector-button {
    the outline is recomputed per frame and written as one `d`, because what a
    creature does is change shape, and a keyframe can only move a drawing about.
 
-   Skin adds the paper relief: the same outline under a shallow shadow and a
-   lifted edge. The face is ink on the agent's pigment. The marks beside a
-   head follow the reading surface so they remain visible in a dark room;
-   their three small loops are the only motion in this block.
+   Two casts draw the same creatures. The cut one adds the paper relief, the
+   same outline under a shallow shadow and a lifted edge, and an eye that is a
+   white with a pupil in it; the drawn one is a brush line over a pigment out
+   of register. Either way the face is ink on the agent's pigment, and the
+   marks beside a head follow the reading surface so they remain visible in a
+   dark room; their three small loops are the only motion in this block.
    ========================================================================== */
 
 .avatar {
   --eye: #252824;
+  /* Paper, not white: the one light thing on a creature should not be the
+     brightest thing in the column beside it. */
+  --sclera: #fbf8f1;
+  /* The drawn cast's edge. Ink on paper; on a dark page the edge has to be
+     the light one, or the silhouette is only the misregistered pigment. */
+  --brush-edge: var(--eye);
 
   display: inline-grid;
   place-items: center;
@@ -1884,6 +1892,47 @@ input[type="file"]::file-selector-button {
 
 .avatar__mark {
   --eye: var(--text);
+}
+
+:root[data-surface="dark"] .avatar {
+  --brush-edge: #e8e3d6;
+}
+
+/* The cut eye: the white between the lids, the pupil and the lid's shadow
+   clipped to it, and the lid line over the top. */
+.avatar__white {
+  fill: var(--sclera);
+}
+
+.avatar__pupil {
+  fill: var(--eye);
+}
+
+.avatar__shade {
+  fill: var(--eye);
+  opacity: 0.16;
+}
+
+.avatar__lids path {
+  fill: none;
+  stroke: var(--eye);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The drawn one: every stroke is a filled shape, because a brush line has a
+   width of its own at every point and an SVG stroke has one width. */
+.avatar__edge {
+  fill: var(--brush-edge);
+}
+
+.avatar__brush {
+  fill: var(--eye);
+}
+
+.avatar__brush ellipse {
+  fill: none;
+  stroke: var(--eye);
 }
 
 /* Paused and composted are the same face and the same treatment: a creature
@@ -7198,6 +7247,19 @@ input[type="file"]:disabled {
 .choice:hover:not([aria-pressed="true"]):not([aria-checked="true"]) {
   color: var(--text);
   border-color: color-mix(in oklab, var(--flesh) 40%, var(--edge));
+}
+
+/* A choice you have to see to make: three of the cast, drawn the way the
+   choice would draw them, beside its name. */
+.choice--cast {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.choice__crew {
+  display: inline-flex;
+  gap: var(--space-1);
 }
 
 /* Two words in a row that already carries a name and a sentence. The base

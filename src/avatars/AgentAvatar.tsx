@@ -1,25 +1,25 @@
-import { type CSSProperties, useEffect, useRef } from "react";
+import { type CSSProperties, useContext, useEffect, useRef } from "react";
 
 import { prefersReducedMotion } from "../lib/motion";
+import type { Cast } from "../lib/prefs";
 import type { LiveCall } from "../lib/trail";
 import type { Activity, Lifecycle } from "../lib/types";
+import { CutArt } from "./CutArt";
+import { CastContext } from "./cast";
 import { lookupCharacter } from "./catalog";
 import { gaitOf, join, type Painter } from "./clock";
-import { AIM, aimedEye, blendEyes, type Drawn, eyePath, eyesAt, gazeAt, settle } from "./eyes";
-import { blend, bodyPoints, FORM, outline, type Point } from "./form";
-import { MOODS, type Mood, markFor, moodFor } from "./moods";
-import { Skin } from "./Skin";
+import { DrawnArt } from "./DrawnArt";
+import { AIM, gazeAt, settle } from "./eyes";
+import { FORM, type Point } from "./form";
+import { AVATAR_PX, type Gesture, type Look, type Paint, type Size } from "./frame";
+import { MOODS, MORPH, type Mood, moodFor } from "./moods";
 
-/** Where the character is looking. Used to make a send visibly aimed at someone. */
-export type Look = "up" | "down" | null;
-
-/** A one-off reaction: winding up to throw, or being hit by something. */
-export type Gesture = "send" | "receive" | null;
+export type { Gesture, Look } from "./frame";
 
 interface Props {
   avatar: string;
   color: string;
-  size?: "xs" | "sm" | "md" | "lg";
+  size?: Size;
   /** What the runtime says it is doing. `moods.ts` turns these into a face. */
   activity?: Activity;
   lifecycle?: Lifecycle;
@@ -31,6 +31,8 @@ interface Props {
   finishedAt?: number;
   /** Overrides everything above. For a preview, where there is no agent to read. */
   mood?: Mood;
+  /** Overrides the operator's choice of cast. For a preview of the other one. */
+  cast?: Cast;
   /** Where its own clock starts and how fast it runs. Pass the agent id. */
   seed?: string;
   look?: Look;
@@ -39,9 +41,6 @@ interface Props {
   says?: string | null;
   title?: string;
 }
-
-/** How long one mood takes to become another. */
-const MORPH = 0.6;
 
 /** What a throw and a catch do to the mass, in body radii. */
 const KNOCK = {
@@ -54,9 +53,9 @@ interface Cell {
   mood: Mood;
   from: Mood;
   /**
-   * When the change to `mood` began, and when a gesture did, both on the shared
-   * clock rather than the creature's own: how quickly a face reacts is not
-   * allowed to be a property of its id.
+   * When the change to `mood` began, when a gesture did and when the aimed
+   * look last changed, all on the shared clock rather than the creature's own:
+   * how quickly a face reacts is not allowed to be a property of its id.
    */
   at: number;
   /** Where the look has got to, and how fast, in body radii. */
@@ -65,20 +64,21 @@ interface Cell {
   last: number;
   gesture: Gesture;
   gestureAt: number;
-  /** Which mood's mark the group is currently holding. */
-  marked: Mood | null;
+  look: Look;
+  lookAt: number;
 }
 
 /**
  * An agent's character.
  *
- * The drawing is `form.ts` and `eyes.ts`; the table of expressions is
- * `moods.ts`. This owns the one thing neither of those can: what is true right
- * now. Every frame it decides the mood from the signals it was given, moulds
- * the last mood into it, follows the gaze with the mass, and writes three
- * attributes. Nothing here re-renders: a mood that lasts two seconds and a
- * message landing are both decided inside the loop, so a rail of a dozen agents
- * reacting to each other costs React nothing at all.
+ * The drawing is one of two casts, `CutArt` or `DrawnArt`, over the same body
+ * (`form.ts`), the same moods (`moods.ts`) and the same gaze (`eyes.ts`). This
+ * owns the one thing none of those can: what is true right now. Every frame it
+ * decides the mood from the signals it was given, follows the gaze with the
+ * mass, adds whatever a message landing did to it, and hands the result to the
+ * cast, which writes its own attributes. Nothing here re-renders: a mood that
+ * lasts two seconds and a message landing are both decided inside the loop, so
+ * a rail of a dozen agents reacting to each other costs React nothing at all.
  */
 export function AgentAvatar({
   avatar,
@@ -90,6 +90,7 @@ export function AgentAvatar({
   escalated,
   finishedAt,
   mood,
+  cast,
   seed,
   look = null,
   gesture = null,
@@ -97,21 +98,22 @@ export function AgentAvatar({
   title,
 }: Props) {
   const character = lookupCharacter(avatar);
+  const chosen = useContext(CastContext);
+  const drawing = cast ?? chosen;
 
   const box = useRef<HTMLSpanElement>(null);
-  const skin = useRef<SVGPathElement>(null);
-  const eyes = useRef<SVGGElement>(null);
-  const mark = useRef<SVGGElement>(null);
+  const art = useRef<Paint | null>(null);
   const cell = useRef<Cell>({
     mood: "idle",
     from: "idle",
-    at: -MORPH,
+    at: Number.NEGATIVE_INFINITY,
     gaze: [0, 0],
     vel: [0, 0],
     last: 0,
     gesture: null,
     gestureAt: 0,
-    marked: null,
+    look: null,
+    lookAt: Number.NEGATIVE_INFINITY,
   });
 
   /* Read by the painter rather than closed over, so the loop never holds a
@@ -126,6 +128,7 @@ export function AgentAvatar({
     look,
     gesture,
     character,
+    size,
   });
 
   /* Its own clock, so a crew of idle agents is not one animal breathing. Only
@@ -135,11 +138,6 @@ export function AgentAvatar({
   const paint = useRef<Painter>(() => {});
   paint.current = (seconds, live) => {
     const now = props.current;
-    const lump = now.character;
-    const body = skin.current;
-    const face = eyes.current;
-    if (!body || !face) return;
-
     const state = cell.current;
     const t = seconds * gait.rate + gait.phase;
 
@@ -151,6 +149,10 @@ export function AgentAvatar({
     }
     const struckAt =
       state.gesture === "receive" ? Date.now() - (seconds - state.gestureAt) * 1000 : undefined;
+    if (now.look !== state.look) {
+      state.look = now.look;
+      state.lookAt = seconds;
+    }
 
     const want =
       now.mood ??
@@ -169,30 +171,22 @@ export function AgentAvatar({
       state.from = state.mood;
       state.mood = want;
       state.at = seconds;
+      box.current?.setAttribute("data-mood", want);
     }
-    /* Both of these are structure rather than geometry, so they are written on
-       a change of mood and not on every frame. */
-    if (state.marked !== state.mood) {
-      state.marked = state.mood;
-      if (mark.current) mark.current.innerHTML = markFor(state.mood);
-      box.current?.setAttribute("data-mood", state.mood);
-    }
-
-    const to = MOODS[state.mood];
-    const from = MOODS[state.from];
-    const raw = live ? Math.min(1, (seconds - state.at) / MORPH) : 1;
-    const u = raw * raw * (3 - 2 * raw);
 
     /* Where it is asked to look. An aimed look at a peer outranks whatever the
        mood would have done, because the point of that look is who it is for. */
+    const since = seconds - state.at;
+    const raw = live ? Math.min(1, since / MORPH) : 1;
+    const u = raw * raw * (3 - 2 * raw);
     let eyeGaze: Point;
     if (now.look) {
       eyeGaze = [0, now.look === "up" ? -AIM.up : AIM.down];
     } else if (!live) {
       eyeGaze = [0, 0];
     } else {
-      const a = gazeAt(t, from.watch?.gaze);
-      const b = gazeAt(t, to.watch?.gaze);
+      const a = gazeAt(t, MOODS[state.from].watch?.gaze);
+      const b = gazeAt(t, MOODS[state.mood].watch?.gaze);
       eyeGaze = [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u];
     }
 
@@ -234,19 +228,22 @@ export function AgentAvatar({
       }
     }
 
-    const shape = bodyPoints(lump, to.shape, t, bodyGaze);
-    const pts =
-      u >= 1 ? shape.pts : blend(bodyPoints(lump, from.shape, t, bodyGaze).pts, shape.pts, u);
-    body.setAttribute("d", outline(pts));
-
-    const blended = u >= 1 ? to.eye : blendEyes(from.eye, to.eye, u);
-    /* An aimed look is moulded in on top of the mood rather than replacing it,
-       so a creature that is thinking still looks like it is thinking while it
-       watches a message go. `eyes.ts` has the argument for why the offset alone
-       was not enough to read as looking anywhere. */
-    const eye = now.look ? aimedEye(blended, now.look) : blended;
-    const watch = u > 0.5 ? to.watch : from.watch;
-    write(face, eyesAt(lump, eye, watch, t, live, eyeGaze));
+    art.current?.({
+      lump: now.character,
+      t,
+      dt,
+      live,
+      mood: state.mood,
+      from: state.from,
+      since: live ? since : Number.POSITIVE_INFINITY,
+      look: now.look,
+      sinceLook: seconds - state.lookAt,
+      gesture: state.gesture,
+      sinceGesture: seconds - state.gestureAt,
+      eyes: eyeGaze,
+      body: bodyGaze,
+      px: AVATAR_PX[now.size],
+    });
   };
 
   /* Joined once. The painter is stable, so nothing here is torn down and set up
@@ -257,7 +254,8 @@ export function AgentAvatar({
   }, []);
 
   /* And painted again after every render, at the time the clock last reached,
-     so a change of props is on screen whether or not anything is moving. */
+     so a change of props (or of cast) is on screen whether or not anything is
+     moving. */
   useEffect(() => {
     props.current = {
       activity,
@@ -269,6 +267,7 @@ export function AgentAvatar({
       look,
       gesture,
       character,
+      size,
     };
     paint.current(cell.current.last, !prefersReducedMotion());
   });
@@ -282,22 +281,13 @@ export function AgentAvatar({
     <span
       ref={box}
       className={`avatar avatar--${size}`}
+      data-cast={drawing}
       style={style}
       title={title ?? character.label}
+      data-mood={cell.current.mood}
     >
       <svg viewBox={`0 0 ${FORM.box} ${FORM.box}`} className="avatar__body" aria-hidden="true">
-        <Skin pathRef={skin} />
-        <g
-          ref={eyes}
-          className="avatar__eyes"
-          fill="none"
-          stroke="var(--eye)"
-          strokeLinecap="round"
-        >
-          <path />
-          <path />
-        </g>
-        <g ref={mark} className="avatar__mark" />
+        {drawing === "drawn" ? <DrawnArt paint={art} /> : <CutArt paint={art} />}
       </svg>
       {says && (
         <span className="avatar__says" aria-hidden="true">
@@ -306,19 +296,4 @@ export function AgentAvatar({
       )}
     </span>
   );
-}
-
-/** Two path elements, made once and written to every frame. */
-function write(group: SVGGElement, drawn: Drawn[]) {
-  const paths = group.children;
-  for (let i = 0; i < paths.length; i++) {
-    const path = paths[i] as SVGPathElement;
-    const eye = drawn[i];
-    if (!eye) {
-      path.setAttribute("d", "");
-      continue;
-    }
-    path.setAttribute("d", eyePath(eye));
-    path.setAttribute("stroke-width", eye.h.toFixed(2));
-  }
 }

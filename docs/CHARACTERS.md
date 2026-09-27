@@ -1,7 +1,9 @@
 # Characters
 
-An agent is a creature cut from pigmented paper in one of five shapes, and everything
-it has to say it says by changing shape.
+An agent is a creature in one of five shapes, and everything it has to say it
+says by changing shape: the outline of its body, and the lids over its eyes.
+There are two casts of the same creatures, one cut from pigmented paper and one
+drawn with a brush, and the operator chooses which (*Two casts* below).
 
 This is the fourth cast. The three before it were emoji, then a hand-drawn set
 of creatures, then an egg with props, then sixteen vegetables, and every one of
@@ -30,11 +32,14 @@ So it is two decisions now: which of five shapes, and then the lump on top.
 | `src/avatars/silhouette.ts` | The five shapes, as one radius function each, and the two numbers they are sized against. |
 | `src/avatars/form.ts` | The body. `FORM`, the types, and the maths that turns a character and a mood into points. |
 | `src/avatars/Skin.tsx` | The paper relief: one outline, a shallow shadow and a lifted edge. Shared by the app and the README. |
-| `src/avatars/eyes.ts` | The eye primitive, the blink, and the gaze. |
+| `src/avatars/eyes.ts` | The gaze both casts share, the blinks, and the cut cast's eye: a ball, a pupil, two lids. |
 | `src/avatars/catalog.ts` | The cast, the accents, and the alias table that keeps every key an older build wrote still meaning something. |
 | `src/avatars/moods.ts` | The ten expressions, the marks drawn beside a head, and `moodFor`, which is the only place a runtime signal becomes a face. |
+| `src/avatars/drawn.ts` | The drawn cast: its faces, the brush, the mark on each head and the marks beside it. No DOM. |
 | `src/avatars/clock.ts` | The clock every creature shares, and the one each of them keeps. |
-| `src/avatars/AgentAvatar.tsx` | What is true right now, written to three attributes a frame. |
+| `src/avatars/frame.ts` | The one frame `AgentAvatar` decides and either cast draws. |
+| `src/avatars/CutArt.tsx`, `DrawnArt.tsx` | Each cast's elements, and the writes it makes to them. |
+| `src/avatars/AgentAvatar.tsx` | What is true right now: the mood, the look and the knock, handed to whichever cast is drawing. |
 | `scripts/make-crew.ts` | The strip on the README's front page, drawn from the files above rather than redrawn. |
 
 **The README's strip is generated, not drawn.** `./scripts/make-crew.sh` holds
@@ -68,7 +73,7 @@ there is no animated transform or keyframe in the drawing path. When a creature
 leans, the mass leans: one side thickens and the other
 thins.
 
-**The material is paper relief.** `Skin` draws three uses of the same path:
+**The cut cast is paper relief.** `Skin` draws three uses of the same path:
 a shadow offset by (1.1, 2.3) at 18% opacity, the agent's pigment, and a white
 edge offset by (-0.4, -0.5), 0.55 units wide at 45% opacity. These are fixed
 material offsets in the 64-unit viewBox, so they scale with the avatar. A frame
@@ -133,42 +138,64 @@ that belongs to the moods. Without that second bound a character that rested too
 far out would not fail in `catalog.test.ts`, where somebody typed the number: it
 would fail in `form.test.ts`, in one frame of one mood, months later.
 
-## The eye is one stroke
+## The eye is a ball, a pupil and two lids
 
-An eye is an arc with a round cap and four numbers on it, in eye radii:
+This is the cut cast's eye. The drawn cast has its own, which is the stroke this
+one replaced; *Two casts* has it.
 
-- `w` half its length. A dot is this at zero.
-- `h` its weight. A dot with `w` of 0 and `h` of 2 is a circle of radius 1.
-- `c` how far it bows. Negative curves up, which is the only smile there is.
-- `a` how far it tilts, mirrored between the two. Positive drops the inner ends.
-- `skew` one eye higher than the other, and `lop` one eye narrower. The two
-  numbers that are not mirrored.
+An eye used to be one stroke with four numbers on it, and it was being asked to
+carry everything. With no pupil a look was the whole eye sliding across the face,
+so every glance moved the face and every stare spent outline; with no lid,
+looking down at a peer had to be faked by molding the stroke toward a line, and
+it read as a squint. At 24px, working, frustrated, paused and stuck were four
+dashes told apart by the tilt of a line two pixels long.
 
-A blink is the dot moulded into a line. Upset is the line tilted in. A brow is
-the line raised and thinned until it is all that is left of the eye: `frustrated`
-wears two of them, tilted in until the stroke is a scowl, and `stuck` wears the
-same thing with the inner ends up, which is worry. Nothing is ever swapped for
-anything, which is what lets a face sit halfway between two moods and lets a
-mood change be an interpolation rather than a cut.
+So an eye is what an animator draws. **The pupil takes the glance and the lids
+take the emotion.** Eight numbers in `Eye`, all lerped, none switched:
 
-There are no eyebrows and there is no mouth. Both were tried. An eyebrow is a
-second object that has to stay in register with the eye under it, and it was
-doing work the tilt of the eye itself does better. A mouth at 22px is a smudge.
+- `open` is the upper lid, from clear of the ball to shut onto the lower lid.
+  Negative retracts it, which is shock.
+- `tilt` drops the inner end of both lids (cross) or lifts it (worry); `arch`
+  bows the upper lid.
+- `low` raises the lower lid and `smile` bows it up in the middle: the cheeks
+  pushing, which is a smile with no mouth in it.
+- `pupil` is its radius. Pinned is shock, open is interest.
+- `size` scales the ball, and `skew` lowers the lid on the viewer's right.
+
+**What is drawn is the opening, not the lids.** The white between the two lid
+lines, cut to the ball, with the pupil and the lid's shadow clipped to it and a
+line along the upper lid. Lids painted in the body's color over a white ball left
+a hairline of white round every shut eye wherever the two edges antialiased; the
+body is already there to be the lid. The upper lid closes onto the lower one,
+wherever that is, so a shut eye is one line and never a line with white under it.
+
+**The lid line is hinted.** At 24px a line drawn at its own weight is a
+hairline, and a shut eye is then nothing at all. `CutArt` draws it up to 2.2
+times heavier as the creature shrinks, from the size it was asked for rather
+than the size it measured, and `styles.test.ts` holds `AVATAR_PX` to the sizes
+in `styles.css` so the two cannot drift.
 
 **A mirror can be calm, cross or afraid, but never doubtful.** Every expression
-above is the same stroke on both sides, and one whole family of faces is the
-two sides disagreeing: one brow up and the other eye narrowed. `skew` is the
-height of that disagreement and `lop` is the width of it, both in eye radii,
-and both lerp like the other four. `thinking` wears both, which is what turned
-a mild pair into a creature weighing something up, and `blocked` puts them on
-as it squints up at its badge, so it is looking at the badge and doubting it.
+above is the same lids on both sides, and one whole family of faces is the two
+sides disagreeing. `skew` is the disagreement: one lid lower than the other.
+`thinking` wears it while it looks up and away, which is what turned a mild pair
+into a creature weighing something up, and `blocked` puts it on as it squints up
+at its badge.
 
 **The far eye is smaller.** A hard look to one side turns the head, and on a
 turned head the eye that went round the curve is foreshortened: `PEEK` grows the
-near eye and shrinks the far one by the same share of the look. Without it a
-look to the edge of the range is two equal marks slid across a ball, and the
-foreshortening of the *gap* between them, which was already there, was not
-enough on its own.
+near eye and shrinks the far one by the same share of the look.
+
+**The eyes cross the face by a fraction of a glance and all of a stare.** The
+pupil travels inside the white, so the eyes themselves move a little under half
+the look across the face (`TRAVEL`), and the snout the body pulls out for a
+stare carries them further (`PULL.lead`). That is the bargain `grip` makes for
+the body, made for the face: `form.test.ts` measures both per unit of look.
+
+**The upper lid rides the pupil down.** A look down lowers the lid after the
+pupil, and a look up lifts it a little and brings the lower lid up after it.
+That, and not a second molding, is what makes a look at somebody below read as
+one, and it is true of every look, so the aimed one needs nothing of its own.
 
 **Eyes flick, they never slide.** A gaze picks a target, crosses to it over a
 number of seconds that has nothing to do with how often it happens, and holds.
@@ -183,6 +210,13 @@ first half of it rather than at its start, so no two holds are the same length.
 A hold that never varies is a metronome, which is the thing a slide is, arrived
 at from the other side.
 
+**Half of blinking is not on a timer.** A face blinks into a large saccade, lids
+leading by a few frames, and blinks as it turns to look at somebody and as it
+turns away. `saccadeBlink` is the first, two large jumps in three and never a
+small one; `cueBlink` is the second, and `AgentAvatar` hands it the age of the
+aimed look. The blink on a timer is still there, a little rarer, because a face
+that only blinks for a reason is a face that stares.
+
 **Most looks are glances and some are looks.** `gaze.far` is the share of
 saccades that go the whole way to one side and level; the rest stay inside the
 middle of the range. Without it every target is anywhere in the box and a
@@ -193,11 +227,12 @@ section.
 **A gaze can be written down.** Random saccades are right for idle and thinking
 and wrong for a mood that is looking at one particular thing. `gaze.script` is
 `[x, y, hold]` steps, cycled through the same crossing and the same easing.
-`blocked` uses one: it looks up at its own badge, presses at it, and comes back
-to you.
+`blocked` uses one: it looks up at its own badge, narrows an eye at it, and comes
+back to you. `working` uses another, and it is reading: short steps to the right
+along a line, one long return, the next line a little lower.
 
-**A look can change the face.** `watch.squint` blends into the eye shape by how
-far up the gaze has gone, so blocked narrows and tilts as it looks at the badge
+**A look can change the face.** `watch.squint` blends into the lids by how far
+up the gaze has gone, so blocked narrows and cocks a lid as it looks at the badge
 and opens again when it looks back. A mood that acts needs no second drawing to
 switch to.
 
@@ -275,31 +310,23 @@ knocked its recipient upward.
 ## An aimed look
 
 A creature aimed at a peer is the only gaze that does not come out of `gazeAt`,
-and it is the furthest any of them goes. It is two things at once, and it needs
-to be.
-
-`AIM` is spent as a gaze, so everything above applies: the mass leans and swells
-after it on the same spring. On its own that is two marks sliding a few units
-down a face, which nobody reads as looking down, because nothing about the eye
-changed. So `aimedEye` moulds the stroke on top of whatever the mood made it --
-toward a line and thinner as the look drops, back toward the dot it was cut from
-as it lifts -- and adds an offset in eye radii, which is travel the outline does
-not pay for. It is added rather than substituted, so a frustrated creature
-aiming downward is still frustrated, and it goes through `blendEyes` and
-`geometry` like everything else, so nothing is ever swapped for anything.
+and it is the furthest any of them goes. `AIM` is spent as a gaze and nothing
+else: the mass leans and swells after it, the pupil goes to the edge of the
+white, and the upper lid comes down after the pupil. The stroke this replaced
+needed `aimedEye`, a second molding on top of the look, because two marks
+sliding down a face do not read as looking anywhere. A pupil going down under a
+lid that comes with it does.
 
 **The two directions are not the same size, and the numbers are measured.**
 Every one of these bodies hangs its mass below its eyes, so there is depth under
-them and very little over them. The down look has getting on for three units of
-outline to spare; the up look has a third of one, at the character the suite
-binds on, which is `bean` wearing the widest eyes on the table. That is why the
-up look rounds the stroke rather than fattening it, and takes no offset of its
-own: weight and travel are the two terms that eat what room is left above an
-eye. `form.test.ts` measures the ink against the outline itself rather than
-against a radius at an angle, because these bodies are not star-shaped and a
-cloud's outer corner sits over a dip between two lobes, where a radial bound is
-wrong in both directions at once. It is the gate: move either number and it says
-which creature loses its eyes.
+them and very little over them, and the widest eyes on the table, `surprised`,
+have to fit while looking up at whoever just threw something at them.
+`form.test.ts` measures the ink against the outline itself rather than against a
+radius at an angle, because these bodies are not star-shaped and a cloud's outer
+corner sits over a dip between two lobes, where a radial bound is wrong in both
+directions at once. It is the gate: move either number, or any eye in the
+catalog, and it says which creature loses its eyes. The square is the one it
+binds on, looking up and to the right at its badge.
 
 ## Moods
 
@@ -309,15 +336,15 @@ component learns about it, no stylesheet gains a rule.
 | Mood | What it is | What the app reads it from |
 |---|---|---|
 | idle | Still, blinking, looking about, now and then all the way to one side | Active with nothing in flight |
-| listening | Eyes open and raised, held on you | A message queued |
-| thinking | One brow up and one eye narrowed, flicking away and back | A turn between rounds |
-| working | Narrowed, scanning, kneading on a beat | A tool call in flight |
-| frustrated | Two brows tilted in, trembling, glaring off to a side | The last call back was refused or failed |
-| blocked | Looks up at its badge, cocks a brow at it, then back at you | A turn parked on a person |
-| pleased | Eased off, quietly satisfied | Its reply landed in the last few seconds |
+| listening | Lids back and pupils open, held on you | A message queued |
+| thinking | One lid lower than the other, looking up and away | A turn between rounds |
+| working | Level lids half down, reading, kneading on a beat | A tool call in flight |
+| frustrated | Inner ends of the lids down hard, trembling, glaring off to a side | The last call back was refused or failed |
+| blocked | Looks up at its badge, narrows an eye at it, then back at you | A turn parked on a person |
+| pleased | Lower lids pushed up into a crescent, quietly satisfied | Its reply landed in the last few seconds |
 | paused | Shut, slow, sitting down, grey | Lifecycle paused, or composted |
-| stuck | Low, worried, eyes darting where the body cannot go | An escalation of its own is open |
-| surprised | Everything open at once | It has just been handed a message |
+| stuck | Low, worried, inner ends up, eyes darting where the body cannot go | An escalation of its own is open |
+| surprised | Lids retracted, pupils pinned | It has just been handed a message |
 
 `moodFor` is the only place a runtime signal becomes an expression, and
 `moods.test.ts` proves every mood in the table is reachable from a real signal.
@@ -333,6 +360,66 @@ expire on a stamp, and `moodFor` takes the clock as an argument, so the decision
 is made inside the render loop. A rail of a dozen agents reacting to each other
 costs React nothing at all.
 
+## Two casts
+
+The same creatures, drawn two ways, and the operator picks which in Settings,
+Appearance. `cut` is everything above: paper relief and an eye with lids.
+`drawn` is a brush. Both were prototyped side by side with a third, a simulated
+gel, and the gel had the best motion and the wrong material for a column of text;
+these two are the ones worth having, and they are different enough that one does
+not stand in for the other.
+
+**It is the operator's, not the agent's.** An agent stores which character it
+is and nothing about how it is drawn, so the choice lives in `lib/prefs.ts` with
+the surface and the scale, is read by every avatar through the store, and
+changing it redraws every creature on screen at once. `AgentAvatar` takes a
+`cast` for a preview, which is how each choice in Settings shows its own cast
+before it is picked.
+
+**Everything that is a decision is shared.** The body is `bodyPoints` for both,
+the moods and `moodFor` are one table, the gaze and its smoothing are one, and
+the knock is one. `AgentAvatar` decides all of it once a frame and hands the
+result to the cast as a `Frame`; the cast owns only its own elements. So a mood
+added to the table is a mood both casts must draw, and the type says so: `DRAWN`
+is a `Record<Mood, Face>`.
+
+**The drawn outline is one brush stroke.** It is the same outline, drawn as a
+filled shape that presses heavier underneath, starts at the top left and runs a
+little past where it began, which is what a hand drawing a closed shape does.
+The pigment under it is printed a unit out of register. The whole body is
+clipped to `FORM.reach` the way the paper relief is, because a brush has width
+on both sides of the line the reach was measured on.
+
+**It is drawn on twos.** Twelve drawings a second, held between: a look is a
+snap, a hold is dead still, and a large look is hidden behind a blink the way an
+animator cuts a head turn. A change of mood is five drawings, one of them past
+the new pose (`POSES`), which is the overshoot a smoothstep can never have. The
+one thing simulated between drawings is the mark on each head, a curl, a leaf, a
+tick or nothing, which lags the body on a spring: the only secondary motion in
+either cast, and a second thing that tells two creatures of one silhouette apart
+at 24px.
+
+**The line is an emotional channel.** Calm moods hold a clean line and it does
+not move between drawings, which `drawn.test.ts` holds, because a rail of idle
+creatures whose outlines crawl is the screensaver this whole design exists to
+avoid. Work boils it on every drawing, frustration scratches it, stuck wavers
+slowly, and a paused creature's line runs dry.
+
+**The drawn face has brows and a mouth, and neither can fall out of register.**
+Both were refused for the cut cast: a brow is a second object that has to stay
+over the eye under it, and a mouth at 22px is a smudge. Here the eye is a dot or
+a dash, the brow is a stroke computed from it, and the mouth is not drawn at all
+under `MOUTH_PX`. Every stroke of the face is also kept inside the outline point
+by point, measured on the outline itself: a brow over a cloud's notch bends down
+into it rather than floating in the air above it, and a mouth on a squat body
+rides up off the floor. `drawn.test.ts` holds every face inside every body, in
+every mood, wherever the eyes have gone.
+
+**Beside the head, comics' own marks.** A scribble is cross, a drop of sweat is
+worry, lines round the head are shock and a star is pleased, drawn on twos in
+the page's text color like the cut cast's marks. `bang` is the same amber badge
+in both casts and is still only `blocked`.
+
 ## What one loop buys
 
 `clock.ts` holds one `requestAnimationFrame` for every creature on screen. A
@@ -345,6 +432,10 @@ for the sake of the eight you can see.
 mount and again whenever its props change, so an operator who asked for reduced
 motion, a hidden window and a row scrolled out of view all draw the right thing.
 The loop only makes it move.
+
+**The drawn cast writes a fifth as often.** It is called every frame like the
+cut one and returns at once unless a new drawing is due, so a rail of sixty
+drawn faces is twelve writes a second each rather than sixty.
 
 The next frame is scheduled before the painting, so one painter throwing cannot
 stop every other face in the app for the rest of the session.
@@ -387,7 +478,8 @@ phase is handed down as `--gait` and each loop is pulled back by it.
 
 The silhouette carries the first half and the eyes carry the rest: how far apart
 they are set, how big they are, how high they sit, and whether there is one of
-them. `catalog.test.ts` holds every character to a distinguishable pair, because
+them. `r` is the whole ball, before any lid covers it; the drawn cast's dot is
+two thirds of it. `catalog.test.ts` holds every character to a distinguishable pair, because
 four characters share a shape and the pair is all that is left to tell them
 apart. It also holds every one of the five to being used by somebody: a shape
 nobody is cut from is a shape that could break with nothing on screen to say so.

@@ -26,6 +26,9 @@ import { join } from "node:path";
 
 import { beforeAll, describe, expect, it } from "vitest";
 
+import { AVATAR_PX } from "./avatars/frame";
+import { ROOT_PX } from "./lib/appearance";
+
 // From the project root rather than from this module: the jsdom environment
 // rewrites `import.meta.url` to an `http:` URL, which `readFileSync` refuses.
 const css = readFileSync(join(process.cwd(), "src/styles.css"), "utf8");
@@ -48,6 +51,23 @@ function nest(...classes: string[]): HTMLElement {
   }
   return at;
 }
+
+describe("avatar sizes", () => {
+  // A creature drawn small draws its lines heavier, and how much heavier is
+  // worked out from the size it was asked for. A size changed here and not
+  // there is a shut eye that vanishes at 24px, with nothing else to say so.
+  it.each(Object.entries(AVATAR_PX))(
+    "draws %s at the %dpx its lines are hinted for",
+    (size, px) => {
+      const rule = css.match(
+        new RegExp(`\\.avatar--${size} \\{\\s*width: ([\\d.]+)rem;\\s*height: ([\\d.]+)rem;`),
+      );
+      expect(rule, `.avatar--${size}`).not.toBeNull();
+      expect(Number(rule?.[1]) * ROOT_PX).toBe(px);
+      expect(Number(rule?.[2]) * ROOT_PX).toBe(px);
+    },
+  );
+});
 
 describe("avatar hit targets", () => {
   it.each(["picker__item", "orb", "agent-row"])(

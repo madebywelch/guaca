@@ -37,7 +37,7 @@ export const CHARACTERS: Character[] = [
     ax: 1,
     ay: 1,
     sig: [{ k: 2, amp: 0.02, phase: 0.4 }],
-    eye: { spread: 6.6, r: 2.9 },
+    eye: { spread: 6.86, r: 4.35 },
   },
   {
     key: "egg",
@@ -46,7 +46,7 @@ export const CHARACTERS: Character[] = [
     ax: 0.98,
     ay: 1.01,
     sig: [{ k: 2, amp: 0.02, phase: 1.4 }],
-    eye: { spread: 5.9, r: 2.8, y: 2.2 },
+    eye: { spread: 6.14, r: 4.2, y: 2.2 },
   },
   {
     key: "pebble",
@@ -58,7 +58,7 @@ export const CHARACTERS: Character[] = [
       { k: 2, amp: 0.026, phase: 0.2 },
       { k: 3, amp: 0.018, phase: 1.1 },
     ],
-    eye: { spread: 7.4, r: 2.8 },
+    eye: { spread: 7.7, r: 4.2 },
   },
   {
     key: "drop",
@@ -67,7 +67,7 @@ export const CHARACTERS: Character[] = [
     ax: 1,
     ay: 1,
     sig: [{ k: 3, amp: 0.018, phase: 0.9 }],
-    eye: { spread: 6.2, r: 2.9, y: 3 },
+    eye: { spread: 6.45, r: 4.35, y: 3 },
   },
   {
     key: "bean",
@@ -76,7 +76,7 @@ export const CHARACTERS: Character[] = [
     ax: 1.01,
     ay: 0.99,
     sig: [{ k: 1, amp: 0.028, phase: 0.6 }],
-    eye: { spread: 6.4, r: 2.8, x: -1.4, y: 1 },
+    eye: { spread: 6.66, r: 4.2, x: -1.4, y: 1 },
   },
   {
     key: "lobe",
@@ -85,7 +85,7 @@ export const CHARACTERS: Character[] = [
     ax: 1.02,
     ay: 1,
     sig: [{ k: 2, amp: 0.022, phase: -1.57 }],
-    eye: { spread: 6.4, r: 3, y: 1 },
+    eye: { spread: 6.66, r: 4.5, y: 1 },
   },
   {
     key: "puck",
@@ -94,7 +94,7 @@ export const CHARACTERS: Character[] = [
     ax: 1.04,
     ay: 0.95,
     sig: [{ k: 2, amp: 0.022, phase: 1.57 }],
-    eye: { spread: 7.2, r: 2.7 },
+    eye: { spread: 7.49, r: 4.05 },
   },
   {
     key: "cell",
@@ -103,7 +103,7 @@ export const CHARACTERS: Character[] = [
     ax: 1.02,
     ay: 1.02,
     sig: [{ k: 4, amp: 0.03, phase: 0.8 }],
-    eye: { spread: 0, r: 3.6, one: true },
+    eye: { spread: 0, r: 7.02, one: true },
   },
   {
     key: "knot",
@@ -112,7 +112,7 @@ export const CHARACTERS: Character[] = [
     ax: 1,
     ay: 1.01,
     sig: [{ k: 2, amp: 0.02, phase: 1.2 }],
-    eye: { spread: 5.6, r: 2.7 },
+    eye: { spread: 5.82, r: 4.05 },
   },
   {
     key: "moon",
@@ -124,7 +124,7 @@ export const CHARACTERS: Character[] = [
       { k: 1, amp: 0.05, phase: 3.14 },
       { k: 3, amp: 0.014, phase: 0.5 },
     ],
-    eye: { spread: 6.6, r: 2.9, x: 1.6 },
+    eye: { spread: 6.86, r: 4.35, x: 1.6 },
   },
   {
     key: "wave",
@@ -133,7 +133,7 @@ export const CHARACTERS: Character[] = [
     ax: 1.03,
     ay: 0.98,
     sig: [{ k: 3, amp: 0.018, phase: 0 }],
-    eye: { spread: 6.2, r: 2.8, y: 1 },
+    eye: { spread: 6.45, r: 4.2, y: 1 },
   },
   {
     key: "mote",
@@ -142,7 +142,7 @@ export const CHARACTERS: Character[] = [
     ax: 1.02,
     ay: 0.97,
     sig: [{ k: 2, amp: 0.022, phase: 2 }],
-    eye: { spread: 8, r: 2.2 },
+    eye: { spread: 8.32, r: 3.3 },
   },
   {
     key: "bead",
@@ -151,7 +151,7 @@ export const CHARACTERS: Character[] = [
     ax: 1,
     ay: 1,
     sig: [{ k: 2, amp: 0.015, phase: 0.9 }],
-    eye: { spread: 4.6, r: 2.3 },
+    eye: { spread: 4.78, r: 3.45 },
   },
   {
     key: "gourd",
@@ -160,7 +160,7 @@ export const CHARACTERS: Character[] = [
     ax: 0.99,
     ay: 1,
     sig: [{ k: 2, amp: 0.024, phase: 0.3 }],
-    eye: { spread: 6, r: 2.9, y: 3.6 },
+    eye: { spread: 6.24, r: 4.35, y: 3.6 },
   },
   {
     key: "slab",
@@ -169,7 +169,7 @@ export const CHARACTERS: Character[] = [
     ax: 1.04,
     ay: 0.96,
     sig: [],
-    eye: { spread: 7, r: 3.3 },
+    eye: { spread: 7.1, r: 4.7 },
   },
   {
     key: "pip",
@@ -178,7 +178,7 @@ export const CHARACTERS: Character[] = [
     ax: 0.99,
     ay: 1.02,
     sig: [{ k: 4, amp: 0.016, phase: 1 }],
-    eye: { spread: 5.4, r: 2.5, y: 1.6 },
+    eye: { spread: 5.62, r: 3.75, y: 1.6 },
   },
   {
     key: "husk",
@@ -187,7 +187,7 @@ export const CHARACTERS: Character[] = [
     ax: 1.03,
     ay: 0.98,
     sig: [{ k: 1, amp: 0.026, phase: 1.3 }],
-    eye: { spread: 7, r: 2.6 },
+    eye: { spread: 7.28, r: 3.9 },
   },
   {
     key: "loop",
@@ -196,7 +196,7 @@ export const CHARACTERS: Character[] = [
     ax: 1.01,
     ay: 1.01,
     sig: [{ k: 2, amp: 0.024, phase: -0.6 }],
-    eye: { spread: 0, r: 2.8, one: true },
+    eye: { spread: 0, r: 5.46, one: true },
   },
   {
     key: "crumb",
@@ -205,7 +205,7 @@ export const CHARACTERS: Character[] = [
     ax: 1.02,
     ay: 1,
     sig: [{ k: 1, amp: 0.03, phase: 0 }],
-    eye: { spread: 6, r: 2.7, x: 1, y: 1.4 },
+    eye: { spread: 6.24, r: 4.05, x: 1, y: 1.4 },
   },
   {
     key: "tide",
@@ -214,7 +214,7 @@ export const CHARACTERS: Character[] = [
     ax: 0.98,
     ay: 1.02,
     sig: [{ k: 2, amp: 0.026, phase: 0 }],
-    eye: { spread: 5.8, r: 3.1, y: 1 },
+    eye: { spread: 6.05, r: 4.65, y: 1 },
   },
   {
     key: "cinder",
@@ -223,7 +223,7 @@ export const CHARACTERS: Character[] = [
     ax: 1.01,
     ay: 0.99,
     sig: [{ k: 3, amp: 0.02, phase: 0.5 }],
-    eye: { spread: 6.8, r: 2.4 },
+    eye: { spread: 7.07, r: 3.6 },
   },
 ];
 

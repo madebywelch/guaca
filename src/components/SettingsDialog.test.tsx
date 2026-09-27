@@ -1441,6 +1441,25 @@ describe("appearance", () => {
     expect(document.documentElement.dataset.surface).toBe("light");
   });
 
+  it("keeps a chosen cast and shows each one before it is chosen", () => {
+    open();
+    pane("Appearance");
+    // Each choice draws its own cast whatever the preference says, so the one
+    // not chosen is still there to be looked at.
+    expect(choice("Characters: Cut").querySelectorAll('[data-cast="cut"]')).toHaveLength(3);
+    expect(choice("Characters: Drawn").querySelectorAll('[data-cast="drawn"]')).toHaveLength(3);
+    expect(choice("Characters: Cut").getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(choice("Characters: Drawn"));
+
+    expect(useStore.getState().prefs.cast).toBe("drawn");
+    expect(choice("Characters: Drawn").getAttribute("aria-pressed")).toBe("true");
+    expect(choice("Characters: Cut").getAttribute("aria-pressed")).toBe("false");
+    expect(choice("Characters: Cut").querySelectorAll('[data-cast="cut"]')).toHaveLength(3);
+    // And the surface is left alone: this is not a third way to write it.
+    expect(useStore.getState().prefs.surface).toBe(DEFAULT_PREFS.surface);
+  });
+
   it("keeps a chosen scale without disturbing the surface", () => {
     open(stored(), { ...DEFAULT_PREFS, surface: "dark" });
     pane("Appearance");
