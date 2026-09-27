@@ -164,8 +164,21 @@ The daemon, a browser as a client, and the boot both hosts share.
   `guacad:<commit>` image, so the two differ and the update is offered. The
   registry answers the pull with `denied` until that tag is published. Every
   pull failure used to say "check your connection"; `pull_failure` now names
-  the refusal and the image. Develop the local host through `install.sh`, or
-  export `GUACA_BACKEND_IMAGE` naming an image already on this machine.
+  the refusal and the image. `pnpm app` now builds this checkout's image and
+  compiles its name in, which is `scripts/app.sh`.
+- **A development build under the installed app's identifier manages the
+  installed app's host.** `LocalHost` names its container, its data volume and
+  its update journal from the bundle identifier, and `tauri dev` used the one
+  in `tauri.conf.json`. On this Mac in a dev window found, started and offered
+  to update the operator's own container, and on a Docker context without it,
+  would have created one over the operator's old data volume. `pnpm app` passes
+  `tauri.dev.conf.json`, whose identifier is `com.madebywelch.guac.dev`.
+- **`pnpm app` could not start at all after `guacad` became a second binary.**
+  `tauri dev` runs a bare `cargo run --no-default-features` and adds back only
+  the default features that do not enable `tauri/custom-protocol`. That was
+  inside `desktop`, so `desktop` went with it, and two `[[bin]]` targets with
+  no `default-run` gave `cargo run` nothing to choose. `custom-protocol` is its
+  own default feature and `default-run` is `guac`.
 - **The Docker card in host setup is a stack, not a `.preset`.** It was drawn
   with the provider picker's classes, which lay one line out as a flex row, and
   its status, update prompt, update log and buttons stood side by side in

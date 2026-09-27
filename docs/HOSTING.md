@@ -669,8 +669,11 @@ and volumes. A remote Docker context is refused for On this Mac.
 For downloadable releases, `GUACA_BACKEND_IMAGE` must name the published image
 for that build, ideally by digest. The fallback is the versioned GHCR image;
 that image must be published and publicly pullable before releasing the app.
-Source development can override it with an already built local image. App and
-backend publishing are separate from merging this branch.
+`pnpm app` overrides it for source development: `scripts/app.sh` builds this
+checkout's image, compiles its name in, and runs the app under its own bundle
+identifier from `src-tauri/tauri.dev.conf.json`, so its On this Mac is a
+different container and volume from an installed app's. App and backend
+publishing are separate from merging this branch.
 
 ## Upgrading databases from the hosting branch
 

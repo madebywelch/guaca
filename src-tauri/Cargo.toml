@@ -4,6 +4,8 @@ version = "0.2.0"
 description = "Guac: a local, no-auth chat surface where you and your agents talk to each other."
 authors = ["madebywelch"]
 edition = "2021"
+# `tauri dev` runs a bare `cargo run`, which cannot choose between two binaries.
+default-run = "guac"
 # Dependencies require 1.88; the workspace's process lock uses File::try_lock,
 # stabilized in 1.89. Declare the actual floor before Cargo downloads anything.
 rust-version = "1.89"
@@ -109,7 +111,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time"
 axum = "0.7"
 
 [features]
-default = ["desktop"]
+default = ["desktop", "custom-protocol"]
 
 # The desktop app: a window, a menu bar, and the Tauri IPC transport.
 #
@@ -122,8 +124,12 @@ desktop = [
   "dep:tauri",
   "dep:tauri-plugin-opener",
   "dep:tauri-plugin-notification",
-  "tauri/custom-protocol",
 ]
+
+# Serves the bundled `dist/` instead of the dev server. Its own feature because
+# `tauri dev` drops every default feature that enables it: inside `desktop`,
+# that took `desktop` with it and left `cargo run` with no binary it could build.
+custom-protocol = ["tauri/custom-protocol"]
 
 # The daemon: the same runtime, reached over HTTP and a socket.
 server = ["dep:axum", "dep:tower-http", "dep:hyper", "dep:hyper-util"]

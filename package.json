@@ -11,7 +11,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "app": "tauri dev",
+    "app": "./scripts/app.sh",
     "app:build": "tauri build",
     "check": "biome check .",
     "check:fix": "biome check --write .",
