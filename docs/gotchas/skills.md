@@ -1,7 +1,7 @@
 # Skills
 
-The `skill` tool, the three scopes, and the manual. `docs/SKILLS.md`, then
-`domain/skill.rs` and `skills.rs`.
+The `skill` tool, the three scopes, the starters, skills.sh, and the manual.
+`docs/SKILLS.md`, then `domain/skill.rs`, `skills.rs` and `skills_sh.rs`.
 
 - **The directory is the name.** A hand-written file whose front matter says
   another name is still found, listed and written by its directory, because
@@ -20,3 +20,26 @@ The `skill` tool, the three scopes, and the manual. `docs/SKILLS.md`, then
 - **Guaca's manual is checked against the UI.** Add a pane to Settings or a
   section to a crew's settings and `manual.test.ts` fails until
   `src-tauri/skills/guaca/SKILL.md` names it in bold.
+- **A skill from elsewhere is not held to `MAX_DESCRIPTION`.** More than half
+  of the forty most installed on skills.sh describe themselves in more than 300
+  characters. `Package` accepts any length and the read cuts it, as it cuts a
+  hand-written file's; refusing them refuses most of the directory. The body
+  is still refused past `MAX_BODY`, because a procedure cut short is a
+  different procedure.
+- **The documented skills.sh API is the wrong one.** `/api/v1/` answers 401
+  without a Vercel OIDC token, which a desktop app cannot mint. `skills_sh.rs`
+  calls what the site and its CLI call. Moving it to `/api/v1/` looks like a
+  cleanup and breaks every request; the live half of `tests/skills_sh.rs` is
+  what says when the undocumented ones move.
+- **A rename moves the directory.** It used to write the new name and delete
+  the old, which was fine while a skill was one file and loses every reference
+  a skill carries now. `Skills::rename` moves it, and only a rename onto a name
+  already taken falls back to write and delete.
+- **Editing an added skill rewrites its `SKILL.md`.** `Clean::render` writes
+  `name` and `description` only, so the author's license and author lines in
+  its front matter do not survive an edit made here. Its `.origin` and any
+  `LICENSE` file it carries do.
+- **A starter is offered once, by name.** `skills/.defaults` is the ledger.
+  Seeding whenever a starter is missing puts back one the operator deleted;
+  making the starters bundled takes away the operator's right to edit or
+  delete them. Both were considered and are wrong.

@@ -1341,6 +1341,8 @@ mod tests {
             scope,
             body: "THE BODY".into(),
             updated_at: 0,
+            files: Vec::new(),
+            origin: None,
         };
         let section = skills_section(&[
             skill("guaca", Scope::Bundled),

@@ -46,6 +46,10 @@ import type {
   ConnectorId,
   Decision,
   DeviceCode,
+  DirectoryBoard,
+  DirectoryListing,
+  DirectoryPage,
+  DirectorySkill,
   Envelope,
   Escalation,
   EscalationId,
@@ -200,6 +204,13 @@ export const api = {
     invoke<Skill>("save_skill", { scope, draft }),
   deleteSkill: (scope: SkillScope, name: string) =>
     invoke<boolean>("delete_skill", { scope, name }),
+  skillDirectory: (board: DirectoryBoard, page: number) =>
+    invoke<DirectoryPage>("skill_directory", { board, page }),
+  searchSkillDirectory: (query: string) =>
+    invoke<DirectoryListing[]>("search_skill_directory", { query }),
+  previewDirectorySkill: (id: string) => invoke<DirectorySkill>("preview_directory_skill", { id }),
+  addDirectorySkill: (scope: SkillScope, id: string, hash: string) =>
+    invoke<Skill>("add_directory_skill", { scope, id, hash }),
 
   /**
    * The directories a crew has linked, and who in it may work in each.

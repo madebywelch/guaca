@@ -473,10 +473,17 @@ async fn skills_are_written_read_and_announced_over_the_hosted_surface() {
     let event = next_of_kind(&mut socket, "skillsChanged").await;
     assert_eq!(event["scope"]["kind"], "workspace");
 
-    // A listing carries no bodies; a read does.
+    // A listing carries no bodies; a read does. The workspace opened with the
+    // starters in it, because the boot both hosts share put them there.
     let (_, listed) = call(addr, "list_skills", json!({ "scope": workspace })).await;
-    assert_eq!(listed["ok"][0]["name"], "house-style");
-    assert_eq!(listed["ok"][0]["body"], "");
+    let listed = listed["ok"].as_array().expect("a list").clone();
+    let names: Vec<_> = listed.iter().filter_map(|s| s["name"].as_str()).collect();
+    for starter in guac_lib::skills::STARTERS.iter().map(|(name, _)| *name) {
+        assert!(names.contains(&starter), "{starter} missing from {names:?}");
+    }
+    let house = listed.iter().find(|s| s["name"] == "house-style").expect("the new skill");
+    assert_eq!(house["body"], "");
+    assert_eq!(house["files"], json!([]));
     let (_, read) =
         call(addr, "read_skill", json!({ "scope": workspace, "name": "house-style" })).await;
     assert_eq!(read["ok"]["body"], "Plain words.");
@@ -506,6 +513,32 @@ async fn skills_are_written_read_and_announced_over_the_hosted_surface() {
         call(addr, "delete_skill", json!({ "scope": workspace, "name": "house-style" })).await;
     assert_eq!(deleted["ok"], true);
     let _ = socket.close(None).await;
+}
+
+#[tokio::test]
+async fn renaming_a_skill_that_carries_files_carries_them_to_the_new_name() {
+    let (addr, dir) = workspace().await;
+    let workspace = json!({ "kind": "workspace" });
+    // A starter carries its license; a reference is what a skills.sh one
+    // carries. A rename used to write the new name and delete the old one.
+    let folder = dir.path().join("data/skills/workspace/grill-me");
+    std::fs::create_dir_all(folder.join("references")).unwrap();
+    std::fs::write(folder.join("references/rounds.md"), "# Rounds").unwrap();
+
+    let (status, body) = call(
+        addr,
+        "save_skill",
+        json!({ "scope": workspace, "draft": {
+            "name": "grill", "description": "When grilling", "body": "Ask in rounds.",
+            "previous": "grill-me",
+        }}),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["ok"]["files"], json!(["LICENSE.txt", "references/rounds.md"]));
+    let (_, gone) =
+        call(addr, "read_skill", json!({ "scope": workspace, "name": "grill-me" })).await;
+    assert_eq!(gone["err"]["kind"], "notFound", "{gone}");
 }
 
 #[tokio::test]

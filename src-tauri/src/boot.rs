@@ -104,6 +104,13 @@ pub async fn open(
     // `OnDisk::under` is the one place that arrangement is decided.
     let disk = OnDisk::under(&paths.data);
     let workspace_dir = disk.workspace.root().to_path_buf();
+    // The starter skills, once per workspace. A failure here costs the
+    // operator a handful of documents they can add by hand, not the workspace.
+    match disk.skills.offer(crate::skills::STARTERS) {
+        Ok(added) if !added.is_empty() => tracing::info!(?added, "added the starter skills"),
+        Ok(_) => {}
+        Err(err) => tracing::warn!(%err, "could not add the starter skills"),
+    }
 
     let store =
         Store::open(&db_path).map_err(|err| format!("could not open the workspace: {err}"))?;

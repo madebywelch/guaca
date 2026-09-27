@@ -7439,10 +7439,25 @@ impl Runtime {
                     lines.join("\n")
                 ))
             }
-            tools::SkillAction::View { name } => {
+            tools::SkillAction::View { name, file: Some(path) } => {
+                let text = self.inner.skills.read_file(Some(card.group_id), name, path)?;
+                Ok(format!("`{path}`, from the skill `{name}`:\n\n{text}"))
+            }
+            tools::SkillAction::View { name, file: None } => {
                 let found = self.inner.skills.read(Some(card.group_id), name)?;
+                // Named after the instructions rather than before them: they
+                // are what to read first, and the files are what they point at.
+                let files = if found.files.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "\n\nFiles beside it, read with `view` and `file` when the instructions \
+                         send you to one: {}",
+                        found.files.join(", ")
+                    )
+                };
                 Ok(format!(
-                    "Skill `{}` ({}): {}\n\n{}",
+                    "Skill `{}` ({}): {}\n\n{}{files}",
                     found.name,
                     found.scope.label(),
                     found.description,

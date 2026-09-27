@@ -8269,3 +8269,48 @@ input[type="file"]:disabled {
 .host-workspace:not([hidden]) { display: contents; }
 .host-update-facts { display: grid; grid-template-columns: auto 1fr; gap: var(--space-2) var(--space-4); }
 .host-update-facts dd { margin: 0; overflow-wrap: anywhere; }
+
+/* skills.sh, inside a skills pane. The ranking is two hundred rows a page, so
+   it scrolls in place rather than pushing the pane's own skills off screen. */
+.directory__search {
+  flex: 1;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* The height of the three rankings beside it, so the row reads as one control. */
+.directory__search .input {
+  min-height: var(--control-h-sm);
+  padding: 0 var(--space-3);
+  font-size: var(--type-small);
+}
+
+.directory__list {
+  max-height: 28rem;
+  overflow: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.directory__entry {
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--edge);
+}
+
+.directory__reading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-3);
+}
+
+.directory__audits {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--type-fine);
+}

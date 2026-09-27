@@ -50,6 +50,14 @@ pub const LISTED: usize = 40;
 /// transcript, not a library, and every one of them is a line in every prompt.
 pub const MAX_PER_SCOPE: usize = 100;
 
+/// How many files a skill may carry beside its `SKILL.md`. The largest in the
+/// top forty on skills.sh carried 195 (September 2026), mostly references an
+/// agent reads one at a time.
+pub const MAX_FILES: usize = 256;
+
+/// All of a skill's files together. The same survey's largest was 1.2 MB.
+pub const MAX_BUNDLE: usize = 4 * 1024 * 1024;
+
 /// Where a skill lives, which is who may write it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -106,6 +114,14 @@ pub struct Skill {
     /// Milliseconds since the epoch. Zero for a bundled skill, which has no
     /// moment it was written on this machine.
     pub updated_at: i64,
+    /// What sits beside `SKILL.md`, as paths relative to it: references,
+    /// templates, scripts. Read one at a time; nothing here runs a script.
+    #[serde(default)]
+    pub files: Vec<String>,
+    /// Where it was added from, as a page a person can open. `None` for one
+    /// written here or dropped in by hand.
+    #[serde(default)]
+    pub origin: Option<String>,
 }
 
 impl Skill {
@@ -145,6 +161,22 @@ pub enum SkillError {
          fold two that overlap into one, before writing another"
     )]
     Full,
+    #[error(
+        "`{0}` is not a file beside a skill. Name one the way the skill lists it: a relative \
+         path such as `references/api.md`"
+    )]
+    BadFile(String),
+    #[error("there is no `SKILL.md` at the top of this skill, so there is nothing to follow")]
+    NoSkillFile,
+    #[error(
+        "this skill carries {0} files beside its `SKILL.md` and the limit is {MAX_FILES}. It is \
+         a library rather than a skill; add a smaller one"
+    )]
+    TooManyFiles(usize),
+    #[error(
+        "this skill's files come to {0} bytes and the limit is {MAX_BUNDLE}. Add a smaller one"
+    )]
+    TooLarge(usize),
 }
 
 /// Names Guaca ships, which nothing else may take.
@@ -230,6 +262,126 @@ impl Clean {
         let quoted =
             serde_json::to_string(&self.description).unwrap_or_else(|_| "\"\"".to_string());
         format!("---\nname: {}\ndescription: {quoted}\n---\n\n{}\n", self.name, self.body)
+    }
+}
+
+/// Whether a path can name a file beside a skill's `SKILL.md`.
+///
+/// Relative, forward slashes, and inside: a skill's files are read by a path a
+/// model types, so `../` is a way out of the skill and a leading `/` is a way
+/// out of everything. A component starting with a dot is refused as well,
+/// because the dot names in a skill's directory are Guaca's own bookkeeping.
+pub fn check_file(path: &str) -> Result<(), SkillError> {
+    let bad = || SkillError::BadFile(path.to_string());
+    if path.is_empty()
+        || path.len() > 512
+        || path == "SKILL.md"
+        || path.chars().any(|c| c == '\\' || c == ':' || c.is_control())
+    {
+        return Err(bad());
+    }
+    for part in path.split('/') {
+        if part.is_empty() || part.starts_with('.') {
+            return Err(bad());
+        }
+    }
+    Ok(())
+}
+
+/// A skill written somewhere else, checked and ready to put in a scope whole:
+/// its `SKILL.md` exactly as its author wrote it, and every file beside it.
+///
+/// Checked differently from [`Clean`], and on purpose. `Clean` is a skill being
+/// written here, so it is held to the line a prompt can carry. A package is
+/// somebody else's file, and more than half of the forty most installed on
+/// skills.sh describe themselves in more than [`MAX_DESCRIPTION`] characters,
+/// so the description is accepted at any length and cut where it is read, as a
+/// hand-written file's is. The body is not: a procedure cut short is a
+/// different procedure, and the operator should hear that before it is added.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Package {
+    /// The directory it will live in, which is its name everywhere here.
+    pub name: String,
+    pub description: String,
+    pub body: String,
+    /// `SKILL.md` as it arrived, front matter and all, so the license and
+    /// author lines its author wrote travel with it.
+    pub text: String,
+    /// Everything beside it, sorted by path.
+    pub files: Vec<(String, String)>,
+    /// SHA-256 over every path and its contents. What the operator read is
+    /// what gets added: the add is refused when the hash moved in between.
+    pub hash: String,
+}
+
+impl Package {
+    /// Checks a skill as `(path, contents)` pairs, named by `slug` because
+    /// that is the name its directory had where it came from.
+    ///
+    /// Files under a dot-named directory (`.github/`, `.gitignore`) are left
+    /// behind rather than refused: they are the repository's, not the skill's.
+    pub fn new(slug: &str, files: Vec<(String, String)>) -> Result<Self, SkillError> {
+        let name = if check_name(slug).is_ok() { slug.to_string() } else { self::slug(slug) };
+        if RESERVED.contains(&name.as_str()) {
+            return Err(SkillError::Reserved(name));
+        }
+        let total: usize = files.iter().map(|(path, contents)| path.len() + contents.len()).sum();
+        if total > MAX_BUNDLE {
+            return Err(SkillError::TooLarge(total));
+        }
+
+        let mut text = None;
+        let mut beside: Vec<(String, String)> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for (path, contents) in files {
+            let path = path.trim_start_matches("./").to_string();
+            if path == "SKILL.md" {
+                text.get_or_insert(contents);
+                continue;
+            }
+            // `..` is not a dot name but a way out, and is refused below.
+            let dotted = |part: &str| part.starts_with('.') && part != "." && part != "..";
+            if path.split('/').any(dotted) {
+                continue;
+            }
+            check_file(&path)?;
+            // Once per path as a case-insensitive disk sees it, or the second
+            // quietly overwrites the first on the operator's Mac.
+            if seen.insert(path.to_lowercase()) {
+                beside.push((path, contents));
+            }
+        }
+        let text = text.ok_or(SkillError::NoSkillFile)?;
+        if beside.len() > MAX_FILES {
+            return Err(SkillError::TooManyFiles(beside.len()));
+        }
+        beside.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let (_, description, body) = parse(&text)?;
+        let description = description.split_whitespace().collect::<Vec<_>>().join(" ");
+        if description.is_empty() {
+            return Err(SkillError::NoDescription);
+        }
+        if body.is_empty() {
+            return Err(SkillError::NoBody);
+        }
+        let length = body.chars().count();
+        if length > MAX_BODY {
+            return Err(SkillError::LongBody(length));
+        }
+
+        use sha2::{Digest, Sha256};
+        let mut digest = Sha256::new();
+        for (path, contents) in std::iter::once(("SKILL.md", text.as_str()))
+            .chain(beside.iter().map(|(p, c)| (p.as_str(), c.as_str())))
+        {
+            digest.update(path.as_bytes());
+            digest.update([0]);
+            digest.update(contents.as_bytes());
+            digest.update([0]);
+        }
+        let hash = format!("{:x}", digest.finalize());
+        Ok(Self { name, description, body, text, files: beside, hash })
     }
 }
 
@@ -359,6 +511,94 @@ mod tests {
             let refused = parse(text).unwrap_err();
             assert!(refused.to_string().contains("`description:`"), "{text}: {refused}");
         }
+    }
+
+    fn file(path: &str, contents: &str) -> (String, String) {
+        (path.to_string(), contents.to_string())
+    }
+
+    const SKILL_MD: &str =
+        "---\nname: Nice Name\ndescription: When it fits\nlicense: MIT\n---\n# Do it\n";
+
+    #[test]
+    fn a_file_beside_a_skill_is_named_from_inside_it() {
+        for bad in [
+            "",
+            "SKILL.md",
+            "/etc/passwd",
+            "../x.md",
+            "a/../../x",
+            "a//b",
+            "a\\b",
+            "C:x",
+            ".origin",
+            "refs/.hidden",
+            "a\nb",
+        ] {
+            assert!(matches!(check_file(bad), Err(SkillError::BadFile(_))), "{bad:?}");
+        }
+        for good in ["reference.md", "references/api.md", "scripts/fill form.py", "a/SKILL.md"] {
+            assert!(check_file(good).is_ok(), "{good}");
+        }
+    }
+
+    #[test]
+    fn a_package_refuses_what_it_cannot_carry_and_says_so() {
+        assert_eq!(Package::new("x", vec![file("README.md", "hi")]), Err(SkillError::NoSkillFile));
+        assert_eq!(
+            Package::new("guaca", vec![file("SKILL.md", SKILL_MD)]),
+            Err(SkillError::Reserved("guaca".into()))
+        );
+        let traversal = Package::new("x", vec![file("SKILL.md", SKILL_MD), file("../up", "x")]);
+        assert_eq!(traversal, Err(SkillError::BadFile("../up".into())));
+        let long = format!("---\nname: x\ndescription: d\n---\n{}", "w".repeat(MAX_BODY + 1));
+        assert_eq!(
+            Package::new("x", vec![file("SKILL.md", &long)]),
+            Err(SkillError::LongBody(MAX_BODY + 1))
+        );
+        let empty = "---\nname: x\ndescription: d\n---\n";
+        assert_eq!(Package::new("x", vec![file("SKILL.md", empty)]), Err(SkillError::NoBody));
+        let many: Vec<_> = std::iter::once(file("SKILL.md", SKILL_MD))
+            .chain((0..=MAX_FILES).map(|n| file(&format!("r/{n}.md"), "x")))
+            .collect();
+        assert_eq!(Package::new("x", many), Err(SkillError::TooManyFiles(MAX_FILES + 1)));
+        let heavy = vec![file("SKILL.md", SKILL_MD), file("big.txt", &"x".repeat(MAX_BUNDLE))];
+        assert!(matches!(Package::new("x", heavy), Err(SkillError::TooLarge(_))));
+    }
+
+    #[test]
+    fn a_package_keeps_its_authors_file_and_leaves_the_repositorys_behind() {
+        let long = "w ".repeat(MAX_DESCRIPTION);
+        let text = format!("---\nname: pdf\ndescription: {long}\nlicense: MIT\n---\n# Do it\n");
+        let package = Package::new(
+            "Fancy_Name",
+            vec![
+                file("scripts/run.py", "print()"),
+                file("./SKILL.md", &text),
+                file(".github/workflows/ci.yml", "on: push"),
+                file("README.md", "one"),
+                file("readme.md", "the same file on a Mac"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(package.name, "fancy-name", "the directory is a name a model can type");
+        assert_eq!(package.text, text, "front matter survives, license and all");
+        assert!(package.description.chars().count() > MAX_DESCRIPTION, "cut where it is read");
+        let paths: Vec<_> = package.files.iter().map(|(path, _)| path.as_str()).collect();
+        assert_eq!(paths, ["README.md", "scripts/run.py"]);
+    }
+
+    #[test]
+    fn a_package_hash_moves_with_any_file_and_not_with_arrival_order() {
+        let one = Package::new("x", vec![file("SKILL.md", SKILL_MD), file("a.md", "a")]).unwrap();
+        let again = Package::new("x", vec![file("a.md", "a"), file("SKILL.md", SKILL_MD)]).unwrap();
+        let edited =
+            Package::new("x", vec![file("SKILL.md", SKILL_MD), file("a.md", "b")]).unwrap();
+        let moved = Package::new("x", vec![file("SKILL.md", SKILL_MD), file("b.md", "a")]).unwrap();
+        assert_eq!(one.hash, again.hash);
+        assert_ne!(one.hash, edited.hash);
+        assert_ne!(one.hash, moved.hash);
+        assert_eq!(one.hash.len(), 64);
     }
 
     #[test]

@@ -8,22 +8,64 @@
 //! ```text
 //! skills/
 //!   workspace/<name>/SKILL.md        the operator's, read by every crew
+//!   workspace/<name>/references/...  anything else the skill carries
+//!   workspace/<name>/.origin         where it was added from, if anywhere
 //!   crews/<group id>/<name>/SKILL.md one crew's
+//!   .defaults                        the starter skills already offered
 //! ```
 //!
 //! Bundled skills are compiled in and never touch the disk, so a host that
 //! was updated serves the manual of the build it runs rather than a copy an
-//! older build left behind.
+//! older build left behind. The starter skills are the opposite: copied into
+//! the operator's scope once, because they are the operator's to edit or
+//! delete, and a deleted one stays deleted.
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::domain::ids::GroupId;
-use crate::domain::skill::{self, Clean, Scope, Skill, SkillError, MAX_BODY, MAX_DESCRIPTION};
+use crate::domain::skill::{
+    self, Clean, Package, Scope, Skill, SkillError, MAX_BODY, MAX_DESCRIPTION, MAX_FILES,
+};
 
 /// Skills that ship with Guaca, as `(name, file)`.
 const BUNDLED: &[(&str, &str)] = &[("guaca", include_str!("../skills/guaca/SKILL.md"))];
+
+/// The license the starter skills came under, carried beside each one so it
+/// travels wherever the skill is copied.
+const STARTER_LICENSE: &str = include_str!("../skills/defaults/LICENSE");
+
+macro_rules! starter {
+    ($name:literal) => {
+        (
+            $name,
+            &[
+                ("SKILL.md", include_str!(concat!("../skills/defaults/", $name, "/SKILL.md"))),
+                ("LICENSE.txt", STARTER_LICENSE),
+            ],
+        )
+    };
+}
+
+/// What every workspace starts with, adapted from Hermes Agent's own
+/// (`skills/defaults/LICENSE` says which, and at what commit). Kept to general
+/// procedure: nothing that names a program an agent here cannot run, a
+/// platform it is not on, or a tool it does not have.
+pub const STARTERS: &[(&str, &[(&str, &str)])] = &[
+    starter!("grounded-citations"),
+    starter!("grill-me"),
+    starter!("one-three-one"),
+    starter!("systematic-debugging"),
+    starter!("document-to-action-items"),
+    starter!("meeting-action-items"),
+];
+
+/// Where a skill added from elsewhere says it came from.
+const ORIGIN: &str = ".origin";
+
+/// The starter skills a workspace has already been given, one name a line.
+const OFFERED: &str = ".defaults";
 
 #[derive(Debug, thiserror::Error)]
 pub enum SkillsError {
@@ -31,6 +73,12 @@ pub enum SkillsError {
     NotFound(String),
     #[error("`{0}` is Guaca's own skill and is read-only")]
     ReadOnly(String),
+    #[error(
+        "a skill called `{0}` is already here. Delete it or rename it first, then add this one"
+    )]
+    Taken(String),
+    #[error("`{name}` has no file `{path}`. `view` the skill to see the files it carries")]
+    NoFile { name: String, path: String },
     #[error(
         "`{name}` belongs to {owner}, not your crew, so it cannot be deleted from here. Leave \
          it, or ask the operator"
@@ -81,6 +129,8 @@ impl Skills {
                     scope: Scope::Bundled,
                     body,
                     updated_at: 0,
+                    files: Vec::new(),
+                    origin: None,
                 }
             })
             .collect()
@@ -173,9 +223,51 @@ impl Skills {
             .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|since| since.as_millis() as i64)
             .unwrap_or(0);
+        let folder = dir.join(name);
+        let origin = fs::read_to_string(folder.join(ORIGIN))
+            .ok()
+            .map(|text| text.trim().to_string())
+            .filter(|text| !text.is_empty());
         // The directory is the name. It is what every write and delete
         // addresses, and a file that says otherwise is still found by it.
-        Ok(Skill { name: name.to_string(), description, scope, body, updated_at })
+        Ok(Skill {
+            name: name.to_string(),
+            description,
+            scope,
+            body,
+            updated_at,
+            files: beside(&folder),
+            origin,
+        })
+    }
+
+    /// One file a skill carries, resolved the way [`Skills::read`] resolves
+    /// the skill. Served cut past [`MAX_BODY`], like a body.
+    pub fn read_file(
+        &self,
+        group: Option<GroupId>,
+        name: &str,
+        path: &str,
+    ) -> Result<String, SkillsError> {
+        let found = self.read(group, name)?;
+        let path = path.trim().trim_start_matches("./");
+        skill::check_file(path)?;
+        let no_file = || SkillsError::NoFile { name: found.name.clone(), path: path.to_string() };
+        // Listed means readable: a path that is not in the listing is refused
+        // here rather than resolved on disk, so a symlink a skill carried in
+        // cannot point a read somewhere else.
+        if !found.files.iter().any(|listed| listed == path) {
+            return Err(no_file());
+        }
+        let dir = self.dir(found.scope).ok_or_else(no_file)?;
+        let full = dir.join(&found.name).join(path);
+        let text = match fs::read(&full) {
+            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Err(no_file()),
+            Err(err) => return Err(io(&full)(err)),
+        };
+        let (text, cut) = crate::domain::cut_to(&text, MAX_BODY);
+        Ok(if cut { format!("{text}\n\n[The rest of this file was cut.]") } else { text })
     }
 
     /// Creates or replaces one skill in one scope.
@@ -193,6 +285,112 @@ impl Skills {
         fs::write(&temp, clean.render()).map_err(io(&temp))?;
         fs::rename(&temp, &path).map_err(io(&path))?;
         self.load(scope, &clean.name)
+    }
+
+    /// Puts a skill written elsewhere into one scope, whole: its `SKILL.md` as
+    /// its author wrote it, every file beside it, and where it came from.
+    ///
+    /// Assembled in a hidden directory and renamed into place, so a crew never
+    /// reads a skill whose references are half written, and a failure leaves
+    /// nothing behind. Never over one already there: an operator who meant to
+    /// replace one deletes it first, and one who did not mean to keeps theirs.
+    pub fn install(
+        &self,
+        scope: Scope,
+        package: &Package,
+        origin: Option<&str>,
+    ) -> Result<Skill, SkillsError> {
+        let Some(dir) = self.dir(scope) else {
+            return Err(SkillsError::ReadOnly(package.name.clone()));
+        };
+        let folder = dir.join(&package.name);
+        if folder.exists() {
+            return Err(SkillsError::Taken(package.name.clone()));
+        }
+        if self.in_scope(scope).len() >= skill::MAX_PER_SCOPE {
+            return Err(SkillError::Full.into());
+        }
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|since| since.as_nanos())
+            .unwrap_or(0);
+        let staging = dir.join(format!(".incoming-{}-{stamp}", package.name));
+        let assembled = (|| {
+            let mut entries: Vec<(&str, &str)> = vec![("SKILL.md", package.text.as_str())];
+            entries.extend(package.files.iter().map(|(p, c)| (p.as_str(), c.as_str())));
+            if let Some(origin) = origin {
+                entries.push((ORIGIN, origin));
+            }
+            for (path, contents) in entries {
+                let target = staging.join(path);
+                if let Some(parent) = target.parent() {
+                    fs::create_dir_all(parent).map_err(io(parent))?;
+                }
+                fs::write(&target, contents).map_err(io(&target))?;
+            }
+            fs::rename(&staging, &folder).map_err(io(&folder))
+        })();
+        if let Err(err) = assembled {
+            let _ = fs::remove_dir_all(&staging);
+            return Err(err);
+        }
+        self.load(scope, &package.name)
+    }
+
+    /// Moves one skill to another name in the same scope, with everything it
+    /// carries. False when the new name is taken, which leaves both alone.
+    pub fn rename(&self, scope: Scope, from: &str, to: &str) -> Result<bool, SkillsError> {
+        skill::check_name(from)?;
+        skill::check_name(to)?;
+        let Some(dir) = self.dir(scope) else {
+            return Err(SkillsError::ReadOnly(from.to_string()));
+        };
+        let (old, new) = (dir.join(from), dir.join(to));
+        if new.exists() || !old.exists() {
+            return Ok(false);
+        }
+        fs::rename(&old, &new).map_err(io(&new))?;
+        Ok(true)
+    }
+
+    /// Copies each starter skill into the operator's scope the first time a
+    /// workspace is opened by a build that ships it, and never again.
+    ///
+    /// A name is offered once. One the operator deleted is not put back on
+    /// the next start, and one they already had under that name is left as
+    /// theirs rather than overwritten. Returns the names added.
+    pub fn offer(&self, starters: &[(&str, &[(&str, &str)])]) -> Result<Vec<String>, SkillsError> {
+        let ledger = self.root.join(OFFERED);
+        let mut offered: Vec<String> = match fs::read_to_string(&ledger) {
+            Ok(text) => {
+                text.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect()
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Vec::new(),
+            Err(err) => return Err(io(&ledger)(err)),
+        };
+        let mut added = Vec::new();
+        for (name, files) in starters {
+            if offered.iter().any(|done| done == name) {
+                continue;
+            }
+            let files = files.iter().map(|(p, c)| (p.to_string(), c.to_string())).collect();
+            let package = Package::new(name, files)?;
+            match self.install(Scope::Workspace, &package, None) {
+                Ok(_) => added.push(name.to_string()),
+                // The operator's own under that name, or a scope with no room:
+                // theirs either way, and not asked again.
+                Err(SkillsError::Taken(_)) | Err(SkillsError::Invalid(SkillError::Full)) => {}
+                Err(err) => return Err(err),
+            }
+            offered.push(name.to_string());
+        }
+        fs::create_dir_all(&self.root).map_err(io(&self.root))?;
+        let mut text = offered.join("\n");
+        text.push('\n');
+        let temp = self.root.join(".defaults.tmp");
+        fs::write(&temp, text).map_err(io(&temp))?;
+        fs::rename(&temp, &ledger).map_err(io(&ledger))?;
+        Ok(added)
     }
 
     /// Removes one skill from one scope. False when there was none.
@@ -226,6 +424,35 @@ fn without_body(mut found: Skill) -> Skill {
     found
 }
 
+/// Every file under a skill's directory but its `SKILL.md` and Guaca's own dot
+/// names, as sorted relative paths. Regular files only: a symlink is not
+/// followed, so nothing a skill carries can list a file outside it.
+fn beside(folder: &Path) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut pending = vec![(folder.to_path_buf(), String::new())];
+    while let Some((dir, prefix)) = pending.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        for entry in entries.filter_map(|entry| entry.ok()) {
+            let Some(part) = entry.file_name().to_str().map(str::to_string) else { continue };
+            if part.starts_with('.') {
+                continue;
+            }
+            let path = format!("{prefix}{part}");
+            match entry.file_type() {
+                Ok(kind) if kind.is_dir() => pending.push((entry.path(), format!("{path}/"))),
+                Ok(kind) if kind.is_file() && path != "SKILL.md" => found.push(path),
+                _ => {}
+            }
+        }
+        if found.len() > MAX_FILES {
+            break;
+        }
+    }
+    found.sort();
+    found.truncate(MAX_FILES);
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,6 +479,39 @@ mod tests {
                 "{} is not reserved",
                 found.name
             );
+        }
+    }
+
+    #[test]
+    fn every_starter_is_a_skill_this_build_can_hold_and_names_no_tool_it_does_not_have() {
+        for (name, files) in STARTERS {
+            let files = files.iter().map(|(p, c)| (p.to_string(), c.to_string())).collect();
+            let package = Package::new(name, files).unwrap_or_else(|err| panic!("{name}: {err}"));
+            assert_eq!(package.name, *name);
+            assert!(
+                package.description.chars().count() <= MAX_DESCRIPTION,
+                "{name}: a starter's description is read whole, so it fits the line"
+            );
+            assert!(package.description.starts_with("Use "), "{name} says when to load it");
+            let (_, _, body) = skill::parse(&package.text).unwrap();
+            // Written for another harness first. Each of these is a tool or a
+            // word from there that a model here would try to call or look for.
+            for foreign in [
+                "web_search",
+                "web_extract",
+                "browser_navigate",
+                "delegate_task",
+                "execute_code",
+                "search_files",
+                "skill_view",
+                "terminal(",
+                "Hermes",
+                "hermes",
+                "scripts/",
+                "\u{2014}",
+            ] {
+                assert!(!body.contains(foreign), "{name} mentions `{foreign}`");
+            }
         }
     }
 
@@ -306,6 +566,124 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].description, "When taking notes");
         assert!(listed[0].updated_at > 0);
+    }
+
+    fn package(name: &str, files: &[(&str, &str)]) -> Package {
+        let text =
+            format!("---\nname: {name}\ndescription: when {name}\nlicense: MIT\n---\n# {name}\n");
+        let mut all = vec![("SKILL.md".to_string(), text)];
+        all.extend(files.iter().map(|(p, c)| (p.to_string(), c.to_string())));
+        Package::new(name, all).unwrap()
+    }
+
+    #[test]
+    fn an_install_never_lands_on_a_skill_already_there_and_leaves_nothing_when_refused() {
+        let (skills, _dir) = store();
+        skills.write(Scope::Workspace, &clean("pdf", "mine")).unwrap();
+        let refused = skills.install(Scope::Workspace, &package("pdf", &[]), None).unwrap_err();
+        assert!(matches!(refused, SkillsError::Taken(ref name) if name == "pdf"), "{refused}");
+        assert_eq!(skills.load(Scope::Workspace, "pdf").unwrap().description, "mine");
+        assert!(matches!(
+            skills.install(Scope::Bundled, &package("x", &[]), None),
+            Err(SkillsError::ReadOnly(_))
+        ));
+        let root = skills.dir(Scope::Workspace).unwrap();
+        let leftovers: Vec<_> = fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(leftovers, ["pdf"], "no staging directory is left behind");
+    }
+
+    #[test]
+    fn an_installed_skill_carries_its_files_its_origin_and_its_authors_front_matter() {
+        let (skills, _dir) = store();
+        let pdf = package("pdf", &[("reference.md", "# Ref"), ("scripts/fill.py", "print()")]);
+        let origin = "https://skills.sh/anthropics/skills/pdf";
+        let added = skills.install(Scope::Workspace, &pdf, Some(origin)).unwrap();
+        assert_eq!(added.files, ["reference.md", "scripts/fill.py"]);
+        assert_eq!(added.origin.as_deref(), Some(origin));
+        let on_disk =
+            fs::read_to_string(skills.dir(Scope::Workspace).unwrap().join("pdf/SKILL.md"));
+        assert!(on_disk.unwrap().contains("license: MIT"));
+        // Listed with the rest, and its files never counted as skills.
+        assert_eq!(skills.in_scope(Scope::Workspace).len(), 1);
+    }
+
+    #[test]
+    fn a_file_is_read_only_from_a_skill_that_lists_it() {
+        let (skills, dir) = store();
+        let ours = GroupId::new();
+        let pdf = package("pdf", &[("reference.md", "# Ref")]);
+        skills.install(Scope::Crew { group_id: ours }, &pdf, None).unwrap();
+        fs::write(dir.path().join("secret.txt"), "not yours").unwrap();
+
+        assert_eq!(skills.read_file(Some(ours), "pdf", "reference.md").unwrap(), "# Ref");
+        assert_eq!(skills.read_file(Some(ours), "pdf", "./reference.md").unwrap(), "# Ref");
+        for (path, expect_invalid) in
+            [("../../../secret.txt", true), (".origin", true), ("missing.md", false)]
+        {
+            let refused = skills.read_file(Some(ours), "pdf", path).unwrap_err();
+            let invalid = matches!(refused, SkillsError::Invalid(SkillError::BadFile(_)));
+            let missing = matches!(refused, SkillsError::NoFile { .. });
+            assert!(if expect_invalid { invalid } else { missing }, "{path}: {refused}");
+        }
+        // Another crew does not see the skill at all.
+        let other = skills.read_file(Some(GroupId::new()), "pdf", "reference.md").unwrap_err();
+        assert!(matches!(other, SkillsError::NotFound(_)), "{other}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_a_skill_carries_is_neither_listed_nor_read() {
+        let (skills, dir) = store();
+        skills.install(Scope::Workspace, &package("pdf", &[]), None).unwrap();
+        fs::write(dir.path().join("secret.txt"), "not yours").unwrap();
+        let folder = skills.dir(Scope::Workspace).unwrap().join("pdf");
+        std::os::unix::fs::symlink(dir.path().join("secret.txt"), folder.join("link.md")).unwrap();
+        assert!(skills.load(Scope::Workspace, "pdf").unwrap().files.is_empty());
+        assert!(matches!(
+            skills.read_file(None, "pdf", "link.md"),
+            Err(SkillsError::NoFile { .. })
+        ));
+    }
+
+    #[test]
+    fn a_rename_carries_the_files_and_never_lands_on_another_skill() {
+        let (skills, _dir) = store();
+        skills.install(Scope::Workspace, &package("pdf", &[("a.md", "a")]), None).unwrap();
+        skills.write(Scope::Workspace, &clean("taken", "mine")).unwrap();
+        assert!(!skills.rename(Scope::Workspace, "pdf", "taken").unwrap());
+        assert_eq!(skills.load(Scope::Workspace, "taken").unwrap().description, "mine");
+        assert!(skills.rename(Scope::Workspace, "pdf", "documents").unwrap());
+        assert_eq!(skills.load(Scope::Workspace, "documents").unwrap().files, ["a.md"]);
+        assert!(matches!(skills.load(Scope::Workspace, "pdf"), Err(SkillsError::NotFound(_))));
+    }
+
+    const STARTER: &str = "---\nname: cite\ndescription: When citing\n---\nCite it.";
+
+    #[test]
+    fn a_starter_skill_is_offered_once_and_never_over_the_operators_own() {
+        let (skills, _dir) = store();
+        skills.write(Scope::Workspace, &clean("mine", "the operator's")).unwrap();
+        let first: &[(&str, &[(&str, &str)])] = &[
+            ("cite", &[("SKILL.md", STARTER), ("LICENSE.txt", "MIT")]),
+            ("mine", &[("SKILL.md", STARTER)]),
+        ];
+        assert_eq!(skills.offer(first).unwrap(), ["cite"]);
+        assert_eq!(skills.load(Scope::Workspace, "cite").unwrap().files, ["LICENSE.txt"]);
+        assert_eq!(skills.load(Scope::Workspace, "mine").unwrap().description, "the operator's");
+
+        // Deleted by the operator, and a later start does not put it back.
+        skills.delete(Scope::Workspace, "cite").unwrap();
+        assert!(skills.offer(first).unwrap().is_empty());
+        assert!(matches!(skills.load(Scope::Workspace, "cite"), Err(SkillsError::NotFound(_))));
+
+        // A later build that ships one more offers only the new one.
+        let later: &[(&str, &[(&str, &str)])] =
+            &[("cite", &[("SKILL.md", STARTER)]), ("grill", &[("SKILL.md", STARTER)])];
+        assert_eq!(skills.offer(later).unwrap(), ["grill"]);
     }
 
     #[test]

@@ -375,12 +375,32 @@ impl From<crate::notebook::NotebookError> for CommandError {
     }
 }
 
+impl From<crate::skills_sh::DirectoryError> for CommandError {
+    fn from(err: crate::skills_sh::DirectoryError) -> Self {
+        use crate::skills_sh::DirectoryError;
+        let kind = match err {
+            DirectoryError::Store(inner) => return inner.into(),
+            DirectoryError::Missing(_) => "notFound",
+            DirectoryError::Changed => "changed",
+            DirectoryError::NotAddable(_)
+            | DirectoryError::ShortQuery
+            | DirectoryError::Invalid(_) => "validation",
+            DirectoryError::Unreachable(_)
+            | DirectoryError::Busy
+            | DirectoryError::Status(_)
+            | DirectoryError::Unexpected(_) => "directory",
+        };
+        CommandError::new(kind, err.to_string())
+    }
+}
+
 impl From<crate::skills::SkillsError> for CommandError {
     fn from(err: crate::skills::SkillsError) -> Self {
         use crate::skills::SkillsError;
         let kind = match &err {
-            SkillsError::NotFound(_) => "notFound",
+            SkillsError::NotFound(_) | SkillsError::NoFile { .. } => "notFound",
             SkillsError::ReadOnly(_) | SkillsError::NotYours { .. } => "readOnly",
+            SkillsError::Taken(_) => "validation",
             SkillsError::Invalid(_) => "validation",
             SkillsError::Io { .. } => "storage",
         };
@@ -2172,9 +2192,17 @@ pub async fn save_skill(state: &AppState, scope: SkillScope, draft: SkillDraft) 
     let scope = skill_scope(state, scope)?;
     let clean = crate::domain::skill::Clean::new(&draft.name, &draft.description, &draft.body)
         .map_err(crate::skills::SkillsError::from)?;
-    let written = state.runtime.skills().write(scope, &clean)?;
-    if let Some(previous) = draft.previous.filter(|previous| *previous != written.name) {
-        state.runtime.skills().delete(scope, &previous)?;
+    let skills = state.runtime.skills();
+    // A rename moves the directory first, so the files a skill carries go
+    // with it; only onto a name already taken is it a write and a delete.
+    let previous = draft.previous.filter(|previous| *previous != clean.name);
+    let moved = match &previous {
+        Some(previous) => skills.rename(scope, previous, &clean.name)?,
+        None => false,
+    };
+    let written = skills.write(scope, &clean)?;
+    if let Some(previous) = previous.filter(|_| !moved) {
+        skills.delete(scope, &previous)?;
     }
     state.runtime.emit(UiEvent::SkillsChanged { scope });
     Ok(written)
@@ -2187,6 +2215,43 @@ pub async fn delete_skill(state: &AppState, scope: SkillScope, name: String) -> 
         state.runtime.emit(UiEvent::SkillsChanged { scope });
     }
     Ok(deleted)
+}
+
+// ---- skills.sh -----------------------------------------------------------
+
+pub async fn skill_directory(
+    _state: &AppState,
+    board: crate::skills_sh::Board,
+    page: u32,
+) -> Reply<crate::skills_sh::Page> {
+    Ok(crate::skills_sh::Directory::new().board(board, page).await?)
+}
+
+pub async fn search_skill_directory(
+    _state: &AppState,
+    query: String,
+) -> Reply<Vec<crate::skills_sh::Listing>> {
+    Ok(crate::skills_sh::Directory::new().search(&query).await?)
+}
+
+pub async fn preview_directory_skill(
+    _state: &AppState,
+    id: String,
+) -> Reply<crate::skills_sh::Preview> {
+    Ok(crate::skills_sh::Directory::new().preview(&id).await?)
+}
+
+pub async fn add_directory_skill(
+    state: &AppState,
+    scope: SkillScope,
+    id: String,
+    hash: String,
+) -> Reply<Skill> {
+    let scope = skill_scope(state, scope)?;
+    let directory = crate::skills_sh::Directory::new();
+    let added = directory.add(state.runtime.skills(), scope, &id, &hash).await?;
+    state.runtime.emit(UiEvent::SkillsChanged { scope });
+    Ok(added)
 }
 
 // ---- agents --------------------------------------------------------------
