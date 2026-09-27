@@ -366,7 +366,9 @@ describe("what the operator is shown", () => {
     // A sign-in, a credential and a linked directory all have to belong to
     // something, and there is no row to hang any of them on yet.
     open(null);
-    expect((screen.getByRole("tab", { name: "Plugins" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("tab", { name: "Connectors" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
     expect((screen.getByRole("tab", { name: "Secrets" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("tab", { name: "Repositories" }) as HTMLButtonElement).disabled).toBe(
       true,
@@ -382,7 +384,7 @@ describe("what the operator is shown", () => {
     pane("Repositories");
     expect(await screen.findByText("Link a repository")).toBeTruthy();
 
-    pane("Plugins");
+    pane("Connectors");
     await waitFor(() => expect(groupPlugins).toHaveBeenCalled());
     expect(screen.queryByText("Link a repository")).toBeNull();
     expect(screen.queryByText("Add a secret")).toBeNull();

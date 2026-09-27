@@ -62,7 +62,7 @@ const SECTION_LABELS: Record<Section, string> = {
   general: "General",
   provider: "Provider",
   limits: "Limits",
-  plugins: "Plugins",
+  plugins: "Connectors",
   secrets: "Secrets",
   skills: "Skills",
   repositories: "Repositories",
@@ -698,11 +698,12 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                 holding the account that issues refunds. Secrets have their own pane and agent grants. */}
             {section === "plugins" && group && (
               <>
-                <h3 className="settings__title">Plugins</h3>
+                <h3 className="settings__title">Connectors</h3>
                 <p className="settings__lede">
-                  Sign in once, on behalf of this group, then choose which agents get it. Every
-                  agent is the default; narrow the ones that reach money or production. None of them
-                  ever holds the sign-in.
+                  MCP servers this crew can reach. Sign in once, on behalf of the crew, then choose
+                  which agents get each one and which of its tools they may call. Every agent is the
+                  default; narrow the ones that reach money or production. None of them ever holds
+                  the sign-in.
                 </p>
                 <PluginList groupId={group.id} crew={members} />
               </>

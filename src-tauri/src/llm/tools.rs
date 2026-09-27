@@ -191,9 +191,9 @@ pub fn plugin_specs(connected: &[PluginToolset]) -> Vec<ToolSpec> {
                 // tool descriptions has no other signal that `run_sql` reaches
                 // the operator's real database rather than a local one.
                 description: if tool.description.trim().is_empty() {
-                    format!("From the {} plugin.", kind.label())
+                    format!("From the {} connector.", kind.label())
                 } else {
-                    format!("{} plugin. {}", kind.label(), tool.description.trim())
+                    format!("{} connector. {}", kind.label(), tool.description.trim())
                 },
                 // Passed through untouched. It is the server's schema, the
                 // server validates against it, and anything Guaca did to it
@@ -4620,7 +4620,7 @@ mod tests {
         // The description says where the call reaches. A model reading twenty
         // of these has no other signal that `run_sql` is somebody's real
         // database rather than a scratch one.
-        assert!(specs[0].description.starts_with("Neon plugin."), "{}", specs[0].description);
+        assert!(specs[0].description.starts_with("Neon connector."), "{}", specs[0].description);
     }
 
     #[test]

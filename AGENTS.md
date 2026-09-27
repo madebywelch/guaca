@@ -340,6 +340,17 @@ of calls, the runtime dispatches them exactly as it does for the other two, and
 its loop over because it is a different unit of work with its own budget. A turn
 cannot: it is the unit the five limits are written in.
 
+**Connector, tool, skill, secret: four words, and the code's older name for
+two of them.** A connector is an MCP server a crew signs in to; the code calls
+it a plugin (`domain/plugin.rs`, `mcp.rs`, the `*_plugin*` commands, the
+`plugins` table), because those names are the wire contract with a desktop on
+an older release. A tool is one function an agent calls, a connector's or
+Guaca's own. A skill is a markdown document of instructions (`docs/SKILLS.md`).
+A secret is a pasted credential handed to chosen agents as an environment
+variable; the code calls it a `Connector` (`domain/connector.rs`), which
+predates the other meaning. Say connector, tool, skill and secret wherever a
+person or a model reads it.
+
 **A calendar records and a routine fires, and they are two tables because of
 that one word.** Both are lists an agent keeps and a model reads them as near
 synonyms, so the split is enforced in the design rather than in wording alone: a
@@ -446,7 +457,7 @@ the gotchas file says what it already cost somebody to change it.
 | A ChatGPT sign-in, the `claude` program, either of their wires | `docs/gotchas/providers.md` |
 | Model suggestions, and whether a model can be shown a picture | `docs/gotchas/models.md` |
 | Repositories, the two doors, the gate, either harness, the bridge | `docs/gotchas/coding.md` |
-| Plugins, MCP, and the OAuth they and the account share | `docs/gotchas/plugins.md` |
+| Connectors (plugins in the code), MCP, and the OAuth they and the account share | `docs/gotchas/plugins.md` |
 | The daemon, a browser as a client, the boot both hosts share | `docs/gotchas/hosting.md` |
 | Computers, browsers, sandboxes, sign-ins found on them | `docs/gotchas/machines.md` |
 | Schedules, triggers, firings | `docs/gotchas/routines.md` |

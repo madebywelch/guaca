@@ -1,4 +1,9 @@
-# Plugins
+# Connectors
+
+The app calls these **connectors**; the code, the commands and the tables
+still call them plugins, and this document uses the code's word below. The
+command names are the wire contract with a desktop on an older release, and
+renaming them would cut that desktop off from a newer host for a word.
 
 A plugin is a server a crew signs in to once. After that, the agents that crew
 chose are offered that server's tools on every turn, and none of them ever holds

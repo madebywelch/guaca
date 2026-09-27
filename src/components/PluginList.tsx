@@ -218,14 +218,14 @@ function callers(plugin: Plugin, tool: PluginToolCard, crew: AgentCard[]): strin
       ? "switched off: nobody in this group can call it"
       : `nobody can call it: ${named.map((agent) => agent.name).join(", ")} ${
           named.length === 1 ? "is" : "are"
-        } not on this plugin`;
+        } not on this connector`;
   }
   const short = reach.map((agent) => agent.name).join(", ");
   const lost = named.filter((agent) => !allows(plugin.access, agent.id));
   if (lost.length === 0) return `called by ${short}`;
   return `called by ${short}; ${lost.map((agent) => agent.name).join(", ")} ${
     lost.length === 1 ? "is" : "are"
-  } not on this plugin`;
+  } not on this connector`;
 }
 
 /**
@@ -447,7 +447,8 @@ export function PluginList({ groupId, crew }: Props) {
     }
   };
 
-  if (offers === null || connected === null) return <p className="field__hint">Loading plugins…</p>;
+  if (offers === null || connected === null)
+    return <p className="field__hint">Loading connectors…</p>;
 
   return (
     <div className="access">

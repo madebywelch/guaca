@@ -1532,7 +1532,7 @@ pub async fn readdress_plugin(
         .group_plugins(group_id)?
         .into_iter()
         .find(|held| held.id == id)
-        .ok_or_else(|| CommandError::new("validation", "that plugin is not in this group"))?;
+        .ok_or_else(|| CommandError::new("validation", "that connector is not in this crew"))?;
     if !held.custom {
         return Err(CommandError::new(
             "validation",
@@ -1624,7 +1624,7 @@ pub async fn check_plugin(state: &AppState, id: PluginId) -> Reply<ServerReport>
         .runtime
         .store()
         .plugin_dial(id)?
-        .ok_or_else(|| CommandError::new("validation", "that plugin is not connected"))?;
+        .ok_or_else(|| CommandError::new("validation", "that connector is not connected"))?;
 
     // The same two-line resolution `connect_plugin` does, and for the same
     // reason: an account-backed plugin's server is the operator's own account

@@ -464,7 +464,7 @@ describe("PluginList", () => {
     render(<PluginList groupId={GROUP} crew={CREW} />);
 
     fireEvent.click(await screen.findByText("Show all 1"));
-    expect(screen.getByText(/nobody can call it: Scribe is not on this plugin/)).toBeTruthy();
+    expect(screen.getByText(/nobody can call it: Scribe is not on this connector/)).toBeTruthy();
   });
 
   it("says when a connected plugin has nothing left switched on", async () => {

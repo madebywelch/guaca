@@ -7694,7 +7694,7 @@ impl Runtime {
                     if theirs.is_empty() {
                         continue;
                     }
-                    format!("the {} plugin's {}", plugin.kind.label(), theirs.join(", "))
+                    format!("the {} connector's {}", plugin.kind.label(), theirs.join(", "))
                 } else {
                     // Not on the plugin at all, so every tool this peer holds
                     // is one this agent lacks. A plugin where that is none is a
@@ -7702,7 +7702,7 @@ impl Runtime {
                     if !plugin.tools.iter().any(|tool| tool.access.allows(card.id)) {
                         continue;
                     }
-                    format!("the {} plugin", plugin.kind.label())
+                    format!("the {} connector", plugin.kind.label())
                 };
                 reaches.entry(card.id).or_default().push(entry);
             }

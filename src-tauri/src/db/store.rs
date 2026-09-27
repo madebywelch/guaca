@@ -118,7 +118,7 @@ pub enum StoreError {
     #[error("agent {0} is not in this group, so it cannot be given this group's access")]
     AgentNotInGroup(AgentId),
     #[error(
-        "this plugin publishes no tool called {1:?}, so there is nothing to allow or deny; the \
+        "this connector publishes no tool called {1:?}, so there is nothing to allow or deny; the \
          list on screen is older than the one the server last sent, so connect it again"
     )]
     PluginToolNotFound(PluginId, String),

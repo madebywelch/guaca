@@ -1106,7 +1106,7 @@ It is sectioned on the Settings shell for the same reason Settings is: a group
 now decides who pays for its turns, which model answers them, how long a call may
 take and how far a conversation may run, and one scroll put the name and the
 delete button a page apart. The state lives in the shell, so changing section
-cannot discard a half-typed endpoint. Plugins, Secrets and Repositories are disabled
+cannot discard a half-typed endpoint. Connectors, Secrets and Repositories are disabled
 until the group exists, because a sign-in, a credential and a linked directory
 all have to belong to something.
 

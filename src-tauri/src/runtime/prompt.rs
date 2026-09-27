@@ -353,7 +353,8 @@ pub fn system_prompt(
         // has Neon behave differently when asked "can we check the database".
         if !plugins.is_empty() {
             out.push_str(
-                "Your crew has these plugins connected. The sign-in behind each one is the \
+                "Your crew has these connectors: MCP servers it signed in to. The sign-in behind \
+                 each one is the \
                  operator's, held by Guaca: there is nothing for you to authenticate, no key to \
                  find, and no command to run. These tools do not depend on a browser being \
                  signed in. The available names below come from this turn's tool definitions; \
@@ -419,7 +420,7 @@ pub fn system_prompt(
                 // level up.
                 if !set.elsewhere.is_empty() {
                     out.push_str(&format!(
-                        "  Someone else's on this plugin, not yours: {}. Hand that part to the \
+                        "  Someone else's on this connector, not yours: {}. Hand that part to the \
                          peer your roster names for it rather than reporting it cannot be \
                          done.\n",
                         set.elsewhere.join(", "),
@@ -1828,7 +1829,7 @@ mod tests {
 
         assert!(prompt.contains("Switched off by the operator"), "{prompt}");
         assert!(prompt.contains("delete_inbox"), "{prompt}");
-        assert!(prompt.contains("Someone else's on this plugin"), "{prompt}");
+        assert!(prompt.contains("Someone else's on this connector"), "{prompt}");
         assert!(prompt.contains("send"), "{prompt}");
         // The one that decides which way the agent goes: a peer for one, the
         // operator for the other, and never the same sentence for both.
@@ -1871,7 +1872,7 @@ mod tests {
         // pays for on every turn.
         let c = card("Researcher");
         let prompt = prompt_for(&c, &[], "", ReplyMode::ToOperator);
-        assert!(!prompt.contains("plugins connected"), "{prompt}");
+        assert!(!prompt.contains("these connectors"), "{prompt}");
     }
 
     #[test]

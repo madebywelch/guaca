@@ -72,7 +72,9 @@ pub enum OauthError {
     },
     #[error("{url} answered HTTP {status} when asked {what}: {body}")]
     Status { what: &'static str, url: String, status: u16, body: String },
-    #[error("{url} does not publish where to sign in ({detail}); this plugin cannot be connected")]
+    #[error(
+        "{url} does not publish where to sign in ({detail}); this connector cannot be connected"
+    )]
     NoMetadata { url: String, detail: String },
     #[error(
         "{issuer} does not let an application register itself, so Guaca cannot sign in to it \
@@ -107,7 +109,7 @@ pub enum OauthError {
     IssuerMismatch { expected: String, named: String },
     #[error("{issuer} issued a grant with no access token in it")]
     NoToken { issuer: String },
-    #[error("this plugin has no refresh token, so its sign-in cannot be renewed")]
+    #[error("this connector has no refresh token, so its sign-in cannot be renewed")]
     NoRefreshToken,
 }
 

@@ -1,6 +1,6 @@
 ---
 name: guaca
-description: "Guaca itself: what the operator sees, its settings, where it runs, updates, skills, plugins, secrets, routines and the calendar. Load it before answering a question about the app or changing how it is set up."
+description: "Guaca itself: what the operator sees, its settings, where it runs, updates, skills, connectors, secrets, routines and the calendar. Load it before answering a question about the app or changing how it is set up."
 ---
 
 # Guaca
@@ -18,7 +18,7 @@ pane the operator has open), read it with `settings` rather than guessing.
 ## Where it runs
 
 Guaca has two halves. The **host** (`guacad`) runs every agent, routine, coding
-job and plugin. The **app** is a window on the operator's Mac, or a browser tab,
+job and connector. The **app** is a window on the operator's Mac, or a browser tab,
 that shows the host. The host is either a container on the operator's Mac or a
 remote machine they connected to. Closing the window stops nothing on the host.
 A host on a sleeping laptop sleeps with it; unattended work needs a host that
@@ -31,7 +31,8 @@ is the host itself, and `host.docker.internal` reaches the Mac from a container.
 
 - **The rail**, on the left: crews and their agents. Each agent has a channel,
   which is its conversation with the operator. Crews are places the operator can
-  go inside; one crew never sees another's agents, calendar, plugins or secrets.
+  go inside; one crew never sees another's agents, calendar, connectors or
+  secrets.
 - **The channel**, in the middle: the conversation. Your tool calls show as
   small chips under your reply, and the operator can open them.
 - **The inspector**, on the right: the selected agent's memory, working notes,
@@ -78,7 +79,7 @@ The operator edits them in **Settings**:
   crews that do not set their own.
 - **Machines**: the E2B key for computers and the Kernel key for browsers, and
   how long each may sit idle before it sleeps.
-- **Account**: the optional Guaca account, used only by the Google plugin.
+- **Account**: the optional Guaca account, used only by the Google connector.
 - **Appearance**: interface size, and light or dark. Kept per window.
 - **Notifications**: what may interrupt the operator. Kept per window.
 - **Shortcuts**: every key the app answers to.
@@ -120,7 +121,7 @@ it would do and why. `read` lists the buttons with their ids, and
 - **Provider**: a provider, model and key for this crew only. Anything left
   blank uses the app's.
 - **Limits**: this crew's own limits.
-- **Plugins**: services the crew signed in to, like Linear or Stripe, and
+- **Connectors**: MCP servers the crew signed in to, like Linear or Stripe, and
   which agents may use which of their tools.
 - **Secrets**: credentials handed to chosen agents as environment variables on
   their machine or in their commands.
@@ -143,13 +144,16 @@ a deploy, a report format, a customer's quirks. Keep the description to the
 one line that says when to load it. Do not copy this skill or the operator's
 into your crew; point at them instead.
 
-## Plugins, secrets and sign-ins
+## Connectors, tools, skills, secrets and sign-ins
 
-Three different ways you reach the outside, and they are not interchangeable:
+Words that are easy to mix up, and are not interchangeable:
 
-- **Plugins** are MCP servers the crew signed in to. Their tools are named
+- **Connectors** are MCP servers the crew signed in to. Their tools are named
   `server__tool` and appear in your tool list only if the operator gave them to
   you. The call acts on the operator's real account.
+- **Tools** are single functions you call: `skill`, `settings`, `schedule`,
+  `calendar`, `send_message` and the rest, and every connector's own.
+- **Skills** are markdown instructions you read with `skill`.
 - **Secrets** are credentials in environment variables on your machine or in
   your commands. You never see the value, only which variable holds it.
 - **Sign-ins** are sessions in your browser or on your computer, found by
@@ -175,7 +179,7 @@ operator to review them rather than being repeated.
 
 - You cannot read an API key, a secret's value, or a sign-in's cookies. Nothing
   that crosses into a prompt carries one.
-- You cannot touch another crew: its agents, skills, calendar, plugins or
+- You cannot touch another crew: its agents, skills, calendar, connectors or
   secrets.
 - You cannot change the operator's appearance or notification preferences;
   those belong to each window.
