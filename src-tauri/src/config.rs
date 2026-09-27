@@ -455,8 +455,8 @@ pub enum ConfigError {
     },
     #[error("base URL must start with http:// or https://, got {got:?}")]
     BadBaseUrl { got: String },
-    #[error("model must not be blank")]
-    BlankModel,
+    #[error("{field} must not be blank")]
+    Blank { field: &'static str },
 }
 
 /// Normalizes and validates an operator-supplied base URL.
@@ -472,6 +472,97 @@ pub fn normalize_base_url(input: &str) -> Result<String, ConfigError> {
         return Err(ConfigError::BadBaseUrl { got: input.to_string() });
     }
     Ok(cleaned.to_string())
+}
+
+// ---- changing settings ---------------------------------------------------
+
+/// Absent fields are left alone. `apiKey: ""` clears the key; omitting it
+/// keeps the existing one, which is what lets the UI show a redacted value
+/// without ever round-tripping the secret.
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SettingsPatch {
+    pub operator_name: Option<String>,
+    pub provider: Option<Provider>,
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+    pub default_model: Option<String>,
+    pub subscription_model: Option<String>,
+    pub reasoning_effort: Option<crate::domain::effort::ReasoningEffort>,
+    pub request_timeout_secs: Option<u64>,
+    pub limits: Option<GuardLimits>,
+    pub e2b_api_key: Option<String>,
+    pub computer_idle_minutes: Option<u32>,
+    pub kernel_api_key: Option<String>,
+    pub browser_idle_minutes: Option<u32>,
+    pub browser_stealth: Option<bool>,
+}
+
+impl AppConfig {
+    /// Applies a patch in memory: the one set of rules every writer shares, the
+    /// settings pane in any client and an agent alike.
+    ///
+    /// Clamped rather than refused where a number is out of range, because the
+    /// pane reads the stored value back and shows what was kept.
+    pub fn apply(&mut self, patch: SettingsPatch) -> Result<(), ConfigError> {
+        if let Some(name) = patch.operator_name {
+            self.operator_name = name.trim().to_string();
+        }
+        if let Some(provider) = patch.provider {
+            self.inference.provider = provider;
+        }
+        if let Some(base_url) = patch.base_url {
+            self.inference.base_url = normalize_base_url(&base_url)?;
+        }
+        if let Some(key) = patch.e2b_api_key {
+            self.e2b.api_key = key.trim().to_string();
+        }
+        if let Some(minutes) = patch.computer_idle_minutes {
+            // A machine that sleeps after zero minutes can never be used, and one
+            // that never sleeps is a bill nobody chose.
+            self.e2b.idle_minutes = minutes.clamp(1, 24 * 60);
+        }
+        if let Some(key) = patch.kernel_api_key {
+            self.kernel.api_key = key.trim().to_string();
+        }
+        if let Some(minutes) = patch.browser_idle_minutes {
+            // Wider at the top than the machine's, because a browser on standby
+            // costs nothing and the provider allows three days. Wider at the bottom
+            // is not possible: ten seconds is its floor, which is a fifth of a
+            // minute, so one minute is as short as this can offer.
+            self.kernel.idle_minutes = minutes.clamp(1, 72 * 60);
+        }
+        if let Some(stealth) = patch.browser_stealth {
+            self.kernel.stealth = stealth;
+        }
+        if let Some(api_key) = patch.api_key {
+            self.inference.api_key = api_key.trim().to_string();
+        }
+        if let Some(model) = patch.default_model {
+            let trimmed = model.trim();
+            if trimmed.is_empty() {
+                return Err(ConfigError::Blank { field: "default model" });
+            }
+            self.inference.default_model = trimmed.to_string();
+        }
+        if let Some(effort) = patch.reasoning_effort {
+            self.inference.reasoning_effort = effort;
+        }
+        if let Some(model) = patch.subscription_model {
+            let trimmed = model.trim();
+            if trimmed.is_empty() {
+                return Err(ConfigError::Blank { field: "subscription model" });
+            }
+            self.inference.subscription_model = trimmed.to_string();
+        }
+        if let Some(timeout) = patch.request_timeout_secs {
+            self.inference.request_timeout_secs = timeout.clamp(5, 900);
+        }
+        if let Some(limits) = patch.limits {
+            self.limits = limits.sanitized();
+        }
+        Ok(())
+    }
 }
 
 /// Reads stored settings, migrating and rewriting them if they are outdated.
