@@ -22,7 +22,7 @@ use crate::domain::now_ms;
 const COLUMNS: &str = "SELECT r.id, r.group_id, r.owner_id, o.name,
         (o.lifecycle = 'terminated' OR o.group_id <> r.group_id),
         r.title, r.version, h.agent_id, h.actor, r.created_at, r.updated_at,
-        h.sources, r.allowed_sources
+        h.sources, r.allowed_sources, h.condensed IS NOT NULL
       FROM artifacts r
       LEFT JOIN agents o ON o.id = r.owner_id
       JOIN artifact_history h
@@ -61,6 +61,7 @@ fn row_to_artifact(row: &Row<'_>) -> Read<Artifact> {
     let updated_at: i64 = row.get(10)?;
     let declared: String = row.get(11)?;
     let allowed: Option<String> = row.get(12)?;
+    let condensed: bool = row.get(13)?;
     Ok((|| {
         let sources: Vec<Source> = serde_json::from_str(&declared)
             .map_err(|e| corrupt("artifact sources", &declared, e))?;
@@ -86,6 +87,7 @@ fn row_to_artifact(row: &Row<'_>) -> Read<Artifact> {
             updated_at,
             sources,
             sources_allowed,
+            condensed,
         })
     })())
 }
@@ -120,8 +122,29 @@ struct Written<'a> {
     version: u32,
     owner: Option<&'a str>,
     note: &'a str,
-    /// The page and the reads it declares, on the rows that made a version.
-    version_of: Option<(&'a str, &'a str)>,
+    /// What the version is, on the rows that made one.
+    version_of: Option<Version<'a>>,
+}
+
+/// One version's contents: the page, the reads it declares as stored, and the
+/// condensed view when it has one.
+struct Version<'a> {
+    page: &'a str,
+    sources: &'a str,
+    condensed: Option<&'a str>,
+}
+
+/// A version as read back, owned.
+struct Stored {
+    page: String,
+    sources: String,
+    condensed: Option<String>,
+}
+
+impl Stored {
+    fn as_version(&self) -> Version<'_> {
+        Version { page: &self.page, sources: &self.sources, condensed: self.condensed.as_deref() }
+    }
 }
 
 /// Appends one row to the log. The only insert into `artifact_history`.
@@ -132,13 +155,17 @@ fn append(
     row: Written<'_>,
 ) -> Result<(), StoreError> {
     debug_assert_eq!(row.change.makes_version(), row.version_of.is_some());
-    let (page, sources) = row.version_of.unzip();
+    let (page, sources, condensed) = match row.version_of {
+        Some(Version { page, sources, condensed }) => (Some(page), Some(sources), condensed),
+        None => (None, None, None),
+    };
     tx.execute(
         "INSERT INTO artifact_history
-            (artifact_id, seq, at, change, agent_id, actor, version, owner, note, page, sources)
+            (artifact_id, seq, at, change, agent_id, actor, version, owner, note, page, sources,
+             condensed)
          VALUES (?1,
                  (SELECT COALESCE(MAX(seq), 0) + 1 FROM artifact_history WHERE artifact_id = ?1),
-                 ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                 ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             id.to_string(),
             at,
@@ -150,6 +177,7 @@ fn append(
             row.note,
             page,
             sources,
+            condensed,
         ],
     )?;
     Ok(())
@@ -176,13 +204,13 @@ fn version_at(
     tx: &Transaction<'_>,
     id: ArtifactId,
     version: u32,
-) -> Result<Option<(String, String)>, StoreError> {
+) -> Result<Option<Stored>, StoreError> {
     Ok(tx
         .query_row(
-            "SELECT page, sources FROM artifact_history
+            "SELECT page, sources, condensed FROM artifact_history
               WHERE artifact_id = ?1 AND version = ?2 AND page IS NOT NULL",
             params![id.to_string(), version],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok(Stored { page: row.get(0)?, sources: row.get(1)?, condensed: row.get(2)? }),
         )
         .optional()?)
 }
@@ -197,15 +225,19 @@ pub struct ArtifactDraft<'a> {
     pub title: &'a str,
     pub page: &'a str,
     pub sources: &'a [Source],
+    /// What the status bar draws, if the page is meant to be pinned there.
+    pub condensed: Option<&'a str>,
     pub note: &'a str,
 }
 
 /// What an edit changes. `None` keeps what the current version has: a rename
-/// keeps the page, and a new page keeps its reads, and so keeps them allowed.
+/// keeps the page, a new page keeps its reads, and so keeps them allowed, and
+/// either keeps the condensed view.
 pub struct ArtifactRevision<'a> {
     pub title: Option<&'a str>,
     pub page: Option<&'a str>,
     pub sources: Option<&'a [Source]>,
+    pub condensed: Option<&'a str>,
     pub note: &'a str,
 }
 
@@ -218,7 +250,7 @@ impl Store {
         owner_name: &str,
         draft: ArtifactDraft<'_>,
     ) -> Result<Artifact, StoreError> {
-        let ArtifactDraft { title, page, sources, note } = draft;
+        let ArtifactDraft { title, page, sources, condensed, note } = draft;
         let sources = declared(sources)?;
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -240,7 +272,7 @@ impl Store {
                 version: 1,
                 owner: Some(owner_name),
                 note,
-                version_of: Some((page, &sources)),
+                version_of: Some(Version { page, sources: &sources, condensed }),
             },
         )?;
         tx.commit()?;
@@ -325,20 +357,21 @@ impl Store {
         by: &Actor,
         revision: ArtifactRevision<'_>,
     ) -> Result<Option<Artifact>, StoreError> {
-        let ArtifactRevision { title, page, sources, note } = revision;
+        let ArtifactRevision { title, page, sources, condensed, note } = revision;
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let Some((version, owner)) = standing(&tx, id, Some(group))? else {
             return Ok(None);
         };
-        let (kept_page, kept_sources) = version_at(&tx, id, version)?.ok_or_else(|| {
+        let kept = version_at(&tx, id, version)?.ok_or_else(|| {
             StoreError::Corrupt(format!("artifact {id} has no page at version {version}"))
         })?;
-        let page = page.map(str::to_string).unwrap_or(kept_page);
+        let page = page.map(str::to_string).unwrap_or(kept.page);
         let sources = match sources {
             Some(sources) => declared(sources)?,
-            None => kept_sources,
+            None => kept.sources,
         };
+        let condensed = condensed.map(str::to_string).or(kept.condensed);
         let next = version + 1;
         let now = now_ms();
         append(
@@ -351,7 +384,11 @@ impl Store {
                 version: next,
                 owner: owner.as_deref(),
                 note,
-                version_of: Some((&page, &sources)),
+                version_of: Some(Version {
+                    page: &page,
+                    sources: &sources,
+                    condensed: condensed.as_deref(),
+                }),
             },
         )?;
         tx.execute(
@@ -458,7 +495,7 @@ impl Store {
         let Some((current, owner)) = standing(&tx, id, None)? else {
             return Ok(None);
         };
-        let Some((page, sources)) = version_at(&tx, id, version)? else {
+        let Some(earlier) = version_at(&tx, id, version)? else {
             return Ok(None);
         };
         let next = current + 1;
@@ -474,7 +511,7 @@ impl Store {
                 version: next,
                 owner: owner.as_deref(),
                 note: &note,
-                version_of: Some((&page, &sources)),
+                version_of: Some(earlier.as_version()),
             },
         )?;
         tx.execute(
@@ -491,15 +528,44 @@ impl Store {
     /// approval one of that list and nothing else: see the migration. A page
     /// that declares none has nothing to allow, and is left as it is.
     pub fn allow_artifact_sources(&self, id: ArtifactId) -> Result<Option<Artifact>, StoreError> {
+        self.allow_sources(id, None)
+    }
+
+    /// The same, only if the current version still declares `seen`: the list
+    /// an approval card showed the operator before they answered it. A crewmate
+    /// can edit the page while the card waits, and a yes to one list is not a
+    /// yes to whatever replaced it. The artifact comes back either way, and
+    /// `sources_allowed` on it says which happened.
+    pub fn allow_artifact_sources_seen(
+        &self,
+        id: ArtifactId,
+        seen: &[Source],
+    ) -> Result<Option<Artifact>, StoreError> {
+        self.allow_sources(id, Some(seen))
+    }
+
+    fn allow_sources(
+        &self,
+        id: ArtifactId,
+        seen: Option<&[Source]>,
+    ) -> Result<Option<Artifact>, StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let Some((version, owner)) = standing(&tx, id, None)? else {
             return Ok(None);
         };
-        let Some((_, sources)) = version_at(&tx, id, version)? else {
+        let Some(Stored { sources, .. }) = version_at(&tx, id, version)? else {
             return Ok(None);
         };
-        if sources != "[]" {
+        let as_seen = match seen {
+            None => true,
+            Some(seen) => {
+                let now: Vec<Source> = serde_json::from_str(&sources)
+                    .map_err(|e| corrupt("artifact sources", &sources, e))?;
+                now == seen
+            }
+        };
+        if sources != "[]" && as_seen {
             tx.execute(
                 "UPDATE artifacts SET allowed_sources = ?2 WHERE id = ?1",
                 params![id.to_string(), sources],
@@ -580,6 +646,21 @@ impl Store {
             .optional()?)
     }
 
+    /// The current version's condensed view, if it has one. `None` as well for
+    /// an artifact that is not there; the caller has already asked which.
+    pub fn artifact_condensed(&self, id: ArtifactId) -> Result<Option<String>, StoreError> {
+        let conn = self.conn()?;
+        Ok(conn
+            .query_row(
+                "SELECT h.condensed FROM artifact_history h JOIN artifacts r ON r.id = h.artifact_id
+                  WHERE h.artifact_id = ?1 AND h.page IS NOT NULL AND h.version = r.version",
+                params![id.to_string()],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten())
+    }
+
     /// Deletes one, with its whole history. The operator's call only.
     pub fn delete_artifact(&self, id: ArtifactId) -> Result<bool, StoreError> {
         let mut conn = self.conn()?;
@@ -649,6 +730,7 @@ mod tests {
                     title: "Pipeline",
                     page: "<p>v1</p>",
                     sources: &[],
+                    condensed: None,
                     note: "First cut",
                 },
             )
@@ -672,6 +754,7 @@ mod tests {
                         title: None,
                         page: Some("<p>x</p>"),
                         sources: None,
+                        condensed: None,
                         note: "mine now"
                     }
                 )
@@ -720,6 +803,7 @@ mod tests {
                     title: None,
                     page: Some("<p>v2</p>"),
                     sources: None,
+                    condensed: None,
                     note: "Added Q4",
                 },
             )
@@ -746,6 +830,7 @@ mod tests {
                     title: Some("Pipeline by stage"),
                     page: None,
                     sources: None,
+                    condensed: None,
                     note: "Clearer",
                 },
             )
@@ -787,6 +872,7 @@ mod tests {
                     title: None,
                     page: Some("<p>broken</p>"),
                     sources: None,
+                    condensed: None,
                     note: "Oops",
                 },
             )
@@ -812,7 +898,13 @@ mod tests {
                 f.crew,
                 f.milo.id,
                 "Milo",
-                ArtifactDraft { title: "Plan", page: "<p>p</p>", sources: &[], note: "First" },
+                ArtifactDraft {
+                    title: "Plan",
+                    page: "<p>p</p>",
+                    sources: &[],
+                    condensed: None,
+                    note: "First",
+                },
             )
             .unwrap();
         f.store.discard_agent(f.milo.id, now_ms()).unwrap();
@@ -869,6 +961,113 @@ mod tests {
             assert_eq!(without.is_ok(), !change.makes_version(), "{change:?} without one");
             assert!(half.is_err(), "{change:?}: a page without its reads is half a version");
         }
+        // A condensed view is part of a version, so a row that made none
+        // cannot carry one.
+        let stray = conn.execute(
+            "INSERT INTO artifact_history (artifact_id, seq, at, change, version, condensed)
+             VALUES (?1, 900, 0, 'took', 1, '<b>3</b>')",
+            params![kept.id.to_string()],
+        );
+        assert!(stray.is_err(), "a take-over carrying a condensed view");
+    }
+
+    #[test]
+    fn a_condensed_view_is_kept_changed_and_put_back_with_its_version() {
+        // The number on the status bar and the board behind it are one version
+        // of one thing. An edit that leaves the strip out keeps it, and a
+        // restore brings back the strip that version had, not today's.
+        let f = fixture();
+        let page = f
+            .store
+            .create_artifact(
+                f.crew,
+                f.rae.id,
+                "Rae",
+                ArtifactDraft {
+                    title: "Pipeline",
+                    page: "<p>v1</p>",
+                    sources: &[],
+                    condensed: Some("<b>4 deals</b>"),
+                    note: "",
+                },
+            )
+            .unwrap();
+        assert!(page.condensed);
+        let edit = |page_html: Option<&'static str>, condensed: Option<&'static str>| {
+            f.store
+                .edit_artifact(
+                    page.id,
+                    f.crew,
+                    &by(&f.milo),
+                    ArtifactRevision {
+                        title: None,
+                        page: page_html,
+                        sources: None,
+                        condensed,
+                        note: "edit",
+                    },
+                )
+                .unwrap()
+                .unwrap()
+        };
+        edit(Some("<p>v2</p>"), None);
+        assert_eq!(f.store.artifact_condensed(page.id).unwrap().as_deref(), Some("<b>4 deals</b>"));
+        edit(None, Some("<b>5 deals</b>"));
+        assert_eq!(f.store.artifact_condensed(page.id).unwrap().as_deref(), Some("<b>5 deals</b>"));
+
+        let back = f.store.restore_artifact(page.id, 1, &Actor::Operator).unwrap().unwrap();
+        assert_eq!(back.version, 4);
+        assert_eq!(f.store.artifact_condensed(page.id).unwrap().as_deref(), Some("<b>4 deals</b>"));
+        assert_eq!(f.store.artifact_page(page.id, None).unwrap().unwrap(), "<p>v1</p>");
+
+        let plain = made(&f);
+        assert!(!plain.condensed, "most pages have none");
+        assert_eq!(f.store.artifact_condensed(plain.id).unwrap(), None);
+    }
+
+    #[test]
+    fn a_card_allows_only_the_reads_it_showed() {
+        // The card waits while the crew keeps working. A crewmate who changed
+        // the reads in the meantime has changed what the operator would be
+        // saying yes to, so the yes does not reach the new list.
+        let f = fixture();
+        let shown = reads("linear__list_issues");
+        let page = f
+            .store
+            .create_artifact(
+                f.crew,
+                f.rae.id,
+                "Rae",
+                ArtifactDraft {
+                    title: "Board",
+                    page: "<p>v1</p>",
+                    sources: &shown,
+                    condensed: None,
+                    note: "",
+                },
+            )
+            .unwrap();
+        f.store
+            .edit_artifact(
+                page.id,
+                f.crew,
+                &by(&f.milo),
+                ArtifactRevision {
+                    title: None,
+                    page: None,
+                    sources: Some(&reads("linear__list_projects")),
+                    condensed: None,
+                    note: "Projects instead",
+                },
+            )
+            .unwrap();
+        let after = f.store.allow_artifact_sources_seen(page.id, &shown).unwrap().unwrap();
+        assert!(!after.sources_allowed, "the list changed under the card");
+        assert_ne!(f.store.artifact_log(page.id).unwrap().last().unwrap().change, Change::Allowed);
+
+        let current = f.store.any_artifact(page.id).unwrap().unwrap().sources;
+        let allowed = f.store.allow_artifact_sources_seen(page.id, &current).unwrap().unwrap();
+        assert!(allowed.sources_allowed, "and the list it did show is allowed");
     }
 
     fn reads(tool: &str) -> Vec<Source> {
@@ -892,6 +1091,7 @@ mod tests {
                     title: "Board",
                     page: "<p>v1</p>",
                     sources: &reads("linear__list_issues"),
+                    condensed: None,
                     note: "",
                 },
             )
@@ -914,6 +1114,7 @@ mod tests {
                     title: None,
                     page: Some("<p>v2</p>"),
                     sources: None,
+                    condensed: None,
                     note: "Tidier",
                 },
             )
@@ -931,6 +1132,7 @@ mod tests {
                     title: None,
                     page: None,
                     sources: Some(&reads("linear__list_projects")),
+                    condensed: None,
                     note: "Projects too",
                 },
             )
@@ -973,7 +1175,13 @@ mod tests {
                 f.other,
                 f.juno.id,
                 "Juno",
-                ArtifactDraft { title: "Rota", page: "<p>pipeline</p>", sources: &[], note: "" },
+                ArtifactDraft {
+                    title: "Rota",
+                    page: "<p>pipeline</p>",
+                    sources: &[],
+                    condensed: None,
+                    note: "",
+                },
             )
             .unwrap();
         let found = f.store.search("pipe", 10).unwrap().artifacts;
@@ -1001,7 +1209,13 @@ mod tests {
                 f.other,
                 f.juno.id,
                 "Juno",
-                ArtifactDraft { title: "Rota", page: "<p>r</p>", sources: &[], note: "First" },
+                ArtifactDraft {
+                    title: "Rota",
+                    page: "<p>r</p>",
+                    sources: &[],
+                    condensed: None,
+                    note: "First",
+                },
             )
             .unwrap();
         f.store
@@ -1013,6 +1227,7 @@ mod tests {
                     title: None,
                     page: Some("<p>v2</p>"),
                     sources: None,
+                    condensed: None,
                     note: "Newer",
                 },
             )

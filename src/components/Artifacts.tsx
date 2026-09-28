@@ -19,6 +19,7 @@ import {
   type ArtifactMade,
   type ArtifactRead,
   errorMessage,
+  type WidgetWidth,
 } from "../lib/types";
 import { HtmlArtifact } from "./HtmlArtifact";
 
@@ -67,6 +68,13 @@ interface Props {
  * Anyone in the crew may edit, so there is nothing to grant; what the operator
  * decides is who answers for the page, which is the way out when its owner has
  * left, and a rare enough act to live beside the record of who held it.
+ *
+ * ## A page with a condensed view can go on the status bar
+ *
+ * From the foot, as a width or not at all. The operator's own pin asks nobody
+ * and allows nothing: reads are allowed here, above the page, where the list
+ * is drawn in full. A page pinned while its current version has no condensed
+ * view, which a restore can do, can only be taken off.
  */
 export function Artifacts({ onClose }: Props) {
   const open = useStore((state) => state.artifactsOpen);
@@ -213,6 +221,8 @@ function ArtifactView({
   const groups = useStore((state) => state.groups);
   const activity = useStore((state) => state.activity);
   const changed = useStore((state) => state.artifactsVersion);
+  const widgets = useStore((state) => state.settings?.widgets ?? null);
+  const setSettings = useStore((state) => state.setSettings);
   const now = useNow(60_000);
 
   const [detail, setDetail] = useState<ArtifactDetail | null>(null);
@@ -341,6 +351,16 @@ function ArtifactView({
   // An earlier version the operator picked, or `null` while the current one is
   // on screen. The one place a restore can be offered from.
   const earlier = viewing !== null && viewing !== artifact.version ? viewing : null;
+  // `null` from a host older than the bar's pages, which offers no control.
+  const pinned = widgets?.find((widget) => widget.artifactId === artifact.id) ?? null;
+  const place = (width: WidgetWidth | "") =>
+    void act(async () =>
+      setSettings(
+        width === ""
+          ? await api.unpinArtifact(artifact.id)
+          : await api.pinArtifact(artifact.id, width),
+      ),
+    );
 
   return (
     <>
@@ -505,6 +525,26 @@ function ArtifactView({
           >
             Refresh
           </button>
+        )}
+        {!history && widgets !== null && (artifact.condensed || pinned) && (
+          <label className="artifacts__owner artifacts__pin">
+            <span>Status bar</span>
+            <select
+              className="input input--slim"
+              aria-label="Status bar"
+              disabled={busy}
+              value={pinned?.width ?? ""}
+              onChange={(event) => place(event.target.value as WidgetWidth | "")}
+            >
+              <option value="">Not on it</option>
+              <option value="narrow" disabled={!artifact.condensed}>
+                Narrow
+              </option>
+              <option value="wide" disabled={!artifact.condensed}>
+                Wide
+              </option>
+            </select>
+          </label>
         )}
         <span className="artifacts__spacer" />
         {confirming ? (

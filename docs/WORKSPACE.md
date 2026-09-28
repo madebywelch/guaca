@@ -1799,25 +1799,82 @@ pushed into every prompt: the screen changes far more often than a turn starts,
 and a line that changed on every click would cost the prompt cache on every
 turn for a fact most turns do not need.
 
-## The status bar is data, and an agent's button is the operator's yes
+## The status bar holds pages the crews keep, and a click on one is the bar's
 
 The last row of the reading column says which host this window shows, marked
-when this app and the host are on different releases, and holds the
-operator's quick actions. A quick action is data from a closed set
-(`domain/quick.rs`): send one agent a fixed message, or open a channel, the
-calendar, For You, a Settings pane or a crew's settings. The app draws and
-runs each one. Hermes lets an agent write JavaScript that runs in the window
-with the app's whole authority; its own loader says that is not a capability
-boundary, and in this app it would be a way around every other one.
+when this app and the host are on different releases, holds the pages pinned
+to it, and the operator's quick actions. Both are settings on the host, so
+every window draws the same bar and a change reaches them through
+`settingsChanged`.
 
-The buttons are a setting on the host, so every window draws the same bar and
-a change reaches them through `settingsChanged`. The operator's own need
-nobody's approval. An agent's go through `settings` and the same card as any
-settings change, because a message a button sends arrives as `[OPERATOR]`, on
-a click made without reading the text again. The card quotes the whole
-message, and an agent may only aim one at its own crew, since a button is the
-operator's voice and one that spoke to another crew would carry an agent's
-words across the wall.
+**A widget is a kept page, not a new kind of thing.** The bar was data from a
+closed set because the only alternative was Hermes's: an agent's JavaScript
+running in the window with the app's whole authority, which its own loader
+says is not a capability boundary. The artifact origin is one. A page there
+reaches no network and cannot read the document that framed it, so a widget can
+be code without the bar trusting it. What an agent puts on the bar is a page its
+crew already keeps: owner, versions, reads and history are the artifact's, and
+the pin (`domain/widget.rs`) is only where it sits, how wide, and how often its
+reads run.
+
+**It is drawn from a second document.** A version can carry `condensed`, at
+most 16 KB, beside the page. Separate rather than one page that folds itself
+down, because a pinned widget runs all day and a page can be half a megabyte of
+chart library, and because the cap is what keeps it condensed: a page that
+shrinks itself can still put a small copy of everything in the strip. The two
+share a version, so the number on the bar and the board behind it are one
+version of one thing, and a restore puts both back.
+
+**The bar sets the box.** One row high, narrow or wide, chosen with the pin. A
+frame on another origin cannot be measured from outside, and a page that
+reported its own width would be a page deciding how much of the bar it takes.
+The frame is handed the bar's colors as `--guaca-*` and defaults for one line
+of the bar's text, solved from the operator's theme in `lib/widget.ts` and set
+at zero specificity, so the page's own rules win. A system face, because the
+app's face is a bundled web font and the frame loads fonts only as `data:`. The
+`artifact` tool tells agents the two widths in pixels, and `widget.test.ts`
+holds that sentence to the stylesheet.
+
+**A click is the bar's.** The frame takes no pointer events and a button of the
+bar's own lies over it, and a click opens the page in Artifacts, where its
+reads are allowed, its history is kept and its own buttons reach its owner. A
+popover above the bar was the first design; the dialog already is the main
+view, with everything a page needs around it. A frame on another origin
+swallows its clicks, so the button is also the only way the bar could open
+anything, and a strip of small controls that each spend a turn of the owner's
+is a strip of mis-clicks.
+
+**An agent's pin is the operator's yes, once, for the placement and the
+reads.** `artifact` with `pin` parks the turn on the desk as a settings change,
+because the bar is a setting and the one surface every crew shares. The card
+names the page, its width, every read it makes, how often and as whom, and a
+yes allows those reads if the page's current version still declares exactly
+the list the card showed: a crewmate can edit the page while the card waits.
+Everything that would make a yes useless is refused before anybody is asked: a
+page with no condensed view, one already there, a full bar, another crew's id.
+The operator's own pin, from the page in Artifacts, asks nobody and allows
+nothing; the reads are allowed above the page, where the list is drawn.
+
+**Reads run on the pin's clock, and only where they are seen.** Minutes between
+reads are chosen with the pin, from one to a day. Each is a connector call as
+the page's owner, with no model. A hidden window stops them, and coming back
+reads again if the last one is older than the clock. Reads nobody allowed are
+asked for once, so the page can say they are waiting, and not again.
+
+**Deleting a page takes its pin with it.** Deleting one and disbanding its crew
+both end in `Runtime::unpin_missing`, so no slot is held by a page that is
+gone. Every agent's prompt marks its crew's pages that are on the bar, because
+an owner that does not know changes the board and leaves the strip saying last
+week's number.
+
+**Quick actions are the operator's own.** A quick action is data from a closed
+set (`domain/quick.rs`): send one agent a fixed message, or open a channel, the
+calendar, For You, a Settings pane or a crew's settings. A message a button
+sends arrives as `[OPERATOR]`, on a click made without reading the text again,
+which is why agents used to ask for them through a card that quoted the whole
+message. They no longer can: what an agent wants on the bar is a page, and a
+page's click opens the page rather than speaking for anybody. A button an agent
+asked for before that is still drawn and still says who asked.
 
 ## The page is the only white thing, and both edges are the same off-white
 

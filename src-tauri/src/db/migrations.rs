@@ -1699,6 +1699,18 @@ CREATE TABLE coding_tuning (
 );
 "#,
     ),
+    (
+        60,
+        r#"
+-- A version's second document: the condensed view the status bar draws. On the
+-- version row beside the page, because the two are written, read and put back
+-- together, and a restore that brought back one without the other would pin an
+-- old number beside a new page. Optional: most pages have none, and every
+-- version written before this has none.
+ALTER TABLE artifact_history
+    ADD COLUMN condensed TEXT CHECK (condensed IS NULL OR page IS NOT NULL);
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

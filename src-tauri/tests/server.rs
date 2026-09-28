@@ -409,6 +409,72 @@ async fn the_operators_quick_actions_reach_every_window() {
 }
 
 #[tokio::test]
+async fn a_page_is_pinned_resized_and_taken_off_the_bar_with_its_deletion() {
+    let (addr, dir) = workspace().await;
+    let (mut other, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/v1/events?token={TOKEN}"))
+            .await
+            .expect("the event socket opens");
+    let (_, rae) = call(
+        addr,
+        "create_agent",
+        json!({"draft": {
+            "name":"Rae", "avatar":"avocado", "color":"#7ab55c", "model":"", "systemPrompt":"Test"
+        }}),
+    )
+    .await;
+    let rae_id: guac_lib::domain::ids::AgentId = rae["ok"]["id"].as_str().unwrap().parse().unwrap();
+    let crew = rae["ok"]["groupId"].as_str().unwrap().parse().unwrap();
+    // Pages are an agent's to make, so the test writes them where the daemon
+    // keeps them rather than scripting a model.
+    let store = guac_lib::db::Store::open(&dir.path().join("data/guac.db")).unwrap();
+    let draft = |condensed| guac_lib::db::ArtifactDraft {
+        title: "Open PRs",
+        page: "<p>the board</p>",
+        sources: &[],
+        condensed,
+        note: "",
+    };
+    let page = store.create_artifact(crew, rae_id, "Rae", draft(Some("<b>3 open</b>"))).unwrap();
+    let plain = store.create_artifact(crew, rae_id, "Rae", draft(None)).unwrap();
+
+    let (_, refused) =
+        call(addr, "pin_artifact", json!({ "id": plain.id, "width": "narrow" })).await;
+    assert_eq!(refused["err"]["kind"], "validation", "{refused}");
+    assert!(refused["err"]["message"].as_str().unwrap().contains("condensed view"), "{refused}");
+
+    let (status, pinned) =
+        call(addr, "pin_artifact", json!({ "id": page.id, "width": "narrow" })).await;
+    assert_eq!(status, 200, "{pinned}");
+    assert_eq!(
+        pinned["ok"]["widgets"],
+        json!([{ "artifactId": page.id, "width": "narrow", "everyMinutes": 5, "addedBy": "the operator" }])
+    );
+    let event = next_of_kind(&mut other, "settingsChanged").await;
+    assert_eq!(event["settings"]["widgets"][0]["artifactId"], json!(page.id), "every window hears");
+
+    let (_, wide) = call(addr, "pin_artifact", json!({ "id": page.id, "width": "wide" })).await;
+    assert_eq!(wide["ok"]["widgets"][0]["width"], "wide", "pinning again resizes in place");
+    assert_eq!(wide["ok"]["widgets"].as_array().unwrap().len(), 1);
+
+    let (_, drawn) = call(addr, "artifact_condensed", json!({ "id": page.id })).await;
+    assert_eq!(drawn["ok"]["page"], "<b>3 open</b>");
+    assert_eq!(drawn["ok"]["artifact"]["title"], "Open PRs");
+
+    let (_, deleted) = call(addr, "delete_artifact", json!({ "id": page.id })).await;
+    assert!(deleted.get("err").is_none(), "{deleted}");
+    let (_, settings) = call(addr, "get_settings", json!({})).await;
+    assert_eq!(settings["ok"]["widgets"], json!([]), "a pin does not outlive its page");
+
+    let (_, missing) = call(addr, "unpin_artifact", json!({ "id": page.id })).await;
+    assert!(
+        missing["err"]["message"].as_str().unwrap().contains("not on the status bar"),
+        "{missing}"
+    );
+    let _ = other.close(None).await;
+}
+
+#[tokio::test]
 async fn skills_are_written_read_and_announced_over_the_hosted_surface() {
     let (addr, _dir) = workspace().await;
     let (mut socket, _) =

@@ -44,6 +44,7 @@ import type {
   Capabilities,
   CatalogKind,
   Computer,
+  CondensedView,
   Connector,
   ConnectorDraft,
   ConnectorId,
@@ -105,6 +106,7 @@ import type {
   Tuning,
   UiEvent,
   WebhookAddress,
+  WidgetWidth,
   WorkDecision,
   WorkingNote,
 } from "./types";
@@ -449,6 +451,15 @@ export const api = {
   handArtifact: (id: ArtifactId, agentId: AgentId) =>
     invoke<Artifact>("hand_artifact", { id, agentId }),
   deleteArtifact: (id: ArtifactId) => invoke<void>("delete_artifact", { id }),
+  /** A pinned page as the status bar draws it: the artifact and its condensed view. */
+  artifactCondensed: (id: ArtifactId) => invoke<CondensedView>("artifact_condensed", { id }),
+  /**
+   * Puts a page with a condensed view on the status bar, or changes the width
+   * of one already there. The operator's own, so nobody approves it.
+   */
+  pinArtifact: (id: ArtifactId, width: WidgetWidth) =>
+    invoke<Settings>("pin_artifact", { id, width }),
+  unpinArtifact: (id: ArtifactId) => invoke<Settings>("unpin_artifact", { id }),
 
   /** Refused if it was already answered or has lapsed. */
   decideApproval: (id: ApprovalId, decision: Decision) =>

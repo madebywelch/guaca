@@ -1309,8 +1309,22 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                  operator clicks it, the value reaches the page's owner as a message from the \
                  operator, naming the page, and the owner is expected to act on it, usually by \
                  doing the work and updating the page. Send only from a click handler: a send \
-                 the operator did not click is dropped. A page over {} KB is refused. Titles are \
-                 cut past {} characters.",
+                 the operator did not click is dropped.\n\n\
+                 A page the operator will want to glance at all day, a count, a status or the \
+                 next date, can also carry `condensed`: a second HTML document of at most {} KB, \
+                 drawn one row high on the operator's status bar, about 120 pixels wide when \
+                 narrow and 240 when wide. One line, nothing to scroll and nothing to click: a \
+                 click anywhere on it opens the page. It reads the page's `sources` through the \
+                 same `await guaca.data()`, and is drawn at the bar's text size and color on the \
+                 bar's background, with `--guaca-text`, `--guaca-muted`, \
+                 `--guaca-attention`, `--guaca-ok` and `--guaca-danger` for anything that needs a \
+                 color. `pin` asks the operator to put a page that has a condensed view on their \
+                 status bar, with a `width` and `every_minutes` between its reads. They see the \
+                 page's reads with the request, and a yes allows those too. Pin what the \
+                 operator will want to see without asking for it; the bar holds {} in all.\n\n\
+                 A page over {} KB is refused. Titles are cut past {} characters.",
+                crate::domain::artifact::MAX_CONDENSED / 1024,
+                crate::domain::widget::MAX_WIDGETS,
                 crate::domain::artifact::MAX_PAGE / 1024,
                 crate::domain::artifact::MAX_TITLE
             ),
@@ -1319,12 +1333,12 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["list", "view", "create", "update", "take"]
+                        "enum": ["list", "view", "create", "update", "take", "pin"]
                     },
                     "id": {
                         "type": "string",
-                        "description": "The artifact to `view`, `update` or `take`, as your \
-                                        system prompt or `list` shows it."
+                        "description": "The artifact to `view`, `update`, `take` or `pin`, as \
+                                        your system prompt or `list` shows it."
                     },
                     "title": {
                         "type": "string",
@@ -1341,6 +1355,28 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                         "type": "string",
                         "description": "One line. On `update`, what changed; on `take`, why \
                                         you are taking it over. Optional on `create`."
+                    },
+                    "condensed": {
+                        "type": "string",
+                        "description": "The page's one-row view for the status bar: a whole \
+                                        HTML document, with its own style and script. On \
+                                        `update`, leave it out to keep the one the page has."
+                    },
+                    "width": {
+                        "type": "string",
+                        "enum": ["narrow", "wide"],
+                        "description": "On `pin`: how much of the bar it takes. Narrow unless \
+                                        the condensed view was written wide."
+                    },
+                    "every_minutes": {
+                        "type": "integer",
+                        "minimum": crate::domain::widget::MIN_EVERY,
+                        "maximum": crate::domain::widget::MAX_EVERY,
+                        "description": format!(
+                            "On `pin`: minutes between the page's reads while it is on the bar. \
+                             {} when left out.",
+                            crate::domain::widget::DEFAULT_EVERY
+                        )
                     },
                     "sources": {
                         "type": "array",
@@ -1486,11 +1522,6 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                           changed on its own. The operator sees each change with its before and \
                           after, and nothing changes unless they allow it. Say why in your reply, \
                           since that is what they will weigh.\n\n\
-                          `add_quick_action` asks to put a button on the operator's status bar \
-                          for something they do often: sending one of your crew a fixed message, \
-                          or opening a place in the app. They approve it the same way, with the \
-                          whole message shown. `remove_quick_action` asks to take one off by the \
-                          id `read` lists.\n\n\
                           The provider, its endpoint and every key are the operator's to change in \
                           Settings, and no key is ever shown to you. The `guaca` skill says what \
                           each setting means."
@@ -1500,37 +1531,7 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["read", "update", "add_quick_action", "remove_quick_action"]
-                    },
-                    "quick_action": {
-                        "type": "object",
-                        "description": "On `add_quick_action`: a `label` of two or three words, \
-                                        and either `send` with `to` (a message and the name of \
-                                        the agent in your crew it goes to) or `open` (a place).",
-                        "properties": {
-                            "label": { "type": "string" },
-                            "send": { "type": "string" },
-                            "to": { "type": "string" },
-                            "open": {
-                                "type": "string",
-                                "enum": ["channel", "calendar", "for_you", "settings",
-                                         "crew_settings"]
-                            },
-                            "agent": {
-                                "type": "string",
-                                "description": "For `open: channel`: whose channel."
-                            },
-                            "section": {
-                                "type": "string",
-                                "description": "For `open: settings`: which pane, such as `limits`."
-                            }
-                        },
-                        "required": ["label"],
-                        "additionalProperties": false
-                    },
-                    "id": {
-                        "type": "string",
-                        "description": "On `remove_quick_action`: the button's id, from `read`."
+                        "enum": ["read", "update"]
                     },
                     "changes": {
                         "type": "object",
@@ -1901,19 +1902,6 @@ pub enum SettingsAction {
     Update {
         changes: serde_json::Value,
     },
-    /// A button for the status bar, as the model described it. Names are
-    /// resolved against the caller's own crew at dispatch.
-    AddQuickAction {
-        label: String,
-        send: Option<String>,
-        to: Option<String>,
-        open: Option<String>,
-        agent: Option<String>,
-        section: Option<String>,
-    },
-    RemoveQuickAction {
-        id: String,
-    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1987,19 +1975,29 @@ pub enum ArtifactAction {
         page: String,
         note: Option<String>,
         sources: Vec<crate::domain::artifact::Source>,
+        condensed: Option<String>,
     },
-    /// A new version. At least one of `title`, `page` and `sources` is
-    /// present; an absent one keeps what the current version has.
+    /// A new version. At least one of `title`, `page`, `sources` and
+    /// `condensed` is present; an absent one keeps what the current version has.
     Update {
         id: String,
         title: Option<String>,
         page: Option<String>,
         note: Option<String>,
         sources: Option<Vec<crate::domain::artifact::Source>>,
+        condensed: Option<String>,
     },
     Take {
         id: String,
         note: Option<String>,
+    },
+    /// A request to put it on the operator's status bar. Carried unchecked:
+    /// `domain::widget` says what a width and an interval may be, where the
+    /// refusal can say what to send instead.
+    Pin {
+        id: String,
+        width: Option<String>,
+        every_minutes: Option<u64>,
     },
 }
 
@@ -2098,8 +2096,6 @@ pub enum ToolParseError {
     UnknownNotebookAction,
     #[error("notebook needs {needs}")]
     IncompleteNotebook { needs: String },
-    #[error("settings needs {needs}")]
-    IncompleteSettings { needs: String },
     #[error("skill needs {needs}")]
     IncompleteSkill { needs: String },
     #[error("use_screen {action} needs {needs}")]
@@ -2155,7 +2151,7 @@ impl ToolParseError {
                  \"...\", \"starts_at\": \"2026-09-15 10:00\"}}."
             ),
             ToolParseError::UnknownArtifactAction => {
-                "Error: `action` must be list, view, create, update or take. Use \
+                "Error: `action` must be list, view, create, update, take or pin. Use \
                  {\"action\": \"list\"} to see what your crew already keeps."
                     .to_string()
             }
@@ -2178,17 +2174,11 @@ impl ToolParseError {
             ToolParseError::UnknownSettingsAction => {
                 "Error: `action` must be read or update. Use {\"action\": \"read\"} to see the \
                  settings and their names, then {\"action\": \"update\", \"changes\": \
-                 {\"limits\": {\"maxHops\": 12}}} to ask the operator for a change."
+                 {\"limits\": {\"maxHops\": 12}}} to ask the operator for a change. Something \
+                 for the operator's status bar is a kept page with a `condensed` view, put there \
+                 with `artifact` and `pin`."
                     .to_string()
             }
-            ToolParseError::IncompleteSettings { needs } => format!(
-                "Error: that `settings` call needs {needs}. A button that sends a message: \
-                 {{\"action\": \"add_quick_action\", \"quick_action\": {{\"label\": \
-                 \"Morning brief\", \"send\": \"Give me the morning brief.\", \"to\": \
-                 \"Scout\"}}}}. One that opens a place: {{\"action\": \"add_quick_action\", \
-                 \"quick_action\": {{\"label\": \"Limits\", \"open\": \"settings\", \
-                 \"section\": \"limits\"}}}}."
-            ),
             ToolParseError::UnknownSkillAction => {
                 "Error: `action` must be view, list, write or delete. Use {\"action\": \"list\"} \
                  to see the skills you can read."
@@ -3032,6 +3022,7 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
             // `html` and `content` are what a model reaches for when it has not
             // read the schema, and both mean the page.
             let page = || text(&["page", "html", "content", "body"]);
+            let condensed = || text(&["condensed", "condensed_view", "compact"]);
             let note = || text(&["note", "reason", "why", "summary", "message"]);
             let needs = |what: &str| ToolParseError::IncompleteArtifact { needs: what.to_string() };
             let id = |doing: &str| {
@@ -3088,20 +3079,33 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                     page: page().ok_or_else(|| needs("a `page`: the whole HTML document"))?,
                     note: note(),
                     sources: sources()?.unwrap_or_default(),
+                    condensed: condensed(),
                 },
                 "update" | "edit" | "change" | "revise" | "rename" => {
                     let id = id("update")?;
-                    let (title, page, sources) = (title(), page(), sources()?);
-                    if title.is_none() && page.is_none() && sources.is_none() {
+                    let (title, page, sources, condensed) =
+                        (title(), page(), sources()?, condensed());
+                    if title.is_none() && page.is_none() && sources.is_none() && condensed.is_none()
+                    {
                         return Err(needs(
-                            "a new `page`, a new `title`, new `sources`, or some of those",
+                            "a new `page`, `title`, `sources` or `condensed` view, or some of \
+                             those",
                         ));
                     }
-                    ArtifactAction::Update { id, title, page, note: note(), sources }
+                    ArtifactAction::Update { id, title, page, note: note(), sources, condensed }
                 }
                 "take" | "take_over" | "take_ownership" | "claim" | "own" => {
                     ArtifactAction::Take { id: id("take over")?, note: note() }
                 }
+                "pin" | "pin_to_status_bar" | "add_to_status_bar" => ArtifactAction::Pin {
+                    id: id("pin")?,
+                    width: text(&["width", "size"]),
+                    // A number, or a number a model wrote as a string.
+                    every_minutes: ["every_minutes", "every", "refresh_minutes"]
+                        .iter()
+                        .find_map(|key| value.get(*key))
+                        .and_then(|v| v.as_u64().or_else(|| v.as_str()?.trim().parse().ok())),
+                },
                 _ => return Err(ToolParseError::UnknownArtifactAction),
             };
             Ok(ToolInvocation::Artifact { action })
@@ -3166,45 +3170,6 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                     };
                     SettingsAction::Update { changes }
                 }
-                "add_quick_action" | "add_button" => {
-                    let spec = value.get("quick_action").cloned().unwrap_or_else(|| value.clone());
-                    let text = |key: &str| {
-                        spec.get(key)
-                            .and_then(|v| v.as_str())
-                            .map(str::trim)
-                            .filter(|text| !text.is_empty())
-                            .map(str::to_string)
-                    };
-                    let label =
-                        text("label").ok_or_else(|| ToolParseError::IncompleteSettings {
-                            needs: "a `label` for the button".to_string(),
-                        })?;
-                    let (send, open) = (text("send").or_else(|| text("message")), text("open"));
-                    if send.is_none() && open.is_none() {
-                        return Err(ToolParseError::IncompleteSettings {
-                            needs: "either `send` with `to`, or `open`".to_string(),
-                        });
-                    }
-                    SettingsAction::AddQuickAction {
-                        label,
-                        send,
-                        to: text("to"),
-                        open,
-                        agent: text("agent"),
-                        section: text("section"),
-                    }
-                }
-                "remove_quick_action" | "remove_button" => SettingsAction::RemoveQuickAction {
-                    id: value
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .map(str::trim)
-                        .filter(|id| !id.is_empty())
-                        .ok_or_else(|| ToolParseError::IncompleteSettings {
-                            needs: "the `id` of the quick action, which `read` lists".to_string(),
-                        })?
-                        .to_string(),
-                },
                 _ => return Err(ToolParseError::UnknownSettingsAction),
             };
             Ok(ToolInvocation::Settings { action })
@@ -3699,18 +3664,11 @@ mod tests {
             parse(&call(SETTINGS, r#"{"action": "reset"}"#)),
             Err(ToolParseError::UnknownSettingsAction)
         );
-        let button = r#"{"action": "add_quick_action",
-            "quick_action": {"label": "Brief", "send": "Brief me.", "to": "Scout"}}"#;
-        assert!(matches!(
-            parse(&call(SETTINGS, button)),
-            Ok(ToolInvocation::Settings { action: SettingsAction::AddQuickAction { .. } })
-        ));
-        let refused = parse(&call(
-            SETTINGS,
-            r#"{"action": "add_quick_action", "quick_action": {"label": "x"}}"#,
-        ))
-        .unwrap_err();
-        assert!(refused.guidance().contains("\"send\""), "{}", refused.guidance());
+        // The button an agent used to ask for is a widget now. A model that
+        // learned the old action is pointed at the new one, not just refused.
+        let old = parse(&call(SETTINGS, r#"{"action": "add_quick_action"}"#)).unwrap_err();
+        assert_eq!(old, ToolParseError::UnknownSettingsAction);
+        assert!(old.guidance().contains("`pin`"), "{}", old.guidance());
     }
 
     #[test]
@@ -4811,7 +4769,7 @@ mod tests {
 
     #[test]
     fn an_artifact_call_without_an_id_says_where_the_ids_are() {
-        for action in ["view", "update", "take"] {
+        for action in ["view", "update", "take", "pin"] {
             let err =
                 parse(&call(ARTIFACT, &format!("{{\"action\": \"{action}\", \"page\": \"p\"}}")))
                     .unwrap_err();
@@ -4845,6 +4803,7 @@ mod tests {
                     page: "<p>hi</p>".into(),
                     note: None,
                     sources: vec![],
+                    condensed: None,
                 }
             }
         );
@@ -4877,6 +4836,44 @@ mod tests {
     }
 
     #[test]
+    fn a_condensed_view_alone_is_an_edit_and_a_pin_carries_what_it_was_sent() {
+        let parsed = parse(&call(
+            ARTIFACT,
+            "{\"action\": \"update\", \"id\": \"a1\", \"condensed\": \"<b>3</b>\", \
+              \"note\": \"Strip\"}",
+        ))
+        .unwrap();
+        assert!(matches!(
+            parsed,
+            ToolInvocation::Artifact {
+                action: ArtifactAction::Update { condensed: Some(ref c), page: None, .. }
+            } if c == "<b>3</b>"
+        ));
+        // The interval is a number, or a number a model wrote as a string.
+        // Whether either is a width or an interval the bar allows is the
+        // runtime's to say.
+        assert_eq!(
+            parse(&call(
+                ARTIFACT,
+                "{\"action\": \"pin\", \"id\": \"a1\", \"width\": \"wide\", \"every\": \"15\"}"
+            )),
+            Ok(ToolInvocation::Artifact {
+                action: ArtifactAction::Pin {
+                    id: "a1".into(),
+                    width: Some("wide".into()),
+                    every_minutes: Some(15),
+                }
+            })
+        );
+        assert_eq!(
+            parse(&call(ARTIFACT, "{\"action\": \"pin\", \"id\": \"a1\"}")),
+            Ok(ToolInvocation::Artifact {
+                action: ArtifactAction::Pin { id: "a1".into(), width: None, every_minutes: None }
+            })
+        );
+    }
+
+    #[test]
     fn a_blank_artifact_title_on_update_keeps_the_title() {
         let parsed = parse(&call(
             ARTIFACT,
@@ -4893,6 +4890,7 @@ mod tests {
                     page: Some("<p/>".into()),
                     note: Some("Fixed totals".into()),
                     sources: None,
+                    condensed: None,
                 }
             }
         );

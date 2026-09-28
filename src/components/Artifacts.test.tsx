@@ -1,7 +1,14 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { AgentCard, Artifact, ArtifactDetail, ArtifactRead } from "../lib/types";
+import type {
+  AgentCard,
+  Artifact,
+  ArtifactDetail,
+  ArtifactRead,
+  Settings,
+  WidgetWidth,
+} from "../lib/types";
 import { aGroup, DEFAULT_GROUP } from "../test-fixtures";
 
 /**
@@ -26,6 +33,8 @@ const artifactData = vi.fn<(id: string, version?: number | null) => Promise<Arti
 );
 const allowArtifactSources = vi.fn<(id: string) => Promise<Artifact>>();
 const sendMessage = vi.fn<(agentId: string, text: string) => Promise<string>>(async () => "run");
+const pinArtifact = vi.fn<(id: string, width: WidgetWidth) => Promise<Settings>>();
+const unpinArtifact = vi.fn<(id: string) => Promise<Settings>>();
 
 vi.mock("../lib/ipc", () => ({
   api: {
@@ -38,6 +47,8 @@ vi.mock("../lib/ipc", () => ({
     artifactData: (id: string, version?: number | null) => artifactData(id, version),
     allowArtifactSources: (id: string) => allowArtifactSources(id),
     sendMessage: (agentId: string, text: string) => sendMessage(agentId, text),
+    pinArtifact: (id: string, width: WidgetWidth) => pinArtifact(id, width),
+    unpinArtifact: (id: string) => unpinArtifact(id),
     frameArtifact: async () => ({ port: 1, id: "digest", ticket: null }),
   },
 }));
@@ -88,6 +99,7 @@ function kept(over: Partial<Artifact> = {}): Artifact {
     updatedAt: 0,
     sources: [],
     sourcesAllowed: false,
+    condensed: false,
     ...over,
   };
 }
@@ -127,6 +139,7 @@ function open(railGroup: string | null, list: Artifact[] = [kept()]) {
     activity: {},
     agents: [agent("rae", "Rae"), agent("milo", "Milo"), agent("juno", "Juno", OTHER_CREW)],
     groups: [aGroup({ name: "Sales" }), aGroup({ id: OTHER_CREW, name: "Ops" })],
+    settings: { widgets: [] } as unknown as Settings,
   });
   return render(<Artifacts onClose={onClose} />);
 }
@@ -156,6 +169,55 @@ describe("which artifacts it lists", () => {
   it("says an owner who left is still the owner, and that they left", async () => {
     open(DEFAULT_GROUP, [kept({ owner: { id: "rae", name: "Rae", gone: true } })]);
     expect(await screen.findByText(/Owner Rae, left the crew/)).toBeTruthy();
+  });
+});
+
+describe("the status bar, from the page", () => {
+  async function openOne(artifact: Artifact) {
+    artifactDetail.mockResolvedValue({ ...detail, artifact });
+    open(DEFAULT_GROUP, [artifact]);
+    fireEvent.click(await screen.findByRole("button", { name: /Pipeline by stage/ }));
+    await waitFor(() => expect(artifactPage).toHaveBeenCalled());
+  }
+
+  it("puts a page with a condensed view on the bar at a width, and takes it off", async () => {
+    await openOne(kept({ condensed: true }));
+    const bar = await screen.findByRole("combobox", { name: "Status bar" });
+    expect((bar as HTMLSelectElement).value).toBe("");
+    const pinned = {
+      widgets: [
+        { artifactId: "artifact-1", width: "wide", everyMinutes: 5, addedBy: "the operator" },
+      ],
+    } as unknown as Settings;
+    pinArtifact.mockResolvedValue(pinned);
+    fireEvent.change(bar, { target: { value: "wide" } });
+    await waitFor(() => expect(pinArtifact).toHaveBeenCalledWith("artifact-1", "wide"));
+    await waitFor(() => expect((bar as HTMLSelectElement).value).toBe("wide"));
+
+    unpinArtifact.mockResolvedValue({ widgets: [] } as unknown as Settings);
+    fireEvent.change(bar, { target: { value: "" } });
+    await waitFor(() => expect(unpinArtifact).toHaveBeenCalledWith("artifact-1"));
+  });
+
+  it("offers nothing for a page with no condensed view", async () => {
+    await openOne(kept());
+    expect(screen.queryByRole("combobox", { name: "Status bar" })).toBeNull();
+  });
+
+  it("can only take a pinned page off once its version has no condensed view", async () => {
+    // A restore can put back a version from before the strip existed. The pin
+    // is still the operator's to remove; it cannot be resized onto nothing.
+    await openOne(kept());
+    act(() =>
+      useStore.setState({
+        settings: {
+          widgets: [{ artifactId: "artifact-1", width: "narrow", everyMinutes: 5, addedBy: "Rae" }],
+        } as unknown as Settings,
+      }),
+    );
+    const bar = await screen.findByRole("combobox", { name: "Status bar" });
+    const options = [...bar.querySelectorAll("option")];
+    expect(options.map((option) => option.disabled)).toEqual([false, true, true]);
   });
 });
 

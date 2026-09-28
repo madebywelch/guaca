@@ -1982,70 +1982,164 @@ async fn an_agent_is_refused_the_endpoint_before_the_operator_is_bothered() {
     assert!(results.contains("`baseUrl` is the operator's"), "{results}");
 }
 
-#[tokio::test]
-async fn a_button_an_agent_asks_for_reaches_the_status_bar_only_once_approved() {
-    let stub = serve(|body| {
-        if has_tool_result(body) {
-            Script::Say("Asked for the button.".into())
+/// A page in the default crew, made before the turn, with a condensed view
+/// when `condensed` is given and one connector read.
+fn pinnable(
+    h: &Harness,
+    owner: &str,
+    condensed: Option<&str>,
+) -> guac_lib::domain::artifact::Artifact {
+    let crew = h.runtime.store().get_agent(h.id(owner)).unwrap().unwrap().group_id;
+    h.runtime
+        .store()
+        .create_artifact(
+            crew,
+            h.id(owner),
+            owner,
+            guac_lib::db::ArtifactDraft {
+                title: "Open PRs",
+                page: "<p>the board</p>",
+                sources: &[guac_lib::domain::artifact::Source {
+                    name: "prs".into(),
+                    tool: "github__list_pull_requests".into(),
+                    arguments: serde_json::json!({ "state": "open" }),
+                }],
+                condensed,
+                note: "",
+            },
+        )
+        .unwrap()
+}
+
+/// An agent that pins whatever id the operator's message ends on.
+async fn pinning(width: &'static str, every: u32) -> Stub {
+    serve(move |body| {
+        let asked = last_word(body);
+        if has_tool_result(body) || !asked.contains('-') {
+            Script::Say("Asked.".into())
         } else {
-            Script::Settings(serde_json::json!({
-                "action": "add_quick_action",
-                "quick_action": {
-                    "label": "Morning brief",
-                    "send": "Give me the morning brief.",
-                    "to": "Scout",
-                },
-            }))
+            Script::Plugin {
+                name: "artifact".into(),
+                arguments: serde_json::json!({
+                    "action": "pin", "id": asked, "width": width, "every_minutes": every,
+                }),
+            }
         }
     })
-    .await;
-    let h = harness(&stub, &["Helper", "Scout"], GuardLimits::default());
-    h.runtime.send_from_human(h.id("Helper"), "Give me a button for the brief.").unwrap();
-    let request = h.awaited_request().await;
-    assert!(h.runtime.config().quick_actions.is_empty(), "nothing is added while asked");
-    let asked = h.runtime.store().get_approval(request).unwrap().unwrap();
-    assert!(
-        asked.detail.iter().any(|field| field.label == "Status bar"
-            && field.value.contains("sends Scout: \u{201c}Give me the morning brief.\u{201d}")),
-        "the operator sees the whole message it will send as them: {:?}",
-        asked.detail
-    );
-
-    h.runtime.decide_approval(request, Decision::Allow).unwrap();
-    h.wait_until("the button lands", |h| !h.runtime.config().quick_actions.is_empty()).await;
-    let added = &h.runtime.config().quick_actions[0];
-    assert_eq!(added.label, "Morning brief");
-    assert_eq!(added.added_by, "Helper");
-    assert!(matches!(
-        &added.does,
-        guac_lib::domain::quick::Does::Message { agent_id, .. } if *agent_id == h.id("Scout")
-    ));
+    .await
 }
 
 #[tokio::test]
-async fn a_button_cannot_speak_to_another_crew() {
-    let stub = serve(|body| {
-        if has_tool_result(body) {
-            Script::Say("I cannot.".into())
-        } else {
-            Script::Settings(serde_json::json!({
-                "action": "add_quick_action",
-                "quick_action": { "label": "Poke", "send": "Do the thing.", "to": "Outsider" },
-            }))
-        }
-    })
-    .await;
+async fn a_page_reaches_the_status_bar_only_once_the_operator_says_yes_to_it_and_its_reads() {
+    // The bar is the operator's, so a pin parks. The card has to show every
+    // read the page will make on it and how often, because the yes allows
+    // those too: one decision, not a placement now and refused reads later.
+    let stub = pinning("wide", 10).await;
+    let h = harness(&stub, &["Rae"], GuardLimits::default());
+    let page = pinnable(&h, "Rae", Some("<b>3 open</b>"));
+
+    h.runtime.send_from_human(h.id("Rae"), &format!("Put it on my bar, id {}", page.id)).unwrap();
+    let request = h.awaited_request().await;
+    assert!(h.runtime.config().widgets.is_empty(), "nothing is pinned while asked");
+    let asked = h.runtime.store().get_approval(request).unwrap().unwrap();
+    assert!(asked.summary.contains("\"Open PRs\" on your status bar"), "{}", asked.summary);
+    let reads = asked
+        .detail
+        .iter()
+        .find(|field| field.label == "Reads, allowed with this")
+        .unwrap_or_else(|| panic!("the card shows the reads: {:?}", asked.detail));
+    assert!(
+        reads.value.contains("github__list_pull_requests {\"state\":\"open\"}"),
+        "{}",
+        reads.value
+    );
+    assert!(reads.value.contains("every 10 min, as Rae"), "{}", reads.value);
+
+    h.runtime.decide_approval(request, Decision::Allow).unwrap();
+    h.wait_until("the page lands", |h| !h.runtime.config().widgets.is_empty()).await;
+    let pinned = &h.runtime.config().widgets[0];
+    assert_eq!(pinned.artifact_id, page.id);
+    assert_eq!(pinned.width, guac_lib::domain::widget::Width::Wide);
+    assert_eq!((pinned.every_minutes, pinned.added_by.as_str()), (10, "Rae"));
+    assert!(
+        h.runtime.store().any_artifact(page.id).unwrap().unwrap().sources_allowed,
+        "the yes allowed the reads it showed"
+    );
+
+    // Its crew reads that it is up there, which is what keeps the strip true.
+    let run = h.runtime.send_from_human(h.id("Rae"), "Anything new?").unwrap();
+    h.settle(run).await;
+    let prompt = prompts_by_agent(&stub).remove("Rae").unwrap_or_default();
+    assert!(prompt.contains("on the operator's status bar"), "{prompt}");
+}
+
+#[tokio::test]
+async fn a_page_without_a_condensed_view_is_refused_before_anybody_is_asked() {
+    let stub = pinning("narrow", 5).await;
+    let h = harness(&stub, &["Rae"], GuardLimits::default());
+    let page = pinnable(&h, "Rae", None);
+
+    let run =
+        h.runtime.send_from_human(h.id("Rae"), &format!("Pin the board, id {}", page.id)).unwrap();
+    h.settle(run).await;
+
+    assert!(h.runtime.store().pending_approvals(10).unwrap().is_empty(), "nobody was asked");
+    assert!(h.runtime.config().widgets.is_empty());
+    let results = tool_results(&stub).join("\n");
+    assert!(results.contains("has no condensed view"), "the refusal says what to add: {results}");
+    assert!(results.contains("`condensed`"), "{results}");
+}
+
+#[tokio::test]
+async fn an_agent_cannot_pin_another_crews_page() {
+    // The wall, for the one surface every crew shares. The id is real; the
+    // crew on the caller's card is the only thing stopping it.
+    let stub = pinning("narrow", 5).await;
     let h = harness_in_groups(
         &stub,
-        &[("Helper", None), ("Outsider", Some("Elsewhere"))],
+        &[("Manager", Some("Front")), ("Chef", Some("Back"))],
         GuardLimits::default(),
     );
-    let run = h.runtime.send_from_human(h.id("Helper"), "Button for Outsider.").unwrap();
+    let theirs = pinnable(&h, "Chef", Some("<b>2</b>"));
+
+    let run = h
+        .runtime
+        .send_from_human(h.id("Manager"), &format!("Pin the menu, id {}", theirs.id))
+        .unwrap();
     h.settle(run).await;
+
     assert!(h.runtime.store().pending_approvals(10).unwrap().is_empty(), "nobody was asked");
-    assert!(h.runtime.config().quick_actions.is_empty());
+    assert!(h.runtime.config().widgets.is_empty());
     let results = tool_results(&stub).join("\n");
-    assert!(results.contains("nobody in your crew is called Outsider"), "{results}");
+    assert!(results.contains("no artifact with the id"), "{results}");
+}
+
+#[tokio::test]
+async fn a_deleted_page_leaves_the_status_bar_with_it() {
+    let stub = serve(|_| Script::Say("Done.".into())).await;
+    let h = harness(&stub, &["Rae"], GuardLimits::default());
+    let (gone, kept) =
+        (pinnable(&h, "Rae", Some("<b>1</b>")), pinnable(&h, "Rae", Some("<b>2</b>")));
+    h.runtime
+        .change_config(|config| {
+            for id in [gone.id, kept.id] {
+                let pin = guac_lib::domain::widget::Widget::new(
+                    id,
+                    guac_lib::domain::widget::Width::Narrow,
+                    None,
+                    "the operator",
+                )?;
+                guac_lib::domain::widget::pin(&mut config.widgets, pin)?;
+            }
+            Ok::<_, guac_lib::config::ConfigError>(())
+        })
+        .unwrap();
+
+    h.runtime.store().delete_artifact(gone.id).unwrap();
+    h.runtime.unpin_missing();
+
+    let left: Vec<_> = h.runtime.config().widgets.iter().map(|w| w.artifact_id).collect();
+    assert_eq!(left, vec![kept.id], "a pin never outlives its page, and the others stay put");
 }
 
 // ---- the calendar --------------------------------------------------------
@@ -2234,6 +2328,63 @@ async fn an_agent_keeps_a_page_and_its_turn_records_a_card_for_it() {
 }
 
 #[tokio::test]
+async fn a_page_made_with_a_condensed_view_is_told_it_can_be_pinned() {
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Made it.".into())
+        } else {
+            Script::Plugin {
+                name: "artifact".into(),
+                arguments: serde_json::json!({
+                    "action": "create",
+                    "title": "Open PRs",
+                    "page": "<!doctype html><p>the board</p>",
+                    "condensed": "<!doctype html><b>3 open</b>",
+                }),
+            }
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Rae"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Rae"), "Track my PRs.").unwrap();
+    h.settle(run).await;
+
+    let kept = &h.runtime.store().artifacts(None, 10).unwrap()[0];
+    assert!(kept.condensed);
+    assert_eq!(
+        h.runtime.store().artifact_condensed(kept.id).unwrap().as_deref(),
+        Some("<!doctype html><b>3 open</b>")
+    );
+    let results = tool_results(&stub).join("\n");
+    assert!(results.contains("`pin` asks them"), "{results}");
+    assert!(h.runtime.config().widgets.is_empty(), "made is not pinned: that is the operator's");
+}
+
+#[tokio::test]
+async fn viewing_a_page_shows_its_condensed_view_so_an_edit_to_it_is_not_blind() {
+    let stub = serve(|body| {
+        let asked = last_word(body);
+        if has_tool_result(body) || !asked.contains('-') {
+            Script::Say("Read it.".into())
+        } else {
+            Script::Plugin {
+                name: "artifact".into(),
+                arguments: serde_json::json!({ "action": "view", "id": asked }),
+            }
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Rae"], GuardLimits::default());
+    let page = pinnable(&h, "Rae", Some("<b>3 open</b>"));
+    let run = h.runtime.send_from_human(h.id("Rae"), &format!("Look at {}", page.id)).unwrap();
+    h.settle(run).await;
+
+    let results = tool_results(&stub).join("\n");
+    assert!(results.contains("Its condensed view, not on the status bar"), "{results}");
+    assert!(results.contains("<b>3 open</b>"), "{results}");
+}
+
+#[tokio::test]
 async fn a_crewmate_edits_without_messaging_the_owner_who_reads_it_on_its_next_turn() {
     // Anyone in the crew edits, one agent owns. The editor is told the owner
     // will read about it, and the owner does, from its own prompt, without a
@@ -2270,6 +2421,7 @@ async fn a_crewmate_edits_without_messaging_the_owner_who_reads_it_on_its_next_t
                 title: "Pipeline",
                 page: "<p>v1</p>",
                 sources: &[],
+                condensed: None,
                 note: "First cut",
             },
         )
@@ -2326,6 +2478,7 @@ async fn an_edit_without_a_note_is_refused_and_changes_nothing() {
                 title: "Pipeline",
                 page: "<p>v1</p>",
                 sources: &[],
+                condensed: None,
                 note: "",
             },
         )
@@ -2384,6 +2537,7 @@ async fn an_agent_cannot_touch_another_crews_artifact() {
                 title: "Menu",
                 page: "<p>menu</p>",
                 sources: &[],
+                condensed: None,
                 note: "",
             },
         )
@@ -3139,6 +3293,7 @@ async fn a_group_can_pin_a_model_without_touching_the_other_group() {
         kernel: Default::default(),
         webhook: Default::default(),
         quick_actions: Vec::new(),
+        widgets: Vec::new(),
     };
     let sink = RecordingSink::new();
     let runtime = Runtime::new(
@@ -3232,6 +3387,7 @@ async fn a_group_runs_on_its_own_budget_and_leaves_the_next_group_alone() {
         kernel: Default::default(),
         webhook: Default::default(),
         quick_actions: Vec::new(),
+        widgets: Vec::new(),
     };
     let sink = RecordingSink::new();
     let runtime = Runtime::new(

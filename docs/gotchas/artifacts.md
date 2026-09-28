@@ -75,3 +75,44 @@ Pages a crew keeps. *An artifact is a page a crew keeps* in
   `onSend`, carries it to an agent.
 - **Delete is the operator's only.** Agents have `update`, which keeps what it
   replaced. What the operator keeps is theirs to throw away.
+
+## On the status bar
+
+*The status bar holds pages the crews keep, and a click on one is the bar's* in
+`docs/WORKSPACE.md`, then `domain/widget.rs`, `src/lib/widget.ts` and
+`PinnedPage` in `src/components/StatusBar.tsx`.
+
+- **The condensed view is a second document, not the page made responsive.**
+  A page that folds itself down to one row still loads everything it is, all
+  day, and can still put a small copy of everything in the strip. The 16 KB
+  cap on a separate document is what keeps the strip a strip.
+- **It is part of the version.** Written, kept by an edit that leaves it out,
+  and put back by a restore, with the page. A column on the artifact row
+  instead would pin today's number beside last month's board after a restore.
+- **A version can have none, and a pinned page can be on one.** A restore can
+  bring back a version from before the strip existed. The bar draws the title
+  in its place, and the dialog offers only to take it off.
+- **A pin is a setting, not a column.** What is on the bar is the operator's
+  decision about their screen, and every window has to draw the same bar. Both
+  acts that delete pages call `Runtime::unpin_missing`; a third one has to too.
+- **The frame takes no pointer events, and its messages are never heard.** A
+  click on a widget is the bar's button, and it opens the page. Giving the
+  strip `guaca.send` puts a row of tiny controls that each spend the owner's
+  turn one mis-click away, and a click inside a frame on another origin cannot
+  be seen from outside anyway.
+- **An agent's pin allows the reads the card showed, and nothing else.**
+  `allow_artifact_sources_seen` compares the list the card was built from with
+  the one the version declares when the operator answers. A crewmate who
+  changed the reads while the card waited gets a pin whose reads still wait.
+- **The operator's pin allows nothing.** Reads are allowed above the page,
+  where the list is drawn in full. A pin that allowed them too would be an
+  approval of a list nobody was shown.
+- **The bar's look is solved from the preferences, not read off the document.**
+  A child's effect runs before `App`'s, so reading computed colors when the
+  theme changes reads the old ones and frames the strip in them.
+- **The widths are stated to agents in pixels.** `--widget-narrow` and
+  `--widget-wide` in `styles.css` and the sentence in the `artifact` tool are
+  one fact in two places, and `widget.test.ts` fails when they disagree.
+- **Reads do not run while the window is hidden, or on a clock when nobody
+  allowed them.** A read nobody sees is a connector call spent on nothing, and
+  reads that are refused are refused the same way every time.

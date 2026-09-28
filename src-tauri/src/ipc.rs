@@ -297,6 +297,9 @@ surface! {
     restore_artifact(id: crate::domain::ids::ArtifactId, version: u32) -> crate::domain::artifact::Artifact,
     hand_artifact(id: crate::domain::ids::ArtifactId, agent_id: AgentId) -> crate::domain::artifact::Artifact,
     delete_artifact(id: crate::domain::ids::ArtifactId) -> (),
+    artifact_condensed(id: crate::domain::ids::ArtifactId) -> crate::commands::CondensedView,
+    pin_artifact(id: crate::domain::ids::ArtifactId, width: crate::domain::widget::Width) -> RedactedConfig,
+    unpin_artifact(id: crate::domain::ids::ArtifactId) -> RedactedConfig,
     webhook_address() -> crate::commands::WebhookAddress,
 
     report_view(view: crate::domain::view::OperatorView) -> (),

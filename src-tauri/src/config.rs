@@ -251,6 +251,10 @@ pub struct AppConfig {
     /// through the same event.
     #[serde(default)]
     pub quick_actions: Vec<crate::domain::quick::QuickAction>,
+    /// Kept pages pinned to the status bar, drawn from their condensed views,
+    /// in the order they are drawn. A setting for the quick actions' reason.
+    #[serde(default)]
+    pub widgets: Vec<crate::domain::widget::Widget>,
 }
 
 /// Where an event is posted to fire a routine, and what the post has to carry.
@@ -409,6 +413,9 @@ pub struct RedactedConfig {
     /// Nothing secret in one, so it crosses whole.
     #[serde(default)]
     pub quick_actions: Vec<crate::domain::quick::QuickAction>,
+    /// An artifact id and a width. The page itself is read when it is drawn.
+    #[serde(default)]
+    pub widgets: Vec<crate::domain::widget::Widget>,
 }
 
 impl AppConfig {
@@ -433,6 +440,7 @@ impl AppConfig {
             limits: self.limits,
             subscription_models: vec![crate::llm::codex::DEFAULT_MODEL.to_string()],
             quick_actions: self.quick_actions.clone(),
+            widgets: self.widgets.clone(),
         }
     }
 }
@@ -468,6 +476,8 @@ pub enum ConfigError {
     Blank { field: &'static str },
     #[error(transparent)]
     Quick(#[from] crate::domain::quick::QuickError),
+    #[error(transparent)]
+    Widget(#[from] crate::domain::widget::WidgetError),
 }
 
 /// Normalizes and validates an operator-supplied base URL.

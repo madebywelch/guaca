@@ -27,7 +27,7 @@ const TABLES: &[(&str, &str, &str)] = &[
     ("artifacts", "id,group_id,owner_id,title,version,created_at,updated_at", "group_id = ?1"),
     // Without `allowed_sources`: which reads a page may make is the operator's
     // decision on this machine, and a copy asks again once its connectors are.
-    ("artifact_history", "artifact_id,seq,at,change,agent_id,actor,version,owner,note,page,sources", "artifact_id IN (SELECT id FROM artifacts WHERE group_id = ?1)"),
+    ("artifact_history", "artifact_id,seq,at,change,agent_id,actor,version,owner,note,page,sources,condensed", "artifact_id IN (SELECT id FROM artifacts WHERE group_id = ?1)"),
     ("working_notes", "agent_id,at,body", "agent_id IN (SELECT id FROM agents WHERE group_id = ?1)"),
     ("usage", "agent_id,group_id,run_id,model,prompt,completion,cost,created_at", "group_id = ?1"),
     ("routine_runs", "routine_id,run_id,kind,at", "routine_id IN (SELECT id FROM routines WHERE agent_id IN (SELECT id FROM agents WHERE group_id = ?1))"),
@@ -738,6 +738,7 @@ mod tests {
                     title: "Board",
                     page: "<p>v1</p>",
                     sources: &[],
+                    condensed: None,
                     note: "First",
                 },
             )
@@ -753,6 +754,7 @@ mod tests {
                     title: None,
                     page: Some("<p>v2</p>"),
                     sources: None,
+                    condensed: Some("<b>2 open</b>"),
                     note: "Tighter",
                 },
             )
@@ -784,6 +786,10 @@ mod tests {
         assert_ne!(*id, visitor.id, "and does not point at the agent in the other crew");
         assert_eq!(log[1].by.agent_id(), Some(copied.id), "a member's edits are its copy's");
         assert_eq!(f.store.artifact_page(copy.id, Some(1)).unwrap().unwrap(), "<p>v1</p>");
+        // The strip travels with its version, or a copy pinned to a bar draws
+        // nothing where the original drew a number.
+        assert!(copy.condensed);
+        assert_eq!(f.store.artifact_condensed(copy.id).unwrap().as_deref(), Some("<b>2 open</b>"));
     }
     #[test]
     fn invalid_participants_are_refused_without_partial_groups() {

@@ -13,6 +13,18 @@
 //! `crate::artifact`, the same content policy, reaching nothing. Keeping a page
 //! changes where it lives, not what it may do.
 //!
+//! ## A version can carry a second, condensed document
+//!
+//! The status bar draws a kept page one row high, and the page itself is the
+//! wrong thing to draw there: it can be half a megabyte of chart library, and a
+//! pinned widget runs all day. So a version may carry `condensed`, a separate
+//! document of at most [`MAX_CONDENSED`] bytes, written for the strip. Separate
+//! rather than one page that folds itself down, because the cap is what keeps
+//! it condensed: a responsive page can put a small copy of everything in the
+//! strip, and a sixteen-kilobyte document cannot. It shares the page's version,
+//! reads and history, so the number on the bar and the board behind it are
+//! always the same version of the same thing.
+//!
 //! ## Anyone in the crew edits it, and one agent owns it
 //!
 //! The two are separate on purpose. Editing is open to every agent in the crew
@@ -88,6 +100,10 @@ pub const MAX_NOTE: usize = 300;
 /// than two that agree today: a page kept here that the server then refused to
 /// frame would be a version nobody can open.
 pub const MAX_PAGE: usize = 512 * 1024;
+
+/// The most a condensed view may be, in bytes. A number, a state, a small
+/// sparkline drawn inline, and the script that picks them out of the reads.
+pub const MAX_CONDENSED: usize = 16 * 1024;
 
 /// How many a prompt names. The list is on every turn of every agent in the
 /// crew, so it is capped rather than scrolled; `list` has the rest.
@@ -244,6 +260,9 @@ pub struct Artifact {
     /// Whether the operator allowed exactly these reads. Never true for a page
     /// with none.
     pub sources_allowed: bool,
+    /// Whether the current version has a condensed view, which is what the
+    /// status bar draws and so what a page needs before it can be pinned.
+    pub condensed: bool,
 }
 
 /// One row of an artifact's log.
@@ -286,6 +305,15 @@ pub enum Invalid {
          compute what it shows in its own script instead of writing every value out"
     )]
     PageTooBig { bytes: usize },
+    #[error(
+        "the condensed view is {bytes} bytes and holds at most {MAX_CONDENSED}. It is one row of \
+         the status bar: a number, a state or a next date. Put the rest in the page"
+    )]
+    CondensedTooBig { bytes: usize },
+    #[error(
+        "a condensed view cannot be empty. Leave `condensed` out to keep the one the page has"
+    )]
+    NoCondensed,
     #[error("{doing} needs a `note`: one line saying {what}")]
     NoNote { doing: &'static str, what: &'static str },
     #[error("a page may declare at most {MAX_SOURCES} sources; read fewer things, or fewer times")]
@@ -329,6 +357,19 @@ pub fn page(raw: &str) -> Result<String, Invalid> {
     }
     if trimmed.len() > MAX_PAGE {
         return Err(Invalid::PageTooBig { bytes: trimmed.len() });
+    }
+    Ok(trimmed.to_string())
+}
+
+/// A condensed view, whole. Refused over the cap rather than cut, for the
+/// page's reason.
+pub fn condensed(raw: &str) -> Result<String, Invalid> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(Invalid::NoCondensed);
+    }
+    if trimmed.len() > MAX_CONDENSED {
+        return Err(Invalid::CondensedTooBig { bytes: trimmed.len() });
     }
     Ok(trimmed.to_string())
 }
@@ -439,16 +480,19 @@ impl Artifact {
     }
 
     /// One line in the prompt and in `list`. Owner and last editor both, so an
-    /// owner reads that somebody else changed its page without being told.
-    pub fn index_line(&self, reader: AgentId, now: i64) -> String {
+    /// owner reads that somebody else changed its page without being told, and
+    /// whether it is on the status bar, where its condensed view is what the
+    /// operator sees all day and so has to be kept as true as the page.
+    pub fn index_line(&self, reader: AgentId, now: i64, pinned: bool) -> String {
         format!(
-            "- {} \"{}\" v{}, {}, updated {} by {}",
+            "- {} \"{}\" v{}, {}, updated {} by {}{}",
             self.id,
             self.title,
             self.version,
             self.owner_words(reader),
             how_long_ago(self.updated_at, now),
             self.edited_by.said_to(reader),
+            if pinned { ", on the operator's status bar" } else { "" },
         )
     }
 }
@@ -517,6 +561,17 @@ mod tests {
         assert!(matches!(page(&big), Err(Invalid::PageTooBig { .. })));
         assert_eq!(page("  <p>hi</p>\n").unwrap(), "<p>hi</p>");
         assert_eq!(page("   "), Err(Invalid::NoPage));
+    }
+
+    #[test]
+    fn a_condensed_view_is_held_to_a_strip_and_never_cut() {
+        // The cap is the whole of what keeps it condensed. A page that fits in
+        // half a megabyte does not fit in one row of the status bar.
+        let page_sized = format!("<p>{}</p>", "x".repeat(MAX_CONDENSED));
+        assert!(page(&page_sized).is_ok(), "fine as a page");
+        assert!(matches!(condensed(&page_sized), Err(Invalid::CondensedTooBig { .. })));
+        assert_eq!(condensed(" <b>3 open</b>\n").unwrap(), "<b>3 open</b>");
+        assert_eq!(condensed("  "), Err(Invalid::NoCondensed));
     }
 
     #[test]
@@ -639,9 +694,15 @@ mod tests {
             updated_at: 0,
             sources: vec![],
             sources_allowed: false,
+            condensed: false,
         };
-        let line = mine.index_line(me, 2 * 3_600_000);
-        assert!(line.contains("\"Pipeline by stage\" v7, yours, updated 2h ago by Milo"), "{line}");
+        let line = mine.index_line(me, 2 * 3_600_000, false);
+        assert!(
+            line.ends_with("\"Pipeline by stage\" v7, yours, updated 2h ago by Milo"),
+            "{line}"
+        );
+        let pinned = mine.index_line(me, 2 * 3_600_000, true);
+        assert!(pinned.ends_with("by Milo, on the operator's status bar"), "{pinned}");
     }
 
     #[test]
@@ -659,6 +720,7 @@ mod tests {
             updated_at: 0,
             sources: vec![],
             sources_allowed: false,
+            condensed: false,
         };
         assert_eq!(gone.owner_words(AgentId::new()), "owned by Rae, who is no longer in this crew");
     }
