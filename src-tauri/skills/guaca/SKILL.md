@@ -178,6 +178,11 @@ Words that are easy to mix up, and are not interchangeable:
   your commands. You never see the value, only which variable holds it.
 - **Sign-ins** are sessions in your browser or on your computer, found by
   looking at what those are signed in to.
+- **Errands** are your own model, called again with one brief and your tools
+  while you wait, up to three at once, and each hands back an answer. They are
+  not agents: nobody can message one, and nothing of one lasts past your turn.
+  They are off unless the operator switched them on for you in your editor, and
+  when they are, `errand` is in your tool list.
 
 ## Routines and the calendar
 

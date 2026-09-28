@@ -316,6 +316,72 @@ permitted up to 48 billable calls. The unit is now the model call, because that
 is the thing that costs money. A cascade test caught this; the fix is one line
 and the test that found it is still there.
 
+## An errand is the agent's model again, inside the turn that sent it
+
+An agent the operator has switched errands on for can call `errand` with up to
+three briefs. Each one is a second call to the same model, with the agent's own
+tools and in its name, working that brief alone while the turn waits. What comes
+back is each errand's answer, as the result of the call. It exists for the
+reading a turn does not need to keep: a long document, or a site searched page by
+page, fills the context of whoever does it, and an errand hands back the finding
+instead of the trail.
+
+**It is not an agent.** No card, no channel, no memory, no place in the
+directory, nothing addressable once the turn has its answer. That is the
+difference from the three things it could be confused with. A peer has a role and
+answers later as a message. `create_agent` adds a colleague for a role the crew
+lacks. `code` hands work to a different program on a budget of its own.
+
+**It runs inside the sending turn's tool call, on that turn's run.** That one
+decision is why nothing else had to be built for it:
+
+- Every errand model call claims a step from the run, so `max_steps_per_run` is
+  still the only ceiling on spend and the trajectory suite reads the same bill. A
+  budget per errand is how a worst case multiplies: OpenHands gave each delegate
+  its own iteration limit and reached that limit squared.
+- The operator's stop reaches it at the same boundaries a turn has, and its model
+  calls are raced against the stop the same way. A stop is a control on the
+  conversation, and an errand is part of the conversation.
+- The run cannot settle under it, because the turn is still holding its envelope.
+- The answer lands in the context that asked. `code` returns a message on a new
+  run because a job outlives its turn by forty minutes; an errand is bounded to a
+  few, and a turn woken again to read one would have forgotten why it asked.
+
+**The limits are Guaca's, never the model's.** Three at once, and a fourth is
+refused rather than queued. Twelve rounds each, or the crew's `max_tool_rounds`
+if that is lower. And an errand never takes the last two steps of a run
+(`RunState::reserve_step_leaving`): without that, three errands spend the budget
+between them and the turn that sent them ends holding findings it has no call
+left to report. The numbers are in `domain/errand.rs`.
+
+**Three tools are withheld, each for a reason that holds however well the errand
+behaves.** Another errand multiplies spend at every level. A message to a peer is
+answered after the errand has gone, into a turn that never asked. And a memory is
+rewritten whole, so two errands writing it at once lose a write. The check is on
+what the call parsed to, not the name it used, so an alias cannot walk round it
+(`tools::withheld_from_errands`). Everything else is the agent's, including tools
+that stop and ask the operator: the card on the desk names the agent, because the
+errand is the agent.
+
+**The agent's computer, browser and repository are held by one errand at a
+time.** Each is one thing, and two errands working one page or one work tree at
+once each undo the other. An errand that touches any of the three holds all of
+them until it finishes; errands that touch none run alongside. One lock rather
+than three, because separate locks taken in the order each errand happens to need
+them deadlock.
+
+**What comes back is framed as the errand's account.** The sending turn did not
+see what it read, and an answer can carry text a page put there. The result says
+so, as a finished coding job's does, and says how each errand ended: finished,
+unfinished, out of rounds, out of budget, failed or stopped. A turn limit reached
+and a task done must not read alike; Gemini's subagents once reported success
+from a child that had run out of turns.
+
+**It is off until the operator switches it on, per agent.** An errand spends the
+model again, up to three at once, so the grant sits beside the computer and the
+browser on the card, and a new agent, including one another agent made, starts
+without it. `runtime/errand.rs` is the loop and `tests/errands.rs` holds it.
+
 ## A stop marks the run and releases nothing
 
 The limits above decide when a conversation ends on its own. A stop is the

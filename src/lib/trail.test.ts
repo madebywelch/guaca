@@ -105,6 +105,23 @@ describe("what one call was", () => {
     expect(step?.target).toBe("fix the flaky test");
   });
 
+  it("names how many errands were sent and opens onto their briefs and answers", () => {
+    const [two] = steps(
+      call(
+        "errand",
+        { briefs: ["Count the north office.", "Count the south office."] },
+        ok("2 errands: 2 finished\n\n1. Its answer:\nNorth office: 12 staff."),
+      ),
+    );
+    expect(two?.title).toBe("Sent 2 errands");
+    expect(two?.target).toBe("Count the north office.\n\nCount the south office.");
+    expect(tellsMore(two!), "what they came back with is behind the click").toBe(true);
+
+    const [one] = steps(call("errand", { briefs: "Read the pricing page." }));
+    expect(one?.title).toBe("Sent an errand");
+    expect(one?.target).toBe("Read the pricing page.");
+  });
+
   it("reads a screen action as the place it happened", () => {
     const [step] = steps(call("use_screen", { action: "click", x: 412, y: 96 }));
     expect(step?.title).toBe("Clicked on its screen");

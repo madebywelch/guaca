@@ -168,6 +168,10 @@ export const api = {
   setAgentBrowserConsent: (id: AgentId, consent: BrowserConsent) =>
     invoke<void>("set_agent_browser_consent", { id, consent }),
 
+  /** Whether this agent may send errands. Applied at once, and off by default. */
+  setAgentErrands: (id: AgentId, given: boolean) =>
+    invoke<void>("set_agent_errands", { id, given }),
+
   /** Opens one, or hands back the one it already has. Idempotent. */
   startAgentBrowser: (id: AgentId) => invoke<Browser>("start_agent_browser", { id }),
 

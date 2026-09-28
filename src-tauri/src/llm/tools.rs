@@ -42,6 +42,7 @@ pub const WRITE_DOCUMENT: &str = "write_document";
 pub const READ_FILE: &str = "read_file";
 pub const CODE: &str = "code";
 pub const SHELL: &str = "shell";
+pub const ERRAND: &str = "errand";
 
 /// Which of the two places an agent has been given, which decides which tools
 /// it is offered.
@@ -66,6 +67,13 @@ pub struct Surfaces {
     /// Not a [`crate::domain::signin::Surface`] and deliberately absent from
     /// [`Surfaces::has`]: nothing is ever signed in to a directory.
     pub repository: bool,
+    /// Whether this agent may send errands.
+    ///
+    /// Not a place at all, and here anyway, for the reason `repository` is:
+    /// this struct is the one decision a turn's tool list and its prompt are
+    /// both read from, and a grant decided anywhere else is a tool offered by
+    /// one of them and not the other.
+    pub errands: bool,
 }
 
 /// Which machine a tool call is spent on, by the tool's name, or none for a
@@ -87,11 +95,11 @@ pub fn surface_of(name: &str) -> Option<crate::domain::signin::Surface> {
 
 impl Surfaces {
     pub fn both() -> Self {
-        Surfaces { computer: true, browser: true, repository: true }
+        Surfaces { computer: true, browser: true, repository: true, errands: true }
     }
 
     pub fn none() -> Self {
-        Surfaces { computer: false, browser: false, repository: false }
+        Surfaces { computer: false, browser: false, repository: false, errands: false }
     }
 
     /// What one agent has, out of what the workspace could hand out.
@@ -108,6 +116,7 @@ impl Surfaces {
             computer: self.computer && card.has_computer,
             browser: self.browser && card.has_browser,
             repository: self.repository && card.repository_id.is_some(),
+            errands: self.errands && card.runs_errands,
         }
     }
 
@@ -232,6 +241,7 @@ fn offered(name: &str, surfaces: Surfaces, modalities: Modalities) -> bool {
         BROWSE => surfaces.browser,
         CODE | SHELL => surfaces.repository,
         REQUEST_PERMISSION => surfaces.computer || surfaces.browser || surfaces.repository,
+        ERRAND => surfaces.errands,
         _ => true,
     }
 }
@@ -245,6 +255,7 @@ fn needs(name: &str) -> Option<&'static str> {
         BROWSE => Some("a browser"),
         CODE | SHELL => Some("a repository"),
         REQUEST_PERMISSION => Some("a computer, a browser or a repository"),
+        ERRAND => Some("errands switched on"),
         _ => None,
     }
 }
@@ -264,7 +275,7 @@ pub struct ToolSummary {
 /// so the list an operator reads cannot drift from the list a model is sent.
 /// A connector's tools are its own and are listed with the connector.
 pub fn catalog() -> Vec<ToolSummary> {
-    let every = Surfaces { computer: true, browser: true, repository: true };
+    let every = Surfaces::both();
     all_specs(every)
         .into_iter()
         .map(|spec| {
@@ -946,6 +957,53 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: ERRAND.to_string(),
+            // Offered only to an agent the operator switched errands on for.
+            // The description carries the whole of when to reach for one,
+            // because the two ways this goes wrong are both about when: an
+            // errand for a single lookup spends a model call to save none, and
+            // a brief that leans on this conversation is a brief nobody can do.
+            // Anthropic's research system saw both, the second as three
+            // subagents researching the same thing.
+            description: format!(
+                "Send up to {} errands at once: second calls to your own model that each work \
+                 one brief with your tools, in your name, while you wait, and hand you back \
+                 their answers. Use one when a piece of work would fill this conversation \
+                 with reading you do not need to keep, such as a long document or a site \
+                 searched page by page, or when separate pieces can run at the same time. Do \
+                 not send one for a lookup you can do in a single call yourself, and never send \
+                 two with the same brief: every errand spends model calls from this \
+                 conversation's budget, and the last {} are kept for your own answer.\n\
+                 An errand knows nothing but its brief. It has not seen this conversation, \
+                 your memory or your crew, and it cannot ask. So each brief has to stand \
+                 alone: what to find or do, where to look, what to hand back and in what \
+                 shape, and where to stop.\n\
+                 An errand cannot message anyone, rewrite your memory or send errands of its \
+                 own. Your computer, browser and repository are used by one errand at a time, \
+                 so errands that need them take turns while the others run. What comes back is \
+                 each errand's own account: you did not see what it read, so report what it \
+                 found as found, not as checked.",
+                crate::domain::errand::MOST_AT_ONCE,
+                crate::domain::errand::HEADROOM,
+            ),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "briefs": {
+                        "type": "array",
+                        "items": { "type": "string", "minLength": 1 },
+                        "minItems": 1,
+                        "maxItems": crate::domain::errand::MOST_AT_ONCE,
+                        "description": "One brief per errand, each everything that errand will \
+                                        know: the task, where to look, what to hand back and \
+                                        where to stop."
+                    }
+                },
+                "required": ["briefs"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
             name: SHELL.to_string(),
             // The small door into the same repository `code` is the big door
             // into, offered on the same condition. Two ways in, because the
@@ -1484,6 +1542,16 @@ pub enum ToolInvocation {
     CreateAgent {
         draft: NewAgent,
     },
+    /// Send errands: the agent's own model, once per brief, with its tools.
+    ///
+    /// Parsed like any other call and never dispatched like one. A turn that
+    /// may send errands runs them itself, because only the turn holds what an
+    /// errand needs (the model, the budget, the tool list); anything that
+    /// reaches the ordinary dispatch with this is either not allowed errands
+    /// or is an errand trying to send its own.
+    Errand {
+        briefs: Vec<String>,
+    },
     /// A tool belonging to one of the group's connected plugins.
     ///
     /// Unlike every other variant, what this can be is not known at compile
@@ -1674,6 +1742,8 @@ pub enum ToolParseError {
     MissingFiles,
     #[error("code needs a non-empty `task`")]
     MissingTask,
+    #[error("errand needs at least one non-empty brief in `briefs`")]
+    MissingBriefs,
     #[error("write_document needs a `name`")]
     MissingDocumentName,
     #[error("read_file needs an attachment `name` and an optional nonnegative integer `offset`")]
@@ -1850,6 +1920,13 @@ impl ToolParseError {
                  commit, push or open a pull request."
                     .to_string()
             }
+            ToolParseError::MissingBriefs => {
+                "Error: `briefs` must be a list of one or more briefs, each the whole of what \
+                 one errand will know, for example {\"briefs\": [\"Read the pricing page at \
+                 https://example.com/pricing and list every tier with its monthly price.\"]}. \
+                 Nothing was sent."
+                    .to_string()
+            }
             ToolParseError::MissingDocumentName => {
                 "Error: `name` must be a file name with an extension, for example \
                  {\"name\": \"readiness.md\", \"content\": \"# Readiness\\n…\"}."
@@ -1900,6 +1977,76 @@ struct SendArgs {
     /// Reached for by analogy, and meaning the same thing.
     #[serde(default)]
     attachments: Option<serde_json::Value>,
+}
+
+/// The briefs in an errand call, however they were sent.
+///
+/// Looser than the schema, for the reason every parser here is: a model asked
+/// for a list of strings sends one string, or a list of objects with the brief
+/// under some other key, often enough that refusing would be a retry loop
+/// rather than a working tool. A blank brief is dropped rather than sent: an
+/// errand handed nothing spends a model call finding that out.
+fn briefs_in(value: &serde_json::Value) -> Vec<String> {
+    const KEYS: [&str; 6] = ["brief", "goal", "task", "prompt", "text", "description"];
+    let one = |item: &serde_json::Value| match item {
+        serde_json::Value::String(text) => Some(text.clone()),
+        serde_json::Value::Object(_) => first_string(item, &KEYS),
+        _ => None,
+    };
+    let listed = ["briefs", "tasks", "errands"]
+        .iter()
+        .find_map(|key| value.get(*key))
+        .map(|found| match found {
+            serde_json::Value::Array(items) => items.iter().filter_map(one).collect(),
+            other => one(other).into_iter().collect(),
+        })
+        .unwrap_or_else(|| first_string(value, &KEYS).into_iter().collect::<Vec<_>>());
+    listed.into_iter().map(|brief| brief.trim().to_string()).filter(|b| !b.is_empty()).collect()
+}
+
+/// Which of the sending agent's tools an errand does not get, by what the call
+/// turned out to be rather than by the name it used, so an alias cannot walk
+/// round it.
+///
+/// Three, each for a reason that holds however well the errand behaves.
+/// Another errand multiplies the spend at every level. A message to a peer is
+/// answered after the errand is gone, into a turn that never asked. And a
+/// memory is rewritten whole, so two errands writing it at once lose one of
+/// the writes, and a third starts from what the agent believed before either.
+pub fn withheld_from_errands(invocation: &ToolInvocation) -> Option<&'static str> {
+    match invocation {
+        ToolInvocation::Errand { .. } => Some(ERRAND),
+        ToolInvocation::SendMessage { .. } => Some(SEND_MESSAGE),
+        ToolInvocation::UpdateMemory { .. } => Some(UPDATE_MEMORY),
+        _ => None,
+    }
+}
+
+/// The tools an errand is offered: the sending turn's own, less the three
+/// [`withheld_from_errands`] names.
+pub fn for_errands(offered: impl IntoIterator<Item = ToolSpec>) -> Vec<ToolSpec> {
+    offered
+        .into_iter()
+        .filter(|spec| ![ERRAND, SEND_MESSAGE, UPDATE_MEMORY].contains(&spec.name.as_str()))
+        .collect()
+}
+
+/// Whether a call reaches one of the agent's three places, which an errand
+/// holds for the rest of its life once it has touched any of them.
+///
+/// All three behind one lock rather than one each. Separate locks taken in the
+/// order an errand happens to need them are two errands each holding one and
+/// waiting on the other's, forever.
+pub fn reaches_a_place(invocation: &ToolInvocation) -> bool {
+    matches!(
+        invocation,
+        ToolInvocation::RunCommand { .. }
+            | ToolInvocation::OpenOnDesktop { .. }
+            | ToolInvocation::UseScreen { .. }
+            | ToolInvocation::Browse { .. }
+            | ToolInvocation::Shell { .. }
+            | ToolInvocation::Code { .. }
+    )
 }
 
 /// Reads one screen action, with the coordinates it needs.
@@ -2747,6 +2894,19 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                 _ => Err(ToolParseError::MissingShellCommand),
             }
         }
+        // The aliases are what other harnesses call the same thing, and a model
+        // trained on their transcripts reaches for them by name.
+        ERRAND | "errands" | "run_errand" | "send_errand" | "delegate_task" | "subagent" => {
+            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                name: ERRAND.to_string(),
+                detail: e.to_string(),
+            })?;
+            let briefs = briefs_in(&value);
+            if briefs.is_empty() {
+                return Err(ToolParseError::MissingBriefs);
+            }
+            Ok(ToolInvocation::Errand { briefs })
+        }
         CODE | "write_code" | "run_coding_agent" | "delegate_code" => {
             let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
                 name: CODE.to_string(),
@@ -3514,12 +3674,14 @@ mod tests {
             specs(surfaces, Modalities::seeing()).into_iter().map(|spec| spec.name).collect()
         };
 
-        let computer_only = names(Surfaces { computer: true, browser: false, repository: false });
+        let computer_only =
+            names(Surfaces { computer: true, browser: false, repository: false, errands: false });
         assert!(computer_only.contains(&USE_SCREEN.to_string()));
         assert!(computer_only.contains(&RUN_COMMAND.to_string()));
         assert!(!computer_only.contains(&BROWSE.to_string()));
 
-        let browser_only = names(Surfaces { computer: false, browser: true, repository: false });
+        let browser_only =
+            names(Surfaces { computer: false, browser: true, repository: false, errands: false });
         assert!(browser_only.contains(&BROWSE.to_string()));
         assert!(!browser_only.contains(&USE_SCREEN.to_string()));
         assert!(!browser_only.contains(&OPEN_ON_DESKTOP.to_string()));
@@ -3547,7 +3709,8 @@ mod tests {
         // offered neither: either one costs a model call and a turn to
         // discover, and the agent reports the capability as broken rather than
         // as absent.
-        let coder = names(Surfaces { computer: false, browser: false, repository: true });
+        let coder =
+            names(Surfaces { computer: false, browser: false, repository: true, errands: false });
         for reaches in [CODE, SHELL] {
             assert!(
                 coder.contains(&reaches.to_string()),
@@ -3608,15 +3771,17 @@ mod tests {
                 .description
         };
 
-        let both = Surfaces { computer: true, browser: false, repository: true };
+        let both = Surfaces { computer: true, browser: false, repository: true, errands: false };
         assert!(described(both, SHELL).contains("not `run_command`"), "shell says nothing of it");
         assert!(described(both, RUN_COMMAND).contains("`shell`"), "run_command says nothing of it");
 
         // And neither disclaims a tool the agent does not have, which would be
         // a sentence about something absent from its list.
-        let repository_only = Surfaces { computer: false, browser: false, repository: true };
+        let repository_only =
+            Surfaces { computer: false, browser: false, repository: true, errands: false };
         assert!(!described(repository_only, SHELL).contains("run_command"), "there is no other");
-        let computer_only = Surfaces { computer: true, browser: false, repository: false };
+        let computer_only =
+            Surfaces { computer: true, browser: false, repository: false, errands: false };
         assert!(!described(computer_only, RUN_COMMAND).contains("`shell`"), "there is no other");
     }
 
@@ -3690,7 +3855,7 @@ mod tests {
         // a codebase. And the harness cannot see the conversation, so a task
         // saying "do what we discussed" is a task nobody can do.
         let spec = specs(
-            Surfaces { computer: false, browser: false, repository: true },
+            Surfaces { computer: false, browser: false, repository: true, errands: false },
             Modalities::seeing(),
         )
         .into_iter()
@@ -4170,7 +4335,7 @@ mod tests {
     #[test]
     fn the_operators_list_of_tools_is_the_models_and_says_what_each_needs() {
         let listed = catalog();
-        let bare = Surfaces { computer: false, browser: false, repository: false };
+        let bare = Surfaces { computer: false, browser: false, repository: false, errands: false };
         for tool in &listed {
             assert!(tool.summary.len() > 10 && tool.summary.ends_with('.'), "{tool:?}");
             assert!(!tool.summary.contains("  "), "{tool:?}");
@@ -4192,10 +4357,11 @@ mod tests {
         let specs = specs(Surfaces::both(), Modalities::seeing());
         assert_eq!(
             specs.len(),
-            23,
-            "directory, run_command, open_on_desktop, use_screen, browse, code, shell, schedule, \
-             calendar, skill, notebook, settings, create_agent, request_permission, ask_operator, decision, escalate, \
-             send_message, read_file, write_document, attach_file, update_memory, note_progress"
+            24,
+            "directory, run_command, open_on_desktop, use_screen, browse, code, errand, shell, \
+             schedule, calendar, skill, notebook, settings, create_agent, request_permission, \
+             ask_operator, decision, escalate, send_message, read_file, write_document, \
+             attach_file, update_memory, note_progress"
         );
         for spec in &specs {
             assert_eq!(
@@ -4208,6 +4374,64 @@ mod tests {
                 "{} needs a description a model can act on",
                 spec.name
             );
+        }
+    }
+
+    #[test]
+    fn errands_are_offered_only_where_the_operator_switched_them_on() {
+        let names = |surfaces: Surfaces| -> Vec<String> {
+            specs(surfaces, Modalities::seeing()).into_iter().map(|spec| spec.name).collect()
+        };
+        assert!(!names(Surfaces::none()).contains(&ERRAND.to_string()));
+        assert!(names(Surfaces { errands: true, ..Surfaces::none() }).contains(&ERRAND.to_string()));
+    }
+
+    #[test]
+    fn an_errand_gets_the_senders_tools_less_the_three_it_cannot_be_trusted_with() {
+        let offered = specs(Surfaces::both(), Modalities::seeing());
+        let kept: Vec<String> = for_errands(offered.clone()).into_iter().map(|s| s.name).collect();
+        for withheld in [ERRAND, SEND_MESSAGE, UPDATE_MEMORY] {
+            assert!(!kept.contains(&withheld.to_string()), "{withheld} reached an errand");
+        }
+        assert_eq!(kept.len(), offered.len() - 3, "everything else is the sender's: {kept:?}");
+
+        // The list an errand is offered and the calls it is refused are one
+        // rule. Every name taken off the list parses to something refused, so
+        // an errand that calls one anyway, under any spelling, is stopped.
+        for (name, arguments) in [
+            (ERRAND, r#"{"briefs":["again"]}"#),
+            ("delegate_task", r#"{"tasks":[{"goal":"again"}]}"#),
+            (SEND_MESSAGE, r#"{"to":["Chef"],"text":"hi"}"#),
+            (UPDATE_MEMORY, r#"{"content":"new"}"#),
+            ("update_notes", r#"{"content":"new"}"#),
+        ] {
+            let invocation = parse(&call(name, arguments)).unwrap();
+            assert!(withheld_from_errands(&invocation).is_some(), "{name} slipped through");
+        }
+        let browse = parse(&call(BROWSE, r#"{"action":"open","url":"https://a.test"}"#)).unwrap();
+        assert!(withheld_from_errands(&browse).is_none());
+        assert!(reaches_a_place(&browse), "the browser is one of the three places");
+    }
+
+    #[test]
+    fn briefs_are_read_in_whatever_shape_a_model_sends_them() {
+        let briefs = |arguments: &str| match parse(&call(ERRAND, arguments)) {
+            Ok(ToolInvocation::Errand { briefs }) => briefs,
+            other => panic!("{arguments}: {other:?}"),
+        };
+        assert_eq!(briefs(r#"{"briefs":["one","two"]}"#), ["one", "two"]);
+        assert_eq!(briefs(r#"{"briefs":"just one"}"#), ["just one"]);
+        assert_eq!(briefs(r#"{"tasks":[{"goal":"a"},{"brief":"b"}]}"#), ["a", "b"]);
+        assert_eq!(briefs(r#"{"brief":"bare"}"#), ["bare"]);
+        assert_eq!(briefs(r#"{"briefs":["kept","  "]}"#), ["kept"], "a blank brief is dropped");
+    }
+
+    #[test]
+    fn an_errand_with_nothing_to_do_is_refused_before_anything_is_spent() {
+        for arguments in [r#"{}"#, r#"{"briefs":[]}"#, r#"{"briefs":["   "]}"#] {
+            let err = parse(&call(ERRAND, arguments)).unwrap_err();
+            assert_eq!(err, ToolParseError::MissingBriefs, "{arguments}");
+            assert!(err.guidance().contains("Nothing was sent"), "{}", err.guidance());
         }
     }
 

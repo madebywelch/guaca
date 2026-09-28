@@ -1520,6 +1520,14 @@ WHERE kind = 'supermemory'
   );
 "#,
     ),
+    (
+        56,
+        r#"
+-- Off for every agent that exists. An errand spends the agent's model again,
+-- so nobody is opted in by a newer build opening their workspace.
+ALTER TABLE agents ADD COLUMN runs_errands INTEGER NOT NULL DEFAULT 0;
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { useStore } from "../lib/store";
 import type { AgentCard, Group, Settings } from "../lib/types";
@@ -17,6 +17,7 @@ const api = vi.hoisted(() => ({
     })),
   ),
   updateAgent: vi.fn(async () => {}),
+  setAgentErrands: vi.fn(async () => {}),
   createAgent: vi.fn(async () => ({ id: "new-agent" })),
   rankedModels: vi.fn(async () => []),
 }));
@@ -69,6 +70,7 @@ function card(model = ""): AgentCard {
     browserId: null,
     hasComputer: false,
     hasBrowser: false,
+    runsErrands: false,
     browserConsent: "open",
     repositoryId: null,
     lifecycle: "active",
@@ -265,4 +267,31 @@ it("updates inherited effort when the agent changes groups", () => {
     target: { value: "second" },
   });
   expect(screen.getByRole("option", { name: "Use group default · high" })).toBeTruthy();
+});
+
+it("stays off when switching errands on is refused, and says why", async () => {
+  api.setAgentErrands.mockRejectedValueOnce(new Error("The agent is gone."));
+  open(card());
+  const toggle = screen.getByRole("checkbox", { name: /^Errands/ }) as HTMLInputElement;
+  expect(toggle.checked, "off until the operator says otherwise").toBe(false);
+
+  fireEvent.click(toggle);
+  expect(await screen.findByText("The agent is gone.")).toBeTruthy();
+  expect(toggle.checked).toBe(false);
+  expect(api.updateAgent, "a grant is not an edit to the card").not.toHaveBeenCalled();
+});
+
+it("switches errands on at once, without waiting for Save", async () => {
+  open(card());
+  const toggle = screen.getByRole("checkbox", { name: /^Errands/ }) as HTMLInputElement;
+  fireEvent.click(toggle);
+  await waitFor(() => expect(toggle.checked).toBe(true));
+  expect(api.setAgentErrands).toHaveBeenCalledWith("agent-1", true);
+});
+
+it("offers no errands switch while the agent is still being created", async () => {
+  open();
+  await waitFor(() => expect(api.subscriptionModels).toHaveBeenCalled());
+  await act(async () => {});
+  expect(screen.queryByRole("checkbox", { name: /^Errands/ })).toBeNull();
 });

@@ -113,6 +113,7 @@ function agent(name: string, railOrder = 0): AgentCard {
     browserId: null,
     hasComputer: false,
     hasBrowser: false,
+    runsErrands: false,
     browserConsent: "open",
     repositoryId: null,
     name,

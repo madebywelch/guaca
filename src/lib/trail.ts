@@ -145,6 +145,20 @@ function text(args: Args, key: string): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
+/**
+ * The briefs an errand call carried, as the model sent them.
+ *
+ * The runtime reads `briefs` loosely, and so does this: a single string is one
+ * brief, and anything that is not a string is not drawn.
+ */
+function briefList(args: Args): string[] {
+  const value = args.briefs;
+  const listed = Array.isArray(value) ? value : [value];
+  return listed.filter(
+    (brief): brief is string => typeof brief === "string" && brief.trim() !== "",
+  );
+}
+
 function whole(args: Args, key: string): number | null {
   const value = args[key];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -242,6 +256,17 @@ function describe(tool: string, args: Args): Described {
 
     case "code":
       return { title: "Started a coding agent", target: text(args, "task") };
+
+    // The briefs are what the operator opens it for: the errands' own calls
+    // are drawn beside this chip already, and what each came back with is
+    // what the call answered.
+    case "errand": {
+      const briefs = briefList(args);
+      return {
+        title: briefs.length === 1 ? "Sent an errand" : `Sent ${briefs.length} errands`,
+        target: briefs.length > 0 ? briefs.join("\n\n") : null,
+      };
+    }
 
     case "open_on_desktop": {
       const command = text(args, "command");
@@ -444,6 +469,8 @@ export function callInFlight(name: string, raw: unknown): string {
       return "Running a command in its repository";
     case "code":
       return "Starting a coding agent";
+    case "errand":
+      return "Waiting on errands";
     case "browse": {
       const url = text(args, "url");
       return url && text(args, "action") === "open"
@@ -500,6 +527,8 @@ function manyLabel(group: TrailGroup): string {
       return `Ran ${count} commands`;
     case "shell":
       return `Ran ${count} commands in its repository`;
+    case "errand":
+      return `Sent errands ${count} times`;
     case "browse": {
       const places = new Set(group.steps.map((step) => step.where).filter(Boolean));
       const only = places.size === 1 ? [...places][0] : null;

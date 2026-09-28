@@ -91,6 +91,7 @@ function anAgent(name: string, group = CREW): AgentCard {
     browserId: null,
     hasComputer: false,
     hasBrowser: false,
+    runsErrands: false,
     browserConsent: "open",
     repositoryId: null,
     version: 1,

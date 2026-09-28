@@ -79,6 +79,7 @@ function agent(id: string, name: string): AgentCard {
     browserId: null,
     hasComputer: false,
     hasBrowser: false,
+    runsErrands: false,
     browserConsent: "open",
     repositoryId: null,
     version: 1,

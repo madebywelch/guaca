@@ -125,6 +125,18 @@ cargo test --manifest-path src-tauri/Cargo.toml --test coding
 cargo test --manifest-path src-tauri/Cargo.toml --test coding -- --ignored
 ```
 
+`tests/errands.rs` drives errands against the same scripted server the cascade
+suite uses, which answers an errand as "on an errand for" its agent because that
+is how its prompt opens. It holds what is not wording: an errand is offered only
+where the operator switched it on, a fourth is refused, the three withheld tools
+are refused under any name, the last two steps stay with the sending turn, a
+stop reaches an errand mid-call, and two errands that need the repository take
+turns with it. Remove the lock or the kept steps and the matching test fails.
+
+```sh
+cargo test --manifest-path src-tauri/Cargo.toml --test errands
+```
+
 And `tests/machines.rs` is the same shape for the two providers: scripted
 control planes for Kernel and E2B, and the real `Runtime` provisioning against
 them. It is entirely offline and costs nothing. Nothing else in the build

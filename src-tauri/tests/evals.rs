@@ -1175,7 +1175,8 @@ mod live {
             ));
         }
         println!("authorization eval model: {}", config.inference.active_model());
-        let surfaces = Surfaces { computer: false, browser: true, repository: false };
+        let surfaces =
+            Surfaces { computer: false, browser: true, repository: false, errands: false };
         let mut offered: Vec<_> = tools::specs(surfaces, Modalities::seeing())
             .into_iter()
             .filter(|tool| {
@@ -1281,7 +1282,8 @@ mod live {
                 PluginTool { name: "gmail_send".into(), description: "Send an email as the operator. Empty to, subject or body returns a validation error before sending anything.".into(), input_schema: serde_json::json!({"type":"object","properties":{"to":{"type":"string"},"subject":{"type":"string"},"body":{"type":"string"}},"required":["to","subject","body"]}) },
             ], withheld: vec![], elsewhere: vec![],
         }];
-        let surfaces = Surfaces { computer: false, browser: true, repository: false };
+        let surfaces =
+            Surfaces { computer: false, browser: true, repository: false, errands: false };
         let prompt = system_prompt(
             &card,
             "Robert",

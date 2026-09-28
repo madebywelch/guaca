@@ -296,6 +296,23 @@ impl RunState {
         true
     }
 
+    /// Claims one model call only while more than `kept` would remain after it.
+    ///
+    /// The errand's claim. An errand spends from the run that sent it, and the
+    /// turn that sent it still has to read what came back and answer; a claim
+    /// that could take the last step would let errands spend the budget
+    /// between them and leave that turn with findings and no call to report
+    /// them in. The turn itself claims with [`Self::reserve_step`], so what is
+    /// kept here is kept for it.
+    pub fn reserve_step_leaving(&mut self, kept: u32) -> bool {
+        self.last_touched = now_ms();
+        if self.steps_remaining() <= kept {
+            return false;
+        }
+        self.steps_used += 1;
+        true
+    }
+
     /// Gives back the step claimed for a call the operator's stop cut short.
     ///
     /// The one caller is the model call a stop abandoned, and it exists because
@@ -486,6 +503,19 @@ mod tests {
             max_sends_per_pair: 50,
             max_tool_rounds: 24,
         }
+    }
+
+    #[test]
+    fn an_errand_never_takes_the_steps_kept_for_the_turn_that_sent_it() {
+        let mut state = RunState::new(GuardLimits { max_steps_per_run: 5, ..permissive() });
+        assert!(state.reserve_step_leaving(2));
+        assert!(state.reserve_step_leaving(2));
+        assert!(state.reserve_step_leaving(2));
+        assert!(!state.reserve_step_leaving(2), "two are left and both are kept");
+        assert_eq!(state.steps_used(), 3, "a refused claim spends nothing");
+        assert!(state.reserve_step(), "the turn itself can still spend what was kept");
+        assert!(state.reserve_step());
+        assert!(!state.reserve_step());
     }
 
     #[test]

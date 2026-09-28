@@ -30,6 +30,7 @@ const ADA: AgentCard = {
   browserId: null,
   hasComputer: false,
   hasBrowser: false,
+  runsErrands: false,
   browserConsent: "open",
   repositoryId: null,
   lifecycle: "active",

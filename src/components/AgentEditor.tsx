@@ -309,6 +309,8 @@ export function AgentEditor({ agent, onClose }: Props) {
 
         {agent && <GrantList agent={agent} />}
 
+        {agent && <ErrandSwitch agent={agent} />}
+
         <label className="field">
           <span className="field__label">Instructions</span>
           <textarea
@@ -379,5 +381,53 @@ export function AgentEditor({ agent, onClose }: Props) {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * Whether this agent may send errands.
+ *
+ * Applied the moment it changes, like the grants above it, because it is a
+ * decision about what the agent may spend and not part of the card that Save
+ * writes. Only on an agent that exists: a new one starts with it off.
+ */
+function ErrandSwitch({ agent }: { agent: AgentCard }) {
+  const [on, setOn] = useState(agent.runsErrands);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const change = async (next: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.setAgentErrands(agent.id, next);
+      setOn(next);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <label className="field field--row">
+      <input
+        type="checkbox"
+        checked={on}
+        disabled={busy}
+        onChange={(event) => void change(event.target.checked)}
+      />
+      <span>
+        <span className="field__label">Errands</span>
+        <span className="field__hint">
+          {agent.name} can hand a piece of work to its own model, called again with one brief and
+          its tools, up to three at once, and read back what each found. An errand cannot message
+          anyone, rewrite {agent.name}'s memory or send errands of its own. Off by default: every
+          errand spends model calls from the same conversation's budget, so one turn can cost
+          several times what it did.
+        </span>
+        {error && <span className="field__hint">{error}</span>}
+      </span>
+    </label>
   );
 }

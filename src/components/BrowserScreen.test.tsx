@@ -30,6 +30,7 @@ function card(id: string, name: string, given = true, consent: BrowserConsent = 
     browserId: null,
     hasComputer: false,
     hasBrowser: given,
+    runsErrands: false,
     browserConsent: consent,
     repositoryId: null,
     name,
