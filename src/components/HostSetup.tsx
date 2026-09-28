@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useEffect, useId, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   type DockerStatus,
   type ExistingHost,
@@ -68,16 +68,25 @@ export function HostChoice({
   initialError = "",
   onConnected,
   showUpdate = true,
+  inUse = false,
 }: {
   initialError?: string;
   showUpdate?: boolean;
   onConnected?: () => void;
+  /** The workspace is open on the host this window is attached to. Onboarding
+   *  and a host that was turned away are not, and get the form instead. */
+  inUse?: boolean;
 }) {
-  const [mode, setMode] = useState<"local" | "remote">(
-    attached() && hostMode() === "remote" ? "remote" : "local",
-  );
-  const [origin, setOrigin] = useState(attached()?.origin ?? "");
+  // A local host's loopback address is not a remote one, so it prefills nothing.
+  const remote = hostMode() === "remote" ? attached() : null;
+  const [mode, setMode] = useState<"local" | "remote">(remote ? "remote" : "local");
+  const [origin, setOrigin] = useState(remote?.origin ?? "");
   const [token, setToken] = useState("");
+  // The saved key is never read back into the field, so the host in use is
+  // stated rather than drawn as an empty form that looks disconnected.
+  const [changing, setChanging] = useState(false);
+  const address = useRef<HTMLInputElement>(null);
+  const change = useRef<HTMLButtonElement>(null);
   const [docker, setDocker] = useState<DockerStatus | null>(null);
   const [existing, setExisting] = useState<ExistingHost[]>([]);
   const [busy, setBusy] = useState(false);
@@ -93,6 +102,9 @@ export function HostChoice({
   useEffect(() => {
     if (desktop && mode === "local") void refresh();
   }, [mode, refresh]);
+  useEffect(() => {
+    if (changing) address.current?.focus();
+  }, [changing]);
 
   const connectExisting = async (name: string) => {
     setBusy(true);
@@ -159,6 +171,14 @@ export function HostChoice({
     } finally {
       setBusy(false);
     }
+  };
+  const connected = inUse && !changing && mode === "remote" ? remote : null;
+  const keep = () => {
+    setChanging(false);
+    setOrigin(remote?.origin ?? "");
+    setToken("");
+    setError("");
+    requestAnimationFrame(() => change.current?.focus());
   };
   const usable = !!docker && ["ready", "running", "stopped"].includes(docker.state);
   // A finished update is history. Only one that stopped part way needs reading.
@@ -275,12 +295,29 @@ export function HostChoice({
             )}
           </section>
         </>
+      ) : connected ? (
+        <section className="host-status" aria-label="Remote host status">
+          <p role="status">
+            Connected to {connected.origin}. Your access key is saved on this Mac.
+          </p>
+          <div className="access__row">
+            <button
+              ref={change}
+              className="btn btn--small"
+              type="button"
+              onClick={() => setChanging(true)}
+            >
+              Change host
+            </button>
+          </div>
+        </section>
       ) : (
         <>
           <p className="field__hint">Use the address and access key supplied by your host.</p>
           <label className="field">
             <span className="field__label">Host address</span>
             <input
+              ref={address}
               className="input"
               placeholder="https://guaca.example.com"
               value={origin}
@@ -317,25 +354,34 @@ export function HostChoice({
           </a>
         </p>
       )}
-      <button
-        className="btn btn--primary"
-        type="button"
-        disabled={
-          busy ||
-          (mode === "remote"
-            ? !origin.trim() || !token.trim()
-            : !docker || ["missing", "unavailable"].includes(docker.state))
-        }
-        onClick={() => void connect()}
-      >
-        {busy
-          ? mode === "local"
-            ? "Preparing your host…"
-            : "Connecting…"
-          : mode === "local"
-            ? "Use this Mac"
-            : "Connect to host"}
-      </button>
+      {!connected && (
+        <div className="access__row">
+          <button
+            className="btn btn--primary"
+            type="button"
+            disabled={
+              busy ||
+              (mode === "remote"
+                ? !origin.trim() || !token.trim()
+                : !docker || ["missing", "unavailable"].includes(docker.state))
+            }
+            onClick={() => void connect()}
+          >
+            {busy
+              ? mode === "local"
+                ? "Preparing your host…"
+                : "Connecting…"
+              : mode === "local"
+                ? "Use this Mac"
+                : "Connect to host"}
+          </button>
+          {changing && mode === "remote" && (
+            <button className="btn btn--ghost" type="button" disabled={busy} onClick={keep}>
+              Cancel
+            </button>
+          )}
+        </div>
+      )}
       {busy && mode === "local" && (
         <p className="field__hint" role="status">
           The first setup may take a few minutes while Guaca downloads its host. Your existing
