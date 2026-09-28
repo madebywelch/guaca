@@ -1,7 +1,9 @@
 import protocol from "../../release-protocol.json";
 
 export { protocol };
-export const RELEASES = "https://github.com/madebywelch/guaca/releases";
+
+const REPOSITORY = "https://github.com/madebywelch/guaca";
+export const RELEASES = `${REPOSITORY}/releases`;
 export const INSTRUCTIONS =
   "https://github.com/madebywelch/guaca/blob/main/docs/HOSTING.md#updating-a-self-hosted-backend";
 
@@ -12,8 +14,12 @@ export interface Health {
   release?: boolean;
   apiGeneration?: number;
 }
+/** Which builds a box installs: published releases, or every build of main. */
+export type Channel = "release" | "main";
 export interface Release {
   schema: number;
+  /** Absent from a release, whose manifest predates channels. */
+  channel?: "main";
   version: string;
   commit: string;
   image: string;
@@ -23,6 +29,8 @@ export interface Release {
   notes: string;
 }
 export interface ReleaseStatus {
+  /** Absent from a host older than channels, which only follows releases. */
+  channel?: Channel;
   automatic: boolean;
   checkedAt: string | null;
   latest: Release | null;
@@ -48,11 +56,15 @@ export function compareVersions(left: string, right: string): number | null {
   return 0;
 }
 export function available(health: Health | null, status: ReleaseStatus | null): boolean {
+  const latest = status?.latest;
+  if (!health || !latest) return false;
+  // Every build of main carries the version it will be released as, so the
+  // commit is the one thing that says a host is behind it.
+  if (latest.channel === "main") return !sameBuild(health.build, latest.commit);
   return !!(
-    health?.release &&
+    health.release &&
     health.version &&
-    status?.latest &&
-    compareVersions(health.version, status.latest.version) === -1
+    compareVersions(health.version, latest.version) === -1
   );
 }
 /**
@@ -130,6 +142,11 @@ export function updateNotice(facts: UpdateFacts): UpdateNotice | null {
         text: `This app and its host are different builds of Guaca ${health.version}, so features one has may be missing from the other. Run both from the same build.`,
       };
   }
+  if (available(health, release) && release?.latest?.channel === "main")
+    return {
+      key: `host:main:${release.latest.commit}`,
+      text: `Host update available: main at ${shortBuild(release.latest.commit)}.`,
+    };
   if (available(health, release))
     return {
       key: `host:${latest}`,
@@ -162,6 +179,18 @@ function otherBuild(a: string, b: string): boolean {
   return BUILD.test(a) && BUILD.test(b) && a !== b && !sameBuild(a, b);
 }
 
+/**
+ * A build as the operator reads it beside a version: seven characters, and
+ * `-dirty` where the tree had edits. A source build keeps the last release's
+ * version, so this is the only part of what is drawn that tells two apart.
+ * Empty for anything that is not a commit, which the reader draws as the
+ * version alone.
+ */
+export function shortBuild(build: string): string {
+  const found = BUILD.exec(build);
+  return found ? `${build.slice(0, 7)}${found[1] ?? ""}` : "";
+}
+
 export function parseHealth(value: unknown): Health {
   if (!value || typeof value !== "object" || !("service" in value) || value.service !== "guacad")
     throw new Error(
@@ -182,20 +211,26 @@ export function parseReleaseStatus(value: unknown): ReleaseStatus {
     throw new Error("The host returned unreadable update information.");
   const data = value as ReleaseStatus;
   if (
+    !(data.channel === undefined || data.channel === "release" || data.channel === "main") ||
     typeof data.automatic !== "boolean" ||
     !(data.checkedAt === null || typeof data.checkedAt === "string") ||
     !(data.error === null || typeof data.error === "string")
   )
     throw new Error("The host returned unreadable update information.");
   const r = data.latest;
+  // A build of main links the commit it was made from; a release, its notes.
+  const notes =
+    r?.channel === "main" ? `${REPOSITORY}/commit/${r.commit}` : `${RELEASES}/tag/v${r?.version}`;
   if (
     r !== null &&
     (r?.schema !== 1 ||
+      !(r.channel === undefined || r.channel === "main") ||
+      (r.channel ?? "release") !== (data.channel ?? "release") ||
       typeof r.version !== "string" ||
       compareVersions(r.version, r.version) !== 0 ||
       !/^[a-f0-9]{40}$/.test(r.commit) ||
       !/^ghcr\.io\/madebywelch\/guaca\/guacad@sha256:[a-f0-9]{64}$/.test(r.image) ||
-      r.notes !== `${RELEASES}/tag/v${r.version}` ||
+      r.notes !== notes ||
       !Number.isSafeInteger(r.apiGeneration) ||
       r.apiGeneration < 1 ||
       !Number.isSafeInteger(r.clientMinimum) ||

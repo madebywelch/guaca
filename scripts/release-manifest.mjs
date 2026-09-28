@@ -1,4 +1,9 @@
 // Release metadata, and the signature that lets an updater install what it names.
+//
+//   GUACA_BACKEND_IMAGE=... node scripts/release-manifest.mjs out.json
+//       a release: out.json and out.json.sig, signed with the release key
+//   GUACA_BACKEND_IMAGE=... node scripts/release-manifest.mjs --channel main out.json
+//       a build of main: one file carrying both, signed with the key CI holds
 import { execFileSync } from "node:child_process";
 import { createPublicKey, sign, verify } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -6,13 +11,25 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export function manifest(version, commit, image, protocol) {
+export function manifest(version, commit, image, protocol, channel = "release") {
   if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) throw new Error("A stable semantic release version is required.");
   if (!/^[a-f0-9]{40}$/.test(commit)) throw new Error("A full clean source commit is required.");
   if (!/^ghcr\.io\/madebywelch\/guaca\/guacad@sha256:[a-f0-9]{64}$/.test(image)) throw new Error("A published backend digest is required.");
   const {generation, minimum, maximum} = protocol;
   if (![generation, minimum, maximum].every(Number.isSafeInteger) || minimum < 1 || minimum > generation || maximum < generation) throw new Error("Invalid API compatibility range.");
-  return {schema: 1, version, commit, image, apiGeneration: generation, clientMinimum: minimum, clientMaximum: maximum, notes: `https://github.com/madebywelch/guaca/releases/tag/v${version}`};
+  const range = {apiGeneration: generation, clientMinimum: minimum, clientMaximum: maximum};
+  if (channel === "release") return {schema: 1, version, commit, image, ...range, notes: `https://github.com/madebywelch/guaca/releases/tag/v${version}`};
+  // A release manifest never names its channel: updaters older than channels
+  // refuse a field they do not know, and they read only releases.
+  if (channel === "main") return {schema: 1, channel, version, commit, image, ...range, notes: `https://github.com/madebywelch/guaca/commit/${commit}`};
+  throw new Error("The channel is release or main.");
+}
+
+/** What the main channel publishes: the manifest's exact bytes and the
+ *  signature over them, in one file, because the file is replaced on every
+ *  push and a pair replaced one after the other can be read one from each. */
+export function envelope(bytes, said) {
+  return Buffer.from(`${JSON.stringify({manifest: bytes.toString("base64"), signature: said})}\n`);
 }
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -49,14 +66,26 @@ export function trusted(bytes, said, keys) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const args = process.argv.slice(2);
+  const main = args[0] === "--channel" && args[1] === "main";
+  const out = main ? args[2] : args[0];
+  if (!out || (args[0] === "--channel" && !main)) throw new Error("Usage: GUACA_BACKEND_IMAGE=... node scripts/release-manifest.mjs [--channel main] /path/to/manifest.json");
   const git = (...args) => execFileSync("git", args, {cwd: root, encoding: "utf8"}).trim();
   if (git("status", "--porcelain")) throw new Error("Build release metadata from a clean checkout.");
-  const value = manifest(sharedVersion(), git("rev-parse", "HEAD"), process.env.GUACA_BACKEND_IMAGE ?? "", JSON.parse(read("release-protocol.json")));
-  if (!process.argv[2]) throw new Error("Usage: GUACA_BACKEND_IMAGE=... node scripts/release-manifest.mjs /path/to/guaca-release.json");
+  const channel = main ? "main" : "release";
+  const value = manifest(sharedVersion(), git("rev-parse", "HEAD"), process.env.GUACA_BACKEND_IMAGE ?? "", JSON.parse(read("release-protocol.json")), channel);
   const bytes = Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
-  const key = readFileSync(process.env.GUACA_RELEASE_SIGNING_KEY ?? resolve(homedir(), ".config/guaca/release-signing-key.pem"), "utf8");
+  // CI hands main's key over as a secret's contents; a release is signed at a desk, from a file.
+  const key = main
+    ? process.env.GUACA_MAIN_SIGNING_KEY || readFileSync(resolve(homedir(), ".config/guaca/main-signing-key.pem"), "utf8")
+    : readFileSync(process.env.GUACA_RELEASE_SIGNING_KEY ?? resolve(homedir(), ".config/guaca/release-signing-key.pem"), "utf8");
   const said = signature(bytes, key);
-  if (!trusted(bytes, said, read("release-keys.pub"))) throw new Error("That signing key is not in release-keys.pub. No updater would install this release.");
-  writeFileSync(process.argv[2], bytes);
-  writeFileSync(`${process.argv[2]}.sig`, `${said}\n`);
+  const list = main ? "main-keys.pub" : "release-keys.pub";
+  if (!trusted(bytes, said, read(list))) throw new Error(`That signing key is not in ${list}. No updater would install this ${main ? "build" : "release"}.`);
+  if (main) {
+    writeFileSync(out, envelope(bytes, said));
+  } else {
+    writeFileSync(out, bytes);
+    writeFileSync(`${out}.sig`, `${said}\n`);
+  }
 }

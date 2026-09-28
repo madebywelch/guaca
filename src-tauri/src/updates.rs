@@ -1,6 +1,6 @@
 //! Public release information. What the checker reads is news and nothing
-//! more; [`signed`] is the only read anything installs from, and it refuses a
-//! manifest that none of this build's keys signed.
+//! more; [`signed`] and [`feed`] are the only reads anything installs from,
+//! and each refuses a manifest that none of its channel's keys signed.
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -12,6 +12,53 @@ pub const SOURCE: &str =
 /// The keys a manifest may be signed with. A GitHub account that can publish
 /// a release is not, by itself, able to make every box install it.
 pub const KEYS: &str = include_str!("../../release-keys.pub");
+
+/// The newest build of `main`, as CI published it: one file carrying the
+/// manifest and its signature, because the file is replaced on every push
+/// and two files replaced one after the other can be read one from each.
+pub const MAIN_FEED: &str =
+    "https://github.com/madebywelch/guaca/releases/download/channel-main/guaca-main.json";
+
+/// The keys a build of `main` may be signed with. Not the release keys: CI
+/// holds this one, and a leak of it reaches only the boxes that chose `main`.
+pub const MAIN_KEYS: &str = include_str!("../../main-keys.pub");
+
+/// How long the checker keeps an answer about `main`. A push is news within
+/// minutes on that channel, which is what choosing it asked for.
+const MAIN_CACHE_FOR: Duration = Duration::from_secs(5 * 60);
+
+/// Which builds a box installs: published releases, or every build of `main`.
+///
+/// Set where the box is installed, in `GUACA_CHANNEL`, and read from the
+/// updater's own environment. Nothing that can reach the updater's socket can
+/// change it, so an agent in the host cannot move a release box onto `main`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Channel {
+    #[default]
+    Release,
+    Main,
+}
+
+impl Channel {
+    pub fn from_env() -> Result<Channel, String> {
+        Channel::named(std::env::var("GUACA_CHANNEL").ok().as_deref())
+    }
+
+    fn named(said: Option<&str>) -> Result<Channel, String> {
+        match said.map(str::trim) {
+            None | Some("") | Some("release") => Ok(Channel::Release),
+            Some("main") => Ok(Channel::Main),
+            Some(other) => Err(format!(
+                "GUACA_CHANNEL is {other:?}. Set it to release or main, or leave it out for release."
+            )),
+        }
+    }
+
+    fn is_release(&self) -> bool {
+        *self == Channel::Release
+    }
+}
 
 /// Where each release's files are, by version. The signature is read from
 /// here rather than from `latest`, so a release published between the two
@@ -55,6 +102,10 @@ pub fn metadata() -> serde_json::Value {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Release {
     pub schema: u32,
+    /// Absent from a release manifest, which predates channels and is read by
+    /// updaters that refuse a field they do not know.
+    #[serde(default, skip_serializing_if = "Channel::is_release")]
+    pub channel: Channel,
     pub version: String,
     pub commit: String,
     pub image: String,
@@ -79,12 +130,22 @@ impl Release {
             || self.client_minimum > self.client_maximum
             || self.api_generation < self.client_minimum
             || self.api_generation > self.client_maximum
-            || self.notes
-                != format!("https://github.com/madebywelch/guaca/releases/tag/v{}", self.version)
+            || self.notes != self.notes_for()
         {
             return Err("The release metadata could not be verified. Try again after the publisher fixes the release.".into());
         }
         Ok(())
+    }
+
+    /// The one page a manifest may link: a release's notes, or the commit a
+    /// build of `main` was made from.
+    fn notes_for(&self) -> String {
+        match self.channel {
+            Channel::Release => {
+                format!("https://github.com/madebywelch/guaca/releases/tag/v{}", self.version)
+            }
+            Channel::Main => format!("https://github.com/madebywelch/guaca/commit/{}", self.commit),
+        }
     }
 }
 
@@ -95,6 +156,7 @@ fn hex(value: &str, length: usize) -> bool {
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
+    pub channel: Channel,
     pub automatic: bool,
     pub checked_at: Option<String>,
     pub latest: Option<Release>,
@@ -107,36 +169,55 @@ struct Cached {
     attempted: Option<Instant>,
 }
 
+/// News about what an update would install. Which channel's news is not the
+/// checker's to decide: a box's updater follows one, and a host without an
+/// updater follows releases, so the caller says which on every check.
 pub struct Checker {
-    source: String,
+    release: String,
+    main: String,
     automatic: bool,
     cached: Mutex<Cached>,
 }
 
 impl Default for Checker {
     fn default() -> Self {
-        Self::new(SOURCE.into(), std::env::var("GUACA_UPDATE_CHECKS").as_deref() != Ok("off"))
+        Self::new(
+            SOURCE.into(),
+            MAIN_FEED.into(),
+            std::env::var("GUACA_UPDATE_CHECKS").as_deref() != Ok("off"),
+        )
     }
 }
 
 impl Checker {
-    fn new(source: String, automatic: bool) -> Self {
-        Self { source, automatic, cached: Mutex::new(Cached::default()) }
+    fn new(release: String, main: String, automatic: bool) -> Self {
+        Self { release, main, automatic, cached: Mutex::new(Cached::default()) }
     }
 
-    pub async fn check(&self, refresh: bool) -> Status {
+    /// The news for `channel`, or for whichever channel was asked about last
+    /// when the caller cannot say, which is an updater replacing itself.
+    pub async fn check(&self, channel: Option<Channel>, refresh: bool) -> Status {
         // Serializing the read also coalesces checks from several clients.
         let mut cached = self.cached.lock().await;
+        let channel = channel.unwrap_or(cached.status.channel);
+        if channel != cached.status.channel {
+            // A release is not news on main, nor the other way round.
+            *cached = Cached::default();
+            cached.status.channel = channel;
+        }
         cached.status.automatic = self.automatic;
-        let lifetime =
-            if refresh || cached.status.error.is_some() { RETRY_AFTER } else { CACHE_FOR };
+        let settled = match channel {
+            Channel::Release => CACHE_FOR,
+            Channel::Main => MAIN_CACHE_FOR,
+        };
+        let lifetime = if refresh || cached.status.error.is_some() { RETRY_AFTER } else { settled };
         if (!self.automatic && !refresh)
             || cached.attempted.is_some_and(|time| time.elapsed() < lifetime)
         {
             return cached.status.clone();
         }
         cached.attempted = Some(Instant::now());
-        match self.fetch().await {
+        match self.fetch(channel).await {
             Ok(release) => {
                 cached.status.latest = Some(release);
                 cached.status.checked_at = Some(chrono::Utc::now().to_rfc3339());
@@ -151,8 +232,14 @@ impl Checker {
         cached.status.clone()
     }
 
-    async fn fetch(&self) -> Result<Release, String> {
-        parse(&download(&client()?, &self.source).await?)
+    async fn fetch(&self, channel: Channel) -> Result<Release, String> {
+        match channel {
+            Channel::Release => {
+                parse(&download(&client()?, &self.release).await?, Channel::Release)
+            }
+            // One read either way, so the news is checked as an install would be.
+            Channel::Main => feed(&self.main, MAIN_KEYS).await,
+        }
     }
 }
 
@@ -164,7 +251,7 @@ impl Checker {
 pub async fn signed(source: &str, downloads: &str, keys: &str) -> Result<Release, String> {
     let client = client()?;
     let bytes = download(&client, source).await?;
-    let release = parse(&bytes)?;
+    let release = parse(&bytes, Channel::Release)?;
     let signature = format!("{downloads}/v{}/guaca-release.json.sig", release.version);
     let said = download(&client, &signature).await.map_err(|error| {
         if error.contains("HTTP 404") {
@@ -176,16 +263,45 @@ pub async fn signed(source: &str, downloads: &str, keys: &str) -> Result<Release
             format!("The signature of Guaca {} could not be read, so nothing was installed. {error}", release.version)
         }
     })?;
-    verify(&bytes, &said, keys)?;
+    verify(&bytes, &said, keys, Channel::Release)?;
     Ok(release)
 }
 
-/// Whether one of `keys` made `signature` over `bytes`.
-fn verify(bytes: &[u8], signature: &[u8], keys: &str) -> Result<(), String> {
+/// What `MAIN_FEED` is: a manifest's exact bytes and the signature over them,
+/// both base64.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Envelope {
+    manifest: String,
+    signature: String,
+}
+
+/// The build `main` is at, if one of `keys` signed exactly the manifest read.
+pub async fn feed(source: &str, keys: &str) -> Result<Release, String> {
     use base64::Engine;
-    let refused = || {
-        "This release is not signed with Guaca's release key, so nothing was installed. Try again later; if it persists, the release was not published by Guaca.".to_string()
+    let bytes = download(&client()?, source).await?;
+    let unreadable = || {
+        "The latest build of main is unreadable, so nothing was installed. Try again after the next push.".to_string()
     };
+    let envelope: Envelope = serde_json::from_slice(&bytes).map_err(|_| unreadable())?;
+    let manifest = base64::engine::general_purpose::STANDARD
+        .decode(envelope.manifest.trim())
+        .map_err(|_| unreadable())?;
+    verify(&manifest, envelope.signature.as_bytes(), keys, Channel::Main)?;
+    parse(&manifest, Channel::Main)
+}
+
+const UNSIGNED_RELEASE: &str = "This release is not signed with Guaca's release key, so nothing was installed. Try again later; if it persists, the release was not published by Guaca.";
+const UNSIGNED_MAIN: &str = "This build of main is not signed with Guaca's key for main, so nothing was installed. Try again after the next push; if it persists, the build was not published by Guaca's CI.";
+
+/// Whether one of `keys` made `signature` over `bytes`.
+fn verify(bytes: &[u8], signature: &[u8], keys: &str, channel: Channel) -> Result<(), String> {
+    use base64::Engine;
+    let said = match channel {
+        Channel::Release => UNSIGNED_RELEASE,
+        Channel::Main => UNSIGNED_MAIN,
+    };
+    let refused = || said.to_string();
     let signature = base64::engine::general_purpose::STANDARD
         .decode(signature.trim_ascii())
         .map_err(|_| refused())?;
@@ -233,9 +349,14 @@ async fn download(client: &reqwest::Client, source: &str) -> Result<Vec<u8>, Str
     Ok(bytes)
 }
 
-fn parse(bytes: &[u8]) -> Result<Release, String> {
+/// A manifest, held to the channel it was read for: a build of `main` read
+/// where a release belongs is refused, and the other way round.
+fn parse(bytes: &[u8], channel: Channel) -> Result<Release, String> {
     let release: Release = serde_json::from_slice(bytes)
         .map_err(|_| "The release metadata is unreadable. Try again later.".to_string())?;
+    if release.channel != channel {
+        return Err("The release metadata could not be verified. Try again after the publisher fixes the release.".into());
+    }
     release.validate()?;
     Ok(release)
 }
@@ -246,6 +367,7 @@ mod tests {
     fn release() -> Release {
         Release {
             schema: 1,
+            channel: Channel::Release,
             version: "0.2.0".into(),
             commit: "a".repeat(40),
             image: format!("ghcr.io/madebywelch/guaca/guacad@sha256:{}", "b".repeat(64)),
@@ -275,21 +397,21 @@ mod tests {
     }
     #[tokio::test]
     async fn offline_checks_keep_the_previous_release_and_timestamp() {
-        let checker = Checker::new("http://127.0.0.1:1".into(), true);
+        let checker = Checker::new("http://127.0.0.1:1".into(), String::new(), true);
         {
             let mut cached = checker.cached.lock().await;
             cached.status.latest = Some(release());
             cached.status.checked_at = Some("previous check".into());
         }
-        let result = checker.check(true).await;
+        let result = checker.check(Some(Channel::Release), true).await;
         assert!(result.error.is_some());
         assert_eq!(result.latest.unwrap().version, "0.2.0");
         assert_eq!(result.checked_at.as_deref(), Some("previous check"));
     }
     #[tokio::test]
     async fn disabled_checks_do_not_contact_the_source() {
-        let checker = Checker::new("not a URL".into(), false);
-        let result = checker.check(false).await;
+        let checker = Checker::new("not a URL".into(), "not a URL".into(), false);
+        let result = checker.check(None, false).await;
         assert!(!result.automatic);
         assert!(result.error.is_none());
         assert!(result.checked_at.is_none());
@@ -395,14 +517,182 @@ mod tests {
             }),
         );
         let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let checker = Checker::new(format!("http://{}/", socket.local_addr().unwrap()), true);
+        let checker =
+            Checker::new(format!("http://{}/", socket.local_addr().unwrap()), String::new(), true);
         let task = tokio::spawn(async move {
             axum::serve(socket, app).await.unwrap();
         });
-        let (a, b) = tokio::join!(checker.check(true), checker.check(true));
+        let (a, b) = tokio::join!(
+            checker.check(Some(Channel::Release), true),
+            checker.check(Some(Channel::Release), true)
+        );
         assert!(a.error.is_none());
         assert!(b.latest.is_some());
         assert_eq!(count.load(Ordering::SeqCst), 1);
         task.abort();
+    }
+
+    /// A build of `main`, as CI describes one.
+    fn build() -> Release {
+        let commit = "e".repeat(40);
+        Release {
+            channel: Channel::Main,
+            notes: format!("https://github.com/madebywelch/guaca/commit/{commit}"),
+            commit,
+            ..release()
+        }
+    }
+
+    /// What CI publishes: the manifest's exact bytes and a signature over them.
+    fn envelope(manifest: &[u8], signature: &str) -> Vec<u8> {
+        use base64::Engine;
+        serde_json::to_vec(&serde_json::json!({
+            "manifest": base64::engine::general_purpose::STANDARD.encode(manifest),
+            "signature": signature,
+        }))
+        .unwrap()
+    }
+
+    async fn serve(body: Vec<u8>) -> (String, tokio::task::JoinHandle<()>) {
+        let app = axum::Router::new()
+            .route("/guaca-main.json", axum::routing::get(move || async move { body }));
+        let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/guaca-main.json", socket.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            axum::serve(socket, app).await.unwrap();
+        });
+        (url, task)
+    }
+
+    #[test]
+    fn a_build_of_main_links_its_commit_and_nothing_else() {
+        assert!(build().validate().is_ok());
+        let mut value = build();
+        value.notes = release().notes;
+        assert!(value.validate().is_err(), "a build of main has no release notes to link");
+        let mut value = release();
+        value.notes = build().notes;
+        assert!(value.validate().is_err());
+        let mut value = build();
+        value.version = "0.2.0-main".into();
+        assert!(value.validate().is_err(), "main carries the version it will be released as");
+    }
+
+    #[test]
+    fn a_manifest_is_refused_on_the_other_channel() {
+        let main = serde_json::to_vec(&build()).unwrap();
+        let published = serde_json::to_vec(&release()).unwrap();
+        assert!(parse(&main, Channel::Main).is_ok());
+        assert!(parse(&published, Channel::Release).is_ok());
+        assert!(parse(&main, Channel::Release).is_err(), "main at the release address");
+        assert!(parse(&published, Channel::Main).is_err(), "a release in main's feed");
+        assert!(
+            !String::from_utf8(published).unwrap().contains("channel"),
+            "a release manifest stays readable by updaters that refuse unknown fields"
+        );
+    }
+
+    #[tokio::test]
+    async fn only_a_build_the_main_key_signed_is_installable() {
+        let (pair, public) = keypair();
+        let (stranger, _) = keypair();
+        let bytes = serde_json::to_vec_pretty(&build()).unwrap();
+        let mut tampered = build();
+        tampered.image = format!("ghcr.io/madebywelch/guaca/guacad@sha256:{}", "d".repeat(64));
+        let tampered = serde_json::to_vec_pretty(&tampered).unwrap();
+        let published = serde_json::to_vec_pretty(&release()).unwrap();
+        for (body, accepted) in [
+            (envelope(&bytes, &sign(&pair, &bytes)), true),
+            (envelope(&tampered, &sign(&pair, &bytes)), false),
+            (envelope(&bytes, &sign(&stranger, &bytes)), false),
+            (envelope(&published, &sign(&pair, &published)), false),
+            (envelope(&bytes, "not base64"), false),
+            (bytes.clone(), false),
+            (b"<html>".to_vec(), false),
+        ] {
+            let (url, task) = serve(body).await;
+            let result = feed(&url, &public).await;
+            assert_eq!(result.is_ok(), accepted, "{result:?}");
+            if let Err(error) = result {
+                assert!(
+                    error.contains("nothing was installed")
+                        || error.contains("could not be verified"),
+                    "{error}"
+                );
+            }
+            task.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn a_checker_on_main_reads_the_feed_and_says_which_channel_it_follows() {
+        let (pair, public) = keypair();
+        let bytes = serde_json::to_vec_pretty(&build()).unwrap();
+        let (url, task) = serve(envelope(&bytes, &sign(&pair, &bytes))).await;
+        // The checker trusts the compiled-in key, which this test's pair is
+        // not, so it reports the refusal: the news is checked as an install
+        // would check it.
+        let checker = Checker::new(String::new(), url.clone(), true);
+        let status = checker.check(Some(Channel::Main), true).await;
+        assert_eq!(status.channel, Channel::Main);
+        assert!(status.latest.is_none());
+        assert!(status.error.unwrap().contains("not signed"));
+        assert_eq!(feed(&url, &public).await.unwrap().commit, "e".repeat(40));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn news_about_one_channel_is_never_reported_as_the_other() {
+        let checker = Checker::new("http://127.0.0.1:1".into(), "http://127.0.0.1:1".into(), true);
+        {
+            let mut cached = checker.cached.lock().await;
+            cached.status.latest = Some(release());
+            cached.status.checked_at = Some("a release check".into());
+            cached.attempted = Some(Instant::now());
+        }
+        // Not refreshed and within the cache's life: only the channel moved.
+        let moved = checker.check(Some(Channel::Main), false).await;
+        assert_eq!(moved.channel, Channel::Main);
+        assert!(moved.latest.is_none(), "a release is not a build of main");
+        assert!(moved.checked_at.is_none());
+        // An updater that cannot answer keeps the channel the box was on.
+        assert_eq!(checker.check(None, false).await.channel, Channel::Main);
+    }
+
+    #[test]
+    fn a_channel_is_one_of_two_words() {
+        for (said, channel) in [
+            (Some("mian"), None),
+            (Some("Main"), None),
+            (None, Some(Channel::Release)),
+            (Some(""), Some(Channel::Release)),
+            (Some("release"), Some(Channel::Release)),
+            (Some(" main "), Some(Channel::Main)),
+        ] {
+            let result = Channel::named(said);
+            assert_eq!(result.as_ref().ok().copied(), channel, "{said:?}");
+            if let Err(error) = result {
+                assert!(error.contains("release or main"), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn this_build_trusts_at_least_one_well_formed_main_key_and_it_is_not_a_release_key() {
+        use base64::Engine;
+        let parse = |file: &str| -> Vec<Vec<u8>> {
+            file.lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .map(|line| base64::engine::general_purpose::STANDARD.decode(line).unwrap())
+                .collect()
+        };
+        let main = parse(MAIN_KEYS);
+        assert!(!main.is_empty());
+        assert!(main.iter().all(|key| key.len() == 32));
+        assert!(
+            parse(KEYS).iter().all(|key| !main.contains(key)),
+            "a key CI holds must not also sign releases"
+        );
     }
 }

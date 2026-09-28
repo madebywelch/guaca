@@ -1,17 +1,20 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { platform, mode, docker, update, reload } = vi.hoisted(() => ({
+const { platform, mode, docker, update, reload, appSource, rebuild } = vi.hoisted(() => ({
   platform: { desktop: true },
   mode: vi.fn(),
   docker: vi.fn(),
   update: vi.fn(),
   reload: vi.fn(),
+  appSource: vi.fn(),
+  rebuild: vi.fn(),
 }));
 vi.mock("../lib/host", async (actual) => ({
   ...(await actual<typeof import("../lib/host")>()),
   hostMode: mode,
   localHost: { status: docker, update },
+  thisApp: { source: appSource, rebuild },
 }));
 vi.mock("../lib/transport", () => ({
   get desktop() {
@@ -50,6 +53,16 @@ const published = {
     notes: "https://github.com/madebywelch/guaca/releases/tag/v0.2.0",
   },
 };
+/** What a release of the app says about rebuilding itself. */
+const released = {
+  checkout: null,
+  unavailable: "This is a release of Guaca. Download the next release to update it.",
+  branch: null,
+  upstream: null,
+  running: false,
+  failure: null,
+  log: "/Users/r/Library/Logs/com.madebywelch.guac/rebuild.log",
+};
 let health: Record<string, unknown>;
 let release: unknown;
 let box: Record<string, unknown>;
@@ -69,6 +82,7 @@ beforeEach(() => {
     targetVersion: "0.1.0",
   });
   box = { managed: false };
+  appSource.mockResolvedValue(released);
   fetched.mockImplementation((url: string) =>
     Promise.resolve(
       new Response(
@@ -89,6 +103,12 @@ function mount() {
       <HostUpdatePanel />
     </HostMonitor>,
   );
+}
+/** What the facts list says beside `term`. */
+function fact(term: string): Element {
+  const value = screen.getByText(term, { selector: "dt" }).nextElementSibling;
+  if (!value) throw new Error(`Nothing beside "${term}".`);
+  return value;
 }
 describe("host updates in either client", () => {
   it("checks before mounting and detects an equally old browser and backend", async () => {
@@ -203,6 +223,8 @@ describe("host updates in either client", () => {
       "This host runs Guaca 0.2.0 and this app is 0.1.0. Update this app to match.",
     );
     expect(screen.getByText("This app runs an older Guaca than its host.")).toBeTruthy();
+    expect(fact("Host").hasAttribute("data-drift")).toBe(true);
+    expect(fact("This app").hasAttribute("data-drift")).toBe(true);
     expect(
       screen.getByRole("link", { name: "Download the latest Guaca desktop app" }),
     ).toBeTruthy();
@@ -218,24 +240,42 @@ describe("host updates in either client", () => {
       screen.queryByRole("link", { name: "Download the latest Guaca desktop app" }),
     ).toBeNull();
   });
-  it("does not call one version on two builds compatible", async () => {
+  it("does not call one version on two builds compatible, or draw them as one", async () => {
     // A source-built app against the release its version names: every
     // version on the pane agreed while the host refused the app's commands.
-    health.build = "c".repeat(40);
+    // The two rows read "0.1.0" twice, and the operator believed them.
+    health.build = "c15bd9a".padEnd(40, "0");
     release = { ...published, latest: null };
     mount();
     await screen.findByText("This app and its host are different builds of the same version.");
     expect(screen.getByText("Connects; features may differ")).toBeTruthy();
     expect(screen.queryByText("Compatible")).toBeNull();
-    expect(screen.getByText("Build details").closest("details")?.open).toBe(true);
-    expect(screen.getByText(`Host commit: ${"c".repeat(40)}`)).toBeTruthy();
+    const host = fact("Host");
+    const app = fact("This app");
+    expect(host.textContent).not.toBe(app.textContent);
+    expect(host.textContent).toBe("0.1.0 · c15bd9a");
+    expect(app.textContent).toBe("0.1.0 · aaaaaaa");
+    expect(host.hasAttribute("data-drift")).toBe(true);
+    expect(app.hasAttribute("data-drift")).toBe(true);
   });
-  it("calls one build on both sides compatible", async () => {
+  it("calls one build on both sides compatible, and marks neither row", async () => {
     health.build = "a".repeat(40);
     release = { ...published, latest: null };
     mount();
     await screen.findByText("Compatible");
-    expect(screen.getByText("Build details").closest("details")?.open).toBe(false);
+    expect(fact("Host").textContent).toBe("0.1.0 · aaaaaaa");
+    expect(fact("This app").textContent).toBe("0.1.0 · aaaaaaa");
+    expect(fact("Host").hasAttribute("data-drift")).toBe(false);
+    expect(fact("This app").hasAttribute("data-drift")).toBe(false);
+  });
+  it("names a host built without a commit by its version alone", async () => {
+    health.build = "";
+    health.release = false;
+    release = { ...published, latest: null };
+    mount();
+    await screen.findByText("This is an unverified or development build.");
+    expect(fact("Host").textContent).toBe("0.1.0 (unverified)");
+    expect(fact("Host").hasAttribute("data-drift")).toBe(false);
   });
 });
 
@@ -420,5 +460,179 @@ describe("a box that updates itself", () => {
     await screen.findByText("A newer host release is available.");
     expect(screen.queryByRole("button", { name: "Back up and update host" })).toBeNull();
     expect(screen.getByRole("button", { name: "View update instructions" })).toBeTruthy();
+  });
+});
+
+describe("a box that follows main", () => {
+  const tip = "d".repeat(40);
+  const image = `ghcr.io/madebywelch/guaca/guacad@sha256:${"e".repeat(64)}`;
+  const idle = {
+    managed: true,
+    channel: "main",
+    updating: false,
+    running: { image: "ghcr.io/madebywelch/guaca/guacad@sha256:old", version: "0.1.0" },
+    operation: null,
+    error: null,
+  };
+  const json = (value: unknown) =>
+    Promise.resolve(
+      new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } }),
+    );
+  const poke = () => act(async () => window.dispatchEvent(new Event("guaca:reconnected")));
+  beforeEach(() => {
+    box = { ...idle };
+    release = {
+      ...published,
+      channel: "main",
+      latest: {
+        ...published.latest,
+        channel: "main",
+        version: "0.1.0",
+        commit: tip,
+        image,
+        notes: `https://github.com/madebywelch/guaca/commit/${tip}`,
+      },
+    };
+    fetched.mockImplementation((url: string, init?: RequestInit) => {
+      if (init?.method === "POST") return json({ ...idle, updating: true });
+      if (url.endsWith("/health")) return json(health);
+      return json(url.endsWith("/v1/host") ? box : release);
+    });
+  });
+
+  it("never reports an earlier build of main as this one, though both are the same version", async () => {
+    const earlier = {
+      stage: "Host updated",
+      backup: "guacad-backup-0",
+      previousImage: "older",
+      targetImage: "ghcr.io/madebywelch/guaca/guacad@sha256:earlier",
+      targetVersion: "0.1.0",
+      error: null,
+    };
+    box = { ...idle, operation: earlier };
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Back up and update host" }));
+    await waitFor(() =>
+      expect(fetched.mock.calls.some(([, init]) => init?.method === "POST")).toBe(true),
+    );
+    box = { ...idle, operation: earlier, error: "Another Guaca process is managing this host." };
+    await poke();
+    expect((await screen.findByRole("alert")).textContent).toContain("Another Guaca process");
+    expect(screen.queryByText(/Host updated to/)).toBeNull();
+  });
+
+  it("offers nothing when the host is already the tip", async () => {
+    health.build = tip;
+    mount();
+    await screen.findByText("Host");
+    expect(screen.queryByRole("button", { name: "Back up and update host" })).toBeNull();
+  });
+
+  it("updates to the build that was reviewed, by commit, and names it when done", async () => {
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Back up and update host" }));
+    expect(screen.getByText("Update this host to main at ddddddd.")).toBeTruthy();
+    await waitFor(() =>
+      expect(fetched).toHaveBeenCalledWith(
+        "https://host.example/v1/host/update",
+        expect.objectContaining({ body: JSON.stringify({ version: "0.1.0", commit: tip }) }),
+      ),
+    );
+    health.build = tip;
+    box = {
+      ...idle,
+      operation: {
+        stage: "Host updated",
+        backup: "guacad-backup-1",
+        previousImage: "old",
+        targetImage: image,
+        targetVersion: "0.1.0",
+        error: null,
+      },
+    };
+    await poke();
+    await screen.findByText(
+      "Host updated to main at ddddddd. Review any interrupted work before trying it again.",
+    );
+    expect(screen.getByText("The commit").getAttribute("href")).toBe(
+      `https://github.com/madebywelch/guaca/commit/${tip}`,
+    );
+  });
+});
+
+describe("this app, rebuilt from its checkout", () => {
+  const upstream = "f".repeat(40);
+  const source = {
+    ...released,
+    checkout: "/Users/r/Development/guaca",
+    unavailable: null,
+    branch: "main",
+    upstream,
+  };
+
+  it("offers nothing to a release, or to a build at its branch's tip with edits on top", async () => {
+    mount();
+    await screen.findByText("Host");
+    expect(screen.queryByRole("button", { name: "Rebuild this app" })).toBeNull();
+    cleanup();
+    appSource.mockResolvedValue({ ...source, upstream: "a".repeat(40) });
+    mount();
+    await screen.findByText("Host");
+    await waitFor(() => expect(appSource).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "Rebuild this app" })).toBeNull();
+  });
+
+  it("holds the app back until a host on main is at the tip", async () => {
+    appSource.mockResolvedValue(source);
+    box = {
+      managed: true,
+      channel: "main",
+      updating: false,
+      running: null,
+      operation: null,
+      error: null,
+    };
+    release = {
+      ...published,
+      channel: "main",
+      latest: {
+        ...published.latest,
+        channel: "main",
+        version: "0.1.0",
+        commit: upstream,
+        notes: `https://github.com/madebywelch/guaca/commit/${upstream}`,
+      },
+    };
+    mount();
+    await screen.findByText("Update the host first. This app rebuilds from main after it.");
+    expect(screen.queryByRole("button", { name: "Rebuild this app" })).toBeNull();
+  });
+
+  it("rebuilds from the branch, and shows the end of the log when that fails", async () => {
+    appSource.mockResolvedValue(source);
+    rebuild.mockResolvedValue(undefined);
+    mount();
+    expect(await screen.findByText("This app is at aaaaaaa, and main is at fffffff.")).toBeTruthy();
+    appSource.mockResolvedValue({ ...source, running: true });
+    fireEvent.click(screen.getByRole("button", { name: "Rebuild this app" }));
+    await screen.findByText(/Rebuilding this app from main/);
+    expect(rebuild).toHaveBeenCalledTimes(1);
+    cleanup();
+    appSource.mockResolvedValue({ ...source, failure: "==> Building\ncargo is not on PATH" });
+    mount();
+    expect((await screen.findByRole("alert")).textContent).toBe("The rebuild did not finish.");
+    expect(screen.getByText(/cargo is not on PATH/)).toBeTruthy();
+    expect(screen.getByText(source.log)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Rebuild this app" })).toBeTruthy();
+  });
+
+  it("says why the script would not start", async () => {
+    appSource.mockResolvedValue(source);
+    rebuild.mockRejectedValue(
+      "Guaca is already being rebuilt. It restarts when the build finishes.",
+    );
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Rebuild this app" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("already being rebuilt");
   });
 });

@@ -12,6 +12,8 @@
 //!   GUACA_PORT     the loopback port the host is published on. Default 8787.
 //!   GUACA_VOLUME   the workspace volume. Default `guacad-data`; name an
 //!                  existing one to adopt a workspace.
+//!   GUACA_CHANNEL  `release`, the default, or `main`: which builds an update
+//!                  installs. Fixed here; nothing the host sends changes it.
 //!   and every variable guacad reads, listed in `updater::HOST_ENV`.
 
 fn main() {

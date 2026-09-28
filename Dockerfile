@@ -51,7 +51,7 @@ RUN mkdir -p src/bin \
  && cargo build --release --no-default-features --features server --bin guacad --bin guaca-updater \
  && rm -rf src build.rs target/release/deps/guac* target/release/deps/libguac*
 COPY src-tauri/ ./
-COPY release-protocol.json release-keys.pub /app/
+COPY release-protocol.json release-keys.pub main-keys.pub /app/
 ARG GUACA_COMMIT
 ARG GUACA_RELEASE
 ENV GUACA_COMMIT=$GUACA_COMMIT GUACA_RELEASE=$GUACA_RELEASE

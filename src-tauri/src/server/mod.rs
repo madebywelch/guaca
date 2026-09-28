@@ -358,7 +358,27 @@ async fn update_status(
     if let Err(response) = authorized(&serving, &headers, None) {
         return *response;
     }
-    Json(serving.updates.check(query.refresh).await).into_response()
+    // What is news is what the updater would install, so the channel is the
+    // updater's to say. A host without one follows releases.
+    let channel = match serving.updater.as_deref() {
+        Some(socket) => followed(socket).await,
+        None => Some(crate::updates::Channel::Release),
+    };
+    Json(serving.updates.check(channel, query.refresh).await).into_response()
+}
+
+/// The channel the box's updater follows, or `None` while it is not answering,
+/// which is an updater replacing itself. An updater older than channels says
+/// none, and it only ever installed releases.
+async fn followed(socket: &std::path::Path) -> Option<crate::updates::Channel> {
+    #[cfg(unix)]
+    let report = crate::updater::ask(socket, &crate::updater::Request::Status).await.ok()?;
+    #[cfg(not(unix))]
+    let report = {
+        let _ = socket;
+        Value::Null
+    };
+    Some(serde_json::from_value(report["channel"].clone()).unwrap_or_default())
 }
 
 /// The box's updater, as a client sees it: whether there is one, what the
@@ -366,8 +386,9 @@ async fn update_status(
 ///
 /// The workspace's token authorizes an update as it authorizes everything
 /// else here. What an update may install is not the client's to say: the
-/// updater installs only a signed release, and the version is only a check
-/// that it is the one the operator was shown.
+/// updater installs only a signed build on the box's own channel, and the
+/// version and commit are only a check that it is the one the operator was
+/// shown.
 async fn host_status(State(serving): State<Serving>, headers: HeaderMap) -> Response {
     if let Err(response) = authorized(&serving, &headers, None) {
         return *response;
@@ -381,6 +402,8 @@ async fn host_status(State(serving): State<Serving>, headers: HeaderMap) -> Resp
 #[derive(Deserialize)]
 struct HostUpdate {
     version: String,
+    #[serde(default)]
+    commit: Option<String>,
 }
 
 async fn host_update(
@@ -401,7 +424,8 @@ async fn host_update(
         )
             .into_response();
     };
-    relay(&socket, crate::updater::Request::Update { version: body.version }).await
+    relay(&socket, crate::updater::Request::Update { version: body.version, commit: body.commit })
+        .await
 }
 
 async fn relay(socket: &std::path::Path, request: crate::updater::Request) -> Response {

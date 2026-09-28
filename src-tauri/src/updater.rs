@@ -7,11 +7,13 @@
 //! a Unix socket on a volume the two share.
 //!
 //! It can be asked two things: how the host is, and to install the latest
-//! release whose manifest one of this build's keys signed. Not an image, not a
-//! command, not a restore. That list is what makes it safe to leave within
-//! reach of an agent's shell: the most anything in the host can make it do is
-//! update the box to Guaca's own latest release, which interrupts work and
-//! loses none.
+//! build on the box's channel whose manifest one of that channel's keys
+//! signed. Not an image, not a command, not a restore, and not a channel: the
+//! channel is the updater's own setting, fixed where the box was installed.
+//! That list is what makes it safe to leave within reach of an agent's shell:
+//! the most anything in the host can make it do is update the box to the
+//! newest build Guaca published on the channel the box already follows, which
+//! interrupts work and loses none.
 //!
 //! The sequence is the desktop's, in `host.rs`, run with a box's [`Spec`].
 //! After it has updated the host it replaces itself from the same release, so
@@ -27,6 +29,7 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
 use crate::host::{self, LocalHost, Operation, Reach, Running, Spec, Target};
+use crate::updates::Channel;
 
 /// The host's container.
 pub const HOST: &str = "guacad";
@@ -59,17 +62,25 @@ pub const HOST_ENV: &[&str] = &[
 ];
 /// The updater's own settings. It carries these and the host's to the
 /// updater that replaces it, which is the only way they survive one.
-const OWN_ENV: &[&str] = &["GUACA_PORT", "GUACA_VOLUME"];
+///
+/// The channel is here and not in `HOST_ENV`: a host learns its environment
+/// when it is made, and reinstalling replaces the updater and not the host,
+/// so the host asks the updater which channel it follows instead.
+const OWN_ENV: &[&str] = &["GUACA_PORT", "GUACA_VOLUME", "GUACA_CHANNEL"];
 
 /// The one line guacad sends.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "ask", rename_all = "camelCase")]
 pub enum Request {
     Status,
-    /// Install the latest signed release, which has to be `version`: the one
-    /// the operator was shown and agreed to.
+    /// Install the latest signed build on the box's channel, which has to be
+    /// `version` from `commit`: the one the operator was shown and agreed to.
+    /// Every build of `main` carries the same version, so on that channel the
+    /// commit is the part that says which one, and it is required.
     Update {
         version: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        commit: Option<String>,
     },
 }
 
@@ -77,6 +88,10 @@ pub enum Request {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Report {
+    /// What this box installs. Absent from an older updater's report, which
+    /// only ever installed releases.
+    #[serde(default)]
+    pub channel: Channel,
     pub updating: bool,
     pub running: Option<Running>,
     pub operation: Option<Operation>,
@@ -116,20 +131,31 @@ pub fn host_spec() -> Result<Spec, String> {
     })
 }
 
-/// Where releases are read from, and the keys that have to have signed one.
+/// Where builds are read from, and the keys that have to have signed one.
 #[derive(Clone)]
 pub struct Source {
+    pub channel: Channel,
     pub manifest: String,
+    /// Where a release's signature is. A build of `main` carries its own.
     pub downloads: String,
     pub keys: String,
 }
 
-impl Default for Source {
-    fn default() -> Self {
-        Self {
-            manifest: crate::updates::SOURCE.into(),
-            downloads: crate::updates::DOWNLOADS.into(),
-            keys: crate::updates::KEYS.into(),
+impl Source {
+    pub fn of(channel: Channel) -> Self {
+        match channel {
+            Channel::Release => Self {
+                channel,
+                manifest: crate::updates::SOURCE.into(),
+                downloads: crate::updates::DOWNLOADS.into(),
+                keys: crate::updates::KEYS.into(),
+            },
+            Channel::Main => Self {
+                channel,
+                manifest: crate::updates::MAIN_FEED.into(),
+                downloads: String::new(),
+                keys: crate::updates::MAIN_KEYS.into(),
+            },
         }
     }
 }
@@ -159,6 +185,7 @@ impl Updater {
         // and draws a restart that is not happening.
         let unfinished = operation.as_ref().is_some_and(|op| !op.stage.finished());
         Report {
+            channel: self.source.channel,
             updating: self.busy.load(Ordering::SeqCst) || unfinished,
             running: self.host.running().await.ok().flatten(),
             operation,
@@ -168,12 +195,16 @@ impl Updater {
 
     /// Accepts an update and returns before it runs: the host this request
     /// came through is about to be stopped.
-    pub async fn update(self: &Arc<Self>, version: String) -> Result<Report, String> {
+    pub async fn update(
+        self: &Arc<Self>,
+        version: String,
+        commit: Option<String>,
+    ) -> Result<Report, String> {
         if self.busy.swap(true, Ordering::SeqCst) {
             return Err("An update is already running. Wait for it to finish.".into());
         }
         self.problem.lock().take();
-        let release = match self.release(&version).await {
+        let release = match self.release(&version, commit.as_deref()).await {
             Ok(release) => release,
             Err(error) => {
                 self.busy.store(false, Ordering::SeqCst);
@@ -188,23 +219,44 @@ impl Updater {
         Ok(self.report().await)
     }
 
-    async fn release(&self, version: &str) -> Result<crate::updates::Release, String> {
-        let release = crate::updates::signed(
-            &self.source.manifest,
-            &self.source.downloads,
-            &self.source.keys,
-        )
-        .await?;
+    async fn release(
+        &self,
+        version: &str,
+        commit: Option<&str>,
+    ) -> Result<crate::updates::Release, String> {
+        let Source { channel, manifest, downloads, keys } = &self.source;
+        let release = match channel {
+            Channel::Release => crate::updates::signed(manifest, downloads, keys).await?,
+            Channel::Main => {
+                if commit.is_none() {
+                    return Err("This box follows main, so an update names the build to install. Update the Guaca app, then check for updates and try again.".into());
+                }
+                crate::updates::feed(manifest, keys).await?
+            }
+        };
+        let latest = short(&release.commit);
         if release.version != version {
-            return Err(format!(
-                "The latest release is Guaca {}, not {version}. Check for updates and review it again.",
-                release.version
-            ));
+            return Err(match channel {
+                Channel::Release => format!("The latest release is Guaca {}, not {version}. Check for updates and review it again.", release.version),
+                Channel::Main => format!("Main is now at {latest}, which is Guaca {}, not {version}. Check for updates and review it again.", release.version),
+            });
+        }
+        // Seven characters is the shortest spelling a person is shown, and a
+        // prefix any shorter would match builds nobody reviewed.
+        if let Some(commit) = commit {
+            if commit.len() < 7 || !release.commit.starts_with(commit) {
+                let reviewed = short(commit);
+                return Err(match channel {
+                    Channel::Release => format!("The latest release is Guaca {} from {latest}, not {reviewed}. Check for updates and review it again.", release.version),
+                    Channel::Main => format!("Main is now at {latest}, not {reviewed}. Check for updates and review it again."),
+                });
+            }
         }
         Ok(release)
     }
 
     async fn install(&self, release: crate::updates::Release) {
+        let commit = release.commit;
         let target = Target {
             image: release.image,
             version: release.version,
@@ -213,7 +265,7 @@ impl Updater {
         let before = self.journaled();
         match self.host.update(&target, None).await {
             Ok(_) => {
-                tracing::info!(version = %target.version, "host updated");
+                tracing::info!(version = %target.version, %commit, "host updated");
                 if let Err(error) = self.succeed(&target.image).await {
                     tracing::warn!(%error, "the host is updated; this updater could not replace itself");
                 }
@@ -261,6 +313,11 @@ impl Updater {
     }
 }
 
+/// A commit as the operator is shown one.
+fn short(commit: &str) -> &str {
+    commit.get(..7).unwrap_or(commit)
+}
+
 /// How every updater is labeled, whatever it is named now.
 const MADE: (&str, &str) = (UPDATER_OWNER, UPDATER);
 
@@ -286,6 +343,9 @@ async fn own_image(docker: &Path) -> Result<String, String> {
 /// rather than removed, and named back if its replacement does not start;
 /// the replacement removes it once it is serving ([`serve`]).
 pub async fn install(docker: &Path, image: &str) -> Result<(), String> {
+    // Refused before the old updater is touched: the new one would refuse to
+    // serve, and the box would keep an updater nobody can replace from here.
+    Channel::from_env()?;
     retire(docker).await?;
     let existing = host::owned(docker, UPDATER, MADE).await?.is_some();
     if existing {
@@ -342,6 +402,9 @@ pub async fn serve() -> Result<(), String> {
     let docker = host::docker_binary();
     let image = own_image(&docker).await?;
     let spec = host_spec()?;
+    // Refused here, before the bind, so a box installed with a channel nobody
+    // can read keeps the updater it had rather than one that guesses.
+    let channel = Channel::from_env()?;
     let listener = bind(Path::new(host::UPDATER_SOCKET))?;
     // Past the bind this updater is the one the host reaches, so nothing
     // after it may stop it: an updater that exits here strands the box.
@@ -350,10 +413,10 @@ pub async fn serve() -> Result<(), String> {
     }
     let host = LocalHost::with_spec(spec, &image)
         .with_journal(Path::new(STATE_DIR).join("host-update.json"));
-    let updater = Arc::new(Updater::new(host, Source::default()));
+    let updater = Arc::new(Updater::new(host, Source::of(channel)));
     let starting = updater.clone();
     tokio::spawn(async move { starting.keep_started().await });
-    tracing::info!(%image, socket = host::UPDATER_SOCKET, "guaca-updater ready");
+    tracing::info!(%image, ?channel, socket = host::UPDATER_SOCKET, "guaca-updater ready");
     listen(listener, updater).await
 }
 
@@ -406,7 +469,7 @@ async fn answer(stream: tokio::net::UnixStream, updater: &Arc<Updater>) -> std::
     .map_err(|_| std::io::Error::from(std::io::ErrorKind::TimedOut))??;
     let reply = match serde_json::from_str::<Request>(&line) {
         Ok(Request::Status) => Ok(updater.report().await),
-        Ok(Request::Update { version }) => updater.update(version).await,
+        Ok(Request::Update { version, commit }) => updater.update(version, commit).await,
         Err(_) => Err("The updater did not understand the request. Update the host.".into()),
     };
     let value = match reply {
@@ -484,6 +547,13 @@ mod tests {
     }
 
     async fn a_box(failure: &str, signed_by_us: bool) -> Rig {
+        a_box_on(Channel::Release, failure, signed_by_us).await
+    }
+
+    /// The commit the rig's build of `main` was made from.
+    const TIP: &str = "e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0";
+
+    async fn a_box_on(channel: Channel, failure: &str, signed_by_us: bool) -> Rig {
         use base64::Engine;
         use ring::signature::KeyPair;
         let version = env!("CARGO_PKG_VERSION");
@@ -497,11 +567,18 @@ mod tests {
         let mut tasks = vec![tokio::spawn(async move { axum::serve(health, app).await.unwrap() })];
 
         let image = format!("ghcr.io/madebywelch/guaca/guacad@sha256:{}", "c".repeat(64));
-        let manifest = serde_json::to_vec_pretty(&json!({
-            "schema":1, "version":version, "commit":"a".repeat(40), "image":image,
-            "apiGeneration":1, "clientMinimum":1, "clientMaximum":1,
-            "notes":format!("https://github.com/madebywelch/guaca/releases/tag/v{version}"),
-        }))
+        let manifest = serde_json::to_vec_pretty(&match channel {
+            Channel::Release => json!({
+                "schema":1, "version":version, "commit":"a".repeat(40), "image":image,
+                "apiGeneration":1, "clientMinimum":1, "clientMaximum":1,
+                "notes":format!("https://github.com/madebywelch/guaca/releases/tag/v{version}"),
+            }),
+            Channel::Main => json!({
+                "schema":1, "channel":"main", "version":version, "commit":TIP, "image":image,
+                "apiGeneration":1, "clientMinimum":1, "clientMaximum":1,
+                "notes":format!("https://github.com/madebywelch/guaca/commit/{TIP}"),
+            }),
+        })
         .unwrap();
         let random = ring::rand::SystemRandom::new();
         let ours = ring::signature::Ed25519KeyPair::from_pkcs8(
@@ -516,12 +593,18 @@ mod tests {
         let signature =
             base64::engine::general_purpose::STANDARD.encode(signer.sign(&manifest).as_ref());
         let keys = base64::engine::general_purpose::STANDARD.encode(ours.public_key().as_ref());
+        let envelope = serde_json::to_vec(&json!({
+            "manifest": base64::engine::general_purpose::STANDARD.encode(&manifest),
+            "signature": signature.clone(),
+        }))
+        .unwrap();
         let releases = axum::Router::new()
             .route("/latest", axum::routing::get(move || async move { manifest }))
             .route(
                 &format!("/v{version}/guaca-release.json.sig"),
                 axum::routing::get(move || async move { signature }),
-            );
+            )
+            .route("/main", axum::routing::get(move || async move { envelope }));
         let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", socket.local_addr().unwrap());
         tasks.push(tokio::spawn(async move { axum::serve(socket, releases).await.unwrap() }));
@@ -548,7 +631,14 @@ mod tests {
         let host = LocalHost::with_spec(Spec { reach: Reach::Published, ..spec }, "guacad:old")
             .with_journal(dir.path().join("host-update.json"))
             .with_docker(docker);
-        let source = Source { manifest: format!("{base}/latest"), downloads: base, keys };
+        let source = match channel {
+            Channel::Release => {
+                Source { channel, manifest: format!("{base}/latest"), downloads: base, keys }
+            }
+            Channel::Main => {
+                Source { channel, manifest: format!("{base}/main"), downloads: String::new(), keys }
+            }
+        };
         Rig { dir, updater: Arc::new(Updater::new(host, source)), tasks }
     }
 
@@ -571,14 +661,16 @@ mod tests {
             (HOST, Some(8787), "guacad-data")
         );
         assert_eq!(spec.socket.as_deref(), Some(SOCKET));
-        assert!(!HOST_ENV.contains(&"GUACA_PORT"), "the updater's settings are its own");
+        for own in OWN_ENV {
+            assert!(!HOST_ENV.contains(own), "{own} is the updater's setting, not the host's");
+        }
     }
 
     #[tokio::test]
     async fn an_update_installs_the_signed_release_and_then_replaces_the_updater() {
         let bx = a_box("", true).await;
         let version = env!("CARGO_PKG_VERSION").to_string();
-        let accepted = bx.updater.update(version).await.unwrap();
+        let accepted = bx.updater.update(version, None).await.unwrap();
         assert!(accepted.updating);
         let report = settled(&bx.updater).await;
         let op = report.operation.unwrap();
@@ -649,7 +741,7 @@ mod tests {
     #[tokio::test]
     async fn a_release_nobody_trusted_signed_is_refused_before_anything_stops() {
         let bx = a_box("", false).await;
-        let error = bx.updater.update(env!("CARGO_PKG_VERSION").into()).await.err().unwrap();
+        let error = bx.updater.update(env!("CARGO_PKG_VERSION").into(), None).await.err().unwrap();
         assert!(error.contains("nothing was installed"), "{error}");
         assert!(!calls(&bx.dir).iter().any(|c| c[0] == "stop" || c[0] == "pull"));
         assert!(!bx.updater.report().await.updating, "a refusal frees the updater");
@@ -658,7 +750,7 @@ mod tests {
     #[tokio::test]
     async fn an_update_is_to_the_release_the_operator_reviewed() {
         let bx = a_box("", true).await;
-        let error = bx.updater.update("9.9.9".into()).await.err().unwrap();
+        let error = bx.updater.update("9.9.9".into(), None).await.err().unwrap();
         assert!(error.contains("review it again"), "{error}");
         assert!(!calls(&bx.dir).iter().any(|c| c[0] == "stop"));
     }
@@ -667,8 +759,8 @@ mod tests {
     async fn a_second_update_while_one_runs_is_refused() {
         let bx = a_box("", true).await;
         let version = env!("CARGO_PKG_VERSION").to_string();
-        bx.updater.update(version.clone()).await.unwrap();
-        let error = bx.updater.update(version).await.err().unwrap();
+        bx.updater.update(version.clone(), None).await.unwrap();
+        let error = bx.updater.update(version, None).await.err().unwrap();
         assert!(error.contains("already running"), "{error}");
         settled(&bx.updater).await;
     }
@@ -680,7 +772,7 @@ mod tests {
         value["refuse"] =
             json!(format!("ghcr.io/madebywelch/guaca/guacad@sha256:{}", "c".repeat(64)));
         write(&bx.dir, value);
-        bx.updater.update(env!("CARGO_PKG_VERSION").into()).await.unwrap();
+        bx.updater.update(env!("CARGO_PKG_VERSION").into(), None).await.unwrap();
         let report = settled(&bx.updater).await;
         let op = report.operation.unwrap();
         assert_eq!(op.stage, host::Stage::Restored, "{:?}", op.error);
@@ -700,14 +792,14 @@ mod tests {
         // Another manager holds the host, so the sequence never begins.
         let held = std::fs::File::create(bx.dir.path().join("host-update.lock")).unwrap();
         held.try_lock().unwrap();
-        bx.updater.update(env!("CARGO_PKG_VERSION").into()).await.unwrap();
+        bx.updater.update(env!("CARGO_PKG_VERSION").into(), None).await.unwrap();
         let report = settled(&bx.updater).await;
         let op = report.operation.unwrap();
         assert_eq!((op.stage, op.target_version.as_str()), (host::Stage::Updated, "0.1.0"));
         let said = report.error.unwrap();
         assert!(said.contains("Another Guaca process"), "{said}");
         drop(held);
-        bx.updater.update(env!("CARGO_PKG_VERSION").into()).await.unwrap();
+        bx.updater.update(env!("CARGO_PKG_VERSION").into(), None).await.unwrap();
         let report = settled(&bx.updater).await;
         assert!(report.error.is_none(), "a new attempt clears the last refusal");
         assert_eq!(report.operation.unwrap().stage, host::Stage::Updated);
@@ -759,7 +851,9 @@ mod tests {
         let report = ask(&path, &Request::Status).await.unwrap();
         assert_eq!(report["running"]["image"], "guacad:old");
         assert_eq!(report["updating"], false);
-        let refused = ask(&path, &Request::Update { version: "9.9.9".into() }).await.unwrap_err();
+        let refused = ask(&path, &Request::Update { version: "9.9.9".into(), commit: None })
+            .await
+            .unwrap_err();
         assert!(refused.contains("review it again"), "{refused}");
         // A connection that never sends its line is let go, and the next is
         // answered. The clock is paused, so the runtime skips the wait.
@@ -772,5 +866,76 @@ mod tests {
         serving.abort();
         let gone = ask(&dir.path().join("nobody.sock"), &Request::Status).await.unwrap_err();
         assert!(gone.contains("not answering"), "{gone}");
+    }
+
+    #[tokio::test]
+    async fn a_box_on_main_refuses_any_build_but_the_one_reviewed_before_anything_stops() {
+        let bx = a_box_on(Channel::Main, "", true).await;
+        let version = env!("CARGO_PKG_VERSION").to_string();
+        for (commit, said) in [
+            (None, "names the build"),
+            (Some("f".repeat(40)), "review it again"),
+            (Some(TIP[..6].to_string()), "review it again"),
+            (Some(String::new()), "review it again"),
+        ] {
+            let error = bx.updater.update(version.clone(), commit.clone()).await.err().unwrap();
+            assert!(error.contains(said), "{commit:?}: {error}");
+            assert!(!bx.updater.report().await.updating, "a refusal frees the updater");
+        }
+        let error = bx.updater.update("9.9.9".into(), Some(TIP.into())).await.err().unwrap();
+        assert!(error.contains("review it again"), "{error}");
+        assert!(!calls(&bx.dir).iter().any(|c| c[0] == "stop" || c[0] == "pull"));
+    }
+
+    #[tokio::test]
+    async fn a_box_on_main_installs_the_reviewed_build_and_says_which_channel_it_follows() {
+        let bx = a_box_on(Channel::Main, "", true).await;
+        assert_eq!(bx.updater.report().await.channel, Channel::Main);
+        let version = env!("CARGO_PKG_VERSION").to_string();
+        bx.updater.update(version, Some(TIP[..7].into())).await.unwrap();
+        let op = settled(&bx.updater).await.operation.unwrap();
+        assert_eq!(op.stage, host::Stage::Updated, "{:?}", op.error);
+        assert!(state(&bx.dir)["container"]["Config"]["Image"]
+            .as_str()
+            .unwrap()
+            .contains("@sha256:"));
+    }
+
+    #[tokio::test]
+    async fn a_box_on_main_refuses_a_build_its_key_did_not_sign() {
+        let bx = a_box_on(Channel::Main, "", false).await;
+        let error = bx
+            .updater
+            .update(env!("CARGO_PKG_VERSION").into(), Some(TIP.into()))
+            .await
+            .err()
+            .unwrap();
+        assert!(error.contains("nothing was installed"), "{error}");
+        assert!(!calls(&bx.dir).iter().any(|c| c[0] == "stop" || c[0] == "pull"));
+    }
+
+    #[tokio::test]
+    async fn a_release_box_holds_a_named_commit_to_the_release() {
+        let bx = a_box("", true).await;
+        let version = env!("CARGO_PKG_VERSION").to_string();
+        let error = bx.updater.update(version.clone(), Some(TIP.into())).await.err().unwrap();
+        assert!(error.contains("latest release"), "{error}");
+        bx.updater.update(version, Some("a".repeat(40))).await.unwrap();
+        settled(&bx.updater).await;
+    }
+
+    #[test]
+    fn a_host_from_before_channels_still_asks_in_words_the_updater_reads() {
+        let old: Request = serde_json::from_str(r#"{"ask":"update","version":"0.2.0"}"#).unwrap();
+        assert!(matches!(old, Request::Update { commit: None, .. }));
+        let said =
+            serde_json::to_string(&Request::Update { version: "0.2.0".into(), commit: None })
+                .unwrap();
+        assert_eq!(said, r#"{"ask":"update","version":"0.2.0"}"#, "an older updater reads this");
+        let report: Report = serde_json::from_str(
+            r#"{"updating":false,"running":null,"operation":null,"error":null}"#,
+        )
+        .unwrap();
+        assert_eq!(report.channel, Channel::Release, "an older updater only installed releases");
     }
 }

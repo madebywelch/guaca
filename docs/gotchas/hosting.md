@@ -223,3 +223,32 @@ The daemon, a browser as a client, and the boot both hosts share.
   `releases.ts` and `different_builds` in `ipc.rs`, one rule written twice.
   A host older than the field still gives the generic sentence; the pane
   is the client's and says the truth either way.
+- **Main's feed is one file on purpose.** The release manifest and its
+  signature are two files because a release never changes. `guaca-main.json`
+  is replaced on every push, so a manifest and a signature read as a pair could
+  come from two builds and a correct build would be refused as unsigned. The
+  envelope is what `feed` reads; do not split it to match the release layout.
+- **The key CI holds is not a release key.** `main-keys.pub` and
+  `release-keys.pub` are separate lists and `updates.rs` fails the build if
+  they share a key. Adding the main key to the release list would let anyone
+  who can push a workflow sign a release for every box.
+- **A box on `main` is behind by commit, never by version.** Every build of
+  `main` says the same version, so `available` compares `health.build` with
+  the feed's commit on that channel, and the panel matches a finished update by
+  image. Matched by version, an update that never began is reported as the one
+  before it.
+- **`GUACA_CHANNEL` is the updater's, and the host asks for it.** It is in
+  `OWN_ENV`, not `HOST_ENV`. In `HOST_ENV` the host learned it only when its
+  container was made, and reinstalling replaces the updater and not the host,
+  so a box moved onto `main` kept reporting releases while its updater
+  refused every update that named no commit, including the one that would have
+  remade the host. `/v1/updates` asks the updater which channel it follows on
+  every check. An update request that named a channel would let anything in
+  the host move a release box onto `main`.
+- **The app rebuild runs in its own process group.** `install.sh` quits the
+  app once the bundle is built, and launchd ends whatever is left in a job's
+  process group when the job exits (`AbandonProcessGroup` in
+  `launchd.plist(5)`). In the app's group the script would be ended by the
+  quit it asked for, leaving the old app closed and the new one never installed.
+  Only failure is reported: success is the app closing.
+

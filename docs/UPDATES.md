@@ -228,6 +228,78 @@ can publish a release cannot, by itself, make every box install it. Rotating
 the key means shipping the new key in that file a release before anything is
 signed with it, because an updater only knows the keys it was built with.
 
+## The main channel
+
+A box can follow `main` instead of releases, so a change pushed to `main` is a
+button in Settings > Workspace minutes later, without anybody cutting a
+version. It exists for the operator who builds the desktop app from source with
+`scripts/install.sh`: that app is always some commit of `main`, and a host that
+could only move between releases was always a week behind it, missing whatever
+the app now asked it for. A connector that was on `main` was absent from every
+crew because the box that served the catalog was on the last release, and both
+sides said 0.2.0.
+
+**The build happens in CI, not on the operator's machine.**
+`.github/workflows/main-channel.yml` builds the host image for every push to
+`main`, for amd64 and arm64 on runners of each kind, and pushes it to GHCR by
+digest. A laptop cannot do this in the time the channel promises: it is
+usually ARM, a box is usually x86_64, and compiling the daemon under emulation
+takes most of an hour. A box should not either: it is the machine agents run
+on, and a release build of the daemon on every push would take its CPU and
+memory from them for minutes at a time.
+
+**What a box reads is one file.** `guaca-main.json` on the `channel-main`
+prerelease holds the manifest's exact bytes and the signature over them.
+Releases publish the two as separate files because a release is immutable and
+its signature has a stable address per version; this file is replaced on every
+push, and two files replaced one after the other can be read one from each, so
+a correct build would be refused as unsigned for a moment after every push. A
+prerelease is never `latest`, so a release box never reads it.
+
+**It is signed with a key of its own.** CI holds the private half as the
+`GUACA_MAIN_SIGNING_KEY` secret; `main-keys.pub` is the public half. It is not
+in `release-keys.pub`, and a test fails the build if the two lists ever share a
+key: a secret a workflow can read is a secret anybody who can push a workflow
+can read, and its reach stops at the boxes that chose `main`. The release key
+stays on the machine that signs releases.
+
+**The channel is the updater's own setting.** `GUACA_CHANNEL` is read from the
+updater's environment, which the installer sets and each updater hands to its
+replacement, and which nothing in the host can change. That keeps the short
+list above true: the most anything that reaches the socket can do is install
+the newest build Guaca published on the channel the box already follows. An
+update request that could name the channel would let an agent move a release
+box onto `main`. An unreadable value stops the installer and the updater
+before either touches anything. The host keeps no copy: it asks the updater on
+every check which channel's news to report, so reinstalling with the other
+value moves the box at once, without remaking the host.
+
+**An update names the commit.** Every build of `main` carries the version it
+will be released as, so the version in a request says nothing about which
+build the operator reviewed. On `main` the request carries the commit as well,
+and the updater refuses when the feed has moved on since, the same way a
+release box refuses a release that is no longer the latest. A host older than
+the field sends none, and a box on `main` refuses that rather than guessing.
+The panel tells one finished update from the last by the image rather than the
+version for the same reason.
+
+**The host goes first, then the app.** A host newer than its app only has
+commands nobody calls yet; an app newer than its host calls commands the host
+does not have, which is the failure the build comparison exists to name. So on
+a box that follows `main` the panel offers the host update, and holds back
+**Rebuild this app** until the host is at the tip. The rebuild runs
+`scripts/install.sh` in the checkout the app was built from (`rebuild.rs`),
+which quits the app once the new bundle is built and opens the new one. A
+release of the app has no checkout and is never offered it. On this Mac the
+order is the other way round and needs nothing new: the app build is what
+produces the host image, and the existing local update installs it after.
+
+**CI does not move the feed backward or past what a box can pull.** A run is
+cancelled when a newer push arrives, a re-run of an older commit builds but
+does not publish, and a build whose image cannot be pulled without
+credentials fails before the feed changes, with the setting to fix in the
+message. The first run fails that way until the package is made public once.
+
 ## Delivery and verification
 
 Ship in this order:

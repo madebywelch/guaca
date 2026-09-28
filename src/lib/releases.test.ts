@@ -8,6 +8,7 @@ import {
   parseReleaseStatus,
   type ReleaseStatus,
   sameBuild,
+  shortBuild,
   skew,
   updateNotice,
 } from "./releases";
@@ -57,6 +58,15 @@ describe("release detection", () => {
     expect(sameBuild("abcdef1", "abcdef123456")).toBe(true);
     expect(sameBuild("abcdef1-dirty", "abcdef1")).toBe(false);
     expect(sameBuild("", "")).toBe(false);
+  });
+  it("names a build by its short commit, and names nothing that is not a commit", () => {
+    expect(shortBuild("")).toBe("");
+    expect(shortBuild("unknown")).toBe("");
+    expect(shortBuild("abc")).toBe("");
+    expect(shortBuild("c15bd9a-dirty; rm")).toBe("");
+    expect(shortBuild("c15bd9a".padEnd(40, "0"))).toBe("c15bd9a");
+    expect(shortBuild("79961bb-dirty")).toBe("79961bb-dirty");
+    expect(shortBuild(`${"c15bd9a".padEnd(40, "0")}-dirty`)).toBe("c15bd9a-dirty");
   });
   it("does not render untrusted release links or install targets", () => {
     expect(parseReleaseStatus(status)).toEqual(status);
@@ -159,5 +169,53 @@ describe("a desktop and its host, updated separately", () => {
   it("offers a managed host's own image only when nothing more specific applies", () => {
     expect(facts({ localUpdate: "guacad:new" })?.text).toBe("Host update available.");
     expect(facts({ localUpdate: null })).toBeNull();
+  });
+});
+
+describe("a box that follows main", () => {
+  const tip = "d".repeat(40);
+  const main: ReleaseStatus = {
+    ...status,
+    channel: "main",
+    latest: {
+      ...status.latest!,
+      channel: "main",
+      version: "0.1.0",
+      commit: tip,
+      notes: `https://github.com/madebywelch/guaca/commit/${tip}`,
+    },
+  };
+  it("refuses a build of main that links anything but its commit, or claims the other channel", () => {
+    for (const bad of [
+      { ...main, latest: { ...main.latest!, notes: status.latest!.notes } },
+      { ...main, channel: "release" },
+      { ...main, channel: undefined },
+      { ...status, channel: "main" },
+      { ...main, channel: "nightly" },
+      { ...main, latest: { ...main.latest!, channel: "nightly" } },
+    ])
+      expect(() => parseReleaseStatus(bad)).toThrow();
+    expect(parseReleaseStatus(main)).toEqual(main);
+    expect(parseReleaseStatus({ ...status, channel: "release" }).latest?.version).toBe("0.2.0");
+  });
+  it("is behind when its commit is not the tip, whatever the versions say", () => {
+    expect(available({ ...health, build: tip.slice(0, 7) }, main)).toBe(false);
+    expect(available({ ...health, build: tip }, main)).toBe(false);
+    expect(available({ ...health, build: `${tip.slice(0, 7)}-dirty` }, main)).toBe(true);
+    expect(available({ ...health, build: "aaaaaaa", release: false }, main)).toBe(true);
+    expect(available({ ...health, build: "", version: "9.9.9" }, main)).toBe(true);
+  });
+  it("names the build it would install", () => {
+    const notice = updateNotice({
+      desktop: false,
+      client: { version: "0.1.0", commit: "aaaaaaa" },
+      health,
+      release: main,
+      localUpdate: null,
+    });
+    expect(notice).toEqual({
+      key: `host:main:${tip}`,
+      text: "Host update available: main at ddddddd.",
+    });
   });
 });

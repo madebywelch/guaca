@@ -8,7 +8,15 @@ import {
   useState,
 } from "react";
 import { COMMIT, VERSION } from "../lib/build";
-import { type DockerStatus, hostMode, localHost, type Manager, parseManager } from "../lib/host";
+import {
+  type AppSource,
+  type DockerStatus,
+  hostMode,
+  localHost,
+  type Manager,
+  parseManager,
+  thisApp,
+} from "../lib/host";
 import {
   available,
   clientUpdate,
@@ -22,6 +30,8 @@ import {
   protocol,
   RELEASES,
   type ReleaseStatus,
+  sameBuild,
+  shortBuild,
   skew,
   updateNotice,
 } from "../lib/releases";
@@ -276,11 +286,23 @@ export function HostUpdateNotice({ onReview }: { onReview: () => void }) {
   );
 }
 
-/** What the operator is told when an update to `version` on a box has finished. */
-function outcome(manager: Manager, version: string): { result: string } | { failure: string } {
+/** An update a box accepted: what it was asked for, and what to call it. */
+interface Accepted {
+  at: number;
+  version: string;
+  /** The image, on main, where every build carries the same version. */
+  image?: string;
+  name: string;
+}
+
+/** What the operator is told when an update on a box has finished. */
+function outcome(manager: Manager, asked: Accepted): { result: string } | { failure: string } {
   // The journal holds the last update that ran. One that never began leaves
   // it holding an earlier one, whose outcome is not this one's.
-  const op = manager.operation?.targetVersion === version ? manager.operation : null;
+  const ran = manager.operation;
+  const op = (asked.image ? ran?.targetImage === asked.image : ran?.targetVersion === asked.version)
+    ? ran
+    : null;
   if (!op)
     return {
       failure:
@@ -288,13 +310,89 @@ function outcome(manager: Manager, version: string): { result: string } | { fail
     };
   if (op.stage === "Host updated")
     return {
-      result: `Host updated to Guaca ${version}. Review any interrupted work before trying it again.`,
+      result: `Host updated to ${asked.name}. Review any interrupted work before trying it again.`,
     };
   if (op.stage === "Previous version restored")
     return {
       failure: `${op.error ?? "The update did not finish."} Guaca put the previous version back, with the workspace as it was when the update began.`,
     };
   return { failure: op.error ?? manager.error ?? "The update did not finish. Try again." };
+}
+
+/**
+ * This app, rebuilt from the checkout it came from. A source build has no
+ * release to download: its latest is the tip of the branch it follows.
+ *
+ * On a box that follows main, the host goes first. An app newer than its host
+ * calls commands the host does not have, which is the failure the build
+ * comparison above exists to name; a host newer than its app is only unused.
+ */
+function AppRebuild({ hostFirst }: { hostFirst: boolean }) {
+  const [source, setSource] = useState<AppSource | null>(null);
+  const [failure, setFailure] = useState("");
+  const read = useCallback(
+    () =>
+      thisApp
+        .source()
+        .then(setSource)
+        .catch(() => setSource(null)),
+    [],
+  );
+  useEffect(() => {
+    void read();
+  }, [read]);
+  const running = !!source?.running;
+  useEffect(() => {
+    if (!running) return;
+    const timer = setInterval(() => void read(), 2000);
+    return () => clearInterval(timer);
+  }, [running, read]);
+  if (!source?.checkout || !source.upstream) return null;
+  // Edits on top of the branch's own commit are the operator's, not news.
+  const current = sameBuild(COMMIT.replace(/-dirty$/, ""), source.upstream);
+  const failed = failure || source.failure;
+  if (current && !running && !failed) return null;
+  const branch = source.branch ?? "main";
+  const start = async () => {
+    setFailure("");
+    try {
+      await thisApp.rebuild();
+    } catch (cause) {
+      setFailure(errorMessage(cause));
+    }
+    await read();
+  };
+  return (
+    <div className="field">
+      <p role="status">
+        {running
+          ? `Rebuilding this app from ${branch}. Guaca closes and reopens when the build finishes.`
+          : `This app is at ${shortBuild(COMMIT) || "an unknown build"}, and ${branch} is at ${shortBuild(source.upstream)}.`}
+      </p>
+      {!running &&
+        !current &&
+        (hostFirst ? (
+          <p className="field__hint">
+            Update the host first. This app rebuilds from {branch} after it.
+          </p>
+        ) : (
+          <button className="btn" type="button" onClick={() => void start()}>
+            Rebuild this app
+          </button>
+        ))}
+      {failed && (
+        <>
+          <p className="field__error" role="alert">
+            {failure || "The rebuild did not finish."}
+          </p>
+          {source.failure && <pre className="md__pre">{source.failure}</pre>}
+          <p className="field__hint">
+            The whole log is at <code>{source.log}</code>.
+          </p>
+        </>
+      )}
+    </div>
+  );
 }
 
 export function HostUpdatePanel() {
@@ -304,7 +402,7 @@ export function HostUpdatePanel() {
   const [failure, setFailure] = useState("");
   const [instructions, setInstructions] = useState(false);
   /** An update a box accepted from this panel, until it reports it finished. */
-  const [accepted, setAccepted] = useState<{ at: number; version: string } | null>(null);
+  const [accepted, setAccepted] = useState<Accepted | null>(null);
   const activity = useStore((s) => s.activity);
   const building = useStore((s) => s.building);
   const checkProgress = state?.refresh;
@@ -322,7 +420,7 @@ export function HostUpdatePanel() {
     // Finished only by an answer read after the box accepted, from a host
     // that is answering again: the one before the click also says "not updating".
     if (!accepted || !manager || manager.updating || managerAt <= accepted.at || !answered) return;
-    const said = outcome(manager, accepted.version);
+    const said = outcome(manager, accepted);
     if ("result" in said) setResult(said.result);
     else setFailure(said.failure);
     setAccepted(null);
@@ -342,10 +440,14 @@ export function HostUpdatePanel() {
       latest.apiGeneration >= protocol.minimum &&
       latest.apiGeneration <= protocol.maximum);
   const boxed = !managed && !!manager;
+  const onMain = latest?.channel === "main";
+  const target =
+    latest && (onMain ? `main at ${shortBuild(latest.commit)}` : `Guaca ${latest.version}`);
   // A box's updater installs only a signed release, so a source build on one
   // is offered the release that makes it verified, not only a newer number.
+  // On main every build is the same version, and the commit is what moves.
   const order = latest && health?.version ? compareVersions(health.version, latest.version) : null;
-  const boxNewer = order === -1 || (order === 0 && !health?.release);
+  const boxNewer = onMain ? newer : order === -1 || (order === 0 && !health?.release);
   const canUpdateBox = boxed && boxNewer && reachable && match !== "clientOld";
   const pageChanged = pageStale(desktop, COMMIT, health);
   const drift = desktop ? skew({ version: VERSION, commit: COMMIT }, health) : "unknown";
@@ -353,6 +455,8 @@ export function HostUpdatePanel() {
   // added since the older build are missing whatever the generation says.
   const apart = drift === "otherBuild" || drift === "hostBehind" || drift === "clientBehind";
   const appBehind = desktop && (drift === "clientBehind" || clientUpdate(VERSION, release));
+  const hostBuild = shortBuild(health?.build ?? "");
+  const appBuild = shortBuild(COMMIT);
   const title =
     match === "hostOld"
       ? "This host needs an update"
@@ -384,7 +488,9 @@ export function HostUpdatePanel() {
         method: "POST",
         cache: "no-store",
         headers: { authorization: `Bearer ${token()}`, "content-type": "application/json" },
-        body: JSON.stringify({ version: latest.version }),
+        body: JSON.stringify(
+          onMain ? { version: latest.version, commit: latest.commit } : { version: latest.version },
+        ),
         signal: AbortSignal.timeout(45000),
       });
       const body: unknown = await response.json().catch(() => null);
@@ -395,7 +501,12 @@ export function HostUpdatePanel() {
         );
       const report = parseManager(body);
       if (report) state.adoptManager(report);
-      setAccepted({ at: Date.now(), version: latest.version });
+      setAccepted({
+        at: Date.now(),
+        version: latest.version,
+        image: onMain ? latest.image : undefined,
+        name: target ?? `Guaca ${latest.version}`,
+      });
     } catch (cause) {
       setFailure(errorMessage(cause));
     } finally {
@@ -442,14 +553,18 @@ export function HostUpdatePanel() {
       {health && (
         <dl className="host-update-facts">
           <dt>Host</dt>
-          <dd>
+          <dd data-drift={apart ? "" : undefined}>
             {health.version ?? "Unknown release"}
+            {hostBuild && ` · ${hostBuild}`}
             {!health.release && " (unverified)"}
           </dd>
           {desktop && (
             <>
               <dt>This app</dt>
-              <dd>{VERSION}</dd>
+              <dd data-drift={apart ? "" : undefined}>
+                {VERSION}
+                {appBuild && ` · ${appBuild}`}
+              </dd>
             </>
           )}
           <dt>Available</dt>
@@ -471,15 +586,6 @@ export function HostUpdatePanel() {
           </dd>
         </dl>
       )}
-      {health && (
-        <details open={drift === "otherBuild"}>
-          <summary>Build details</summary>
-          <p>
-            Guaca frontend: {VERSION} ({COMMIT || "unknown commit"})
-          </p>
-          <p>Host commit: {health.build || "unknown"}</p>
-        </details>
-      )}
       {!release?.automatic && release && (
         <p className="field__hint">Automatic release checks are disabled on this host.</p>
       )}
@@ -490,14 +596,14 @@ export function HostUpdatePanel() {
       )}
       {release?.latest && (
         <a href={release.latest.notes} target="_blank" rel="noopener noreferrer">
-          Release notes
+          {onMain ? "The commit" : "Release notes"}
         </a>
       )}
       {((canUpdate && match !== "clientOld") || canUpdateBox) && (
         <div className="field">
           <p>
             {canUpdateBox && latest
-              ? `Update this host to Guaca ${latest.version}.`
+              ? `Update this host to ${target}.`
               : `Update this host to the build included with this desktop app${
                   docker?.targetVersion ? ` (${docker.targetVersion})` : ""
                 }.`}
@@ -520,7 +626,7 @@ export function HostUpdatePanel() {
       )}
       {boxed && boxNewer && !reachable && (
         <p>
-          Guaca {latest?.version} needs a newer desktop app.{" "}
+          {target} needs a newer desktop app.{" "}
           <a href={RELEASES} target="_blank" rel="noopener noreferrer">
             Download it
           </a>
@@ -551,6 +657,7 @@ export function HostUpdatePanel() {
           {operation.error && <p>{operation.error}</p>}
         </details>
       )}
+      {desktop && <AppRebuild hostFirst={boxed && onMain && newer} />}
       {desktop && (appBehind || match === "clientOld" || (newer && managed && !canUpdate)) && (
         <p>
           <a href={RELEASES} target="_blank" rel="noopener noreferrer">

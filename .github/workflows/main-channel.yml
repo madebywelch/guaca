@@ -1,0 +1,177 @@
+# Every push to main, as a host image a box on the main channel can install.
+#
+# Built here rather than on a laptop because a box is usually x86_64 and a
+# laptop is usually not, and compiling the daemon under emulation takes the
+# better part of an hour. Each architecture builds on a runner of its own kind.
+#
+# What a box reads is one file, guaca-main.json on the channel-main release:
+# the image's digest and the commit it came from, signed with the key in the
+# GUACA_MAIN_SIGNING_KEY secret, whose public half is main-keys.pub. The
+# updater installs nothing that key did not sign, so pushing to this registry
+# is not by itself a way onto anybody's box. docs/UPDATES.md, *The main
+# channel*, has the rest.
+
+name: main channel
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Only the newest push matters: a box installs the tip, never a build of a
+# commit main has already moved past.
+concurrency:
+  group: main-channel
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  IMAGE: ghcr.io/madebywelch/guaca/guacad
+
+jobs:
+  build:
+    name: build ${{ matrix.arch }}
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the version this commit carries
+        id: version
+        run: echo "version=$(jq -r .version package.json)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Pushed by digest only. The tags go on the index the next job makes,
+      # so no tag ever names half an image.
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          build-args: |
+            GUACA_COMMIT=${{ github.sha }}
+            GUACA_VERSION=${{ steps.version.outputs.version }}
+            GUACA_RELEASE=0
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          provenance: false
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=guacad-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=guacad-${{ matrix.arch }}
+
+      - name: Keep the digest
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "$RUNNER_TEMP/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag both architectures as one image
+        id: image
+        run: |
+          cd "$RUNNER_TEMP/digests"
+          # shellcheck disable=SC2046
+          docker buildx imagetools create \
+            --tag "$IMAGE:main" \
+            --tag "$IMAGE:sha-$GITHUB_SHA" \
+            $(printf "$IMAGE@sha256:%s " *)
+          digest=$(docker buildx imagetools inspect "$IMAGE:sha-$GITHUB_SHA" --format '{{json .Manifest}}' | jq -r .digest)
+          case "$digest" in
+            sha256:*) echo "digest=$digest" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::The registry named no digest for $IMAGE:sha-$GITHUB_SHA."; exit 1 ;;
+          esac
+
+      # A box pulls without credentials. An image it cannot pull is an update
+      # that fails on every box, so the feed is not moved until one can.
+      - name: Check that a box can pull it
+        run: |
+          docker logout ghcr.io
+          if ! docker buildx imagetools inspect "$IMAGE@${{ steps.image.outputs.digest }}" > /dev/null; then
+            echo "::error::$IMAGE is not public, so no box can pull it. Open https://github.com/users/madebywelch/packages/container/guaca%2Fguacad/settings, set the visibility to Public, then re-run this workflow."
+            exit 1
+          fi
+
+      # A re-run of an older push would move the feed backward.
+      - name: Check that main is still here
+        id: tip
+        run: |
+          tip=$(git ls-remote origin refs/heads/main | cut -f1)
+          if [ "$tip" = "$GITHUB_SHA" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::main moved to $tip while $GITHUB_SHA built; its own run publishes it."
+            echo "current=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sign the feed
+        if: steps.tip.outputs.current == 'true'
+        env:
+          GUACA_BACKEND_IMAGE: ${{ env.IMAGE }}@${{ steps.image.outputs.digest }}
+          GUACA_MAIN_SIGNING_KEY: ${{ secrets.GUACA_MAIN_SIGNING_KEY }}
+        run: |
+          if [ -z "$GUACA_MAIN_SIGNING_KEY" ]; then
+            echo "::error::The GUACA_MAIN_SIGNING_KEY secret is not set, so no box would trust this build. Set it to the key whose public half is in main-keys.pub."
+            exit 1
+          fi
+          node scripts/release-manifest.mjs --channel main "$RUNNER_TEMP/guaca-main.json"
+
+      - name: Publish the feed
+        if: steps.tip.outputs.current == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view channel-main > /dev/null 2>&1; then
+            gh release create channel-main --prerelease --latest=false --target main \
+              --title "main" \
+              --notes "The newest build of main, for boxes installed with GUACA_CHANNEL=main. Replaced on every push; not a release."
+          fi
+          gh release upload channel-main "$RUNNER_TEMP/guaca-main.json" --clobber
+          echo "Published $GITHUB_SHA as ${{ steps.image.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"

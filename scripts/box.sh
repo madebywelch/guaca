@@ -11,6 +11,8 @@
 # build's key signed, from GitHub, so what is checked instead is that the
 # release there now is refused before anything stops. The sequence itself is
 # the desktop's, and `host::tests` and the ignored Docker test in host.rs run it.
+# It also moves the box onto main and back, which is the one setting that
+# crosses all three containers: the installer's, the updater's and the host's.
 #
 # The names are a box's own, so it refuses to run beside a box that exists.
 
@@ -110,5 +112,54 @@ for _ in $(seq 1 30); do
 done
 curl -fsS -H "authorization: Bearer ${TOKEN}" "${BASE}/v1/host" | grep -q '"managed":true' \
   || fail "the host lost its updater when the updater was replaced"
+
+# Reinstalls with the settings the box already has and `GUACA_CHANNEL` as given,
+# then waits for the replacement updater to answer through the host.
+reinstall() {
+  env -u GUACA_CHANNEL "$@" GUACA_IMAGE="$IMAGE" GUACA_ENV="$SETTINGS" GUACA_PORT="$PORT" GUACA_VOLUME="$WORKSPACE" \
+    sh deploy/box/install.sh >/dev/null
+  for _ in $(seq 1 30); do
+    if ! docker container inspect guaca-updater-retiring >/dev/null 2>&1 &&
+      curl -fsS -H "authorization: Bearer ${TOKEN}" "${BASE}/v1/host" 2>/dev/null | grep -q '"managed":true'; then
+      return 0
+    fi
+    sleep 1
+  done
+  fail "the updater did not come back after reinstalling with $*"
+}
+followed() {
+  curl -fsS -H "authorization: Bearer ${TOKEN}" "${BASE}/$1" |
+    python3 -c 'import json, sys; print(json.load(sys.stdin).get("channel", "absent"))'
+}
+
+step "Refusing a channel nobody can read, before anything changes"
+updater="$(docker container inspect --format '{{.Id}}' guaca-updater)"
+if GUACA_CHANNEL=nightly GUACA_IMAGE="$IMAGE" GUACA_ENV="$SETTINGS" GUACA_PORT="$PORT" GUACA_VOLUME="$WORKSPACE" \
+  sh deploy/box/install.sh >/dev/null 2>&1; then
+  fail "the installer accepted a channel nobody can read"
+fi
+# The updater refuses it too, for the replacement it makes of itself, and says
+# so before it asks Docker for anything.
+if said="$(docker run --rm --env GUACA_CHANNEL=nightly --entrypoint /usr/local/bin/guaca-updater "$IMAGE" install "$IMAGE" 2>&1)"; then
+  fail "the updater would replace itself on a channel nobody can read"
+fi
+grep -q "GUACA_CHANNEL is" <<<"$said" || fail "the updater refused a channel nobody can read without saying why: $said"
+[ "$(docker container inspect --format '{{.Id}}' guaca-updater)" = "$updater" ] || fail "a refused channel replaced the updater"
+
+step "Moving the box onto main, which the host learns from its updater"
+reinstall GUACA_CHANNEL=main
+[ "$(followed v1/host)" = "main" ] || fail "the updater does not say it follows main"
+[ "$(followed v1/updates)" = "main" ] || fail "the host still reports releases after its updater moved to main"
+[ "$(docker container inspect --format '{{.Id}}' guacad)" = "$before" ] || fail "moving channels replaced the host"
+answer="$(curl -s -w '\n%{http_code}' -X POST -H "authorization: Bearer ${TOKEN}" \
+  -H 'content-type: application/json' -d '{"version":"0.0.0"}' "${BASE}/v1/host/update")"
+echo "answer: ${answer}"
+[ "$(tail -1 <<<"$answer")" = "409" ] || fail "a box on main accepted an update that named no build"
+grep -q "names the build" <<<"$answer" || fail "a box on main refused an unnamed build without saying why"
+
+step "Moving it back"
+reinstall
+[ "$(followed v1/host)" = "release" ] || fail "reinstalling without a channel left the box on main"
+[ "$(followed v1/updates)" = "release" ] || fail "the host still reports main after its updater moved back"
 
 step "Box check passed"

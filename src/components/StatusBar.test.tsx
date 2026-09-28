@@ -153,11 +153,19 @@ describe("StatusBar", () => {
     expect(behind.title).toContain("Update this app");
   });
 
-  it("flags a host on the same version and another build", () => {
+  it("says which build a host on the same version is, without a hover", () => {
+    // The label read "Host 0.1.0" for either build, and the only difference
+    // was a color and a title nobody hovers for.
     seed([]);
-    host.build = "bbbbbbb";
-    render(<StatusBar onOpen={onOpen} onMessage={onMessage} />);
-    const other = screen.getByRole("button", { name: "Host 0.1.0" });
+    host.build = "a".repeat(40);
+    const { rerender } = render(<StatusBar onOpen={onOpen} onMessage={onMessage} />);
+    const same = screen.getByRole("button", { name: /^Host/ });
+    expect(same.textContent).toBe("Host 0.1.0");
+    expect(same.hasAttribute("data-drift")).toBe(false);
+    host.build = "c15bd9a".padEnd(40, "0");
+    rerender(<StatusBar onOpen={onOpen} onMessage={onMessage} />);
+    const other = screen.getByRole("button", { name: /^Host/ });
+    expect(other.textContent).toBe("Host 0.1.0 · c15bd9a");
     expect(other.hasAttribute("data-drift")).toBe(true);
     expect(other.title).toBe(
       "This host and this app are different builds of Guaca 0.1.0. Open Workspace settings to see which.",

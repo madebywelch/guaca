@@ -618,9 +618,12 @@ input[type="file"]::file-selector-button {
   color: var(--text);
 }
 
-/* A host and this app on different releases is the one fact here worth a
-   color: it is the one that breaks commands. */
-.statusbar__host[data-drift] {
+/* A host and this app on different builds is the one fact on the status bar
+   worth a color: it is the one that breaks commands. The two rows in
+   Workspace settings that name those builds are the same fact, so they get
+   the same mark. */
+.statusbar__host[data-drift],
+.host-update-facts dd[data-drift] {
   color: var(--system);
 }
 

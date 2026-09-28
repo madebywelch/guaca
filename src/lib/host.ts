@@ -1,3 +1,4 @@
+import type { Channel } from "./releases";
 import { invokeLocal, type Remote } from "./transport";
 
 /** One host update, as the manager that ran it recorded it. */
@@ -24,6 +25,8 @@ export interface DockerStatus {
 
 /** A box's updater, as the host relays it. `null` is a host with none. */
 export interface Manager {
+  /** What it installs. Absent from an updater older than channels. */
+  channel?: Channel;
   updating: boolean;
   running: { image: string; version: string | null } | null;
   operation: HostOperation | null;
@@ -38,6 +41,7 @@ export function parseManager(value: unknown): Manager | null {
   const op = data.operation as Record<string, unknown> | null;
   if (
     data.managed !== true ||
+    !(data.channel === undefined || data.channel === "release" || data.channel === "main") ||
     typeof data.updating !== "boolean" ||
     !(data.error === null || typeof data.error === "string") ||
     !(op === null || (typeof op === "object" && typeof op.stage === "string"))
@@ -57,6 +61,24 @@ export const localHost = {
   update: (origin?: string) => invokeLocal<Remote>("local_host_update", { origin }),
   start: () => invokeLocal<Remote>("local_host_start"),
   openDocker: () => invokeLocal<void>("open_docker"),
+};
+/** The checkout a source build was made from, as the desktop reads it. */
+export interface AppSource {
+  checkout: string | null;
+  /** Why this app cannot rebuild itself, when it cannot. */
+  unavailable: string | null;
+  branch: string | null;
+  /** The commit that branch is at on origin, when it could be read. */
+  upstream: string | null;
+  running: boolean;
+  /** The end of the log of the rebuild that last failed. */
+  failure: string | null;
+  log: string;
+}
+/** This app, rebuilt from its own checkout by `scripts/install.sh`. */
+export const thisApp = {
+  source: () => invokeLocal<AppSource>("app_source"),
+  rebuild: () => invokeLocal<void>("rebuild_app"),
 };
 const MODE = "guaca.workspace.hostMode";
 type HostMode = "local" | "existing" | "remote";
