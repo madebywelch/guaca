@@ -86,6 +86,9 @@ pub struct Settings {
     /// origin of the last call that arrived, which is right whenever the
     /// operator is signing in from the page they are reading.
     pub origin: Option<String>,
+    /// The socket of the updater beside this host, on a box that has one.
+    /// Absent, the host says it cannot be updated from here.
+    pub updater: Option<PathBuf>,
 }
 
 /// Fans runtime events out to whoever is watching.
@@ -117,6 +120,7 @@ struct Serving {
     token: Arc<str>,
     sink: Arc<SocketSink>,
     updates: Arc<crate::updates::Checker>,
+    updater: Option<Arc<std::path::Path>>,
 }
 
 /// A workspace that is open and a socket that is listening, not yet serving.
@@ -187,11 +191,14 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
         token: token.clone(),
         sink,
         updates: Arc::new(crate::updates::Checker::default()),
+        updater: settings.updater.map(Arc::from),
     };
 
     let mut app = Router::new()
         .route("/health", get(health))
         .route("/v1/updates", get(update_status))
+        .route("/v1/host", get(host_status))
+        .route("/v1/host/update", post(host_update))
         .route("/v1/call", post(call))
         .route("/v1/events", get(events_socket))
         .route(
@@ -363,6 +370,70 @@ async fn update_status(
         return *response;
     }
     Json(serving.updates.check(query.refresh).await).into_response()
+}
+
+/// The box's updater, as a client sees it: whether there is one, what the
+/// host runs, and how the last update went.
+///
+/// The workspace's token authorizes an update as it authorizes everything
+/// else here. What an update may install is not the client's to say: the
+/// updater installs only a signed release, and the version is only a check
+/// that it is the one the operator was shown.
+async fn host_status(State(serving): State<Serving>, headers: HeaderMap) -> Response {
+    if let Err(response) = authorized(&serving, &headers, None) {
+        return *response;
+    }
+    let Some(socket) = serving.updater.clone() else {
+        return Json(json!({ "managed": false })).into_response();
+    };
+    relay(&socket, crate::updater::Request::Status).await
+}
+
+#[derive(Deserialize)]
+struct HostUpdate {
+    version: String,
+}
+
+async fn host_update(
+    State(serving): State<Serving>,
+    headers: HeaderMap,
+    Json(body): Json<HostUpdate>,
+) -> Response {
+    if let Err(response) = authorized(&serving, &headers, None) {
+        return *response;
+    }
+    let Some(socket) = serving.updater.clone() else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "err": {
+                "kind": "unmanaged",
+                "message": "This host has no updater. Update it on the machine it runs on, using the update instructions.",
+            }})),
+        )
+            .into_response();
+    };
+    relay(&socket, crate::updater::Request::Update { version: body.version }).await
+}
+
+async fn relay(socket: &std::path::Path, request: crate::updater::Request) -> Response {
+    #[cfg(unix)]
+    let answer = crate::updater::ask(socket, &request).await;
+    #[cfg(not(unix))]
+    let answer: Result<Value, String> = {
+        let _ = (socket, request);
+        Err("An updater is reached over a Unix socket, which this system does not have.".into())
+    };
+    match answer {
+        Ok(mut report) => {
+            report["managed"] = json!(true);
+            Json(report).into_response()
+        }
+        Err(message) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "err": { "kind": "updater", "message": message } })),
+        )
+            .into_response(),
+    }
 }
 
 #[derive(Deserialize)]

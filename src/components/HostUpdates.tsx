@@ -8,16 +8,18 @@ import {
   useState,
 } from "react";
 import { COMMIT, VERSION } from "../lib/build";
-import { type DockerStatus, hostMode, localHost } from "../lib/host";
+import { type DockerStatus, hostMode, localHost, type Manager, parseManager } from "../lib/host";
 import {
   available,
   clientUpdate,
+  compareVersions,
   compatibility,
   type Health,
   INSTRUCTIONS,
   pageStale,
   parseHealth,
   parseReleaseStatus,
+  protocol,
   RELEASES,
   type ReleaseStatus,
   skew,
@@ -39,6 +41,12 @@ interface UpdateState {
   health: Health | null;
   release: ReleaseStatus | null;
   docker: DockerStatus | null;
+  /** The updater on a box, which this host relays. `null` is a host with none. */
+  manager: Manager | null;
+  /** When the read that produced `manager` began, so an answer from before a
+   *  click is never taken for one after it. */
+  managerAt: number;
+  adoptManager: (manager: Manager) => void;
   error: string;
   checking: boolean;
   refresh: (manual?: boolean) => Promise<void>;
@@ -55,6 +63,10 @@ export function HostMonitor({ children }: { children: ReactNode }) {
   const [health, setHealth] = useState<Health | null>(null);
   const [release, setRelease] = useState<ReleaseStatus | null>(null);
   const [docker, setDocker] = useState<DockerStatus | null>(null);
+  const [manager, setManager] = useState<{ value: Manager | null; at: number }>({
+    value: null,
+    at: 0,
+  });
   const [error, setError] = useState("");
   const [checking, setChecking] = useState(true);
   const [admitted, setAdmitted] = useState(false);
@@ -88,6 +100,7 @@ export function HostMonitor({ children }: { children: ReactNode }) {
         setHealth(found);
         if (compatibility(found) === "compatible") setAdmitted(true);
         setError("");
+        const asked = Date.now();
         const results = await Promise.allSettled([
           fetch(`${workspaceOrigin()}/v1/updates?refresh=${manual}`, {
             cache: "no-store",
@@ -107,9 +120,30 @@ export function HostMonitor({ children }: { children: ReactNode }) {
             if (!response.ok) throw new Error("Could not read host update information. Try again.");
             return parseReleaseStatus(await response.json());
           }),
+          fetch(`${workspaceOrigin()}/v1/host`, {
+            cache: "no-store",
+            headers: { authorization: `Bearer ${token()}` },
+            signal: AbortSignal.timeout(15000),
+          }).then(async (response) => {
+            // Older than the route: a 404, or the page served in its place.
+            if (
+              response.status === 404 ||
+              (response.ok && !response.headers.get("content-type")?.includes("application/json"))
+            )
+              return null;
+            if (!response.ok) throw new Error("The host's updater did not answer.");
+            return parseManager(await response.json());
+          }),
         ]);
         if (!mounted.current) return;
-        const [updates] = results;
+        const [updates, updater] = results;
+        // An updater that does not answer is kept as it was last seen: it is
+        // replacing itself, or its host is restarting, and the click that
+        // started that is waiting on the next answer rather than this one.
+        if (updater.status === "fulfilled") {
+          const value = updater.value;
+          setManager((seen) => (asked >= seen.at ? { value, at: asked } : seen));
+        }
         if (updates.status === "fulfilled") setRelease(updates.value);
         else
           setRelease((previous) => ({
@@ -146,7 +180,19 @@ export function HostMonitor({ children }: { children: ReactNode }) {
   }, [refresh]);
   const blocked = health && ["hostOld", "clientOld"].includes(compatibility(health));
   return (
-    <Context.Provider value={{ health, release, docker, error, checking, refresh }}>
+    <Context.Provider
+      value={{
+        health,
+        release,
+        docker,
+        manager: manager.value,
+        managerAt: manager.at,
+        adoptManager: (value) => setManager({ value, at: Date.now() }),
+        error,
+        checking,
+        refresh,
+      }}
+    >
       {admitted || legacy ? (
         <>
           <div className="host-workspace" hidden={!!blocked}>
@@ -230,27 +276,77 @@ export function HostUpdateNotice({ onReview }: { onReview: () => void }) {
   );
 }
 
+/** What the operator is told when an update to `version` on a box has finished. */
+function outcome(manager: Manager, version: string): { result: string } | { failure: string } {
+  // The journal holds the last update that ran. One that never began leaves
+  // it holding an earlier one, whose outcome is not this one's.
+  const op = manager.operation?.targetVersion === version ? manager.operation : null;
+  if (!op)
+    return {
+      failure:
+        manager.error ?? "The host did not start the update. Check for updates and try again.",
+    };
+  if (op.stage === "Host updated")
+    return {
+      result: `Host updated to Guaca ${version}. Review any interrupted work before trying it again.`,
+    };
+  if (op.stage === "Previous version restored")
+    return {
+      failure: `${op.error ?? "The update did not finish."} Guaca put the previous version back, with the workspace as it was when the update began.`,
+    };
+  return { failure: op.error ?? manager.error ?? "The update did not finish. Try again." };
+}
+
 export function HostUpdatePanel() {
   const state = useContext(Context);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState("");
   const [failure, setFailure] = useState("");
   const [instructions, setInstructions] = useState(false);
+  /** An update a box accepted from this panel, until it reports it finished. */
+  const [accepted, setAccepted] = useState<{ at: number; version: string } | null>(null);
   const activity = useStore((s) => s.activity);
   const building = useStore((s) => s.building);
   const checkProgress = state?.refresh;
-  const updating = busy || !!state?.docker?.updating;
+  const boxBusy = !!accepted || !!state?.manager?.updating;
+  const updating = busy || !!state?.docker?.updating || boxBusy;
   useEffect(() => {
     if (!updating || !checkProgress) return;
     const timer = setInterval(() => void checkProgress(), 1500);
     return () => clearInterval(timer);
   }, [updating, checkProgress]);
+  const manager = state?.manager ?? null;
+  const managerAt = state?.managerAt ?? 0;
+  const answered = !!state?.health && !state?.error;
+  useEffect(() => {
+    // Finished only by an answer read after the box accepted, from a host
+    // that is answering again: the one before the click also says "not updating".
+    if (!accepted || !manager || manager.updating || managerAt <= accepted.at || !answered) return;
+    const said = outcome(manager, accepted.version);
+    if ("result" in said) setResult(said.result);
+    else setFailure(said.failure);
+    setAccepted(null);
+  }, [accepted, manager, managerAt, answered]);
   if (!state) return null;
   const { health, release, docker, checking, refresh, error } = state;
   const match = health ? compatibility(health) : "unknown";
   const newer = available(health, release);
   const managed = isManaged() && docker?.origin === workspaceOrigin();
   const canUpdate = managed && docker?.updateAvailable;
+  // A box with an updater. A window only offers a release it can still talk
+  // to afterward; a browser is served the new release's own page.
+  const latest = release?.latest ?? null;
+  const reachable =
+    !desktop ||
+    (!!latest &&
+      latest.apiGeneration >= protocol.minimum &&
+      latest.apiGeneration <= protocol.maximum);
+  const boxed = !managed && !!manager;
+  // A box's updater installs only a signed release, so a source build on one
+  // is offered the release that makes it verified, not only a newer number.
+  const order = latest && health?.version ? compareVersions(health.version, latest.version) : null;
+  const boxNewer = order === -1 || (order === 0 && !health?.release);
+  const canUpdateBox = boxed && boxNewer && reachable && match !== "clientOld";
   const pageChanged = pageStale(desktop, COMMIT, health);
   const drift = desktop ? skew(VERSION, health) : "unknown";
   const appBehind = desktop && (drift === "clientBehind" || clientUpdate(VERSION, release));
@@ -270,6 +366,35 @@ export function HostUpdatePanel() {
       setResult("Host updated. Review any interrupted work before trying it again.");
     } catch (cause) {
       setFailure(errorMessage(cause));
+      void refresh(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const runOnBox = async () => {
+    if (!latest) return;
+    setBusy(true);
+    setFailure("");
+    setResult("");
+    try {
+      const response = await fetch(`${workspaceOrigin()}/v1/host/update`, {
+        method: "POST",
+        cache: "no-store",
+        headers: { authorization: `Bearer ${token()}`, "content-type": "application/json" },
+        body: JSON.stringify({ version: latest.version }),
+        signal: AbortSignal.timeout(45000),
+      });
+      const body: unknown = await response.json().catch(() => null);
+      if (!response.ok)
+        throw new Error(
+          (body as { err?: { message?: string } } | null)?.err?.message ??
+            "The host did not accept the update. Try again.",
+        );
+      const report = parseManager(body);
+      if (report) state.adoptManager(report);
+      setAccepted({ at: Date.now(), version: latest.version });
+    } catch (cause) {
+      setFailure(errorMessage(cause));
     } finally {
       setBusy(false);
     }
@@ -277,32 +402,37 @@ export function HostUpdatePanel() {
   const working = Object.values(activity).filter(
     (a) => a.state === "thinking" || a.state === "awaitingApproval",
   ).length;
+  const operation = docker?.operation ?? manager?.operation ?? null;
+  // While a box restarts its host, not answering is the update working.
+  const restarting = boxBusy && !answered;
   return (
     <section className="host-choice" aria-label="Host updates" aria-busy={updating}>
       <h3>{title}</h3>
       <p className="field__hint">{workspaceOrigin()}</p>
       <p role="status">
-        {!health
-          ? checking
-            ? "Checking host…"
-            : "Could not reach the host."
-          : match === "hostOld"
-            ? "Update the host before opening this workspace."
-            : match === "clientOld"
-              ? "This frontend cannot use the host API. Update Guaca to reconnect."
-              : drift === "hostBehind"
-                ? "This host runs an older Guaca than this app."
-                : drift === "clientBehind"
-                  ? "This app runs an older Guaca than its host."
-                  : newer
-                    ? "A newer host release is available."
-                    : release?.error
-                      ? "Could not check for updates."
-                      : !health.release
-                        ? "This is an unverified or development build."
-                        : !release?.latest
-                          ? "Release status has not been checked."
-                          : "No newer stable host release was found."}
+        {restarting
+          ? "The host is restarting on its new version."
+          : !health
+            ? checking
+              ? "Checking host…"
+              : "Could not reach the host."
+            : match === "hostOld"
+              ? "Update the host before opening this workspace."
+              : match === "clientOld"
+                ? "This frontend cannot use the host API. Update Guaca to reconnect."
+                : drift === "hostBehind"
+                  ? "This host runs an older Guaca than this app."
+                  : drift === "clientBehind"
+                    ? "This app runs an older Guaca than its host."
+                    : newer
+                      ? "A newer host release is available."
+                      : release?.error
+                        ? "Could not check for updates."
+                        : !health.release
+                          ? "This is an unverified or development build."
+                          : !release?.latest
+                            ? "Release status has not been checked."
+                            : "No newer stable host release was found."}
       </p>
       {health && (
         <dl className="host-update-facts">
@@ -346,9 +476,9 @@ export function HostUpdatePanel() {
       {!release?.automatic && release && (
         <p className="field__hint">Automatic release checks are disabled on this host.</p>
       )}
-      {(error || release?.error || failure) && (
+      {(failure || (!restarting && (error || release?.error || manager?.error))) && (
         <p className="field__error" role="alert">
-          {failure || error || release?.error}
+          {failure || error || release?.error || manager?.error}
         </p>
       )}
       {release?.latest && (
@@ -356,43 +486,62 @@ export function HostUpdatePanel() {
           Release notes
         </a>
       )}
-      {canUpdate && match !== "clientOld" && (
+      {((canUpdate && match !== "clientOld") || canUpdateBox) && (
         <div className="field">
           <p>
-            Update this host to the build included with this desktop app
-            {docker?.targetVersion ? ` (${docker.targetVersion})` : ""}.
+            {canUpdateBox && latest
+              ? `Update this host to Guaca ${latest.version}.`
+              : `Update this host to the build included with this desktop app${
+                  docker?.targetVersion ? ` (${docker.targetVersion})` : ""
+                }.`}
           </p>
           <p className="field__hint">
             {working} agents and {Object.keys(building).length} coding jobs are working. Updating
             interrupts current work, including work from other clients. Guaca saves a complete
-            backup before replacing the host.
+            backup before replacing the host, and puts the previous version back if the update does
+            not finish.
           </p>
           <button
             className="btn btn--primary"
             disabled={updating}
             type="button"
-            onClick={() => void run()}
+            onClick={() => void (canUpdateBox ? runOnBox() : run())}
           >
             Back up and update host
           </button>
         </div>
       )}
-      {updating && (
-        <p role="status">
-          {docker?.operation?.stage ?? "Starting update"}. Keep Guaca open until the update
-          finishes.
+      {boxed && boxNewer && !reachable && (
+        <p>
+          Guaca {latest?.version} needs a newer desktop app.{" "}
+          <a href={RELEASES} target="_blank" rel="noopener noreferrer">
+            Download it
+          </a>
+          , then update the host from it.
         </p>
       )}
-      {docker?.operation && !updating && (
+      {updating && (
+        <p role="status">
+          {boxBusy
+            ? `${restarting ? "Starting updated host" : (manager?.operation?.stage ?? "Starting update")}. The update runs on the host, so closing Guaca does not stop it.`
+            : `${docker?.operation?.stage ?? "Starting update"}. Keep Guaca open until the update finishes.`}
+        </p>
+      )}
+      {operation && !updating && (
         <details>
           <summary>Last host update</summary>
-          <p>{docker.operation.stage}</p>
-          {docker.operation.backup && (
+          <p>{operation.stage}</p>
+          {operation.backup && (
             <p>
-              Recovery backup: <code>{docker.operation.backup}</code>
+              Recovery backup: <code>{operation.backup}</code>
             </p>
           )}
-          {docker.operation.error && <p>{docker.operation.error}</p>}
+          {operation.preserved && (
+            <p>
+              Workspace the failed version left: <code>{operation.preserved}</code>
+            </p>
+          )}
+          {operation.error && <p>{operation.error}</p>}
         </details>
       )}
       {desktop && (appBehind || match === "clientOld" || (newer && managed && !canUpdate)) && (
@@ -427,15 +576,17 @@ export function HostUpdatePanel() {
         >
           {checking ? "Checking…" : "Check for updates"}
         </button>
-        <button
-          className="btn btn--small"
-          type="button"
-          onClick={() => setInstructions(!instructions)}
-        >
-          View update instructions
-        </button>
+        {!boxed && (
+          <button
+            className="btn btn--small"
+            type="button"
+            onClick={() => setInstructions(!instructions)}
+          >
+            View update instructions
+          </button>
+        )}
       </div>
-      {instructions && (
+      {instructions && !boxed && (
         <div className="field">
           <p>
             Update on the machine running this host. Stop it and back up the complete workspace,

@@ -86,6 +86,10 @@ docker exec "${NAME}" pi --version >/dev/null || fail "pi is not in the image"
 docker exec "${NAME}" node --version >/dev/null || fail "node is not in the image"
 [ "$(docker exec "${NAME}" pnpm --version)" = "10.33.0" ] || fail "pnpm is not the pinned version"
 docker exec "${NAME}" python3 --version >/dev/null || fail "python3 is not in the image"
+docker exec "${NAME}" test -x /usr/local/bin/guaca-updater || fail "guaca-updater is not in the image"
+docker exec "${NAME}" docker --version >/dev/null || fail "the Docker CLI guaca-updater drives is not in the image"
+[ "$(docker exec "${NAME}" sh -c 'test -S /var/run/docker.sock && echo socket')" = "" ] \
+  || fail "the host can reach a Docker socket"
 
 step "Restarting on the same volume"
 curl -fsS -X POST "${BASE}/v1/call" \

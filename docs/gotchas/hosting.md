@@ -184,3 +184,31 @@ The daemon, a browser as a client, and the boot both hosts share.
   its status, update prompt, update log and buttons stood side by side in
   columns a word wide. A finished update is not drawn at all; only one with an
   `error` is, and Docker's own buttons appear only while Docker is unusable.
+- **A box's host gets its settings from a list, by name.** The updater makes
+  `guacad` itself, so a variable the host starts reading reaches a box only if
+  it is in `HOST_ENV` in `updater.rs`. `the_compose_host_and_a_box_read_the_same_settings`
+  fails when the Compose file hands the host a variable the list does not.
+- **The updater reaches the host at its bridge address, not its port.** The
+  port is published to the box's own loopback, which a container cannot see.
+  Probed through the published port, the updater waits a minute and reports a
+  host that never started while the host is answering the tunnel.
+- **The socket volume is read-only in the host, and connecting still works.**
+  `connect(2)` needs write permission on the socket file, not a writable mount;
+  the 0666 mode `bind` sets is what admits the host's unprivileged user.
+  `scripts/box.sh` is the only check that runs it on a real kernel.
+- **The updater's container runs with `--no-healthcheck`.** The image's check
+  probes port 8787, which the updater does not serve, and would mark every
+  box's updater unhealthy forever.
+- **An update request is answered before the update runs.** The host it came
+  through is about to stop. Not answering during an update is the host
+  restarting, and the panel draws it that way; drawn as an error, every
+  successful update shows a red line for a minute.
+- **An answer from before the click also says "not updating."** The panel
+  finishes only on an updater read that began after the box accepted
+  (`managerAt`), and the monitor never lets an older read overwrite a newer one.
+  Without both, a poll in flight when the button was pressed reports the update
+  finished before it started.
+- **The Docker CLI in the image is 28 on purpose.** It negotiates down to the
+  Docker a long-term-support distribution ships and speaks an API above the
+  floor the newest daemons require. The newest CLI narrows the first half.
+

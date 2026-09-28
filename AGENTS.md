@@ -150,6 +150,12 @@ src-tauri/src/
                       socket, behind one token.
   bin/guacad.rs       The daemon that starts it, configured from the
                       environment because systemd starts it, not a person.
+  host.rs             A guacad container, and the one sequence that backs it
+                      up, replaces it and undoes a failed replacement. The
+                      desktop's On this Mac and a box's updater both run it.
+  updater.rs          guaca-updater: the container beside a box's host that
+                      holds the Docker socket, so the host never does, and
+                      what the host may ask it. Two things.
   menubar.rs          What the menu bar says. No Tauri, no menu, no drawing.
   tray.rs             Drawing that, and turning a click back into a decision.
   app.rs              Where Tauri is wired up. It and `tray.rs` are the only
@@ -222,6 +228,7 @@ repo: the frontend renders state and forwards intent.
 | Testing an address or a connected plugin without connecting it | *Testing it is the whole path, minus the browser* in `docs/PLUGINS.md`, then `plugins::inspect` and `plugins::check` |
 | Anything about the wire: protocol versions, the handshake, headers | *Two protocol eras* in `docs/PLUGINS.md`, then `mcp.rs`, whose era probe is the one thing no offline test of a single server can check |
 | Running Guaca somewhere other than the operator's machine: the daemon, the token, a browser as the client | `docs/HOSTING.md`, then `server/mod.rs` and `src/lib/transport.ts`, and run `tests/server.rs` under `--no-default-features --features server` |
+| Updating a host from the app: the button, the updater on a box, the signed manifest, the restore after a failed update | *Updating a remote or externally managed host* in `docs/UPDATES.md`, then `host.rs` and `updater.rs`, and run `scripts/image.sh` and `scripts/box.sh` |
 | What a hosted workspace refuses, and why each refusal is a fact about a machine rather than a missing feature | *Five capabilities, and none of them is a feature nobody finished* in `docs/HOSTING.md`, then `domain/deployment.rs` and every reader of `capabilities` in `src/` |
 | A command that works at a desk and fails on a box, or a new command at all | *One list, three readers* in `docs/HOSTING.md`, then the `surface!` block in `src-tauri/src/ipc.rs` and `ipc.contract.test.ts` |
 | An invitation, a token that stopped working, the screen a browser sees before the app | *A browser is admitted by a token, and the token arrives by fragment* in `docs/HOSTING.md`, then `src/components/TokenEntry.tsx` and `adoptInvitation` |
@@ -475,7 +482,7 @@ the gotchas file says what it already cost somebody to change it.
 | Model suggestions, and whether a model can be shown a picture | `docs/gotchas/models.md` |
 | Repositories, the two doors, the gate, either harness, the bridge | `docs/gotchas/coding.md` |
 | Connectors (plugins in the code), MCP, and the OAuth they and the account share | `docs/gotchas/plugins.md` |
-| The daemon, a browser as a client, the boot both hosts share | `docs/gotchas/hosting.md` |
+| The daemon, the updater beside it on a box, a browser as a client, the boot both hosts share | `docs/gotchas/hosting.md` |
 | Computers, browsers, sandboxes, sign-ins found on them | `docs/gotchas/machines.md` |
 | Schedules, triggers, firings | `docs/gotchas/routines.md` |
 | A crew's calendar, an occasion, the wall between two crews' dates | `docs/gotchas/calendar.md` |

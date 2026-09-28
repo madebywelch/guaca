@@ -1,16 +1,16 @@
 # Host updates
 
-Design and longer-term direction. The first implementation now provides the
-shared status UI, API compatibility checks, advisory release manifest, local
-backup/replacement progress journal, and self-hosted update instructions.
+Design and longer-term direction. Shipped: the shared status UI, API
+compatibility checks, a signed release manifest, one update sequence with an
+automatic restore, used by the desktop for On this Mac and by `guaca-updater`
+on a box, and self-hosted instructions for every other deployment.
 [Hosting](HOSTING.md#updating-a-self-hosted-backend) describes shipped behavior.
-Automatic idle scheduling, a VPS controller, in-app backup restore/deletion,
-and installation of arbitrary feed-selected releases remain future work.
-The local manager still interrupts work by stopping the backend; it does not
-implement a separate runtime maintenance mode.
+Automatic idle scheduling, in-app backup deletion, and a maintenance mode that
+refuses new runs before the host stops remain future work: an update still
+interrupts work by stopping the backend.
 
-The remaining sections describe the full target experience. The existing manual
-local-container replacement is described in [Hosting](HOSTING.md#updating-the-local-host).
+The remaining sections describe the full target experience. Where the shipped
+design differs from it, the section says so.
 
 Every client should answer three separate questions: which host it is connected
 to, whether that host has a newer published release, and whether this client
@@ -145,31 +145,88 @@ The same status and review panel appears in a browser and on desktop. The action
 depends on the manager, not geographic location: a Compose container on this Mac
 is externally managed, and a VPS reached over a loopback SSH tunnel is remote.
 
-For the first release, show **View update instructions** for self-hosted VPS,
-Compose, and systemd deployments. Instructions identify the verified target,
-explain stopping and backing up the workspace, recreating the service with the
-same volume/configuration, verifying readiness, and restoring the backup on
-failure. Tailor executable commands only when the deployment configuration is
-known. The current Compose file builds from source; generic `compose pull`
-instructions would not update this checkout. After an operator updates the host,
-the client reconnects and verifies it; an open browser offers a draft-preserving
-reload when its bundle changed.
+A box installed with `deploy/box/install.sh` has a manager of its own, and the
+panel offers it the same **Back up and update host** button a desktop offers
+On this Mac. Everything else (a Compose source build, systemd, a container
+started by hand) gets **View update instructions**, which name the verified
+target and explain stopping and backing up the workspace, recreating the
+service with the same volume and configuration, verifying readiness, and
+restoring the backup on failure. The current Compose file builds from source;
+generic `compose pull` instructions would not update that checkout.
+
+### The updater is a second container, because the host cannot hold the socket
 
 Container image replacement requires stopping and recreating the container.
 [Docker Compose documents this behavior](https://docs.docker.com/reference/cli/docker/compose/up/).
-The backend cannot reliably own an operation that removes its own process.
-For one-click VPS updates, introduce an optional host controller outside the
-container, installed explicitly by the host administrator. It manages one named
-deployment and exposes only release-specific update/status/recovery operations.
-Use a distinct administrative authorization boundary, not ordinary agent tools
-or possession of a conversation credential. Do not give guacad the Docker
-socket, SSH keys, arbitrary shell execution, or arbitrary image selection.
+The backend cannot own an operation that removes its own process, and what can
+is the Docker socket, which is root on the box. guacad runs the shell commands
+agents ask for, so it never holds one.
 
-The controller must survive backend replacement, serialize concurrent requests,
-persist progress, back up and restore volumes, preserve deployment configuration,
-and report status while guacad is unavailable. The UI only offers **Back up and
-update** when that controller is installed, reachable and authorized. Until then,
-show the working manual path. Detection does not require installing a controller.
+`guaca-updater` (`src-tauri/src/updater.rs`) is the controller: a container
+from the same image, running nothing else, holding the socket. It makes the
+`guacad` container and replaces it, with the sequence the desktop uses
+(`host.rs`) and a box's `Spec`: loopback-published, the box's settings handed
+through by name, and the updater's socket mounted read-only. It reaches the
+host at its bridge address, because the port is published to the box's own
+loopback, which no container can see.
+
+guacad reaches the updater over a Unix socket on a volume the two share, and
+relays it at `/v1/host` and `/v1/host/update`. The updater can be asked two
+things: how the host is, and to install the latest release, named by version.
+It cannot be handed an image, a command, or a restore. That short list is why
+the workspace token authorizes an update rather than a separate administrator
+credential: an agent shell inside the host can reach the socket, and the most
+it can make the updater do is install Guaca's own latest signed release, which
+interrupts work and loses none. A second key the operator has to keep would
+buy nothing against that and cost every non-technical operator a password.
+
+The updater fetches and verifies the manifest itself rather than trusting
+guacad's reading of it: the host is the container agents run in, and the
+updater's decision cannot rest on anything in it. The version in the request
+is only a check that the release is the one the operator reviewed; if the
+latest release has moved on, the updater refuses and the panel asks for a new
+review. A box on a source build is offered the signed release of its own
+version too, because the updater installs nothing else and that release is the
+way onto a verified build; everywhere else a source build is never ordered.
+It answers before it starts, because the host the request came through
+is about to stop, and the panel reads progress through the host until the host
+stops answering, then waits for it to answer again. Not answering during an
+update is drawn as the host restarting, not as a failure.
+
+After updating the host, the updater replaces itself from the same release: it
+renames itself aside, makes a new `guaca-updater`, and the new one removes the
+old once it is listening. Everything that can stop an updater happens before it
+listens, and nothing after: a replacement that cannot be made is named back,
+and one that fails before listening leaves the old one answering the socket.
+So a fix to the updater reaches a box without anybody logging in to it, and a
+broken release of the updater does not take the working one with it. The
+renamed updater is still labeled with the name it was made under, which is
+what the replacement checks before removing it.
+
+### A failed update is undone without asking
+
+The design above required an explicit restore decision. The shipped sequence
+restores automatically, on a box and on a desktop, when the new version fails
+to start or to verify: it copies the workspace the failed version left to a
+`-failed-` volume, restores the backup into the same volume, and runs the
+previous image. The backup was taken with the host stopped, so the only
+changes lost are what the failed version did in the seconds it ran, and those
+are in the `-failed-` volume. The operator who pressed the button is not
+assumed to have a terminal, and "Recovery needed" with a Docker volume name is
+a dead end for them. A restore that fails is the one case left as
+**Recovery needed**, with the backup's name, and the manager refuses to start
+anything until someone resolves it.
+
+A manager killed partway through settles the operation the next time it
+starts: before the swap the old container was never removed, so it is started
+again; after the swap the new container is kept only if it passes the same
+checks an uninterrupted update makes, and restored otherwise.
+
+The updater only installs a manifest whose Ed25519 signature one of the keys in
+`release-keys.pub` made, over the exact bytes published. A GitHub account that
+can publish a release cannot, by itself, make every box install it. Rotating
+the key means shipping the new key in that file a release before anything is
+signed with it, because an updater only knows the keys it was built with.
 
 ## Delivery and verification
 
@@ -182,6 +239,7 @@ Ship in this order:
 3. Local update hardening: compatible targets, real durable progress, backup
    inventory, operation recovery, and verified completion.
 4. Optional VPS controller and one-click remote updates as a separate change.
+   Shipped as `guaca-updater`, described above.
 
 Required checks include a browser whose frontend and backend are both one
 release behind; a newer desktop with an older host; an older desktop with a
