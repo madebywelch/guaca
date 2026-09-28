@@ -424,17 +424,19 @@
   box-sizing: border-box;
 }
 
-/* The three surfaces that are not the page.
+/* The surfaces that are not the page: three columns, and the panel under the
+   menu bar icon, which is drawn on their ground.
    Everything drawn inside one of them reaches for `--sunken` when it wants to
    be recessed, and recessed from white is a value that disappears on an
-   off-white panel. Remapped once here, on the three elements every rule in
-   those columns descends from, rather than at each rule inside: a row added to
+   off-white panel. Remapped once here, on the elements every rule in those
+   surfaces descends from, rather than at each rule inside: a row added to
    the inspector tomorrow is then recessed from what it is actually drawn on
    without having to know which half of the app it is in. `styles.test.ts` is
    the gate, and it reads this rule to know which names are covered. */
 .rail,
 .grail,
-.inspector {
+.inspector,
+.menubar {
   --sunken: var(--rail-sunken);
 }
 
@@ -843,6 +845,271 @@ input[type="file"]::file-selector-button {
    alarm color would make the two kinds compete instead of stack. */
 .desk__card[data-kind="stuck"] {
   border-left: 2px solid var(--danger);
+}
+
+/* ==========================================================================
+   The menu bar panel
+
+   Guaca under the menu bar icon, a page of its own in a window of its own.
+   `components/MenubarPanel.tsx` has the argument for what it holds, and
+   `menubar.rs` says where it stands. Drawn on the columns' ground rather than
+   the page's: it is navigation and answers, like the rail it borrows its rows
+   from, and the page is still the only white thing.
+
+   Its window is exactly as tall as this is, up to a ceiling, so the chrome is
+   fixed and the body between them is the one thing that scrolls.
+   ========================================================================== */
+.menubar {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--rail-ground);
+  color: var(--rail-text);
+  /* Controls rather than prose, as the rail is. What was said is the one
+     thing in here worth selecting, and it says so below. */
+  user-select: none;
+}
+
+.menubar__head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  min-height: var(--space-8);
+  padding: 0 var(--space-5);
+  border-bottom: 1px solid var(--rail-edge);
+}
+
+.menubar__headline {
+  margin-left: auto;
+  font-size: var(--type-small);
+  color: var(--rail-muted);
+  white-space: nowrap;
+}
+
+/* The one thing the header can say that is asking for something. */
+.menubar__headline[data-waiting] {
+  color: var(--attention);
+  font-weight: 600;
+}
+
+.menubar__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.menubar__foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--rail-edge);
+}
+
+/* A button keeps its words on one line; the reading beside it is what gives. */
+.menubar__foot .btn {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* The spend is a reading, not a control, so it takes the space the buttons do
+   not and says it in the rail's machine texture. */
+.menubar__spend {
+  margin-right: auto;
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  color: var(--rail-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.menubar__note {
+  padding: var(--space-6) var(--space-5);
+  font-size: var(--type-small);
+  line-height: var(--lead-ui);
+  color: var(--rail-muted);
+}
+
+.menubar .banner {
+  margin: var(--space-4) var(--space-5) 0;
+}
+
+/* For you's decisions are answered in the window, where their history is, so
+   this is one line that goes there and says how many. */
+.menubar__decisions {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border: 0;
+  border-bottom: 1px solid var(--rail-edge);
+  background: var(--rail-raised);
+  text-align: left;
+  font-size: var(--type-aside);
+  font-weight: 600;
+  color: var(--attention);
+}
+
+.menubar__decisions-go {
+  margin-left: auto;
+  font-size: var(--type-meta);
+  font-weight: 500;
+  color: var(--rail-muted);
+}
+
+.menubar__decisions:hover .menubar__decisions-go {
+  color: var(--rail-text);
+  text-decoration: underline;
+}
+
+/* The desk, as it is in For you, on a raised band so what needs an answer is
+   a different ground from the list of who is doing what. */
+.menubar .for-you__requests {
+  padding: 0;
+  background: var(--rail-raised);
+  border-bottom: 1px solid var(--rail-edge);
+}
+
+/* The desk counts what it holds, and the panel's header has already said so
+   one line above it. Still labeled for a screen reader, by the section. */
+.menubar .for-you__requests h3 {
+  display: none;
+}
+
+.menubar__agents {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-2) 0;
+}
+
+/* Only when there is another crew to tell it from, and quieter than the name
+   it follows, which is what the operator is looking for. */
+.menubar__crew {
+  min-width: 0;
+  font-size: var(--type-meta);
+  color: var(--rail-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.menubar__talk {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Who this is and the way back stay put, and so does the line to them: the
+   body scrolls between the two, and a reply long enough to push either out of
+   sight is exactly when the operator wants both. */
+.menubar__talk-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  background: var(--rail-ground);
+  border-bottom: 1px solid var(--rail-edge);
+}
+
+.menubar__talk-who {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.menubar__talk-who .agent-row__meta {
+  align-self: flex-start;
+}
+
+.menubar__said {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-5);
+}
+
+.menubar__said article {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  user-select: text;
+}
+
+.menubar__speaker {
+  font-size: var(--type-meta);
+  font-weight: 600;
+  color: var(--rail-muted);
+}
+
+/* What was said, at the reading size the operator chose but no taller than a
+   panel can spare. Faded only when something was cut, because a fade over a
+   short reply reads as text that is not there. */
+.menubar__words {
+  max-height: 12rem;
+  overflow: hidden;
+  font-family: var(--font-read);
+  font-size: var(--type-aside);
+  line-height: var(--lead-read);
+  color: var(--rail-text);
+}
+
+.menubar__words[data-clipped] {
+  mask-image: linear-gradient(to bottom, black 70%, transparent);
+}
+
+.menubar__more {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: var(--type-meta);
+  color: var(--system);
+  text-decoration: underline;
+}
+
+.menubar__compose {
+  position: sticky;
+  bottom: 0;
+  background: var(--rail-ground);
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--rail-edge);
+}
+
+.menubar__field {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--edge-control);
+  border-radius: var(--radius-sm);
+  background: var(--ground);
+  color: var(--text);
+  font-family: var(--font-read);
+  font-size: var(--type-aside);
+  line-height: var(--lead-ui);
+}
+
+.menubar__field:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.menubar__error {
+  padding: 0 var(--space-5) var(--space-4);
+  font-size: var(--type-small);
+  color: var(--danger);
 }
 
 /* ==========================================================================

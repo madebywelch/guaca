@@ -87,9 +87,12 @@ function stuckOn(over: Partial<Escalation> = {}): Escalation {
   };
 }
 
+/** Where "Open channel" was asked to go. The caller decides what that means. */
+const openChannel = vi.fn<(agent: string) => void>();
+
 function draw(pending: Approval[], stuck: Escalation[] = []) {
   useStore.setState({ agents: [agent("Manager")], pending, stuck, approvals: {}, banner: null });
-  return render(<Desk />);
+  return render(<Desk onOpenChannel={openChannel} />);
 }
 
 /** A question, which is answered with a value rather than with a verdict. */
@@ -103,6 +106,7 @@ function asks(options: string[], over: Partial<Approval> = {}): Approval {
 }
 
 beforeEach(() => {
+  openChannel.mockReset();
   answerQuestion.mockReset();
   answerQuestion.mockResolvedValue(request({ state: "answered" }));
   decideApproval.mockReset();
@@ -162,19 +166,19 @@ describe("the desk", () => {
     draw([request()]);
 
     fireEvent.click(screen.getByRole("button", { name: "Open channel" }));
-    expect(useStore.getState().selected).toBe("Manager");
+    expect(openChannel).toHaveBeenCalledWith("Manager");
   });
 
   it("names an agent that has since been deleted rather than drawing nothing", () => {
     useStore.setState({ agents: [], pending: [request()] });
-    render(<Desk />);
+    render(<Desk onOpenChannel={openChannel} />);
     expect(screen.getByText("A deleted agent")).toBeTruthy();
   });
 
   it("shows new requests while an older blocker remains", () => {
     const { rerender } = draw([], [stuckOn()]);
     useStore.setState({ pending: [request()] });
-    rerender(<Desk />);
+    rerender(<Desk onOpenChannel={openChannel} />);
     expect(screen.getByRole("button", { name: "Allow" })).toBeTruthy();
   });
 
@@ -267,7 +271,7 @@ describe("an escalation on the desk", () => {
   it("opens the channel of the agent that raised it", () => {
     draw([], [stuckOn()]);
     fireEvent.click(screen.getByRole("button", { name: "Open channel" }));
-    expect(useStore.getState().selected).toBe("Manager");
+    expect(openChannel).toHaveBeenCalledWith("Manager");
   });
 
   it("clears the one it was asked about", () => {

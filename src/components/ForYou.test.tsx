@@ -136,3 +136,38 @@ it("does not let an older refresh overwrite a newer answer", async () => {
   await first;
   expect(useStore.getState().decisions[0]?.status).toBe("answered");
 });
+
+// The desk inside For you leads into the window it is already in. The same
+// desk under the menu bar icon leads somewhere else, which is why the desk
+// asks rather than deciding, and why this is asserted here.
+it("opens a request's channel behind For you and gets out of the way", async () => {
+  const select = vi.fn(async () => {});
+  const close = vi.fn();
+  useStore.setState({
+    select,
+    decisions: [],
+    pending: [
+      {
+        id: "req-1",
+        agentId: "agent-1",
+        groupId: "group-1",
+        runId: "run-1",
+        request: { kind: "permission", action: "createAgent" },
+        summary: "Wants to hire a scribe",
+        detail: [],
+        state: "pending",
+        answer: null,
+        createdAt: 0,
+        decidedAt: null,
+      },
+    ],
+  });
+  mocks.list.mockResolvedValue([]);
+  await act(async () => {
+    render(<ForYou onClose={close} />);
+  });
+
+  fireEvent.click(screen.getByRole("button", { name: "Open channel" }));
+  expect(select).toHaveBeenCalledWith("agent-1");
+  expect(close).toHaveBeenCalled();
+});

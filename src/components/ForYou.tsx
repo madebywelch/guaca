@@ -16,6 +16,7 @@ export function ForYou({ onClose }: { onClose: () => void }) {
   const stuck = useStore((state) => state.stuck);
   const agents = useStore((state) => state.agents);
   const lastActive = useStore((state) => state.lastActive);
+  const select = useStore((state) => state.select);
   const now = useNow(30_000);
   const panel = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<"needs" | "following" | "history">("needs");
@@ -140,7 +141,14 @@ export function ForYou({ onClose }: { onClose: () => void }) {
               {receipt}
             </p>
           )}
-          {view === "needs" && <Desk />}
+          {view === "needs" && (
+            <Desk
+              onOpenChannel={(agent) => {
+                void select(agent);
+                onClose();
+              }}
+            />
+          )}
           {shown.map((item) => (
             <DecisionCard
               key={item.id}

@@ -18,12 +18,13 @@ import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { announcementFor } from "./lib/announce";
 import { applyAppearance, watchSystemSurface } from "./lib/appearance";
-import { api, notifyOperator, onMenubarAsk, onRevealRequest, onRuntimeEvent } from "./lib/ipc";
+import { api, notifyOperator, onRevealRequest } from "./lib/ipc";
 import { bindingFor } from "./lib/keybinds";
 import { FEED_COALESCE_MS, presenceOf, samePresence } from "./lib/menubar";
 import { away, burst, markQuiet, quiet, shouldNotify } from "./lib/notify";
+import { useRuntime } from "./lib/runtime";
 import { useLiveAgents, useStore } from "./lib/store";
-import { attached, hosted } from "./lib/transport";
+import { attached } from "./lib/transport";
 import {
   type AgentCard,
   errorMessage,
@@ -44,11 +45,8 @@ export default function App() {
   const setBanner = useStore((s) => s.setBanner);
   const handoff = useStore((s) => s.handoff);
   const setHandoff = useStore((s) => s.setHandoff);
-  const bootstrap = useStore((s) => s.bootstrap);
-  const applyEvent = useStore((s) => s.applyEvent);
   const refreshAgents = useStore((s) => s.refreshAgents);
   const select = useStore((s) => s.select);
-  const focusGroup = useStore((s) => s.focusGroup);
   const loadChannel = useStore((s) => s.loadChannel);
   const groups = useStore((s) => s.groups);
   const railGroup = useStore((s) => s.railGroup);
@@ -96,7 +94,6 @@ export default function App() {
   const showArtifacts = useStore((state) => state.showArtifacts);
   const [showSettings, setShowSettings] = useState<Section | true | null>(null);
   const [searching, setSearching] = useState(false);
-  const [ready, setReady] = useState(false);
   const [showCafeteria, setShowCafeteria] = useState(false);
   const [showCalendar, setShowCalendar] = useState(false);
   // The pane inside whichever settings dialog is open, reported by the dialog.
@@ -141,104 +138,27 @@ export default function App() {
     return watchSystemSurface(() => applyAppearance(look));
   }, [uiScale, surface, grays, attention, contrast, typeface, reading, readingSize]);
 
+  // Nothing interrupts the operator for the first few seconds. A routine whose
+  // slot passed while the app was closed is overdue and fires on the first
+  // tick, which is correct, but launching after a weekend away should not
+  // announce a weekend of schedule at once. All of it is on screen immediately
+  // either way; only the interruption waits. Before the subscription below, so
+  // nothing it delivers is announced ahead of the quiet.
+  useEffect(markQuiet, []);
+  const ready = useRuntime(announce);
+
+  // The menu bar follows the window. The tray process holds no workspace of
+  // its own, so its icon is drawn from this window's store, coalesced and only
+  // when it would draw differently, and its panel is told which host this
+  // window is attached to and becomes a second client of it. A refusal is
+  // said rather than swallowed: a report the tray turned away once left the
+  // icon idle whatever the crew was doing, and nothing on screen said so.
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    // Subscribing is async, so a teardown can arrive before it resolves. Without
-    // this flag the listener leaks: StrictMode mounts twice in development, the
-    // first cleanup finds `unlisten` still undefined, and every stream delta is
-    // then applied by two listeners. That renders as text interleaved with
-    // itself, which looks like a model bug rather than a subscription bug.
-    let canceled = false;
-
-    let initialReadDone = false;
-    let refreshing = false;
-    let requested = false;
-    const refresh = async () => {
-      requested = true;
-      if (!initialReadDone || refreshing) return;
-      refreshing = true;
-      try {
-        while (requested && !canceled) {
-          requested = false;
-          await useStore.getState().resynchronize();
-        }
-      } catch (error) {
-        if (!canceled) setBanner({ tone: "error", text: errorMessage(error) });
-      } finally {
-        refreshing = false;
-      }
-    };
-
-    void (async () => {
-      // Subscribe before the first read so nothing that happens during startup
-      // is missed.
-      const stop = await onRuntimeEvent(
-        (event) => {
-          applyEvent(event);
-          announce(event);
-          // A read that overlapped a durable change may contain older rows.
-          // Read again after it completes; token deltas need no database read.
-          if (
-            refreshing &&
-            [
-              "messageAppended",
-              "agentsChanged",
-              "approvalRequested",
-              "approvalSettled",
-              "escalationRaised",
-              "escalationCleared",
-              "decisionsChanged",
-              "runSettled",
-            ].includes(event.type)
-          ) {
-            requested = true;
-          }
-        },
-        () => {
-          void refresh();
-        },
-      );
-      if (canceled) {
-        stop();
-        return;
-      }
-      unlisten = stop;
-
-      // Nothing interrupts the operator for the first few seconds. A routine
-      // whose slot passed while the app was closed is overdue and fires on the
-      // first tick, which is correct, but launching after a weekend away should
-      // not announce a weekend of schedule at once. All of it is on screen
-      // immediately either way; only the interruption waits.
-      markQuiet();
-
-      try {
-        await bootstrap();
-      } catch (error) {
-        setBanner({ tone: "error", text: errorMessage(error) });
-      } finally {
-        initialReadDone = true;
-        if (requested && !canceled) await refresh();
-        if (!canceled) setReady(true);
-      }
-    })();
-
-    return () => {
-      canceled = true;
-      unlisten?.();
-    };
-  }, [announce, applyEvent, bootstrap, setBanner]);
-
-  // The menu bar follows the window. While this window shows a box, the strip
-  // on this machine is handed the box's presence, coalesced, and only when it
-  // would draw differently; while it shows this machine, the strip reads the
-  // runtime itself and is told once to do so, because the process outlives
-  // the page and the last page may have left it fed.
-  useEffect(() => {
-    if (!hosted) {
-      void api.reportPresence(null).catch(() => {});
-      return;
-    }
-    if (!attached()) return;
+    const host = attached();
+    if (!host) return;
+    const refused = (what: string) => (error: unknown) =>
+      console.warn(`The menu bar refused ${what}: ${errorMessage(error)}`);
+    void api.reportHost(host).catch(refused("the workspace this window is showing"));
 
     let last = presenceOf(useStore.getState());
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -247,9 +167,9 @@ export default function App() {
       const next = presenceOf(useStore.getState());
       if (samePresence(next, last)) return;
       last = next;
-      void api.reportPresence(next).catch(() => {});
+      void api.reportPresence(next).catch(refused("what this window is showing"));
     };
-    void api.reportPresence(last).catch(() => {});
+    void api.reportPresence(last).catch(refused("what this window is showing"));
     const unsubscribe = useStore.subscribe(() => {
       if (timer === null) timer = setTimeout(report, FEED_COALESCE_MS);
     });
@@ -259,47 +179,17 @@ export default function App() {
     };
   }, []);
 
-  // A click on a strip row that was drawn from a box. The act belongs to the
-  // box and this window holds the connection, so it does what the row said.
-  useEffect(() => {
-    if (!attached()) return;
-    let unlisten: (() => void) | undefined;
-    let canceled = false;
-    void (async () => {
-      const stop = await onMenubarAsk((ask) => {
-        const act =
-          ask.kind === "stopAll"
-            ? api.stopEverything()
-            : api.decideApproval(ask.approval, ask.decision);
-        void act.catch((error) => setBanner({ tone: "error", text: errorMessage(error) }));
-      });
-      if (canceled) {
-        stop();
-        return;
-      }
-      unlisten = stop;
-    })();
-    return () => {
-      canceled = true;
-      unlisten?.();
-    };
-  }, [setBanner]);
-
-  // A row in the menu bar, clicked. The window is already up by the time this
-  // lands; the only thing left is which channel it lands in, and the newest
-  // window of it is the right one: a request the strip offered is the last
-  // thing in the channel that raised it.
+  // The menu bar panel, asking for the window. The window is already up by the
+  // time this lands; the only thing left is where it lands, and the newest
+  // window of a channel is the right one: a request the panel offered is the
+  // last thing in the channel that raised it.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let canceled = false;
 
     void (async () => {
       const stop = await onRevealRequest((target) => {
-        // Two destinations, and the crew is not a channel: `focusGroup` opens
-        // the crew and picks nobody in it, because a click that was about the
-        // crew must not put somebody's history on screen as a side effect.
         if (target.kind === "forYou") useStore.getState().showForYou(true);
-        else if (target.kind === "crew") void focusGroup(target.id);
         else void select(target.id);
       });
       if (canceled) {
@@ -313,7 +203,7 @@ export default function App() {
       canceled = true;
       unlisten?.();
     };
-  }, [focusGroup, select]);
+  }, [select]);
 
   /**
    * Runs something on one agent and re-reads the roster.

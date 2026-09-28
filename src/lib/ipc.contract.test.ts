@@ -193,6 +193,26 @@ describe("IPC contract", () => {
     expect([...variants].sort()).toEqual([...known].sort());
   });
 
+  it("reports the menu bar the fields it reads, and no fewer", () => {
+    // The icon is drawn from nothing but this report, and a field Rust
+    // requires that the window never sends refuses the whole report rather
+    // than one number in it. One did: `onMachine` outlived the only code that
+    // wrote it, every report after that was turned away, and the icon sat at
+    // "nothing running" for as long as nobody compared the two lists.
+    const block = read("src-tauri/src/menubar.rs").match(/pub struct Presence \{([\s\S]*?)\n\}/);
+    if (!block) throw new Error("could not find struct Presence in menubar.rs");
+    const rust = [...block[1]!.matchAll(/^\s{4}pub ([a-z_]+):/gm)].map((found) =>
+      found[1]!.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase()),
+    );
+    expect(rust.length).toBeGreaterThan(3);
+
+    const shape = read("src/lib/types.ts").match(/export interface Presence \{([\s\S]*?)\n\}/);
+    if (!shape) throw new Error("could not find interface Presence in types.ts");
+    const web = [...shape[1]!.matchAll(/^\s{2}([a-zA-Z]+):/gm)].map((found) => found[1]!);
+
+    expect([...web].sort()).toEqual([...rust].sort());
+  });
+
   it("draws the same floor under a price on both sides", () => {
     // The rail's meters and the menu bar are two readings of one number, and
     // each decides on its own whether a cost is worth the width it takes. A

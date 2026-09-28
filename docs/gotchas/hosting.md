@@ -100,10 +100,11 @@ The daemon, a browser as a client, and the boot both hosts share.
   file dropped on the desktop went nowhere. The reveal channel, the drop and
   the menu bar feed are the places a window has something a browser does not.
 - **The tray keeps what it was fed across page loads.** The process outlives
-  the page. A window that comes back showing this machine sends
-  `report_presence(null)` once at boot; without it the strip keeps drawing a
-  box nobody is looking at.
-- **The contract test counts `invokeLocal` as a caller.** The two desktop-only
+  the page, so the icon draws the last report until the next one replaces it,
+  and the panel keeps showing the last host until the window reports another.
+  The host is compared rather than replaced, so a window reloading onto the
+  same host does not reload the panel under somebody typing in it.
+- **The contract test counts `invokeLocal` as a caller.** The desktop-only
   commands are reached through it, and a test that only recognizes `invoke`
   reports them as surface nobody uses.
 - **A screen's credential is in the path, and the artifact's is in the

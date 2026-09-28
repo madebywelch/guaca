@@ -3,21 +3,23 @@ import { type FormEvent, useState } from "react";
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { useStore } from "../lib/store";
 import { relativeTime } from "../lib/time";
-import type { AgentCard, Approval, Decision, Escalation } from "../lib/types";
+import type { AgentCard, AgentId, Approval, Decision, Escalation } from "../lib/types";
 
-/** Live permissions and operational blockers inside For you. */
-export function Desk() {
+/**
+ * Live permissions and operational blockers, answerable where they are seen.
+ *
+ * Drawn in two places: For you, and the panel under the menu bar icon. Every
+ * answer goes through the store either way, so a request answered in one is
+ * gone from the other; only where "Open channel" leads is up to the caller,
+ * because one is inside the window and the other has to bring it back.
+ */
+export function Desk({ onOpenChannel }: { onOpenChannel: (agent: AgentId) => void }) {
   const pending = useStore((s) => s.pending);
   const stuck = useStore((s) => s.stuck);
   const agents = useStore((s) => s.agents);
-  const select = useStore((s) => s.select);
   const decide = useStore((s) => s.decideApproval);
   const answer = useStore((s) => s.answerQuestion);
   const clear = useStore((s) => s.clearEscalation);
-  const open = (id: string) => {
-    void select(id);
-    useStore.getState().showForYou(false);
-  };
   if (pending.length + stuck.length === 0) return null;
   return (
     <section className="for-you__requests" aria-label="Waiting on you">
@@ -29,7 +31,7 @@ export function Desk() {
           agent={agents.find((a) => a.id === request.agentId)}
           onDecide={(decision) => decide(request.id, decision)}
           onAnswer={(text) => answer(request.id, text)}
-          onOpenChannel={() => open(request.agentId)}
+          onOpenChannel={() => onOpenChannel(request.agentId)}
         />
       ))}
       {stuck.map((one) => (
@@ -38,7 +40,7 @@ export function Desk() {
           escalation={one}
           agent={agents.find((a) => a.id === one.agentId)}
           onClear={() => void clear(one.id)}
-          onOpenChannel={() => open(one.agentId)}
+          onOpenChannel={() => onOpenChannel(one.agentId)}
         />
       ))}
     </section>

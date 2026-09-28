@@ -1,42 +1,52 @@
-//! The menu bar presence.
+//! The menu bar presence: the icon, and the panel it opens.
 //!
 //! The second file that knows Tauri exists, and it earns that the same way
-//! `app.rs` does: everything above it is a plain library. What the strip *says*
-//! is decided in `menubar.rs`, which has no idea a platform menu exists and is
-//! tested without one. This file draws that decision, and turns a click back
-//! into something the runtime already knows how to do.
+//! `app.rs` does: everything above it is a plain library. What the icon says
+//! and where the panel stands are decided in `menubar.rs`, which has no idea a
+//! platform exists and is tested without one. This file draws those decisions
+//! and owns the panel's window.
 //!
-//! Two things here are less obvious than they look.
+//! Three things here are less obvious than they look.
 //!
-//! **The presence is read, not accumulated.** Every number on the strip but the
-//! session total is a fresh read of whatever already holds the truth: the
-//! roster, the activity map, the pending requests, the usage table. A presence
-//! assembled by adding up events drifts the moment one is missed, and the thing
-//! that would drift is the number the operator is using to decide whether to go
-//! and look. The reads are local and happen at most every
-//! [`COALESCE`], and only while something is happening.
+//! **The icon is drawn from what the window reports.** The tray process holds
+//! no workspace: agents run in a host, and the window is the client of it. So
+//! the window hands over a presence, coalesced on its side and again here, and
+//! the icon is only ever as current as the last report.
 //!
-//! **A menu is edited in place when it can be.** Replacing the menu closes one
-//! the operator is reading, and the spend on it moves every few seconds while a
-//! crew works, so a strip that rebuilt on every change would be unreadable
-//! exactly when it was worth reading. `menubar::plan` decides which of the two
-//! a change is.
+//! **The panel is a second client, not a second view.** It is the frontend
+//! again, on `menubar.html`, and it reads the host the window is attached to
+//! for itself. It is made, hidden, once the window says which host that is,
+//! and reloaded when the window says a different one, so a click opens a page
+//! that is already drawn rather than one that starts connecting when asked.
+//!
+//! **The panel is an ordinary window.** A menu bar panel on macOS is usually
+//! an `NSPanel`, which takes the keyboard without bringing its app forward, and
+//! Tauri makes no such window. Making this one into one means changing its
+//! class under the windowing library, which objc2 documents as undefined
+//! unless the new class descends from the old one, and `NSPanel` does not
+//! descend from tao's window. So opening the panel brings Guaca forward, as
+//! clicking any of its windows would, and closing it from the panel hands the
+//! keyboard back by hiding the app when the window is not open. What that
+//! costs: the panel cannot be drawn over another app's full-screen space.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::image::Image;
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::tray::{TrayIcon, TrayIconBuilder};
-use tauri::{AppHandle, Emitter, Manager, Wry};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
+use tauri::{
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder, WindowEvent, Wry,
+};
 use tokio::sync::Notify;
 
-use crate::domain::approval::Decision;
-use crate::domain::ids::{AgentId, GroupId};
-use crate::menubar::{self, Command, Glyph, Look, Presence, Row, Update};
+use crate::domain::ids::AgentId;
+use crate::menubar::{self, Frame, Glyph, Look, Presence, Screen};
 
-/// The strip's own id, so `app.rs` can ask whether it is there.
+/// The icon's own id, so `app.rs` can ask whether it is there.
 ///
 /// That question is load-bearing: closing the window hides it instead of
 /// quitting, and an app with no window and no menu bar icon is an app the
@@ -44,7 +54,7 @@ use crate::menubar::{self, Command, Glyph, Look, Presence, Row, Update};
 /// this existing.
 pub const TRAY_ID: &str = "guac.menubar";
 
-/// The channel the strip asks the window to go somewhere on.
+/// The channel the panel asks the window to go somewhere on.
 ///
 /// Its own channel rather than a variant of `UiEvent`. That one is the runtime
 /// telling the UI what happened; this is one surface asking another to open a
@@ -52,84 +62,91 @@ pub const TRAY_ID: &str = "guac.menubar";
 /// event handling for something the runtime never emits.
 pub const REVEAL: &str = "guac://reveal";
 
-/// The channel a click goes down when the strip is showing a box.
-///
-/// The row was drawn from a presence the window handed over, so the act it
-/// stands for belongs to the box too, and the window is what holds a
-/// connection to the box. Local rows never come through here.
-pub const MENUBAR: &str = "guac://menubar";
+/// The panel's window label, and the page it draws.
+const PANEL: &str = "menubar";
+const PAGE: &str = "menubar.html";
 
-/// What a click on a fed strip asks the window to do.
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
-pub enum Ask {
-    StopAll,
-    Decide { approval: crate::domain::ids::ApprovalId, decision: crate::domain::approval::Decision },
-}
+/// The one item in the right-click menu that is not the platform's own.
+const OPEN: &str = "guac.open";
 
-/// Where the strip is asking the window to go.
+/// How long a burst of reports becomes one redraw.
 ///
-/// One channel and two destinations, because it is one gesture: the operator
-/// clicked a row and expects to be looking at what it named. Two, because the
-/// window answers them with different calls and neither is the other's fallback.
-/// `select` follows an agent into whatever crew it is in; `focusGroup` opens a
-/// crew and picks nobody in it, because choosing somebody would put an agent's
-/// history on screen as a side effect of a click that was about the crew.
-#[derive(Debug, Clone, Serialize)]
+/// A cascade changes what the window reports several times a second, and each
+/// is a real change. Coalescing is what keeps that from being the icon redrawn
+/// on the main thread ten times a second.
+const COALESCE: Duration = Duration::from_millis(300);
+
+/// How soon after the panel put itself away a click on the icon is the click
+/// that put it away.
+///
+/// A click on the icon while the panel is open is, first, a click outside the
+/// panel. Where that takes the focus before the click itself arrives, the
+/// panel has already hidden, and reading the click as "open" would bring it
+/// straight back.
+const REOPEN: Duration = Duration::from_millis(300);
+
+/// Where the panel is asking the window to go.
+///
+/// Two destinations, and neither is the other's fallback: an agent is
+/// `select`, which follows it into whatever crew it is in, and For you is the
+/// desk.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Reveal {
     ForYou,
     Agent { id: AgentId },
-    Crew { id: GroupId },
 }
 
-/// How long a burst of events becomes one redraw.
+/// The workspace the window is attached to: where it answers and what opens it.
 ///
-/// A cascade emits an activity change and a token count per agent per call, and
-/// each of those is a real change to what the strip says. Coalescing is what
-/// keeps that from being a menu rebuilt on the main thread ten times a second.
-const COALESCE: std::time::Duration = std::time::Duration::from_millis(300);
-
-/// A drawn menu, and the handles that can edit it without replacing it.
-struct Painted {
-    menu: Menu<Wry>,
-    /// One entry per row, in the same order. `None` where the row has no text
-    /// that can change, so an index into this is an index into the rows it was
-    /// built from.
-    items: Vec<Option<MenuItem<Wry>>>,
+/// No `Debug`, because the token is a credential and a derived `Debug` is one
+/// `{:?}` in a log line away from printing it.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Host {
+    pub origin: String,
+    pub token: String,
 }
 
-/// What is on screen right now.
-struct Drawn {
-    rows: Vec<Row>,
-    look: Look,
-    items: Vec<Option<MenuItem<Wry>>>,
+/// What placing the panel needs to remember between one call and the next.
+#[derive(Default)]
+struct Spot {
+    /// The icon, in pixels, as of the click that last opened the panel.
+    icon: Option<Frame>,
+    /// How tall the page last said it wants to be.
+    wanted: Option<f64>,
+    /// When the panel last put itself away on losing focus.
+    blurred: Option<Instant>,
 }
 
 pub struct Tray {
     app: AppHandle,
     icon: TrayIcon<Wry>,
-    drawn: Mutex<Drawn>,
+    drawn: Mutex<Look>,
     wake: Arc<Notify>,
-    /// A presence the window handed over, while it is showing a workspace
-    /// that is not this machine's. The strip follows the window: while this
-    /// is set the local runtime is not read, and every click on a row that
-    /// came from it is sent back to the window to act on.
+    /// What the window last reported.
     fed: Mutex<Option<Presence>>,
+    /// The host the window is attached to, which the panel shows too.
+    host: Mutex<Option<Host>>,
+    spot: Mutex<Spot>,
 }
 
 impl Tray {
     /// Puts the icon in the menu bar and starts keeping it current.
-    ///
-    /// Called before the agents are started, so nothing that happens on the way
-    /// up is missed.
     pub fn install(app: &AppHandle) -> tauri::Result<Arc<Self>> {
-        let presence = Presence::default();
-        let look = presence.look();
-        let rows = presence.rows();
-
-        let painted = build(app, &rows)?;
+        let look = Presence::default().look();
         let (image, template) = glyph(look.glyph);
+
+        // The two things worth doing when the panel is not what is wanted: the
+        // window, and quitting. The platform's own quit, so it behaves like
+        // every other app's and picks up the accelerator the operator knows.
+        let menu = Menu::with_items(
+            app,
+            &[
+                &MenuItem::with_id(app, OPEN, "Open Guaca", true, None::<&str>)?,
+                &PredefinedMenuItem::separator(app)?,
+                &PredefinedMenuItem::quit(app, Some("Quit Guaca"))?,
+            ],
+        )?;
 
         let icon = TrayIconBuilder::with_id(TRAY_ID)
             .icon(image)
@@ -140,24 +157,43 @@ impl Tray {
             .icon_as_template(template)
             .title(look.title.clone().unwrap_or_default())
             .tooltip(&look.tooltip)
-            .menu(&painted.menu)
-            // Left click opens the menu rather than the window. The whole point
-            // of the strip is the glance that does not interrupt anything, and
-            // the window is one item away.
-            .show_menu_on_left_click(true)
+            .menu(&menu)
+            // Left click is the panel. The menu is the right click.
+            .show_menu_on_left_click(false)
             .build(app)?;
 
         let tray = Arc::new(Self {
             app: app.clone(),
             icon,
-            drawn: Mutex::new(Drawn { rows, look, items: painted.items }),
+            drawn: Mutex::new(look),
             wake: Arc::new(Notify::new()),
             fed: Mutex::new(None),
+            host: Mutex::new(None),
+            spot: Mutex::new(Spot::default()),
         });
 
         {
             let clicks = tray.clone();
-            tray.icon.on_menu_event(move |_app, event| clicks.clicked(event.id().as_ref()));
+            tray.icon.on_menu_event(move |_app, event| {
+                if event.id().as_ref() == OPEN {
+                    clicks.open_window(None);
+                }
+            });
+        }
+
+        {
+            let clicks = tray.clone();
+            tray.icon.on_tray_icon_event(move |_icon, event| {
+                if let TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    rect,
+                    ..
+                } = event
+                {
+                    clicks.toggle(rect);
+                }
+            });
         }
 
         {
@@ -166,22 +202,21 @@ impl Tray {
             tauri::async_runtime::spawn(async move {
                 loop {
                     wake.notified().await;
-                    // The burst, not the first event in it. Everything that
+                    // The burst, not the first report in it. Everything that
                     // arrives while this sleeps is already counted, and
                     // `Notify` holds one permit, so the next pass runs
                     // immediately and coalesces the next burst.
                     tokio::time::sleep(COALESCE).await;
 
-                    // Off the async pool. Every menu call hops to the main
+                    // Off the async pool. Every icon call hops to the main
                     // thread and blocks on the answer, so a redraw that ran
                     // here would hold an executor thread for as long as the
-                    // main thread was busy, and the threads it would hold are
-                    // the ones the agents run on.
+                    // main thread was busy.
                     let redraw = tray.clone();
                     if let Err(err) =
                         tauri::async_runtime::spawn_blocking(move || redraw.redraw()).await
                     {
-                        tracing::warn!(%err, "the menu bar stopped keeping itself current");
+                        tracing::warn!(%err, "the menu bar icon stopped keeping itself current");
                         return;
                     }
                 }
@@ -191,69 +226,24 @@ impl Tray {
         Ok(tray)
     }
 
+    /// Takes what the window is showing, for the icon to draw.
     pub fn feed(&self, presence: Option<Presence>) {
         *self.fed.lock() = presence;
         self.wake.notify_one();
     }
 
-    /// Reads the world and makes the strip agree with it.
+    /// Makes the icon agree with the last report.
     fn redraw(&self) {
-        let presence = self.fed.lock().clone().unwrap_or_default();
-        let look = presence.look();
-        let rows = presence.rows();
-
+        let look = match self.fed.lock().as_ref() {
+            Some(presence) => presence.look(),
+            None => Presence::default().look(),
+        };
         let mut drawn = self.drawn.lock();
-
-        // Committed only when it all landed, for the same reason the text edits
-        // below are: recording a change that failed leaves the strip stale for
-        // good, because the next pass compares against what it thinks it wrote.
-        if look != drawn.look && self.wear(&look) {
-            drawn.look = look;
-        }
-
-        match menubar::plan(&drawn.rows, &rows) {
-            Update::Nothing => {}
-            Update::Text(edits) => {
-                let mut all = true;
-                for (index, text) in edits {
-                    // A row with a label has an item, so a miss here is this
-                    // file and `menubar` having drifted apart rather than
-                    // anything about the workspace.
-                    match drawn.items.get(index).and_then(Option::as_ref) {
-                        Some(item) => {
-                            if let Err(err) = item.set_text(menubar::escape_mnemonic(&text)) {
-                                tracing::debug!(%err, "could not update a menu bar row");
-                                all = false;
-                            }
-                        }
-                        None => {
-                            tracing::warn!(index, "no menu item to put {text:?} in");
-                            all = false;
-                        }
-                    }
-                }
-                // Only what was written is remembered as written. Recording an
-                // edit that failed would leave the row stale for good: the next
-                // pass would compare against text that is not on screen and
-                // find nothing to do.
-                if all {
-                    drawn.rows = rows;
-                }
-            }
-            Update::Rebuild => match build(&self.app, &rows) {
-                Ok(painted) => {
-                    if let Err(err) = self.icon.set_menu(Some(painted.menu)) {
-                        tracing::debug!(%err, "could not replace the menu bar menu");
-                        return;
-                    }
-                    drawn.rows = rows;
-                    drawn.items = painted.items;
-                }
-                // The menu on screen is the last one that built, which is stale
-                // rather than wrong, and every row on it still does what it
-                // says. Keeping it beats an empty menu bar.
-                Err(err) => tracing::warn!(%err, "could not build the menu bar menu"),
-            },
+        // Committed only when it all landed: recording a change that failed
+        // leaves the icon stale for good, because the next pass compares
+        // against what it thinks it wrote.
+        if look != *drawn && self.wear(&look) {
+            *drawn = look;
         }
     }
 
@@ -279,50 +269,209 @@ impl Tray {
         .fold(true, |all, result| match result {
             Ok(()) => all,
             Err(err) => {
-                tracing::debug!(%err, "could not change the menu bar");
+                tracing::debug!(%err, "could not change the menu bar icon");
                 false
             }
         })
     }
 
-    /// One click, from a menu item id back to something the runtime does.
+    /// Takes the host the window is attached to, and makes the panel show it.
     ///
-    /// An id this build does not recognize is ignored. That is not defensive
-    /// padding: the disabled rows carry ids too, and a guess at an unparseable
-    /// one is a permission request answered by nobody.
-    fn clicked(&self, id: &str) {
-        let Some(command) = Command::parse(id) else {
-            tracing::debug!(id, "a menu bar row with nothing behind it was clicked");
+    /// The same host twice is nothing: the window reports it every time it
+    /// loads, and reloading the panel for each would drop whatever the operator
+    /// was typing in it.
+    pub fn attach(self: &Arc<Self>, host: Host) {
+        {
+            let mut held = self.host.lock();
+            if held.as_ref() == Some(&host) {
+                return;
+            }
+            *held = Some(host);
+        }
+        match self.app.get_webview_window(PANEL) {
+            // Reloaded rather than told: the page reads its host once, at
+            // load, like the window does, so there is nothing to update in
+            // place and nothing that can be half updated.
+            Some(panel) => match panel.reload() {
+                Ok(()) => {
+                    tracing::info!("the menu bar panel is showing the window's new workspace")
+                }
+                Err(err) => {
+                    tracing::warn!(%err, "the menu bar panel is still showing the last workspace")
+                }
+            },
+            None => match self.build_panel() {
+                Ok(()) => tracing::info!("the menu bar panel is ready for the window's workspace"),
+                Err(err) => {
+                    tracing::warn!(%err, "no menu bar panel this session; the icon opens the window")
+                }
+            },
+        }
+    }
+
+    /// The host the panel is to show, or nothing before the window has said.
+    pub fn host(&self) -> Option<Host> {
+        self.host.lock().clone()
+    }
+
+    /// Makes the panel's window, hidden, drawing its page.
+    fn build_panel(self: &Arc<Self>) -> tauri::Result<()> {
+        let panel = WebviewWindowBuilder::new(&self.app, PANEL, WebviewUrl::App(PAGE.into()))
+            .title("Guaca")
+            .inner_size(menubar::PANEL_WIDTH, menubar::PANEL_FIRST)
+            .resizable(false)
+            .maximizable(false)
+            .minimizable(false)
+            .decorations(false)
+            .shadow(true)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            // On whichever desktop the operator is on when they click, rather
+            // than dragging them back to the one it was first drawn on.
+            .visible_on_all_workspaces(true)
+            // The first click on a panel that has just appeared is a click on
+            // what it shows, not a click spent bringing it forward.
+            .accept_first_mouse(true)
+            .visible(false)
+            .focused(false)
+            .build()?;
+
+        let tray = Arc::clone(self);
+        panel.on_window_event(move |event| {
+            if let WindowEvent::Focused(false) = event {
+                tray.blurred();
+            }
+        });
+        Ok(())
+    }
+
+    /// The icon, clicked: the panel opens, or closes if it was open.
+    fn toggle(&self, rect: tauri::Rect) {
+        let Some(panel) = self.app.get_webview_window(PANEL) else {
+            // No panel until the window has said which workspace it is
+            // showing, and until then the window is where there is anything
+            // to see.
+            self.open_window(None);
             return;
         };
+        if panel.is_visible().unwrap_or(false) {
+            self.put_away(&panel, true);
+            return;
+        }
+        if self.spot.lock().blurred.take().is_some_and(|at| at.elapsed() < REOPEN) {
+            return;
+        }
 
-        match command {
-            Command::ForYou => self.reveal(Some(Reveal::ForYou)),
-            Command::Open => self.reveal(None),
-            Command::Reveal(agent) => self.reveal(Some(Reveal::Agent { id: agent })),
-            Command::Enter(crew) => self.reveal(Some(Reveal::Crew { id: crew })),
-            Command::StopAll => self.ask(Ask::StopAll),
-            Command::Decide(approval, decision) => self.ask(Ask::Decide { approval, decision }),
+        self.spot.lock().icon = Some(pixels(rect));
+        self.stand(&panel);
+        // Brought back first if closing the panel hid the app. Hidden is a
+        // state of the app rather than of a window, and a window shown inside
+        // a hidden app stays out of sight.
+        #[cfg(target_os = "macos")]
+        if let Err(err) = self.app.show() {
+            tracing::debug!(%err, "could not unhide Guaca");
+        }
+        for (what, result) in [("show", panel.show()), ("focus", panel.set_focus())] {
+            if let Err(err) = result {
+                tracing::debug!(%err, "could not {what} the menu bar panel");
+            }
         }
     }
 
-    /// Sends a click on a fed row to the window, which holds the connection
-    /// the act has to go over.
-    fn ask(&self, ask: Ask) {
-        if let Err(err) = self.app.emit(MENUBAR, ask) {
-            tracing::debug!(%err, "could not hand a menu bar click to the window");
+    /// The panel lost the focus, which means the operator is somewhere else.
+    fn blurred(&self) {
+        let Some(panel) = self.app.get_webview_window(PANEL) else { return };
+        if !panel.is_visible().unwrap_or(false) {
+            return;
+        }
+        self.spot.lock().blurred = Some(Instant::now());
+        self.put_away(&panel, false);
+    }
+
+    /// Hides the panel.
+    ///
+    /// `hand_back` is for a close from the panel or the icon, where the
+    /// operator was in the panel and nowhere else. Opening it brought Guaca
+    /// forward, and with the window not open, putting the panel away would
+    /// leave the operator's keyboard in an app showing nothing. Hiding the app
+    /// hands it back to whatever had it. A panel closed by clicking somewhere
+    /// else has already lost the keyboard to that somewhere, and needs nothing.
+    fn put_away(&self, panel: &WebviewWindow, hand_back: bool) {
+        if let Err(err) = panel.hide() {
+            tracing::debug!(%err, "could not hide the menu bar panel");
+        }
+        #[cfg(target_os = "macos")]
+        if hand_back
+            && !main_window(&self.app).is_some_and(|window| window.is_visible().unwrap_or(false))
+        {
+            if let Err(err) = self.app.hide() {
+                tracing::debug!(%err, "could not hand the keyboard back after the panel");
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = hand_back;
+    }
+
+    /// Closes the panel from inside it.
+    pub fn close(&self) {
+        if let Some(panel) = self.app.get_webview_window(PANEL) {
+            self.put_away(&panel, true);
         }
     }
 
-    /// Brings the window back, optionally somewhere in particular.
+    /// The page's height, as the page measured it. The window follows it
+    /// while it is open and takes it the next time it opens.
+    pub fn fit(&self, height: f64) {
+        if !height.is_finite() || height <= 0.0 {
+            return;
+        }
+        tracing::debug!(height, "the menu bar panel measured itself");
+        self.spot.lock().wanted = Some(height);
+        if let Some(panel) = self.app.get_webview_window(PANEL) {
+            if panel.is_visible().unwrap_or(false) {
+                self.stand(&panel);
+            }
+        }
+    }
+
+    /// Puts the panel under the icon, as tall as the page asked to be.
+    fn stand(&self, panel: &WebviewWindow) {
+        let (icon, wanted) = {
+            let spot = self.spot.lock();
+            (spot.icon, spot.wanted.unwrap_or(menubar::PANEL_FIRST))
+        };
+        let Some(icon) = icon else { return };
+        let Some(at) = menubar::place(icon, &screens(&self.app), wanted) else {
+            tracing::debug!("no display claims the menu bar icon; the panel stays where it was");
+            return;
+        };
+        for (what, result) in [
+            ("size", panel.set_size(LogicalSize::new(at.width, at.height))),
+            ("place", panel.set_position(LogicalPosition::new(at.x, at.y))),
+        ] {
+            if let Err(err) = result {
+                tracing::debug!(%err, "could not {what} the menu bar panel");
+            }
+        }
+    }
+
+    /// Brings the window back, optionally somewhere in particular, and puts
+    /// the panel away: the operator asked for the bigger of the two.
     ///
     /// Shown *and* unminimized *and* focused, because the window can be in any
     /// of the three states and only one of the three calls fixes each.
-    fn reveal(&self, target: Option<Reveal>) {
-        let Some(window) = window(&self.app) else {
+    pub fn open_window(&self, target: Option<Reveal>) {
+        if let Some(panel) = self.app.get_webview_window(PANEL) {
+            self.put_away(&panel, false);
+        }
+        let Some(window) = main_window(&self.app) else {
             tracing::warn!("no window to open from the menu bar");
             return;
         };
+        #[cfg(target_os = "macos")]
+        if let Err(err) = self.app.show() {
+            tracing::debug!(%err, "could not unhide Guaca");
+        }
         for (what, result) in [
             ("show", window.show()),
             ("unminimize", window.unminimize()),
@@ -334,17 +483,65 @@ impl Tray {
         }
         if let Some(target) = target {
             // Emitted after the window is up, so the transcript it scrolls is
-            // one that is being drawn.
-            if let Err(err) = self.app.emit(REVEAL, target) {
+            // one that is being drawn, and to the window alone: the panel has
+            // nowhere to go.
+            if let Err(err) = self.app.emit_to(window.label(), REVEAL, target) {
                 tracing::debug!(%err, "could not ask the window to go anywhere");
             }
         }
     }
 }
 
-/// The window, whatever it is called.
-fn window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
-    app.get_webview_window("main").or_else(|| app.webview_windows().into_values().next())
+/// The window, whatever it is called, and never the panel.
+fn main_window(app: &AppHandle) -> Option<WebviewWindow> {
+    app.webview_windows().into_iter().find(|(label, _)| label != PANEL).map(|(_, window)| window)
+}
+
+/// The icon as the tray reported it, in pixels.
+///
+/// Every tray the platform layer supports reports pixels. A logical rectangle
+/// read at a scale of one is what it already is, so either arrives as the same
+/// thing `menubar::place` reads.
+fn pixels(rect: tauri::Rect) -> Frame {
+    let at = rect.position.to_physical::<f64>(1.0);
+    let size = rect.size.to_physical::<f64>(1.0);
+    Frame { x: at.x, y: at.y, width: size.width, height: size.height }
+}
+
+/// Every display, in points, as `menubar::place` reads them.
+///
+/// Each display reports its pixels at its own scale, so each is read back to
+/// points at that scale, which is the one coordinate space two displays at
+/// different scales share.
+fn screens(app: &AppHandle) -> Vec<Screen> {
+    let monitors = match app.available_monitors() {
+        Ok(monitors) => monitors,
+        Err(err) => {
+            tracing::debug!(%err, "could not list the displays");
+            return Vec::new();
+        }
+    };
+    monitors
+        .iter()
+        .map(|monitor| {
+            let scale = monitor.scale_factor();
+            let at = monitor.position().to_logical::<f64>(scale);
+            let size = monitor.size().to_logical::<f64>(scale);
+            let area = monitor.work_area();
+            let area_at = area.position.to_logical::<f64>(scale);
+            let area_size = area.size.to_logical::<f64>(scale);
+            Screen {
+                bounds: Frame { x: at.x, y: at.y, width: size.width, height: size.height },
+                area: Frame {
+                    x: area_at.x,
+                    y: area_at.y,
+                    width: area_size.width,
+                    height: area_size.height,
+                },
+                scale,
+            }
+        })
+        .collect()
 }
 
 /// The image for one state, and whether the platform may tint it.
@@ -355,108 +552,4 @@ fn glyph(glyph: Glyph) -> (Image<'static>, bool) {
         // The one that is not a template. See `menubar::Glyph`.
         Glyph::Attention => (tauri::include_image!("./icons/tray-attention.png"), false),
     }
-}
-
-/// Draws a list of rows as a platform menu.
-///
-/// Returns the item handles alongside it, in row order, so the next change can
-/// edit a row rather than replace the menu it is in.
-fn build(app: &AppHandle, rows: &[Row]) -> tauri::Result<Painted> {
-    let menu = Menu::new(app)?;
-    let mut items = Vec::with_capacity(rows.len());
-
-    for (index, row) in rows.iter().enumerate() {
-        match row {
-            Row::Note(text) => {
-                let item = note(app, &index.to_string(), text)?;
-                menu.append(&item)?;
-                items.push(Some(item));
-            }
-            Row::Separator => {
-                menu.append(&PredefinedMenuItem::separator(app)?)?;
-                items.push(None);
-            }
-            Row::Waiting { id, agent, label, detail, always } => {
-                let sub = Submenu::new(app, menubar::escape_mnemonic(label), true)?;
-                // The request's own fields first, because a decision made
-                // without them is a decision made blind, and they are inert:
-                // the values are what a model asked for.
-                for (field, line) in detail.iter().enumerate() {
-                    sub.append(&note(app, &format!("{index}.{field}"), line)?)?;
-                }
-                if !detail.is_empty() {
-                    sub.append(&PredefinedMenuItem::separator(app)?)?;
-                }
-                sub.append(&answer(app, Command::Decide(*id, Decision::Allow), "Allow")?)?;
-                if *always {
-                    sub.append(&answer(
-                        app,
-                        Command::Decide(*id, Decision::AlwaysAllow),
-                        "Always allow",
-                    )?)?;
-                }
-                sub.append(&answer(app, Command::Decide(*id, Decision::Deny), "Deny")?)?;
-                sub.append(&PredefinedMenuItem::separator(app)?)?;
-                sub.append(&answer(app, Command::Reveal(*agent), "Open in Guaca")?)?;
-                menu.append(&sub)?;
-                // The label never moves: it is composed from a request that
-                // does not change. See `Row::shape`.
-                items.push(None);
-            }
-            Row::Agent { id, label } => {
-                let item = answer(app, Command::Reveal(*id), label)?;
-                menu.append(&item)?;
-                items.push(Some(item));
-            }
-            Row::Crew { id, label } => {
-                let item = answer(app, Command::Enter(*id), label)?;
-                menu.append(&item)?;
-                items.push(Some(item));
-            }
-            Row::ForYou => {
-                let item = answer(app, Command::ForYou, "For you")?;
-                menu.append(&item)?;
-                items.push(None);
-            }
-            Row::Open => {
-                let item = answer(app, Command::Open, "Open Guaca")?;
-                menu.append(&item)?;
-                items.push(None);
-            }
-            Row::StopAll(label) => {
-                let item = answer(app, Command::StopAll, label)?;
-                menu.append(&item)?;
-                items.push(Some(item));
-            }
-            Row::Quit => {
-                // The platform's own quit, so it behaves like every other app's
-                // and picks up the accelerator the operator already knows.
-                menu.append(&PredefinedMenuItem::quit(app, Some("Quit Guaca"))?)?;
-                items.push(None);
-            }
-        }
-    }
-
-    Ok(Painted { menu, items })
-}
-
-/// A row that says something and does nothing.
-///
-/// It still carries an id, because two menu items with the same id is not
-/// something to find out about on a platform that minds. `Command::parse`
-/// refuses these, which is what keeps a heading from being clickable if a
-/// platform ever decides a disabled item can be.
-fn note(app: &AppHandle, key: &str, text: &str) -> tauri::Result<MenuItem<Wry>> {
-    MenuItem::with_id(
-        app,
-        format!("guac.note.{key}"),
-        menubar::escape_mnemonic(text),
-        false,
-        None::<&str>,
-    )
-}
-
-/// A row that does something.
-fn answer(app: &AppHandle, command: Command, text: &str) -> tauri::Result<MenuItem<Wry>> {
-    MenuItem::with_id(app, command.id(), menubar::escape_mnemonic(text), true, None::<&str>)
 }

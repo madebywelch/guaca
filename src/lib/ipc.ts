@@ -16,6 +16,7 @@ import {
   invoke,
   invokeLocal,
   notify,
+  type Remote,
   openExternal as reachBrowser,
   subscribe,
   token,
@@ -67,7 +68,6 @@ import type {
   Harness,
   HarnessOnMachine,
   HeaderPair,
-  MenubarAsk,
   MessageId,
   ModelOffer,
   NotebookEntry,
@@ -115,7 +115,7 @@ import { errorMessage } from "./types";
 const EVENT_CHANNEL = "guac://event";
 
 /**
- * The menu bar asking the window to open an agent's channel, or a crew.
+ * The menu bar panel asking the window to open an agent's channel, or For you.
  *
  * Its own channel rather than a `UiEvent`. That one is the runtime saying what
  * happened, and this is one surface asking another to go somewhere: folding
@@ -123,7 +123,6 @@ const EVENT_CHANNEL = "guac://event";
  * something the runtime never emits. Kept in step with `tray.rs`.
  */
 const REVEAL_CHANNEL = "guac://reveal";
-const MENUBAR_CHANNEL = "guac://menubar";
 
 export const api = {
   exportGroup: (id: GroupId) => invoke<GroupArchive>("export_group", { id }),
@@ -628,6 +627,28 @@ export const api = {
    */
   reportPresence: (presence: Presence | null) => invokeLocal<void>("report_presence", { presence }),
 
+  /**
+   * Tells the menu bar which workspace this window is attached to, so the
+   * panel under its icon can be a second client of the same one. The token
+   * goes to this machine's own tray process and nowhere else.
+   */
+  reportHost: (host: Remote) => invokeLocal<void>("report_host", { host }),
+
+  /** The workspace the menu bar panel shows, which is the one the window chose. */
+  menubarHost: () => invokeLocal<Remote | null>("menubar_host"),
+
+  /**
+   * Brings the window back from the menu bar panel, somewhere in particular or
+   * wherever it was, and puts the panel away.
+   */
+  openWindow: (target: Reveal | null) => invokeLocal<void>("open_window", { target }),
+
+  /** Puts the panel away and hands the keyboard back to whatever had it. */
+  closeMenubar: () => invokeLocal<void>("close_menubar"),
+
+  /** How tall the panel's content is, so the panel can be exactly that tall. */
+  fitMenubar: (height: number) => invokeLocal<void>("fit_menubar", { height }),
+
   /** Stops every conversation in the workspace. Says how many were running. */
   stopEverything: () => invoke<number>("stop_everything"),
 
@@ -855,36 +876,20 @@ export function onRuntimeEvent(
 }
 
 /**
- * Subscribes to the menu bar asking to be taken somewhere.
+ * Subscribes to the menu bar panel asking to be taken somewhere.
  *
  * The window is already shown, unminimized and focused by the time this
- * arrives; all that is left is where it lands. Answering a permission request
- * from the strip does not come through here: that one is decided in Rust and
- * reaches the transcript as an ordinary settled event.
+ * arrives; all that is left is where it lands. Answering a request in the
+ * panel does not come through here: the panel is a client of the host itself,
+ * and the answer reaches this window as an ordinary settled event.
  */
 export function onRevealRequest(handler: (target: Reveal) => void): Promise<Unlisten> {
   // The menu bar is the desktop's, and so is this channel. A browser has no
-  // strip to be asked from, and a subscription that never fires is cheaper
-  // than a caller that has to know which host it is in. A window showing a
-  // box still has its strip, and the strip still opens the window.
+  // panel to be asked from, and a subscription that never fires is cheaper
+  // than a caller that has to know which host it is in.
   if (hosted && !attached()) return Promise.resolve(() => {});
   return import("@tauri-apps/api/event").then((events) =>
     events.listen<Reveal>(REVEAL_CHANNEL, (message) => handler(message.payload)),
-  );
-}
-
-/**
- * A click on the menu bar, when the strip is showing a box.
- *
- * The row was drawn from what this window handed over, so the act belongs to
- * the box, and this window is what holds a connection to it. A desktop that
- * is showing its own workspace never receives one: the tray acts on the local
- * runtime itself.
- */
-export function onMenubarAsk(handler: (ask: MenubarAsk) => void): Promise<Unlisten> {
-  if (hosted && !attached()) return Promise.resolve(() => {});
-  return import("@tauri-apps/api/event").then((events) =>
-    events.listen<MenubarAsk>(MENUBAR_CHANNEL, (message) => handler(message.payload)),
   );
 }
 
