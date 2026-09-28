@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
 import { artifactUrl } from "../lib/files";
 import { api } from "../lib/ipc";
@@ -37,9 +37,37 @@ export const Answering = createContext<{ id: AgentId; name: string } | null>(nul
  * what was posted, in Guaca's chrome, under the frame, and waits. Nothing goes
  * anywhere until the operator presses a button that belongs to the app.
  */
-export function HtmlArtifact({ html, title }: { html: string; title: string }) {
+export function HtmlArtifact({
+  html,
+  title,
+  data,
+  onSend,
+}: {
+  html: string;
+  title: string;
+  /**
+   * What a kept page's `guaca.data()` resolves to, posted into the frame when
+   * it loads and again whenever it changes. Absent for a fenced page, which
+   * has nothing to read.
+   */
+  data?: unknown;
+  /**
+   * Where a kept page's `guaca.send` goes, with whether the operator's click is
+   * what caused it. Absent for a fenced page, where a send is an answer like
+   * any other and waits in the strip for the operator.
+   */
+  onSend?: (json: string, clicked: boolean) => void;
+}) {
   const frame = useRef<HTMLIFrameElement>(null);
   const to = useContext(Answering);
+  // Read through a ref by the message handler, which is bound once.
+  const sendTo = useRef(onSend);
+  useEffect(() => {
+    sendTo.current = onSend;
+  }, [onSend]);
+  // Whether the frame has loaded the page it points at, so data is never
+  // posted into the blank document a frame starts with and then lost.
+  const loaded = useRef(false);
   const [src, setSrc] = useState<string | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [height, setHeight] = useState(MIN_HEIGHT);
@@ -50,6 +78,7 @@ export function HtmlArtifact({ html, title }: { html: string; title: string }) {
   useEffect(() => {
     let live = true;
     setFailed(null);
+    loaded.current = false;
     api
       .frameArtifact(html)
       .then((at) => live && setSrc(artifactUrl(at)))
@@ -88,7 +117,21 @@ export function HtmlArtifact({ html, title }: { html: string; title: string }) {
         return;
       }
 
-      if (guaca === "artifact-answer" && typeof value === "string") {
+      if (guaca === "artifact-send" && typeof value === "string" && sendTo.current) {
+        // A click inside a frame on another origin cannot be seen from out
+        // here, but where it moves the focus can: clicking a page's button
+        // gives the frame the focus. A page sending while something else has
+        // it, or while the window is in the background, is a page sending by
+        // itself. This bounds a page rather than proving a click, and the
+        // surface that carries the send bounds it again.
+        const clicked = document.hasFocus() && document.activeElement === frame.current;
+        sendTo.current(value, clicked);
+        return;
+      }
+
+      // A fenced page's send is an answer: it has nobody to reach but the
+      // operator, who reads it in the strip before anything goes anywhere.
+      if ((guaca === "artifact-answer" || guaca === "artifact-send") && typeof value === "string") {
         // Replaces whatever was there rather than queuing. A page that answers
         // on every drag of a slider is doing the right thing, and what the
         // operator sends is what the page last said, which is what they are
@@ -106,6 +149,18 @@ export function HtmlArtifact({ html, title }: { html: string; title: string }) {
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
   }, []);
+
+  // Into the frame's own window and nowhere else. `"*"` because the page's
+  // origin is opaque and has no name to target; the window object is the
+  // address, and it is the one this component framed.
+  const post = useCallback(() => {
+    if (data === undefined || !loaded.current) return;
+    frame.current?.contentWindow?.postMessage({ guaca: "artifact-data", data }, "*");
+  }, [data]);
+
+  useEffect(() => {
+    post();
+  }, [post]);
 
   useEffect(() => {
     if (!full) return;
@@ -139,6 +194,10 @@ export function HtmlArtifact({ html, title }: { html: string; title: string }) {
       sandbox="allow-scripts"
       referrerPolicy="no-referrer"
       src={src ?? undefined}
+      onLoad={() => {
+        loaded.current = true;
+        post();
+      }}
       title={title}
       style={full ? undefined : { height }}
     />

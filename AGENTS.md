@@ -35,6 +35,7 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/diff.ts         Two versions of a page, as the lines between them.
   lib/reasoning.ts    A turn's own thinking: how much is held, what is drawn.
   lib/calendar.ts     What a calendar shows, and in what order. No DOM.
+  lib/artifacts.ts    What the Artifacts dialog says about a kept page. No DOM.
   lib/cafeteria.ts    Preset agents, waiting to be hired. Content, not runtime.
   lib/compost.ts      Where a deleted agent waits, and how long it has left.
   lib/roles.ts        What an agent is for, in OpenRouter's twelve words.
@@ -75,6 +76,8 @@ src-tauri/src/
                       can do, and why an agent's needs the operator's yes.
     occasion.rs       A date the crew is answerable for. It fires nothing, which
                       is the whole of what separates it from a routine.
+    artifact.rs       A page a crew keeps: who owns it, who may edit it, and
+                      the log of versions, in the words of the moment.
     promise.rs        A closing sentence that says the work is still coming,
                       in a turn that is over. One rule, two readers.
     approval.rs       The two things an agent stops to ask a person, and why
@@ -257,6 +260,8 @@ repo: the frontend renders state and forwards intent.
 | A box round the part of a reply that needs the operator, and which marker draws which one | *A reply can mark the one part that needs a person* in `docs/WORKSPACE.md`, then `src/lib/callout.ts` |
 | A chart's colors, or how many series one may carry | *A chart's colors are the output of a check* in `docs/WORKSPACE.md`, then `src/lib/palette.ts` and the test beside it, which is the gate |
 | Running a model's own HTML, or anything about that origin | *A page an agent wrote runs somewhere else* in `docs/WORKSPACE.md`, then `src-tauri/src/artifact.rs` |
+| A page a crew keeps: the `artifact` tool, owners, versions, the Artifacts dialog, the card in a transcript | *An artifact is a page a crew keeps* in `docs/WORKSPACE.md`, then `domain/artifact.rs`, `db/artifacts.rs` and `Runtime::keep_artifact` |
+| A kept page's live data, what the operator allows, a click that reaches the owner | *Live data is declared, allowed once, and read with no model* and *A click on a kept page reaches its owner* in `docs/WORKSPACE.md`, then `Runtime::read_artifact`, `Runtime::call_connector`, and `onSend` in `src/components/HtmlArtifact.tsx` |
 | A page the operator can work, and what it may hand back | *A page can hand one value back* in `docs/WORKSPACE.md`, then `BRIDGE` in `src-tauri/src/artifact.rs` and `Answering` in `src/components/HtmlArtifact.tsx` |
 | A turn's tool calls in a channel: what folds, what a chip says, what opens | *A turn's own work is chips* in `docs/WORKSPACE.md`, then `src/lib/trail.ts` |
 | What an agent changed about its own memory, and where the version before it came from | *A memory rewrite opens as a diff* in `docs/WORKSPACE.md`, then `Workspace::write` and `src/lib/diff.ts` |
@@ -493,6 +498,7 @@ the gotchas file says what it already cost somebody to change it.
 | Skills, the `skill` tool, the starters, skills.sh, the `guaca` manual | `docs/gotchas/skills.md` |
 | A turn drawn while it runs: the bubble, the trail, the thinking | `docs/gotchas/transcript.md` |
 | Charts, callouts, and a page an agent wrote | `docs/gotchas/figures.md` |
+| A page a crew keeps, its owner and its history | `docs/gotchas/artifacts.md` |
 | Attachments, previews, a file in a reply | `docs/gotchas/files.md` |
 | Anything in `src/styles.css` | `docs/gotchas/styles.md` |
 | The rail, the crews' column, deleting an agent | `docs/gotchas/workspace.md` |

@@ -650,6 +650,110 @@ behind a search hit, inside a pair's thread or in a document preview draws and
 runs exactly as before; a Send button in those places would be a control that
 cannot say who it sends to.
 
+## An artifact is a page a crew keeps
+
+A fenced page is drawn once, inside the reply that carried it, and leaves the
+operator's view when the conversation moves on. That is right for a picker or a
+diagram that answers the question in front of them, and wrong for the thing
+they come back to: the pipeline board, the hiring plan, the comparison they
+will want again next week. So an artifact is the same page with an address.
+`domain/artifact.rs` has the argument; this is what it adds up to on screen.
+
+**What runs is exactly what a fenced page runs.** Same loopback origin, same
+content policy, reaching nothing, and `artifact.rs` holds both to one size cap
+by reference, so a version the crew kept is never one the frame server refuses.
+What a kept page adds is two channels through its host, both carried by the
+bridge `artifact.rs` prepends: data in, and a click out.
+
+**A tool call, not a fence, and that is the fence's own argument turned
+around.** A chart is a fence because the agent has the numbers in hand when it
+writes the sentence about them. A kept page is written to be read later, has
+an id the write assigns, and has to be checked against the crew before it is
+stored. `artifact` does all three, and the prompt's figure section points a
+page worth keeping at it.
+
+**Anyone in the crew edits; one agent owns.** Editing is open because a crew
+works on shared things. Ownership is who answers for the page: the name on the
+list, the one the others ask, the one whose prompt marks it *yours*. It moves
+only by a decision, an agent's `take` with a reason or the operator handing it
+from the dialog, never by an edit and never by the owner leaving. An owner that
+was deleted or moved out of the crew is still named, and said to be gone, until
+somebody decides.
+
+**The owner reads an edit; nobody sends it one.** Every agent's prompt lists
+its crew's artifacts with the owner and whoever made the current version, so an
+owner learns a crewmate changed its page on its next turn without being woken
+for it. The tool says so to the editor before it thinks of writing to the
+owner, because that message is a paid turn, and an owner woken by every edit
+edits back and wakes the editor.
+
+**The log is one table, in the words of the moment.** Versions and ownership
+changes are one sequence, so they are rows of one table, and the rows that made
+a version carry the whole page. Each names who acted, and who owned the page
+afterward, by the names they had then: the log is the record of what happened,
+and it has to keep reading after the agents it names are renamed, moved or
+purged. Putting a version back is a new version, never a rewind, so the page it
+replaced is still there to put back in turn.
+
+**The page is the point, and everything else is quiet.** The operator opens
+an artifact for the page. Its crew, owner, version and when it last changed are
+one faint line under the name, in the list and in the artifact alike, and the
+history is behind a button with the owner control beside it. It was first
+drawn as a column next to the page and as table columns in the list, and both
+spent the room on what nobody opened the dialog to read. The history is for
+working out what happened, by the operator or by an agent asked about it; it
+has to be one click away, not on screen.
+
+**What the dialog lists is what the rail is showing.** Inside a crew, that
+crew's; with every crew in the rail, every crew's, with a column saying whose.
+There is no filter of its own, because the rail already is one. This is a
+deliberate difference from the calendar, which always opens on every crew.
+
+**The card is drawn from the tool call.** A turn that made or changed a page
+leaves a card in its record rather than a chip, because the page is a place to
+go rather than a line to read. It is drawn from `artifact` on the call's part,
+beside `replaced` and for the same reason: the id is assigned by the write, so
+nothing in the model's arguments can say which page a `create` made, and
+nothing afterward can say which version this call left it at.
+
+**Live data is declared, allowed once, and read with no model.** A page can
+declare `sources`: a connector tool and the exact arguments to call it with,
+under a name. The operator sees every call and its arguments in the dialog and
+allows the list once. From then on, opening the page makes those calls as its
+owner, through the same path a turn's connector calls take, and hands the
+results to the page, where `guaca.data()` resolves to one entry per name. No
+model is involved, so a board costs a connector call to open and nothing else.
+
+The arguments being fixed is the safety argument. The page reaches no network,
+so the only way anything it read could leave is through something it can say,
+and a read whose arguments the page chose would be one: a search whose query is
+the row it just read is a message to whoever runs the search. The approval is
+of an exact list, compared as stored: an edit that changes the list waits for
+the operator again, an edit that keeps it keeps the approval, and putting back
+a version with the allowed list needs nothing new. A crew export leaves
+approvals behind, because they are this machine's decisions.
+
+Reads are checked when they are declared, against the owner, because the owner
+is who they run as: a page naming a tool its owner cannot call is refused while
+the agent can still fix it, not discovered on the first open.
+
+**A click on a kept page reaches its owner.** `guaca.send(value)` is carried to
+the page's owner as the operator's message, naming the page and fencing the
+value, so the owner does the work and updates the page, and the dialog shows
+the new version. Three things bound it, all in the dialog. The operator's click
+has to be what caused it: a click inside a frame on another origin cannot be
+seen, but the focus it moves into the frame can, and a page sending while
+something else has the focus is sending by itself. One at a time: nothing goes
+while the owner is still working. And never by itself, on a timer or when data
+changes, because that is every page view spending a turn and a page that loops
+with its owner. Work on a clock is what a routine is for. In a fenced page,
+`guaca.send` is an answer and waits in the strip like one.
+
+**Search finds a page by its title.** Every crew's, because search is the
+operator's. Not by its markup: a search for "total" that matched every page
+with a variable called `total` would bury the one whose name was half
+remembered.
+
 ## A transcript is a log, and says one thing out loud
 
 Waiting for a reply is the shape of using this app, and a reader who cannot see

@@ -16,6 +16,7 @@ import { relativeTime } from "./time";
 import type {
   AgentCard,
   AgentId,
+  ArtifactId,
   Group,
   GroupId,
   MessageHit,
@@ -33,6 +34,7 @@ export const SCOPES = [
   "files",
   "links",
   "routines",
+  "artifacts",
   "actions",
 ] as const;
 
@@ -44,6 +46,7 @@ export type SearchAction =
   | { do: "openChannel"; agentId: AgentId }
   | { do: "openMessage"; channelId: AgentId; messageId: MessageId }
   | { do: "openLink"; url: string }
+  | { do: "openArtifact"; artifactId: ArtifactId }
   | { do: "editAgent"; agentId: AgentId }
   | { do: "editGroup"; groupId: GroupId }
   | { do: "openSettings" }
@@ -95,8 +98,11 @@ const NEUTRAL = 10;
  * because it is the one result that leaves the app.
  */
 const PRIORITY: Record<ResultKind, number> = {
-  agents: 7,
-  groups: 6,
+  agents: 8,
+  groups: 7,
+  // A kept page is a place, like a crew: somewhere the operator goes, and
+  // named by somebody on purpose, which a line inside a message is not.
+  artifacts: 6,
   actions: 5,
   messages: 4,
   files: 3,
@@ -282,6 +288,20 @@ export function searchResults(input: SearchInput): SearchResult[] {
       // The channel, not the profile: a schedule sits in the panel beside the
       // conversation, and the profile dialog no longer has it.
       action: { do: "openChannel", agentId: routine.agentId },
+    });
+  }
+
+  // Pushed without a score test, like the four above, and for their reason.
+  for (const artifact of hits?.artifacts ?? []) {
+    results.push({
+      key: `artifact:${artifact.id}`,
+      kind: "artifacts",
+      title: artifact.title,
+      detail: groups.find((group) => group.id === artifact.groupId)?.name ?? "",
+      meta: relativeTime(artifact.updatedAt, now),
+      score: score(artifact.title, query),
+      at: artifact.updatedAt,
+      action: { do: "openArtifact", artifactId: artifact.id },
     });
   }
 

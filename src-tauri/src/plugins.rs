@@ -512,7 +512,7 @@ pub async fn call(
     target: Target<'_>,
     tool: &str,
     arguments: &serde_json::Value,
-) -> Result<String, PluginError> {
+) -> Result<mcp::Called, PluginError> {
     let Target { group, agent, kind, endpoint, account } = target;
     let label = || kind.label().to_string();
     let (id, grant, headers, schema) = match store.plugin_reach(group, agent, kind, tool)? {
@@ -575,7 +575,7 @@ async fn run(
     tool: &str,
     arguments: &serde_json::Value,
     schema: Option<&serde_json::Value>,
-) -> Result<String, McpError> {
+) -> Result<mcp::Called, McpError> {
     let session = mcp::open(dial.with_token(grant.map(|g| g.access_token.as_str()))).await?;
     mcp::call_tool(&session, tool, arguments, schema).await
 }

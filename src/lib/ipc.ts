@@ -34,6 +34,10 @@ import type {
   Approval,
   ApprovalId,
   ApprovalState,
+  Artifact,
+  ArtifactDetail,
+  ArtifactId,
+  ArtifactRead,
   Attachment,
   Bench,
   Browser,
@@ -481,6 +485,35 @@ export const api = {
   updateOccasion: (id: OccasionId, draft: OccasionDraft) =>
     invoke<Occasion>("update_occasion", { id, draft }),
   deleteOccasion: (id: OccasionId) => invoke<void>("delete_occasion", { id }),
+
+  /**
+   * The artifacts the operator can see, newest change first. No `groupId` is
+   * every crew's, which is what the dialog reads while the rail shows every
+   * crew; the wall between crews is for agents, not the operator.
+   */
+  artifacts: (groupId?: GroupId | null) =>
+    invoke<Artifact[]>("artifacts", { groupId: groupId ?? null }),
+  /** One artifact and its whole log, without any page in it. */
+  artifactDetail: (id: ArtifactId) => invoke<ArtifactDetail>("artifact_detail", { id }),
+  /** The page at one version, or the current one when `version` is left out. */
+  artifactPage: (id: ArtifactId, version?: number | null) =>
+    invoke<string>("artifact_page", { id, version: version ?? null }),
+  /**
+   * A kept page's reads, made now, with no model involved. Refused reads come
+   * back refused rather than failing the call, so the page can say which of
+   * its numbers are missing and why.
+   */
+  artifactData: (id: ArtifactId, version?: number | null) =>
+    invoke<ArtifactRead[]>("artifact_data", { id, version: version ?? null }),
+  /** Allows the reads the current version declares, exactly that list. */
+  allowArtifactSources: (id: ArtifactId) => invoke<Artifact>("allow_artifact_sources", { id }),
+  /** Puts an earlier version back as a new one. The one it replaces is kept. */
+  restoreArtifact: (id: ArtifactId, version: number) =>
+    invoke<Artifact>("restore_artifact", { id, version }),
+  /** Gives it to an agent in its own crew; refused for anybody outside it. */
+  handArtifact: (id: ArtifactId, agentId: AgentId) =>
+    invoke<Artifact>("hand_artifact", { id, agentId }),
+  deleteArtifact: (id: ArtifactId) => invoke<void>("delete_artifact", { id }),
 
   /** Refused if it was already answered or has lapsed. */
   decideApproval: (id: ApprovalId, decision: Decision) =>

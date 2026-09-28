@@ -18,6 +18,7 @@ use crate::artifact::Artifacts;
 use crate::config::{self, AppConfig, RedactedConfig};
 use crate::domain::agent::{copy_name, hire_names, AgentCard, AgentDraft, Consent, Lifecycle};
 use crate::domain::approval::{Approval, ApprovalState, Decision, ProtectedAction};
+use crate::domain::artifact::{self as artifact_domain, Actor, Artifact};
 use crate::domain::attachment::Attachment;
 use crate::domain::connector::{Connector, ConnectorDraft};
 use crate::domain::deployment::{Absent, Capabilities, Deployment};
@@ -25,8 +26,8 @@ use crate::domain::envelope::Envelope;
 use crate::domain::escalation::Escalation;
 use crate::domain::group::{Group, GroupDraft, GroupInference};
 use crate::domain::ids::{
-    AgentId, ApprovalId, ConnectorId, EscalationId, GroupId, MessageId, OccasionId, PluginId,
-    RepositoryId, RoutineId, RunId,
+    AgentId, ApprovalId, ArtifactId, ConnectorId, EscalationId, GroupId, MessageId, OccasionId,
+    PluginId, RepositoryId, RoutineId, RunId,
 };
 use crate::domain::now_ms;
 use crate::domain::occasion::{self, Occasion};
@@ -1967,6 +1968,124 @@ pub async fn delete_occasion(state: &AppState, id: OccasionId) -> Reply<()> {
     };
     state.runtime.store().delete_occasion(id, existing.group_id)?;
     state.runtime.emit(UiEvent::CalendarChanged { group_id: existing.group_id });
+    Ok(())
+}
+
+// ---- artifacts -----------------------------------------------------------
+
+/// How many artifacts one read of the list hands back. A ceiling on a
+/// pathological workspace, not a page size: the dialog is a list the operator
+/// scrolls, newest change first, so what is cut is what nobody touched longest.
+const MAX_ARTIFACTS: u32 = 500;
+
+/// The artifacts the operator can see. `groupId` absent is every crew's, which
+/// is what the dialog reads when the rail is showing every crew; the wall
+/// between crews is for agents, not for the operator.
+pub async fn artifacts(state: &AppState, group_id: Option<GroupId>) -> Reply<Vec<Artifact>> {
+    Ok(state.runtime.store().artifacts(group_id, MAX_ARTIFACTS)?)
+}
+
+/// One artifact and its whole log, without any page in it. The page at a
+/// version is its own read, because the log of a busy one is dozens of pages
+/// and the dialog draws one at a time.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactDetail {
+    pub artifact: Artifact,
+    pub log: Vec<artifact_domain::Entry>,
+}
+
+fn no_artifact(id: ArtifactId) -> CommandError {
+    CommandError::new(
+        "notFound",
+        format!("There is no artifact with id {id} any more. Somebody may have deleted it."),
+    )
+}
+
+pub async fn artifact_detail(state: &AppState, id: ArtifactId) -> Reply<ArtifactDetail> {
+    let store = state.runtime.store();
+    let artifact = store.any_artifact(id)?.ok_or_else(|| no_artifact(id))?;
+    Ok(ArtifactDetail { artifact, log: store.artifact_log(id)? })
+}
+
+/// The page at one version, or the current one when `version` is absent.
+pub async fn artifact_page(
+    state: &AppState,
+    id: ArtifactId,
+    version: Option<u32>,
+) -> Reply<String> {
+    state.runtime.store().artifact_page(id, version)?.ok_or_else(|| match version {
+        Some(version) => CommandError::new(
+            "notFound",
+            format!("This artifact has no version {version}. Pick one from its history."),
+        ),
+        None => no_artifact(id),
+    })
+}
+
+/// A kept page's reads, made now, for the page on screen.
+///
+/// Refused sources come back refused rather than failing the call, so the page
+/// can say which of its numbers are missing and why.
+pub async fn artifact_data(
+    state: &AppState,
+    id: ArtifactId,
+    version: Option<u32>,
+) -> Reply<Vec<artifact_domain::Read>> {
+    state.runtime.read_artifact(id, version).await?.ok_or_else(|| no_artifact(id))
+}
+
+/// The operator allowing the reads the current version declares. The approval
+/// is of that exact list: a version that declares another waits again.
+pub async fn allow_artifact_sources(state: &AppState, id: ArtifactId) -> Reply<Artifact> {
+    let allowed =
+        state.runtime.store().allow_artifact_sources(id)?.ok_or_else(|| no_artifact(id))?;
+    state.runtime.emit(UiEvent::ArtifactsChanged { group_id: allowed.group_id });
+    Ok(allowed)
+}
+
+/// Puts an earlier version back, as a new version. Nothing is rewound: the
+/// version this replaces stays in the history and can be put back in turn.
+pub async fn restore_artifact(state: &AppState, id: ArtifactId, version: u32) -> Reply<Artifact> {
+    let restored = state
+        .runtime
+        .store()
+        .restore_artifact(id, version, &Actor::Operator)?
+        .ok_or_else(|| {
+            CommandError::new(
+                "notFound",
+                format!("This artifact has no version {version} to put back. Pick one from its history."),
+            )
+        })?;
+    state.runtime.emit(UiEvent::ArtifactsChanged { group_id: restored.group_id });
+    Ok(restored)
+}
+
+/// Gives an artifact to an agent in its own crew. The operator's version of an
+/// agent's `take`, and the way out when the owner has been deleted.
+pub async fn hand_artifact(state: &AppState, id: ArtifactId, agent_id: AgentId) -> Reply<Artifact> {
+    let handed = state.runtime.store().hand_artifact(id, agent_id).map_err(|err| match err {
+        crate::db::StoreError::AgentNotInGroup(_) => CommandError::new(
+            "validation",
+            "That agent is not in this artifact's crew. Pick one of the crew's own agents.",
+        ),
+        other => other.into(),
+    })?;
+    let handed = handed.ok_or_else(|| no_artifact(id))?;
+    state.runtime.emit(UiEvent::ArtifactsChanged { group_id: handed.group_id });
+    Ok(handed)
+}
+
+/// Deletes one and its whole history. The operator's call only: agents have no
+/// delete, because what the operator keeps is the operator's to throw away.
+pub async fn delete_artifact(state: &AppState, id: ArtifactId) -> Reply<()> {
+    // Read first, because the event names the crew and afterward there is
+    // nothing left to ask.
+    let Some(existing) = state.runtime.store().any_artifact(id)? else {
+        return Ok(());
+    };
+    state.runtime.store().delete_artifact(id)?;
+    state.runtime.emit(UiEvent::ArtifactsChanged { group_id: existing.group_id });
     Ok(())
 }
 

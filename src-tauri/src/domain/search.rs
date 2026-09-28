@@ -14,6 +14,7 @@
 
 use serde::Serialize;
 
+use super::artifact::Artifact;
 use super::attachment::Attachment;
 use super::envelope::Participant;
 use super::ids::{AgentId, MessageId};
@@ -27,6 +28,9 @@ pub struct SearchHits {
     pub files: Vec<FileHit>,
     pub links: Vec<LinkHit>,
     pub routines: Vec<Routine>,
+    /// Kept pages whose title matched, most recently changed first. Every
+    /// crew's: search is the operator's, and the wall between crews is not.
+    pub artifacts: Vec<Artifact>,
 }
 
 /// One message that matched, with enough to draw a row and open it.

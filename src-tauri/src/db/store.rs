@@ -3317,6 +3317,14 @@ impl Store {
         // nobody left for the dates to be true for; leaving them would fail the
         // foreign key on the line below in any case.
         tx.execute("DELETE FROM occasions WHERE group_id=?1", params![id.to_string()])?;
+        // And its artifacts, for the same reason: they are the crew's. The log
+        // goes first, or its foreign key refuses the line after it.
+        tx.execute(
+            "DELETE FROM artifact_history WHERE artifact_id IN
+                 (SELECT id FROM artifacts WHERE group_id=?1)",
+            params![id.to_string()],
+        )?;
+        tx.execute("DELETE FROM artifacts WHERE group_id=?1", params![id.to_string()])?;
         tx.execute("DELETE FROM groups WHERE id=?1", params![id.to_string()])?;
         tx.commit()?;
         Ok(())
@@ -3714,6 +3722,7 @@ impl Store {
             links,
             files: self.matching_files(&pattern, want)?,
             routines: self.matching_routines(&pattern, limit)?,
+            artifacts: self.matching_artifacts(&pattern, limit)?,
         })
     }
 
@@ -5100,7 +5109,9 @@ mod tests {
         f.store.discard_agent(discarded.id, 1_000).unwrap();
         f.store.create_connector(&key_for(mine.group_id, "TOKEN", "private-token")).unwrap();
         let mut conn = f.store.conn().unwrap();
-        conn.execute_batch("DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; PRAGMA user_version=51;").unwrap();
+        // Everything the migrations after 51 made, so the database is the one a
+        // version-51 install really has. Each new migration adds its undo here.
+        conn.execute_batch("DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; PRAGMA user_version=51;").unwrap();
         migrations::run(&mut conn).unwrap();
         drop(conn);
         assert_eq!(f.store.connector_env(mine.id).unwrap()["TOKEN"], "private-token");

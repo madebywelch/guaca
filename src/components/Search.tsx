@@ -43,7 +43,7 @@ const LIMIT = 25;
 /**
  * The workspace search.
  *
- * One ranked list over seven kinds of thing, opened from the rail or with the
+ * One ranked list over eight kinds of thing, opened from the rail or with the
  * platform's find shortcut. Everything it can do is a jump or a settings pane.
  * Nothing here deletes, pauses or sends: a control you drive by typing and
  * pressing Enter is the wrong place to keep an irreversible action.
@@ -64,6 +64,7 @@ export function Search({
   const openMessage = useStore((s) => s.openMessage);
   const select = useStore((s) => s.select);
   const setBanner = useStore((s) => s.setBanner);
+  const showArtifacts = useStore((s) => s.showArtifacts);
   const now = useNow(30_000);
 
   const [query, setQuery] = useState("");
@@ -121,6 +122,9 @@ export function Search({
         case "openLink":
           void openExternal(action.url);
           break;
+        case "openArtifact":
+          showArtifacts({ id: action.artifactId });
+          break;
         case "editAgent": {
           const agent = agents.find((a) => a.id === action.agentId);
           if (agent) onEditAgent(agent);
@@ -159,6 +163,7 @@ export function Search({
       onOpenChannel,
       openMessage,
       select,
+      showArtifacts,
     ],
   );
 
@@ -325,5 +330,6 @@ const GLYPH: Record<SearchResult["kind"], string> = {
   files: "◫",
   links: "↗",
   routines: "◷",
+  artifacts: "❏",
   actions: "⌘",
 };

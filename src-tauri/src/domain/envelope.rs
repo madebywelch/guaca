@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::approval::{DetailField, ProtectedAction};
+use super::artifact::Made;
 use super::attachment::Attachment;
 use super::ids::{AgentId, ApprovalId, MessageId, RoutineId, RunId};
 
@@ -181,6 +182,15 @@ pub enum Part {
         /// rows written before this existed, which read as they always did.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         replaced: Option<String>,
+        /// The kept page the call made or changed, and the version it is at.
+        ///
+        /// Here for the reason `replaced` is: an artifact's id is assigned by
+        /// the write, so nothing in `arguments` names the one a `create` made,
+        /// and nothing afterward can work out which version this call left it
+        /// at. The transcript draws a card from it. Only `artifact` fills it
+        /// in, and only on a call that wrote.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        artifact: Option<Made>,
     },
     /// A file this message carries.
     ///
@@ -295,7 +305,7 @@ impl Part {
         arguments: serde_json::Value,
         outcome: ToolOutcome,
     ) -> Self {
-        Part::ToolCall { name: name.into(), arguments, outcome, replaced: None }
+        Part::ToolCall { name: name.into(), arguments, outcome, replaced: None, artifact: None }
     }
 
     /// A call that overwrote something whole, carrying what was there first.
@@ -305,7 +315,29 @@ impl Part {
         outcome: ToolOutcome,
         replaced: impl Into<String>,
     ) -> Self {
-        Part::ToolCall { name: name.into(), arguments, outcome, replaced: Some(replaced.into()) }
+        Part::ToolCall {
+            name: name.into(),
+            arguments,
+            outcome,
+            replaced: Some(replaced.into()),
+            artifact: None,
+        }
+    }
+
+    /// A call that wrote a kept page, carrying which one and at what version.
+    pub fn tool_call_making(
+        name: impl Into<String>,
+        arguments: serde_json::Value,
+        outcome: ToolOutcome,
+        made: Made,
+    ) -> Self {
+        Part::ToolCall {
+            name: name.into(),
+            arguments,
+            outcome,
+            replaced: None,
+            artifact: Some(made),
+        }
     }
 
     /// The plain-text projection, used for prompts, dedup hashing, and search.

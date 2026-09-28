@@ -944,7 +944,9 @@ pub fn system_prompt(
              An ```html fence is run as a page, on an origin of its own: a diagram, a layout, \
              a comparison laid out as cards, a small thing the operator can work. Its own \
              markup, style and script, and it can reach nothing at all: no network, no remote \
-             image, no font, no library. Everything it shows it has to contain or compute.\n\n\
+             image, no font, no library. Everything it shows it has to contain or compute. It \
+             is shown in this reply and nowhere else: a page the operator will come back to \
+             belongs in `artifact`, which keeps it.\n\n\
              A page can hand one value back. Call `guaca.answer(value)` with any JSON value and \
              Guaca shows it to the operator underneath the page, with a button that sends it to \
              you as their next message. The page cannot send anything by itself, so call it \
@@ -1241,6 +1243,54 @@ pub fn notebook_section(entries: &[crate::notebook::Entry]) -> String {
         ));
     }
     out
+}
+
+/// What the crew keeps, named and never read out.
+///
+/// Omitted when it keeps nothing, like the notebook: the tool's own description
+/// is what says the shelf exists. Each line carries the owner and whoever made
+/// the current version, and that pairing is the point of drawing it every turn:
+/// it is how an owner learns a crewmate changed its page, which is the one
+/// thing nobody should send it a message to say.
+pub fn artifacts_section(
+    kept: &[crate::domain::artifact::Artifact],
+    reader: AgentId,
+    now: i64,
+) -> String {
+    use crate::domain::artifact::LISTED;
+    if kept.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(
+        "\n## Your crew's artifacts\n\
+         Pages your crew keeps, most recently changed first. Not their contents: `artifact` \
+         with `view` opens one. When you are asked for something one of these already covers, \
+         `update` it rather than making another. Any of you can edit any of them; the ones \
+         marked yours are yours to keep current.\n",
+    );
+    for one in kept.iter().take(LISTED) {
+        out.push_str(&one.index_line(reader, now));
+        out.push('\n');
+    }
+    if kept.len() > LISTED {
+        out.push_str(&format!(
+            "({} more; `artifact` with `list` shows them all.)\n",
+            kept.len() - LISTED
+        ));
+    }
+    out
+}
+
+/// Appends [`artifacts_section`] to the system message a turn was built with.
+pub fn add_artifacts(
+    messages: &mut [ChatMessage],
+    kept: &[crate::domain::artifact::Artifact],
+    reader: AgentId,
+    now: i64,
+) {
+    if let Some(ChatMessage::System { content }) = messages.first_mut() {
+        content.push_str(&artifacts_section(kept, reader, now));
+    }
 }
 
 /// Appends [`notebook_section`] to the system message a turn was built with.
@@ -3467,5 +3517,81 @@ mod tests {
             Modalities::seeing(),
         );
         assert!(!prompt.contains("## What you are waiting on"), "{prompt}");
+    }
+
+    fn kept(
+        title: &str,
+        owner: Option<(AgentId, &str)>,
+        editor: AgentId,
+    ) -> crate::domain::artifact::Artifact {
+        use crate::domain::artifact::{Actor, Artifact, Owner};
+        Artifact {
+            id: crate::domain::ids::ArtifactId::new(),
+            group_id: crate::domain::ids::GroupId::new(),
+            owner: owner.map(|(id, name)| Owner { id, name: name.into(), gone: false }),
+            title: title.into(),
+            version: 3,
+            edited_by: Actor::Agent { id: editor, name: "Milo".into() },
+            created_at: 0,
+            updated_at: 0,
+            sources: vec![],
+            sources_allowed: false,
+        }
+    }
+
+    #[test]
+    fn a_crew_that_keeps_no_artifacts_gets_no_heading() {
+        // The tool description already says the shelf exists. A heading over
+        // nothing costs every turn of every agent and reads as a broken feature.
+        assert_eq!(artifacts_section(&[], AgentId::new(), 0), "");
+    }
+
+    #[test]
+    fn an_owner_reads_that_somebody_else_changed_its_page() {
+        // This line is how an owner finds out, which is what lets the tool tell
+        // an editor not to send it a message.
+        let rae = AgentId::new();
+        let milo = AgentId::new();
+        let section = artifacts_section(&[kept("Pipeline", Some((rae, "Rae")), milo)], rae, 0);
+        assert!(section.contains("## Your crew's artifacts"), "{section}");
+        assert!(section.contains("\"Pipeline\" v3, yours, updated just now by Milo"), "{section}");
+        assert!(section.contains("`update` it rather than making another"), "{section}");
+
+        let theirs = artifacts_section(&[kept("Pipeline", Some((rae, "Rae")), milo)], milo, 0);
+        assert!(theirs.contains("owned by Rae, updated just now by you"), "{theirs}");
+    }
+
+    #[test]
+    fn a_long_shelf_is_named_to_a_limit_and_counted_past_it() {
+        use crate::domain::artifact::LISTED;
+        let editor = AgentId::new();
+        let many: Vec<_> =
+            (0..LISTED + 3).map(|n| kept(&format!("Page {n}"), None, editor)).collect();
+        let section = artifacts_section(&many, AgentId::new(), 0);
+        assert!(section.contains("(3 more; `artifact` with `list`"), "{section}");
+        assert!(!section.contains(&format!("Page {}", LISTED)), "{section}");
+    }
+
+    #[test]
+    fn a_fenced_page_points_at_the_tool_that_keeps_one() {
+        let prompt = system_prompt(
+            &card("Product"),
+            "",
+            &[],
+            &[],
+            &[],
+            &[],
+            "",
+            &[],
+            &[],
+            &[],
+            ReplyMode::ToOperator,
+            &[],
+            None,
+            None,
+            Surfaces::both(),
+            Modalities::seeing(),
+        );
+        assert!(prompt.contains("belongs in `artifact`, which keeps it"), "{prompt}");
     }
 }

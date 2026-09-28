@@ -1528,6 +1528,70 @@ WHERE kind = 'supermemory'
 ALTER TABLE agents ADD COLUMN runs_errands INTEGER NOT NULL DEFAULT 0;
 "#,
     ),
+    (
+        57,
+        r#"
+-- Pages a crew keeps. `domain/artifact.rs` argues the design; what matters for
+-- the schema is three decisions.
+--
+-- `group_id` is the wall, as it is for `occasions`: every agent read and write
+-- matches on it, and `Store::delete_group` takes these rows out itself, history
+-- first, because these foreign keys are enforced.
+--
+-- `version` and `updated_at` on the row are a copy of the newest history row
+-- that made a version. Kept here so the list, which is read on every turn of
+-- every agent in the crew, is one indexed read rather than a join against the
+-- whole log. The two are written in one transaction and nowhere else.
+--
+-- `owner_id` is a reference to a live row, and deliberately not the only record
+-- of who owned it: an agent's row can be renamed, and the log below says who
+-- held the page by the name they had then.
+--
+-- `allowed_sources` is the exact list of reads the operator allowed, as it was
+-- stored. A page's reads run only while its current version declares that same
+-- string, so any change to the list, by an edit or a restore, waits for the
+-- operator again without anything having to remember to revoke it.
+CREATE TABLE artifacts (
+    id              TEXT    PRIMARY KEY,
+    group_id        TEXT    NOT NULL REFERENCES groups(id),
+    owner_id        TEXT    REFERENCES agents(id) ON DELETE SET NULL,
+    title           TEXT    NOT NULL,
+    version         INTEGER NOT NULL,
+    created_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL,
+    allowed_sources TEXT
+);
+CREATE INDEX artifacts_crew ON artifacts (group_id, updated_at);
+
+-- The log, and the versions, in one table. A version is a row that carries a
+-- page, and the reads that page declares, `[]` for none; taking and handing
+-- ownership and allowing reads are rows that carry neither. One table rather
+-- than two because they are one sequence: "Milo edited it, then Juno took it
+-- over" is read in order, and two tables would need their order reconstructed
+-- from timestamps.
+--
+-- `agent_id` has no foreign key, and `actor` and `owner` are names rather than
+-- ids. This table is the record of what happened, in the words of the moment,
+-- and it has to keep reading after the agents it names are renamed, moved or
+-- purged. `agent_id` NULL is the operator.
+CREATE TABLE artifact_history (
+    artifact_id TEXT    NOT NULL REFERENCES artifacts(id),
+    seq         INTEGER NOT NULL,
+    at          INTEGER NOT NULL,
+    change      TEXT    NOT NULL,
+    agent_id    TEXT,
+    actor       TEXT    NOT NULL DEFAULT '',
+    version     INTEGER NOT NULL,
+    owner       TEXT,
+    note        TEXT    NOT NULL DEFAULT '',
+    page        TEXT,
+    sources     TEXT,
+    PRIMARY KEY (artifact_id, seq),
+    CHECK ((change IN ('created', 'edited', 'restored')) = (page IS NOT NULL)),
+    CHECK ((page IS NOT NULL) = (sources IS NOT NULL))
+);
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

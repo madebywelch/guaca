@@ -299,6 +299,22 @@ function describe(tool: string, args: Args): Described {
       };
     }
 
+    // A call that wrote a page is drawn as a card, not a chip: see
+    // `ActivityRecord`. What reaches here is a read, a take-over, a refusal,
+    // or a call still in flight, and the title is what it was for.
+    case "artifact": {
+      const action = text(args, "action") ?? "list";
+      const title = text(args, "title");
+      if (["create", "add", "new", "make"].includes(action))
+        return { title: title ? `Made ${clip(title, 40)}` : "Made an artifact", target: null };
+      if (["update", "edit", "change", "revise", "rename"].includes(action))
+        return { title: "Updated an artifact", target: text(args, "note") };
+      if (["take", "take_over", "take_ownership", "claim", "own"].includes(action))
+        return { title: "Took over an artifact", target: text(args, "note") };
+      if (action === "list") return { title: "Checked its crew's artifacts", target: null };
+      return { title: "Opened an artifact", target: null };
+    }
+
     // Named by file, because which file is the thing an operator opens the
     // chip to find out; the words are about its own notebook.
     case "notebook": {
@@ -498,6 +514,8 @@ export function callInFlight(name: string, raw: unknown): string {
       return "Reading its skills";
     case "notebook":
       return "Working in its notebook";
+    case "artifact":
+      return "Working on an artifact";
     case "create_agent":
       return "Asking to add an agent";
     case "request_permission":
@@ -544,6 +562,8 @@ function manyLabel(group: TrailGroup): string {
       return `Used its skills ${count} times`;
     case "notebook":
       return `Used its notebook ${count} times`;
+    case "artifact":
+      return `Used its crew's artifacts ${count} times`;
     case "attach_file":
       return `Attached ${count} files`;
     case "update_memory":

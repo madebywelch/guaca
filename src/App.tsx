@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AgentAvatar } from "./avatars/AgentAvatar";
 import { AgentEditor } from "./components/AgentEditor";
 import { AgentMenu, type MenuTarget } from "./components/AgentMenu";
+import { Artifacts } from "./components/Artifacts";
 import { Cafeteria } from "./components/Cafeteria";
 import { Calendar } from "./components/Calendar";
 import { ChannelView } from "./components/ChannelView";
@@ -91,6 +92,8 @@ export default function App() {
   const [menu, setMenu] = useState<MenuTarget | null>(null);
   const forYou = useStore((state) => state.forYou);
   const showForYou = useStore((state) => state.showForYou);
+  const artifactsOpen = useStore((state) => state.artifactsOpen);
+  const showArtifacts = useStore((state) => state.showArtifacts);
   const [showSettings, setShowSettings] = useState<Section | true | null>(null);
   const [searching, setSearching] = useState(false);
   const [ready, setReady] = useState(false);
@@ -376,9 +379,11 @@ export default function App() {
             ? "cafeteria"
             : showCalendar
               ? "calendar"
-              : forYou
-                ? "forYou"
-                : null;
+              : artifactsOpen
+                ? "artifacts"
+                : forYou
+                  ? "forYou"
+                  : null;
   useReportView({
     agentId: selected ?? null,
     overlay,
@@ -407,6 +412,7 @@ export default function App() {
         onEditAgent={(agent) => setEditing(agent)}
         onOpenCafeteria={() => setShowCafeteria(true)}
         onOpenCalendar={() => setShowCalendar(true)}
+        onOpenArtifacts={() => showArtifacts({ id: null })}
         onEditGroup={(group) => setEditingGroup(group)}
         onOpenSettings={() => setShowSettings(true)}
         onOpenSearch={() => setSearching(true)}
@@ -572,6 +578,7 @@ export default function App() {
       )}
       {showCafeteria && <Cafeteria onClose={() => setShowCafeteria(false)} />}
       {showCalendar && <Calendar onClose={() => setShowCalendar(false)} />}
+      {artifactsOpen && <Artifacts onClose={() => showArtifacts(null)} />}
       {showSettings && (
         <SettingsDialog
           onClose={() => setShowSettings(null)}

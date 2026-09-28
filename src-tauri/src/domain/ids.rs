@@ -64,6 +64,7 @@ macro_rules! declare_id {
 
 declare_id!(AgentId, "agent");
 declare_id!(ApprovalId, "approval");
+declare_id!(ArtifactId, "artifact");
 declare_id!(ConnectorId, "connector");
 declare_id!(DecisionId, "decision");
 declare_id!(EscalationId, "escalation");
