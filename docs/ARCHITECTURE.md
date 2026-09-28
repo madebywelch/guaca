@@ -505,8 +505,10 @@ model selector calls `subscription_models`, which reads the Codex backend's
 `/models` catalog with Guaca's subscription credential. Picker-visible entries
 are ordered by the service's priority. The installed coding CLI is not involved;
 its image version cannot update a list compiled into Guaca. The catalog request
-names the protocol version it understands and retries one 401 through the same
-serialized token refresh used by model calls.
+retries one 401 through the same serialized token refresh used by model calls.
+The `client_version` it has to send is a floor the service filters models by,
+so it is set far above any release: a real release number pinned there hid the
+GPT-6 family until someone noticed. `CATALOG_CLIENT_VERSION` has the measurement.
 
 The request runs separately from settings loading, with a ten-second ceiling.
 A failure leaves the default and saved choice selectable and says the catalog

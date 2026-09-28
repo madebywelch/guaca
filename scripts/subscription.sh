@@ -13,7 +13,8 @@
 #
 # It reads the sign-in from the app's own config directory, so what is measured
 # is what the operator is actually running. Point GUAC_SUBSCRIPTION_JSON at a
-# file to test a different one. It spends a few hundred tokens of plan quota.
+# file to test a different one, and name GUAC_SUBSCRIPTION_MODEL to run the turn
+# on a model other than the default. It spends a few hundred tokens of plan quota.
 
 set -euo pipefail
 

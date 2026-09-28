@@ -36,14 +36,21 @@ async fn catalog(status: StatusCode, body: Value, expire: bool) -> Catalog {
         let reads = reads.clone();
         move |headers: HeaderMap, Query(query): Query<std::collections::HashMap<String, String>>| {
             let reads = reads.clone();
-            let body = body.clone();
+            let mut body = body.clone();
             async move {
                 let nth = reads.fetch_add(1, Ordering::SeqCst);
-                assert_eq!(query["client_version"], "0.153.3");
                 assert_eq!(headers["originator"], "codex_cli_rs");
                 assert_eq!(headers["chatgpt-account-id"], "account");
                 assert_eq!(headers["authorization"], if expire && nth > 0 { "Bearer fresh" } else { "Bearer stored" });
                 if expire && nth == 0 { return StatusCode::UNAUTHORIZED.into_response(); }
+                let Some(asked) = query.get("client_version").and_then(|raw| version(raw)) else {
+                    return (StatusCode::BAD_REQUEST, "Invalid client_version format").into_response();
+                };
+                if let Some(models) = body.get_mut("models").and_then(Value::as_array_mut) {
+                    models.retain(|model| {
+                        model["minimum"].as_str().and_then(version).is_none_or(|floor| floor <= asked)
+                    });
+                }
                 (status, Json(body)).into_response()
             }
         }
@@ -80,6 +87,14 @@ async fn catalog(status: StatusCode, body: Value, expire: bool) -> Catalog {
         _dir: dir,
         server,
     }
+}
+
+/// What the service does with `client_version`: a model whose floor is above
+/// it is left out, and one that does not parse is refused.
+fn version(raw: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = raw.split('.').map(|part| part.parse().ok());
+    let parsed = (parts.next()??, parts.next()??, parts.next()??);
+    parts.next().is_none().then_some(parsed)
 }
 
 #[tokio::test]
@@ -131,6 +146,32 @@ async fn live_offers_replace_the_compiled_list_in_priority_order() {
             .map(|m| m.slug)
             .collect::<Vec<_>>(),
         ["new-model", "older"]
+    );
+}
+
+#[tokio::test]
+async fn no_model_is_left_out_for_being_newer_than_guaca() {
+    // The floors the service put on the GPT-6 family. A pinned 0.153.3 showed
+    // the first and silently dropped the second, and the third stands for the
+    // next family, which must not need a release of Guaca to appear.
+    let server = catalog(
+        StatusCode::OK,
+        json!({"models":[
+            {"slug":"gpt-6-astra", "visibility":"list", "priority":1, "minimum":"0.150.0"},
+            {"slug":"gpt-6-sol", "visibility":"list", "priority":2, "minimum":"0.155.0"},
+            {"slug":"next-family", "visibility":"list", "priority":3, "minimum":"2.0.0"}
+        ]}),
+        false,
+    )
+    .await;
+    assert_eq!(
+        codex::models(&server.subscription)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| m.slug)
+            .collect::<Vec<_>>(),
+        ["gpt-6-astra", "gpt-6-sol", "next-family"]
     );
 }
 

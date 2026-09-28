@@ -37,12 +37,14 @@ offline is a stub agreeing with what this app believes the protocol is, and the
 failure worth catching is that belief going stale.
 
 ```sh
-./scripts/subscription.sh    # a real call against your own ChatGPT plan
+./scripts/subscription.sh                                    # a real call against your own ChatGPT plan
+GUAC_SUBSCRIPTION_MODEL=gpt-6-sol ./scripts/subscription.sh  # the same, on a model the catalog just added
 ```
 
 `tests/subscription_catalog.rs` checks the authenticated model list, including
-hidden entries, priority, malformed responses and one refresh after a 401. Its
-live check reads the catalog without spending model quota:
+hidden entries, priority, malformed responses, one refresh after a 401, and that
+no model is left out for needing a newer Codex CLI than the version Guaca names.
+Its live check reads the catalog without spending model quota:
 
 ```sh
 GUAC_SUBSCRIPTION_JSON=/path/to/subscription.json cargo test \
