@@ -257,6 +257,14 @@ The daemon, a browser as a client, and the boot both hosts share.
   `launchd.plist(5)`). In the app's group the script would be ended by the
   quit it asked for, leaving the old app closed and the new one never installed.
   Only failure is reported: success is the app closing.
+- **`install.sh` looks for the app with `pgrep -a`.** macOS `pgrep` and
+  `pkill` leave out their own ancestors unless given `-a`, and when the app
+  starts the rebuild the app is one. Without it the script found nothing to
+  quit, replaced and deleted the bundle under the running app, and `open`
+  brought that old process forward instead of the new build. The first file
+  picker opened in it afterward aborted the process from inside AppKit.
+  From a terminal the app is never an ancestor, which is why the line had
+  worked since the script was written.
 - **Updates used to keep every backup.** Each is a full copy of the
   workspace, and on a box following `main` the disk would fill in a few
   updates, after which every update fails at its backup step. One is kept now, the

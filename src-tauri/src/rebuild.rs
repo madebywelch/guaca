@@ -376,4 +376,119 @@ mod tests {
             assert_eq!(installed_in(Path::new(loose)), None, "{loose}");
         }
     }
+
+    /// A stand-in for the installed app, ended when the test is.
+    #[cfg(target_os = "macos")]
+    struct Running(std::process::Child);
+
+    #[cfg(target_os = "macos")]
+    impl Drop for Running {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    /// The real `install.sh`, started by the installed app the way `start`
+    /// starts it: whether the app was still running when the script reached
+    /// the copy, and the script's log. The app is `bash` reached through a
+    /// symlink at the installed executable's path, so `pgrep -f` sees what it
+    /// sees for Guaca, and it exits when asked to quit unless `stubborn`.
+    /// Every tool that builds, signs or quits is a stub; the one that copies
+    /// records what it found and fails, so nothing is replaced.
+    #[cfg(target_os = "macos")]
+    fn install_from_the_app(stubborn: bool, within: Duration) -> (String, String) {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("guaca");
+        let dest = dir.path().join("Applications");
+        let stubs = dir.path().join("bin");
+        let built = repo.join("src-tauri/target/release/bundle/macos/Guaca.app/Contents");
+        let exec = dest.join("Guaca.app/Contents/MacOS/guac");
+        let (log, quit, seen) =
+            (dir.path().join("install.log"), dir.path().join("quit"), dir.path().join("seen"));
+        for made in
+            [repo.join("scripts"), built.clone(), exec.parent().unwrap().into(), stubs.clone()]
+        {
+            std::fs::create_dir_all(made).unwrap();
+        }
+        std::fs::write(repo.join("scripts/install.sh"), include_str!("../../scripts/install.sh"))
+            .unwrap();
+        std::fs::write(
+            built.join("Info.plist"),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict>\
+             <key>CFBundleIdentifier</key><string>com.madebywelch.guac.test</string>\
+             <key>CFBundleShortVersionString</key><string>0.0.0</string>\
+             </dict></plist>\n",
+        )
+        .unwrap();
+        symlink("/bin/bash", &exec).unwrap();
+        let (exec, quit, seen) = (exec.display(), quit.display(), seen.display());
+        for (tool, body) in [
+            ("git", "echo 0000000".to_string()),
+            ("pnpm", "exit 0".into()),
+            ("cargo", "exit 0".into()),
+            ("codesign", "exit 0".into()),
+            ("osascript", format!("touch '{quit}'")),
+            (
+                "ditto",
+                format!(
+                    "if pgrep -a -f '^{exec}' >/dev/null; then echo running; else echo gone; fi > '{seen}'\nexit 1"
+                ),
+            ),
+        ] {
+            let stub = stubs.join(tool);
+            std::fs::write(&stub, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let until = if stubborn { ":".to_string() } else { format!("[ ! -e '{quit}' ]") };
+        let _app = Running(
+            std::process::Command::new(exec.to_string())
+                .arg("-c")
+                .arg(format!(
+                    "/bin/bash '{}' --no-pull >'{}' 2>&1 &\nwhile {until}; do sleep 0.05; done",
+                    repo.join("scripts/install.sh").display(),
+                    log.display()
+                ))
+                .env("PATH", format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", stubs.display()))
+                .env("GUACA_DEST", &dest)
+                .env_remove("GUACA_SIGN_IDENTITY")
+                .spawn()
+                .unwrap(),
+        );
+        let started = std::time::Instant::now();
+        let seen = loop {
+            let said = std::fs::read_to_string(seen.to_string()).unwrap_or_default();
+            if !said.trim().is_empty() {
+                break said.trim().to_string();
+            }
+            assert!(
+                started.elapsed() < within,
+                "the script never reached the copy:\n{}",
+                std::fs::read_to_string(&log).unwrap_or_default()
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        (seen, std::fs::read_to_string(&log).unwrap())
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_app_that_starts_the_install_is_quit_before_its_bundle_is_replaced() {
+        let (app, log) = install_from_the_app(false, Duration::from_secs(10));
+        assert_eq!(app, "gone", "{log}");
+        assert!(log.contains("Quitting the running Guaca"), "{log}");
+        assert!(!log.contains("did not quit on its own"), "{log}");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_app_that_starts_the_install_and_ignores_the_quit_is_ended_before_its_bundle_is_replaced()
+    {
+        let (app, log) = install_from_the_app(true, Duration::from_secs(30));
+        assert_eq!(app, "gone", "{log}");
+        assert!(log.contains("it did not quit on its own; ending it"), "{log}");
+    }
 }
