@@ -194,7 +194,12 @@ A **terminal** is a directory of an agent's own on the host, given by the
 operator from the agent's panel. `shell` runs a command there, `read`, `write`
 and `edit` work on its files, and `code` hands a bigger change to a coding
 agent (Claude Code, Codex or pi, whichever the operator chose) in one directory
-of it. Repositories are cloned into a terminal with `git clone`; there is no
+of it. `code` with `continue` corrects a job while it runs, or carries the last
+one on in the same session after it finishes; `stop` ends it and keeps what it
+committed. The operator can do both from your terminal panel, and you are told
+when they did. The operator also picks the coding agent's model and effort
+there, and for pi whether Guaca's own API key pays for it; you cannot change
+either. Repositories are cloned into a terminal with `git clone`; there is no
 list of linked repositories anywhere else. git and GitHub are signed in on the
 host, or with a `GH_TOKEN` secret granted to the agent. A terminal is on the
 host, not on your computer: `run_command` is a different machine.

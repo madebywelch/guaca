@@ -27,23 +27,26 @@
 //! argument is in [`Harness`], and it is the reason this module is a dispatch
 //! rather than a provider flag on a single command line.
 //!
-//! What they share is the shape of a job: one process, in one directory, whose
-//! stdout is a stream of JSON objects, one per line. Pi and Claude share the
-//! process lifecycle below, with their own arguments and event readers. Codex
-//! owns a bidirectional app-server session in [`codex`], ending its process
-//! after the active turn completes. All three return the same [`Outcome`].
+//! What they share is the shape of a job: one process, in one directory,
+//! speaking JSON one object per line, with its stdin open for the life of the
+//! job. Claude Code's lifecycle is below, because its stdout is a stream that
+//! ends at `result`; `pi`'s RPC mode and Codex's app-server hold a
+//! conversation on stdin and each drives its own process in [`pi`] and
+//! [`codex`]. All three end by having their input closed, never by a kill
+//! unless that fails, and return the same [`Outcome`].
 //!
-//! ## Why the credentials are not ours
+//! ## Whose credentials
 //!
 //! The harnesses read their own auth: `pi` from `~/.pi/agent/auth.json` or the
-//! environment, Codex and Claude Code from their own sign-ins. Each is already signed in or
-//! it is not, and Guaca passing a key would put the operator's Guaca key on a
-//! second bill under a second provider for work they are already paying for.
-//! The consequence is stated rather than hidden: a job's spend does not appear
-//! in this app's usage table, because this app did not spend it. What the job
+//! environment, Codex and Claude Code from their own sign-ins, and a plan is
+//! spent by the program it was issued to. The one exception is chosen, never
+//! inferred: `pi` set to be paid for with Guaca's own API key reaches it
+//! through [`relay`], which holds the key in this process and hands the job a
+//! loopback token. Only then does a job's spend appear in this app's usage
+//! table, because only then did this app spend it. Otherwise what the job
 //! reports back is what the harness says it cost.
 //!
-//! ## Claude Code and Codex jobs are reachable while they run
+//! ## Every job is reachable while it runs
 //!
 //! `code` returns as soon as the process is up, which is what keeps the agent
 //! that asked from reading as `Thinking` for the length of a change to a
@@ -51,16 +54,15 @@
 //! [`CEILING`] the job was write-only, and an operator watching one go the
 //! wrong way at minute three had nothing to do but wait for it to finish.
 //!
-//! [`bridge`] is what makes it two-way. Claude Code has a second interface
-//! besides its stdout, so a job on that harness gets a mailbox the operator can
-//! drop a correction into, an optional gate in front of the handful of commands
-//! that reach outside the repository, and two tools for reporting what it
-//! produced. `pi` has no equivalent and gets none of it, which is a difference
-//! between the harnesses rather than a gap: everything the bridge adds is an
-//! improvement on a job that already worked without it, so every part of it
-//! fails open on the existing adapters. Codex uses its native `turn/steer` and
-//! approval callbacks instead of hooks. It verifies the requested approval
-//! policy before starting a gated turn and acknowledges each correction.
+//! Each program is reached through the interface its own window uses.
+//! Claude Code takes a correction through [`bridge`]'s hooks and a stop as its
+//! SDK's `interrupt` on stdin; Codex takes `turn/steer` and `turn/interrupt`;
+//! `pi` takes RPC `steer` and `abort`. A push gate is a `PreToolUse` hook, an
+//! approval callback and an extension's confirm respectively, and all three
+//! are decided by [`bridge::outward`] and the operator's desk. What the
+//! operator chose inside each program, the model and the effort, is passed as
+//! that program's own flag ([`crate::domain::terminal::Tuning`]), and the
+//! models offered are asked of the program ([`models`]).
 //!
 //! ## What is not here
 //!
@@ -86,10 +88,11 @@ pub mod bridge;
 pub mod claude_code;
 pub mod codex;
 pub mod pi;
+pub mod relay;
 
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
-use crate::domain::terminal::Harness;
+use crate::domain::terminal::{Gate, Harness};
 
 pub use bridge::{Bridge, Signal, Wiring};
 
@@ -147,6 +150,18 @@ pub enum CodingError {
     NoAnswer(String),
     #[error("the job ran for {0} minutes without finishing and was stopped")]
     TooLong(u64),
+    #[error(
+        "the {harness} on this machine is older than {}.{}, which is the version Guaca can \
+         steer and stop while it works. Update it with `{install}`, or choose another harness in \
+         the agent's terminal settings",
+        .needs.0,
+        .needs.1
+    )]
+    TooOld { harness: &'static str, needs: (u32, u32), install: &'static str },
+    /// A program asked for its models that did not list them. Nothing was
+    /// started; the model field still takes a name typed by hand.
+    #[error("{0}. The model field still takes a name typed by hand")]
+    NoModels(String),
 }
 
 /// What one job did, as the agent that started it is told.
@@ -176,14 +191,21 @@ pub struct Outcome {
     /// nothing needed doing, and `pi auth check` called the provider ready
     /// throughout.
     pub failed: Option<String>,
-    /// The harness session this job ran as, when Guaca chose one.
+    /// The harness session this job ran as.
     ///
-    /// Empty on `pi` and on any job that ran without a bridge. Where it is set
-    /// it is what the operator hands to `claude --resume` to open the same work
-    /// in their own terminal, which is not the same thing as `claude -c`:
-    /// `-c` resumes whatever ran last in that directory, and after two jobs
-    /// that is the wrong one.
+    /// What a follow-up continues, and what the operator hands to `claude
+    /// --resume`, `codex resume` or `pi --session` to open the same work in
+    /// their own terminal, which is not the same thing as `-c`: that resumes
+    /// whatever ran last in the directory, and after two jobs that is the
+    /// wrong one.
     pub session_id: String,
+    /// Whether the operator or the agent stopped it before it finished.
+    ///
+    /// Not a failure: the harness ended its turn because it was asked to, the
+    /// session is on disk, and whatever it committed is real. The agent is told
+    /// the work is partly done, which is a different sentence from both "it
+    /// finished" and "it could not".
+    pub stopped: bool,
     /// A pull request the job opened and said so about.
     ///
     /// Filled in by the runtime from [`Signal::PullRequest`] rather than by the
@@ -312,12 +334,28 @@ pub async fn presence(harness: Harness) -> Presence {
     }
 
     let version = String::from_utf8_lossy(&asked.stdout).trim().to_string();
-    let bridged = match harness {
-        Harness::Claude => at_least(&version, BRIDGE_FLOOR),
-        Harness::Codex => at_least(&version, (0, 153)),
-        Harness::Pi => false,
-    };
+    let bridged = at_least(&version, floor(harness));
     Presence::Installed { version, bridged }
+}
+
+/// The oldest version of each program whose interface this build was measured
+/// against.
+fn floor(harness: Harness) -> (u32, u32) {
+    match harness {
+        Harness::Claude => BRIDGE_FLOOR,
+        Harness::Codex => (0, 153),
+        Harness::Pi => pi::RPC_FLOOR,
+    }
+}
+
+/// The refusal for a program too old to be driven at all, with the floor it
+/// is under spelled from the same constant [`presence`] compares against.
+pub fn too_old(harness: Harness) -> CodingError {
+    CodingError::TooOld {
+        harness: harness.label(),
+        needs: floor(harness),
+        install: install(harness),
+    }
 }
 
 /// Commands are run by the operator on the backend, under the daemon's user.
@@ -372,121 +410,317 @@ fn at_least(version: &str, floor: (u32, u32)) -> bool {
     (major, minor) >= floor
 }
 
-/// Runs one task to completion in one repository.
+/// One model a harness offers, as its own model picker shows it.
 ///
-/// No harness is asked for a session-less run. A session on disk is what
-/// lets the operator open the same work in their own terminal (`pi -c`,
-/// `claude -c`), which is the difference between a harness the app runs and a
-/// black box.
+/// Asked of the program rather than listed here, because the list is the
+/// program's and moves with its releases and its sign-in: Claude Code's
+/// `initialize` answer, Codex's `model/list`, `pi`'s `get_available_models`.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelOffer {
+    /// What `--model` (or Codex's `model`) takes.
+    pub id: String,
+    /// What the program calls it.
+    pub label: String,
+    /// The program's own line about it, or which provider serves it.
+    pub detail: String,
+    /// Whether it is what the program runs when nothing is chosen.
+    pub default: bool,
+    /// The effort words this model takes. Empty when it takes none.
+    pub efforts: Vec<String>,
+}
+
+/// How long a program has to answer a question about itself.
+const ASKING: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// The models a harness offers on this machine, asked of the program.
 ///
-/// `wiring` is the job's end of the [`bridge`], and `None` is a job that runs
-/// without one: `pi`, a Claude Code older than [`BRIDGE_FLOOR`], or a bridge
-/// that could not start. All three run the job.
+/// `lent` is for `pi` on Guaca's key: the listing loads the same provider
+/// override a job would, so what is offered is what that job can run. Against
+/// an endpoint other than OpenRouter there is no catalog to ask, and the list
+/// is empty rather than pi's own sign-ins, which would offer models the job
+/// cannot reach.
+pub async fn models(
+    harness: Harness,
+    lent: Option<&relay::Upstream>,
+) -> Result<Vec<ModelOffer>, CodingError> {
+    match harness {
+        Harness::Claude => {
+            let args = [
+                "-p",
+                "--input-format",
+                "stream-json",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+            ];
+            let asked = [claude_code::initialize()];
+            let answer = ask(harness, &args, &asked, claude_code::initialized).await?;
+            Ok(claude_code::offers(&answer))
+        }
+        Harness::Codex => {
+            let asked = codex::listing();
+            let answer =
+                ask(harness, &["app-server", "--listen", "stdio://"], &asked, codex::listed)
+                    .await?;
+            Ok(codex::offers(&answer))
+        }
+        Harness::Pi => {
+            if lent.is_some_and(|upstream| !upstream.is_openrouter()) {
+                return Ok(Vec::new());
+            }
+            let mut scratch =
+                pi::Scratch::new().map_err(|err| CodingError::Start(err.to_string()))?;
+            let mut args = vec!["--mode".to_string(), "rpc".into(), "--no-session".into()];
+            if lent.is_some() {
+                // Never called: the address is a port nothing listens on, and a
+                // listing makes no model call. It only has to make pi count the
+                // provider as signed in.
+                let source = pi::provider_source("http://127.0.0.1:9/v1", "listing", true, "");
+                scratch
+                    .add("provider.ts", &source)
+                    .map_err(|err| CodingError::Start(err.to_string()))?;
+                for extension in scratch.extensions() {
+                    args.push("-e".into());
+                    args.push(extension.to_string_lossy().into_owned());
+                }
+            }
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            let answer = ask(harness, &args, &[pi::listing()], pi::listed).await?;
+            Ok(pi::offers(&answer, lent.is_some()))
+        }
+    }
+}
+
+/// Starts a program, says a few lines to it, and returns the first line of
+/// its output `answered` accepts. The process is ended either way.
+async fn ask(
+    harness: Harness,
+    args: &[&str],
+    lines: &[serde_json::Value],
+    answered: fn(&serde_json::Value) -> bool,
+) -> Result<serde_json::Value, CodingError> {
+    // A directory of its own, so a program that writes where it starts leaves
+    // nothing behind, and two listings never share one.
+    let here = std::env::temp_dir().join(format!("guaca-models-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&here).map_err(|err| CodingError::Start(err.to_string()))?;
+    let answer = ask_in(&here, harness, args, lines, answered).await;
+    let _ = std::fs::remove_dir_all(&here);
+    answer
+}
+
+async fn ask_in(
+    here: &std::path::Path,
+    harness: Harness,
+    args: &[&str],
+    lines: &[serde_json::Value],
+    answered: fn(&serde_json::Value) -> bool,
+) -> Result<serde_json::Value, CodingError> {
+    use tokio::io::AsyncWriteExt;
+
+    let mut child = tokio::process::Command::new(binary(harness))
+        .args(args)
+        .current_dir(here)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|err| match err.kind() {
+            std::io::ErrorKind::NotFound => {
+                CodingError::NotInstalled { harness: harness.label(), install: install(harness) }
+            }
+            _ => CodingError::Start(err.to_string()),
+        })?;
+    let mut stdin = child.stdin.take().ok_or_else(|| CodingError::Start("no input".into()))?;
+    let stdout = child.stdout.take().ok_or_else(|| CodingError::Start("no output".into()))?;
+    for line in lines {
+        let text = format!("{line}\n");
+        stdin
+            .write_all(text.as_bytes())
+            .await
+            .map_err(|_| CodingError::NoModels(format!("{} closed its input", harness.label())))?;
+    }
+    let mut output = BufReader::new(stdout).lines();
+    let reading = async {
+        while let Ok(Some(line)) = output.next_line().await {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
+                if answered(&value) {
+                    return Some(value);
+                }
+            }
+        }
+        None
+    };
+    let found = tokio::time::timeout(ASKING, reading).await;
+    close(&mut child, stdin).await;
+    match found {
+        Ok(Some(value)) => Ok(value),
+        Ok(None) => Err(CodingError::NoModels(format!(
+            "{} exited without listing its models. Run it on the backend to see why",
+            harness.label()
+        ))),
+        Err(_) => Err(CodingError::NoModels(format!(
+            "{} did not list its models within {} seconds",
+            harness.label(),
+            ASKING.as_secs()
+        ))),
+    }
+}
+
+/// Ends a program by closing its input, and kills it only if that fails.
+///
+/// All three exit on their own when stdin closes, in milliseconds. A kill is
+/// not the same thing to them: a `pi` that is killed leaves the next `pi` to
+/// start waiting about thirty seconds before it answers anything, measured
+/// against 0.84.4, and a model listing that killed pi made every other panel
+/// open half a minute late.
+async fn close(child: &mut tokio::process::Child, stdin: tokio::process::ChildStdin) {
+    drop(stdin);
+    if tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await.is_err() {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+    }
+}
+
+/// One piece of work handed to a harness.
+///
+/// Everything the three drivers need, gathered once by the runtime so none of
+/// them reads the store. `session` is the harness's own name for the
+/// conversation: `claude` and `pi` are started with one Guaca chose, which is
+/// what makes a follow-up and `claude --resume` find it; Codex names its thread
+/// itself, so a new Codex job carries an empty one and reports the thread with
+/// [`Signal::Session`].
+pub struct Job<'a> {
+    pub harness: Harness,
+    /// Absolute, and inside the agent's terminal.
+    pub directory: &'a str,
+    pub brief: &'a str,
+    pub session: &'a str,
+    /// Whether `session` already exists and this job carries it on, with
+    /// everything it had already read and decided, rather than starting over.
+    pub resume: bool,
+    pub gate: Gate,
+    pub env: &'a crate::secrets::Environment,
+    /// Claude Code's end of the [`bridge`], when this job has one. The other two
+    /// are reached through their own protocols and never have one.
+    pub bridge: Option<&'a bridge::Session>,
+    /// The model and effort the operator chose for this agent in this harness,
+    /// passed as the program's own flags. Default is the program's setting.
+    pub tuning: &'a crate::domain::terminal::Tuning,
+    /// Guaca's key, lent to a `pi` job through the [`relay`], when the
+    /// operator chose [`crate::domain::terminal::Payer::GuacaKey`] for it.
+    pub lent: Option<&'a relay::Lease>,
+}
+
+/// What the runtime can ask of a job while it runs.
+///
+/// The same two things an operator can do in each program's own window, and
+/// every harness answers both: a message that reaches the model at its next
+/// step, and a stop that ends the turn and keeps the session.
+pub enum Control {
+    /// Delivered at the job's next tool boundary. `reply` says whether the
+    /// harness took it, which for Codex is its own acknowledgment.
+    Steer { message: String, reply: tokio::sync::oneshot::Sender<Result<(), String>> },
+    /// End the current turn. The session stays on disk, so the work can be
+    /// continued from where it stopped.
+    Stop,
+}
+
+/// How long a stopped job is given to end its turn before it is killed.
+///
+/// Long enough for a harness to write the interrupted turn into its session,
+/// which is what makes a stopped job one a follow-up can continue, and short
+/// enough that a harness ignoring the request does not hold the agent's one
+/// job slot for the length of a test run.
+const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// What a Claude job with no bridge says to a correction.
+const CLAUDE_UNREACHABLE: &str = "this Claude Code job is running without a bridge, so nothing \
+     can reach it until it finishes. Claude Code has to be new enough for one";
+
+/// Runs one job to its end, answering controls as it goes.
+///
+/// Returns when the harness has finished its turn, however that happened: an
+/// answer, a failure it reported, a stop, or the [`CEILING`]. Whatever the
+/// outcome carries has had every granted secret's value taken out of it.
 pub async fn run(
-    harness: Harness,
-    repository: &str,
-    task: &str,
-    wiring: Option<&Wiring>,
-    watching: impl FnMut(Progress),
+    job: Job<'_>,
+    controls: tokio::sync::mpsc::Receiver<Control>,
+    signals: tokio::sync::mpsc::Sender<Signal>,
+    mut watching: impl FnMut(Progress) + Send,
 ) -> Result<Outcome, CodingError> {
-    run_with_control(harness, repository, task, wiring, None, watching).await
-}
-
-pub async fn run_with_control(
-    harness: Harness,
-    repository: &str,
-    task: &str,
-    wiring: Option<&Wiring>,
-    control: Option<codex::Control>,
-    watching: impl FnMut(Progress),
-) -> Result<Outcome, CodingError> {
-    run_with_env(
-        harness,
-        repository,
-        task,
-        wiring,
-        control,
-        &crate::secrets::Environment::default(),
-        watching,
-    )
-    .await
-}
-
-pub async fn run_with_env(
-    harness: Harness,
-    repository: &str,
-    task: &str,
-    wiring: Option<&Wiring>,
-    control: Option<codex::Control>,
-    env: &crate::secrets::Environment,
-    mut watching: impl FnMut(Progress),
-) -> Result<Outcome, CodingError> {
-    let task = format!("{task}{}", env.description());
+    let brief = format!("{}{}", job.brief, job.env.description());
+    let job = Job { brief: &brief, ..job };
+    let values = job.env.values.clone();
     let mut sanitized = |progress| {
         watching(match progress {
             Progress::Using { tool, detail } => Progress::Using {
-                tool: crate::secrets::redact(&tool, &env.values),
-                detail: crate::secrets::redact(&detail, &env.values),
+                tool: crate::secrets::redact(&tool, &values),
+                detail: crate::secrets::redact(&detail, &values),
             },
-            Progress::Said(said) => Progress::Said(crate::secrets::redact(&said, &env.values)),
+            Progress::Said(said) => Progress::Said(crate::secrets::redact(&said, &values)),
         })
     };
-    let result =
-        run_process(harness, repository, &task, wiring, control, env, &mut sanitized).await;
+    let result = match job.harness {
+        Harness::Codex => codex::run(&job, controls, signals, &mut sanitized).await,
+        Harness::Pi => pi::run(&job, controls, signals, &mut sanitized).await,
+        Harness::Claude => run_stream(&job, controls, &mut sanitized).await,
+    };
+    let values = &job.env.values;
     result
         .map(|mut outcome| {
-            outcome.said = crate::secrets::redact(&outcome.said, &env.values);
-            outcome.failed = outcome.failed.map(|text| crate::secrets::redact(&text, &env.values));
-            outcome.model = crate::secrets::redact(&outcome.model, &env.values);
-            outcome.session_id = crate::secrets::redact(&outcome.session_id, &env.values);
+            outcome.said = crate::secrets::redact(&outcome.said, values);
+            outcome.failed = outcome.failed.map(|text| crate::secrets::redact(&text, values));
+            outcome.model = crate::secrets::redact(&outcome.model, values);
+            outcome.session_id = crate::secrets::redact(&outcome.session_id, values);
             if let Some(pr) = &mut outcome.pull_request {
-                pr.url = crate::secrets::redact(&pr.url, &env.values);
-                pr.branch = crate::secrets::redact(&pr.branch, &env.values);
+                pr.url = crate::secrets::redact(&pr.url, values);
+                pr.branch = crate::secrets::redact(&pr.branch, values);
             }
             outcome
         })
         .map_err(|error| match error {
             CodingError::NoAnswer(text) => {
-                CodingError::NoAnswer(crate::secrets::redact(&text, &env.values))
+                CodingError::NoAnswer(crate::secrets::redact(&text, values))
             }
-            CodingError::Start(text) => {
-                CodingError::Start(crate::secrets::redact(&text, &env.values))
-            }
+            CodingError::Start(text) => CodingError::Start(crate::secrets::redact(&text, values)),
             other => other,
         })
 }
 
-async fn run_process(
-    harness: Harness,
-    repository: &str,
-    task: &str,
-    wiring: Option<&Wiring>,
-    control: Option<codex::Control>,
-    env: &crate::secrets::Environment,
-    mut watching: impl FnMut(Progress),
+/// Claude Code: one process, its brief and its stop on stdin, and a stream of
+/// events on stdout that ends at `result`.
+///
+/// A correction is posted to the job's mailbox on the bridge and read by a
+/// hook, which is measured and is the one path an older program without a
+/// bridge refuses. A stop is the SDK's own `interrupt` on stdin, which ends the
+/// turn and leaves the session resumable; the process is killed only if it has
+/// not ended the turn within [`STOP_GRACE`].
+async fn run_stream(
+    job: &Job<'_>,
+    mut controls: tokio::sync::mpsc::Receiver<Control>,
+    mut watching: impl FnMut(Progress) + Send,
 ) -> Result<Outcome, CodingError> {
-    if harness == Harness::Codex {
-        return codex::run(repository, task, control, env, watching).await;
-    }
-    let (args, fold): (Vec<String>, Fold) = match harness {
-        // `pi` has no hooks and no second interface, so the wiring is not
-        // offered to it rather than being offered and ignored.
-        Harness::Pi => (pi::argv(task), pi::absorb),
-        Harness::Codex => unreachable!("Codex owns a bidirectional protocol"),
-        Harness::Claude => (claude_code::argv(task, wiring), claude_code::absorb),
-    };
+    use tokio::io::AsyncWriteExt;
+
+    let harness = job.harness;
+    let args =
+        claude_code::argv(job.session, job.resume, job.bridge.map(|b| b.wiring()), job.tuning);
+    let fold: Fold = claude_code::absorb;
+    let directory = job.directory;
 
     let mut command = tokio::process::Command::new(binary(harness));
-    env.apply(&mut command);
+    job.env.apply(&mut command);
     let mut child = command
-        .current_dir(repository)
+        .current_dir(directory)
         .args(&args)
-        .stdin(std::process::Stdio::null())
+        .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         // Killed with this handle rather than left behind. A job whose task is
-        // dropped mid-await otherwise leaves a coding agent running in somebody
-        // else's repository with nothing holding a reference to it.
+        // dropped mid-await otherwise leaves a coding agent running with
+        // nothing holding a reference to it.
         .kill_on_drop(true)
         .spawn()
         .map_err(|err| match err.kind() {
@@ -498,55 +732,119 @@ async fn run_process(
 
     let stdout = child.stdout.take().ok_or_else(|| CodingError::Start("no output".into()))?;
     let stderr = child.stderr.take().ok_or_else(|| CodingError::Start("no stderr".into()))?;
+    let mut stdin = child.stdin.take();
     let mut lines = BufReader::new(stdout).lines();
     // The session is set from what was asked for rather than read back off the
     // stream, which is the point of choosing it: a job killed at the ceiling
     // still has a session the operator can open, and a job that died before its
     // first event still says which one it was.
-    let mut outcome = Outcome {
-        session_id: wiring.map(|w| w.session_id.clone()).unwrap_or_default(),
-        ..Outcome::default()
-    };
+    let mut outcome = Outcome { session_id: job.session.to_string(), ..Outcome::default() };
 
     // Every tool call the panel draws goes through here rather than through the
-    // two parsers, because this is the level that knows where the job is
-    // standing and a `cd` is only redundant against that.
+    // parser, because this is the level that knows where the job is standing
+    // and a `cd` is only redundant against that.
     let mut drawing = |progress: Progress| {
         watching(match progress {
             Progress::Using { tool, detail } => {
-                Progress::Using { tool, detail: shown(repository, &detail) }
+                Progress::Using { tool, detail: shown(directory, &detail) }
             }
             said => said,
         });
     };
 
-    let reading = async {
-        // Split on `\n` and nothing else: pi's own protocol note, and the
-        // reason is that `U+2028` and `U+2029` are legal inside JSON strings.
-        // Rust's `lines` is compliant where several line readers are not.
-        while let Ok(Some(line)) = lines.next_line().await {
-            let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
-                continue;
-            };
-            fold(&mut outcome, &event, &mut drawing);
+    let draining = tokio::spawn(drain_stderr(stderr));
+    // A program that cannot take its brief has already exited, and what it
+    // said about why is on stderr, which the exit handling below reports.
+    if let Some(pipe) = stdin.as_mut() {
+        let line = format!("{}\n", claude_code::prompt(job.brief));
+        if pipe.write_all(line.as_bytes()).await.is_err() {
+            stdin = None;
         }
-    };
+    }
 
-    // Drain both pipes concurrently, retaining only a bounded stderr prefix.
-    // Waiting for stdout before reading stderr deadlocks a noisy CLI once the
-    // stderr pipe fills. The ceiling also includes waiting for process exit.
-    let draining = drain_stderr(stderr);
-    let finishing = async {
-        let (_, stderr_text, status) = tokio::join!(reading, draining, child.wait());
-        status.map(|status| (status, stderr_text))
-    };
-    let (status, stderr_text) = match tokio::time::timeout(CEILING, finishing).await {
-        Ok(result) => result.map_err(|err| CodingError::Start(err.to_string()))?,
-        Err(_) => {
-            let _ = child.kill().await;
-            return Err(CodingError::TooLong(CEILING.as_secs() / 60));
+    // When the stop was asked for, so the grace can run out; and whether the
+    // turn had already ended by then, in which case there was nothing to stop.
+    let mut stopping: Option<tokio::time::Instant> = None;
+    let mut ended = false;
+    let reading = async {
+        loop {
+            let grace = async {
+                match stopping {
+                    Some(at) => tokio::time::sleep_until(at).await,
+                    None => std::future::pending().await,
+                }
+            };
+            tokio::select! {
+                line = lines.next_line() => {
+                    // Split on `\n` and nothing else: `U+2028` and `U+2029` are
+                    // legal inside JSON strings, and Rust's `lines` is compliant
+                    // where several line readers are not.
+                    let Ok(Some(line)) = line else { break };
+                    let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
+                        continue;
+                    };
+                    fold(&mut outcome, &event, &mut drawing);
+                    // In this mode the program waits for another message after
+                    // its answer. There is none, and closing stdin is how it is
+                    // told so.
+                    if event["type"] == "result" {
+                        ended = true;
+                        stdin = None;
+                    }
+                }
+                Some(control) = controls.recv() => match control {
+                    Control::Steer { message, reply } => {
+                        let answer = match job.bridge {
+                            Some(session) if session.post(&message) => Ok(()),
+                            Some(_) => Err("the job has already finished".to_string()),
+                            None => Err(CLAUDE_UNREACHABLE.to_string()),
+                        };
+                        let _ = reply.send(answer);
+                    }
+                    Control::Stop if stopping.is_none() && !ended => {
+                        stopping = Some(tokio::time::Instant::now() + STOP_GRACE);
+                        let sent = match stdin.as_mut() {
+                            Some(pipe) => {
+                                let line = format!("{}\n", claude_code::interrupt());
+                                pipe.write_all(line.as_bytes()).await.is_ok()
+                            }
+                            None => false,
+                        };
+                        // Nobody to ask: the grace is spent at once.
+                        if !sent {
+                            break;
+                        }
+                    }
+                    Control::Stop => {}
+                },
+                _ = grace => break,
+            }
         }
     };
+    if tokio::time::timeout(CEILING, reading).await.is_err() {
+        let _ = child.kill().await;
+        return Err(CodingError::TooLong(CEILING.as_secs() / 60));
+    }
+    if stopping.is_some() {
+        // The interrupt ends the turn as `error_during_execution`, which is the
+        // program's word for a turn that did not finish and not a failure: it
+        // was asked to stop, and did. Given its own exit if it answered, and
+        // killed if the grace ran out.
+        // Its input was closed at `result`, so it is already on its way out.
+        drop(stdin);
+        let exited = ended
+            && tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await.is_ok();
+        if !exited {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+        }
+        outcome.stopped = true;
+        outcome.failed = None;
+        return Ok(outcome);
+    }
+    drop(stdin);
+    let status = child.wait().await.map_err(|err| CodingError::Start(err.to_string()))?;
+    let stderr_text = draining.await.unwrap_or_default();
     if !status.success() && outcome.said.trim().is_empty() && outcome.failed.is_none() {
         // Only when there is nothing to report. A harness that answered and
         // then exited non-zero has still done the work, and throwing its answer
@@ -554,11 +852,10 @@ async fn run_process(
         // a failure.
         //
         // A harness that said inside its own stream *why* it failed has also
-        // reported something, and it is the more specific of the two. That
-        // clause is not defensive: Claude Code exits non-zero on exactly the
-        // failure this feature exists for, so without it a spent plan is
-        // reported to the operator as `exit 1` with the sentence naming the
-        // plan thrown away.
+        // reported something, and it is the more specific of the two. Claude
+        // Code exits non-zero on exactly the failure this feature exists for,
+        // so without that clause a spent plan is reported as `exit 1` with the
+        // sentence naming the plan thrown away.
         let mut why = format!("exit {}", status.code().unwrap_or(-1));
         if !stderr_text.trim().is_empty() {
             why = format!("{why}: {}", stderr_text.trim());
@@ -731,6 +1028,15 @@ mod tests {
         // answer, so it decides, and git is the only undo.
         assert!(APPENDED_PROMPT.contains("unattended"));
         assert!(APPENDED_PROMPT.contains("last message"));
+    }
+
+    #[test]
+    fn a_program_too_old_to_drive_is_told_the_floor_it_is_under_and_how_to_clear_it() {
+        let why = too_old(Harness::Pi).to_string();
+        assert!(why.contains("older than 0.84"), "{why}");
+        assert!(why.contains(pi::INSTALL), "{why}");
+        assert!(at_least("0.84.4", floor(Harness::Pi)));
+        assert!(!at_least("0.83.9", floor(Harness::Pi)));
     }
 
     #[test]

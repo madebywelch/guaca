@@ -857,6 +857,9 @@ pub fn system_prompt(
              - `code` does not block. You get a message back when the work finishes, which may be \
               many minutes. Start it, say you have started it, and end your turn. `shell` is the \
               opposite: it waits, so use it when you need the answer now.\n\
+             - A follow-up or a correction is `code` with `continue`, not a new start: it reaches \
+              the job while it runs, or carries the last session on with everything it already \
+              read. `stop` ends a job that is going the wrong way and keeps its session.\n\
              - The coding agent cannot see this conversation and cannot ask you anything, so the \
               brief has to carry everything: what to change, how to tell it worked, and what to \
               do with the result.\n\

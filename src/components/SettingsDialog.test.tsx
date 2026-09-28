@@ -144,6 +144,7 @@ const codingHarnesses = vi.fn<() => Promise<HarnessOnMachine[]>>(async () => [
     version: "2.1.247 (Claude Code)",
     bridged: true,
     install: "npm install -g @anthropic-ai/claude-code",
+    efforts: ["low", "medium", "high", "xhigh", "max"],
   },
   {
     harness: "pi",
@@ -151,6 +152,7 @@ const codingHarnesses = vi.fn<() => Promise<HarnessOnMachine[]>>(async () => [
     version: "0.9.0",
     bridged: false,
     install: "npm install -g @mariozechner/pi",
+    efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
   },
 ]);
 

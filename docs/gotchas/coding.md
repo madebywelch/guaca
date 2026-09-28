@@ -87,12 +87,57 @@ and `programs.rs` are the code.
   (`Stop`'s `reason`, `PostToolUse`'s `additionalContext`): all three are
   promises about how the program *behaves* rather than flags it accepts, which
   is what the `#[ignore]`d half of `tests/coding.rs` is for.
-- **A job's session id is chosen rather than read back.** `--session-id` takes a
-  UUID, so one value is the job's address on the bridge, the key of its mailbox,
-  and what an operator hands to `claude --resume`. That last one is the reason:
+- **A job's session id is chosen rather than read back, where it can be.**
+  `--session-id` takes a UUID for both `claude` and `pi`, so one value is the
+  job's address on the bridge, the key of its mailbox, and what an operator
+  hands to `claude --resume` or `pi --session`. That last one is the reason:
   `claude -c` resumes whatever ran last in the directory, which after two jobs is
   the wrong one. Chosen also means a job killed at the ceiling, and one that died
-  before its first event, both still have one to hand over.
+  before its first event, both still have one to hand over. Codex names its own
+  thread, so that one is recorded the moment `thread/start` answers, not when
+  the job ends: a job stopped before its turn finished is the one most likely to
+  be carried on.
+- **A follow-up to a finished job is not an error.** `continue` and the
+  operator's box used to be a correction into a running job and nothing else,
+  and a job that ended between the keystroke and the call answered *nothing is
+  running* to words the operator meant for it. Now the runtime decides: into
+  the job if one is running, or a new turn in the session it left. A test that
+  wants to know whether the lane is free asks `stop_job`, which is still refused
+  when nothing runs.
+- **A session is only carried on by the program that wrote it.** Switching an
+  agent's harness because a plan ran out is the ordinary case, and the other
+  two programs have never heard of the id. `continue` is refused with both
+  names in it rather than starting the new harness on an id it cannot open.
+- **Killing `pi` costs the next one thirty seconds.** A model listing that
+  ended pi with a kill made every listing after it take thirty seconds half the
+  time, with no network open and nothing on stderr, and a job started after a
+  killed pi pays the same. Closing stdin ends all three programs in
+  milliseconds and leaves nothing behind, so that is how every one of them is
+  ended, and the kill is for a process still there five seconds later.
+  `coding::close`.
+- **One model field for three programs breaks on every switch.** They share no
+  model names and no effort words. The tuning is a row per agent per harness,
+  which is the lesson `InferenceConfig`'s two model fields already record.
+- **Codex takes an effort it does not know.** `turn/start`'s `effort` is typed
+  as any non-empty string, so `bogus` is accepted and ignored rather than
+  refused. The panel offers the chosen model's own `supportedReasoningEfforts`
+  for that reason, not Codex's union.
+- **Claude Code's brief is on stdin, not the command line.** Stdin is where its
+  SDK's `interrupt` goes, so it is a stream for the life of the job; and in that
+  mode the program waits for another message after `result` instead of
+  exiting, so the driver closes stdin there. A driver that forgets holds the
+  job until the ceiling, which the stand-in reproduces on purpose.
+- **Guaca's key is never in pi's environment or its files.** Both are places
+  pi's own `bash` tool can print, which is a README away from the key being in
+  a transcript. The relay holds the key and pi holds a per-job loopback token.
+- **pi is done at `agent_settled`, not `agent_end`.** pi can retry after an
+  `agent_end` (the event carries `willRetry`), and closing stdin on the first
+  one would cut the retry off and report a job that was still working as
+  finished.
+- **pi's gate fails closed, unlike the Claude bridge.** The extension is asked
+  for by `-e` and confirmed by `get_commands` before the brief is sent. A pi
+  that did not load it (an old version, a broken extension directory) would
+  otherwise run a job that looked gated and pushed without asking.
 - **The gate reads what a line runs, and stops short of what it cannot read.**
   Those are one decision, not a rule and a hole in it. Reading the words alone
   is what one level of indirection walks straight past: `./scripts/ship.sh` is
@@ -147,13 +192,13 @@ and `programs.rs` are the code.
   is theirs too: a `Stop` hook of their own answering `{"decision":"block"}`
   holds a job against its own completion until the ceiling, in a loop nothing
   here can see. `docs/CODING.md`.
-- **A harness is two functions, and the process around them is one.** What `pi`
-  and Claude Code share is the shape of a job: one process, in one directory,
-  whose stdout is JSON objects one per line, that ends. So the spawn, the read
-  loop, the forty-five minute ceiling, the kill and the exit handling are in
-  `coding/mod.rs` once, and each submodule holds only the argument vector and
-  the fold from an event into an `Outcome`. Two of everything would be two
-  places for `kill_on_drop` to be forgotten.
+- **A harness is two functions and a driver, and what they share is in one
+  place.** The forty-five minute ceiling, `STOP_GRACE`, `kill_on_drop` and the
+  redaction of everything a job says are in `coding/mod.rs` once. Claude Code's
+  stdout is a stream that ends, so its read loop is there too. `pi --mode rpc`
+  and Codex's app-server hold a conversation on stdin, so each drives its own
+  process; folding them into one read loop would put a protocol's turn-taking
+  in a function that has to stay ignorant of it.
 - **`claude` refuses `--output-format stream-json` without `--verbose`, and the
   refusal is on the command line.** So a vector that is one flag wrong is a job
   that never starts rather than a job that fails, which is why `tests/coding.rs`

@@ -196,6 +196,7 @@ pub async fn open(
     ));
 
     sweep_providers(&runtime);
+    put_away_leftovers(&runtime, paths);
 
     // The account, and where its MCP server is. Both are one write at startup:
     // the Google plugin's server is the operator's own account rather than a
@@ -218,6 +219,25 @@ pub async fn open(
     );
 
     Ok(Booted { runtime, subscription, account, artifacts, artifact_port, config_path, started })
+}
+
+/// Tidies what the repository subsystem left on disk, in the background: it
+/// runs git, and a workspace must not wait on a slow disk to open.
+fn put_away_leftovers(runtime: &Runtime, paths: &Paths) {
+    let runtime = runtime.clone();
+    let (data, config) = (paths.data.clone(), paths.config.clone());
+    tokio::spawn(async move {
+        let store = runtime.store().clone();
+        let terminals = runtime.terminals().clone();
+        let terminal_of = move |agent| {
+            let living =
+                store.get_agent(agent).ok().flatten().is_some_and(|card| {
+                    card.lifecycle != crate::domain::agent::Lifecycle::Terminated
+                });
+            living.then(|| terminals.ensure(agent).ok()).flatten()
+        };
+        crate::leftovers::put_away(&data, &config, terminal_of).await;
+    });
 }
 
 /// Releases anything a previous process left running at a provider.

@@ -1156,6 +1156,119 @@ impl Store {
 
     /// Drops every note an agent holds. The operator's way to say "that is all
     /// done", and what deleting an agent takes with it.
+    /// Records the coding session an agent is running, replacing the last.
+    pub fn set_coding_session(
+        &self,
+        agent: AgentId,
+        session: &crate::domain::terminal::Session,
+    ) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO coding_sessions (agent_id,harness,session_id,directory,updated_at)
+             VALUES (?1,?2,?3,?4,?5)
+             ON CONFLICT(agent_id) DO UPDATE SET harness=excluded.harness,
+                 session_id=excluded.session_id, directory=excluded.directory,
+                 updated_at=excluded.updated_at",
+            params![
+                agent.to_string(),
+                session.harness.as_str(),
+                session.id,
+                session.directory,
+                session.updated_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// The coding session an agent last ran, if it has run one.
+    pub fn coding_session(
+        &self,
+        agent: AgentId,
+    ) -> Result<Option<crate::domain::terminal::Session>, StoreError> {
+        let conn = self.conn()?;
+        let found = conn
+            .query_row(
+                "SELECT harness,session_id,directory,updated_at FROM coding_sessions
+                  WHERE agent_id=?1",
+                params![agent.to_string()],
+                |row| {
+                    Ok(crate::domain::terminal::Session {
+                        harness: Harness::parse(&row.get::<_, String>(0)?),
+                        id: row.get(1)?,
+                        directory: row.get(2)?,
+                        updated_at: row.get(3)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(found)
+    }
+
+    /// Forgets its session and every harness's tuning, when the agent is gone
+    /// for good. The row is only marked terminated, so the cascade never fires.
+    pub fn clear_coding(&self, agent: AgentId) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        conn.execute("DELETE FROM coding_sessions WHERE agent_id=?1", params![agent.to_string()])?;
+        conn.execute("DELETE FROM coding_tuning WHERE agent_id=?1", params![agent.to_string()])?;
+        Ok(())
+    }
+
+    /// What the operator chose inside one harness for one agent. The program's
+    /// own setting, which is the default, when nothing was chosen.
+    pub fn coding_tuning(
+        &self,
+        agent: AgentId,
+        harness: Harness,
+    ) -> Result<crate::domain::terminal::Tuning, StoreError> {
+        let conn = self.conn()?;
+        let found = conn
+            .query_row(
+                "SELECT model,effort,pays FROM coding_tuning WHERE agent_id=?1 AND harness=?2",
+                params![agent.to_string(), harness.as_str()],
+                |row| {
+                    Ok(crate::domain::terminal::Tuning {
+                        model: row.get(0)?,
+                        effort: row.get(1)?,
+                        pays: crate::domain::terminal::Payer::parse(&row.get::<_, String>(2)?),
+                    })
+                },
+            )
+            .optional()?;
+        Ok(found.unwrap_or_default())
+    }
+
+    /// Records one, already checked against the harness it is for.
+    pub fn set_coding_tuning(
+        &self,
+        agent: AgentId,
+        harness: Harness,
+        tuning: &crate::domain::terminal::Tuning,
+    ) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM agents WHERE id=?1 AND lifecycle <> 'terminated')",
+            params![agent.to_string()],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(StoreError::AgentNotFound(agent));
+        }
+        conn.execute(
+            "INSERT INTO coding_tuning (agent_id,harness,model,effort,pays)
+             VALUES (?1,?2,?3,?4,?5)
+             ON CONFLICT(agent_id,harness) DO UPDATE SET model=excluded.model,
+                 effort=excluded.effort, pays=excluded.pays",
+            params![
+                agent.to_string(),
+                harness.as_str(),
+                tuning.model,
+                tuning.effort,
+                tuning.pays.as_str()
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn clear_working_notes(&self, agent: AgentId) -> Result<usize, StoreError> {
         let conn = self.conn()?;
         Ok(conn
@@ -4849,9 +4962,10 @@ mod tests {
         f.store.create_connector(&key_for(mine.group_id, "TOKEN", "private-token")).unwrap();
         let mut conn = f.store.conn().unwrap();
         // Everything the migrations after 51 made, so the database is the one a
-        // version-51 install really has. Each new migration adds its undo here,
-        // and 58's puts back the repository column and table it rebuilds away.
-        conn.execute_batch("DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
+        // version-51 install really has. Each new migration adds its undo here:
+        // 58's puts back the repository column and table it rebuilds away, and
+        // 59's drops the two tables it adds.
+        conn.execute_batch("DROP TABLE coding_tuning; DROP TABLE coding_sessions; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
         migrations::run(&mut conn).unwrap();
         drop(conn);
         assert_eq!(f.store.connector_env(mine.id).unwrap()["TOKEN"], "private-token");
@@ -9188,6 +9302,69 @@ mod tests {
         let taken = f.store.get_agent(ada.id).unwrap().unwrap();
         assert!(!taken.has_terminal);
         assert_eq!((taken.harness, taken.gate), (Harness::Claude, Gate::AskBeforePushing));
+    }
+
+    #[test]
+    fn the_last_coding_session_is_kept_per_agent_and_replaced_by_the_next() {
+        use crate::domain::terminal::Session;
+        let f = fixture();
+        let group = f.store.create_group(&group_named("Crew")).unwrap();
+        let ada = f.store.create_agent(&draft_in("Ada", group.id)).unwrap();
+        assert_eq!(f.store.coding_session(ada.id).unwrap(), None);
+
+        let first = Session {
+            harness: Harness::Claude,
+            id: "s1".into(),
+            directory: "guaca".into(),
+            updated_at: 1,
+        };
+        f.store.set_coding_session(ada.id, &first).unwrap();
+        assert_eq!(f.store.coding_session(ada.id).unwrap(), Some(first));
+
+        // One per agent: the session before the last is one it moved on from.
+        let second = Session {
+            harness: Harness::Codex,
+            id: "thread-2".into(),
+            directory: "site".into(),
+            updated_at: 2,
+        };
+        f.store.set_coding_session(ada.id, &second).unwrap();
+        assert_eq!(f.store.coding_session(ada.id).unwrap(), Some(second));
+
+        f.store.clear_coding(ada.id).unwrap();
+        assert_eq!(f.store.coding_session(ada.id).unwrap(), None);
+    }
+
+    #[test]
+    fn each_harness_keeps_its_own_tuning_and_a_purge_forgets_all_of_them() {
+        use crate::domain::terminal::{Payer, Tuning};
+        let f = fixture();
+        let ada = f.store.create_agent(&draft("Ada")).unwrap();
+        assert_eq!(f.store.coding_tuning(ada.id, Harness::Claude).unwrap(), Tuning::default());
+
+        let claude =
+            Tuning { model: Some("opus".into()), effort: Some("max".into()), ..Tuning::default() };
+        let pi = Tuning {
+            model: Some("anthropic/claude-sonnet-4.5".into()),
+            pays: Payer::GuacaKey,
+            ..Tuning::default()
+        };
+        f.store.set_coding_tuning(ada.id, Harness::Claude, &claude).unwrap();
+        f.store.set_coding_tuning(ada.id, Harness::Pi, &pi).unwrap();
+        // A switch to Codex and back does not touch the Claude model.
+        assert_eq!(f.store.coding_tuning(ada.id, Harness::Codex).unwrap(), Tuning::default());
+        assert_eq!(f.store.coding_tuning(ada.id, Harness::Claude).unwrap(), claude);
+        assert_eq!(f.store.coding_tuning(ada.id, Harness::Pi).unwrap(), pi);
+
+        f.store.set_coding_tuning(ada.id, Harness::Claude, &Tuning::default()).unwrap();
+        assert_eq!(f.store.coding_tuning(ada.id, Harness::Claude).unwrap(), Tuning::default());
+
+        f.store.clear_coding(ada.id).unwrap();
+        assert_eq!(f.store.coding_tuning(ada.id, Harness::Pi).unwrap(), Tuning::default());
+        assert!(matches!(
+            f.store.set_coding_tuning(AgentId::new(), Harness::Pi, &pi),
+            Err(StoreError::AgentNotFound(_))
+        ));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! Guaca's end of a running coding job.
 //!
-//! A job is a process that runs for up to [`super::CEILING`] in a directory the
-//! operator linked, and until this module existed it was write-only. Guaca read
+//! A job is a process that runs for up to [`super::CEILING`] in the agent's
+//! terminal, and until this module existed it was write-only. Guaca read
 //! its stdout and could say nothing back. An operator watching a job go the
 //! wrong way at minute three had one move, which was to wait thirty-seven more
 //! minutes for it to finish and then start another one.
@@ -126,6 +126,11 @@ pub enum Signal {
     Note(String),
     /// It opened a pull request and said so.
     PullRequest { url: String, branch: String },
+    /// The harness named the session this job is, which a follow-up resumes.
+    ///
+    /// Only Codex sends it: it names its own thread, where `claude` and `pi`
+    /// are started with a session Guaca chose.
+    Session(String),
     /// It is about to do something outward-facing and the gate stopped it.
     ///
     /// Both the line the model wrote and what [`outward`] made of it, because
@@ -195,7 +200,13 @@ impl Bridge {
         Self::default()
     }
 
-    /// Opens a job's end of the bridge.
+    /// Opens a job's end of the bridge, addressed by the session the job runs
+    /// as.
+    ///
+    /// The session rather than a token minted here, so a job that carries on
+    /// an earlier session is reached at the same address the operator hands to
+    /// `claude --resume`. Only one job runs per agent, so only one job holds a
+    /// session at a time.
     ///
     /// `None` when anything about it failed, and the caller runs the job
     /// without it. That is the whole of the error handling and it is
@@ -207,10 +218,10 @@ impl Bridge {
         signals: mpsc::Sender<Signal>,
         gate: Gate,
         root: PathBuf,
+        token: String,
     ) -> Option<Session> {
         let port = *self.inner.port.get_or_try_init(|| listen(self.clone())).await.ok()?;
 
-        let token = uuid::Uuid::new_v4().to_string();
         let dir = scratch(&token)?;
         let settings = dir.join("settings.json");
         let script = dir.join("hook.sh");
@@ -299,6 +310,11 @@ impl Session {
     /// The job's own id, which is also what `claude --resume` takes.
     pub fn session_id(&self) -> &str {
         &self.wiring.session_id
+    }
+
+    /// Stages a message for this job. `false` once the job has ended.
+    pub fn post(&self, message: &str) -> bool {
+        self.bridge.post(&self.wiring.session_id, message)
     }
 }
 
@@ -1868,7 +1884,12 @@ mod tests {
         let bridge = Bridge::new();
         let (signals, _heard) = mpsc::channel(8);
         let session = bridge
-            .open(signals, Gate::Open, PathBuf::from("/nonexistent-work-tree"))
+            .open(
+                signals,
+                Gate::Open,
+                PathBuf::from("/nonexistent-work-tree"),
+                uuid::Uuid::new_v4().to_string(),
+            )
             .await
             .expect("the bridge has to start");
         let token = session.session_id().to_string();
@@ -1890,7 +1911,12 @@ mod tests {
         let bridge = Bridge::new();
         let (signals, _heard) = mpsc::channel(8);
         let session = bridge
-            .open(signals, Gate::Open, PathBuf::from("/nonexistent-work-tree"))
+            .open(
+                signals,
+                Gate::Open,
+                PathBuf::from("/nonexistent-work-tree"),
+                uuid::Uuid::new_v4().to_string(),
+            )
             .await
             .unwrap();
         let port = *bridge.inner.port.get().unwrap();
@@ -1929,8 +1955,14 @@ mod tests {
         let (one, _a) = mpsc::channel(8);
         let (two, _b) = mpsc::channel(8);
         let elsewhere = || PathBuf::from("/nonexistent-work-tree");
-        let first = bridge.open(one, Gate::Open, elsewhere()).await.unwrap();
-        let second = bridge.open(two, Gate::AskBeforePushing, elsewhere()).await.unwrap();
+        let first = bridge
+            .open(one, Gate::Open, elsewhere(), uuid::Uuid::new_v4().to_string())
+            .await
+            .unwrap();
+        let second = bridge
+            .open(two, Gate::AskBeforePushing, elsewhere(), uuid::Uuid::new_v4().to_string())
+            .await
+            .unwrap();
 
         assert_ne!(first.session_id(), second.session_id());
         bridge.post(first.session_id(), "for the first one only");

@@ -116,7 +116,8 @@ src-tauri/src/
                       that asked. The small door; `coding/` is the big one.
   coding/             Starting something that writes code, and reading it back.
     mod.rs            One process, one ceiling, one prompt. Read this one first.
-    pi.rs             `pi`'s argument vector and its stream.
+    pi.rs             `pi` over RPC: steered, aborted, gated by an extension.
+    relay.rs          Guaca's key lent to a pi job on loopback, never handed over.
     claude_code.rs    Claude Code's, which are not the same and cannot be.
     codex.rs          Codex's app-server protocol: one thread, steered in turn.
     bridge.rs         The other end of a job that is still running: what an
@@ -141,6 +142,8 @@ src-tauri/src/
   notebook.rs         An agent's own folder of files, named in its prompt and
                       read when needed. The fourth store, and why it is one.
   files.rs            Attachments, addressed by the SHA-256 of their contents.
+  leftovers.rs        What repositories left on disk, put away where nothing is
+                      lost by it, at every boot.
   eval.rs             Reads a run and says whether it communicated sensibly.
   trajectory.rs       Reads a run's events and says whether the machinery did.
   config.rs           Operator settings, and the API key the webview never sees.
@@ -199,7 +202,12 @@ repo: the frontend renders state and forwards intent.
 | Which program writes the code, a spent plan, a harness that will not start | *There are three harnesses because a subscription is spent by one program* in `docs/CODING.md`, then `domain::terminal::Harness` and `coding/mod.rs` |
 | What branch a coding job starts on, and what it is told about the tree | *A job is told where it is standing before it is told what to do* in `docs/CODING.md`, then `repo::footing` and the brief assembled in `Runtime::start_job` |
 | An argument a harness is started with, or how its stream is read | *One process lifecycle, three of what genuinely differs* in `docs/CODING.md`, then `coding/pi.rs`, `coding/claude_code.rs` and `coding/codex.rs`, and run the live half of `tests/coding.rs` |
-| Reaching a job that is already running, stopping one, or anything a hook does | *A job can be reached while it runs* in `docs/CODING.md`, then `coding/bridge.rs`, and run the live half of `tests/coding.rs`, which is the only thing that can check any of it |
+| Reaching a job that is already running, stopping one, carrying one on, or anything a hook does | *Whatever the program's own terminal can do to a job, Guaca can* in `docs/CODING.md`, then `Runtime::continue_job`, `coding/bridge.rs` and `coding/pi.rs`, and run the live half of `tests/coding.rs`, which is the only thing that can check the programs still behave that way |
+| Which session a follow-up resumes, and why a switched harness cannot | *A session is carried on by the program that wrote it* in `docs/CODING.md`, then `domain::terminal::Session` and migration 59 |
+| The model or effort a job runs on, and the list the panel suggests | *A job's model and effort are the program's own flags* in `docs/CODING.md`, then `domain::terminal::Tuning` and `coding::models`, and run the three live listings in `tests/coding.rs`, which spend nothing |
+| pi paid for with Guaca's key: the relay, the token, the provider it is told about, what it spent | *pi can be paid for with Guaca's key, and never holds it* in `docs/CODING.md`, then `src-tauri/src/coding/relay.rs` and `provider` in `coding/pi.rs` |
+| Why a harness is ended by closing its stdin, and a stop that ends in a kill | *A program is ended by closing its input, not by a kill* in `docs/CODING.md`, then `coding::close` |
+| What the repository subsystem left in `worktrees`, `repos` and `repo-credentials` | *What repositories left on disk is put away at boot* in `docs/CODING.md`, then `src-tauri/src/leftovers.rs` |
 | Whether a job or a `shell` line stops before it pushes, and which asker the card names | *The gate is asked from one function, for every door* in `docs/CODING.md`, then `bridge::outward`, `Runtime::ask_about_push` and `Asker`, which have to answer for every door |
 | A push kept in a script or behind a `cd`, what the gate follows and what it will not | *The line is read, and then what the line runs is read* and *And what it deliberately does not read* in `docs/CODING.md`, then `bridge::outward` and `bridge::Reach` |
 | An operator asked the same thing twice, and how long a no lasts | *One no settles the question for the rest of the run* in `docs/CODING.md`, then `Runs::refused` and `Runtime::ask_about_push` |
@@ -345,9 +353,12 @@ out of extra usage* while `claude` on the same machine and the same account runs
 the work off the plan. So a Claude plan is spent by Claude Code, a ChatGPT plan
 by Codex, and an API key by `pi`, and an operator whose one plan is spent needs
 another *program*. The choice lives on the agent, beside its terminal, because
-it is a fact about how this agent's work is paid for. Everything inside a
-harness (the model, the thinking level, the sign-in) belongs to the harness and
-is never passed from here. `docs/CODING.md`.
+it is a fact about how this agent's work is paid for. The sign-in belongs to
+the harness and is never passed from here. The model and the effort are the
+program's own too, and when the operator chooses them they are passed as the
+program's own flags and nothing more. The one account Guaca lends is its own
+API key, to `pi`, through a loopback relay that keeps the key in this process
+and meters what it spends. `docs/CODING.md`.
 
 **An agent's terminal is not a sandbox.** It is a directory of the agent's own
 on the host, and the shell, the file tools and the harness all run as the

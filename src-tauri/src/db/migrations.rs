@@ -1666,6 +1666,39 @@ CREATE UNIQUE INDEX agents_live_name_unique
 DROP TABLE repositories;
 "#,
     ),
+    (
+        59,
+        r#"
+-- The coding session each agent last ran, which a follow-up carries on.
+--
+-- A harness keeps its own conversation on disk, so continuing one is a new
+-- process pointed at the old session rather than a new brief, with everything
+-- the job had already read and decided. Only the last per agent: an agent runs
+-- one job at a time. Stored rather than held in memory because a follow-up
+-- often comes the next day.
+CREATE TABLE coding_sessions (
+    agent_id   TEXT    PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    harness    TEXT    NOT NULL,
+    session_id TEXT    NOT NULL,
+    directory  TEXT    NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+-- What the operator chose inside each harness for one agent: the model, the
+-- effort, and for pi which account pays. A row per agent per harness, because
+-- the three programs share no model names and no effort words, and one field
+-- would be broken by every switch between them. No row is the program's own
+-- setting, which is what every job ran on before this table.
+CREATE TABLE coding_tuning (
+    agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    harness  TEXT NOT NULL,
+    model    TEXT,
+    effort   TEXT,
+    pays     TEXT NOT NULL DEFAULT 'own',
+    PRIMARY KEY (agent_id, harness)
+);
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

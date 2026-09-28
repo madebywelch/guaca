@@ -544,42 +544,54 @@ edit.\n\n";
 /// A coding job, while it is running.
 ///
 /// Everything about a job that outlives the turn that started it and that
-/// something outside the job needs to reach: where it is working, how to stop
-/// it, and where to post it a correction. Who owns it is the key it is filed
-/// under.
+/// something outside the job needs to reach: where it is working, how to reach
+/// it, and who asked for it to stop. Who owns it is the key it is filed under.
 struct Running {
     /// Where it is working, relative to the agent's terminal.
     directory: String,
-    /// Where the operator's corrections go, once it is known.
-    mailbox: Mailbox,
-    /// Dropping this kills the process.
+    /// Steering and stopping, answered by whichever harness is running.
     ///
-    /// A channel rather than an abort handle on the task, because it can be
-    /// made before the task exists: an operator pressing stop in the moment
-    /// between the spawn and the handle coming back would otherwise find a job
-    /// with no way to end it. What it does is drop the future holding the
-    /// child, which `kill_on_drop` turns into a killed process, which is the
-    /// one mechanism `coding/mod.rs` already documents for stopping one.
-    stop: Option<tokio::sync::oneshot::Sender<()>>,
+    /// Made before the task that runs the job, so the entry is complete the
+    /// moment it exists: a stop pressed in the moment between the spawn and the
+    /// process coming up waits in the channel and is the first thing the driver
+    /// reads.
+    controls: tokio::sync::mpsc::Sender<crate::coding::Control>,
+    /// Who asked it to stop, once somebody has. What the agent is told when it
+    /// ends depends on it: an agent that stopped its own job needs no message
+    /// about it, and one whose job the operator stopped needs to hear why.
+    stopped_by: Option<Origin>,
 }
 
-/// Whether a running job can be reached, and why not when it cannot.
+/// A job about to be spawned: where, what, and which session it is.
+struct Launch {
+    working: std::path::PathBuf,
+    shown: String,
+    brief: String,
+    session: String,
+    resume: bool,
+    harness: Harness,
+    origin: Origin,
+}
+
+/// Who asked for a piece of coding work, or for it to stop.
 ///
-/// Three states rather than an `Option`, because the two ways of not being
-/// reachable have opposite answers for the operator: one is worth waiting a
-/// second for, and the other is a fact about the harness that no amount of
-/// waiting changes.
-#[derive(Clone)]
-enum Mailbox {
-    /// The process is up and the bridge has not answered yet. Momentary.
-    Starting,
-    /// This job has no bridge and will not get one: `pi`, which has no second
-    /// interface, or a Claude Code older than the contract was measured on.
-    Unreachable(&'static str),
-    /// Post here.
-    At(String),
-    /// The app-server accepts and acknowledges each correction.
-    Codex(tokio::sync::mpsc::Sender<crate::coding::codex::Steer>),
+/// The agent, through `code`, or the operator, from the panels. Both reach the
+/// same session through the same calls; what differs is what the agent is told
+/// afterwards, because a follow-up the operator typed straight into the coding
+/// agent is one the agent never saw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    Agent,
+    Operator,
+}
+
+/// What `continue` came to: a message into a job that is running, or a new
+/// turn in the session the last one left.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum Continued {
+    Steered,
+    Resumed { directory: String },
 }
 
 /// How often the schedule is swept for routines that have come due.
@@ -650,6 +662,33 @@ pub enum RuntimeError {
     JobRunning { directory: String },
     #[error(transparent)]
     Terminal(#[from] crate::terminal::TerminalError),
+    /// pi is set to be paid for with Guaca's key, and there is no key.
+    #[error(
+        "your coding agent is set to be paid for with Guaca's API key, and there is no key in \
+         Settings > Provider, so nothing was started. Tell the operator: they can paste a key \
+         there, or set pi back to its own sign-in in your terminal panel"
+    )]
+    NoKeyToLend,
+    #[error(transparent)]
+    Tuning(#[from] crate::domain::terminal::TuningError),
+    #[error("a follow-up needs something in it: say what the coding agent should do next")]
+    NothingToSay,
+    #[error(
+        "there is no coding session to continue yet. Start one with `code` and action `start`, \
+         naming the directory and the whole brief"
+    )]
+    NoCodingSession,
+    #[error(
+        "the last coding session ran on {was}, and this agent is now set to {now}, which cannot \
+         open it. Start a new session with `code` and action `start`, or ask the operator to \
+         switch the harness back"
+    )]
+    SessionElsewhere { was: &'static str, now: &'static str },
+    #[error(
+        "the last coding session worked in `{0}`, which is not in the terminal any more. Start a \
+         new session with `code` and action `start`"
+    )]
+    SessionGone(String),
     /// Asked to reach a job where none is running.
     ///
     /// Reachable in the ordinary course of things rather than only from a
@@ -803,6 +842,9 @@ struct Inner {
     /// whose agents all run `pi` never binds it at all. `coding/bridge.rs` is
     /// the whole of it.
     bridge: crate::coding::Bridge,
+    /// Where a `pi` job set to Guaca's key is paid for, without the key.
+    /// Listening from the first job that needs it. `coding/relay.rs`.
+    relay: crate::coding::relay::Relay,
     /// Loopback port of the computer viewer. Zero until it is listening.
     viewer_port: AtomicU16,
     /// Loopback port of the event receiver. Zero until it is listening, which
@@ -952,6 +994,7 @@ impl Runtime {
                 coding: Mutex::new(HashMap::new()),
                 terminals,
                 bridge: crate::coding::Bridge::new(),
+                relay: crate::coding::relay::Relay::new(),
                 viewer_port: AtomicU16::new(0),
                 webhook_port: AtomicU16::new(0),
                 on_machine: Mutex::new(HashMap::new()),
@@ -1253,7 +1296,7 @@ impl Runtime {
         // A coding job is the agent's hands, and an agent in the compost is not
         // working. Left running it would push under the operator's name for an
         // agent they have just thrown out, and report back to nobody.
-        let _ = self.stop_job(id);
+        let _ = self.stop_job(id, Origin::Operator);
 
         // The one thing it holds that is not its own. Everything else waits
         // out the thirty days untouched because it belongs to this agent and
@@ -1384,6 +1427,9 @@ impl Runtime {
         // is free to reuse the moment an agent is deleted, so whoever takes it
         // next must not inherit a directory of somebody else's work.
         self.inner.terminals.remove_all(id);
+        // And the coding session that directory held, which nothing can
+        // continue once the directory is gone, with what was chosen for it.
+        let _ = self.inner.store.clear_coding(id);
         // Its schedule goes too, or it would keep coming due for an agent that
         // can no longer act on it.
         let _ = self.inner.store.delete_agent_routines(id);
@@ -2361,12 +2407,12 @@ impl Runtime {
         })
     }
 
-    /// Starts a coding job and returns the directory it is working in,
-    /// relative to the agent's terminal.
+    /// Starts a new coding session and returns the directory it is working
+    /// in, relative to the agent's terminal.
     ///
-    /// Returns as soon as the process is spawned. The result comes back later
-    /// as a message, on the same path a routine firing takes: a fresh run with
-    /// a fresh budget, delivered to the agent that asked for it.
+    /// Returns as soon as the job is spawned. The result comes back later as a
+    /// message, on the same path a routine firing takes: a fresh run with a
+    /// fresh budget, delivered to the agent that asked for it.
     ///
     /// That shape is the whole point and it is worth the paragraph. A coding
     /// task is a few hundred tool calls over many minutes. Awaited inside the
@@ -2384,11 +2430,108 @@ impl Runtime {
         if !card.has_terminal {
             return Err(RuntimeError::NoTerminal(card.name.clone()));
         }
-        // Resolved before the lock and before anything is spawned, so a
-        // directory that is not there is a refusal the agent reads in this
-        // turn rather than a job that fails a minute later.
+        // Resolved before anything is spawned, so a directory that is not there
+        // is a refusal the agent reads in this turn rather than a job that fails
+        // a minute later.
         let (working, shown) = self.inner.terminals.directory(card.id, directory)?;
+        // Chosen rather than read back, for the two harnesses that take one:
+        // one value is then what a follow-up resumes and what the operator hands
+        // to the program's own `--resume`. Codex names its thread itself.
+        let session = match card.harness {
+            Harness::Codex => String::new(),
+            Harness::Pi | Harness::Claude => uuid::Uuid::new_v4().to_string(),
+        };
+        self.launch(
+            card,
+            Launch {
+                working,
+                shown: shown.clone(),
+                brief: task.to_string(),
+                session,
+                resume: false,
+                harness: card.harness,
+                origin: Origin::Agent,
+            },
+        )?;
+        Ok(shown)
+    }
 
+    /// Carries an agent's coding work on: a message into the job that is
+    /// running, or a new turn in the session the last one left.
+    ///
+    /// One call for both, from the agent's `code` and from the operator's
+    /// panels alike, because it is one thing a person does in each program's
+    /// own window: type the next message. Whether the program is mid-turn
+    /// decides only when it is read.
+    pub async fn continue_job(
+        &self,
+        card: &AgentCard,
+        message: &str,
+        origin: Origin,
+    ) -> Result<Continued, RuntimeError> {
+        let message: String = message.trim().chars().take(4_000).collect();
+        if message.is_empty() {
+            return Err(RuntimeError::NothingToSay);
+        }
+        let running = self.inner.coding.lock().get(&card.id).map(|job| job.controls.clone());
+        if let Some(controls) = running {
+            let (reply, answer) = tokio::sync::oneshot::channel();
+            controls.try_send(crate::coding::Control::Steer { message, reply }).map_err(|err| {
+                match err {
+                    tokio::sync::mpsc::error::TrySendError::Closed(_) => RuntimeError::NoJobRunning,
+                    tokio::sync::mpsc::error::TrySendError::Full(_) => RuntimeError::JobUnreachable(
+                        "the coding agent has not taken the last few corrections yet. Wait for it \
+                         to reach its next step"
+                            .into(),
+                    ),
+                }
+            })?;
+            answer
+                .await
+                .map_err(|_| RuntimeError::NoJobRunning)?
+                .map_err(RuntimeError::JobUnreachable)?;
+            return Ok(Continued::Steered);
+        }
+
+        if !card.has_terminal {
+            return Err(RuntimeError::NoTerminal(card.name.clone()));
+        }
+        let session =
+            self.inner.store.coding_session(card.id)?.ok_or(RuntimeError::NoCodingSession)?;
+        // A session is only ever continued by the program that wrote it: the
+        // ids mean nothing to the other two.
+        if session.harness != card.harness {
+            return Err(RuntimeError::SessionElsewhere {
+                was: session.harness.label(),
+                now: card.harness.label(),
+            });
+        }
+        let (working, shown) = self
+            .inner
+            .terminals
+            .directory(card.id, Some(&session.directory))
+            .map_err(|_| RuntimeError::SessionGone(session.directory.clone()))?;
+        self.launch(
+            card,
+            Launch {
+                working,
+                shown: shown.clone(),
+                brief: match origin {
+                    Origin::Agent => message,
+                    Origin::Operator => format!("The operator says: {message}"),
+                },
+                session: session.id,
+                resume: true,
+                harness: session.harness,
+                origin,
+            },
+        )?;
+        Ok(Continued::Resumed { directory: shown })
+    }
+
+    /// Spawns a job and returns once it is on its way.
+    fn launch(&self, card: &AgentCard, launch: Launch) -> Result<(), RuntimeError> {
+        let Launch { working, shown, brief: task, session, resume, harness, origin } = launch;
         // One harness per agent. Taken before anything is spawned and held for
         // the life of the job: two `pi` processes in one directory interleave
         // their edits and run git against each other, and nothing downstream
@@ -2398,12 +2541,7 @@ impl Runtime {
         // model: a job takes minutes, the agent that started it goes idle
         // because its turn ended, and the next message it reads can ask it for
         // the next piece of work.
-        //
-        // The stop channel and the job's own run are made before the lock so
-        // the map entry is complete the moment it exists: an operator pressing
-        // stop in the window between inserting and spawning would otherwise
-        // find a job with no way to end it.
-        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let (controls, controlled) = tokio::sync::mpsc::channel(8);
         // The run this job's own permission requests are filed against. Minted
         // rather than borrowed from the turn that called `code`: that run
         // settled minutes ago, and filing against it would report work on a
@@ -2411,34 +2549,47 @@ impl Runtime {
         // makes `release_parked` the way a job ending closes whatever it was
         // waiting on, rather than a second sweep written for this.
         let job_run = RunId::new();
-        let harness = card.harness;
         let gate = card.gate;
+        // What the operator chose inside this harness, read now so a job that
+        // cannot be paid for is refused in the turn that asked rather than
+        // minutes later as a failed job.
+        let mut tuning = self.inner.store.coding_tuning(card.id, harness)?;
+        let lend = match tuning.pays {
+            crate::domain::terminal::Payer::Own => None,
+            crate::domain::terminal::Payer::GuacaKey => {
+                let inference = self.inner.config.read().inference.clone();
+                if inference.api_key.trim().is_empty() || inference.base_url.trim().is_empty() {
+                    return Err(RuntimeError::NoKeyToLend);
+                }
+                // The key's own model when none was chosen, which is the one
+                // model this key is known to be good for.
+                tuning.model.get_or_insert_with(|| inference.default_model.clone());
+                Some(crate::coding::relay::Upstream {
+                    base_url: inference.base_url,
+                    api_key: inference.api_key,
+                    referer: inference.referer,
+                    title: inference.title,
+                })
+            }
+        };
         {
             let mut coding = self.inner.coding.lock();
             if let Some(busy) = coding.get(&card.id) {
                 return Err(RuntimeError::JobRunning { directory: busy.directory.clone() });
             }
-            coding.insert(
-                card.id,
-                Running {
-                    directory: shown.clone(),
-                    mailbox: match harness {
-                        Harness::Claude | Harness::Codex => Mailbox::Starting,
-                        Harness::Pi => Mailbox::Unreachable(
-                            "pi has no way to be reached while it is working. An agent set to \
-                             Claude Code or Codex can be sent one",
-                        ),
-                    },
-                    stop: Some(stop),
-                },
-            );
+            coding
+                .insert(card.id, Running { directory: shown.clone(), controls, stopped_by: None });
+        }
+        // Recorded before anything runs, so a job that dies at once still
+        // leaves a session a follow-up can find and the operator can open.
+        // Codex names its thread itself, and is recorded when it does.
+        if !session.is_empty() {
+            self.record_session(card.id, harness, &session, &shown);
         }
 
         let runtime = self.clone();
         let agent = card.id;
-        let task = task.to_string();
-        let name = shown.clone();
-
+        let group = card.group_id;
         self.emit(UiEvent::CodingJobStarted { agent_id: card.id, directory: shown.clone() });
 
         tokio::spawn(async move {
@@ -2458,146 +2609,80 @@ impl Runtime {
             }
             brief.push_str(&task);
 
-            // The job's own end of the bridge, which is what makes it
-            // reachable while it runs. Opened here rather than before the spawn
-            // because it asks the program its version, which is a process, and
-            // `start_job` has already returned to a turn that must not wait.
-            //
-            // `None` is a job that runs exactly as every job ran before any of
-            // this: `pi`, a Claude Code older than the contract was measured
-            // on, or a bridge that could not start. Every one of them is a
-            // working job, so none of them is an error.
+            // Asked of the program itself, because the answer changes when the
+            // operator upgrades between two jobs. Claude Code below the floor
+            // runs without a bridge, which is every job before the bridge
+            // existed; pi below the floor speaks an RPC nothing here has
+            // checked, so it is refused with the command that updates it.
+            let presence = crate::coding::presence(harness).await;
+            let too_old = matches!(
+                (&presence, harness),
+                (crate::coding::Presence::Installed { bridged: false, .. }, Harness::Pi)
+            );
             let (signals, mut heard) = tokio::sync::mpsc::channel(32);
-            let control = if harness == Harness::Codex {
-                let (sender, steering) = tokio::sync::mpsc::channel(8);
-                if let Some(job) = runtime.inner.coding.lock().get_mut(&agent) {
-                    job.mailbox = Mailbox::Codex(sender);
+            let bridge = match (harness, &presence) {
+                (Harness::Claude, crate::coding::Presence::Installed { bridged: true, .. }) => {
+                    runtime
+                        .inner
+                        .bridge
+                        .open(signals.clone(), gate, working.clone().into(), session.clone())
+                        .await
                 }
-                Some(crate::coding::codex::Control { gate, steering, signals: signals.clone() })
-            } else {
-                None
+                _ => None,
             };
-            let session = match harness {
-                Harness::Pi | Harness::Codex => None,
-                Harness::Claude => match crate::coding::presence(harness).await {
-                    crate::coding::Presence::Installed { bridged: true, .. } => {
-                        runtime.inner.bridge.open(signals, gate, working.clone().into()).await
-                    }
-                    _ => None,
-                },
-            };
-            if let Some(job) = runtime.inner.coding.lock().get_mut(&agent) {
-                match &session {
-                    Some(session) => job.mailbox = Mailbox::At(session.session_id().to_string()),
-                    // Only a job that was expecting one. `pi` already carries a
-                    // more specific reason, written before the process started,
-                    // and replacing it here would tell the operator to upgrade
-                    // a program they are not running.
-                    None if matches!(job.mailbox, Mailbox::Starting) => {
-                        job.mailbox = Mailbox::Unreachable(
-                            "this job is running without a bridge, so nothing can reach it until \
-                             it finishes. Claude Code has to be installed, and new enough, for one",
-                        )
-                    }
-                    None => {}
-                }
-            }
-
-            // Copied off the session rather than borrowed from it, so the
-            // session can be dropped the moment the job ends instead of at the
-            // end of this task: the mailbox and the scratch directory go with
-            // it, and neither should outlive the process by the length of a
-            // message delivery.
-            let wiring = session.as_ref().map(|session| session.wiring().clone());
 
             let env = match runtime.secret_environment(agent) {
-                Ok(env) => env,
+                Ok(env) => Some(env),
                 Err(error) => {
-                    runtime.release_parked(job_run);
-                    runtime.forget_refusals(job_run);
-                    runtime.inner.coding.lock().remove(&agent);
-                    runtime.emit(UiEvent::CodingJobFinished { agent_id: agent });
-                    runtime.job_finished(
-                        agent,
-                        &name,
-                        harness,
-                        Err(crate::coding::CodingError::Start(format!(
-                            "Could not load Secrets: {error}"
-                        ))),
-                    );
-                    return;
+                    tracing::warn!(%error, "could not load a coding job's secrets");
+                    None
                 }
             };
-            let watcher = runtime.clone();
-            let running = crate::coding::run_with_env(
-                harness,
-                &working,
-                &brief,
-                wiring.as_ref(),
-                control,
-                &env,
-                move |progress| {
-                    let (tool, detail) = match progress {
-                        crate::coding::Progress::Using { tool, detail } => (tool, detail),
-                        crate::coding::Progress::Said(said) => (String::new(), said),
-                    };
-                    watcher.emit(UiEvent::CodingProgress { agent_id: agent, tool, detail });
-                },
-            );
-
-            // What the job says about itself through its own tools, drained
-            // beside the process rather than after it: a progress note is worth
-            // nothing once the job has finished, and a permission request has
-            // a harness holding a hook open waiting for the answer.
-            let mut reported: Option<crate::coding::PullRequest> = None;
-            tokio::pin!(running);
-            tokio::pin!(stopped);
-
-            let outcome = loop {
-                tokio::select! {
-                    done = &mut running => break Some(done),
-
-                    // The operator pressed stop. Dropping the run future drops
-                    // the child, and `kill_on_drop` kills the process.
-                    _ = &mut stopped => break None,
-
-                    Some(signal) = heard.recv() => match signal {
-                        crate::coding::Signal::Note(note) => runtime.emit(UiEvent::CodingProgress {
-                            agent_id: agent,
-                            tool: String::new(),
-                            detail: crate::secrets::redact(&note, &env.values),
-                        }),
-                        crate::coding::Signal::PullRequest { url, branch } => {
-                            let url = crate::secrets::redact(&url, &env.values);
-                            let branch = crate::secrets::redact(&branch, &env.values);
-                            runtime.emit(UiEvent::CodingProgress {
-                                agent_id: agent,
-                                tool: "pull request".to_string(),
-                                detail: url.clone(),
-                            });
-                            reported = Some(crate::coding::PullRequest { url, branch });
-                        }
-                        // Spawned rather than awaited here, so the loop keeps
-                        // draining and a stop still lands while the operator is
-                        // deciding. The reply is sent on every path out of the
-                        // task, because a dropped sender is a deny and a job
-                        // denied by Guaca's own plumbing is the one refusal
-                        // that would be a lie.
-                        crate::coding::Signal::Permission { line, reach, reply } => {
-                            let line = crate::secrets::redact(&line, &env.values);
-                            let reach = Reach {
-                                what: crate::secrets::redact(&reach.what, &env.values),
-                                through: reach.through.map(|text| crate::secrets::redact(&text, &env.values)),
+            // Held for the life of the job and dropped with it, which is what
+            // makes the token worthless once the job is over.
+            let lease = match lend {
+                None => Ok(None),
+                Some(upstream) => {
+                    let meter = runtime.meter(agent, group, job_run);
+                    runtime.inner.relay.lend(upstream, Some(meter)).await.map(Some)
+                }
+            };
+            let outcome = match (too_old, env, lease) {
+                (true, _, _) => Err(crate::coding::too_old(harness)),
+                (false, None, _) => Err(crate::coding::CodingError::Start(
+                    "Guaca could not load the secrets granted to this agent".into(),
+                )),
+                (false, _, Err(err)) => Err(crate::coding::CodingError::Start(format!(
+                    "Guaca could not open the relay that lends its key: {err}"
+                ))),
+                (false, Some(env), Ok(lease)) => {
+                    let watcher = runtime.clone();
+                    let running = crate::coding::run(
+                        crate::coding::Job {
+                            harness,
+                            directory: &working,
+                            brief: &brief,
+                            session: &session,
+                            resume,
+                            gate,
+                            env: &env,
+                            bridge: bridge.as_ref(),
+                            tuning: &tuning,
+                            lent: lease.as_ref(),
+                        },
+                        controlled,
+                        signals,
+                        move |progress| {
+                            let (tool, detail) = match progress {
+                                crate::coding::Progress::Using { tool, detail } => (tool, detail),
+                                crate::coding::Progress::Said(said) => (String::new(), said),
                             };
-                            let asking = runtime.clone();
-                            tokio::spawn(async move {
-                                let allowed = asking
-                                    .ask_about_push(agent, job_run, &line, &reach, Asker::Job)
-                                    .await;
-                                let _ = reply.send(allowed);
-                            });
-                        }
-                    },
+                            watcher.emit(UiEvent::CodingProgress { agent_id: agent, tool, detail });
+                        },
+                    );
+                    runtime
+                        .watch_job(agent, job_run, harness, &shown, &env, running, &mut heard)
+                        .await
                 }
             };
 
@@ -2608,31 +2693,114 @@ impl Runtime {
             runtime.forget_refusals(job_run);
 
             // Released before the result is delivered, so the turn that reads
-            // "it finished" can start the next job. The other order is an agent
-            // that has to wait a turn to carry on.
-            runtime.inner.coding.lock().remove(&agent);
+            // "it finished" can start or continue the next job. The other order
+            // is an agent that has to wait a turn to carry on.
+            let stopped_by =
+                runtime.inner.coding.lock().remove(&agent).and_then(|job| job.stopped_by);
             runtime.emit(UiEvent::CodingJobFinished { agent_id: agent });
 
-            // Dropped before the message goes out rather than at the end of the
-            // task, so the mailbox and the scratch directory are gone by the
-            // time the agent is told the job is over.
-            drop(session);
+            // Dropped before the message goes out, so the mailbox and the
+            // scratch directory are gone by the time the agent is told.
+            drop(bridge);
 
             match outcome {
-                None => runtime.job_stopped(agent, &name),
-                Some(outcome) => {
-                    let outcome = outcome.map(|mut done| {
-                        // Filled in here because it never came from the
-                        // harness's stdout: it is the job calling a tool.
-                        done.pull_request = reported;
-                        done
-                    });
-                    runtime.job_finished(agent, &name, harness, outcome);
-                }
+                Ok(done) if done.stopped => match stopped_by {
+                    // It asked, and was told in the turn that asked. A second
+                    // message would be a turn spent saying so again.
+                    Some(Origin::Agent) => {}
+                    _ => runtime.job_stopped(agent, &shown),
+                },
+                outcome => runtime.job_finished(agent, &shown, harness, outcome, origin),
             }
         });
 
-        Ok(shown)
+        Ok(())
+    }
+
+    /// Drives a job to its end, answering what it says about itself on the
+    /// way: a progress note, a pull request, a push it wants to make, the
+    /// session it is.
+    ///
+    /// Drained beside the process rather than after it: a progress note is
+    /// worth nothing once the job has finished, and a permission request has a
+    /// harness holding a call open waiting for the answer.
+    #[allow(clippy::too_many_arguments)]
+    async fn watch_job(
+        &self,
+        agent: AgentId,
+        job_run: RunId,
+        harness: Harness,
+        shown: &str,
+        env: &crate::secrets::Environment,
+        running: impl std::future::Future<
+            Output = Result<crate::coding::Outcome, crate::coding::CodingError>,
+        >,
+        heard: &mut tokio::sync::mpsc::Receiver<crate::coding::Signal>,
+    ) -> Result<crate::coding::Outcome, crate::coding::CodingError> {
+        let mut reported: Option<crate::coding::PullRequest> = None;
+        tokio::pin!(running);
+        let outcome = loop {
+            tokio::select! {
+                done = &mut running => break done,
+                Some(signal) = heard.recv() => match signal {
+                    crate::coding::Signal::Note(note) => self.emit(UiEvent::CodingProgress {
+                        agent_id: agent,
+                        tool: String::new(),
+                        detail: crate::secrets::redact(&note, &env.values),
+                    }),
+                    crate::coding::Signal::PullRequest { url, branch } => {
+                        let url = crate::secrets::redact(&url, &env.values);
+                        let branch = crate::secrets::redact(&branch, &env.values);
+                        self.emit(UiEvent::CodingProgress {
+                            agent_id: agent,
+                            tool: "pull request".to_string(),
+                            detail: url.clone(),
+                        });
+                        reported = Some(crate::coding::PullRequest { url, branch });
+                    }
+                    crate::coding::Signal::Session(id) => self.record_session(agent, harness, &id, shown),
+                    // Spawned rather than awaited here, so the loop keeps
+                    // draining and a stop still lands while the operator is
+                    // deciding. The reply is sent on every path out of the
+                    // task, because a dropped sender is a deny and a job denied
+                    // by Guaca's own plumbing is the one refusal that would be
+                    // a lie.
+                    crate::coding::Signal::Permission { line, reach, reply } => {
+                        let line = crate::secrets::redact(&line, &env.values);
+                        let reach = Reach {
+                            what: crate::secrets::redact(&reach.what, &env.values),
+                            through: reach.through.map(|text| crate::secrets::redact(&text, &env.values)),
+                        };
+                        let asking = self.clone();
+                        tokio::spawn(async move {
+                            let allowed = asking
+                                .ask_about_push(agent, job_run, &line, &reach, Asker::Job)
+                                .await;
+                            let _ = reply.send(allowed);
+                        });
+                    }
+                },
+            }
+        };
+        outcome.map(|mut done| {
+            // Filled in here because it never came from the harness's stdout:
+            // it is the job calling a tool.
+            done.pull_request = reported;
+            done
+        })
+    }
+
+    /// Keeps the session an agent's job is, for a follow-up to find.
+    fn record_session(&self, agent: AgentId, harness: Harness, id: &str, directory: &str) {
+        let session = crate::domain::terminal::Session {
+            harness,
+            id: id.to_string(),
+            directory: directory.to_string(),
+            updated_at: now_ms(),
+        };
+        if let Err(err) = self.inner.store.set_coding_session(agent, &session) {
+            tracing::warn!(%err, "could not record a coding session; a follow-up will start over");
+        }
     }
 
     /// Hands a finished job back to the agent that started it.
@@ -2652,6 +2820,7 @@ impl Runtime {
         directory: &str,
         harness: Harness,
         outcome: Result<crate::coding::Outcome, crate::coding::CodingError>,
+        origin: Origin,
     ) {
         // What the operator is told, separately from what the agent is told.
         // Set only where the harness itself failed: a job that ran and did the
@@ -2692,7 +2861,8 @@ impl Runtime {
                 text.push_str(
                     ". You have not seen the code and did not write it: report what it says it \
                      did, say it was done by the coding agent, and do not claim to have checked \
-                     anything you have not.",
+                     anything you have not. To give it a follow-up in the same session, with \
+                     everything it already read, call `code` with action `continue`.",
                 );
                 // A link the job reported through its own tool rather than a
                 // link parsed out of the paragraph above. The difference is
@@ -2722,6 +2892,15 @@ impl Runtime {
         // switched while it ran, and a login error alone does not name its
         // provider.
         let text = format!("Coding harness: {}.\n\n{text}", harness.label());
+        // A follow-up the operator typed straight into the coding agent is one
+        // this agent never saw, and it is about to be asked what came of it.
+        let text = match origin {
+            Origin::Agent => text,
+            Origin::Operator => format!(
+                "The operator sent the coding agent a follow-up directly, in the session it \
+                 was already working in.\n\n{text}"
+            ),
+        };
 
         if let Some(reason) = operator_should_know {
             self.emit(UiEvent::CodingJobFailed {
@@ -3367,9 +3546,9 @@ impl Runtime {
             "The operator stopped the coding agent working in `{directory}` before it \
              finished. Whatever it had already committed is still there and whatever it was in \
              the middle of is not, so the work is partly done and nobody has checked which \
-             part. Do not report it as finished and do not start it again: the operator \
-             stopped it on purpose and will say what they want next. Say plainly that it was \
-             stopped."
+             part. The session is kept: if the operator wants the work carried on, `code` with \
+             action `continue` picks it up where it stopped. Do not continue or restart it \
+             unless they ask: they stopped it on purpose. Say plainly that it was stopped."
         );
 
         let envelope = Envelope {
@@ -3392,66 +3571,35 @@ impl Runtime {
         }
     }
 
-    /// Sends a correction into a coding job that is already running.
-    ///
-    /// Claude reads a staged correction at its next hook boundary. Codex
-    /// acknowledges native steering before this call reports success.
-    ///
-    /// Addressed by the agent running the job, because an agent runs one job
-    /// at a time in a terminal of its own.
-    pub async fn message_job(&self, agent: AgentId, message: &str) -> Result<(), RuntimeError> {
-        let mailbox = {
-            let coding = self.inner.coding.lock();
-            coding.get(&agent).ok_or(RuntimeError::NoJobRunning)?.mailbox.clone()
-        };
-        match mailbox {
-            Mailbox::Starting => Err(RuntimeError::JobStillStarting),
-            Mailbox::Unreachable(why) => Err(RuntimeError::JobUnreachable(why.into())),
-            Mailbox::At(token) => {
-                if self.inner.bridge.post(&token, message) {
-                    Ok(())
-                } else {
-                    Err(RuntimeError::NoJobRunning)
-                }
-            }
-            Mailbox::Codex(sender) => {
-                let message: String = message.trim().chars().take(2000).collect();
-                if message.is_empty() {
-                    return Err(RuntimeError::JobUnreachable("Enter a correction to send".into()));
-                }
-                let (reply, accepted) = tokio::sync::oneshot::channel();
-                sender.try_send(crate::coding::codex::Steer { message, reply }).map_err(|err| {
-                    match err {
-                        tokio::sync::mpsc::error::TrySendError::Closed(_) => RuntimeError::NoJobRunning,
-                        tokio::sync::mpsc::error::TrySendError::Full(_) => RuntimeError::JobUnreachable("The correction queue is full. Wait for Codex to accept the pending instructions.".into()),
-                    }
-                })?;
-                accepted
-                    .await
-                    .map_err(|_| RuntimeError::NoJobRunning)?
-                    .map_err(RuntimeError::JobUnreachable)
-            }
-        }
+    /// The operator's next message to an agent's coding agent: into the job if
+    /// one is running, or a new turn in the last session if not.
+    pub async fn message_job(
+        &self,
+        agent: AgentId,
+        message: &str,
+    ) -> Result<Continued, RuntimeError> {
+        let card = self.inner.store.get_agent(agent)?.ok_or(RuntimeError::UnknownAgent(agent))?;
+        self.continue_job(&card, message, Origin::Operator).await
     }
 
-    /// Stops a coding job, leaving whatever it has committed.
+    /// Stops a coding job, leaving whatever it has committed and keeping its
+    /// session.
     ///
-    /// Taking the sender rather than dropping the whole entry: the job's own
-    /// task is what removes it, after the process has actually gone, and
-    /// removing it here would let a second job start while a harness was
+    /// A request rather than a kill: each harness ends its turn its own way
+    /// (an abort, an interrupt, a signal) within a few seconds, and the job's
+    /// own task removes the entry once the process has actually gone.
+    /// Removing it here would let a second job start while a harness was
     /// still writing.
-    pub fn stop_job(&self, agent: AgentId) -> Result<(), RuntimeError> {
-        let stop = {
+    pub fn stop_job(&self, agent: AgentId, origin: Origin) -> Result<(), RuntimeError> {
+        let controls = {
             let mut coding = self.inner.coding.lock();
             let job = coding.get_mut(&agent).ok_or(RuntimeError::NoJobRunning)?;
-            job.stop.take()
+            job.stopped_by.get_or_insert(origin);
+            job.controls.clone()
         };
-
-        // Already taken means somebody pressed it twice, and the second press
-        // is not an error: the job it was asked about is ending either way.
-        if let Some(stop) = stop {
-            let _ = stop.send(());
-        }
+        // A full channel is a stop already on its way, and pressing twice is
+        // not an error: the job it was asked about is ending either way.
+        let _ = controls.try_send(crate::coding::Control::Stop);
         Ok(())
     }
 
@@ -5455,20 +5603,54 @@ impl Runtime {
                 (rendered, Part::tool_call(tools::SEND_MESSAGE, arguments, outcome))
             }
 
-            ToolInvocation::Code { task, directory } => {
-                let (rendered, outcome) = match self.start_job(card, &task, directory.as_deref()) {
-                    Ok(directory) => {
-                        let summary = format!("started work in {directory}");
-                        (
-                            format!(
-                                "Started. A coding agent is working in `{directory}` now. It \
-                                 will send you a message when it is done, which may be several \
-                                 minutes. End your turn and say you have started it: there is \
-                                 nothing to wait for and nothing to check.",
-                            ),
-                            ToolOutcome::Ok { summary },
-                        )
+            ToolInvocation::Code(action) => {
+                let done = match action {
+                    tools::CodeAction::Start { task, directory } => {
+                        self.start_job(card, &task, directory.as_deref()).map(|directory| {
+                            (
+                                format!(
+                                    "Started. A coding agent is working in `{directory}` now. It \
+                                     will send you a message when it is done, which may be \
+                                     several minutes. End your turn and say you have started it: \
+                                     there is nothing to wait for and nothing to check.",
+                                ),
+                                format!("started work in {directory}"),
+                            )
+                        })
                     }
+                    tools::CodeAction::Continue { message } => self
+                        .continue_job(card, &message, Origin::Agent)
+                        .await
+                        .map(|continued| match continued {
+                            Continued::Steered => (
+                                "Sent to the coding agent. It reads it at its next step, and \
+                                     you still get one message when the job finishes. End your \
+                                     turn: there is nothing to wait for."
+                                    .to_string(),
+                                "sent to the running job".to_string(),
+                            ),
+                            Continued::Resumed { directory } => (
+                                format!(
+                                    "Continued. The coding agent is carrying its last session \
+                                         on in `{directory}`, with everything it had already \
+                                         read. You get a message back when it is done. End your \
+                                         turn and say you have passed it on."
+                                ),
+                                format!("continued the session in {directory}"),
+                            ),
+                        }),
+                    tools::CodeAction::Stop => self.stop_job(card.id, Origin::Agent).map(|()| {
+                        (
+                            "Stopping it. It ends its turn within a few seconds; what it \
+                             committed stays, and the session is kept for `continue`. Say that \
+                             you stopped it, and why."
+                                .to_string(),
+                            "stopped the job".to_string(),
+                        )
+                    }),
+                };
+                let (rendered, outcome) = match done {
+                    Ok((rendered, summary)) => (rendered, ToolOutcome::Ok { summary }),
                     Err(err) => {
                         (format!("Error: {err}"), ToolOutcome::Failed { error: err.to_string() })
                     }
@@ -6894,6 +7076,39 @@ impl Runtime {
             completion: usage.completion_tokens,
             cost: usage.cost,
         });
+    }
+
+    /// Where a job paid for with Guaca's key records what each call cost.
+    ///
+    /// The same row and the same event a turn's own call produces, against the
+    /// job's run rather than the turn that started it, which settled minutes
+    /// ago. The key is Guaca's, so its spend is in the same account as
+    /// everything else the key paid for.
+    fn meter(&self, agent: AgentId, group: GroupId, run_id: RunId) -> crate::coding::relay::Meter {
+        let store = self.inner.store.clone();
+        let events = self.inner.events.clone();
+        Arc::new(move |spent: crate::coding::relay::Spent| {
+            let entry = crate::domain::usage::UsageEntry {
+                agent_id: agent,
+                group_id: group,
+                run_id,
+                model: spent.model,
+                prompt: spent.prompt,
+                completion: spent.completion,
+                cost: spent.cost,
+            };
+            if let Err(err) = store.record_usage(&entry) {
+                tracing::warn!(%err, "could not record what a relayed call cost");
+            }
+            events.emit(UiEvent::TokensUsed {
+                agent_id: agent,
+                group_id: group,
+                run_id,
+                prompt: spent.prompt,
+                completion: spent.completion,
+                cost: spent.cost,
+            });
+        })
     }
 
     /// Kills every sandbox this app made that no agent still refers to.

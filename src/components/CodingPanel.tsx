@@ -22,8 +22,8 @@ interface Props {
  *
  * ## Why it is a filtered line and not the stream
  *
- * `pi --mode json` emits tens of thousands of events for a real job, almost all
- * of them text deltas and a cumulative usage total repeated on each one.
+ * A harness emits tens of thousands of events for a real job, almost all of
+ * them text deltas and a cumulative usage total repeated on each one.
  * Forwarding that into the webview would be a re-render per token for a panel
  * nobody could read fast enough. The runtime keeps the two things a person
  * watching over a shoulder wants — the tool it reached for, and what it says as
@@ -46,9 +46,9 @@ export function CodingPanel({ agent }: Props) {
   const [stopping, setStopping] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   // Armed before it fires, like the two destructive items in `AgentMenu`. This
-  // ends forty minutes of work that cannot be resumed, and the confirmation is
-  // drawn where the click happened rather than somewhere the operator has to
-  // go and find it.
+  // ends forty minutes of work mid-step, and the confirmation is drawn where
+  // the click happened rather than somewhere the operator has to go and find
+  // it.
   const [confirming, setConfirming] = useState(false);
 
   // Follows its own end unconditionally, unlike the transcript. The panel is
@@ -69,12 +69,18 @@ export function CodingPanel({ agent }: Props) {
     setSending(true);
     setNote("Sending correction…");
     try {
-      await api.messageCodingJob(agent, message);
+      const continued = await api.messageCodingJob(agent, message);
       setCorrection("");
       // Said rather than left to the transcript. What the operator typed goes
       // to the harness and never becomes a message anywhere, so without this
       // the only evidence it arrived is the job changing course minutes later.
-      setNote("Sent. It reaches the job at its next step.");
+      // The job can also end between the keystroke and the call, and then the
+      // same words carried it on in its session rather than being lost.
+      setNote(
+        continued.kind === "steered"
+          ? "Sent. It reaches the job at its next step."
+          : "It had just finished, so this carries it on in the same session.",
+      );
     } catch (err) {
       setNote(errorMessage(err));
     } finally {
@@ -165,8 +171,9 @@ export function CodingPanel({ agent }: Props) {
         // What survives is the half an operator cannot see from here, and it is
         // the half that decides whether they press it.
         <p className="coding__waiting">
-          Stopping kills the program where it stands. Whatever it has committed stays; whatever it
-          was in the middle of does not. It cannot be resumed from here.
+          Stopping ends its turn where it stands. Whatever it has committed stays; whatever it was
+          in the middle of does not. Its session is kept, and a follow-up from the agent&apos;s
+          terminal panel carries on from there.
         </p>
       )}
 

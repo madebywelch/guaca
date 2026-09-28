@@ -243,15 +243,77 @@ So the three map onto what an operator pays with:
 - **A Claude plan** is spent by Claude Code.
 - **A ChatGPT plan** is spent by Codex, signed in with `codex login`. That is
   a separate sign-in from Guaca's own ChatGPT provider.
-- **An API key**, OpenRouter's or any provider's, is spent by `pi`, configured
-  with that key the way `pi` is configured anywhere.
+- **An API key**, OpenRouter's or any provider's, is spent by `pi`: either the
+  one `pi` is signed in to on the host, or Guaca's own, lent through a relay
+  that never hands it over (below).
 
-What is *not* a choice here is everything inside a harness. The model, the
-thinking level, the extensions, the rules file and the sign-in all belong to
-the program and stay there. `coding/pi.rs` passes no `--provider` and no
-`--model`, and `coding/claude_code.rs` passes no `--model`, for the reason the
-binary is found on `PATH` rather than configured: a second place to say
-something is a second place for it to be wrong.
+The sign-in, the extensions and the rules file belong to the program and stay
+there. The model and the effort default to the program's own setting too, and
+the operator can choose them per agent the way the program's own window does,
+because a harness whose model cannot be picked from the app is one the operator
+has to leave the app to drive.
+
+## A job's model and effort are the program's own flags
+
+Each program already takes both, and Guaca passes the operator's choice as the
+program's own argument and nothing more: `--model` and `--effort` for Claude
+Code, `model` on `thread/start` and `effort` on `turn/start` for Codex,
+`--model` and `--thinking` for `pi`. Nothing chosen is nothing passed, which is
+what every job ran on before the choice existed.
+
+`coding_tuning` keeps one row per agent *per harness*. One field for all three
+is the mistake `InferenceConfig` made with two providers: the programs share no
+model names and no effort words, every switch broke the model, and switching
+back did not put it right. An engineer moved to Codex for an afternoon because
+a Claude plan ran out comes back to the Claude model it had.
+
+The panel suggests models asked of the program rather than listed here, because
+the list is the program's and moves with its releases and its sign-in. None of
+the three spends a model call to answer:
+
+- Claude Code answers the SDK's `initialize` control request with what `/model`
+  would offer. Its first entry is `default`, which is the absence of a choice;
+  the first entry that resolves to the same model is marked as the default
+  instead, which is `claude-fable-5-1` on 2.1.283 and the alias `opus[1m]` on
+  2.1.260.
+- Codex answers `model/list`, each model with the efforts it advertises. Its
+  schema types an effort as any non-empty string "advertised by the model", so
+  a word the model does not take is not refused at the door: the panel offers
+  the chosen model's own list rather than the union.
+- `pi` answers RPC `get_available_models` with every model its sign-ins reach.
+
+A stored value is checked against `Harness::efforts` and refused if a model
+name starts with `-`, because it is handed over as the argument after `--model`
+and would otherwise be read as a flag.
+
+## pi can be paid for with Guaca's key, and never holds it
+
+`pi` takes a key from its auth file or the environment, and either is somewhere
+its own `bash` tool can print. A README the job reads can ask it to, and the key
+the operator pasted into Settings > Provider would leave the machine in a job's
+transcript. So when the operator sets pi to Guaca's key, the key stays in this
+process and `coding/relay.rs` lends it:
+
+- The relay listens on loopback and admits one thing: `POST
+  /v1/chat/completions` with a live job's token. It sends the body on to the
+  endpoint in settings with the real key on it, and streams the answer back
+  unchanged, delimited by the connection closing.
+- The job is handed a provider override in a `pi` extension, which pi documents
+  for proxies and gateways: against OpenRouter, pi's own `openrouter` provider
+  with only its address and key replaced, so pi's catalog keeps each model's
+  context, thinking and price; anywhere else, a provider of the one model the
+  job runs, because pi will not run a model it has no entry for. Measured
+  against pi 0.84.4 with both forms.
+- The token is minted per job and dropped with it. Off this machine it is
+  nothing, and after the job it is refused.
+- Every call is metered on its way back: the `usage` the endpoint reports is
+  recorded against the job's run in the same table and the same live tally a
+  turn's own call is. The key is Guaca's, so its spend is in Guaca's account.
+
+It is chosen, never inferred: *nothing about who pays is inferred* holds here
+as everywhere. No model chosen is the key's own, `default_model`. No key in
+settings is a job refused in the turn that asked, with both ways on: paste a
+key, or set pi back to its own sign-in.
 
 ## A job is told where it is standing before it is told what to do
 
@@ -314,12 +376,16 @@ most wants while a job is running, which is what the job is doing.
 
 ## One process lifecycle, three of what genuinely differs
 
-What `pi` and Claude Code share is the shape of a job: one process, in one
-directory, whose stdout is a stream of JSON objects, one per line, that ends.
-So `coding/mod.rs` holds the spawn, the read loop, the ceiling, the kill and
-the exit handling, and each submodule holds the argument vector and the fold
-from an event into an `Outcome`. Codex owns a bidirectional app-server session
-in `coding/codex.rs`, ending its process after the active turn completes.
+What the three share is the shape of a job: one process, in one directory,
+speaking JSON one object per line, under one forty-five minute ceiling, with
+the same redaction on everything it says. Where they differ is who holds the
+conversation. Claude Code's stdout is a stream that ends, so `coding/mod.rs`
+holds its spawn, read loop and kill, and the hooks in `coding/bridge.rs` are
+how it is reached. `pi --mode rpc` and Codex's app-server keep stdin open for
+the life of the job and take commands on it, so `coding/pi.rs` and
+`coding/codex.rs` each drive their own process and end it by closing stdin once
+the turn settles. Each submodule holds its argument vector and the fold from an
+event into an `Outcome`.
 
 Three details of the vectors are load-bearing and none of them is guessable.
 
@@ -341,7 +407,29 @@ carry `file_path`. Merged, one program's field name gets read out of the
 other's arguments, and a wrong guess prints somebody's file contents into a
 channel. Anything not in a table draws no detail at all.
 
-## A job can be reached while it runs, on two of the three
+## Whatever the program's own terminal can do to a job, Guaca can
+
+The test is the operator's own terminal. Anything they could do to a job there
+(correct it mid-turn, stop it, carry it on tomorrow, open it themselves) has to
+be possible from the app, through the same interface the program exposes for
+it, or the harness is a black box the app happens to run.
+
+| | Claude Code | Codex | `pi` |
+|---|---|---|---|
+| Correct it while it runs | hook mailbox | `turn/steer` | RPC `steer` |
+| Stop it | SDK `interrupt` on stdin | `turn/interrupt` | RPC `abort` |
+| Carry it on after | `--resume <id>` | `thread/resume` | the same `--session-id` |
+| Choose the model | `--model` | `model` | `--model` |
+| Choose the effort | `--effort` | `effort` | `--thinking` |
+| Ask before a push | `PreToolUse` hook | approval callbacks | extension, answered over RPC |
+| Open it yourself | `claude --resume <id>` | `codex resume <id>` | `pi --session <id>` |
+
+All of it goes through `code`, for an agent, and `message_coding_job` and
+`stop_coding_job`, for the operator. `continue` and the operator's box are one
+call: into the job if one is running, or a new turn in the last session if not.
+The runtime decides which, because the job can end between the keystroke and
+the call, and words typed at a job that just finished are a follow-up rather
+than an error.
 
 `code` returns the moment the process is up. The cost used to be paid at the
 other end: for up to forty-five minutes a job was write-only.
@@ -361,15 +449,36 @@ passes them with `--settings`, and answers the hook over a loopback socket:
 - **Two ways to report**, on a small MCP server passed with `--mcp-config`:
   `note_progress` and `report_pull_request`.
 
-**Codex** is reached through its own protocol: `turn/steer` with the active
-turn id, acknowledged before Guaca reports it sent, and command approval
-callbacks for the gate.
+Everything the Claude bridge adds is an improvement on a job that already
+worked, which is why every part of it fails open: a bridge that did not start,
+a `curl` that is not installed and a server that already dropped the job all
+end with an empty answer and an exit status of zero. The gate is the
+exception, and fails closed.
 
-**`pi`** has neither in this build and gets none of it. Everything the bridge
-adds is an improvement on a job that already worked, which is why every part
-of it fails open: a bridge that did not start, a `curl` that is not installed
-and a server that already dropped the job all end with an empty answer and an
-exit status of zero.
+**Codex** is reached through its own protocol: `turn/steer` with the active
+turn id, acknowledged before Guaca reports it sent; a correction sent before
+the first turn exists is held until it does. `turn/interrupt` stops it, and
+the turn comes back `interrupted` rather than failed. Command approval
+callbacks are the gate.
+
+**`pi`** runs in `--mode rpc`, the interface its own editor integrations use.
+The brief is a `prompt` command rather than an argument, a correction is
+`steer`, which pi puts in front of the model after the tool calls it is
+running, and a stop is `abort`, which ends the turn and keeps the session. The
+job is over at `agent_settled`, not `agent_end`: pi can retry after an
+`agent_end`, and closing stdin then would cut off the retry. `RPC_FLOOR` is the
+version all of this was measured against, and an older `pi` is refused with the
+update command rather than driven over a protocol nothing here has checked.
+
+pi has no permission system of its own, so its gate is an extension, written to
+a scratch directory per job and loaded with `-e`. It decides nothing: every
+`bash` call asks `ctx.ui.confirm`, which arrives as an `extension_ui_request`,
+and Guaca reads the line with `bridge::outward` and answers
+`extension_ui_response`, so an ordinary line is confirmed without asking
+anybody and a push waits on the desk. Before the brief is sent, Guaca asks
+`get_commands` for the command the extension registers. A gate that did not
+load is a job that does not start, because the alternative is a push the
+operator asked to be asked about, run by a job that looked gated.
 
 ### The three things the Claude bridge rests on are behavior, not flags
 
@@ -385,22 +494,61 @@ None of them can be checked offline, which is why `tests/coding.rs` keeps an
 - `additionalContext` from `PostToolUse` is put in front of the model before
   its next round.
 
-### Stopping leaves what it committed
+### Stopping leaves what it committed, and the session
 
-The process is killed where it stands. Nothing is reverted, because the commits
-a job is told to make as it goes are the operator's checkpoints and throwing
-them away is not that button's decision. The agent that started the job is
-told the work is *partly* done and nobody has checked which part, because an
-agent told only that the job stopped reports the work as not done and leaves
-the operator to discover half of it on a branch. Taking the terminal away and
-deleting the agent both stop its job the same way.
+Each program is stopped the way its own interface stops it, so the stop is
+something the program recorded: the Codex turn ends `interrupted`, the pi turn
+`aborted`, and Claude Code's `result` comes back `error_during_execution` with
+`terminal_reason` `aborted_streaming`, which the driver reads as the stop it
+asked for rather than a failure. Each is in the session a follow-up resumes.
+Each gets `STOP_GRACE` to end on its own before the process is killed anyway.
 
-### The session id is chosen, not read back
+Claude Code is reached for this over stdin, which is why its brief is the first
+message on stdin rather than an argument: `--input-format stream-json` keeps the
+pipe open for the SDK's control requests. In that mode it does not exit at
+`result` but waits for another message, so the driver closes stdin there.
+Measured against 2.1.260 and 2.1.283, and the live half of `tests/coding.rs`
+interrupts one and resumes it.
 
-`--session-id` takes a UUID, so Guaca picks one before a Claude job starts. One
-value is then the job's address on the bridge, the key of its mailbox, and what
-an operator hands to `claude --resume` to open the same work in their own
-terminal.
+### A program is ended by closing its input, not by a kill
+
+All three exit in milliseconds when their stdin closes, and a kill is not the
+same thing to them. A `pi` that is killed leaves the next `pi` to start waiting
+about thirty seconds before it answers anything, measured against 0.84.4: a
+model listing that killed pi made every panel after it open half a minute late,
+and the same would hold for a job started after one. So a job, a stop that was
+answered and a listing all end by closing stdin, and the kill is for a process
+that has not gone five seconds later.
+
+Nothing is reverted, because the commits a job is told to make as it goes are
+the operator's checkpoints and throwing them away is not that button's
+decision. The agent that started the job is told the work is *partly* done and
+nobody has checked which part, because an agent told only that the job stopped
+reports the work as not done and leaves the operator to discover half of it on
+a branch. A stop the agent asked for with `code` `stop` is not reported back
+to it: it has just decided that. Taking the terminal away and deleting the
+agent both stop its job the same way.
+
+### A session is carried on by the program that wrote it
+
+`coding_sessions` holds one row per agent: the harness, its session id, and the
+directory it ran in. Stored rather than held in memory, because a follow-up
+often comes the next day. Only the last one: an agent runs one job at a time,
+and the session before the last is one it has already moved on from.
+
+The id is chosen where the program lets it be chosen. `--session-id` takes a
+UUID for both Claude Code and `pi`, so Guaca picks one before the job starts,
+and one value is then the job's address on the bridge, the key of its mailbox,
+and what the operator hands to `--resume` or `--session`. Codex names its own
+thread, so the id is read back from `thread/start` as soon as it exists,
+before the turn it runs can end or be stopped.
+
+A follow-up is refused, with the way on, in three cases: no job has run, the
+agent's harness has been switched since (the ids mean nothing to the other two
+programs), or the directory the session ran in is gone. A follow-up the
+operator typed is sent as *The operator says: ...*, and the agent is told the
+operator went round it when the result comes back, because it is the one that
+will be asked what came of it.
 
 ## A job inherits the host's own Claude Code setup, and that is deliberate
 
@@ -460,9 +608,34 @@ callback. Keep outward commands out of those rules when relying on this gate.
 
 Any confinement. See above.
 
-Nor is the spend. Every harness reads its own auth, and a job's cost does not
-appear in this app's usage table because this app did not spend it. What a job
-reports back is what the harness says it cost.
+Nor is the spend, except where Guaca paid it. Every harness reads its own auth,
+and a job's cost does not appear in this app's usage table because this app did
+not spend it; what a job reports back is what the harness says it cost. A pi
+job on Guaca's key is the exception, metered through the relay.
+
+## What repositories left on disk is put away at boot
+
+Before terminals, a workspace kept a work tree per agent per repository under
+`<data>/worktrees`, the clones a box made under `<data>/repos`, and a token per
+clone under `<config>/repo-credentials`. Nothing reads any of them now, and
+`leftovers.rs` runs at every boot and tidies them where nothing is lost by it:
+
+- The tokens go unconditionally. A credential nothing uses is one nobody will
+  remember to rotate.
+- A work tree with nothing uncommitted, whose commit is still held by the
+  repository it came from, is removed through `git worktree remove`, which
+  also takes it out of that repository's own list. An operator's own checkout
+  keeps every branch; a clone this workspace made keeps a commit only until the
+  clone goes, so there the commit has to be on a remote.
+- A work tree holding work that exists nowhere else is moved into the terminal
+  of the agent it belonged to with `git worktree move`, still linked, so the
+  agent finds it where it now works.
+- A clone goes once it is clean, has nothing unpushed and backs no work tree.
+- Anything else is kept, and logged with the reason every time the workspace
+  opens, until somebody deals with it.
+
+It runs in the background, because it runs git and a workspace must not wait on
+a slow disk to open, and it is a no-op once there is nothing left.
 
 ## Testing it
 
@@ -487,9 +660,21 @@ denial runs no part of the line, that an ordinary line is not stopped, that
 what `write` made `edit` changes and `shell` reads back, and that a line still
 runs while the agent's job is going.
 
+The three stand-ins are Python programs in `tests/fixtures/` that speak each
+protocol's real shapes: Claude Code's stream-json in both directions, including
+the `interrupt` and `initialize` control requests and the wait for stdin to
+close after `result`; Codex's app-server; pi's RPC, including a provider an
+extension readdresses, which the stand-in really calls, so the relay is tested
+end to end from the job's side.
+
 The `#[ignore]`d half asks the real programs whether they still accept those
-vectors and still answer in the shape this build reads. It spends the host
-user's own plan.
+vectors and still behave the way this build reads them. Three of those tests
+spend nothing and are worth running on any machine with the programs on it:
+the model listings, and pi paying through the relay against a loopback
+endpoint. The interrupt test spends one small call on the host's Claude plan,
+on haiku. Run the half against the versions the image pins, not only the ones
+on the machine: `PATH=<dir with the pinned binaries>:$PATH` in front of the
+command is enough.
 
 ```sh
 cargo test --manifest-path src-tauri/Cargo.toml --test coding

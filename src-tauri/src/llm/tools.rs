@@ -935,37 +935,53 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                           open a pull request. Use it for a change bigger than a few edits: a \
                           feature, a fix that needs investigating, a refactor, anything you \
                           would have to read much of the code to do.\n\
-                          This returns as soon as the work has started, not when it is done. You \
-                          get a message back when it finishes, which may be many minutes later, \
-                          so end your turn after calling this and say you have started it. Do \
-                          not wait, do not call it again for the same work, and do not schedule \
+                          `start` begins a new session in `directory`, a repository in your \
+                          terminal such as `guaca`; clone it there with `shell` first if it is \
+                          not there yet. It returns as soon as the work has started, not when it \
+                          is done. You get a message back when it finishes, which may be many \
+                          minutes later, so end your turn and say you have started it. Do not \
+                          wait, do not start it again for the same work, and do not schedule \
                           anything to check on it.\n\
-                          It works in `directory`, a repository in your terminal such as \
-                          `guaca`. Clone the repository there with `shell` first if it is not \
-                          there yet.\n\
+                          `continue` sends `message` to your coding agent: into the job while it \
+                          is running, which it reads at its next step, or as the next turn of \
+                          the session it last worked in, with everything it already read. Use \
+                          it for a follow-up or a correction rather than starting over. `stop` \
+                          ends the job that is running; what it committed stays, and `continue` \
+                          can pick the session up later.\n\
                           The coding agent cannot see this conversation and cannot ask you \
-                          anything. Everything it needs is in `task`: what to change, how you \
-                          will know it worked, and whether to commit, push or open a pull \
-                          request. Write it as you would write a ticket for somebody competent \
-                          who has never spoken to you."
+                          anything. Everything a new session needs is in `task`: what to change, \
+                          how you will know it worked, and whether to commit, push or open a \
+                          pull request. Write it as you would write a ticket for somebody \
+                          competent who has never spoken to you."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["start", "continue", "stop"],
+                        "description": "`start` a new session, `continue` the current or last \
+                                        one, or `stop` the one that is running."
+                    },
                     "task": {
                         "type": "string",
-                        "minLength": 1,
-                        "description": "The whole brief, in full. What to change, how to check \
-                                        it worked, and what to do with the result: leave it on a \
-                                        branch, push it, or open a pull request."
+                        "description": "On `start`: the whole brief, in full. What to change, \
+                                        how to check it worked, and what to do with the result: \
+                                        leave it on a branch, push it, or open a pull request."
                     },
                     "directory": {
                         "type": "string",
-                        "description": "Where to work, relative to your terminal, e.g. `guaca`. \
-                                        Omit it only for work in the terminal itself."
+                        "description": "On `start`: where to work, relative to your terminal, \
+                                        e.g. `guaca`. Omit it only for work in the terminal \
+                                        itself."
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "On `continue`: what the coding agent should do next, \
+                                        or what it should change about what it is doing."
                     }
                 },
-                "required": ["task"],
+                "required": ["action"],
                 "additionalProperties": false
             }),
         },
@@ -1669,15 +1685,11 @@ pub enum ToolInvocation {
         name: String,
         offset: usize,
     },
-    /// Hand a piece of work to a coding harness in this agent's terminal.
+    /// Start, continue or stop this agent's coding agent.
     ///
     /// The one tool that starts something and does not wait for it. The result
     /// arrives later as a message, on the path a routine firing already uses.
-    Code {
-        task: String,
-        /// Relative to the terminal. `None` is the terminal itself.
-        directory: Option<String>,
-    },
+    Code(CodeAction),
     /// Run one line in this agent's terminal and wait for it.
     ///
     /// The other half of [`ToolInvocation::Code`] and its opposite in the one
@@ -2004,6 +2016,18 @@ pub enum ScreenAction {
     Wait { ms: u32 },
 }
 
+/// What a `code` call asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CodeAction {
+    /// A new session, in a directory of the terminal. `None` is the terminal
+    /// itself.
+    Start { task: String, directory: Option<String> },
+    /// A message into the running job, or the next turn of the last session.
+    Continue { message: String },
+    /// End the job that is running, keeping its session.
+    Stop,
+}
+
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ToolParseError {
     #[error(
@@ -2022,6 +2046,10 @@ pub enum ToolParseError {
     MissingFiles,
     #[error("code needs a non-empty `task`")]
     MissingTask,
+    #[error("code with `continue` needs a non-empty `message`")]
+    MissingFollowUp,
+    #[error("code needs a known `action`")]
+    UnknownCodeAction,
     #[error("errand needs at least one non-empty brief in `briefs`")]
     MissingBriefs,
     #[error("write_document needs a `name`")]
@@ -2235,6 +2263,17 @@ impl ToolParseError {
                 "Error: `task` must be the whole brief for the coding agent, which cannot see \
                  this conversation. Say what to change, how to tell it worked, and whether to \
                  commit, push or open a pull request."
+                    .to_string()
+            }
+            ToolParseError::MissingFollowUp => {
+                "Error: `message` must say what the coding agent should do next, for example \
+                 {\"action\": \"continue\", \"message\": \"Also add a test for the empty \
+                 case.\"}."
+                    .to_string()
+            }
+            ToolParseError::UnknownCodeAction => {
+                "Error: `action` must be `start` (with `task` and `directory`), `continue` (with \
+                 `message`) or `stop`."
                     .to_string()
             }
             ToolParseError::MissingBriefs => {
@@ -3329,13 +3368,34 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                 detail: e.to_string(),
             })?;
             let task = first_string(&value, &["task", "instruction", "prompt", "brief", "text"])
-                .unwrap_or_default();
-            if task.trim().is_empty() {
-                return Err(ToolParseError::MissingTask);
+                .filter(|task| !task.trim().is_empty());
+            let message = first_string(&value, &["message", "correction", "follow_up", "text"])
+                .filter(|message| !message.trim().is_empty());
+            // No action is a start when there is a brief and a follow-up when
+            // there is only a message, which is how a model that never read the
+            // enum spells each.
+            let action = match value.get("action").and_then(|v| v.as_str()) {
+                Some(action) => action.trim().to_ascii_lowercase(),
+                None if task.is_none() && message.is_some() => "continue".into(),
+                None => "start".into(),
+            };
+            match action.as_str() {
+                "start" | "new" | "begin" => {
+                    let task = task.ok_or(ToolParseError::MissingTask)?;
+                    let directory =
+                        first_string(&value, &["directory", "dir", "repository", "path"])
+                            .filter(|directory| !directory.trim().is_empty());
+                    Ok(ToolInvocation::Code(CodeAction::Start { task, directory }))
+                }
+                "continue" | "steer" | "follow_up" | "message" | "resume" => {
+                    let message = message.or(task).ok_or(ToolParseError::MissingFollowUp)?;
+                    Ok(ToolInvocation::Code(CodeAction::Continue { message }))
+                }
+                "stop" | "cancel" | "abort" | "interrupt" => {
+                    Ok(ToolInvocation::Code(CodeAction::Stop))
+                }
+                _ => Err(ToolParseError::UnknownCodeAction),
             }
-            let directory = first_string(&value, &["directory", "dir", "repository", "path"])
-                .filter(|directory| !directory.trim().is_empty());
-            Ok(ToolInvocation::Code { task, directory })
         }
         READ | "Read" | "read_text" | "view_file" => {
             let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
@@ -4348,17 +4408,56 @@ mod tests {
         // retry and a turn spent on vocabulary.
         for key in ["task", "instruction", "prompt", "brief"] {
             let parsed = parse(&call(CODE, &format!(r#"{{"{key}": "fix the test"}}"#))).unwrap();
-            let expected = ToolInvocation::Code { task: "fix the test".into(), directory: None };
+            let expected = ToolInvocation::Code(CodeAction::Start {
+                task: "fix the test".into(),
+                directory: None,
+            });
             assert_eq!(parsed, expected, "{key}");
         }
         let aliased = parse(&call("write_code", r#"{"task": "fix the test"}"#)).unwrap();
-        assert_eq!(aliased, ToolInvocation::Code { task: "fix the test".into(), directory: None });
+        assert_eq!(
+            aliased,
+            ToolInvocation::Code(CodeAction::Start {
+                task: "fix the test".into(),
+                directory: None
+            })
+        );
         let placed =
             parse(&call(CODE, r#"{"task": "fix the test", "directory": "guaca"}"#)).unwrap();
         assert_eq!(
             placed,
-            ToolInvocation::Code { task: "fix the test".into(), directory: Some("guaca".into()) }
+            ToolInvocation::Code(CodeAction::Start {
+                task: "fix the test".into(),
+                directory: Some("guaca".into())
+            })
         );
+    }
+
+    #[test]
+    fn a_follow_up_and_a_stop_are_the_same_tool_as_a_start() {
+        // One tool with three verbs, because they are one thing an operator
+        // does in each program's own window: start it, type the next message,
+        // press stop. Three tools would be three names for a model to pick
+        // between and one more place for the brief to be written twice.
+        assert_eq!(
+            parse(&call(CODE, r#"{"action": "continue", "message": "add a test"}"#)).unwrap(),
+            ToolInvocation::Code(CodeAction::Continue { message: "add a test".into() })
+        );
+        assert_eq!(
+            parse(&call(CODE, r#"{"action": "stop"}"#)).unwrap(),
+            ToolInvocation::Code(CodeAction::Stop)
+        );
+        // A model that never read the enum: a message with no brief is a
+        // follow-up, not a start with nothing to do.
+        assert_eq!(
+            parse(&call(CODE, r#"{"message": "use the staging bucket"}"#)).unwrap(),
+            ToolInvocation::Code(CodeAction::Continue { message: "use the staging bucket".into() })
+        );
+        let empty = parse(&call(CODE, r#"{"action": "continue"}"#)).unwrap_err();
+        assert_eq!(empty, ToolParseError::MissingFollowUp);
+        assert!(empty.guidance().contains("\"action\": \"continue\""), "{}", empty.guidance());
+        let unknown = parse(&call(CODE, r#"{"action": "pause"}"#)).unwrap_err();
+        assert!(unknown.guidance().contains("`stop`"), "{}", unknown.guidance());
     }
 
     #[test]

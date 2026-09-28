@@ -29,7 +29,7 @@ use crate::domain::plugin::{
 use crate::domain::routine::{Routine, RoutineRun};
 use crate::domain::search::SearchHits;
 use crate::domain::signin::Signin;
-use crate::domain::terminal::{Gate, Harness};
+use crate::domain::terminal::{Gate, Harness, Payer, Tuning};
 use crate::domain::usage::{GroupUsage, RunUsage};
 use crate::domain::worknote::WorkingNote;
 use crate::e2b::Computer;
@@ -331,8 +331,10 @@ surface! {
     give_agent_terminal(id: AgentId) -> (),
     take_agent_terminal(id: AgentId) -> (),
     set_agent_coding(id: AgentId, harness: Harness, gate: Gate) -> (),
+    set_coding_tuning(id: AgentId, harness: Harness, tuning: Tuning) -> (),
     coding_harnesses() -> Vec<HarnessOnMachine>,
-    message_coding_job(agent_id: AgentId, message: String) -> (),
+    coding_models(harness: Harness, pays: Payer) -> Vec<crate::coding::ModelOffer>,
+    message_coding_job(agent_id: AgentId, message: String) -> crate::runtime::Continued,
     stop_coding_job(agent_id: AgentId) -> (),
     plugin_catalog() -> Vec<PluginOffer>,
     group_plugins(group_id: GroupId) -> Vec<Plugin>,

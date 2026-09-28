@@ -494,10 +494,36 @@ export const HARNESSES: { readonly id: Harness; readonly label: string }[] = [
  */
 export type Gate = "open" | "askBeforePushing";
 
-/** Where an agent's terminal is, on the machine Guaca runs on. */
+/**
+ * The coding session an agent last ran, which a follow-up carries on.
+ *
+ * Only ever continued by the program that wrote it: the id is the harness's
+ * own, and means nothing to the other two.
+ */
+export interface CodingSession {
+  harness: Harness;
+  id: string;
+  /** Where it ran, relative to the agent's terminal. `.` is the terminal itself. */
+  directory: string;
+  updatedAt: number;
+}
+
+/** Where an agent's terminal is, on the machine Guaca runs on, and what it last ran there. */
 export interface TerminalView {
   path: string;
+  session: CodingSession | null;
+  /** The shell line that opens that session on the host. Spelled in Rust, once. */
+  resume: string | null;
+  /** What was chosen inside each of the three harnesses. */
+  tunings: HarnessTuning[];
+  guacaKey: GuacaKey;
 }
+
+/**
+ * What a message to a coding job came to: a correction into the one running,
+ * or a new turn in the session the last one left.
+ */
+export type Continued = { kind: "steered" } | { kind: "resumed"; directory: string };
 
 /**
  * One harness, as the machine reports it.
@@ -515,7 +541,9 @@ export interface HarnessOnMachine {
    * Whether a job on it can be reached while it runs.
    *
    * False for a program older than the one the behavior was measured against.
-   * That does not stop a job: it runs, and can be stopped, but not steered.
+   * An old Claude Code still runs a job, which can be stopped but not steered.
+   * An old `pi` is refused with the update command, because its protocol is
+   * how it is driven at all.
    */
   bridged: boolean;
   install: string;
@@ -527,6 +555,50 @@ export interface HarnessOnMachine {
   withheld?: string | null;
   signedIn?: boolean | null;
   signIn?: string;
+  /** Every effort word the program takes. A model may take fewer. */
+  efforts: string[];
+}
+
+/**
+ * Which account pays for a harness's model calls. `guacaKey` is only pi's:
+ * Guaca's own key, lent through a loopback relay that keeps it.
+ */
+export type Payer = "own" | "guacaKey";
+
+/**
+ * What the operator chose inside one harness for one agent. Null is the
+ * program's own setting.
+ */
+export interface Tuning {
+  model: string | null;
+  effort: string | null;
+  pays: Payer;
+}
+
+export interface HarnessTuning extends Tuning {
+  harness: Harness;
+}
+
+/** Whether Guaca has a key to lend pi, and where it is spent. Never the key. */
+export interface GuacaKey {
+  set: boolean;
+  endpoint: string;
+  /** OpenRouter's models are the ones pi can list for it. */
+  openrouter: boolean;
+  /** What a job runs when no model was chosen: the key's own. */
+  defaultModel: string;
+}
+
+/** One model a harness offers, as its own picker shows it. */
+export interface ModelOffer {
+  /** What `--model` takes. */
+  id: string;
+  label: string;
+  detail: string;
+  /** Whether it runs when nothing is chosen. */
+  default: boolean;
+  /** The effort words this model takes. Empty when it takes none. */
+  efforts: string[];
 }
 
 export type PluginId = string;

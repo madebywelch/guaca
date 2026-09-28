@@ -36,8 +36,10 @@ use serde::{Deserialize, Serialize};
 /// Three, and there is not meant to be a general one. A harness is a coding
 /// agent with its own loop, its own context and its own sign-in, and the
 /// operator already has whichever ones they have: the choice here is which of
-/// them Guaca starts, not how it is configured. The model, the thinking level,
-/// the extensions and the rules files belong to the harness and stay there.
+/// them Guaca starts. The sign-in, the extensions and the rules files belong to
+/// the harness and stay there. The model and the effort default to the
+/// program's own setting, and can be chosen per agent the way the program's
+/// own window chooses them: [`Tuning`].
 ///
 /// ## Why this is a choice at all
 ///
@@ -156,6 +158,138 @@ impl Gate {
     }
 }
 
+/// What an operator can choose inside a harness, the way its own program lets
+/// them: which model, how hard it thinks, and for `pi`, which account pays.
+///
+/// Each is kept per agent *and per harness*. One field shared by all three was
+/// the mistake `InferenceConfig` already made once with two providers: the
+/// programs have disjoint model names and effort words, so every switch broke
+/// the model and switching back did not put it right. An operator who moves an
+/// engineer to Codex for an afternoon because a Claude plan ran out comes back
+/// to the Claude model they had.
+///
+/// Absent is the program's own setting, which is what an operator who never
+/// opens this gets, and what a job ran before any of this existed. Nothing
+/// here is a sign-in: which account a program is signed in to stays the
+/// program's, and the one exception, [`Payer::GuacaKey`], lends Guaca's key
+/// without handing it over.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Tuning {
+    /// The program's own name for a model: an alias Claude Code resolves, a
+    /// Codex model id, or a `pi` model id under the provider that pays.
+    pub model: Option<String>,
+    /// One of [`Harness::efforts`].
+    pub effort: Option<String>,
+    #[serde(default)]
+    pub pays: Payer,
+}
+
+/// Which account pays for a harness's model calls.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Payer {
+    /// Whatever the program is signed in to on the host.
+    #[default]
+    Own,
+    /// Guaca's own API key, reached through a loopback relay that holds it.
+    /// Only `pi`, which is the harness that spends a key rather than a plan.
+    GuacaKey,
+}
+
+impl Payer {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Payer::Own => "own",
+            Payer::GuacaKey => "guacaKey",
+        }
+    }
+
+    /// Anything unrecognized is [`Payer::Own`]: a value a downgrade wrote
+    /// must not start spending the operator's key.
+    pub fn parse(raw: &str) -> Payer {
+        match raw {
+            "guacaKey" => Payer::GuacaKey,
+            _ => Payer::Own,
+        }
+    }
+}
+
+impl Harness {
+    /// The effort words each program accepts, as its own help says them.
+    ///
+    /// Measured against Claude Code 2.1.260 (`--effort`), Codex 0.153.3
+    /// (`model/list`'s `supportedReasoningEfforts`, whose union this is) and pi
+    /// 0.84.4 (`--thinking`). A model may take fewer than its program does,
+    /// which is why the panel offers the model's own list when the program
+    /// gives one and this is only the check a stored value has to pass.
+    pub fn efforts(self) -> &'static [&'static str] {
+        match self {
+            Harness::Claude => &["low", "medium", "high", "xhigh", "max"],
+            Harness::Codex => &["low", "medium", "high", "xhigh", "max", "ultra"],
+            Harness::Pi => &["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+        }
+    }
+
+    /// Whether this program can be paid for with Guaca's own key.
+    pub fn takes_guaca_key(self) -> bool {
+        self == Harness::Pi
+    }
+}
+
+/// Why a tuning was refused, in a sentence the operator can act on.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum TuningError {
+    #[error(
+        "`{0}` is not a model name {1} can be given: use the name its own model list shows, \
+         without spaces"
+    )]
+    Model(String, &'static str),
+    #[error("{1} does not take the effort `{0}`. It takes {2}")]
+    Effort(String, &'static str, String),
+    #[error(
+        "only pi can be paid for with Guaca's key. {0} spends the plan it is signed in to on \
+         the backend"
+    )]
+    Payer(&'static str),
+}
+
+impl Tuning {
+    /// Trimmed and checked against the program it is for.
+    ///
+    /// A model is passed to a program as the argument after `--model`, so one
+    /// starting with `-` is refused rather than handed over to be read as a
+    /// flag. Blank is absent.
+    pub fn clean(self, harness: Harness) -> Result<Tuning, TuningError> {
+        let blank = |value: Option<String>| {
+            value.map(|value| value.trim().to_string()).filter(|value| !value.is_empty())
+        };
+        let model = blank(self.model);
+        if let Some(model) = &model {
+            let shaped = model.len() <= 200
+                && !model.starts_with('-')
+                && model.chars().all(|c| !c.is_whitespace() && !c.is_control());
+            if !shaped {
+                return Err(TuningError::Model(model.clone(), harness.label()));
+            }
+        }
+        let effort = blank(self.effort);
+        if let Some(effort) = &effort {
+            if !harness.efforts().contains(&effort.as_str()) {
+                return Err(TuningError::Effort(
+                    effort.clone(),
+                    harness.label(),
+                    harness.efforts().join(", "),
+                ));
+            }
+        }
+        if self.pays == Payer::GuacaKey && !harness.takes_guaca_key() {
+            return Err(TuningError::Payer(harness.label()));
+        }
+        Ok(Tuning { model, effort, pays: self.pays })
+    }
+}
+
 /// The coding session an agent last ran, which `code` can carry on.
 ///
 /// A harness keeps its own conversation on disk, so a follow-up can resume it
@@ -193,11 +327,77 @@ impl Session {
             Harness::Pi => format!("pi --session {}", self.id),
         }
     }
+
+    /// The same, as one line an operator pastes into a shell on the host:
+    /// into the directory it worked in, then into the session.
+    ///
+    /// Quoted for a POSIX shell, because the directory is a name the agent
+    /// chose and an apostrophe in it would otherwise end the argument early.
+    pub fn resume_line(&self, terminal: &std::path::Path) -> String {
+        let at = match self.directory.as_str() {
+            "." => terminal.to_path_buf(),
+            directory => terminal.join(directory),
+        };
+        let at = at.to_string_lossy().replace('\'', r"'\''");
+        format!("cd '{at}' && {}", self.resume_command())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tuning_is_refused_with_what_the_program_takes() {
+        let effort = Tuning { effort: Some("ultra".into()), ..Tuning::default() };
+        let why = effort.clean(Harness::Claude).unwrap_err().to_string();
+        assert!(why.contains("low, medium, high, xhigh, max"), "{why}");
+
+        // Read as a flag if it were handed over.
+        let flag = Tuning { model: Some("-e".into()), ..Tuning::default() };
+        assert!(matches!(flag.clean(Harness::Pi), Err(TuningError::Model(..))));
+        let spaced = Tuning { model: Some("gpt 5".into()), ..Tuning::default() };
+        assert!(spaced.clean(Harness::Codex).is_err());
+
+        // A plan is spent by its program: only pi takes Guaca's key.
+        let lent = Tuning { pays: Payer::GuacaKey, ..Tuning::default() };
+        assert!(matches!(lent.clone().clean(Harness::Codex), Err(TuningError::Payer(_))));
+        assert_eq!(lent.clone().clean(Harness::Pi), Ok(lent));
+    }
+
+    #[test]
+    fn a_blank_tuning_is_the_programs_own_setting() {
+        let blank =
+            Tuning { model: Some("  ".into()), effort: Some("".into()), ..Tuning::default() };
+        assert_eq!(blank.clean(Harness::Claude), Ok(Tuning::default()));
+        let kept = Tuning {
+            model: Some(" opus ".into()),
+            effort: Some("max".into()),
+            ..Tuning::default()
+        };
+        assert_eq!(
+            kept.clean(Harness::Claude).unwrap(),
+            Tuning { model: Some("opus".into()), effort: Some("max".into()), ..Tuning::default() }
+        );
+        // A value a downgrade wrote never starts spending the operator's key.
+        assert_eq!(Payer::parse("someday"), Payer::Own);
+    }
+
+    #[test]
+    fn a_resume_line_survives_a_directory_the_agent_named_badly() {
+        let session = Session {
+            harness: Harness::Claude,
+            id: "s1".into(),
+            directory: "bob's site".into(),
+            updated_at: 0,
+        };
+        assert_eq!(
+            session.resume_line(std::path::Path::new("/data/terminals/a1")),
+            r"cd '/data/terminals/a1/bob'\''s site' && claude --resume s1"
+        );
+        let home = Session { directory: ".".into(), harness: Harness::Pi, ..session };
+        assert_eq!(home.resume_line(std::path::Path::new("/t")), "cd '/t' && pi --session s1");
+    }
 
     #[test]
     fn a_stored_value_reads_back_as_what_was_written() {

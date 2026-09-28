@@ -120,6 +120,18 @@ checked by there being one in each terminal. Nothing else in the build can see
 that: the directory a harness is handed is one argument, and a wrong one is a
 job that works perfectly in the wrong tree.
 
+All three programs hold a conversation on stdin, so their stand-ins
+(`tests/fixtures/claude.py`, `codex.py` and `pi.py`) speak each protocol's
+real shapes and answer what they are sent: a steer, an interrupt or an abort,
+a resumed thread, a gate's confirm, a model listing. Each writes what it
+received into its directory (`.claude_prompt`, `.steered`, `.interrupted`,
+`.aborted`, `.resumed`, `.verdict`, `.pi_history`, `.relayed`), which is what
+lets the suite assert that a correction, a stop, a follow-up and a lent key
+reached the program through its own interface, for every harness, rather than
+that Guaca meant to send one. The Claude stand-in also waits for stdin to close
+after `result`, as the real program does, so a driver that forgets to close it
+hangs the test rather than passing it.
+
 ```sh
 cargo test --manifest-path src-tauri/Cargo.toml --test coding
 cargo test --manifest-path src-tauri/Cargo.toml --test coding -- --ignored

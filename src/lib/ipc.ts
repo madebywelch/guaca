@@ -47,6 +47,7 @@ import type {
   Connector,
   ConnectorDraft,
   ConnectorId,
+  Continued,
   Decision,
   DeviceCode,
   DirectoryBoard,
@@ -67,11 +68,13 @@ import type {
   HeaderPair,
   MenubarAsk,
   MessageId,
+  ModelOffer,
   NotebookEntry,
   Occasion,
   OccasionDraft,
   OccasionId,
   OperatorView,
+  Payer,
   Plugin,
   PluginAccess,
   PluginId,
@@ -99,6 +102,7 @@ import type {
   SubscriptionStatus,
   TerminalView,
   ToolSummary,
+  Tuning,
   UiEvent,
   WebhookAddress,
   WorkDecision,
@@ -230,6 +234,21 @@ export const api = {
     invoke<void>("set_agent_coding", { id, harness, gate }),
 
   /**
+   * What the operator chose inside one harness for one agent: the model, the
+   * effort, and for pi which account pays. Kept per harness, so a switch and
+   * back finds the model it left. Refused with the words the program takes.
+   */
+  setCodingTuning: (id: AgentId, harness: Harness, tuning: Tuning) =>
+    invoke<void>("set_coding_tuning", { id, harness, tuning }),
+
+  /**
+   * The models a harness offers, asked of the program on the backend. For pi
+   * on Guaca's key, what that key can reach.
+   */
+  codingModels: (harness: Harness, pays: Payer) =>
+    invoke<ModelOffer[]>("coding_models", { harness, pays }),
+
+  /**
    * Which coding harnesses are on this machine, and how to get the ones that
    * are not. Everything else about a job is discovered when it runs; this
    * cannot be, because the refusal would reach an agent minutes later rather
@@ -238,21 +257,23 @@ export const api = {
   codingHarnesses: () => invoke<HarnessOnMachine[]>("coding_harnesses"),
 
   /**
-   * Sends a correction into a coding job that is already running.
+   * Says something to an agent's coding agent, the way its own program would.
    *
-   * The job reads it at its next tool boundary. Refused when nothing takes it,
-   * and the two reasons are different sentences the operator can act on: the
-   * job has already ended, or its harness cannot be reached at all.
+   * Into the job that is running, as a correction it reads at its next step;
+   * or, when none is, as a new turn in the session the last one left, with
+   * everything it already read. Refused when there is neither, or when the
+   * harness has been switched since and the session belongs to the other one.
    */
   messageCodingJob: (agentId: AgentId, message: string) =>
-    invoke<void>("message_coding_job", { agentId, message }),
+    invoke<Continued>("message_coding_job", { agentId, message }),
 
   /**
    * Stops one, leaving whatever it has committed.
    *
    * Nothing is reverted. The commits a job was told to make as it went are the
    * operator's checkpoints, and throwing them away is not this button's
-   * decision to take. The agent that started it is told it was stopped.
+   * decision to take. The session is kept, so it can be carried on. The agent
+   * that started it is told it was stopped.
    */
   stopCodingJob: (agentId: AgentId) => invoke<void>("stop_coding_job", { agentId }),
 

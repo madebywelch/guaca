@@ -3,8 +3,8 @@
 #![cfg(unix)]
 
 #[tokio::test]
-#[ignore = "live: uses Codex login with gpt-5.4-mini, never the configured default model"]
-async fn codex_mini_accepts_steering_and_honors_a_denied_push() {
+#[ignore = "live: uses the Codex login on the fastest model it lists, never the default"]
+async fn codex_accepts_steering_and_honors_a_denied_push_on_a_model_it_lists() {
     use guac_lib::{coding, domain::terminal::Harness};
     use std::{os::unix::fs::PermissionsExt, process::Command, time::Duration};
     let path = std::env::var_os("PATH").unwrap();
@@ -20,23 +20,30 @@ async fn codex_mini_accepts_steering_and_honors_a_denied_push() {
     std::fs::create_dir(&bin).unwrap();
     std::fs::create_dir(&repo).unwrap();
     let wrapper = bin.join("codex");
-    // Keep the operator's authentication, override the model explicitly, and
-    // disable their MCP servers for this disposable contract test. The wrapper
+    // Keep the operator's authentication and disable their MCP servers for this
+    // disposable contract test. The model is chosen the way an operator chooses
+    // one, through the job's tuning, from what Codex itself lists. The wrapper
     // never reads or prints auth.json and never edits the operator's config.
     let real = serde_json::to_string(&binary.to_string_lossy()).unwrap();
-    std::fs::write(&wrapper, format!(r#"#!/usr/bin/env python3
+    std::fs::write(
+        &wrapper,
+        format!(
+            r#"#!/usr/bin/env python3
 import os, pathlib, sys, tomllib
 real = {real}
 root = pathlib.Path(os.environ.get('CODEX_HOME', str(pathlib.Path.home() / '.codex')))
 config = root / 'config.toml'
 settings = tomllib.loads(config.read_text()) if config.exists() else {{}}
-args = [real, 'app-server', '-c', 'model="gpt-5.4-mini"', '-c', 'model_reasoning_effort="low"', '-c', 'features.multi_agent=false']
+args = [real, 'app-server', '-c', 'features.multi_agent=false']
 for name in settings.get('mcp_servers', {{}}):
     args += ['-c', 'mcp_servers.' + name + '.enabled=false']
 for key in ['CODEX_API_KEY', 'OPENAI_API_KEY']:
     os.environ.pop(key, None)
 os.execv(real, args + sys.argv[2:])
-"#)).unwrap();
+"#
+        ),
+    )
+    .unwrap();
     std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
     let git = |args: &[&str]| {
         let out = Command::new("git").arg("-C").arg(&repo).args(args).output().unwrap();
@@ -55,13 +62,40 @@ os.execv(real, args + sys.argv[2:])
     let bare = dir.path().join("origin.git");
     git(&["init", "--bare", bare.to_str().unwrap()]);
     git(&["remote", "add", "origin", bare.to_str().unwrap()]);
-    let (corrections, steering) = tokio::sync::mpsc::channel(8);
+    // A pinned name went stale once already: `gpt-5.4-mini` stopped being
+    // offered to ChatGPT accounts. So the cheap one is read off the list.
+    let offers = coding::models(Harness::Codex, None).await.expect("Codex lists its models");
+    let cheap = offers
+        .iter()
+        .find(|offer| !offer.default && offer.detail.to_lowercase().contains("fast"))
+        .or(offers.last())
+        .expect("Codex listed no models")
+        .clone();
+    let tuning = guac_lib::domain::terminal::Tuning {
+        model: Some(cheap.id.clone()),
+        effort: cheap.efforts.iter().any(|e| e == "low").then(|| "low".to_string()),
+        ..Default::default()
+    };
+    let (corrections, controlled) = tokio::sync::mpsc::channel(8);
     let (signals, mut heard) = tokio::sync::mpsc::channel(8);
     let (progress, mut watching) = tokio::sync::mpsc::unbounded_channel();
-    let running = coding::run_with_control(
-        Harness::Codex, repo.to_str().unwrap(),
-        "First run sleep 3. Then create smoke.txt containing exactly original followed by a newline. Check its contents and commit it with message test: verify Codex runner. Finally push HEAD to origin as branch steering-check. Origin is a disposable local bare repository. If push is denied, do not retry. Do not contact external services, spawn subagents, or change other files. Reply briefly.",
-        None, Some(coding::codex::Control { gate: guac_lib::domain::terminal::Gate::AskBeforePushing, steering, signals }),
+    let env = guac_lib::secrets::Environment::default();
+    let directory = repo.to_string_lossy().to_string();
+    let running = coding::run(
+        coding::Job {
+            harness: Harness::Codex,
+            directory: &directory,
+            brief: "First run sleep 3. Then create smoke.txt containing exactly original followed by a newline. Check its contents and commit it with message test: verify Codex runner. Finally push HEAD to origin as branch steering-check. Origin is a disposable local bare repository. If push is denied, do not retry. Do not contact external services, spawn subagents, or change other files. Reply briefly.",
+            session: "",
+            resume: false,
+            gate: guac_lib::domain::terminal::Gate::AskBeforePushing,
+            env: &env,
+            bridge: None,
+            tuning: &tuning,
+            lent: None,
+        },
+        controlled,
+        signals,
         move |event| { let _ = progress.send(event); },
     );
     tokio::pin!(running);
@@ -75,7 +109,7 @@ os.execv(real, args + sys.argv[2:])
                 Some(event) = watching.recv() => {
                     if matches!(&event, coding::Progress::Using { detail, .. } if detail.contains("sleep 3")) && !steered && acknowledgment.is_none() {
                         let (reply, accepted) = tokio::sync::oneshot::channel();
-                        corrections.send(coding::codex::Steer { message: "Change of plan: smoke.txt must contain exactly steered followed by a newline. Verify and commit that content before the planned push.".into(), reply }).await.unwrap();
+                        corrections.send(coding::Control::Steer { message: "Change of plan: smoke.txt must contain exactly steered followed by a newline. Verify and commit that content before the planned push.".into(), reply }).await.unwrap();
                         acknowledgment = Some(accepted);
                     }
                 }
@@ -99,7 +133,7 @@ os.execv(real, args + sys.argv[2:])
     let outcome = result.expect("Codex exceeded two minutes").expect("Codex could not run");
     assert!(steered, "the live turn never accepted steering");
     assert!(gated, "the live CLI never asked before pushing");
-    assert_eq!(outcome.model, "gpt-5.4-mini");
+    assert_eq!(outcome.model, cheap.id, "the chosen model, not the configured default");
     assert!(
         git(&["--git-dir", bare.to_str().unwrap(), "for-each-ref"]).is_empty(),
         "a denied push changed the remote"
