@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../lib/store";
@@ -81,12 +81,13 @@ function draw(
   });
   const onNewAgent = vi.fn();
   const onNewGroup = vi.fn();
+  const onOpenCafeteria = vi.fn();
   return {
     ...render(
       <Sidebar
         onEditAgent={vi.fn()}
         onEditGroup={vi.fn()}
-        onOpenCafeteria={vi.fn()}
+        onOpenCafeteria={onOpenCafeteria}
         onOpenCalendar={vi.fn()}
         onOpenArtifacts={vi.fn()}
         onOpenSettings={vi.fn()}
@@ -98,6 +99,7 @@ function draw(
     ),
     onNewAgent,
     onNewGroup,
+    onOpenCafeteria,
   };
 }
 
@@ -370,6 +372,39 @@ describe("what the rail offers", () => {
     // will find it.
     draw([group("everyone")], [agent("Manager")]);
     expect(screen.queryByRole("button", { name: /activity/i })).toBeNull();
+  });
+
+  it("keeps three places in its footer, and hires from the plus", () => {
+    // The cafeteria was a fourth row down there, and every place that shipped
+    // after it added another. Nothing is ever left in the cafeteria: an operator
+    // goes in to come out with agents, so it is behind the plus with the other
+    // ways of making them.
+    const { container, onOpenCafeteria } = draw([group("everyone")], [agent("Manager")]);
+    const foot = container.querySelector<HTMLElement>(".rail__foot");
+    if (!foot) throw new Error("no footer");
+
+    const places = within(foot).getAllByRole("button");
+    expect(places).toHaveLength(3);
+    expect(places).toEqual(
+      ["Calendar", "Artifacts", "App settings"].map((name) =>
+        within(foot).getByRole("button", { name }),
+      ),
+    );
+    expect(within(foot).queryByRole("button", { name: /cafeteria/i })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /make something new/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /cafeteria/i }));
+    expect(onOpenCafeteria).toHaveBeenCalledOnce();
+  });
+
+  it("marks the calendar with today's date", () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date(2026, 8, 3, 12) });
+    try {
+      const { container } = draw([group("everyone")], [agent("Manager")]);
+      expect(container.querySelector(".rail__foot text")?.textContent).toBe("3");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

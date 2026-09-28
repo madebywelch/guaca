@@ -5,15 +5,23 @@ import { NewMenu } from "./NewMenu";
 
 /**
  * The plus is the only way to make an agent or a crew from the main window, so
- * the two things worth holding are that both are behind it and that it closes.
+ * the two things worth holding are that each is behind it and that it closes.
  * A menu that will not shut sits over the transcript it opened on top of.
  */
 
 function draw() {
   const onNewAgent = vi.fn();
   const onNewGroup = vi.fn();
-  render(<NewMenu onNewAgent={onNewAgent} onNewGroup={onNewGroup} />);
-  return { onNewAgent, onNewGroup, plus: screen.getByRole("button", { name: /make something/i }) };
+  const onOpenCafeteria = vi.fn();
+  render(
+    <NewMenu onNewAgent={onNewAgent} onNewGroup={onNewGroup} onOpenCafeteria={onOpenCafeteria} />,
+  );
+  return {
+    onNewAgent,
+    onNewGroup,
+    onOpenCafeteria,
+    plus: screen.getByRole("button", { name: /make something/i }),
+  };
 }
 
 describe("the plus", () => {
@@ -25,6 +33,7 @@ describe("the plus", () => {
   it.each([
     ["New agent", "onNewAgent"],
     ["New group", "onNewGroup"],
+    ["Hire from the cafeteria", "onOpenCafeteria"],
   ] as const)("runs %s and closes", (label, prop) => {
     const handles = draw();
     fireEvent.click(handles.plus);
