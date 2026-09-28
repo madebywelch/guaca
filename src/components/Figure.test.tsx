@@ -163,6 +163,15 @@ describe("a page in a message", () => {
     });
   });
 
+  it("is bounded in the transcript, and opens into a full view", async () => {
+    // The other half of the reading view in Artifacts, which offers no Open:
+    // a message is where a page is capped, so a message is where it opens.
+    const { container } = render(<Markdown>{fence("html", PAGE)}</Markdown>);
+    await waitFor(() => expect(container.querySelector("iframe")).toBeTruthy());
+    expect(container.querySelector("iframe")?.style.height).not.toBe("");
+    expect(screen.getByRole("button", { name: "Open" })).toBeTruthy();
+  });
+
   it("never becomes part of this document", async () => {
     // The markup goes over IPC and comes back as an address. Nothing in the
     // fence is ever parsed into the app's own tree.

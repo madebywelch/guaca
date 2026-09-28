@@ -73,6 +73,13 @@ Pages a crew keeps. *An artifact is a page a crew keeps* in
 - **In a fenced page, `guaca.send` is an answer.** It has nobody to reach but
   the operator, so it waits in the strip. Only a kept page, whose host passes
   `onSend`, carries it to an agent.
+- **The dialog is the reading view, so its page has no Open.** `HtmlArtifact`
+  is drawn with `fill` there: no cap on the frame, and nothing to press. Its
+  Open belongs to a message, where a page is bounded. Offered inside the
+  dialog it opened a second modal showing the same page, and trapped it: the
+  transform `pop` leaves on every dialog makes that dialog the box a
+  `position: fixed` scrim is drawn in, so the full view came out a strip of
+  the dialog's height, scrolling sideways.
 - **Delete is the operator's only.** Agents have `update`, which keeps what it
   replaced. What the operator keeps is theirs to throw away.
 
