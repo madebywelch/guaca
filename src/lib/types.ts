@@ -919,6 +919,11 @@ export interface AgentCard {
    * for, in a turn that has read a page, parks the turn and asks.
    */
   browserConsent: BrowserConsent;
+  /**
+   * Whether this agent may send errands: its own model, called again with one
+   * brief and its tools, up to three at once. Off unless the operator says so.
+   */
+  runsErrands: boolean;
   /** The one repository this agent works in, if it has been put in one. */
   repositoryId: RepositoryId | null;
   name: string;

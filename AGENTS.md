@@ -78,6 +78,8 @@ src-tauri/src/
                       in a turn that is over. One rule, two readers.
     approval.rs       The two things an agent stops to ask a person, and why
                       only one of them may draw the model's own words.
+    errand.rs         The agent's own model called again with one brief: how
+                      many, how long, what it spends, and how it can end.
     escalation.rs     The third thing, which stops nothing: work an agent
                       cannot move and only the operator can.
     group.rs          A crew's wall, and the settings its agents run on.
@@ -88,6 +90,8 @@ src-tauri/src/
   runtime/
     guard.rs          The loop guard. Read this one first.
     mod.rs            Agent actors and the message bus.
+    errand.rs         Running errands inside the turn that sent them, on its
+                      run, its budget and its stop.
     prompt.rs         Prompt assembly, including the trust boundary.
     events.rs         Events pushed to the UI.
   llm/                OpenAI-compatible client, SSE decoding, tool definitions.
@@ -167,6 +171,7 @@ repo: the frontend renders state and forwards intent.
 | What a turn is told it was asked for: `expects_reply`, `intent`, `ReplyMode` | *Cascades terminate because of one asymmetry*, and `runtime/prompt.rs`, which has to agree with it |
 | A turn that ends on "checking now" and does nothing, the round it is given back, the fault that counts them | *A turn ends when the model stops calling tools, so a closing promise is silence* in `docs/gotchas/runtime.md`, then `src-tauri/src/domain/promise.rs` and the `## Your reply` block in `runtime/prompt.rs` |
 | Streaming, retries, the budget, when a run settles | *A failed model call is retried*, *A thought is shown and never kept*, *The budget counts model calls* |
+| Errands: the `errand` tool, who may send one, what an errand may do, what it spends | *An errand is the agent's model again, inside the turn that sent it* in `docs/ARCHITECTURE.md`, then `domain/errand.rs` and `runtime/errand.rs`, and run `tests/errands.rs` |
 | What a turn shows of itself while it runs: the thinking, the calls, the line above the composer | *A thought is shown and never kept* and *A turn's own work is watched while it happens*, then `src/lib/reasoning.ts` |
 | How a turn is paid for: providers, the ChatGPT sign-in, the Responses API | *A subscription is a second provider, not a second endpoint*, then `llm/codex.rs` and `subscription.rs` |
 | Turns paid for by a Claude plan, the `claude` program, the structured answer it is held to | *What the restriction leaves open, which is the program* in `docs/PROTOCOL.md`, then `llm/claude.rs`, and run the live half of `tests/claude.rs` |

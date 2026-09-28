@@ -122,3 +122,26 @@ code.
   parked on one run therefore cannot see that another run's work is queued behind
   it, which is why the pause park drains the queue whenever anything is stopped.
   Survivors go to a holding queue and stay counted in `depth`.
+- **An errand is run by the turn, not by the tool dispatch.** Only the turn
+  holds what one needs (the model, the limits, the tool list it was offered), so
+  `run_turn` sends a call that parses as an errand to `send_errands` before
+  `execute_tool` sees it. The `Errand` arm in `dispatch_tool` is only reached by
+  an errand that called one anyway, and refuses it. Routing it through dispatch
+  would also make the dispatch future contain itself.
+- **An errand claims with `reserve_step_leaving`, never `reserve_step`.** The
+  plain claim can take the last step of a run, and a run whose errands spent it
+  ends with the sending turn unable to make the one call that reports what they
+  found.
+- **An errand's failed model call writes an `UpstreamError` notice.** The
+  trajectory suite counts a failed call by its notice, so an errand that failed
+  silently would leave a claimed step with no call and no failure behind it, and
+  every such run would read as a budget that miscounted.
+- **An errand's calls are recorded on the sending turn's message, ahead of the
+  errand call.** They are drawn live against that turn's placeholder, and the
+  live trail and the recorded one are the same value (`ToolFinished` carries the
+  part). Recording only the errand call would make the trail shrink the moment
+  the turn ended. Their call ids are prefixed with the errand's call id and its
+  number, because every errand's model numbers its calls from one.
+- **One lock covers the computer, the browser and the repository.** Separate
+  locks, taken in whatever order an errand reaches for them, are two errands each
+  holding one and waiting on the other.

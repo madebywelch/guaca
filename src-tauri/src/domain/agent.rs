@@ -184,6 +184,15 @@ pub struct AgentCard {
     /// Whether that browser stops and asks before it acts in the operator's
     /// name. See [`Consent`], which is where the argument is.
     pub browser_consent: Consent,
+    /// Whether this agent may send errands: second calls to its own model,
+    /// each working one brief with its tools while the turn that sent them
+    /// waits. See `runtime/errand.rs`.
+    ///
+    /// Off until the operator says otherwise, and given one agent at a time
+    /// for the reason a computer is. An errand is the agent spending the same
+    /// model again, up to three at once, and a crew where only the coordinator
+    /// should spend that way is the ordinary shape.
+    pub runs_errands: bool,
     /// The repository this agent works in, if the operator gave it one.
     ///
     /// At most one, always. Two agents on one codebase coordinate in the crew
@@ -586,6 +595,7 @@ mod tests {
             has_computer: false,
             has_browser: false,
             browser_consent: Consent::default(),
+            runs_errands: false,
             repository_id: None,
             lifecycle: Lifecycle::Active,
             pinned: false,

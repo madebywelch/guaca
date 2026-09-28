@@ -10,6 +10,7 @@
 //! particular is locked, consulted, and released before any inference starts.
 
 mod decisions;
+mod errand;
 pub mod events;
 pub mod guard;
 pub mod prompt;
@@ -4060,6 +4061,18 @@ impl Runtime {
         // call spent on the same sentence.
         let mut nudged = false;
 
+        // Put the agent's granted integrations before the general workspace
+        // helpers. With helpers first, the live model denied a send function
+        // present later in the same request; presenting the integrations first
+        // restored calls without changing grants.
+        //
+        // Built once: nothing it is made from changes inside a turn, and an
+        // errand is offered this same list less what it is never given.
+        let offered: Vec<crate::llm::openrouter::ToolSpec> = tools::plugin_specs(&plugins)
+            .into_iter()
+            .chain(tools::specs(surfaces, modalities))
+            .collect();
+
         let max_rounds = limits.max_tool_rounds as usize;
         for round in 0..max_rounds {
             // Before the step is claimed, and that ordering is the whole reason
@@ -4101,14 +4114,7 @@ impl Runtime {
             let request = ChatRequest {
                 model: model.clone(),
                 messages: messages.clone(),
-                // Put the agent's granted integrations before the general
-                // workspace helpers. With helpers first, the live model denied
-                // a send function present later in the same request; presenting
-                // the integrations first restored calls without changing grants.
-                tools: tools::plugin_specs(&plugins)
-                    .into_iter()
-                    .chain(tools::specs(surfaces, modalities))
-                    .collect(),
+                tools: offered.clone(),
                 temperature: None,
             };
 
@@ -4121,7 +4127,9 @@ impl Runtime {
                     "turn tool definitions"
                 );
             }
-            let completion = self.stream_with_retries(&inference, &request, &mut stream).await;
+            let completion = self
+                .stream_with_retries(&inference, &request, run_id, agent_id, Some(&mut stream))
+                .await;
 
             let completion = match completion {
                 Ok(Some(completion)) => completion,
@@ -4217,8 +4225,38 @@ impl Runtime {
                     break;
                 }
 
-                let outcome = self
-                    .execute_tool(
+                // Errands run here rather than through the dispatch every other
+                // tool takes, because only the turn holds what one needs: the
+                // model, the limits and the list it was offered. Parsed rather
+                // than matched by name so an alias reaches it too. An agent
+                // that was not given errands goes the ordinary way and is
+                // refused there.
+                let errand = surfaces.errands
+                    && matches!(tools::parse(call, &named), Ok(ToolInvocation::Errand { .. }));
+                let outcome = if errand {
+                    let from = errand::Sender {
+                        card: &card,
+                        run_id,
+                        stream_id: stream.message_id,
+                        inbound_hop,
+                        cause,
+                        settled,
+                        limits,
+                        inference: &inference,
+                        model: &model,
+                        modalities,
+                        offered: &offered,
+                        named: &named,
+                    };
+                    let (outcome, done) = self.send_errands(&from, call, &mut attached).await;
+                    // What the errands did goes on this turn's record ahead
+                    // of the call that sent them, because it happened first
+                    // and because it is this agent's work: an errand has no
+                    // record of its own for any of it to be filed under.
+                    tool_parts.extend(done);
+                    outcome
+                } else {
+                    self.execute_tool(
                         &card,
                         run_id,
                         stream.message_id,
@@ -4232,7 +4270,8 @@ impl Runtime {
                         modalities,
                         &named,
                     )
-                    .await;
+                    .await
+                };
                 let file_image = matches!(&outcome.part,
                     Part::ToolCall { name, .. } if name == tools::READ_FILE);
                 tool_parts.push(outcome.part);
@@ -4372,13 +4411,19 @@ impl Runtime {
     /// afterthought: a provider that asked for a minute would otherwise hold a
     /// called-off run for `MAX_RETRY_AFTER` doing nothing, which reads exactly
     /// like the hang this whole path is here to end.
+    ///
+    /// `stream` is the placeholder the words are drawn into, and an errand has
+    /// none: nothing it writes is shown until the turn that sent it answers, so
+    /// its tokens are read and dropped here rather than drawn into a bubble
+    /// that belongs to somebody else's sentence.
     async fn stream_with_retries(
         &self,
         inference: &InferenceConfig,
         request: &ChatRequest,
-        stream: &mut Stream,
+        run_id: RunId,
+        agent_id: AgentId,
+        mut stream: Option<&mut Stream>,
     ) -> Result<Option<crate::llm::openrouter::Completion>, LlmError> {
-        let (run_id, agent_id) = (stream.run_id, stream.agent_id);
         let mut last: Option<LlmError> = None;
 
         for attempt in 0..CALL_ATTEMPTS {
@@ -4401,27 +4446,37 @@ impl Runtime {
                     return Ok(None);
                 }
                 // Anything already on screen belongs to the attempt that broke.
-                stream.reopen(&*self.inner.events);
+                if let Some(stream) = stream.as_deref_mut() {
+                    stream.reopen(&*self.inner.events);
+                }
             }
 
-            let message_id = stream.message_id;
-            let channel_id = stream.channel_id;
-            // Read here rather than inside the pen: a reopen above has already
-            // cleared it, so a retry starts its bubble at the left margin.
-            let lead = if stream.drawn { ROUND_BREAK } else { "" };
             // Tokens are coalesced before they cross into the window. Each
             // event is an IPC hop and a render, and a model produces them
             // faster than a screen refreshes, so emitting per token spent the
             // operator's main thread on work no eye could resolve. With
             // several agents answering at once it stopped painting at all,
             // which read as the app freezing and the text arriving in a lump.
-            let mut pen = Pen::new(self.inner.events.clone(), message_id, channel_id, lead);
-            let call = self.inner.llm.stream_chat(inference, request, |token| pen.write(token));
+            //
+            // The lead is read here rather than inside the pen: a reopen above
+            // has already cleared it, so a retry starts its bubble at the left
+            // margin.
+            let mut pen = stream.as_deref().map(|stream| {
+                let lead = if stream.drawn { ROUND_BREAK } else { "" };
+                Pen::new(self.inner.events.clone(), stream.message_id, stream.channel_id, lead)
+            });
+            let call = self.inner.llm.stream_chat(inference, request, |token| {
+                if let Some(pen) = pen.as_mut() {
+                    pen.write(token);
+                }
+            });
             let result = self.until_stopped(run_id, agent_id, call).await;
             // Before the answer is looked at, and before the return below, so
             // whatever the abandoned attempt drew is committed while the
             // placeholder is still open. The turn closes it on its way out.
-            pen.flush();
+            if let Some(pen) = pen.as_mut() {
+                pen.flush();
+            }
 
             match result {
                 None => return Ok(None),
@@ -5026,6 +5081,19 @@ impl Runtime {
             | ToolInvocation::Settings { .. }
             | ToolInvocation::AskOperator { .. } => {
                 unreachable!("taken by the branches above")
+            }
+            // Reached only by an errand that called one anyway: a turn that may
+            // send errands runs them before dispatch, and a turn that may not
+            // is refused above. The errand loop refuses this first as well,
+            // so this is the backstop and not the rule.
+            ToolInvocation::Errand { .. } => {
+                let reason = "Refused: an errand cannot send errands of its own. Do this part \
+                              yourself, or say in your answer that it needs doing."
+                    .to_string();
+                (
+                    reason.clone(),
+                    Part::tool_call(tools::ERRAND, arguments, ToolOutcome::Refused { reason }),
+                )
             }
             ToolInvocation::Directory => {
                 let roster = self.roster_excluding(card.id);
@@ -5894,6 +5962,12 @@ impl Runtime {
                  conversation, and say plainly in your reply what needed the web."
                     .to_string(),
             ),
+            ToolInvocation::Errand { .. } if !surfaces.errands => Some(
+                "Refused: errands are not switched on for you, so nothing was sent and nothing \
+                 was spent. Only the operator can switch them on. Do the work yourself in this \
+                 turn."
+                    .to_string(),
+            ),
             _ => None,
         }
     }
@@ -6735,6 +6809,10 @@ impl Runtime {
             // agent can put in its reply and an operator can act on. Asked
             // here it would be a process spawn on the way into every turn.
             repository: true,
+            // Always, for the reason a repository is: an errand needs nothing
+            // the workspace has to be set up with, only the operator's word
+            // on the card.
+            errands: true,
         }
     }
 
@@ -8372,6 +8450,7 @@ mod tests {
             has_computer: true,
             has_browser: false,
             browser_consent: Consent::default(),
+            runs_errands: false,
             repository_id: None,
             browser_id: None,
             lifecycle,

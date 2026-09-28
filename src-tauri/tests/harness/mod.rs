@@ -125,6 +125,8 @@ pub enum Script {
     /// Emit a `browse` tool call that opens a url: the same reach, at the other
     /// place.
     Open(String),
+    /// Emit an `errand` tool call carrying these briefs.
+    Errands(Vec<String>),
     /// Answer with a 503.
     ///
     /// Stands in for every failure worth retrying: a provider having a bad
@@ -434,6 +436,16 @@ pub fn render(script: &Script) -> String {
             body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"index":0,"id":"call_plugin","type":"function",
                  "function":{"name":name,"arguments":arguments.to_string()}}
+            ]}}]})));
+            body.push_str(&frame(
+                serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+            ));
+        }
+        Script::Errands(briefs) => {
+            body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"call_errand","type":"function",
+                 "function":{"name":"errand",
+                             "arguments":serde_json::json!({"briefs": briefs}).to_string()}}
             ]}}]})));
             body.push_str(&frame(
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),

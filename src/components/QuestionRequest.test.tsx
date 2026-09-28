@@ -23,6 +23,7 @@ const ANALYST: AgentCard = {
   browserId: null,
   hasComputer: false,
   hasBrowser: false,
+  runsErrands: false,
   browserConsent: "open",
   repositoryId: null,
   name: "Analyst",

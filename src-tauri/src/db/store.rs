@@ -193,6 +193,7 @@ fn new_card(draft: &CleanDraft, rail_order: i32, fallback: GroupId) -> AgentCard
         has_computer: false,
         has_browser: false,
         browser_consent: Consent::default(),
+        runs_errands: false,
         // Given from the rail, never at creation. A fresh agent belongs to no
         // codebase, which is the same rule every other capability follows.
         repository_id: None,
@@ -723,6 +724,12 @@ impl Store {
         self.set_flag(id, "has_browser", given)
     }
 
+    /// Whether this agent may send errands. A decision about spend, like the
+    /// two above, and it leaves the card version alone for their reason.
+    pub fn set_runs_errands(&self, id: AgentId, given: bool) -> Result<(), StoreError> {
+        self.set_flag(id, "runs_errands", given)
+    }
+
     /// Whether that browser asks before it acts in the operator's name.
     ///
     /// Beside the two above and not folded into `set_has_browser`, because
@@ -743,7 +750,7 @@ impl Store {
     }
 
     /// One boolean column on one agent. The column name is a literal from the
-    /// two callers above and never a value from outside this file.
+    /// callers above and never a value from outside this file.
     fn set_flag(&self, id: AgentId, column: &str, value: bool) -> Result<(), StoreError> {
         let conn = self.conn()?;
         let changed = conn.execute(
@@ -4055,7 +4062,7 @@ type RowResult<T> = Result<Result<T, StoreError>, rusqlite::Error>;
 /// one of the five queries that share this mapper and not the others is four
 /// reads that silently take the wrong field, which is what a card carrying
 /// somebody else's sandbox token looks like on the way out.
-const AGENT_COLUMNS: &str = "id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser,browser_consent,repository_id,discarded_at,reasoning_effort";
+const AGENT_COLUMNS: &str = "id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser,browser_consent,repository_id,discarded_at,reasoning_effort,runs_errands";
 
 fn read_effort(
     row: &Row<'_>,
@@ -4113,6 +4120,7 @@ fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
             has_computer: row.get::<_, i64>(18)? != 0,
             has_browser: row.get::<_, i64>(19)? != 0,
             browser_consent: Consent::parse(&row.get::<_, String>(20)?),
+            runs_errands: row.get::<_, i64>(24)? != 0,
             repository_id: row
                 .get::<_, Option<String>>(21)?
                 .filter(|raw| !raw.trim().is_empty())
@@ -4969,6 +4977,25 @@ mod tests {
     }
 
     #[test]
+    fn a_new_agent_sends_no_errands_until_the_operator_says_so() {
+        // Off at creation, including for an agent another agent made: an
+        // errand spends the model again, and a crew that could switch that on
+        // by hiring would route around the operator's decision.
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Coordinator")).unwrap();
+        assert!(!card.runs_errands);
+
+        f.store.set_runs_errands(card.id, true).unwrap();
+        let given = f.store.get_agent(card.id).unwrap().unwrap();
+        assert!(given.runs_errands);
+        assert!(!given.has_computer && !given.has_browser, "errands are not a machine");
+        assert_eq!(given.version, card.version, "a grant is not an edit to the card");
+
+        f.store.set_runs_errands(card.id, false).unwrap();
+        assert!(!f.store.get_agent(card.id).unwrap().unwrap().runs_errands);
+    }
+
+    #[test]
     fn a_grant_cannot_be_written_against_an_agent_that_is_not_there() {
         let f = fixture();
         let gone = AgentId::new();
@@ -4982,6 +5009,10 @@ mod tests {
         ));
         assert!(matches!(
             f.store.set_browser_consent(gone, Consent::AskBeforeActing),
+            Err(StoreError::AgentNotFound(id)) if id == gone
+        ));
+        assert!(matches!(
+            f.store.set_runs_errands(gone, true),
             Err(StoreError::AgentNotFound(id)) if id == gone
         ));
     }
@@ -5069,7 +5100,7 @@ mod tests {
         f.store.discard_agent(discarded.id, 1_000).unwrap();
         f.store.create_connector(&key_for(mine.group_id, "TOKEN", "private-token")).unwrap();
         let mut conn = f.store.conn().unwrap();
-        conn.execute_batch("DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; PRAGMA user_version=51;").unwrap();
+        conn.execute_batch("DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; PRAGMA user_version=51;").unwrap();
         migrations::run(&mut conn).unwrap();
         drop(conn);
         assert_eq!(f.store.connector_env(mine.id).unwrap()["TOKEN"], "private-token");

@@ -659,6 +659,17 @@ pub async fn set_agent_browser_consent(
     Ok(())
 }
 
+/// Whether an agent may send errands.
+///
+/// A decision about spend and nothing else: no errand is sent here, and an
+/// agent switched on that never needs one costs nothing. What changes is
+/// whether its turns are offered the tool.
+pub async fn set_agent_errands(state: &AppState, id: AgentId, given: bool) -> Reply<()> {
+    state.runtime.store().set_runs_errands(id, given)?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(())
+}
+
 /// Takes it back, and closes the browser if one is open.
 ///
 /// Closing is what writes the cookies back to the agent's profile, so this

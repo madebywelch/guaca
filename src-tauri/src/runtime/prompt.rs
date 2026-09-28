@@ -1480,6 +1480,7 @@ mod tests {
             has_computer: true,
             has_browser: true,
             browser_consent: Default::default(),
+            runs_errands: false,
             repository_id: None,
             id: AgentId::new(),
             name: name.into(),
@@ -2986,7 +2987,7 @@ mod tests {
             &[],
             None,
             None,
-            Surfaces { computer: true, browser: false, repository: false },
+            Surfaces { computer: true, browser: false, repository: false, errands: false },
             Modalities::seeing(),
         );
         assert!(computer_only.contains("## Your computer"), "{computer_only}");
@@ -3146,7 +3147,7 @@ mod tests {
             &[],
             None,
             None,
-            Surfaces { computer: false, browser: true, repository: false },
+            Surfaces { computer: false, browser: true, repository: false, errands: false },
             Modalities::seeing(),
         );
         assert!(somewhere.contains("request_permission"), "{somewhere}");

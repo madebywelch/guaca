@@ -6,6 +6,7 @@ pub mod decision;
 pub mod deployment;
 pub mod effort;
 pub mod envelope;
+pub mod errand;
 pub mod escalation;
 pub mod group;
 pub mod ids;
