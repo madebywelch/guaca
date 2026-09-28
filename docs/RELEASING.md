@@ -99,9 +99,10 @@ First build, test, and publish the backend from that same source commit:
    and `linux/amd64`, supplying the full source SHA as `GUACA_COMMIT`,
    `GUACA_RELEASE=1`, and the package version as `GUACA_VERSION` build arguments. Use
    `ghcr.io/madebywelch/guaca/guacad` with a version tag for the release.
-3. In the GitHub package settings, make that package public. A public source
-   repository does not automatically make its package public. Verify image
-   pulls work without saved registry credentials on both architectures.
+3. Verify image pulls work without saved registry credentials on both
+   architectures. The package is public: the main channel's workflow created
+   it from this public repository on 2026-09-27, and a release tag pushes to
+   the same package.
 4. Record the multi-platform image's immutable digest and export
    `GUACA_BACKEND_IMAGE=ghcr.io/madebywelch/guaca/guacad@sha256:THE_DIGEST` in the
    shell that will build the desktop. Replace `THE_DIGEST` with the real digest.
