@@ -87,6 +87,18 @@ elif args[0] == "run":
     state["container"]["Config"]["Image"] = args[-1]
     state["created"] = args
     save()
+elif args[:2] == ["volume", "ls"]:
+    for name in state.get("volumes", {}): print(name)
+elif args[:2] == ["volume", "rm"]:
+    if mode == "prune": fail()
+    state.get("volumes", {}).pop(args[2], None)
+    save()
+elif args[:2] == ["image", "ls"]:
+    for image in state.get("images", []): print(f"{image['id']} {image['ref']}")
+elif args[:2] == ["image", "rm"]:
+    if args[2] in state.get("in_use", []): fail()
+    state["images"] = [image for image in state.get("images", []) if image["id"] != args[2]]
+    save()
 elif args[0] == "exec":
     print("fixture-token")
 else:

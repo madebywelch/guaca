@@ -257,4 +257,13 @@ The daemon, a browser as a client, and the boot both hosts share.
   `launchd.plist(5)`). In the app's group the script would be ended by the
   quit it asked for, leaving the old app closed and the new one never installed.
   Only failure is reported: success is the app closing.
+- **Updates used to keep every backup.** Each is a full copy of the
+  workspace, and on a box following `main` the disk would fill in a few
+  updates, after which every update fails at its backup step. One is kept now, the
+  latest; earlier ones go only after the new one is recorded. Moving that
+  removal before the copy would leave a window with no backup at all.
+- **A replaced updater is removed with `--volumes`.** The image declares
+  `VOLUME /var/lib/guaca`, which the updater never mounts, so each updater
+  got an anonymous volume that outlived it. `--volumes` removes only anonymous
+  ones; the updater's named state and socket volumes stay.
 
