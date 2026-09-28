@@ -1770,9 +1770,12 @@ through Tauri's `getVersion`, which is exactly that placeholder arriving over
 IPC. So `vite.config.ts` asks git for the short hash while the bundle is being
 built and `src/lib/build.ts` is the one place it is read back from. Nothing is
 asked at runtime, because the built app carries no repository to ask. A tree
-with uncommitted edits on top of that commit gets `-dirty`, because an
-unqualified hash sends whoever reads it to check out a commit that did not
-produce the build in front of them. And a build made outside a repository at all
+with uncommitted edits to tracked files on top of that commit gets `-dirty`,
+because an unqualified hash sends whoever reads it to check out a commit that
+did not produce the build in front of them. An untracked file does not count:
+nothing is built from it unless a tracked file names it, and when it counted, a
+note left in the checkout made a desktop built from `main` read as a different
+build from the same commit running on a box. And a build made outside a repository at all
 draws a dash: it is the same answer the pane already gave for a version it could
 not read, and it is still a thing to say rather than a failure worth a banner.
 

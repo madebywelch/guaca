@@ -16,7 +16,7 @@ step() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 fail() { printf '\033[31mFAIL:\033[0m %s\n' "$1" >&2; exit 1; }
 
 COMMIT="$(git rev-parse --short=7 HEAD 2>/dev/null || echo unknown)"
-if [ -n "$(git status --porcelain 2>/dev/null)" ]; then COMMIT="${COMMIT}-dirty"; fi
+if [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then COMMIT="${COMMIT}-dirty"; fi
 IMAGE="${IMAGE:-guacad:${COMMIT}}"
 NAME="guacad-check-$$"
 VOLUME="${NAME}-data"
