@@ -60,6 +60,7 @@ const released = {
   branch: null,
   upstream: null,
   running: false,
+  stage: null,
   failure: null,
   log: "/Users/r/Library/Logs/com.madebywelch.guac/rebuild.log",
 };
@@ -171,6 +172,70 @@ describe("host updates in either client", () => {
     await screen.findByText(/Host updated. Review/);
     expect(update).toHaveBeenCalledWith("https://host.example");
     expect(reload).not.toHaveBeenCalled();
+  });
+  it("draws a local update's steps from its journal, through the host's silence", async () => {
+    mode.mockReturnValue("local");
+    const poke = () => act(async () => window.dispatchEvent(new Event("guaca:reconnected")));
+    const respond = fetched.getMockImplementation()!;
+    const journal = (stage: string, targetImage = "guacad:new") => ({
+      stage,
+      backup: null,
+      previousImage: "guacad:old",
+      targetImage,
+      targetVersion: "0.1.0",
+      error: null,
+    });
+    const status = (updating: boolean, operation: unknown) => ({
+      state: "running",
+      message: "Ready",
+      updateAvailable: true,
+      origin: "https://host.example",
+      targetImage: "guacad:new",
+      targetVersion: "0.1.0",
+      updating,
+      operation,
+    });
+    docker.mockResolvedValue(status(false, journal("Host updated", "guacad:old")));
+    let finish = () => {};
+    update.mockReturnValue(
+      new Promise((resolve) => {
+        finish = () => resolve({ origin: "https://host.example", token: "secret" });
+      }),
+    );
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Back up and update host" }));
+    // The journal still holds the last update, which finished. That is not this one.
+    await screen.findByText("Starting update · step 1 of 5");
+    expect(screen.queryByRole("button", { name: "Back up and update host" })).toBeNull();
+
+    // Stopped for the backup, the host cannot answer. That is the update working.
+    docker.mockResolvedValue(status(true, journal("Backing up workspace")));
+    fetched.mockImplementation(() => Promise.reject(new TypeError("Load failed")));
+    await poke();
+    await screen.findByText("Backing up workspace · step 3 of 5");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByText("Keep Guaca open until the update finishes.")).toBeTruthy();
+
+    // A poll in flight is not a check the operator asked for.
+    docker.mockResolvedValue(status(true, journal("Verifying host")));
+    let answer = () => {};
+    fetched.mockImplementation(
+      (url: string) =>
+        new Promise((resolve) => {
+          answer = () => resolve(respond(url));
+        }),
+    );
+    await poke();
+    await screen.findByText("Verifying host · step 5 of 5");
+    const check = screen.getByRole("button", { name: "Check for updates" });
+    expect(check.hasAttribute("disabled")).toBe(true);
+    fetched.mockImplementation(respond);
+    await act(async () => answer());
+
+    docker.mockResolvedValue(status(false, journal("Host updated")));
+    await act(async () => finish());
+    await screen.findByText(/Host updated. Review/);
+    expect(screen.queryByText(/step \d of 5/)).toBeNull();
   });
   it("does not offer to replace a different local container", async () => {
     mode.mockReturnValue("local");
@@ -322,11 +387,24 @@ describe("a box that updates itself", () => {
         expect.objectContaining({ method: "POST", body: JSON.stringify({ version: "0.2.0" }) }),
       ),
     );
+    const underway = (stage: string) => ({
+      stage,
+      backup: null,
+      previousImage: "old",
+      targetImage: "new",
+      targetVersion: "0.2.0",
+      error: null,
+    });
+    box = { ...idle, updating: true, operation: underway("Downloading update") };
+    await poke();
+    await screen.findByText("Downloading update · step 1 of 5");
+    expect(screen.queryByRole("button", { name: "Back up and update host" })).toBeNull();
     // The host stops for the swap. That is the update working, not a failure.
     health.down = true;
-    box = { ...idle, updating: true };
     await poke();
     await screen.findByText("The host is restarting on its new version.");
+    // Stopping, backing up or starting: the updater cannot be asked which.
+    expect(screen.getByText("Waiting for the host to answer")).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByText(/closing Guaca does not stop it/)).toBeTruthy();
     delete health.down;
@@ -393,6 +471,9 @@ describe("a box that updates itself", () => {
     await waitFor(() =>
       expect(fetched.mock.calls.some(([, init]) => init?.method === "POST")).toBe(true),
     );
+    // Accepted, with the journal still holding the last update's ending.
+    await screen.findByText("Starting update · step 1 of 5");
+    expect(screen.queryByText("Host updated")).toBeNull();
     box = { ...box, updating: false, error: "Another Guaca process is managing this host." };
     await poke();
     const said = await screen.findByRole("alert");
@@ -538,8 +619,9 @@ describe("a box that follows main", () => {
 
   it("updates to the build that was reviewed, by commit, and names it when done", async () => {
     mount();
-    fireEvent.click(await screen.findByRole("button", { name: "Back up and update host" }));
+    const button = await screen.findByRole("button", { name: "Back up and update host" });
     expect(screen.getByText("Update this host to main at ddddddd.")).toBeTruthy();
+    fireEvent.click(button);
     await waitFor(() =>
       expect(fetched).toHaveBeenCalledWith(
         "https://host.example/v1/host/update",
@@ -621,9 +703,10 @@ describe("this app, rebuilt from its checkout", () => {
     rebuild.mockResolvedValue(undefined);
     mount();
     expect(await screen.findByText("This app is at aaaaaaa, and main is at fffffff.")).toBeTruthy();
-    appSource.mockResolvedValue({ ...source, running: true });
+    appSource.mockResolvedValue({ ...source, running: true, stage: "Building" });
     fireEvent.click(screen.getByRole("button", { name: "Rebuild this app" }));
     await screen.findByText(/Rebuilding this app from main/);
+    await screen.findByText("Building · step 3 of 6");
     expect(rebuild).toHaveBeenCalledTimes(1);
     cleanup();
     appSource.mockResolvedValue({ ...source, failure: "==> Building\ncargo is not on PATH" });

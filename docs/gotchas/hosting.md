@@ -209,6 +209,18 @@ The daemon, a browser as a client, and the boot both hosts share.
   (`managerAt`), and the monitor never lets an older read overwrite a newer one.
   Without both, a poll in flight when the button was pressed reports the update
   finished before it started.
+- **A finished stage in the journal while an update runs is the last update's.**
+  The manager records a new operation only once it has checked the target, and
+  a box answers the click before that, so for the first second of every update
+  the journal said **Host updated** and the panel said so too. `hostProgress`
+  takes an unfinished stage as this update's, and **Host updated** only when
+  the journal's target is this update's.
+- **The progress poll is not a check the operator asked for.** The panel
+  refreshes every 1.5 seconds while an update runs, and every refresh set
+  **Check for updates** to **Checking…**, so the button flickered for the whole
+  update and was the only sign anything was happening. Nor is a host that stops
+  answering during an update on this Mac an error: it is stopped for the
+  backup, and the red line it drew is kept for when nothing is running.
 - **The Docker CLI in the image is 28 on purpose.** It negotiates down to the
   Docker a long-term-support distribution ships and speaks an API above the
   floor the newest daemons require. The newest CLI narrows the first half.
