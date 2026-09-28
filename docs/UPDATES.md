@@ -137,7 +137,8 @@ Recovery restores the backup to a separate volume and runs the recorded old
 image there, preserving the failed volume for diagnosis. Show when the backup
 was made and that restoring it loses subsequent changes. Require an explicit
 restore decision. Backups must be discoverable and removable in host details;
-never delete the only recovery backup as an automatic cleanup step.
+never delete the only recovery backup as an automatic cleanup step. (Shipped
+differently: see *One backup is kept* below.)
 
 ## Updating a remote or externally managed host
 
@@ -202,6 +203,32 @@ So a fix to the updater reaches a box without anybody logging in to it, and a
 broken release of the updater does not take the working one with it. The
 renamed updater is still labeled with the name it was made under, which is
 what the replacement checks before removing it.
+
+### One backup is kept
+
+Every update copies the whole stopped workspace before it replaces the host,
+and nothing used to remove those copies. A box following `main` updates
+several times a day, and k1 as first moved onto the updater, a 19 GB disk
+holding a 3 GB workspace and its images, had room for about one backup: its
+second update would have failed at the backup step, and every one after it.
+
+So one is kept: the one the latest update took. It is what a failed update
+restores, and what an operator would roll back to; a backup from before the
+previous update is of a state the host has already moved past and survived.
+Earlier backups and the `-failed-` copies of earlier failed updates are removed
+once the new backup is recorded, never before, so there is no moment without
+one. A volume that will not go is left and logged, and the update goes on.
+Only volumes named for this host's container are looked at.
+
+The design above said never to delete the only recovery backup automatically.
+This does not: the one it keeps is the only one there is, and it is never
+deleted except by the next update after that update's own is taken.
+
+A box's updater applies the same rule to images: after an update it removes
+every image of `ghcr.io/madebywelch/guaca/guacad` except the one the host now
+runs and the one before it, which is the image the kept backup restores with.
+An image a container still uses is refused by Docker and left. Images under any
+other name are the operator's and are not looked at.
 
 ### A failed update is undone without asking
 

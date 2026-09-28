@@ -659,8 +659,10 @@ has touched the database is undone: the workspace it left is copied to a
 `-failed-` volume, the backup is restored into the workspace volume, and the
 previous image is started on it. An old binary never runs on a database a newer
 one migrated. Backup volume names begin with the container name followed by
-`-backup-`, and are kept until the operator removes them, as are `-failed-`
-copies. This is a recovery backup, not an automatic migration between hosts.
+`-backup-`. One is kept: the one the latest update took. Once it is recorded,
+every earlier backup of the host and every `-failed-` copy goes, so a workspace
+costs its own size twice on disk, and three times only while an update copies
+it. This is a recovery backup, not an automatic migration between hosts.
 
 `./scripts/release-candidate.sh` runs the gates, builds and exercises a local
 image, and builds its matching native candidate without publishing anything.
@@ -810,6 +812,7 @@ container and reports separately if that restart fails. Completion requires a
 matching version, image revision (where provided), API generation and successful
 authenticated workspace call. Update progress remains outside the container
 being replaced. The UI installs the image embedded in its desktop build, and
-refuses to downgrade a host with a newer labeled release. Backups are retained;
-list them in Docker by the `<container>-backup-` prefix and remove obsolete
-copies manually after verifying the updated workspace.
+refuses to downgrade a host with a newer labeled release. The latest update's
+backup is kept and every earlier one removed; on a box the updater also removes
+host images other than the running one and the one before it, which is what
+that backup restores with.

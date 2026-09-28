@@ -735,6 +735,12 @@ impl LocalHost {
         // killed after this write restores rather than guesses.
         op.stage = Stage::Starting;
         self.record(op)?;
+        // One backup is kept: this one, which is what a failed update restores
+        // and what the operator would roll back to. Every earlier backup, and
+        // every copy a failed update left, is of a state this host has moved
+        // past. Removed only now that this one is recorded, so there is never
+        // a moment with none.
+        self.prune(&backup).await;
         self.docker(&["rm", &self.spec.name], 30).await?;
         let connection = self.start_unlocked(&target.image, Some(port)).await?;
         op.stage = Stage::Verifying;
@@ -872,6 +878,31 @@ impl LocalHost {
     }
 
     /// A whole volume into a new one, as root, with `image` supplying `cp`.
+    /// Removes this host's backups and failed-update copies, all but `keep`.
+    /// One that will not go is left and said: the update does not depend on
+    /// it, and the next update tries again.
+    async fn prune(&self, keep: &str) {
+        let names = match self.docker(&["volume", "ls", "--format", "{{.Name}}"], 30).await {
+            Ok(names) => names,
+            Err(error) => {
+                tracing::warn!(%error, "could not list earlier backups; they were left");
+                return;
+            }
+        };
+        let ours = [format!("{}-backup-", self.spec.name), format!("{}-failed-", self.spec.name)];
+        for name in names.lines().map(str::trim) {
+            if name == keep || !ours.iter().any(|prefix| name.starts_with(prefix.as_str())) {
+                continue;
+            }
+            match self.docker(&["volume", "rm", name], 60).await {
+                Ok(_) => tracing::info!(volume = name, "removed an earlier backup"),
+                Err(error) => {
+                    tracing::warn!(volume = name, %error, "could not remove an earlier backup")
+                }
+            }
+        }
+    }
+
     async fn copy(&self, image: &str, from: &str, to: &str) -> Result<String, String> {
         self.docker(
             &[
@@ -1247,6 +1278,69 @@ pub(crate) mod tests {
             assert!(!log.iter().any(|c| c[0] == "rm"));
             task.abort();
         }
+    }
+    /// Volumes beside a fixture host: two of its own earlier copies, and
+    /// three that only look like them.
+    #[cfg(unix)]
+    fn earlier_copies(dir: &tempfile::TempDir) {
+        edit(dir, |state| {
+            state["volumes"] = serde_json::json!({
+                "fixture-host-backup-earlier": "fixture-host-data",
+                "fixture-host-failed-earlier": "fixture-host-data",
+                "fixture-host-data": "",
+                "fixture-host-backups-notes": "",
+                "other-host-backup-1": "other-host-data",
+            });
+        });
+    }
+    #[cfg(unix)]
+    fn volumes(dir: &tempfile::TempDir) -> Vec<String> {
+        let mut names: Vec<String> =
+            state(dir)["volumes"].as_object().unwrap().keys().cloned().collect();
+        names.sort();
+        names
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_backup_that_will_not_go_does_not_stop_the_update() {
+        let (host, dir, task, origin) = simulated("prune", env!("CARGO_PKG_VERSION")).await;
+        earlier_copies(&dir);
+        host.update(&host.bundled(), Some(&origin)).await.unwrap();
+        assert_eq!(host.operation().unwrap().unwrap().stage, Stage::Updated);
+        assert!(volumes(&dir).contains(&"fixture-host-backup-earlier".to_string()));
+        task.abort();
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_backup_that_failed_removes_nothing() {
+        let (host, dir, task, origin) = simulated("backup", env!("CARGO_PKG_VERSION")).await;
+        earlier_copies(&dir);
+        assert!(host.update(&host.bundled(), Some(&origin)).await.is_err());
+        assert!(!calls(&dir).iter().any(|c| c[..2] == ["volume", "rm"]));
+        assert!(volumes(&dir).contains(&"fixture-host-backup-earlier".to_string()));
+        task.abort();
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_update_keeps_one_backup_the_one_it_took() {
+        let (host, dir, task, origin) = simulated("", env!("CARGO_PKG_VERSION")).await;
+        earlier_copies(&dir);
+        host.update(&host.bundled(), Some(&origin)).await.unwrap();
+        let taken = host.operation().unwrap().unwrap().backup.unwrap();
+        let mut expected = vec![
+            taken.clone(),
+            "fixture-host-backups-notes".to_string(),
+            "fixture-host-data".to_string(),
+            "other-host-backup-1".to_string(),
+        ];
+        expected.sort();
+        assert_eq!(volumes(&dir), expected, "only this host's earlier copies go");
+        // Removed after the new one was taken and recorded, never before.
+        let log = calls(&dir);
+        let copied = log.iter().position(|c| c[0] == "run" && c.contains(&"cp".into())).unwrap();
+        let first_removal = log.iter().position(|c| c[..2] == ["volume", "rm"]).unwrap();
+        assert!(copied < first_removal);
+        task.abort();
     }
     #[cfg(unix)]
     #[tokio::test]

@@ -266,6 +266,18 @@ impl Updater {
         match self.host.update(&target, None).await {
             Ok(_) => {
                 tracing::info!(version = %target.version, %commit, "host updated");
+                // Before this updater replaces itself, because the one that
+                // replaces it removes this one, and whatever is after that
+                // line may never run.
+                let previous = self.host.operation().ok().flatten().map(|op| op.previous_image);
+                let docker = self.host.docker_path();
+                let own = own_image(docker).await.ok();
+                let keep: Vec<&str> =
+                    [Some(target.image.as_str()), previous.as_deref(), own.as_deref()]
+                        .into_iter()
+                        .flatten()
+                        .collect();
+                prune_images(docker, &keep).await;
                 if let Err(error) = self.succeed(&target.image).await {
                     tracing::warn!(%error, "the host is updated; this updater could not replace itself");
                 }
@@ -318,13 +330,62 @@ fn short(commit: &str) -> &str {
     commit.get(..7).unwrap_or(commit)
 }
 
+/// Where every host image a box installs comes from.
+const REPOSITORY: &str = "ghcr.io/madebywelch/guaca/guacad";
+
+/// Removes host images this box can no longer use: all but the one it runs
+/// now and the one before, which is what the one kept backup restores with.
+/// Docker refuses to remove an image a container still uses, and that one is
+/// left. Only this repository's images are looked at; anything the operator
+/// built or pulled under another name is theirs.
+async fn prune_images(docker: &Path, keep: &[&str]) {
+    let listed = match host::run_docker(
+        docker,
+        &[
+            "image",
+            "ls",
+            "--no-trunc",
+            "--digests",
+            "--format",
+            "{{.ID}} {{.Repository}}@{{.Digest}}",
+            REPOSITORY,
+        ],
+        30,
+    )
+    .await
+    {
+        Ok(listed) => listed,
+        Err(error) => {
+            tracing::warn!(%error, "could not list host images; they were left");
+            return;
+        }
+    };
+    let images: Vec<(&str, &str)> =
+        listed.lines().filter_map(|line| line.trim().split_once(' ')).collect();
+    let kept: Vec<&str> =
+        images.iter().filter(|(_, image)| keep.contains(image)).map(|(id, _)| *id).collect();
+    let mut gone: Vec<&str> = Vec::new();
+    for (id, _) in &images {
+        if kept.contains(id) || gone.contains(id) {
+            continue;
+        }
+        gone.push(id);
+        match host::run_docker(docker, &["image", "rm", id], 60).await {
+            Ok(_) => tracing::info!(image = id, "removed a host image this box no longer uses"),
+            Err(error) => tracing::warn!(image = id, %error, "could not remove a host image"),
+        }
+    }
+}
+
 /// How every updater is labeled, whatever it is named now.
 const MADE: (&str, &str) = (UPDATER_OWNER, UPDATER);
 
 /// Removes an updater that was renamed aside for a replacement.
 async fn retire(docker: &Path) -> Result<(), String> {
     if host::owned(docker, RETIRING, MADE).await?.is_some() {
-        host::run_docker(docker, &["rm", "--force", RETIRING], 60).await?;
+        // With the anonymous volume the image's VOLUME line gave it, which
+        // nothing mounts again and which would otherwise stay for good.
+        host::run_docker(docker, &["rm", "--force", "--volumes", RETIRING], 60).await?;
         tracing::info!("removed the updater this one replaced");
     }
     Ok(())
@@ -812,6 +873,15 @@ mod tests {
         install(&docker, "guacad:new").await.unwrap();
         assert!(state(&bx.dir)["others"][RETIRING].is_object(), "renamed aside, not removed");
         retire(&docker).await.unwrap();
+        assert!(
+            calls(&bx.dir).iter().any(|c| c.iter().map(String::as_str).eq([
+                "rm",
+                "--force",
+                "--volumes",
+                RETIRING
+            ])),
+            "its anonymous volume goes with it"
+        );
         let now = state(&bx.dir);
         assert!(now["others"][RETIRING].is_null());
         assert_eq!(now["others"][UPDATER]["Config"]["Image"], "guacad:new");
@@ -922,6 +992,50 @@ mod tests {
         assert!(error.contains("latest release"), "{error}");
         bx.updater.update(version, Some("a".repeat(40))).await.unwrap();
         settled(&bx.updater).await;
+    }
+
+    #[tokio::test]
+    async fn a_finished_update_keeps_the_images_it_could_restore_to_and_no_others() {
+        let bx = a_box("", true).await;
+        let target = format!("ghcr.io/madebywelch/guaca/guacad@sha256:{}", "c".repeat(64));
+        let mut value = state(&bx.dir);
+        value["images"] = json!([
+            {"id": "sha256:older", "ref": "ghcr.io/madebywelch/guaca/guacad@sha256:older"},
+            {"id": "sha256:target", "ref": target},
+            {"id": "sha256:busy", "ref": "ghcr.io/madebywelch/guaca/guacad@sha256:busy"},
+        ]);
+        value["in_use"] = json!(["sha256:busy"]);
+        write(&bx.dir, value);
+        bx.updater.update(env!("CARGO_PKG_VERSION").into(), None).await.unwrap();
+        let op = settled(&bx.updater).await.operation.unwrap();
+        assert_eq!(op.stage, host::Stage::Updated, "{:?}", op.error);
+        let left: Vec<String> = state(&bx.dir)["images"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|image| image["id"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(left, ["sha256:target", "sha256:busy"], "an image in use is refused and left");
+        let log = calls(&bx.dir);
+        let listed = log.iter().position(|c| c[..2] == ["image", "ls"]).unwrap();
+        assert!(log[listed].contains(&REPOSITORY.to_string()), "only this repository is looked at");
+        let replaced =
+            log.iter().position(|c| c[0] == "run" && c.contains(&UPDATER.to_string())).unwrap();
+        assert!(listed < replaced, "pruned before this updater is replaced");
+    }
+
+    #[tokio::test]
+    async fn a_failed_update_removes_no_image() {
+        let bx = a_box("", true).await;
+        let mut value = state(&bx.dir);
+        value["refuse"] =
+            json!(format!("ghcr.io/madebywelch/guaca/guacad@sha256:{}", "c".repeat(64)));
+        value["images"] =
+            json!([{"id": "sha256:older", "ref": "ghcr.io/madebywelch/guaca/guacad@sha256:older"}]);
+        write(&bx.dir, value);
+        bx.updater.update(env!("CARGO_PKG_VERSION").into(), None).await.unwrap();
+        settled(&bx.updater).await;
+        assert!(!calls(&bx.dir).iter().any(|c| c[..2] == ["image", "rm"]));
     }
 
     #[test]
