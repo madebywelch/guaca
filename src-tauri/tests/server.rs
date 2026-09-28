@@ -27,6 +27,11 @@ const TOKEN: &str = "a-token-nobody-guessed";
 
 /// A daemon on a free port, with a workspace of its own.
 async fn workspace() -> (SocketAddr, tempfile::TempDir) {
+    workspace_beside(None).await
+}
+
+/// The same, on a box whose updater listens at `updater`.
+async fn workspace_beside(updater: Option<std::path::PathBuf>) -> (SocketAddr, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("a temporary workspace");
     let bound = guac_lib::server::bind(guac_lib::server::Settings {
         root: dir.path().to_path_buf(),
@@ -36,6 +41,7 @@ async fn workspace() -> (SocketAddr, tempfile::TempDir) {
         token: TOKEN.to_string(),
         web: None,
         origin: None,
+        updater,
     })
     .await
     .expect("the workspace opens");
@@ -891,6 +897,7 @@ async fn two_hosts_cannot_run_the_same_workspace() {
         token: TOKEN.into(),
         web: None,
         origin: None,
+        updater: None,
     })
     .await;
     match second {
@@ -1118,4 +1125,107 @@ async fn secrets_are_write_only_and_manageable_over_the_hosted_surface() {
     call(addr, "delete_connector", json!({"id":id})).await;
     let (_, listed) = call(addr, "group_connectors", json!({"groupId":group})).await;
     assert_eq!(listed["ok"], json!([]));
+}
+
+#[tokio::test]
+async fn a_host_without_an_updater_says_so_and_refuses_to_update() {
+    let (addr, _dir) = workspace().await;
+    let http = reqwest::Client::new();
+    let status = http.get(format!("http://{addr}/v1/host")).send().await.unwrap();
+    assert_eq!(status.status(), 401, "what a box runs is the operator's business");
+    let status: Value = http
+        .get(format!("http://{addr}/v1/host"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(status, json!({ "managed": false }));
+    let refused = http
+        .post(format!("http://{addr}/v1/host/update"))
+        .bearer_auth(TOKEN)
+        .json(&json!({ "version": "9.9.9" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 404);
+    let body: Value = refused.json().await.unwrap();
+    assert!(body["err"]["message"].as_str().unwrap().contains("update instructions"), "{body}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_box_relays_its_updater_and_only_for_the_token() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let sockets = tempfile::tempdir().unwrap();
+    let path = sockets.path().join("updater.sock");
+    let listener = tokio::net::UnixListener::bind(&path).unwrap();
+    let (asked, mut heard) = tokio::sync::mpsc::unbounded_channel::<Value>();
+    let updater = tokio::spawn(async move {
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read, mut write) = stream.into_split();
+            let mut line = String::new();
+            BufReader::new(read).read_line(&mut line).await.unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            let reply = if request["ask"] == "update" && request["version"] != "0.3.0" {
+                json!({ "err": "The latest release is Guaca 0.3.0, not 9.9.9. Check for updates and review it again." })
+            } else {
+                json!({ "ok": { "updating": request["ask"] == "update",
+                    "running": { "image": "guacad:old", "version": "0.2.0" },
+                    "operation": null, "error": null } })
+            };
+            asked.send(request).unwrap();
+            write.write_all(format!("{reply}\n").as_bytes()).await.unwrap();
+        }
+    });
+    let (addr, _dir) = workspace_beside(Some(path)).await;
+    let http = reqwest::Client::new();
+
+    let unauthorized = http
+        .post(format!("http://{addr}/v1/host/update"))
+        .json(&json!({ "version": "0.3.0" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), 401);
+    assert!(heard.try_recv().is_err(), "nothing reaches the updater without the token");
+
+    let status: Value = http
+        .get(format!("http://{addr}/v1/host"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(status["managed"], true);
+    assert_eq!(status["running"]["version"], "0.2.0");
+    assert_eq!(heard.recv().await.unwrap(), json!({ "ask": "status" }));
+
+    let accepted = http
+        .post(format!("http://{addr}/v1/host/update"))
+        .bearer_auth(TOKEN)
+        .json(&json!({ "version": "0.3.0" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), 200);
+    assert_eq!(accepted.json::<Value>().await.unwrap()["updating"], true);
+    assert_eq!(heard.recv().await.unwrap(), json!({ "ask": "update", "version": "0.3.0" }));
+
+    let stale = http
+        .post(format!("http://{addr}/v1/host/update"))
+        .bearer_auth(TOKEN)
+        .json(&json!({ "version": "9.9.9" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), 409);
+    let body: Value = stale.json().await.unwrap();
+    assert!(body["err"]["message"].as_str().unwrap().contains("review it again"), "{body}");
+    updater.abort();
 }

@@ -90,6 +90,10 @@ r2d2_sqlite = "0.25"
 # local zone; this is the smallest thing that has both.
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
+# Verifies a release manifest's Ed25519 signature before the updater installs
+# anything it names. Already compiled in for TLS; this names it directly.
+ring = "0.17"
+
 uuid = { version = "1", features = ["v4", "serde"] }
 thiserror = "2"
 sha2 = "0.10"
@@ -142,6 +146,11 @@ required-features = ["desktop"]
 [[bin]]
 name = "guacad"
 path = "src/bin/guacad.rs"
+required-features = ["server"]
+
+[[bin]]
+name = "guaca-updater"
+path = "src/bin/guaca-updater.rs"
 required-features = ["server"]
 
 [profile.release]

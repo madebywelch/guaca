@@ -1,0 +1,4 @@
+# Ed25519 keys a release manifest may be signed with: base64 of the raw 32-byte
+# public key, one per line. An updater verifies only the keys it was built
+# with, so a new key ships here one release before anything is signed with it.
+AV+ChCroHmXm88j/zz8ViGUMd55+KE77R0I4lKtrV7o=

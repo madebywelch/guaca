@@ -17,7 +17,7 @@ async fn local_host_update(
     state: tauri::State<'_, LocalHost>,
     origin: Option<String>,
 ) -> Result<Connection, String> {
-    state.update(origin.as_deref()).await
+    state.update(&state.bundled(), origin.as_deref()).await
 }
 #[tauri::command]
 async fn local_hosts(

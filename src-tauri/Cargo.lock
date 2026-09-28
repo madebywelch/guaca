@@ -1592,6 +1592,7 @@ dependencies = [
  "r2d2",
  "r2d2_sqlite",
  "reqwest 0.12.28",
+ "ring",
  "rusqlite",
  "semver",
  "serde",

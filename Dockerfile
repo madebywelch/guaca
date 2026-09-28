@@ -45,17 +45,25 @@ COPY src-tauri/Cargo.toml src-tauri/Cargo.lock ./
 RUN mkdir -p src/bin \
  && echo 'fn main() {}' > src/main.rs \
  && echo 'fn main() {}' > src/bin/guacad.rs \
+ && echo 'fn main() {}' > src/bin/guaca-updater.rs \
  && echo '' > src/lib.rs \
  && echo 'fn main() {}' > build.rs \
- && cargo build --release --no-default-features --features server --bin guacad \
+ && cargo build --release --no-default-features --features server --bin guacad --bin guaca-updater \
  && rm -rf src build.rs target/release/deps/guac* target/release/deps/libguac*
 COPY src-tauri/ ./
-COPY release-protocol.json /app/release-protocol.json
+COPY release-protocol.json release-keys.pub /app/
 COPY deploy/github/github_app.py /app/deploy/github/github_app.py
 ARG GUACA_COMMIT
 ARG GUACA_RELEASE
 ENV GUACA_COMMIT=$GUACA_COMMIT GUACA_RELEASE=$GUACA_RELEASE
-RUN cargo build --release --no-default-features --features server --bin guacad
+RUN cargo build --release --no-default-features --features server --bin guacad --bin guaca-updater
+
+# ---- the updater's one tool -------------------------------------------------
+# `guaca-updater` replaces the host through the Docker CLI, as the desktop
+# does. 28 rather than the newest: it still negotiates down to the Docker a
+# long-term-support distribution ships, and speaks an API above the floor the
+# newest daemons require. The daemon never gets a socket to use it with.
+FROM docker:28.5.2-cli AS docker
 
 # ---- what runs --------------------------------------------------------------
 FROM node:22-bookworm-slim
@@ -100,6 +108,8 @@ COPY deploy/github/github_app.py /usr/local/lib/guaca/github-helper.py
 COPY --chmod=755 deploy/github/gh /usr/local/bin/gh
 ENV DISABLE_AUTOUPDATER=1
 COPY --from=daemon /app/src-tauri/target/release/guacad /usr/local/bin/guacad
+COPY --from=daemon /app/src-tauri/target/release/guaca-updater /usr/local/bin/guaca-updater
+COPY --from=docker /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=web /app/dist /usr/share/guaca/web
 
 # Every interface *inside the container*, which is the only way a published

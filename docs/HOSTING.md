@@ -711,11 +711,12 @@ the image first and refuses, with the old host still running, an image whose
 version label is not the app's own version. Then it stops the container, copies the whole volume to a new backup
 volume, and only then replaces the container. The running port and token are
 preserved. A failed backup cancels the upgrade. A failure after the new binary
-has touched the database leaves the backup available; it never starts an old
-binary against a potentially migrated database. Backup volume names begin
-with the container name followed by `-backup-` and are kept until the operator
-removes them. This is a recovery backup, not an automatic migration between
-hosts.
+has touched the database is undone: the workspace it left is copied to a
+`-failed-` volume, the backup is restored into the workspace volume, and the
+previous image is started on it. An old binary never runs on a database a newer
+one migrated. Backup volume names begin with the container name followed by
+`-backup-`, and are kept until the operator removes them, as are `-failed-`
+copies. This is a recovery backup, not an automatic migration between hosts.
 
 `./scripts/release-candidate.sh` runs the gates, builds and exercises a local
 image, and builds its matching native candidate without publishing anything.
@@ -770,7 +771,8 @@ that authenticated workspace access succeeds. The client reconnects without
 replaying interrupted actions. Review its recovery notices before retrying work.
 A plain container restart does not change the image. This app does not hold
 SSH or Docker privileges on an externally managed server; its update panel
-provides instructions rather than a remote update button.
+provides instructions for one. A box installed as below is not externally
+managed, and gets a button.
 
 After a failed update, preserve the failed volume. Restore the complete backup
 into a separate volume and run the recorded previous image on that restored
@@ -781,12 +783,63 @@ before proceeding.
 The native local manager records its update stages and recovery backup in
 `host-update.json` under the app's application-support directory. It serializes
 operations across app processes and prevents ordinary app exit while a local
-host operation runs. If an update was interrupted after replacement could have
-begun, startup refuses automatic recovery. The saved journal identifies the
-backup volume and previous image. Restore manually using the procedure above,
-then archive the journal after verifying the restored workspace; retaining an
-unfinished journal intentionally keeps automatic startup blocked. Do not erase
-an unreadable journal merely to get past the error.
+host operation runs. An update interrupted partway is settled the next time the
+host starts: before the swap, the old container is started again; after it,
+the new container is kept if it verifies and restored from the backup if it
+does not. Only a restore that itself failed leaves **Recovery needed**, which
+keeps automatic startup blocked until the journal is archived after a manual
+restore by the procedure above. Do not erase an unreadable journal merely to
+get past the error.
+
+### A box that updates from the app
+
+`deploy/box/install.sh` installs a box whose operator never logs in to it:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/madebywelch/guaca/main/deploy/box/install.sh | sudo sh
+```
+
+It needs Docker Engine and nothing else. It makes `guaca-updater`, which holds
+the Docker socket and runs nothing else, and the updater makes `guacad`, which
+is published to `127.0.0.1:8787` and never sees the socket. Put a tunnel in
+front of that port (`tailscale serve --bg http://127.0.0.1:8787`, or a TLS
+reverse proxy) and give the operator that address and the key the installer
+prints. Settings for the host go in `/etc/guaca/guaca.env`, one `NAME=value`
+per line, mode 0600; the names are `HOST_ENV` in `src-tauri/src/updater.rs`.
+Running the installer again applies changed settings to the updater and keeps
+the workspace; the host picks them up the next time it is made, which is the
+next update. `docker rm -f guacad` followed by `docker restart guaca-updater`
+applies them now.
+
+From then on Settings > Workspace offers **Back up and update host** whenever a
+newer signed release is out, in the desktop app and in a browser alike. The
+host's workspace token authorizes it. Why the updater is a second container,
+what it can be asked and why that list is short are in
+[Updates](UPDATES.md#updating-a-remote-or-externally-managed-host).
+
+To move a Compose host onto the updater, keep its volume and adopt it:
+
+```sh
+docker compose stop guacad && docker compose rm -f guacad   # the volume stays
+docker volume ls | grep guaca                               # <project>_guaca
+GUACA_VOLUME=<project>_guaca sh deploy/box/install.sh
+```
+
+The workspace, its token and the tunnel in front of port 8787 are unchanged.
+The GitHub App broker overlay is a Compose service and is not carried over;
+a box uses `GH_TOKEN` or per-repository token access instead.
+
+`./scripts/box.sh` is the gate, beside `image.sh`: it installs a box from a
+local image on this machine's Docker and checks what a fake Docker cannot. The
+updater makes the host, reaches it at its bridge address and shares the socket
+with it read-only; the host never gets the Docker socket; the host relays the
+updater only behind the token; the release on GitHub is refused, while the host
+keeps running, unless this build's key signed it; and installing again replaces
+the updater without touching the host.
+
+```sh
+IMAGE=guacad:$(git rev-parse --short=7 HEAD) ./scripts/box.sh
+```
 
 Finishing an operation explicitly unlocks its file before closing it, so a
 descriptor inherited by a concurrently forked child cannot keep the completed

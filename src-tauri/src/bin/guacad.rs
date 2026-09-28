@@ -19,6 +19,8 @@
 //!   ANTHROPIC_API_KEY  not Guaca's own setting, but read for one decision:
 //!                  with it set, Claude Code is offered as a coding harness
 //!                  and spends the key.
+//!   GUACA_UPDATER_SOCKET  where the updater beside this host listens, on a
+//!                  box `guaca-updater` made. Set by the updater, never by hand.
 //!   GUAC_LOG       the tracing filter, spelled as the desktop app spells it.
 
 use std::path::PathBuf;
@@ -62,6 +64,9 @@ fn main() {
             .ok()
             .map(|o| o.trim().to_string())
             .filter(|o| !o.is_empty()),
+        updater: std::env::var_os("GUACA_UPDATER_SOCKET")
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from),
     };
 
     let runtime = tokio::runtime::Builder::new_multi_thread()

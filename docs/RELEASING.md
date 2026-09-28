@@ -319,8 +319,9 @@ and [GitHub Container Registry](https://docs.github.com/en/packages/working-with
 
 ## Release checks in browser and desktop
 
-Every published stable release also carries `guaca-release.json`. Generate it
-from the same clean checkout after recording the image digest:
+Every published stable release also carries `guaca-release.json` and its
+signature, `guaca-release.json.sig`. Generate both from the same clean checkout
+after recording the image digest:
 
 ```sh
 GUACA_BACKEND_IMAGE=ghcr.io/madebywelch/guaca/guacad@sha256:THE_DIGEST \
@@ -328,8 +329,22 @@ GUACA_BACKEND_IMAGE=ghcr.io/madebywelch/guaca/guacad@sha256:THE_DIGEST \
 ```
 
 The generator verifies the frontend, Cargo and desktop versions agree and
-refuses prereleases, mutable image tags, or an invalid API range. Upload this
-file alongside the verified DMG and checksum before publishing the release.
+refuses prereleases, mutable image tags, or an invalid API range. It signs the
+exact bytes it writes with the Ed25519 key at
+`~/.config/guaca/release-signing-key.pem` (override with
+`GUACA_RELEASE_SIGNING_KEY=/path/to/key.pem`), and refuses to write anything
+when that key's public half is not in `release-keys.pub`, because no updater
+would install the release. Upload both files alongside the verified DMG and
+checksum before publishing the release. A release without the signature is
+shown as available and refused by every box's updater, which says so; a box
+cannot install it until a signed release follows.
+
+The key is the one thing that lets a box install a release, so it is not in
+this repository and should not live only on the release machine. Keep a copy
+in the secrets manager. Losing it means every box needs one manual reinstall
+from a release signed with a new key. Rotating it means adding the new public
+key to `release-keys.pub`, releasing, and signing with the new key only from
+the release after that.
 Do not publish the manifest until both artifacts have passed verification.
 The public stable feed is GitHub's
 `/madebywelch/guaca/releases/latest/download/guaca-release.json`; verify an

@@ -1,6 +1,8 @@
-// Advisory release metadata. It never grants permission to install an image.
+// Release metadata, and the signature that lets an updater install what it names.
 import { execFileSync } from "node:child_process";
+import { createPublicKey, sign, verify } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -26,10 +28,35 @@ export function sharedVersion() {
   return version;
 }
 
+/** Base64 Ed25519 signature over exactly the bytes that are published. */
+export function signature(bytes, privateKeyPem) {
+  return sign(null, bytes, privateKeyPem).toString("base64");
+}
+
+/** Whether a key in `keys` (release-keys.pub's format) made `said` over `bytes`.
+ *  Checked before anything is written: a signature no updater accepts is a
+ *  release every box refuses, found out on every box. */
+export function trusted(bytes, said, keys) {
+  const spki = Buffer.from("302a300506032b6570032100", "hex");
+  return keys
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"))
+    .some((line) => {
+      const key = createPublicKey({ key: Buffer.concat([spki, Buffer.from(line, "base64")]), format: "der", type: "spki" });
+      return verify(null, bytes, key, Buffer.from(said, "base64"));
+    });
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const git = (...args) => execFileSync("git", args, {cwd: root, encoding: "utf8"}).trim();
   if (git("status", "--porcelain")) throw new Error("Build release metadata from a clean checkout.");
   const value = manifest(sharedVersion(), git("rev-parse", "HEAD"), process.env.GUACA_BACKEND_IMAGE ?? "", JSON.parse(read("release-protocol.json")));
   if (!process.argv[2]) throw new Error("Usage: GUACA_BACKEND_IMAGE=... node scripts/release-manifest.mjs /path/to/guaca-release.json");
-  writeFileSync(process.argv[2], `${JSON.stringify(value, null, 2)}\n`);
+  const bytes = Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+  const key = readFileSync(process.env.GUACA_RELEASE_SIGNING_KEY ?? resolve(homedir(), ".config/guaca/release-signing-key.pem"), "utf8");
+  const said = signature(bytes, key);
+  if (!trusted(bytes, said, read("release-keys.pub"))) throw new Error("That signing key is not in release-keys.pub. No updater would install this release.");
+  writeFileSync(process.argv[2], bytes);
+  writeFileSync(`${process.argv[2]}.sig`, `${said}\n`);
 }

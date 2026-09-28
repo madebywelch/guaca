@@ -1,5 +1,6 @@
-//! Public release information is advisory. Only the native app's embedded
-//! image reference may be installed by its local host manager.
+//! Public release information. What the checker reads is news and nothing
+//! more; [`signed`] is the only read anything installs from, and it refuses a
+//! manifest that none of this build's keys signed.
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -7,6 +8,15 @@ use tokio::sync::Mutex;
 
 pub const SOURCE: &str =
     "https://github.com/madebywelch/guaca/releases/latest/download/guaca-release.json";
+
+/// The keys a manifest may be signed with. A GitHub account that can publish
+/// a release is not, by itself, able to make every box install it.
+pub const KEYS: &str = include_str!("../../release-keys.pub");
+
+/// Where each release's files are, by version. The signature is read from
+/// here rather than from `latest`, so a release published between the two
+/// reads is a mismatch rather than a pair of files from two releases.
+pub const DOWNLOADS: &str = "https://github.com/madebywelch/guaca/releases/download";
 const MAX_BYTES: usize = 16 * 1024;
 const CACHE_FOR: Duration = Duration::from_secs(6 * 60 * 60);
 const RETRY_AFTER: Duration = Duration::from_secs(60);
@@ -31,7 +41,7 @@ pub fn metadata() -> serde_json::Value {
     })
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Release {
     pub schema: u32,
@@ -132,36 +142,92 @@ impl Checker {
     }
 
     async fn fetch(&self) -> Result<Release, String> {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .user_agent("Guaca release check")
-            .build()
-            .map_err(|_| "Could not start the release check. Try again.".to_string())?;
-        let mut response = client.get(&self.source).send().await.map_err(|_| {
-            "Could not reach the release service. Check your connection and try again.".to_string()
-        })?;
-        if !response.status().is_success() {
-            return Err(format!(
-                "Release metadata is unavailable (HTTP {}). Try again later.",
-                response.status().as_u16()
-            ));
-        }
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|_| "The release download was interrupted. Try again.")?
-        {
-            if bytes.len() + chunk.len() > MAX_BYTES {
-                return Err("The release metadata is too large. Contact the publisher.".into());
-            }
-            bytes.extend_from_slice(&chunk);
-        }
-        let release: Release = serde_json::from_slice(&bytes)
-            .map_err(|_| "The release metadata is unreadable. Try again later.".to_string())?;
-        release.validate()?;
-        Ok(release)
+        parse(&download(&client()?, &self.source).await?)
     }
+}
+
+/// The release at `source`, if one of `keys` signed exactly the bytes read.
+///
+/// The signature is checked before anything in the manifest is acted on; the
+/// version is read first only to find the signature, and only after
+/// `validate` has held it to a plain release number.
+pub async fn signed(source: &str, downloads: &str, keys: &str) -> Result<Release, String> {
+    let client = client()?;
+    let bytes = download(&client, source).await?;
+    let release = parse(&bytes)?;
+    let signature = format!("{downloads}/v{}/guaca-release.json.sig", release.version);
+    let said = download(&client, &signature).await.map_err(|error| {
+        if error.contains("HTTP 404") {
+            format!(
+                "Guaca {} was published without a signature, so nothing was installed. This host updates to the next signed release.",
+                release.version
+            )
+        } else {
+            format!("The signature of Guaca {} could not be read, so nothing was installed. {error}", release.version)
+        }
+    })?;
+    verify(&bytes, &said, keys)?;
+    Ok(release)
+}
+
+/// Whether one of `keys` made `signature` over `bytes`.
+fn verify(bytes: &[u8], signature: &[u8], keys: &str) -> Result<(), String> {
+    use base64::Engine;
+    let refused = || {
+        "This release is not signed with Guaca's release key, so nothing was installed. Try again later; if it persists, the release was not published by Guaca.".to_string()
+    };
+    let signature = base64::engine::general_purpose::STANDARD
+        .decode(signature.trim_ascii())
+        .map_err(|_| refused())?;
+    let trusted = keys
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(|line| base64::engine::general_purpose::STANDARD.decode(line).ok());
+    for key in trusted {
+        let key = ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, key);
+        if key.verify(bytes, &signature).is_ok() {
+            return Ok(());
+        }
+    }
+    Err(refused())
+}
+
+fn client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .user_agent("Guaca release check")
+        .build()
+        .map_err(|_| "Could not start the release check. Try again.".to_string())
+}
+
+async fn download(client: &reqwest::Client, source: &str) -> Result<Vec<u8>, String> {
+    let mut response = client.get(source).send().await.map_err(|_| {
+        "Could not reach the release service. Check your connection and try again.".to_string()
+    })?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Release metadata is unavailable (HTTP {}). Try again later.",
+            response.status().as_u16()
+        ));
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) =
+        response.chunk().await.map_err(|_| "The release download was interrupted. Try again.")?
+    {
+        if bytes.len() + chunk.len() > MAX_BYTES {
+            return Err("The release metadata is too large. Contact the publisher.".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
+fn parse(bytes: &[u8]) -> Result<Release, String> {
+    let release: Release = serde_json::from_slice(bytes)
+        .map_err(|_| "The release metadata is unreadable. Try again later.".to_string())?;
+    release.validate()?;
+    Ok(release)
 }
 
 #[cfg(test)]
@@ -218,6 +284,88 @@ mod tests {
         assert!(result.error.is_none());
         assert!(result.checked_at.is_none());
     }
+    /// A key pair nobody else holds, and its public half as `KEYS` spells one.
+    fn keypair() -> (ring::signature::Ed25519KeyPair, String) {
+        use base64::Engine;
+        use ring::signature::KeyPair;
+        let document =
+            ring::signature::Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
+                .unwrap();
+        let pair = ring::signature::Ed25519KeyPair::from_pkcs8(document.as_ref()).unwrap();
+        let public = base64::engine::general_purpose::STANDARD.encode(pair.public_key().as_ref());
+        (pair, public)
+    }
+
+    fn sign(pair: &ring::signature::Ed25519KeyPair, bytes: &[u8]) -> String {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(pair.sign(bytes).as_ref())
+    }
+
+    /// Serves one manifest and, beside it, whatever signature it is given.
+    async fn publish(
+        manifest: Vec<u8>,
+        signature: Option<String>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let app = axum::Router::new()
+            .route("/guaca-release.json", axum::routing::get(move || async move { manifest }))
+            .route(
+                "/v0.2.0/guaca-release.json.sig",
+                axum::routing::get(move || async move {
+                    match signature {
+                        Some(said) => (axum::http::StatusCode::OK, said),
+                        None => (axum::http::StatusCode::NOT_FOUND, String::new()),
+                    }
+                }),
+            );
+        let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", socket.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            axum::serve(socket, app).await.unwrap();
+        });
+        (base, task)
+    }
+
+    #[tokio::test]
+    async fn only_a_manifest_one_of_the_keys_signed_is_installable() {
+        let (pair, public) = keypair();
+        let (stranger, _) = keypair();
+        let bytes = serde_json::to_vec_pretty(&release()).unwrap();
+        let mut tampered = release();
+        tampered.image = format!("ghcr.io/madebywelch/guaca/guacad@sha256:{}", "d".repeat(64));
+        let tampered = serde_json::to_vec_pretty(&tampered).unwrap();
+        let rotated = format!("# rotation\n{}\n{public}\n", keypair().1);
+        for (manifest, signature, keys, accepted) in [
+            (bytes.clone(), Some(sign(&pair, &bytes)), public.clone(), true),
+            (bytes.clone(), Some(sign(&pair, &bytes)), rotated, true),
+            (tampered.clone(), Some(sign(&pair, &bytes)), public.clone(), false),
+            (bytes.clone(), Some(sign(&stranger, &bytes)), public.clone(), false),
+            (bytes.clone(), Some("not base64".into()), public.clone(), false),
+            (bytes.clone(), None, public.clone(), false),
+        ] {
+            let (base, task) = publish(manifest, signature).await;
+            let result = signed(&format!("{base}/guaca-release.json"), &base, &keys).await;
+            assert_eq!(result.is_ok(), accepted, "{result:?}");
+            if let Err(error) = result {
+                assert!(error.contains("nothing was installed"), "{error}");
+                assert!(!error.contains("HTTP"), "said to an operator, not a developer: {error}");
+            }
+            task.abort();
+        }
+    }
+
+    #[test]
+    fn this_build_trusts_at_least_one_well_formed_key() {
+        use base64::Engine;
+        let keys: Vec<Vec<u8>> = KEYS
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(|line| base64::engine::general_purpose::STANDARD.decode(line).unwrap())
+            .collect();
+        assert!(!keys.is_empty());
+        assert!(keys.iter().all(|key| key.len() == 32), "Ed25519 public keys are 32 bytes");
+    }
+
     #[tokio::test]
     async fn concurrent_and_manual_checks_share_a_rate_limit() {
         use std::sync::{
