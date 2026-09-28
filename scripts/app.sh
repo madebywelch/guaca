@@ -33,7 +33,7 @@ if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
   # The same qualifier vite.config.ts gives a dev server's About, so the page
   # and the daemon's /health name one build.
   COMMIT="$(git rev-parse --short=7 HEAD)"
-  [ -z "$(git status --porcelain)" ] || COMMIT="$COMMIT-dirty"
+  [ -z "$(git status --porcelain --untracked-files=no)" ] || COMMIT="$COMMIT-dirty"
   printf '==> Building this checkout'"'"'s host image on Docker context %s\n' "$(docker context show)"
   IID="$(mktemp)"
   trap 'rm -f "$IID"' EXIT

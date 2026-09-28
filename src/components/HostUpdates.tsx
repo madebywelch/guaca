@@ -556,7 +556,7 @@ export function HostUpdatePanel() {
           <dd data-drift={apart ? "" : undefined}>
             {health.version ?? "Unknown release"}
             {hostBuild && ` · ${hostBuild}`}
-            {!health.release && " (unverified)"}
+            {release?.channel === "main" ? " (main)" : !health.release && " (unverified)"}
           </dd>
           {desktop && (
             <>
@@ -568,7 +568,11 @@ export function HostUpdatePanel() {
             </>
           )}
           <dt>Available</dt>
-          <dd>{release?.latest?.version ?? "Not verified"}</dd>
+          <dd>
+            {latest?.channel === "main"
+              ? `main at ${shortBuild(latest.commit)}`
+              : (latest?.version ?? "Not verified")}
+          </dd>
           <dt>Compatibility</dt>
           <dd>
             {match === "compatible"

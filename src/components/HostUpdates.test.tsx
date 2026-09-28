@@ -521,6 +521,14 @@ describe("a box that follows main", () => {
     expect(screen.queryByText(/Host updated to/)).toBeNull();
   });
 
+  it("names the channel where a release would name a version", async () => {
+    health.release = false;
+    mount();
+    await screen.findByText("Host");
+    await waitFor(() => expect(fact("Host").textContent).toBe("0.1.0 · aaaaaaa (main)"));
+    expect(fact("Available").textContent).toBe("main at ddddddd");
+  });
+
   it("offers nothing when the host is already the tip", async () => {
     health.build = tip;
     mount();

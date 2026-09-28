@@ -25,7 +25,7 @@ WORKDIR /app
 RUN corepack enable
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
-COPY index.html menubar.html tsconfig.json vite.config.ts release-protocol.json ./
+COPY index.html menubar.html tsconfig.json vite.config.ts build-stamp.ts release-protocol.json ./
 COPY src ./src
 ARG GUACA_COMMIT
 ARG GUACA_RELEASE
