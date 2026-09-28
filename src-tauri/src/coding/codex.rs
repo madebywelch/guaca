@@ -1,6 +1,10 @@
-//! Codex's app-server protocol. One CLI process owns one thread and turn.
-//! Steering uses the active turn id and is acknowledged by the CLI. Approval
-//! callbacks spend the same repository gate as Claude hooks and `shell`.
+//! Codex's app-server protocol. One CLI process owns one thread and one turn.
+//!
+//! A new job starts a thread and a follow-up resumes it, so the work carries on
+//! with everything it had already read. Steering uses the active turn id and is
+//! acknowledged by the CLI; a stop is `turn/interrupt`, which ends the turn and
+//! leaves the thread for the next follow-up. Approval callbacks spend the same
+//! agent gate as Claude hooks, `pi`'s extension and `shell`.
 
 use std::{collections::HashSet, path::Path, process::Stdio, time::Duration};
 
@@ -11,43 +15,28 @@ use tokio::{
     sync::{mpsc, oneshot},
 };
 
-use super::{CodingError, Outcome, Progress, Signal};
-use crate::domain::repository::Gate;
+use super::{CodingError, Control, Job, Outcome, Progress, Signal};
+use crate::domain::terminal::Gate;
 
 pub(super) const BINARY: &str = "codex";
 pub(super) const INSTALL: &str = "npm install -g @openai/codex";
 const RESPONSE_LIMIT: Duration = Duration::from_secs(30);
 
-/// The response belongs to the operator's call, so a late or rejected steer
-/// never gets the same success message as an accepted correction.
-pub struct Steer {
-    pub message: String,
-    pub reply: oneshot::Sender<Result<(), String>>,
-}
-
-pub struct Control {
-    pub gate: Gate,
-    pub steering: mpsc::Receiver<Steer>,
-    pub signals: mpsc::Sender<Signal>,
-}
-
 fn failed(why: impl Into<String>) -> CodingError {
     CodingError::NoAnswer(why.into())
 }
 
-pub async fn run(
-    repository: &str,
-    task: &str,
-    control: Option<Control>,
-    env: &crate::secrets::Environment,
-    mut watching: impl FnMut(Progress),
+pub(super) async fn run(
+    job: &Job<'_>,
+    controls: mpsc::Receiver<Control>,
+    signals: mpsc::Sender<Signal>,
+    watching: &mut (dyn FnMut(Progress) + Send),
 ) -> Result<Outcome, CodingError> {
     let mut command = tokio::process::Command::new(BINARY);
-    crate::repo::github::environment(repository, &mut command).await;
-    env.apply(&mut command);
+    job.env.apply(&mut command);
     let mut child = command
         .args(["app-server", "--listen", "stdio://"])
-        .current_dir(repository)
+        .current_dir(job.directory)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -65,11 +54,14 @@ pub async fn run(
     let stderr = child.stderr.take().ok_or_else(|| failed("Codex has no error pipe"))?;
     let finishing = async {
         let protocol = async {
-            let result = drive(repository, task, control, stdin, stdout, &mut watching).await;
-            // An app-server keeps listening after turn/completed. End this
-            // job's server and reap it before releasing the worktree lock.
-            let _ = child.kill().await;
-            let _ = child.wait().await;
+            let result = drive(job, controls, signals, stdin, stdout, watching).await;
+            // An app-server keeps listening after turn/completed, until its
+            // input closes, which `drive` returning just did. Reaped before the
+            // agent's job slot is freed, and killed only if it does not go.
+            if tokio::time::timeout(Duration::from_secs(5), child.wait()).await.is_err() {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+            }
             result
         };
         let (result, stderr) = tokio::join!(protocol, super::drain_stderr(stderr));
@@ -95,26 +87,62 @@ async fn write(input: &mut tokio::process::ChildStdin, message: Value) -> Result
     input.write_all(&bytes).await.map_err(|_| failed("Codex closed its input pipe"))
 }
 
+/// What a listing says to the app-server: the handshake and one page of
+/// models, large enough to be every one.
+pub(super) fn listing() -> [Value; 3] {
+    [
+        json!({"id":1,"method":"initialize","params":{
+            "clientInfo":{"name":"guaca","title":"Guaca","version":env!("CARGO_PKG_VERSION")}
+        }}),
+        json!({"method":"initialized"}),
+        json!({"id":2,"method":"model/list","params":{"limit":200}}),
+    ]
+}
+
+pub(super) fn listed(line: &Value) -> bool {
+    line["id"] == 2
+}
+
+/// The models the picker shows, with the efforts each one advertises.
+/// Hidden ones are left out, as the picker leaves them out.
+pub(super) fn offers(answer: &Value) -> Vec<super::ModelOffer> {
+    answer["result"]["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|model| model["hidden"] != true)
+        .filter_map(|model| {
+            let id = model["id"].as_str().or_else(|| model["model"].as_str())?;
+            Some(super::ModelOffer {
+                id: id.to_string(),
+                label: model["displayName"].as_str().unwrap_or(id).to_string(),
+                detail: model["description"].as_str().unwrap_or_default().to_string(),
+                default: model["isDefault"] == true,
+                efforts: model["supportedReasoningEfforts"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|effort| effort["reasoningEffort"].as_str().map(str::to_string))
+                    .collect(),
+            })
+        })
+        .collect()
+}
+
 fn input(text: &str) -> Value {
     json!([{ "type": "text", "text": text }])
 }
 
 async fn drive(
-    repository: &str,
-    task: &str,
-    control: Option<Control>,
+    job: &Job<'_>,
+    mut controls: mpsc::Receiver<Control>,
+    signals: mpsc::Sender<Signal>,
     mut stdin: tokio::process::ChildStdin,
     stdout: tokio::process::ChildStdout,
-    watching: &mut impl FnMut(Progress),
+    watching: &mut (dyn FnMut(Progress) + Send),
 ) -> Result<Outcome, CodingError> {
-    let (gate, mut steering, signals) = match control {
-        Some(control) => (control.gate, control.steering, control.signals),
-        None => {
-            let (_, steering) = mpsc::channel(1);
-            let (signals, _) = mpsc::channel(1);
-            (Gate::Open, steering, signals)
-        }
-    };
+    let gate = job.gate;
+    let directory = job.directory;
     write(
         &mut stdin,
         json!({"id":1,"method":"initialize","params":{
@@ -129,51 +157,106 @@ async fn drive(
     let mut turn = String::new();
     let mut ready = false;
     let mut complete = false;
-    let mut accepting = true;
+    let mut stopping = false;
     let mut next_id = 5u64;
     let mut pending: Option<(u64, oneshot::Sender<Result<(), String>>)> = None;
     let mut deadline = tokio::time::Instant::now() + RESPONSE_LIMIT;
     let mut approvals: FuturesUnordered<BoxFuture<'static, Value>> = FuturesUnordered::new();
     let mut items = HashSet::new();
+    // Corrections that arrived before the turn could take one, or while the
+    // last was still being acknowledged. Held rather than refused: a
+    // correction typed a second after `code` returned is the ordinary case.
+    let mut queued: std::collections::VecDeque<(String, oneshot::Sender<Result<(), String>>)> =
+        std::collections::VecDeque::new();
 
     loop {
         if complete && pending.is_none() {
+            for (_, reply) in queued.drain(..) {
+                let _ = reply.send(Err("The job finished before this correction was sent. Send it again to continue the session.".into()));
+            }
             return Ok(outcome);
         }
+        if ready && pending.is_none() && !stopping && !complete {
+            if let Some((message, reply)) = queued.pop_front() {
+                if !reply.is_closed() {
+                    let id = next_id;
+                    next_id += 1;
+                    write(
+                        &mut stdin,
+                        json!({"id":id,"method":"turn/steer","params":{
+                            "threadId":thread,"expectedTurnId":turn,"input":input(&message)
+                        }}),
+                    )
+                    .await?;
+                    pending = Some((id, reply));
+                    deadline = tokio::time::Instant::now() + RESPONSE_LIMIT;
+                }
+                continue;
+            }
+        }
         tokio::select! {
-            _ = tokio::time::sleep_until(deadline), if !ready || pending.is_some() => {
+            _ = tokio::time::sleep_until(deadline), if !ready || pending.is_some() || stopping => {
                 if let Some((_, reply)) = pending.take() {
                     let _ = reply.send(Err("Codex did not acknowledge the correction. The job was stopped; review its changes before retrying.".into()));
+                }
+                if stopping {
+                    // Asked to end its turn and did not within the grace. The
+                    // process is killed by the caller; what it wrote stays.
+                    outcome.stopped = true;
+                    return Ok(outcome);
                 }
                 return Err(failed("Codex did not answer a control request within 30 seconds"));
             }
             Some(answer) = approvals.next(), if !approvals.is_empty() => {
                 write(&mut stdin, answer).await?;
             }
-            correction = steering.recv(), if ready && accepting && pending.is_none() && !complete => {
-                let Some(correction) = correction else { accepting = false; continue; };
-                if correction.reply.is_closed() { continue; }
-                if correction.message.trim().is_empty() {
-                    let _ = correction.reply.send(Err("Enter a correction to send".into()));
-                    continue;
+            // A closed channel matches nothing, which disables this branch for
+            // the rest of the select rather than spinning on `None`.
+            Some(control) = controls.recv(), if !complete => {
+                match control {
+                    Control::Steer { message, reply } => {
+                        if reply.is_closed() { continue; }
+                        if message.trim().is_empty() {
+                            let _ = reply.send(Err("Enter a correction to send".into()));
+                            continue;
+                        }
+                        if stopping {
+                            let _ = reply.send(Err("The job is stopping.".into()));
+                            continue;
+                        }
+                        queued.push_back((message, reply));
+                    }
+                    Control::Stop => {
+                        outcome.stopped = true;
+                        if !ready {
+                            // Nothing has started yet, so there is no turn to
+                            // interrupt: ending here is ending before any work.
+                            return Ok(outcome);
+                        }
+                        if !stopping {
+                            let id = next_id;
+                            next_id += 1;
+                            write(&mut stdin, json!({"id":id,"method":"turn/interrupt","params":{
+                                "threadId":thread,"turnId":turn
+                            }})).await?;
+                            stopping = true;
+                            deadline = tokio::time::Instant::now() + super::STOP_GRACE;
+                        }
+                    }
                 }
-                let id = next_id;
-                next_id += 1;
-                write(&mut stdin, json!({"id":id,"method":"turn/steer","params":{
-                    "threadId":thread,"expectedTurnId":turn,"input":input(&correction.message)
-                }})).await?;
-                pending = Some((id, correction.reply));
-                deadline = tokio::time::Instant::now() + RESPONSE_LIMIT;
             }
             line = lines.next_line() => {
                 let Some(line) = line.map_err(|_| failed("Could not read Codex output"))? else {
+                    if stopping {
+                        return Ok(outcome);
+                    }
                     return Err(failed("Codex exited before finishing the job"));
                 };
                 let Ok(event) = serde_json::from_str::<Value>(&line) else { continue; };
                 if let Some(method) = event["method"].as_str() {
                     let params = &event["params"];
                     if event.get("id").is_some() {
-                        approvals.push(answer_request(event.clone(), gate, repository.into(), thread.clone(), turn.clone(), signals.clone()).boxed());
+                        approvals.push(answer_request(event.clone(), gate, directory.into(), thread.clone(), turn.clone(), signals.clone()).boxed());
                         continue;
                     }
                     if params["threadId"].as_str() != Some(thread.as_str()) { continue; }
@@ -182,16 +265,20 @@ async fn drive(
                             turn = params["turn"]["id"].as_str().unwrap_or_default().into();
                         }
                         "item/started" | "item/completed" if params["turnId"].as_str() == Some(turn.as_str()) => {
-                            absorb(&mut outcome, &params["item"], method == "item/completed", &mut items, watching, repository);
+                            absorb(&mut outcome, &params["item"], method == "item/completed", &mut items, watching, directory);
                         }
                         "turn/completed" if params["turn"]["id"].as_str() == Some(turn.as_str()) => {
                             complete = true;
-                            steering.close();
-                            while let Ok(correction) = steering.try_recv() {
-                                let _ = correction.reply.send(Err("The job finished before this correction was sent. Start a new coding job.".into()));
+                            while let Ok(control) = controls.try_recv() {
+                                if let Control::Steer { reply, .. } = control {
+                                    queued.push_back((String::new(), reply));
+                                }
                             }
                             match params["turn"]["status"].as_str() {
                                 Some("completed") => {}
+                                // Asked for, so not a failure: the turn ended where
+                                // the operator stopped it and the thread is kept.
+                                Some("interrupted") if stopping => outcome.stopped = true,
                                 Some("failed") => outcome.failed = Some(params["turn"]["error"]["message"].as_str().unwrap_or("Codex reported a failed turn").into()),
                                 Some("interrupted") => outcome.failed = Some("Codex interrupted the turn; partial changes may remain".into()),
                                 _ => return Err(failed("Codex returned an unknown completion status")),
@@ -211,6 +298,11 @@ async fn drive(
                     let _ = reply.send(answer);
                     continue;
                 }
+                if id >= 5 {
+                    // An interrupt's acknowledgment. What matters is the
+                    // `turn/completed` that follows it.
+                    continue;
+                }
                 if let Some(error) = event.get("error") {
                     return Err(failed(error["message"].as_str().unwrap_or("Codex refused to start the job")));
                 }
@@ -226,16 +318,33 @@ async fn drive(
                         // login check can disagree with a custom provider.
                         if result["requiresOpenaiAuth"] == true && result["account"].is_null() {
                             return Err(failed(format!(
-                                "Codex is not signed in on this backend. Run `{}` as the backend user, then retry the coding job. Guaca's chat sign-in and repository Git token do not sign in Codex.",
-                                super::sign_in(crate::domain::repository::Harness::Codex)
+                                "Codex is not signed in on this backend. Run `{}` as the backend user, then retry the coding job. Guaca's own ChatGPT sign-in does not sign in Codex.",
+                                super::sign_in(crate::domain::terminal::Harness::Codex)
                             )));
                         }
-                        write(&mut stdin, json!({"id":2,"method":"thread/start","params":{
-                            "cwd":repository, "approvalPolicy": if gate == Gate::AskBeforePushing { "untrusted" } else { "never" },
+                        let mut policy = json!({
+                            "cwd":directory,
+                            "approvalPolicy": if gate == Gate::AskBeforePushing { "untrusted" } else { "never" },
                             "approvalsReviewer":"user", "sandbox":"danger-full-access",
                             "developerInstructions":super::APPENDED_PROMPT,
-                            "serviceName":"guaca"
-                        }})).await?;
+                        });
+                        // The operator's choice for this agent, as the app-server's
+                        // own parameter. Absent is Codex's configured model.
+                        if let Some(model) = &job.tuning.model {
+                            policy["model"] = json!(model);
+                        }
+                        // A follow-up carries the thread on, with everything it
+                        // had already read; a new job starts one.
+                        let request = if job.resume && !job.session.is_empty() {
+                            let mut params = policy;
+                            params["threadId"] = json!(job.session);
+                            json!({"id":2,"method":"thread/resume","params":params})
+                        } else {
+                            let mut params = policy;
+                            params["serviceName"] = json!("guaca");
+                            json!({"id":2,"method":"thread/start","params":params})
+                        };
+                        write(&mut stdin, request).await?;
                         deadline = tokio::time::Instant::now() + RESPONSE_LIMIT;
                     }
                     2 => {
@@ -244,10 +353,13 @@ async fn drive(
                             return Err(failed("Codex did not enable Guaca's approval policy; the coding job was not started"));
                         }
                         outcome.session_id = thread.clone();
+                        let _ = signals.send(Signal::Session(thread.clone())).await;
                         outcome.model = result["model"].as_str().unwrap_or_default().into();
-                        write(&mut stdin, json!({"id":3,"method":"turn/start","params":{
-                            "threadId":thread, "input":input(task)
-                        }})).await?;
+                        let mut params = json!({"threadId":thread, "input":input(job.brief)});
+                        if let Some(effort) = &job.tuning.effort {
+                            params["effort"] = json!(effort);
+                        }
+                        write(&mut stdin, json!({"id":3,"method":"turn/start","params":params})).await?;
                         deadline = tokio::time::Instant::now() + RESPONSE_LIMIT;
                     }
                     3 => {
@@ -264,11 +376,11 @@ async fn drive(
 }
 
 /// The CLI handles its ordinary edits. Only outward shell actions spend the
-/// repository gate, through the same signal and decision as Claude's hooks.
+/// agent's gate, through the same signal and decision as Claude's hooks.
 async fn answer_request(
     event: Value,
     gate: Gate,
-    repository: String,
+    directory: String,
     thread: String,
     turn: String,
     signals: mpsc::Sender<Signal>,
@@ -285,7 +397,7 @@ async fn answer_request(
             let allowed = if gate == Gate::Open {
                 true
             } else if let Some(line) = params["command"].as_str() {
-                let cwd = params["cwd"].as_str().unwrap_or(&repository);
+                let cwd = params["cwd"].as_str().unwrap_or(&directory);
                 if let Some(reach) = super::bridge::outward(line, Path::new(cwd)).await {
                     let (reply, decision) = oneshot::channel();
                     signals
@@ -319,7 +431,7 @@ fn absorb(
     completed: bool,
     seen: &mut HashSet<String>,
     watching: &mut dyn FnMut(Progress),
-    repository: &str,
+    directory: &str,
 ) {
     let kind = item["type"].as_str().unwrap_or_default();
     if kind == "agentMessage" && completed {
@@ -342,6 +454,29 @@ fn absorb(
             "mcpToolCall" => (item["tool"].as_str().unwrap_or("MCP"), ""),
             _ => ("search", ""),
         };
-        watching(Progress::Using { tool: tool.into(), detail: super::shown(repository, detail) });
+        watching(Progress::Using { tool: tool.into(), detail: super::shown(directory, detail) });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_model_list_is_the_pickers_with_each_models_own_efforts() {
+        // Cut from 0.153.3's `model/list` answer.
+        let answer = json!({"id":2,"result":{"nextCursor":null,"data":[
+            {"id":"gpt-6-astra","displayName":"GPT-6-Astra","description":"Frontier","isDefault":true,"hidden":false,
+             "supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"ultra"}]},
+            {"id":"gpt-5.5","displayName":"GPT-5.5","isDefault":false,"hidden":false,
+             "supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"xhigh"}]},
+            {"id":"internal","displayName":"Internal","hidden":true}
+        ]}});
+        assert!(listed(&answer));
+        let offers = offers(&answer);
+        assert_eq!(offers.len(), 2, "hidden models are not offered");
+        assert!(offers[0].default);
+        assert_eq!(offers[0].efforts, ["low", "ultra"]);
+        assert_eq!(offers[1].efforts, ["low", "xhigh"], "a model's own list, not the union");
     }
 }

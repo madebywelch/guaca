@@ -56,7 +56,7 @@ code.
   turn this was written for had already made two calls and still closed on a
   promise about two more: what backs a sentence is a call made *before* it, not
   anywhere in the turn. The one exemption is a started `code` job, which
-  genuinely outlives the message announcing it, and which `## Your repository`
+  genuinely outlives the message announcing it, and which `## Your terminal`
   explicitly tells an agent to announce. Without that exemption the nudge fires
   on the one announcement the app asks for and every coding job buys a wasted
   model call.
@@ -95,7 +95,7 @@ code.
 - **`code` not blocking is what made a running turn need to read its inbox at
   all.** The job's answer comes back as a fresh envelope on a run of its own, an
   actor only examines the envelope it is holding, and the turn that asked was
-  therefore the one thing that could not receive it. `RepositoryBusy` then told
+  therefore the one thing that could not receive it. `JobRunning` then told
   that agent to wait for the message its own turn was holding up, which is an
   instruction nothing can follow: measured on a real crew, forty-five minutes
   and forty-five model calls of a turn filling time, with three finished jobs

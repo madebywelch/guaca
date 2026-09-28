@@ -63,10 +63,10 @@ restart; recovery notices explain interrupted work without replaying it.
 
 ## Resources belong to the backend
 
-A hosted workspace resolves repository paths and model addresses on the
-backend. It can clone a remote, use a mounted working directory, or call a
-model service reachable from its own network. The repository form names the
-choice explicitly. `localhost` means the backend; for a model on a Docker
+A hosted workspace resolves terminal paths and model addresses on the
+backend. An agent's terminal is a directory in the backend's data, and what it
+clones comes from whatever the backend's network reaches. `localhost` means the
+backend; for a model on a Docker
 host, use `host.docker.internal` (the compose file supplies the Linux mapping).
 A model running on a sleeping laptop will still stop answering, even when
 Guaca itself runs on a VPS.
@@ -95,7 +95,7 @@ gets reworded and retried by a model and reported as a bug by a person:
 `every_refusal_says_what_to_do_instead` in `deployment.rs` fails the build on
 one that does not.
 
-`Capabilities` is read by the command boundary and by the frontend. Repository
+`Capabilities` is read by the command boundary and by the frontend. Terminal
 paths and local model endpoints are available in both hosts, interpreted on
 the backend. File paths and credentials on the client do not transfer to the server.
 `coding_harnesses` checks installed programs and their own sign-in status.
@@ -178,8 +178,8 @@ shape, same sentences.
 Account sign-in and OAuth-enabled MCP plugins use authorization code with
 PKCE. The original embedded runtime bound a loopback port before naming the
 redirect. The server runtime uses `/v1/oauth/callback` on the origin through
-which the operator reaches the workspace. ChatGPT and GitHub device sign-ins
-do not redirect to this route.
+which the operator reaches the workspace. ChatGPT device sign-in does not
+redirect to this route.
 
 `Landing` is the seam. `Loopback` binds the port; `Served` files the flow
 under its `state` in a map the daemon holds, and names the route on the
@@ -228,60 +228,32 @@ The webview policy admits HTTPS/WSS and loopback HTTP/WS for Docker. Scripts
 remain restricted to the bundled application. Host setup and Docker errors
 appear before any workspace-dependent screen mounts.
 
-## A repository arrives on a box as a clone of a remote
+## An agent's terminal is on the box, and so is its git sign-in
 
-A desktop repository is a directory the operator picked: their own checkout,
-their branch, their uncommitted change, which `docs/CODING.md` says is the
-point of the local version. A box has no directory anybody could pick, so a
-repository is linked by its remote instead, and the workspace clones it into
-a directory of its own under `data/repos/`. Everything downstream is the
-code that already existed: the same worktrees, the same `shell` and `code`
-doors, the same push gate, against a clone whose work comes back as branches
-and pushes rather than as a tree the operator is sitting in.
+An agent given a terminal gets a directory under the workspace's own data, on
+the persistent volume, and everything it does with code happens there: it
+clones what it works on, a coding job runs in one of those clones, and the
+shell starts at the top. Nothing about it names the client's disk, which is
+why the same panel works on a desktop's container and on a box. `docs/CODING.md`
+has the model.
 
-The clone carries explicit Git configuration. A `credential.helper` points at a file beside the
-settings, so a fetch or a push from any process standing in the tree (a
-job's harness included) finds the token without the token ever entering
-`.git/config` or a URL; the file is git's own credential-store format, mode
-0600, named for the clone's directory, and it goes when the repository does.
-When another repository is linked, Git access offers credentials already saved
-on this backend, most recently saved first. `repo::credentials` returns only an
-opaque ID, the source remote and the Git username. The selected ID is resolved
-on the backend and its complete origin (scheme, host and port) is checked again
-before cloning or updating Git configuration. The operator can choose another
-saved entry, paste a different token, or use the backend's existing Git access.
-GitHub App access remains a separate choice. No token is read back into a form.
+git and `gh` are signed in once, as the backend's user, and every terminal uses
+that. The image configures git system-wide to ask `gh` for GitHub credentials,
+so either of these is enough:
 
-Reuse writes a separate entry scoped to the destination repository. Removing or
-replacing one repository's token does not change another repository's access.
-Removing every copy also removes it from future setup choices. Existing files
-are discovered directly, so an upgrade needs no credential migration. A token
-restricted by its provider to one repository may still fail on another; Guaca
-does not broaden the token's permissions or silently retry with other accounts.
+```sh
+docker compose exec guacad gh auth login
+docker compose exec guacad git config --global user.name "Your Name"
+docker compose exec guacad git config --global user.email you@example.com
+```
 
-This is credential reuse, not encrypted secret storage. Git's credential-store
-adapter remains plaintext protected by file permissions. A full secret store
-should replace that adapter with OS credential storage for desktop and an
-external secret service for headless hosts, return only opaque references, and
-serve Git through a repository-scoped helper. Provider API keys and sign-ins
-need their own migration into that same boundary. Encryption with its key beside
-the ciphertext would not improve this threat model. Do not describe the current
-adapter as a vault or claim that coding processes under the same backend user
-cannot read it.
+or a `GH_TOKEN` secret, granted to the agents that should push, which `gh` and
+git both read from that agent's environment. A token scoped to chosen
+repositories on GitHub is how one agent pushes where another cannot. SSH remotes
+use keys configured under the backend user. Nothing in Guaca stores a git
+credential of its own.
 
-The operator supplies their commit name and email when linking a remote, or
-under **Edit → Git access** afterward. Leaving both blank inherits the backend's Git
-configuration. `user.useConfigOnly=true` prevents Git from inventing a container
-identity when that configuration is absent. Existing directories keep their
-identity; older clones using `guaca <guaca@localhost>` can update it under Git
-access. Changes apply to future commits and do not rewrite history.
-
-A token goes with an https remote and is refused for an ssh one, which is
-reached with a key the box holds. Unlinking a clone removes it, clone and
-credential both: they were the workspace's, not the operator's, and the
-check is the clone living under `repos/` rather than the row's say-so.
-
-A repository offers Codex, Claude Code and pi on either host. Availability is
+An agent can be set to Codex, Claude Code or pi on either host. Availability is
 reported by the installed program, not inferred from an API key. The image
 ships all three plus `git` and `gh`.
 
@@ -416,11 +388,9 @@ using the optional Guaca-account sign-in. WebSocket proxying must remain
 enabled, and proxy logs must omit query strings because the event socket
 carries an access token there.
 
-The GitHub App broker uses the same optional Compose overlay as a local host.
-Create new broker state on the VPS and authorize the user there. Mount the
-App private key only into the broker. Provider CLI sign-ins also belong to the
-backend user on this server, independently of sign-ins on the Mac. See
-[GitHub App access](GITHUB.md) and **Coding inside the container** below.
+Provider CLI sign-ins and git and GitHub sign-ins belong to the backend user on
+this server, independently of sign-ins on the Mac. See **Coding inside the
+container** below.
 
 ## Browser isolation and desktop access
 
@@ -491,7 +461,7 @@ in the same SQLite transaction as the message. Settlement removes that entry;
 an operator stop also removes it without releasing the in-memory bookings.
 Startup converts remaining entries into durable interruption notices, once,
 before starting actors. Each notice links the original message to **Try again**.
-Completed messages, attachments, memories, working notes and repository files
+Completed messages, attachments, memories, working notes and agents' terminals
 remain on the volume. Pending approvals expire because their waiting turns no
 longer exist. No interrupted tool action or approval is automatically replayed.
 
@@ -530,8 +500,8 @@ Codex prints the verification link and device code. Claude's CLI can print a
 login URL and accept the code when its callback cannot reach the container.
 These operations belong to the official programs. Their home is
 `/var/lib/guaca`, on the persistent volume; never sign in as root and expect the
-daemon user to find that session. Use **Refresh coding status** in the repository panel to refresh the
-CLI status. Codex coding authentication is separate from Guaca's ChatGPT
+daemon user to find that session. The **Terminal** section of an agent's panel
+shows each CLI's status. Codex coding authentication is separate from Guaca's ChatGPT
 provider sign-in. The model settings for coding also belong to each CLI.
 
 Claude's noninteractive CLI prioritizes `ANTHROPIC_API_KEY` over subscription
@@ -546,52 +516,31 @@ See [Codex authentication](https://developers.openai.com/codex/auth),
 A managed service must use a permitted API/provider authentication arrangement;
 CLI availability alone is not authorization to route users' consumer plans.
 
-In a group's repository panel, **Git access** is independent of either CLI
-sign-in. Each row shows saved access and the effective commit author. **Edit**
-is the single entry point for repository settings, identity and credentials.
-An existing token is not requested again: **Change saved token** opens its
-replacement form, and closing Edit discards unsaved identity and token inputs. For HTTPS, save a repository-scoped access token and the username your
-Git service requires. GitHub's token creation link is included; select the
-repository and grant Contents read/write (workflow edits need their own
-permission). SSH uses keys configured under the backend user. The token is
-stored outside the checkout, mode 0600, replaced atomically, and scoped to the
-origin's host **and path**. Linked agent worktrees share the repository's helper.
-Existing tokens keep their configured path; saving again applies the tighter
-scope. **Remove saved token** removes Guaca's local copy; revoke it at the Git
-service too if it must become unusable elsewhere.
+git and GitHub access is the backend user's too, and independent of either CLI
+sign-in: `gh auth login` in the container, or a `GH_TOKEN` secret granted to the
+agents that push. See **An agent's terminal is on the box, and so is its git
+sign-in** above.
 
-**Check read and push access** runs `ls-remote` and a push dry run. It changes
-no remote refs and distinguishes read failure from push failure. Branch
-protection and server hooks can only decide an actual update. A separate push
-URL is shown explicitly; an origin token does not grant access to that other
-address. Git access does not sign in `gh` for pull-request API operations;
-configure `gh auth login` or `GH_TOKEN` separately if jobs need those.
-
-Alternatively, [connect a GitHub App](GITHUB.md). Its credential service
-authenticates both Git and `gh`, renews installation tokens automatically, and
-keeps the PEM out of the coding container. Self-hosters supply their own App;
-no Guaca account is required.
-
-Codex jobs support worktrees, streamed progress, completion, cancellation,
-acknowledged corrections and Guaca push approvals through the official
-app-server interface (Codex 0.153 or newer). Changing harness preserves the
-repository's path, engineer assignments and gate setting. Corrections guide the
+Codex jobs support streamed progress, completion, cancellation, acknowledged
+corrections and Guaca push approvals through the official app-server interface
+(Codex 0.153 or newer). Changing an agent's harness keeps its terminal and its
+gate setting. Corrections guide the
 next model decision; they do not reverse commands already executed. See
 [the coding contract](CODING.md#codex-runs-through-its-official-cli) for approval
 policy and command-rule behavior.
 
 A container does not inherit the host's installed dependencies, login sessions,
-or unmounted files. For a working tree on the host, add a volume such as
-`./project:/workspace/project` and choose **Directory on backend** with
-`/workspace/project`. The directory must be writable by UID 1000. Agent
-worktrees live in Guaca's persistent volume. Do not mount the Docker socket.
+or unmounted files. Agents clone what they work on into their terminals, which
+live in Guaca's persistent volume. A working tree mounted into the container is
+reachable from a terminal's shell by its path there, but it is not the agent's
+directory and `code` will not start in it. Do not mount the Docker socket.
 For projects requiring other toolchains (for example Rust, Go or Java), derive
 an image from `guacad` and install the versions the project needs. Keep those
 versions in the derived Dockerfile so the environment can be rebuilt.
 
 The compose service runs with an init process to reap child processes and uses
 a named volume for settings, credentials, SQLite, attachments, memories and
-repositories. A container on your laptop still sleeps with that laptop. Use
+agents' terminals. A container on your laptop still sleeps with that laptop. Use
 this same image on an always-on host to keep agents working while it is shut.
 
 ## Verifying the host boundary
@@ -623,7 +572,7 @@ Use **Import / export** in a group’s settings to export that group. Import is
 also available under **Settings → Workspace**. The desktop can list and export
 groups left by the previous native version without starting those agents or
 migrating the old database. Quit the old app before exporting so memory files
-and repository work stop changing while the snapshot is taken.
+and terminals stop changing while the snapshot is taken.
 
 The versioned `.guaca.json` format includes the group’s nonsecret model and
 limit settings, agents, instructions, memory, transcripts, attachments, working
@@ -632,11 +581,12 @@ reads use one transaction. Files are checked by their SHA-256 content address.
 The current limits are 64 MB per archive and 32 MB of attachment bytes.
 
 Imports create a new group and new IDs. Routines arrive paused. Running jobs,
-pending approvals, remote computers, browser sessions, repository directories,
-API keys and stored sign-in credentials are not copied. Repository/harness
-settings and service names remain in a reconnection checklist under the
-imported group’s Import / export pane. Relink repositories, assign engineers,
-connect plugins and configure providers before resuming work. Never resume the
+pending approvals, remote computers, browser sessions, terminals and what is in
+them, API keys and stored sign-in credentials are not copied. Each agent's
+harness and push gate come along; the terminal itself is given again on the new
+host. Service names remain in a reconnection checklist under the imported
+group’s Import / export pane. Give terminals, connect plugins and configure
+providers before resuming work. Never resume the
 same schedule in both copies unless duplicate execution is intended.
 
 Exports contain conversation content and memories, which may themselves hold
@@ -694,13 +644,6 @@ secret. That secret cannot call the workspace API, and the workspace token
 cannot post a routine event. Desktop installs retain the existing loopback
 receiver.
 
-
-The repository form checks whether the connected backend has a GitHub App.
-For a GitHub URL it selects that connection by default, before cloning. Token
-access remains an explicit alternative for other accounts or Git services.
-GitHub user authorization follows the clone under Git access; it supplies human
-commit and pull-request attribution. Optional names, instructions and manual
-commit metadata are under More options.
 
 ## Updating the local host
 

@@ -1592,6 +1592,113 @@ CREATE TABLE artifact_history (
 );
 "#,
     ),
+    (
+        58,
+        r#"
+-- An agent works in a terminal of its own rather than in a repository a crew
+-- linked. The repository row was a directory plus the two decisions about how
+-- work happens in it, and by now each agent already worked in a worktree of
+-- its own; the directory is the agent's outright, and the two decisions move
+-- onto the agent. `domain/terminal.rs` has the argument.
+--
+-- Rebuilt rather than altered, because `repository_id` carries a REFERENCES
+-- clause and SQLite refuses to drop a column that is part of a foreign key.
+-- `run` turns enforcement off around the sequence, which is what the rebuild
+-- wants: with it on, dropping the old table would cascade into every table
+-- that points at an agent.
+CREATE TABLE agents_new (
+    id                    TEXT    PRIMARY KEY,
+    name                  TEXT    NOT NULL,
+    avatar                TEXT    NOT NULL,
+    color                 TEXT    NOT NULL,
+    model                 TEXT    NOT NULL,
+    system_prompt         TEXT    NOT NULL,
+    skills                TEXT    NOT NULL DEFAULT '[]',
+    lifecycle             TEXT    NOT NULL,
+    version               INTEGER NOT NULL DEFAULT 1,
+    created_at            INTEGER NOT NULL,
+    updated_at            INTEGER NOT NULL,
+    group_id              TEXT    NOT NULL REFERENCES groups(id),
+    sandbox_id            TEXT,
+    sandbox_envd_token    TEXT,
+    sandbox_traffic_token TEXT,
+    pinned                INTEGER NOT NULL DEFAULT 0,
+    rail_order            INTEGER NOT NULL DEFAULT 0,
+    browser_id            TEXT,
+    has_computer          INTEGER NOT NULL DEFAULT 0,
+    has_browser           INTEGER NOT NULL DEFAULT 0,
+    discarded_at          INTEGER,
+    browser_consent       TEXT    NOT NULL DEFAULT 'open',
+    reasoning_effort      TEXT,
+    runs_errands          INTEGER NOT NULL DEFAULT 0,
+    -- A decision, like the two before it: taking a terminal away keeps the
+    -- directory and these two answers.
+    has_terminal          INTEGER NOT NULL DEFAULT 0,
+    harness               TEXT    NOT NULL DEFAULT 'pi',
+    gate                  TEXT    NOT NULL DEFAULT 'open'
+);
+
+-- An agent that was put in a repository was trusted with a shell there, and
+-- keeps that trust and the two answers it worked under. What was in the
+-- repository stays where it was on disk; the agent starts in an empty
+-- directory of its own and clones what it needs.
+INSERT INTO agents_new
+    (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,
+     group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,
+     has_computer,has_browser,discarded_at,browser_consent,reasoning_effort,runs_errands,
+     has_terminal,harness,gate)
+SELECT a.id,a.name,a.avatar,a.color,a.model,a.system_prompt,a.skills,a.lifecycle,a.version,
+       a.created_at,a.updated_at,a.group_id,a.sandbox_id,a.sandbox_envd_token,
+       a.sandbox_traffic_token,a.pinned,a.rail_order,a.browser_id,a.has_computer,a.has_browser,
+       a.discarded_at,a.browser_consent,a.reasoning_effort,a.runs_errands,
+       r.id IS NOT NULL, coalesce(r.harness, 'pi'), coalesce(r.gate, 'open')
+  FROM agents a
+  LEFT JOIN repositories r ON r.id = a.repository_id AND r.group_id = a.group_id;
+
+DROP TABLE agents;
+ALTER TABLE agents_new RENAME TO agents;
+
+CREATE INDEX agents_group ON agents (group_id);
+CREATE UNIQUE INDEX agents_live_name_unique
+    ON agents (group_id, lower(name))
+    WHERE lifecycle <> 'terminated';
+
+DROP TABLE repositories;
+"#,
+    ),
+    (
+        59,
+        r#"
+-- The coding session each agent last ran, which a follow-up carries on.
+--
+-- A harness keeps its own conversation on disk, so continuing one is a new
+-- process pointed at the old session rather than a new brief, with everything
+-- the job had already read and decided. Only the last per agent: an agent runs
+-- one job at a time. Stored rather than held in memory because a follow-up
+-- often comes the next day.
+CREATE TABLE coding_sessions (
+    agent_id   TEXT    PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    harness    TEXT    NOT NULL,
+    session_id TEXT    NOT NULL,
+    directory  TEXT    NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+-- What the operator chose inside each harness for one agent: the model, the
+-- effort, and for pi which account pays. A row per agent per harness, because
+-- the three programs share no model names and no effort words, and one field
+-- would be broken by every switch between them. No row is the program's own
+-- setting, which is what every job ran on before this table.
+CREATE TABLE coding_tuning (
+    agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    harness  TEXT NOT NULL,
+    model    TEXT,
+    effort   TEXT,
+    pays     TEXT NOT NULL DEFAULT 'own',
+    PRIMARY KEY (agent_id, harness)
+);
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -1749,6 +1856,7 @@ mod tests {
                 conn.pragma_update(None, "user_version", version).unwrap();
             }
             conn.execute("INSERT INTO repositories (id,group_id,name,path,note,created_at,updated_at) VALUES ('repo',?1,'Code','/repo','keep me',1,1)", [DEFAULT_GROUP_ID]).unwrap();
+            conn.execute("INSERT INTO agents (id,name,avatar,color,model,system_prompt,lifecycle,created_at,updated_at,group_id,repository_id) VALUES ('coder','Coder','orb','#7fb069','m','','active',1,1,?1,'repo')", [DEFAULT_GROUP_ID]).unwrap();
             if hosting {
                 conn.execute(
                     "UPDATE repositories SET remote='https://github.com/person/code.git'",
@@ -1769,16 +1877,13 @@ mod tests {
                 .next()
                 .unwrap()
                 .is_none());
-            assert_eq!(
-                conn.query_row("SELECT note FROM repositories WHERE id='repo'", [], |r| r
-                    .get::<_, String>(0))
-                    .unwrap(),
-                "keep me"
-            );
-            let remote: Option<String> = conn
-                .query_row("SELECT remote FROM repositories WHERE id='repo'", [], |r| r.get(0))
+            // Whichever lineage it came up, the agent that was in a repository
+            // arrives with a terminal, and the repository row is gone.
+            assert!(!has_table(&conn, "repositories").unwrap());
+            let given: bool = conn
+                .query_row("SELECT has_terminal FROM agents WHERE id='coder'", [], |r| r.get(0))
                 .unwrap();
-            assert_eq!(remote.as_deref(), hosting.then_some("https://github.com/person/code.git"));
+            assert!(given, "version {version}, hosting {hosting}");
             assert!(has_table(&conn, "occasions").unwrap());
             assert!(has_table(&conn, "pending_runs").unwrap());
             conn.prepare("SELECT browser_consent FROM agents").unwrap();
@@ -2808,65 +2913,97 @@ mod tests {
     }
 
     #[test]
-    fn a_repository_linked_before_there_were_two_harnesses_keeps_running_pi() {
+    fn an_agent_that_worked_in_a_repository_keeps_a_terminal_and_how_it_coded() {
         // The upgrade path, which no test starting from a blank database can
-        // reach. Every repository ever linked was started with `pi`, and a
-        // backfill that said anything else would silently move somebody's
-        // directory onto a program they have never signed in to, on launch,
-        // with no gesture.
+        // reach. An agent put in a repository was trusted with a shell there,
+        // and the operator had answered two questions about how its work
+        // happens. The repository goes; neither of those decisions should go
+        // with it, and nobody who was never given one should gain one.
         let mut conn = memory();
         let tx = conn.transaction().unwrap();
-        for (version, sql) in MIGRATIONS.iter().take_while(|(v, _)| *v < 40) {
+        for (version, sql) in MIGRATIONS.iter().take_while(|(v, _)| *v < 58) {
             tx.execute_batch(sql).unwrap();
             tx.pragma_update(None, "user_version", *version).unwrap();
         }
         tx.commit().unwrap();
 
         conn.execute(
-            "INSERT INTO repositories (id,group_id,name,path,note,created_at,updated_at)
-             VALUES ('r1',?1,'guaca','/dev/guaca','',1,1)",
+            "INSERT INTO repositories (id,group_id,name,path,harness,gate,bench,created_at,updated_at)
+             VALUES ('r1',?1,'guaca','/dev/guaca','codex','askBeforePushing','own',1,1)",
             rusqlite::params![DEFAULT_GROUP_ID],
         )
         .unwrap();
-
-        run(&mut conn).unwrap();
-
-        let harness: String = conn
-            .query_row("SELECT harness FROM repositories WHERE id='r1'", [], |r| r.get(0))
+        for (id, repository, errands) in [("coder", Some("r1"), true), ("writer", None, false)] {
+            conn.execute(
+                "INSERT INTO agents (id,name,avatar,color,model,system_prompt,lifecycle,created_at,
+                                     updated_at,group_id,repository_id,browser_consent,runs_errands)
+                 VALUES (?1,?1,'orb','#7fb069','m','','active',1,1,?2,?3,'askBeforeActing',?4)",
+                rusqlite::params![id, DEFAULT_GROUP_ID, repository, errands],
+            )
             .unwrap();
-        assert_eq!(harness, "pi", "an upgrade must not change what a directory starts");
-    }
-
-    #[test]
-    fn a_repository_linked_before_there_were_work_trees_keeps_working_where_it_did() {
-        // The one place `Bench`'s SQL default and its Rust default disagree, and
-        // the reason they have to. A new repository gets a worktree per agent,
-        // because that is the better arrangement and the operator is choosing it
-        // now. A repository already linked gets what it already had: moving
-        // somebody's jobs into a directory that has none of their installed
-        // dependencies in it, on launch, with no gesture, is not an upgrade's
-        // decision to take.
-        let mut conn = memory();
-        let tx = conn.transaction().unwrap();
-        for (version, sql) in MIGRATIONS.iter().take_while(|(v, _)| *v < 44) {
-            tx.execute_batch(sql).unwrap();
-            tx.pragma_update(None, "user_version", *version).unwrap();
         }
-        tx.commit().unwrap();
-
+        // Two things that point at an agent, which a rebuild done with
+        // enforcement on would have cascaded away or orphaned.
         conn.execute(
-            "INSERT INTO repositories (id,group_id,name,path,note,harness,gate,created_at,updated_at)
-             VALUES ('r1',?1,'guaca','/dev/guaca','','pi','open',1,1)",
-            rusqlite::params![DEFAULT_GROUP_ID],
+            "INSERT INTO working_notes (agent_id,at,body) VALUES ('coder',1,'halfway')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO artifacts (id,group_id,owner_id,title,version,created_at,updated_at)
+             VALUES ('page',?1,'coder','Plan',1,1,1)",
+            [DEFAULT_GROUP_ID],
         )
         .unwrap();
 
         run(&mut conn).unwrap();
 
-        let bench: String = conn
-            .query_row("SELECT bench FROM repositories WHERE id='r1'", [], |r| r.get(0))
+        let read = |id: &str| -> (bool, String, String, String) {
+            conn.query_row(
+                "SELECT has_terminal, harness, gate, browser_consent FROM agents WHERE id=?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            read("coder"),
+            (true, "codex".into(), "askBeforePushing".into(), "askBeforeActing".into())
+        );
+        assert_eq!(read("writer"), (false, "pi".into(), "open".into(), "askBeforeActing".into()));
+        assert!(!has_table(&conn, "repositories").unwrap());
+        let notes: i64 =
+            conn.query_row("SELECT count(*) FROM working_notes", [], |r| r.get(0)).unwrap();
+        assert_eq!(notes, 1, "the rebuild must not take what points at an agent with it");
+        let owner: Option<String> = conn
+            .query_row("SELECT owner_id FROM artifacts WHERE id='page'", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(bench, "shared", "an upgrade must not move where a directory's jobs run");
+        assert_eq!(owner.as_deref(), Some("coder"));
+        let errands = |id: &str| -> bool {
+            conn.query_row("SELECT runs_errands FROM agents WHERE id=?1", [id], |r| r.get(0))
+                .unwrap()
+        };
+        assert!(
+            errands("coder") && !errands("writer"),
+            "an errand opt-in is the operator's answer"
+        );
+        assert!(conn
+            .prepare("PRAGMA foreign_key_check")
+            .unwrap()
+            .query([])
+            .unwrap()
+            .next()
+            .unwrap()
+            .is_none());
+        // And the name rule survives the rebuild: two live agents in one crew
+        // still cannot share a name.
+        let clash = conn.execute(
+            "INSERT INTO agents (id,name,avatar,color,model,system_prompt,lifecycle,created_at,
+                                 updated_at,group_id)
+             VALUES ('twin','CODER','orb','#7fb069','m','','active',1,1,?1)",
+            [DEFAULT_GROUP_ID],
+        );
+        assert!(clash.is_err(), "the unique index on live names was not recreated");
     }
 
     #[test]

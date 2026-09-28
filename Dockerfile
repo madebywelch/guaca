@@ -52,7 +52,6 @@ RUN mkdir -p src/bin \
  && rm -rf src build.rs target/release/deps/guac* target/release/deps/libguac*
 COPY src-tauri/ ./
 COPY release-protocol.json release-keys.pub /app/
-COPY deploy/github/github_app.py /app/deploy/github/github_app.py
 ARG GUACA_COMMIT
 ARG GUACA_RELEASE
 ENV GUACA_COMMIT=$GUACA_COMMIT GUACA_RELEASE=$GUACA_RELEASE
@@ -74,9 +73,9 @@ LABEL org.opencontainers.image.version=$GUACA_VERSION \
       org.opencontainers.image.revision=$GUACA_COMMIT \
       bot.guaca.release=$GUACA_RELEASE
 # `curl` is the health check. TLS roots are for the model endpoints, the
-# sandboxes and the plugins the daemon calls out to. `git` and `gh` are what a
-# remote-linked repository is cloned, fetched and pushed with, and `claude` is
-# a coding harness. Authentication is configured under the backend user.
+# sandboxes and the plugins the daemon calls out to. `git` and `gh` are what an
+# agent's terminal clones, fetches and pushes with. Authentication is the
+# backend user's, configured once on the volume, or a secret granted to agents.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl git openssh-client python3 build-essential ripgrep \
  && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
@@ -89,7 +88,9 @@ RUN apt-get update \
  && groupmod --new-name guaca node \
  && usermod --login guaca --home /var/lib/guaca node \
  && mkdir -p /var/lib/guaca \
- && chown guaca:guaca /var/lib/guaca
+ && chown guaca:guaca /var/lib/guaca \
+ && git config --system credential.https://github.com.helper '' \
+ && git config --system --add credential.https://github.com.helper '!gh auth git-credential'
 # Pin harness releases. Jobs use their own credentials, configured explicitly
 # in the container, and never inherit a desktop's subscription files.
 ARG CODEX_VERSION=0.153.3
@@ -101,11 +102,6 @@ RUN npm install --global --ignore-scripts pnpm@10.33.0 "@openai/codex@${CODEX_VE
  && bash /tmp/install-claude.sh "${CLAUDE_CODE_VERSION}" \
  && install -m 755 /root/.local/bin/claude /usr/local/bin/claude \
  && rm -rf /root/.local /tmp/install-claude.sh
-# Codex and Claude may launch login shells, which reset the PATH injected by
-# the runtime. Keep the repository-aware gh launcher on their normal PATH.
-# It delegates to the packaged CLI outside an App-linked repository.
-COPY deploy/github/github_app.py /usr/local/lib/guaca/github-helper.py
-COPY --chmod=755 deploy/github/gh /usr/local/bin/gh
 ENV DISABLE_AUTOUPDATER=1
 COPY --from=daemon /app/src-tauri/target/release/guacad /usr/local/bin/guacad
 COPY --from=daemon /app/src-tauri/target/release/guaca-updater /usr/local/bin/guaca-updater

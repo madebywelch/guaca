@@ -27,20 +27,18 @@ use crate::domain::escalation::Escalation;
 use crate::domain::group::{Group, GroupDraft, GroupInference};
 use crate::domain::ids::{
     AgentId, ApprovalId, ArtifactId, ConnectorId, EscalationId, GroupId, MessageId, OccasionId,
-    PluginId, RepositoryId, RoutineId, RunId,
+    PluginId, RoutineId, RunId,
 };
 use crate::domain::now_ms;
 use crate::domain::occasion::{self, Occasion};
 use crate::domain::plugin::{
     self, HeaderPair, Headers, Plugin, PluginAccess, PluginKind, PluginOffer, ServerReport,
 };
-use crate::domain::repository::{
-    Bench, Gate, Harness, Repository, RepositoryDraft, RepositoryEdit,
-};
 use crate::domain::routine::{self, Routine, RoutineRun, Trigger};
 use crate::domain::search::SearchHits;
 use crate::domain::signin::Signin;
 use crate::domain::skill::{Scope as SkillScope, Skill};
+use crate::domain::terminal::{Gate, Harness, Payer, Tuning};
 use crate::domain::usage::{GroupUsage, RunUsage};
 use crate::domain::worknote::WorkingNote;
 use crate::e2b::{Computer, E2bClient, E2bError};
@@ -145,10 +143,6 @@ pub type MenubarFeed = Arc<dyn Fn(Option<crate::menubar::Presence>) + Send + Syn
 pub struct AppState {
     pub runtime: Runtime,
     pub menubar: MenubarFeed,
-    /// Where this workspace's own clones live: the repositories it was given
-    /// by remote rather than by directory. Under the data directory on both
-    /// hosts; the desktop simply never offers the form.
-    pub repos: PathBuf,
     /// The workspace token, on a host that has one. What a screen ticket is
     /// derived from: a computer's live screen is reached through the daemon
     /// at an address noVNC has to be able to resolve its own files against,
@@ -255,8 +249,7 @@ impl From<crate::db::StoreError> for CommandError {
             StoreError::AgentNotFound(_)
             | StoreError::GroupNotFound(_)
             | StoreError::ApprovalNotFound(_)
-            | StoreError::ConnectorNotFound(_)
-            | StoreError::RepositoryNotFound(_) => CommandError::new("notFound", err.to_string()),
+            | StoreError::ConnectorNotFound(_) => CommandError::new("notFound", err.to_string()),
             // Its own kind: a request answered twice, or answered after it
             // lapsed, is a stale button rather than anything being wrong. The
             // UI redraws it instead of showing a failure.
@@ -265,11 +258,7 @@ impl From<crate::db::StoreError> for CommandError {
             }
             // An operator naming a variable twice is a mistake they can fix,
             // not a disk failure, and the message already says which name.
-            StoreError::DuplicateEnvVar(_)
-            | StoreError::DuplicateRepository(_)
-            | StoreError::AgentNotInGroupForRepository(_) => {
-                CommandError::new("validation", err.to_string())
-            }
+            StoreError::DuplicateEnvVar(_) => CommandError::new("validation", err.to_string()),
             // Its own kind: the UI can offer to move the agents, which it
             // cannot do for a generic storage failure.
             StoreError::GroupNotEmpty { .. } | StoreError::CannotDeleteLastGroup => {
@@ -288,17 +277,29 @@ impl From<crate::runtime::RuntimeError> for CommandError {
             RuntimeError::UnknownAgent(_) => CommandError::new("notFound", err.to_string()),
             RuntimeError::AgentTerminated(_) => CommandError::new("terminated", err.to_string()),
             RuntimeError::NothingToRetry => CommandError::new("notFound", err.to_string()),
-            // A precondition the operator can fix from the rail, so it says so
-            // rather than reading as something that broke.
-            RuntimeError::NoRepository(_)
-            | RuntimeError::RepositoryBusy { .. }
-            | RuntimeError::NoWorkTree { .. } => CommandError::new("badRequest", err.to_string()),
-            // A `shell` failure is answered to the model inside its turn and
-            // never to the webview: no command here runs one. The arm exists
-            // because the enum is one enum, and it says what it would say if a
-            // command ever did: a directory that has moved is something the
-            // operator fixes from the repository's panel.
-            RuntimeError::Shell(_) => CommandError::new("badRequest", err.to_string()),
+            // A precondition the operator can fix from the agent's panel, so it
+            // says so rather than reading as something that broke.
+            RuntimeError::NoTerminal(_)
+            | RuntimeError::JobRunning { .. }
+            | RuntimeError::NothingToSay
+            | RuntimeError::NoCodingSession
+            | RuntimeError::SessionElsewhere { .. }
+            | RuntimeError::SessionGone(_)
+            | RuntimeError::Tuning(_) => CommandError::new("badRequest", err.to_string()),
+            // The agent's wording asks it to pass this on; the operator is the
+            // one it would be passed to, so they are told directly.
+            RuntimeError::NoKeyToLend => CommandError::new(
+                "badRequest",
+                "pi is set to be paid for with Guaca's API key, and there is no key in Settings > \
+                 Provider. Paste one there, or set pi back to its own sign-in in this terminal \
+                 panel",
+            ),
+            // A `shell` or file-tool failure is answered to the model inside
+            // its turn and never to the webview: no command here runs one. The
+            // arms exist because the enum is one enum.
+            RuntimeError::Shell(_) | RuntimeError::Terminal(_) => {
+                CommandError::new("badRequest", err.to_string())
+            }
             // A job that ended between the panel drawing a button and the
             // operator pressing it, and two facts about a job that is running.
             // None of them is a failure: each says what the operator can do
@@ -344,22 +345,6 @@ impl From<crate::domain::group::GroupError> for CommandError {
 
 impl From<crate::domain::connector::ConnectorError> for CommandError {
     fn from(err: crate::domain::connector::ConnectorError) -> Self {
-        CommandError::new("validation", err.to_string())
-    }
-}
-
-impl From<crate::domain::repository::RepositoryError> for CommandError {
-    fn from(err: crate::domain::repository::RepositoryError) -> Self {
-        CommandError::new("validation", err.to_string())
-    }
-}
-
-impl From<crate::repo::RepoError> for CommandError {
-    fn from(err: crate::repo::RepoError) -> Self {
-        // Every one of these is something the operator can fix in the dialog
-        // they are already looking at: pick a different directory, run
-        // `git init`, install git. Reported as validation so it lands beside
-        // the field rather than in a banner about storage.
         CommandError::new("validation", err.to_string())
     }
 }
@@ -758,213 +743,170 @@ pub async fn delete_connector(state: &AppState, id: ConnectorId) -> Reply<()> {
     Ok(())
 }
 
-// ---- repositories --------------------------------------------------------
+// ---- terminals -----------------------------------------------------------
 
-/// The directories one crew has linked, and who in it may work in each.
+/// Gives an agent a terminal: a directory of its own on the machine Guaca runs
+/// on, the shell that starts there, and a coding harness.
 ///
-/// No filesystem is touched here. A repository that has been moved or deleted
-/// on disk since it was linked still comes back, because the panel is where the
-/// operator fixes that and a list that silently dropped a row would leave them
-/// nothing to fix.
-pub async fn group_repositories(state: &AppState, group_id: GroupId) -> Reply<Vec<Repository>> {
-    Ok(state.runtime.store().group_repositories(group_id)?)
-}
-
-/// What every linked repository is doing right now, by id.
-///
-/// One call for the rail rather than one per row, and every repository is asked
-/// concurrently: the git half is local and instant, the `gh` half is a network
-/// round trip, and asked in series a crew with four codebases would spend more
-/// than a second before the first branch name appeared.
-///
-/// A repository that cannot be read is absent from the map rather than present
-/// and empty. The directory may have been moved or unmounted since it was
-/// linked, and a row saying `main, clean` about a path that is no longer there
-/// is worse than a row saying nothing.
-pub async fn repository_statuses(
-    state: &AppState,
-) -> Reply<std::collections::HashMap<RepositoryId, crate::repo::RepoStatus>> {
-    let repositories = state.runtime.store().repositories()?;
-    let asked = repositories.into_iter().map(|repository| async move {
-        crate::repo::status(&repository.path).await.map(|status| (repository.id, status))
-    });
-    Ok(futures_util::future::join_all(asked).await.into_iter().flatten().collect())
-}
-
-/// Every repository in the workspace, with who may work in each.
-///
-/// One read for the whole rail. The crews column and the rail inside a crew are
-/// drawn from one roster, and a call per crew would make the round trips the
-/// number of crews.
-pub async fn list_repositories(state: &AppState) -> Reply<Vec<Repository>> {
-    Ok(state.runtime.store().repositories()?)
-}
-
-/// Links a directory to a crew, after checking that it is one.
-///
-/// The check is the point of the command being async: it runs git, and it is
-/// the only moment anything asks the disk whether this path is real. Everything
-/// after it works from the canonical path git agreed to, so two spellings of
-/// one directory cannot become two repositories.
-///
-/// Nobody is given it here. Adding and handing out are two decisions, and the
-/// second one is `set_repository_access`.
-pub async fn create_repository(state: &AppState, draft: RepositoryDraft) -> Reply<Repository> {
-    create_repository_with_auth(state, draft, false).await
-}
-
-pub async fn create_github_repository(
-    state: &AppState,
-    draft: RepositoryDraft,
-) -> Reply<Repository> {
-    create_repository_with_auth(state, draft, true).await
-}
-
-async fn create_repository_with_auth(
-    state: &AppState,
-    draft: RepositoryDraft,
-    github: bool,
-) -> Reply<Repository> {
-    let mut clean = draft.clean()?;
-    if draft.credential_id.is_some()
-        && (github
-            || clean.remote.is_none()
-            || draft.credential.as_deref().is_some_and(|token| !token.trim().is_empty()))
-    {
-        return Err(crate::repo::RepoError::Connection(
-            "Choose one access method: a saved credential, a new token, or GitHub App access"
-                .into(),
-        )
-        .into());
-    }
-    if let Some(author) = &draft.author {
-        crate::repo::auth::validate_identity(author)?;
-    }
-    if github
-        && (clean.remote.is_none()
-            || draft.credential.as_deref().is_some_and(|s| !s.trim().is_empty()))
-    {
-        return Err(crate::repo::RepoError::Connection(
-            "Choose a remote URL and GitHub App access without a pasted token".into(),
-        )
-        .into());
-    }
-
-    if let Some(remote) = clean.remote.clone() {
-        // A clone of the workspace's own, into a directory named by nothing
-        // but a fresh id: the name on the row is the operator's, and a
-        // directory named after it would pin a rename to a move.
-        let stamp = crate::domain::ids::RepositoryId::new().to_string();
-        let into = state.repos.join(&stamp);
-        let credential =
-            draft.credential.as_deref().map(str::trim).filter(|token| !token.is_empty());
-        let credential_file = credentials_dir(state).join(&stamp);
-        let github_file = crate::repo::github::file(&credential_file);
-        let helper = if github {
-            crate::repo::github::prepare(&github_file, &remote).await?;
-            Some(crate::repo::github::helper(&github_file))
-        } else if let Some(id) = &draft.credential_id {
-            crate::repo::credentials::keep(&credentials_dir(state), id, &credential_file, &remote)
-                .await?;
-            Some(crate::repo::auth::helper(&credential_file))
-        } else if let Some(token) = credential {
-            crate::repo::auth::keep(
-                &credential_file,
-                &remote,
-                draft.username.as_deref().unwrap_or("git"),
-                token,
-            )
-            .await?;
-            Some(crate::repo::auth::helper(&credential_file))
-        } else {
-            None
-        };
-        let cloned = async {
-            let path = crate::repo::clone_with_helper(&remote, &into, helper.as_deref()).await?;
-            if let Some(author) = &draft.author {
-                crate::repo::auth::set_identity(&path, author).await?;
-            }
-            if github {
-                crate::repo::github::attach(&path, &github_file).await?;
-            }
-            Ok::<_, crate::repo::RepoError>(path)
-        }
-        .await;
-        clean.path = match cloned {
-            Ok(path) => path,
-            Err(error) => {
-                let _ = tokio::fs::remove_file(&credential_file).await;
-                let _ = tokio::fs::remove_file(&github_file).await;
-                let _ = tokio::fs::remove_dir_all(&into).await;
-                return Err(error.into());
-            }
-        };
-    } else {
-        // A path belongs to the backend. In a container this is a mounted
-        // directory, never a path interpreted on the client.
-        state.deployment.capabilities().require(Absent::LocalDirectories)?;
-
-        clean.path = crate::repo::verify(&clean.path).await?;
-        // Taken from the canonical path rather than the typed one, for the case
-        // where they differ: a directory reached through a symlink would
-        // otherwise be named for the link and drawn beside a path that says
-        // something else.
-        if draft.name.trim().is_empty() {
-            clean.name = clean.path.rsplit('/').next().unwrap_or(&clean.path).to_string();
-        }
-    }
-
-    let repository = state.runtime.store().create_repository(&clean)?;
-    // The roster every agent is shown says what its peers can reach, and a
-    // repository is now part of that.
+/// The decision and nothing else, like a computer. The directory is made the
+/// first time a tool needs it, and an agent that never runs a command never
+/// costs a byte.
+pub async fn give_agent_terminal(state: &AppState, id: AgentId) -> Reply<()> {
+    state.runtime.store().set_has_terminal(id, true)?;
     state.runtime.emit(UiEvent::AgentsChanged);
-    Ok(repository)
+    Ok(())
 }
 
-/// Renames one, rewrites the line its agents read on every turn, changes which
-/// program does the writing, or moves where that program works.
+/// Takes it back, and stops a job it has running.
 ///
-/// The path is not editable and is not a parameter. A different directory is a
-/// different repository: editing the path in place would move every named
-/// agent's boundary with nothing on screen saying so. The harness is the
-/// opposite case and is editable for the same reason the note is: it says how
-/// work happens in a directory the operator already chose, and the day it needs
-/// changing is the day one of the two sign-ins stops paying.
+/// The directory stays. Being allowed a terminal is a decision, and the clones
+/// and files in it are the agent's work, which a change of mind about access
+/// has no business deleting. Giving it back finds them where they were; the
+/// directory goes when the agent is purged.
+pub async fn take_agent_terminal(state: &AppState, id: AgentId) -> Reply<()> {
+    state.runtime.store().set_has_terminal(id, false)?;
+    let _ = state.runtime.stop_job(id, crate::runtime::Origin::Operator);
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(())
+}
+
+/// Which program writes this agent's code, and whether its pushes ask first.
 ///
-/// [`RepositoryEdit`] rather than a [`RepositoryDraft`] with a stand-in path,
-/// and that is a bug fix rather than tidying: the stand-in was `/`, which
-/// cleans down to the empty string, so every call here was refused with *a
-/// repository needs a directory; pick one to link*. Its doc comment is the
-/// long version.
-///
-/// A job already running is not affected. It is a process that was started with
-/// the old answer, and reaching into it would be a second way to stop a job that
-/// `Runtime::start_job` does not have. That covers the bench too: switching a
-/// repository to the linked directory while a job is writing in a worktree
-/// leaves that job exactly where it is, and the next one starts in the new
-/// place. Worktrees an agent is no longer using are left on disk rather than
-/// removed here, because a switch back has to find its caches where it left
-/// them, and `repo::release_bench` is what actually takes one away.
-pub async fn update_repository(
+/// One call for both, because they are one panel's two answers about how this
+/// agent's work happens, and a job reads both when it starts. A job already
+/// running keeps what it started with.
+pub async fn set_agent_coding(
     state: &AppState,
-    id: RepositoryId,
-    name: String,
-    note: String,
+    id: AgentId,
     harness: Harness,
     gate: Gate,
-    bench: Bench,
-) -> Reply<Repository> {
-    let clean = RepositoryEdit { name, note, harness, gate, bench }.clean()?;
-    let repository = state.runtime.store().update_repository(
-        id,
-        &clean.name,
-        &clean.note,
-        clean.harness,
-        clean.gate,
-        clean.bench,
-    )?;
+) -> Reply<()> {
+    state.runtime.store().set_agent_coding(id, harness, gate)?;
     state.runtime.emit(UiEvent::AgentsChanged);
-    Ok(repository)
+    Ok(())
+}
+
+/// An agent's terminal, as its panel shows it.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalView {
+    /// Where the directory is, on the machine Guaca runs on. What an operator
+    /// types after `cd` in their own shell to look at the agent's work.
+    pub path: String,
+    /// The coding session it last ran, which a follow-up carries on.
+    pub session: Option<crate::domain::terminal::Session>,
+    /// The command that opens that session in a shell on the host, from the
+    /// terminal's own directory. Built here rather than in the webview, so the
+    /// flag each program takes is spelled once.
+    pub resume: Option<String>,
+    /// What was chosen inside each harness for this agent, all three, so a
+    /// switch draws the one it switched to without asking again.
+    pub tunings: Vec<HarnessTuning>,
+    /// What Guaca's own key would pay through, if pi were set to it.
+    pub guaca_key: GuacaKey,
+}
+
+/// One harness's tuning, named.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HarnessTuning {
+    pub harness: Harness,
+    #[serde(flatten)]
+    pub tuning: Tuning,
+}
+
+/// Whether Guaca has a key to lend, and to where. Never the key.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuacaKey {
+    pub set: bool,
+    /// The endpoint in Settings > Provider, which the panel names so an
+    /// operator knows whose bill a job lands on.
+    pub endpoint: String,
+    /// Whether it is OpenRouter, whose models pi can list.
+    pub openrouter: bool,
+    /// The model a job runs when none was chosen: the key's own.
+    pub default_model: String,
+}
+
+/// Where an agent's terminal is, and the session it last ran. Made if it is
+/// not there, so the path shown is one that exists.
+pub async fn agent_terminal(state: &AppState, id: AgentId) -> Reply<TerminalView> {
+    let path = state.runtime.terminals().ensure(id).map_err(crate::runtime::RuntimeError::from)?;
+    let session = state.runtime.store().coding_session(id)?;
+    let resume = session.as_ref().map(|session| session.resume_line(&path));
+    let mut tunings = Vec::new();
+    for harness in Harness::ALL {
+        tunings.push(HarnessTuning {
+            harness,
+            tuning: state.runtime.store().coding_tuning(id, harness)?,
+        });
+    }
+    Ok(TerminalView {
+        path: path.to_string_lossy().into_owned(),
+        session,
+        resume,
+        tunings,
+        guaca_key: guaca_key(state),
+    })
+}
+
+fn guaca_key(state: &AppState) -> GuacaKey {
+    let inference = state.runtime.config().inference;
+    let upstream = crate::coding::relay::Upstream {
+        base_url: inference.base_url.clone(),
+        api_key: String::new(),
+        referer: String::new(),
+        title: String::new(),
+    };
+    GuacaKey {
+        set: !inference.api_key.trim().is_empty() && !inference.base_url.trim().is_empty(),
+        endpoint: inference.base_url,
+        openrouter: upstream.is_openrouter(),
+        default_model: inference.default_model,
+    }
+}
+
+/// Records what the operator chose inside one harness for one agent.
+///
+/// Checked against the program it is for before it is kept, so a job never
+/// starts on a word its program would refuse.
+pub async fn set_coding_tuning(
+    state: &AppState,
+    id: AgentId,
+    harness: Harness,
+    tuning: Tuning,
+) -> Reply<()> {
+    let clean = tuning.clean(harness).map_err(crate::runtime::RuntimeError::from)?;
+    state.runtime.store().set_coding_tuning(id, harness, &clean)?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(())
+}
+
+/// The models a harness offers, asked of the program on the backend.
+///
+/// `pays` is which account would pay: pi on Guaca's key lists what that
+/// key can reach, not what pi's own sign-ins can.
+pub async fn coding_models(
+    state: &AppState,
+    harness: Harness,
+    pays: Payer,
+) -> Reply<Vec<crate::coding::ModelOffer>> {
+    let lent = match pays {
+        Payer::Own => None,
+        Payer::GuacaKey => {
+            let key = guaca_key(state);
+            Some(crate::coding::relay::Upstream {
+                base_url: key.endpoint,
+                api_key: String::new(),
+                referer: String::new(),
+                title: String::new(),
+            })
+        }
+    };
+    crate::coding::models(harness, lent.as_ref())
+        .await
+        .map_err(|err| CommandError::new("unavailable", err.to_string()))
 }
 
 /// One coding harness, as the panel that offers the choice needs it.
@@ -981,7 +923,7 @@ pub struct HarnessOnMachine {
     pub version: String,
     /// Whether a job on it can be reached while it runs.
     ///
-    /// False for `pi` and CLI versions older than the steering contract was
+    /// False for a version older than the one its steering contract was
     /// measured against. `coding::presence` defines each version floor.
     pub bridged: bool,
     /// How to get it if it is not. Sent from here rather than spelled in the
@@ -999,12 +941,9 @@ pub struct HarnessOnMachine {
     pub withheld: Option<String>,
     pub signed_in: Option<bool>,
     pub sign_in: &'static str,
-}
-
-/// Whether this workspace has a configured GitHub App credential service.
-/// No credentials or broker addresses cross the command boundary.
-pub async fn github_app_available(_state: &AppState) -> Reply<bool> {
-    Ok(crate::repo::github::configured())
+    /// Every effort word the program takes. A model may take fewer, and the
+    /// panel offers the model's own list when the program gives one.
+    pub efforts: &'static [&'static str],
 }
 
 /// Which coding harnesses are on this machine, and how to get the ones that are
@@ -1014,7 +953,7 @@ pub async fn github_app_available(_state: &AppState) -> Reply<bool> {
 /// not have is answered at the moment they pick. Everything else about a job is
 /// discovered when it runs; this one cannot be, because a job runs minutes after
 /// the tool call that started it and its refusal reaches an agent rather than
-/// the person who set the repository up.
+/// the person who chose the harness.
 ///
 /// Every harness comes back, installed or not, and they are asked concurrently:
 /// each is a process spawn, and asked in series a panel waits once per harness.
@@ -1035,6 +974,7 @@ pub async fn coding_harnesses(state: &AppState) -> Reply<Vec<HarnessOnMachine>> 
             withheld: None,
             signed_in,
             sign_in: crate::coding::sign_in(harness),
+            efforts: harness.efforts(),
         }
     });
     Ok(futures_util::future::join_all(asked).await.into_iter().collect())
@@ -1047,10 +987,14 @@ pub async fn coding_harnesses(state: &AppState) -> Reply<Vec<HarnessOnMachine>> 
 /// and this call waits for its acknowledgment before reporting success.
 ///
 /// Refused rather than swallowed when nothing takes it. A job that has just
-/// ended, and a repository whose harness has no bridge, are two different
+/// ended, and a harness with no way in while it works, are two different
 /// sentences and both are things the operator can act on: the second is why
-/// the panel says which harness a repository runs.
-pub async fn message_coding_job(state: &AppState, agent_id: AgentId, message: String) -> Reply<()> {
+/// the panel says which harness an agent runs.
+pub async fn message_coding_job(
+    state: &AppState,
+    agent_id: AgentId,
+    message: String,
+) -> Reply<crate::runtime::Continued> {
     state.runtime.message_job(agent_id, &message).await.map_err(Into::into)
 }
 
@@ -1062,263 +1006,7 @@ pub async fn message_coding_job(state: &AppState, agent_id: AgentId, message: St
 /// The agent that started the job is told, on the same path it is told about
 /// one that finished: an agent never told is an agent waiting forever.
 pub async fn stop_coding_job(state: &AppState, agent_id: AgentId) -> Reply<()> {
-    state.runtime.stop_job(agent_id).map_err(Into::into)
-}
-
-/// Unlinks a repository.
-///
-/// Nothing in the operator's own checkout is touched. The work trees this app
-/// made for the agents that worked here do go, because each one is a
-/// registration in that checkout and one left behind is an entry in their
-/// `git worktree list` pointing into an app that has forgotten the directory.
-pub async fn delete_repository(state: &AppState, id: RepositoryId) -> Reply<()> {
-    // Read before the row goes: afterwards there is nothing saying whether a
-    // clone and a credential were this workspace's to remove.
-    let repository = state.runtime.store().get_repository(id)?;
-    state.runtime.unlink_repository(id).await?;
-    if let Some(repository) = &repository {
-        let _ = tokio::fs::remove_file(repository_credential(state, repository)).await;
-    }
-
-    // A clone the workspace made is the workspace's to remove, and the
-    // credential file goes with it. A linked directory is the operator's and
-    // is never touched; the check is the clone living under `repos`, not the
-    // remote column, so a row that lied about one cannot aim this at a
-    // directory somebody picked.
-    if let Some(repository) = repository {
-        // Canonicalized before the comparison: the stored path is canonical
-        // (git agreed to it) and the configured repos directory may be spelled
-        // through a symlink, which on macOS every temporary directory is.
-        let repos =
-            tokio::fs::canonicalize(&state.repos).await.unwrap_or_else(|_| state.repos.clone());
-        if repository.remote.is_some() && std::path::Path::new(&repository.path).starts_with(&repos)
-        {
-            let _ = tokio::fs::remove_dir_all(&repository.path).await;
-            if let Some(stamp) = std::path::Path::new(&repository.path).file_name() {
-                let credential = credentials_dir(state).join(stamp);
-                let _ = tokio::fs::remove_file(crate::repo::github::file(&credential)).await;
-                let _ = tokio::fs::remove_file(credential).await;
-            }
-        }
-    }
-    state.runtime.emit(UiEvent::AgentsChanged);
-    Ok(())
-}
-
-/// A managed clone retains the credential path older builds gave it; a linked
-/// directory uses the repository id. No caller can choose an arbitrary file.
-fn repository_credential(state: &AppState, repository: &Repository) -> PathBuf {
-    let repos = std::fs::canonicalize(&state.repos).unwrap_or_else(|_| state.repos.clone());
-    if repository.remote.is_some()
-        && std::path::Path::new(&repository.path).parent() == Some(repos.as_path())
-    {
-        if let Some(stamp) = std::path::Path::new(&repository.path).file_name() {
-            return credentials_dir(state).join(stamp);
-        }
-    }
-    credentials_dir(state).join(repository.id.to_string())
-}
-
-pub async fn repository_connection(
-    state: &AppState,
-    id: RepositoryId,
-) -> Reply<crate::repo::auth::Connection> {
-    let repository = state
-        .runtime
-        .store()
-        .get_repository(id)?
-        .ok_or(crate::db::StoreError::RepositoryNotFound(id))?;
-    Ok(crate::repo::auth::connection(&repository.path, &repository_credential(state, &repository))
-        .await?)
-}
-
-pub async fn set_repository_author(
-    state: &AppState,
-    id: RepositoryId,
-    author: crate::domain::repository::GitIdentity,
-) -> Reply<crate::repo::auth::Connection> {
-    let repository = state
-        .runtime
-        .store()
-        .get_repository(id)?
-        .ok_or(crate::db::StoreError::RepositoryNotFound(id))?;
-    crate::repo::auth::set_identity(&repository.path, &author).await?;
-    Ok(crate::repo::auth::connection(&repository.path, &repository_credential(state, &repository))
-        .await?)
-}
-
-pub async fn begin_repository_github_signin(
-    state: &AppState,
-    id: RepositoryId,
-) -> Reply<crate::repo::github::UserSignin> {
-    let repository = state
-        .runtime
-        .store()
-        .get_repository(id)?
-        .ok_or(crate::db::StoreError::RepositoryNotFound(id))?;
-    Ok(crate::repo::github::user_request(&repository.path, "start", None).await?)
-}
-
-pub async fn repository_github_user(
-    state: &AppState,
-    id: RepositoryId,
-) -> Reply<crate::repo::github::UserStatus> {
-    let repository = state
-        .runtime
-        .store()
-        .get_repository(id)?
-        .ok_or(crate::db::StoreError::RepositoryNotFound(id))?;
-    Ok(crate::repo::github::user_request(&repository.path, "status", None).await?)
-}
-
-pub async fn poll_repository_github_signin(
-    state: &AppState,
-    id: RepositoryId,
-    flow_id: String,
-) -> Reply<crate::repo::github::UserStatus> {
-    let repository = state
-        .runtime
-        .store()
-        .get_repository(id)?
-        .ok_or(crate::db::StoreError::RepositoryNotFound(id))?;
-    let result: crate::repo::github::UserStatus =
-        crate::repo::github::user_request(&repository.path, "poll", Some(&flow_id)).await?;
-    if result.status == crate::repo::github::UserState::Authorized {
-        let author = result.author.as_ref().ok_or_else(|| {
-            crate::repo::RepoError::Connection("GitHub returned no commit author".into())
-        })?;
-        crate::repo::auth::set_identity(&repository.path, author).await?;
-    }
-    Ok(result)
-}
-
-pub async fn sign_out_repository_github_user(
-    state: &AppState,
-    id: RepositoryId,
-) -> Reply<crate::repo::github::UserStatus> {
-    let repository = state
-        .runtime
-        .store()
-        .get_repository(id)?
-        .ok_or(crate::db::StoreError::RepositoryNotFound(id))?;
-    Ok(crate::repo::github::user_request(&repository.path, "disconnect", None).await?)
-}
-
-pub async fn set_repository_github(
-    state: &AppState,
-    id: RepositoryId,
-) -> Reply<crate::repo::auth::Connection> {
-    let repository = state
-        .runtime
-        .store()
-        .get_repository(id)?
-        .ok_or(crate::db::StoreError::RepositoryNotFound(id))?;
-    let credential = repository_credential(state, &repository);
-    let connection = crate::repo::auth::connection(&repository.path, &credential).await?;
-    let remote = connection.remote.ok_or_else(|| {
-        crate::repo::RepoError::Connection("This repository has no origin".into())
-    })?;
-    let file = crate::repo::github::file(&credential);
-    crate::repo::github::prepare(&file, &remote).await?;
-    crate::repo::github::attach(&repository.path, &file).await?;
-    let _ = tokio::fs::remove_file(&credential).await;
-    Ok(crate::repo::auth::connection(&repository.path, &credential).await?)
-}
-
-pub async fn set_repository_credential(
-    state: &AppState,
-    id: RepositoryId,
-    username: String,
-    token: String,
-) -> Reply<crate::repo::auth::Connection> {
-    let repository = state
-        .runtime
-        .store()
-        .get_repository(id)?
-        .ok_or(crate::db::StoreError::RepositoryNotFound(id))?;
-    Ok(crate::repo::auth::set(
-        &repository.path,
-        &repository_credential(state, &repository),
-        &username,
-        &token,
-    )
-    .await?)
-}
-
-/// Metadata only; saved secrets never leave the backend.
-pub async fn saved_repository_credentials(
-    state: &AppState,
-    remote: String,
-) -> Reply<Vec<crate::repo::credentials::Saved>> {
-    Ok(crate::repo::credentials::list(&credentials_dir(state), &remote).await?)
-}
-
-pub async fn reuse_repository_credential(
-    state: &AppState,
-    id: RepositoryId,
-    credential_id: String,
-) -> Reply<crate::repo::auth::Connection> {
-    let repository = state
-        .runtime
-        .store()
-        .get_repository(id)?
-        .ok_or(crate::db::StoreError::RepositoryNotFound(id))?;
-    Ok(crate::repo::credentials::set(
-        &credentials_dir(state),
-        &credential_id,
-        &repository_credential(state, &repository),
-        &repository.path,
-    )
-    .await?)
-}
-
-pub async fn clear_repository_credential(
-    state: &AppState,
-    id: RepositoryId,
-) -> Reply<crate::repo::auth::Connection> {
-    let repository = state
-        .runtime
-        .store()
-        .get_repository(id)?
-        .ok_or(crate::db::StoreError::RepositoryNotFound(id))?;
-    Ok(crate::repo::auth::clear(&repository.path, &repository_credential(state, &repository))
-        .await?)
-}
-
-pub async fn check_repository_connection(state: &AppState, id: RepositoryId) -> Reply<String> {
-    let repository = state
-        .runtime
-        .store()
-        .get_repository(id)?
-        .ok_or(crate::db::StoreError::RepositoryNotFound(id))?;
-    Ok(crate::repo::auth::check(&repository.path).await?)
-}
-
-/// Where a clone's token lives: beside the settings, named for the clone's
-/// directory, in a file only this user can read. Never inside the clone, which
-/// is a directory a job is pointed at.
-fn credentials_dir(state: &AppState) -> PathBuf {
-    state
-        .config_path
-        .parent()
-        .map(|dir| dir.join("repo-credentials"))
-        .unwrap_or_else(|| PathBuf::from("repo-credentials"))
-}
-
-/// Puts one agent in a repository, or takes it out.
-///
-/// A move rather than a grant: an agent works in at most one, so `null` is how
-/// it comes back out and there is no second call that takes one away. The rail
-/// drops an agent onto a repository exactly as it drops one onto a crew, and
-/// the two gestures mean the same kind of thing for the same reason.
-pub async fn set_agent_repository(
-    state: &AppState,
-    id: AgentId,
-    repository_id: Option<RepositoryId>,
-) -> Reply<AgentCard> {
-    let card = state.runtime.store().set_agent_repository(id, repository_id)?;
-    state.runtime.emit(UiEvent::AgentsChanged);
-    Ok(card)
+    state.runtime.stop_job(agent_id, crate::runtime::Origin::Operator).map_err(Into::into)
 }
 
 // ---- plugins -------------------------------------------------------------

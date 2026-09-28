@@ -39,7 +39,6 @@ import type {
   ArtifactId,
   ArtifactRead,
   Attachment,
-  Bench,
   Browser,
   BrowserConsent,
   Capabilities,
@@ -48,6 +47,7 @@ import type {
   Connector,
   ConnectorDraft,
   ConnectorId,
+  Continued,
   Decision,
   DeviceCode,
   DirectoryBoard,
@@ -58,8 +58,6 @@ import type {
   Escalation,
   EscalationId,
   Gate,
-  GithubUserSignin,
-  GithubUserStatus,
   Group,
   GroupDraft,
   GroupId,
@@ -70,11 +68,13 @@ import type {
   HeaderPair,
   MenubarAsk,
   MessageId,
+  ModelOffer,
   NotebookEntry,
   Occasion,
   OccasionDraft,
   OccasionId,
   OperatorView,
+  Payer,
   Plugin,
   PluginAccess,
   PluginId,
@@ -83,11 +83,6 @@ import type {
   ProtectedAction,
   QuickDoes,
   RankedModel,
-  RepoStatus,
-  Repository,
-  RepositoryConnection,
-  RepositoryDraft,
-  RepositoryId,
   Reveal,
   Routine,
   RoutineDraft,
@@ -95,7 +90,6 @@ import type {
   RoutineRun,
   RunId,
   RunUsage,
-  SavedRepositoryCredential,
   SearchHits,
   ServerReport,
   Settings,
@@ -106,7 +100,9 @@ import type {
   SkillScope,
   Staged,
   SubscriptionStatus,
+  TerminalView,
   ToolSummary,
+  Tuning,
   UiEvent,
   WebhookAddress,
   WorkDecision,
@@ -220,57 +216,37 @@ export const api = {
   addDirectorySkill: (scope: SkillScope, id: string, hash: string) =>
     invoke<Skill>("add_directory_skill", { scope, id, hash }),
 
-  /**
-   * The directories a crew has linked, and who in it may work in each.
-   *
-   * No disk is touched: a repository moved or deleted since it was linked still
-   * comes back, because this panel is where the operator fixes that.
-   */
-  /**
-   * Every repository in the workspace. One read for the whole rail, which draws
-   * crews and their contents from one roster.
-   */
-  listRepositories: () => invoke<Repository[]>("list_repositories"),
+  /** Where an agent's terminal is. Made if it is not there, so the path exists. */
+  agentTerminal: (id: AgentId) => invoke<TerminalView>("agent_terminal", { id }),
 
   /**
-   * What every linked repository is doing, by id. One call for the whole rail.
-   *
-   * A repository that could not be read is absent rather than present and
-   * empty: the directory may have been moved since it was linked, and a row
-   * saying "main, clean" about a path that is gone is worse than one saying
-   * nothing.
+   * Gives an agent a terminal: a directory of its own on the machine Guaca
+   * runs on, a shell there, and a coding harness. The decision and nothing
+   * else, like a computer.
    */
-  repositoryStatuses: () => invoke<Record<RepositoryId, RepoStatus>>("repository_statuses"),
+  giveAgentTerminal: (id: AgentId) => invoke<void>("give_agent_terminal", { id }),
 
-  groupRepositories: (groupId: GroupId) => invoke<Repository[]>("group_repositories", { groupId }),
+  /** Takes it back, stopping any job it has running. The directory stays. */
+  takeAgentTerminal: (id: AgentId) => invoke<void>("take_agent_terminal", { id }),
+
+  /** Which program writes this agent's code, and whether its pushes ask first. */
+  setAgentCoding: (id: AgentId, harness: Harness, gate: Gate) =>
+    invoke<void>("set_agent_coding", { id, harness, gate }),
 
   /**
-   * Links a directory, after checking with git that it is the root of a work
-   * tree. Nobody is given it here: that is `setRepositoryAccess`.
+   * What the operator chose inside one harness for one agent: the model, the
+   * effort, and for pi which account pays. Kept per harness, so a switch and
+   * back finds the model it left. Refused with the words the program takes.
    */
-  createGithubRepository: (draft: RepositoryDraft) =>
-    invoke<Repository>("create_github_repository", { draft }),
-  setRepositoryGithub: (id: RepositoryId) =>
-    invoke<RepositoryConnection>("set_repository_github", { id }),
-  createRepository: (draft: RepositoryDraft) => invoke<Repository>("create_repository", { draft }),
+  setCodingTuning: (id: AgentId, harness: Harness, tuning: Tuning) =>
+    invoke<void>("set_coding_tuning", { id, harness, tuning }),
 
   /**
-   * Renames one, rewrites the line its agents read, changes which program does
-   * the writing, or moves where that program works. The path is not among them:
-   * a different directory is a different repository, because reach was granted
-   * for that one.
+   * The models a harness offers, asked of the program on the backend. For pi
+   * on Guaca's key, what that key can reach.
    */
-  updateRepository: (
-    id: RepositoryId,
-    name: string,
-    note: string,
-    harness: Harness,
-    gate: Gate,
-    bench: Bench,
-  ) => invoke<Repository>("update_repository", { id, name, note, harness, gate, bench }),
-
-  /** Unlinks it. Nothing on disk is touched. */
-  deleteRepository: (id: RepositoryId) => invoke<void>("delete_repository", { id }),
+  codingModels: (harness: Harness, pays: Payer) =>
+    invoke<ModelOffer[]>("coding_models", { harness, pays }),
 
   /**
    * Which coding harnesses are on this machine, and how to get the ones that
@@ -278,69 +254,28 @@ export const api = {
    * cannot be, because the refusal would reach an agent minutes later rather
    * than the person choosing.
    */
-  githubAppAvailable: () => invoke<boolean>("github_app_available"),
   codingHarnesses: () => invoke<HarnessOnMachine[]>("coding_harnesses"),
-  setRepositoryAuthor: (id: RepositoryId, author: { name: string; email: string }) =>
-    invoke<RepositoryConnection>("set_repository_author", { id, author }),
-  beginRepositoryGithubSignin: (id: RepositoryId) =>
-    invoke<GithubUserSignin>("begin_repository_github_signin", { id }),
-  pollRepositoryGithubSignin: (id: RepositoryId, flowId: string) =>
-    invoke<GithubUserStatus>("poll_repository_github_signin", { id, flowId }),
-  repositoryGithubUser: (id: RepositoryId) =>
-    invoke<GithubUserStatus>("repository_github_user", { id }),
-  signOutRepositoryGithubUser: (id: RepositoryId) =>
-    invoke<GithubUserStatus>("sign_out_repository_github_user", { id }),
-  repositoryConnection: (id: RepositoryId) =>
-    invoke<RepositoryConnection>("repository_connection", { id }),
-  savedRepositoryCredentials: (remote: string) =>
-    invoke<SavedRepositoryCredential[]>("saved_repository_credentials", { remote }),
-  reuseRepositoryCredential: (id: RepositoryId, credentialId: string) =>
-    invoke<RepositoryConnection>("reuse_repository_credential", { id, credentialId }),
-  setRepositoryCredential: (id: RepositoryId, username: string, token: string) =>
-    invoke<RepositoryConnection>("set_repository_credential", { id, username, token }),
-  clearRepositoryCredential: (id: RepositoryId) =>
-    invoke<RepositoryConnection>("clear_repository_credential", { id }),
-  checkRepositoryConnection: (id: RepositoryId) =>
-    invoke<string>("check_repository_connection", { id }),
 
   /**
-   * Sends a correction into a coding job that is already running.
+   * Says something to an agent's coding agent, the way its own program would.
    *
-   * Staged rather than delivered: the job reads it at its next tool boundary,
-   * or when it tries to finish, whichever comes first. Refused when nothing
-   * takes it, and the two reasons are different sentences the operator can act
-   * on: the job has already ended, or its harness cannot be reached at all.
-   *
-   * Addressed by the agent running the job rather than by the repository. With
-   * a worktree per agent two jobs can be running in one codebase, so the
-   * repository names neither of them; an agent works in at most one repository
-   * and holds at most one work tree in it, so it always names exactly one.
+   * Into the job that is running, as a correction it reads at its next step;
+   * or, when none is, as a new turn in the session the last one left, with
+   * everything it already read. Refused when there is neither, or when the
+   * harness has been switched since and the session belongs to the other one.
    */
   messageCodingJob: (agentId: AgentId, message: string) =>
-    invoke<void>("message_coding_job", { agentId, message }),
+    invoke<Continued>("message_coding_job", { agentId, message }),
 
   /**
    * Stops one, leaving whatever it has committed.
    *
    * Nothing is reverted. The commits a job was told to make as it went are the
    * operator's checkpoints, and throwing them away is not this button's
-   * decision to take. The agent that started it is told it was stopped.
+   * decision to take. The session is kept, so it can be carried on. The agent
+   * that started it is told it was stopped.
    */
   stopCodingJob: (agentId: AgentId) => invoke<void>("stop_coding_job", { agentId }),
-
-  /**
-   * Gives one agent a repository, or takes it back. One agent per call, so a
-   * panel that is a tick behind cannot revoke somebody while granting somebody
-   * else.
-   */
-  /**
-   * Puts one agent in a repository, or takes it out with `null`.
-   *
-   * A move rather than a grant: an agent works in at most one, so there is no
-   * second call that takes one away and no list to send.
-   */
-  setAgentRepository: (id: AgentId, repositoryId: RepositoryId | null) =>
-    invoke<AgentCard>("set_agent_repository", { id, repositoryId }),
 
   pluginCatalog: () => invoke<PluginOffer[]>("plugin_catalog"),
 

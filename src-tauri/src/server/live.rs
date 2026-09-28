@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use serde::Serialize;
 
 use crate::domain::envelope::Participant;
-use crate::domain::ids::{AgentId, MessageId, RepositoryId, RunId};
+use crate::domain::ids::{AgentId, MessageId, RunId};
 use crate::runtime::events::{Activity, UiEvent};
 
 #[derive(Serialize)]
@@ -17,7 +17,8 @@ pub(super) struct Snapshot {
     kind: &'static str,
     activity: HashMap<AgentId, Activity>,
     streams: HashMap<MessageId, Stream>,
-    building: HashMap<AgentId, RepositoryId>,
+    /// Which agents have a coding job running, and where.
+    building: HashMap<AgentId, String>,
 }
 
 #[derive(Serialize)]
@@ -76,10 +77,10 @@ impl Snapshot {
             UiEvent::StreamEnded { message_id, .. } => {
                 self.streams.remove(message_id);
             }
-            UiEvent::CodingJobStarted { agent_id, repository_id, .. } => {
-                self.building.insert(*agent_id, *repository_id);
+            UiEvent::CodingJobStarted { agent_id, directory } => {
+                self.building.insert(*agent_id, directory.clone());
             }
-            UiEvent::CodingJobFinished { agent_id, .. } => {
+            UiEvent::CodingJobFinished { agent_id } => {
                 self.building.remove(agent_id);
             }
             _ => {}

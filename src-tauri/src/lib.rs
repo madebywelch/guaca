@@ -16,6 +16,7 @@ pub mod files;
 pub mod host;
 pub mod ipc;
 pub mod kernel;
+pub mod leftovers;
 pub mod llm;
 pub mod mcp;
 pub mod menubar;
@@ -34,6 +35,7 @@ pub mod shell;
 pub mod skills;
 pub mod skills_sh;
 pub mod subscription;
+pub mod terminal;
 pub mod trajectory;
 pub mod transfer;
 /// The other one.

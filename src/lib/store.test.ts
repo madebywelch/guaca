@@ -14,7 +14,6 @@ vi.mock("./ipc", () => ({
     conversationFlow: vi.fn(async () => [] as Envelope[]),
     usageSummary: vi.fn(async () => []),
     listGroups: vi.fn(async () => []),
-    listRepositories: vi.fn(async () => []),
     moveAgent: vi.fn(async () => null),
     setAgentPinned: vi.fn(async () => null),
   },
@@ -60,7 +59,9 @@ const AGENTS: AgentCard[] = [
     hasBrowser: false,
     runsErrands: false,
     browserConsent: "open",
-    repositoryId: null,
+    hasTerminal: false,
+    harness: "pi",
+    gate: "open",
     name: "Manager",
     avatar: "avocado",
     color: "#c7d96b",
@@ -84,7 +85,9 @@ const AGENTS: AgentCard[] = [
     hasBrowser: false,
     runsErrands: false,
     browserConsent: "open",
-    repositoryId: null,
+    hasTerminal: false,
+    harness: "pi",
+    gate: "open",
     name: "Chef",
     avatar: "chilli",
     color: "#e2674a",
@@ -701,7 +704,7 @@ describe("a coding job that could not run", () => {
     useStore.getState().applyEvent({
       type: "codingJobFailed",
       agentId: "a1",
-      repository: "vision-ios",
+      directory: "vision-ios",
       harness: "pi",
       reason: "Provided authentication token is expired.",
     });
@@ -714,13 +717,13 @@ describe("a coding job that could not run", () => {
 
   it("names which program stopped, because the way out is the other one", () => {
     // A spent plan is not something the operator can fix from inside this app.
-    // What they can do is move the repository to the harness whose sign-in still
+    // What they can do is move the agent to the harness whose sign-in still
     // pays, and a banner that does not say what was running leaves them
     // guessing which one that is.
     useStore.getState().applyEvent({
       type: "codingJobFailed",
       agentId: "a1",
-      repository: "vision-ios",
+      directory: "vision-ios",
       harness: "Claude Code",
       reason: "You're out of extra usage.",
     });
@@ -734,23 +737,20 @@ describe("a coding job that could not run", () => {
     useStore.getState().applyEvent({
       type: "codingJobStarted",
       agentId: "a1",
-      repositoryId: "r1",
-      repository: "vision-ios",
+      directory: "vision-ios",
     });
     useStore.getState().applyEvent({
       type: "codingProgress",
       agentId: "a1",
-      repositoryId: "r1",
       tool: "bash",
       detail: "swift test",
     });
-    expect(useStore.getState().building.a1).toBe("r1");
+    expect(useStore.getState().building.a1).toBe("vision-ios");
     expect(useStore.getState().coding.a1).toEqual([{ tool: "bash", detail: "swift test" }]);
 
     useStore.getState().applyEvent({
       type: "codingJobFinished",
       agentId: "a1",
-      repositoryId: "r1",
     });
     expect(useStore.getState().building.a1).toBeUndefined();
     expect(useStore.getState().coding.a1).toBeUndefined();
@@ -760,14 +760,12 @@ describe("a coding job that could not run", () => {
     useStore.getState().applyEvent({
       type: "codingJobStarted",
       agentId: "a2",
-      repositoryId: "r2",
-      repository: "vision-ios-api",
+      directory: "vision-ios-api",
     });
     for (let n = 0; n < 200; n++) {
       useStore.getState().applyEvent({
         type: "codingProgress",
         agentId: "a2",
-        repositoryId: "r2",
         tool: "bash",
         detail: `step ${n}`,
       });
@@ -779,11 +777,11 @@ describe("a coding job that could not run", () => {
     expect(held.at(-1)?.detail).toBe("step 199");
   });
 
-  it("names the repository, because an operator has more than one", () => {
+  it("names the directory, because an operator has more than one agent coding", () => {
     useStore.getState().applyEvent({
       type: "codingJobFailed",
       agentId: "a1",
-      repository: "vision-ios-api",
+      directory: "vision-ios-api",
       harness: "pi",
       reason: "the pi coding harness is not installed",
     });

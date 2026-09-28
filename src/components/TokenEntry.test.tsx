@@ -25,7 +25,6 @@ const { TokenEntry } = await import("./TokenEntry");
 const { setToken, token, UNAUTHORIZED_EVENT } = await import("../lib/transport");
 
 const EVERYTHING = {
-  localDirectories: true,
   loopbackEndpoints: true,
   claudeProvider: true,
   claudeCodeHarness: true,

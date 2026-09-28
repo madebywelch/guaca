@@ -144,6 +144,7 @@ const codingHarnesses = vi.fn<() => Promise<HarnessOnMachine[]>>(async () => [
     version: "2.1.247 (Claude Code)",
     bridged: true,
     install: "npm install -g @anthropic-ai/claude-code",
+    efforts: ["low", "medium", "high", "xhigh", "max"],
   },
   {
     harness: "pi",
@@ -151,6 +152,7 @@ const codingHarnesses = vi.fn<() => Promise<HarnessOnMachine[]>>(async () => [
     version: "0.9.0",
     bridged: false,
     install: "npm install -g @mariozechner/pi",
+    efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
   },
 ]);
 
@@ -841,7 +843,6 @@ describe("the provider presets", () => {
     // control that fails only after the field is filled in is worse.
     useStore.setState({
       capabilities: {
-        localDirectories: false,
         loopbackEndpoints: false,
         claudeProvider: false,
         claudeCodeHarness: false,
@@ -863,7 +864,6 @@ describe("the provider presets", () => {
     } finally {
       useStore.setState({
         capabilities: {
-          localDirectories: true,
           loopbackEndpoints: true,
           claudeProvider: true,
           claudeCodeHarness: true,

@@ -24,7 +24,6 @@ vi.mock("../lib/ipc", () => ({
 const state = {
   setBanner,
   capabilities: {
-    localDirectories: true,
     loopbackEndpoints: true,
     claudeProvider: true,
     claudeCodeHarness: true,

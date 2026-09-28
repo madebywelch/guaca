@@ -208,9 +208,9 @@ budget and its own forty-five minute ceiling, and a turn that waited for one
 would spend its own timeout doing nothing. So the harness's answer comes back as
 a fresh envelope on a run of its own. An actor only ever examines the envelope it
 is holding, so that answer could not reach the turn that asked for it. The agent
-would then call `code` again, and `RepositoryBusy` would tell it, correctly and
-uselessly, that *whoever asked for the first one gets a message when it
-finishes* — a message the turn being spoken to was itself the thing holding up.
+would then call `code` again, and `JobRunning` would tell it, correctly and
+uselessly, that it gets a message when the first one finishes: a message the
+turn being spoken to was itself the thing holding up.
 Measured on a real crew: forty-five minutes, forty-five model calls, twenty-two
 documents rewritten and thirty-one working notes, with three finished jobs and
 one operator correction stacked in an inbox nobody was free to read.
@@ -363,7 +363,7 @@ what the call parsed to, not the name it used, so an alias cannot walk round it
 that stop and ask the operator: the card on the desk names the agent, because the
 errand is the agent.
 
-**The agent's computer, browser and repository are held by one errand at a
+**The agent's computer, browser and terminal are held by one errand at a
 time.** Each is one thing, and two errands working one page or one work tree at
 once each undo the other. An errand that touches any of the three holds all of
 them until it finishes; errands that touch none run alongside. One lock rather
@@ -1048,11 +1048,11 @@ outcome, because both ends believe the document arrived.
 
 Files an agent attaches resolve a bare name against its saved attachments first.
 An explicit path reads current bytes instead of reusing a saved file with the
-same basename. Repository files come from the same worktree as `shell`, without
-fetching or resetting it. Relative paths start there; absolute paths and symlinks
-must resolve inside that worktree. If the agent also has a computer, a path that
-cannot be read from the repository is tried on that computer. No repository or
-computer is needed to forward a saved attachment.
+same basename. Terminal files come from the same directory `shell` starts in.
+Relative paths start there; absolute paths and symlinks must resolve inside it.
+If the agent also has a computer, a path that cannot be read from the terminal
+is tried on that computer. No terminal or computer is needed to forward a saved
+attachment.
 
 **A send with a missing file delivers nothing.** All requested attachments must
 resolve before any recipient is queued or any message guard is spent. Otherwise

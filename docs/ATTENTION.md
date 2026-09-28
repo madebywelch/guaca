@@ -69,7 +69,7 @@ scope instead of inventing a per-email workspace gate.
 
 This is a prompt rule about when to ask, not a new blanket `ActOnBehalf` grant.
 Permission to send outreach does not authorize purchases or contract terms.
-The configured browser and repository gates still enforce their own decisions.
+The configured browser and terminal gates still enforce their own decisions.
 The live email-authorization eval exercises the production prompt and tool
 descriptions without executing any returned mail calls.
 

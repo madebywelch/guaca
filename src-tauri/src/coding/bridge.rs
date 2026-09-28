@@ -1,7 +1,7 @@
 //! Guaca's end of a running coding job.
 //!
-//! A job is a process that runs for up to [`super::CEILING`] in a directory the
-//! operator linked, and until this module existed it was write-only. Guaca read
+//! A job is a process that runs for up to [`super::CEILING`] in the agent's
+//! terminal, and until this module existed it was write-only. Guaca read
 //! its stdout and could say nothing back. An operator watching a job go the
 //! wrong way at minute three had one move, which was to wait thirty-seven more
 //! minutes for it to finish and then start another one.
@@ -79,7 +79,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::domain::repository::Gate;
+use crate::domain::terminal::Gate;
 
 /// How long a hook may wait for Guaca to answer.
 ///
@@ -126,6 +126,11 @@ pub enum Signal {
     Note(String),
     /// It opened a pull request and said so.
     PullRequest { url: String, branch: String },
+    /// The harness named the session this job is, which a follow-up resumes.
+    ///
+    /// Only Codex sends it: it names its own thread, where `claude` and `pi`
+    /// are started with a session Guaca chose.
+    Session(String),
     /// It is about to do something outward-facing and the gate stopped it.
     ///
     /// Both the line the model wrote and what [`outward`] made of it, because
@@ -186,7 +191,7 @@ pub struct Bridge {
 struct Inner {
     registry: Mutex<Registry>,
     /// Bound on the first job that wants it and never again. A workspace whose
-    /// repositories all run `pi` never opens a socket at all.
+    /// agents all run `pi` never opens a socket at all.
     port: tokio::sync::OnceCell<u16>,
 }
 
@@ -195,7 +200,13 @@ impl Bridge {
         Self::default()
     }
 
-    /// Opens a job's end of the bridge.
+    /// Opens a job's end of the bridge, addressed by the session the job runs
+    /// as.
+    ///
+    /// The session rather than a token minted here, so a job that carries on
+    /// an earlier session is reached at the same address the operator hands to
+    /// `claude --resume`. Only one job runs per agent, so only one job holds a
+    /// session at a time.
     ///
     /// `None` when anything about it failed, and the caller runs the job
     /// without it. That is the whole of the error handling and it is
@@ -207,10 +218,10 @@ impl Bridge {
         signals: mpsc::Sender<Signal>,
         gate: Gate,
         root: PathBuf,
+        token: String,
     ) -> Option<Session> {
         let port = *self.inner.port.get_or_try_init(|| listen(self.clone())).await.ok()?;
 
-        let token = uuid::Uuid::new_v4().to_string();
         let dir = scratch(&token)?;
         let settings = dir.join("settings.json");
         let script = dir.join("hook.sh");
@@ -299,6 +310,11 @@ impl Session {
     /// The job's own id, which is also what `claude --resume` takes.
     pub fn session_id(&self) -> &str {
         &self.wiring.session_id
+    }
+
+    /// Stages a message for this job. `false` once the job has ended.
+    pub fn post(&self, message: &str) -> bool {
+        self.bridge.post(&self.wiring.session_id, message)
     }
 }
 
@@ -754,10 +770,10 @@ pub async fn outward(line: &str, root: &Path) -> Option<Reach> {
     let root = tokio::fs::canonicalize(root).await.ok()?;
 
     let mut seen = HashSet::new();
-    let mut frontier = scripts_in(&root, line, &mut seen).await;
+    let mut frontier = scripts_in(&root, &root, line, &mut seen).await;
     for _ in 0..SCRIPT_DEPTH {
         let mut deeper = Vec::new();
-        for (script, body) in &frontier {
+        for (script, body, ran_in) in &frontier {
             if let Some(what) = named(body) {
                 return Some(Reach { what, through: Some(script.clone()) });
             }
@@ -766,8 +782,8 @@ pub async fn outward(line: &str, root: &Path) -> Option<Reach> {
             // `package.json "release"` can go and read it; asked about the
             // third file in a chain they have to reconstruct how the agent got
             // there before they can answer.
-            for (_, further) in scripts_in(&root, body, &mut seen).await {
-                deeper.push((script.clone(), further));
+            for (_, further, deeper_in) in scripts_in(&root, ran_in, body, &mut seen).await {
+                deeper.push((script.clone(), further, deeper_in));
             }
         }
         if deeper.is_empty() {
@@ -834,17 +850,33 @@ fn invocation(segment: &str) -> Option<(String, Vec<String>)> {
     Some((program, rest.collect()))
 }
 
-/// Every script in this tree that the line runs, with the text of each.
+/// Every script in this tree that the line runs, with the text of each and the
+/// directory it runs in.
 ///
-/// One level: what comes back is fed to [`named`], and to this again. The pair
-/// is what the operator would need to see — the script named as they would
-/// recognize it, and its body for the same rule to read.
+/// One level: what comes back is fed to [`named`], and to this again. The
+/// first two are what the operator would need to see — the script named as they
+/// would recognize it, and its body for the same rule to read. The third is
+/// where the script's own lines run, which is where the scripts *they* name are
+/// looked for.
+///
+/// A `cd` moves where the rest of the line runs, so what comes after it is read
+/// from there. That is the ordinary shape of a line in a terminal holding
+/// several repositories, `cd guaca && npm run release`, and read from the top of
+/// the terminal it named a `package.json` that is not there and stopped
+/// nothing. A `cd` out of the tree leads somewhere this reads nothing, which
+/// [`package_script`] and [`file_script`] each check for themselves.
 ///
 /// `seen` is shared across the whole walk rather than per level, so a pair of
 /// scripts that run each other is read once and a file reached two ways is read
 /// once. It is also the budget: [`MAX_SCRIPTS`] distinct scripts per line.
-async fn scripts_in(root: &Path, line: &str, seen: &mut HashSet<String>) -> Vec<(String, String)> {
+async fn scripts_in(
+    root: &Path,
+    start: &Path,
+    line: &str,
+    seen: &mut HashSet<String>,
+) -> Vec<(String, String, PathBuf)> {
     let mut out = Vec::new();
+    let mut here = start.to_path_buf();
     for segment in segments(line) {
         if seen.len() >= MAX_SCRIPTS {
             break;
@@ -852,15 +884,23 @@ async fn scripts_in(root: &Path, line: &str, seen: &mut HashSet<String>) -> Vec<
         let Some((word, args)) = invocation(&segment) else {
             continue;
         };
+        if word == "cd" {
+            if let Some(to) = args.first() {
+                if let Ok(moved) = tokio::fs::canonicalize(here.join(to)).await {
+                    here = moved;
+                }
+            }
+            continue;
+        }
         let found = match word.rsplit('/').next().unwrap_or(&word) {
-            "npm" | "pnpm" | "yarn" | "bun" => package_script(root, &args).await,
-            _ => file_script(root, &word).await,
+            "npm" | "pnpm" | "yarn" | "bun" => package_script(root, &here, &args).await,
+            _ => file_script(root, &here, &word).await,
         };
         let Some((script, body)) = found else {
             continue;
         };
         if seen.insert(script.clone()) {
-            out.push((script, body));
+            out.push((script, body, here.clone()));
         }
     }
     out
@@ -873,10 +913,14 @@ async fn scripts_in(root: &Path, line: &str, seen: &mut HashSet<String>) -> Vec<
 /// no entry behind it is a command that is about to fail, which is nothing to
 /// look into and nothing to ask about.
 ///
-/// The file is the one at the root of the repository. A workspace that keeps
-/// its release script in a package one directory down is not read, for the
-/// reason in [`outward`]: this follows the ordinary case and says so.
-async fn package_script(root: &Path, args: &[String]) -> Option<(String, String)> {
+/// The file is the one in the directory the line is standing in, and only
+/// inside the tree. A workspace that keeps its release script in a package one
+/// directory further down is not read, for the reason in [`outward`]: this
+/// follows the ordinary case and says so.
+async fn package_script(root: &Path, here: &Path, args: &[String]) -> Option<(String, String)> {
+    if !here.starts_with(root) {
+        return None;
+    }
     let mut plain = args.iter().filter(|arg| !arg.starts_with('-'));
     let mut name = plain.next()?.as_str();
     // `npm run release` and `pnpm release` are the same request. Anything else
@@ -885,10 +929,16 @@ async fn package_script(root: &Path, args: &[String]) -> Option<(String, String)
     if matches!(name, "run" | "run-script" | "exec") {
         name = plain.next()?.as_str();
     }
-    let text = read_text(&root.join("package.json")).await?;
+    let text = read_text(&here.join("package.json")).await?;
     let manifest: serde_json::Value = serde_json::from_str(&text).ok()?;
     let body = manifest.get("scripts")?.get(name)?.as_str()?;
-    Some((format!("package.json \"{name}\""), body.to_string()))
+    let manifest = match here.strip_prefix(root) {
+        Ok(below) if !below.as_os_str().is_empty() => {
+            format!("{}/package.json", below.to_string_lossy())
+        }
+        _ => "package.json".to_string(),
+    };
+    Some((format!("{manifest} \"{name}\""), body.to_string()))
 }
 
 /// The text of the script this word runs, if it is one inside the tree.
@@ -898,11 +948,11 @@ async fn package_script(root: &Path, args: &[String]) -> Option<(String, String)
 /// this job's tree and is read by nothing here. Something that is not text is
 /// something this cannot judge, and is left exactly as it was found: see
 /// [`outward`] on why that is the decision and not the gap.
-async fn file_script(root: &Path, word: &str) -> Option<(String, String)> {
+async fn file_script(root: &Path, here: &Path, word: &str) -> Option<(String, String)> {
     // `join` on an absolute path replaces rather than appends, so an absolute
     // word arrives here as itself. That is what makes the check below the thing
-    // that keeps this inside the repository, rather than the join.
-    let path = tokio::fs::canonicalize(root.join(word)).await.ok()?;
+    // that keeps this inside the tree, rather than the join.
+    let path = tokio::fs::canonicalize(here.join(word)).await.ok()?;
     if !path.starts_with(root) {
         return None;
     }
@@ -1490,6 +1540,42 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// A `cd` moves where the rest of the line runs, and what it runs is read
+    /// from there.
+    ///
+    /// The shape of a line in a terminal holding several repositories. Read
+    /// from the top it names a `package.json` that is not there and stops
+    /// nothing. A `cd` out of the tree leads nowhere this reads.
+    #[tokio::test]
+    async fn a_push_one_cd_down_is_read_from_where_the_line_went() {
+        let root = a_tree(
+            "cd-down",
+            &[
+                ("site/scripts/ship.sh", "#!/bin/sh\ngit push origin main\n"),
+                ("site/package.json", r#"{"scripts":{"release":"./scripts/ship.sh"}}"#),
+            ],
+        );
+
+        for (line, through) in [
+            ("cd site && npm run release", "site/package.json \"release\""),
+            ("cd site; ./scripts/ship.sh", "./scripts/ship.sh"),
+            ("cd ./site && pnpm release", "site/package.json \"release\""),
+        ] {
+            let found = outward(line, &root).await.unwrap_or_else(|| panic!("{line}"));
+            assert_eq!(found.what, "git push", "{line}");
+            assert_eq!(found.through.as_deref(), Some(through), "{line}");
+        }
+        // Read from the top, the same words name nothing.
+        assert_eq!(outward("npm run release", &root).await, None);
+        // And a `cd` out of the tree reads nothing out there.
+        let beside = a_tree("cd-down-beside", &[("ship.sh", "#!/bin/sh\ngit push\n")]);
+        let away = format!("cd {} && ./ship.sh", beside.display());
+        assert_eq!(outward(&away, &root).await, None, "{away}");
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&beside);
+    }
+
     /// And the ordinary script is still ordinary.
     #[tokio::test]
     async fn a_script_that_does_not_reach_outside_asks_nobody() {
@@ -1798,7 +1884,12 @@ mod tests {
         let bridge = Bridge::new();
         let (signals, _heard) = mpsc::channel(8);
         let session = bridge
-            .open(signals, Gate::Open, PathBuf::from("/nonexistent-work-tree"))
+            .open(
+                signals,
+                Gate::Open,
+                PathBuf::from("/nonexistent-work-tree"),
+                uuid::Uuid::new_v4().to_string(),
+            )
             .await
             .expect("the bridge has to start");
         let token = session.session_id().to_string();
@@ -1820,7 +1911,12 @@ mod tests {
         let bridge = Bridge::new();
         let (signals, _heard) = mpsc::channel(8);
         let session = bridge
-            .open(signals, Gate::Open, PathBuf::from("/nonexistent-work-tree"))
+            .open(
+                signals,
+                Gate::Open,
+                PathBuf::from("/nonexistent-work-tree"),
+                uuid::Uuid::new_v4().to_string(),
+            )
             .await
             .unwrap();
         let port = *bridge.inner.port.get().unwrap();
@@ -1859,8 +1955,14 @@ mod tests {
         let (one, _a) = mpsc::channel(8);
         let (two, _b) = mpsc::channel(8);
         let elsewhere = || PathBuf::from("/nonexistent-work-tree");
-        let first = bridge.open(one, Gate::Open, elsewhere()).await.unwrap();
-        let second = bridge.open(two, Gate::AskBeforePushing, elsewhere()).await.unwrap();
+        let first = bridge
+            .open(one, Gate::Open, elsewhere(), uuid::Uuid::new_v4().to_string())
+            .await
+            .unwrap();
+        let second = bridge
+            .open(two, Gate::AskBeforePushing, elsewhere(), uuid::Uuid::new_v4().to_string())
+            .await
+            .unwrap();
 
         assert_ne!(first.session_id(), second.session_id());
         bridge.post(first.session_id(), "for the first one only");

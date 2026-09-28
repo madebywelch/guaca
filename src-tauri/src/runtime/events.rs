@@ -11,9 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::approval::ApprovalState;
 use crate::domain::envelope::{Envelope, Part, Participant};
-use crate::domain::ids::{
-    AgentId, ApprovalId, EscalationId, GroupId, MessageId, RepositoryId, RunId,
-};
+use crate::domain::ids::{AgentId, ApprovalId, EscalationId, GroupId, MessageId, RunId};
 
 /// What an agent is doing right now, surfaced as the dot next to its name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -234,17 +232,17 @@ pub enum UiEvent {
         escalation_id: EscalationId,
     },
 
-    /// A coding job started, and the repository it is working in is now busy.
+    /// A coding job started in this agent's terminal.
     ///
     /// The rail draws this because nothing else would. `code` returns as soon
     /// as the harness is up and the turn ends, so an agent goes idle while a
-    /// coding agent works in its repository for twenty minutes: the crew looks
-    /// stopped at exactly the moment it is building. The job outlives the turn,
-    /// so it cannot be an [`Activity`], which is cleared when a turn ends.
+    /// coding agent works for it for twenty minutes: the crew looks stopped at
+    /// exactly the moment it is building. The job outlives the turn, so it
+    /// cannot be an [`Activity`], which is cleared when a turn ends.
     CodingJobStarted {
         agent_id: AgentId,
-        repository_id: RepositoryId,
-        repository: String,
+        /// Where it is working, relative to the agent's terminal.
+        directory: String,
     },
     /// One line of what a running coding job is doing.
     ///
@@ -260,16 +258,14 @@ pub enum UiEvent {
     /// could read.
     CodingProgress {
         agent_id: AgentId,
-        repository_id: RepositoryId,
         /// What it is doing: a tool name, or empty when it is talking.
         tool: String,
         /// The command, the path, or the sentence.
         detail: String,
     },
-    /// That job ended, however it ended. The repository is free again.
+    /// That job ended, however it ended. The agent can start another.
     CodingJobFinished {
         agent_id: AgentId,
-        repository_id: RepositoryId,
     },
 
     /// A coding job could not run, for a reason only the operator can fix.
@@ -286,9 +282,9 @@ pub enum UiEvent {
     /// is the agent's to report and belongs nowhere near a banner.
     CodingJobFailed {
         agent_id: AgentId,
-        /// Named, because an operator with several repositories needs to know
-        /// which one stopped.
-        repository: String,
+        /// Where it was working, because an operator with several agents
+        /// coding needs to know which job stopped.
+        directory: String,
         /// And which program stopped, because the way out of the commonest
         /// failure here is the other one. A spent plan is not a thing the
         /// operator can fix from inside this app, and a banner that says a

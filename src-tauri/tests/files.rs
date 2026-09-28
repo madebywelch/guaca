@@ -940,47 +940,14 @@ async fn a_file_written_this_turn_is_read_before_its_older_saved_version() {
     assert!(results.contains("NEW-CONTENTS") && !results.contains("OLD-CONTENTS"), "{results}");
 }
 
-fn file_repository(h: &Harness, bench: guac_lib::domain::repository::Bench) -> std::path::PathBuf {
-    use guac_lib::domain::repository::{CleanRepository, Gate, Harness as Which};
-    let root = h._dir.path().join("repository");
-    std::fs::create_dir_all(root.join("public")).unwrap();
-    std::fs::write(root.join("public/logo.png"), b"REPOSITORY-LOGO").unwrap();
-    for args in [
-        vec!["init", "-q"],
-        vec!["add", "."],
-        vec![
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.test",
-            "commit",
-            "-qm",
-            "initial",
-        ],
-    ] {
-        assert!(std::process::Command::new("git")
-            .args(args)
-            .current_dir(&root)
-            .status()
-            .unwrap()
-            .success());
-    }
+/// Gives the Manager a terminal with a logo in it, and answers with where the
+/// terminal is.
+fn file_terminal(h: &Harness) -> std::path::PathBuf {
     let card = h.agent_named("Manager").unwrap();
-    let repository = h
-        .runtime
-        .store()
-        .create_repository(&CleanRepository {
-            group_id: card.group_id,
-            name: "Website".into(),
-            path: root.to_string_lossy().into_owned(),
-            note: String::new(),
-            harness: Which::Claude,
-            gate: Gate::Open,
-            remote: None,
-            bench,
-        })
-        .unwrap();
-    h.runtime.store().set_agent_repository(card.id, Some(repository.id)).unwrap();
+    h.runtime.store().set_has_terminal(card.id, true).unwrap();
+    let root = h.runtime.terminals().ensure(card.id).unwrap();
+    std::fs::create_dir_all(root.join("public")).unwrap();
+    std::fs::write(root.join("public/logo.png"), b"TERMINAL-LOGO").unwrap();
     root
 }
 
@@ -1042,7 +1009,7 @@ async fn a_missing_attachment_stops_the_whole_send_and_preserves_the_retry() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_repository_file_reaches_a_peer_and_can_be_forwarded_without_a_computer() {
+async fn a_terminal_file_reaches_a_peer_and_can_be_forwarded_without_a_computer() {
     let stub = serve(|body| {
         if has_tool_result(body) {
             return Script::Say("Done.".into());
@@ -1063,11 +1030,11 @@ async fn a_repository_file_reaches_a_peer_and_can_be_forwarded_without_a_compute
     })
     .await;
     let h = harness(&stub, &["Manager", "Chef", "Scribe"], GuardLimits::default());
-    file_repository(&h, guac_lib::domain::repository::Bench::Shared);
+    file_terminal(&h);
     let stale = h.runtime.files().put("logo.png", b"OLD-LOGO").unwrap();
     let run = h
         .runtime
-        .send_from_human_with(h.id("Manager"), "Send the repository logo.", vec![stale])
+        .send_from_human_with(h.id("Manager"), "Send the logo in your terminal.", vec![stale])
         .unwrap();
     h.settle(run).await;
     for peer in ["Chef", "Scribe"] {
@@ -1079,24 +1046,28 @@ async fn a_repository_file_reaches_a_peer_and_can_be_forwarded_without_a_compute
             .expect("logo reached the peer");
         assert_eq!(
             h.runtime.files().read(&file.digest).unwrap(),
-            b"REPOSITORY-LOGO",
+            b"TERMINAL-LOGO",
             "an explicit path must not forward a stale attachment with the same basename"
         );
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn attaching_a_repository_file_reads_the_shells_worktree_without_resetting_it() {
+async fn attaching_a_terminal_file_reads_what_the_shell_just_wrote_there() {
     let stub = serve(|body| {
-        let results = body["messages"].as_array().unwrap().iter().filter(|m| m["role"] == "tool").count();
+        let results =
+            body["messages"].as_array().unwrap().iter().filter(|m| m["role"] == "tool").count();
         match results {
-            0 => Script::Plugin { name: "shell".into(), arguments: serde_json::json!({"command": "printf CHANGED-ON-BENCH > public/logo.png"}) },
-            1 => Script::Attach { tool: "attach_file".into(), files: vec!["public/logo.png".into()] },
+            0 => Script::Shell("printf CHANGED-IN-TERMINAL > public/logo.png".into()),
+            1 => {
+                Script::Attach { tool: "attach_file".into(), files: vec!["public/logo.png".into()] }
+            }
             _ => Script::Say("Attached.".into()),
         }
-    }).await;
+    })
+    .await;
     let h = harness(&stub, &["Manager"], GuardLimits::default());
-    let root = file_repository(&h, guac_lib::domain::repository::Bench::Own);
+    let root = file_terminal(&h);
     let run = h.runtime.send_from_human(h.id("Manager"), "Update and attach the logo.").unwrap();
     h.settle(run).await;
     let file = h
@@ -1105,8 +1076,9 @@ async fn attaching_a_repository_file_reads_the_shells_worktree_without_resetting
         .agent_file(h.id("Manager"), "logo.png")
         .unwrap()
         .expect("attachment was delivered");
-    assert_eq!(h.runtime.files().read(&file.digest).unwrap(), b"CHANGED-ON-BENCH");
-    assert_eq!(std::fs::read(root.join("public/logo.png")).unwrap(), b"REPOSITORY-LOGO");
+    // One directory behind both tools, so what the shell wrote is what goes.
+    assert_eq!(h.runtime.files().read(&file.digest).unwrap(), b"CHANGED-IN-TERMINAL");
+    assert_eq!(std::fs::read(root.join("public/logo.png")).unwrap(), b"CHANGED-IN-TERMINAL");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1140,7 +1112,7 @@ async fn saved_metadata_without_bytes_cannot_send_a_phantom_attachment() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn only_an_agent_given_the_repository_can_import_its_paths() {
+async fn only_an_agent_given_a_terminal_can_import_its_paths() {
     let path = std::sync::Arc::new(parking_lot::Mutex::new(String::new()));
     let requested = path.clone();
     let stub = serve(move |body| {
@@ -1152,7 +1124,7 @@ async fn only_an_agent_given_the_repository_can_import_its_paths() {
     })
     .await;
     let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
-    let root = file_repository(&h, guac_lib::domain::repository::Bench::Shared);
+    let root = file_terminal(&h);
     *path.lock() = root.join("public/logo.png").to_string_lossy().into_owned();
     let run = h.runtime.send_from_human(h.id("Chef"), "Attach this file.").unwrap();
     h.settle(run).await;
@@ -1164,16 +1136,16 @@ async fn only_an_agent_given_the_repository_can_import_its_paths() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: costs money, needs a configured model"]
-async fn live_a_repository_logo_reaches_a_peer_and_returns_as_an_attachment() {
+async fn live_a_terminal_logo_reaches_a_peer_and_returns_as_an_attachment() {
     use harness::live::{configured, live_crew, LiveAgent};
     let config = configured().expect("this live eval requires a configured model");
     let h = live_crew(config, &[LiveAgent::generic("Manager"), LiveAgent::generic("Scribe")]);
-    let root = file_repository(&h, guac_lib::domain::repository::Bench::Shared);
+    let root = file_terminal(&h);
     // A real PNG, so the recipient's vision endpoint can decode it.
     let png = include_bytes!("../icons/32x32.png").to_vec();
     std::fs::write(root.join("public/logo.png"), &png).unwrap();
     let run = h.runtime.send_from_human(h.id("Manager"),
-        "Please give Scribe the original logo file at public/logo.png in your repository. Ask Scribe to attach the file to their reply to you. Do not change any files and do not send anything externally.").unwrap();
+        "Please give Scribe the original logo file at public/logo.png in your terminal. Ask Scribe to attach the file to their reply to you. Do not change any files and do not send anything externally.").unwrap();
     assert!(h.settled_within(run, 180).await, "{}", h.transcript());
     println!("{}", h.transcript());
     let file = h

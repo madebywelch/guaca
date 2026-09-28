@@ -15,16 +15,15 @@ interface Props {
  * ## Why this exists at all
  *
  * `code` returns as soon as the harness is up and the turn ends, so the channel
- * goes silent while a coding agent works in the repository for twenty minutes.
- * The operator's own words for it: the chat is quiet and the only evidence
- * anything is happening is pull requests appearing on GitHub. The rail says
- * `building` beside the repository, which answers *whether*; this answers
- * *what*.
+ * goes silent while a coding agent works for twenty minutes. The operator's
+ * own words for it: the chat is quiet and the only evidence anything is
+ * happening is pull requests appearing on GitHub. The rail says `writing code`
+ * beside the agent, which answers *whether*; this answers *what*.
  *
  * ## Why it is a filtered line and not the stream
  *
- * `pi --mode json` emits tens of thousands of events for a real job, almost all
- * of them text deltas and a cumulative usage total repeated on each one.
+ * A harness emits tens of thousands of events for a real job, almost all of
+ * them text deltas and a cumulative usage total repeated on each one.
  * Forwarding that into the webview would be a re-render per token for a panel
  * nobody could read fast enough. The runtime keeps the two things a person
  * watching over a shoulder wants — the tool it reached for, and what it says as
@@ -40,17 +39,16 @@ interface Props {
  */
 export function CodingPanel({ agent }: Props) {
   const lines = useStore((s) => s.coding[agent]);
-  const building = useStore((s) => s.building);
-  const repositories = useStore((s) => s.repositories);
+  const directory = useStore((s) => s.building[agent]);
   const floor = useRef<HTMLDivElement>(null);
   const [correction, setCorrection] = useState("");
   const [sending, setSending] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   // Armed before it fires, like the two destructive items in `AgentMenu`. This
-  // ends forty minutes of work that cannot be resumed, and the confirmation is
-  // drawn where the click happened rather than somewhere the operator has to
-  // go and find it.
+  // ends forty minutes of work mid-step, and the confirmation is drawn where
+  // the click happened rather than somewhere the operator has to go and find
+  // it.
   const [confirming, setConfirming] = useState(false);
 
   // Follows its own end unconditionally, unlike the transcript. The panel is
@@ -61,10 +59,8 @@ export function CodingPanel({ agent }: Props) {
     floor.current?.scrollIntoView({ block: "end" });
   }, []);
 
-  const repositoryId = building[agent];
-  if (!repositoryId) return null;
+  if (directory === undefined) return null;
 
-  const repository = repositories.find((r) => r.id === repositoryId);
   const held = lines ?? [];
 
   const send = async () => {
@@ -73,12 +69,18 @@ export function CodingPanel({ agent }: Props) {
     setSending(true);
     setNote("Sending correction…");
     try {
-      await api.messageCodingJob(agent, message);
+      const continued = await api.messageCodingJob(agent, message);
       setCorrection("");
       // Said rather than left to the transcript. What the operator typed goes
       // to the harness and never becomes a message anywhere, so without this
       // the only evidence it arrived is the job changing course minutes later.
-      setNote("Sent. It reaches the job at its next step.");
+      // The job can also end between the keystroke and the call, and then the
+      // same words carried it on in its session rather than being lost.
+      setNote(
+        continued.kind === "steered"
+          ? "Sent. It reaches the job at its next step."
+          : "It had just finished, so this carries it on in the same session.",
+      );
     } catch (err) {
       setNote(errorMessage(err));
     } finally {
@@ -102,7 +104,9 @@ export function CodingPanel({ agent }: Props) {
     <section className="coding" aria-label="Coding job in progress">
       <div className="coding__head">
         <span className="coding__pulse" aria-hidden="true" />
-        <span className="coding__title">Writing code in {repository?.name ?? "a repository"}</span>
+        <span className="coding__title">
+          Writing code in {directory === "." ? "its terminal" : directory}
+        </span>
         {confirming ? (
           <>
             <button
@@ -167,8 +171,9 @@ export function CodingPanel({ agent }: Props) {
         // What survives is the half an operator cannot see from here, and it is
         // the half that decides whether they press it.
         <p className="coding__waiting">
-          Stopping kills the program where it stands. Whatever it has committed stays; whatever it
-          was in the middle of does not. It cannot be resumed from here.
+          Stopping ends its turn where it stands. Whatever it has committed stays; whatever it was
+          in the middle of does not. Its session is kept, and a follow-up from the agent&apos;s
+          terminal panel carries on from there.
         </p>
       )}
 

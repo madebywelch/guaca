@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
+import type { Continued } from "../lib/types";
 import { CodingPanel } from "./CodingPanel";
 
 vi.mock("../lib/ipc", () => ({
@@ -13,27 +14,12 @@ const messageCodingJob = vi.mocked(api.messageCodingJob);
 const stopCodingJob = vi.mocked(api.stopCodingJob);
 
 const AGENT = "a1";
-const REPO = "r1";
+const REPO = "vision-ios";
 
 function seed(over: Partial<ReturnType<typeof useStore.getState>> = {}) {
   useStore.setState({
     building: {},
     coding: {},
-    repositories: [
-      {
-        id: REPO,
-        groupId: "g1",
-        name: "vision-ios",
-        path: "/Users/you/dev/vision-ios",
-        note: "",
-        harness: "pi",
-        gate: "open",
-        bench: "own",
-        remote: null,
-        createdAt: 0,
-        updatedAt: 0,
-      },
-    ],
     ...over,
   });
 }
@@ -41,7 +27,7 @@ function seed(over: Partial<ReturnType<typeof useStore.getState>> = {}) {
 describe("CodingPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    messageCodingJob.mockResolvedValue(undefined);
+    messageCodingJob.mockResolvedValue({ kind: "steered" });
     stopCodingJob.mockResolvedValue(undefined);
     seed();
   });
@@ -53,10 +39,16 @@ describe("CodingPanel", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("names the repository being worked in", () => {
+  it("names the directory being worked in", () => {
     seed({ building: { [AGENT]: REPO } });
     render(<CodingPanel agent={AGENT} />);
     expect(screen.getByText(/Writing code in vision-ios/)).toBeTruthy();
+  });
+
+  it("says its terminal rather than a dot for a job at the top of it", () => {
+    seed({ building: { [AGENT]: "." } });
+    render(<CodingPanel agent={AGENT} />);
+    expect(screen.getByText(/Writing code in its terminal/)).toBeTruthy();
   });
 
   it("says it is starting before the first tool call arrives", () => {
@@ -128,9 +120,27 @@ describe("CodingPanel", () => {
     expect((box as HTMLInputElement).value).toBe("");
   });
 
+  it("says so when the job ended first and the words carried it on instead", async () => {
+    // Not a failure and not a correction: the job finished between the
+    // keystroke and the call, and the runtime resumed its session with them.
+    seed({ building: { [AGENT]: REPO } });
+    messageCodingJob.mockResolvedValue({ kind: "resumed", directory: REPO });
+    render(<CodingPanel agent={AGENT} />);
+
+    fireEvent.change(screen.getByLabelText("Send a correction to the running coding job"), {
+      target: { value: "and add a test" },
+    });
+    fireEvent.click(screen.getByText("Send"));
+
+    expect(await screen.findByText(/carries it on in the same session/)).toBeTruthy();
+    expect(screen.queryByText(/Sent\./)).toBeNull();
+  });
+
   it("says why a correction was refused rather than looking like it landed", async () => {
     seed({ building: { [AGENT]: REPO } });
-    messageCodingJob.mockRejectedValue(new Error("pi has no way to be reached"));
+    messageCodingJob.mockRejectedValue(
+      new Error("the coding agent has not taken the last few corrections yet"),
+    );
     render(<CodingPanel agent={AGENT} />);
 
     fireEvent.change(screen.getByLabelText("Send a correction to the running coding job"), {
@@ -138,7 +148,7 @@ describe("CodingPanel", () => {
     });
     fireEvent.click(screen.getByText("Send"));
 
-    expect(await screen.findByText(/no way to be reached/)).toBeTruthy();
+    expect(await screen.findByText(/not taken the last few corrections/)).toBeTruthy();
     // The text stays in the box: it was not delivered, so it is still the
     // operator's to send somewhere.
     expect(
@@ -151,8 +161,8 @@ describe("CodingPanel", () => {
     seed({ building: { [AGENT]: REPO } });
     let acknowledge!: () => void;
     messageCodingJob.mockReturnValue(
-      new Promise<void>((resolve) => {
-        acknowledge = resolve;
+      new Promise<Continued>((resolve) => {
+        acknowledge = () => resolve({ kind: "steered" });
       }),
     );
     render(<CodingPanel agent={AGENT} />);
@@ -174,14 +184,15 @@ describe("CodingPanel", () => {
   });
 
   it("arms the stop before it fires it, and says what survives", async () => {
-    // This ends work that cannot be resumed. The confirmation is drawn where
-    // the click happened rather than somewhere the operator has to go and find.
+    // This ends work mid-step. The confirmation is drawn where the click
+    // happened rather than somewhere the operator has to go and find.
     seed({ building: { [AGENT]: REPO } });
     render(<CodingPanel agent={AGENT} />);
 
     fireEvent.click(screen.getByText("Stop"));
     expect(stopCodingJob).not.toHaveBeenCalled();
     expect(screen.getByText(/Whatever it has committed stays/)).toBeTruthy();
+    expect(screen.getByText(/Its session is kept/)).toBeTruthy();
 
     fireEvent.click(screen.getByText("Stop it"));
     await waitFor(() => expect(stopCodingJob).toHaveBeenCalledWith(AGENT));

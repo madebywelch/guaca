@@ -57,9 +57,10 @@ the code is `llm/codex.rs`, `llm/claude.rs` and `subscription.rs`.
   error: `structured_output` deserializes to absent, and the symptom is replies
   going missing rather than anything failing.
 - **A model named on a group running on Claude is kept and never used.** There
-  is no third model field and there will not be one: which model runs is the
-  program's own setting, and this app passes no `--model` for the reason the
-  coding harness passes none. Kept, because an operator who tries Claude for an
+  is no third model field and there will not be one: which model answers a turn
+  is the program's own setting, and this app passes no `--model` for a turn.
+  (A coding job is different: its model is chosen per agent in the terminal
+  panel, from the program's own list.) Kept, because an operator who tries Claude for an
   hour and goes back has to find their model where they left it. Both panels say
   so on the row, because a model field that is quietly ignored is the one thing
   nothing else on screen would explain.

@@ -50,14 +50,12 @@ impl Deployment {
     pub const fn capabilities(self) -> Capabilities {
         match self {
             Deployment::Desktop => Capabilities {
-                local_directories: true,
                 loopback_endpoints: true,
                 claude_provider: true,
                 claude_code_harness: true,
                 local_files: true,
             },
             Deployment::Server => Capabilities {
-                local_directories: true,
                 loopback_endpoints: true,
                 claude_provider: true,
                 claude_code_harness: true,
@@ -74,22 +72,19 @@ impl Deployment {
 /// What a deployment can do.
 ///
 /// A struct of flags rather than a set of `matches!` calls scattered through
-/// the panels. The list is short and it is meant to stay short: a sixth flag
+/// the panels. The list is short and it is meant to stay short: a fifth flag
 /// has to be something that is physically on the operator's machine, not a
 /// feature somebody has not got round to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Capabilities {
-    /// A path on the backend, including explicitly mounted directories in a
-    /// container. Never resolved against the client's filesystem.
-    pub local_directories: bool,
     /// An address on the backend's network. Localhost names the backend;
     /// host.docker.internal can reach the container host.
     pub loopback_endpoints: bool,
     /// Whether the backend may run the official Claude CLI for turns.
     /// Authentication belongs to that CLI, under the operator's backend user.
     pub claude_provider: bool,
-    /// Whether the backend may run Claude Code for repository jobs.
+    /// Whether the backend may run Claude Code for an agent's coding jobs.
     pub claude_code_harness: bool,
     /// Whether a file may be named by a path on the operator's disk, and a
     /// saved copy land in their downloads folder.
@@ -106,7 +101,6 @@ pub struct Capabilities {
 /// and retried, and on a panel it gets reported as a bug.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Absent {
-    LocalDirectories,
     LoopbackEndpoints,
     ClaudeProvider,
     ClaudeCodeHarness,
@@ -116,11 +110,6 @@ pub enum Absent {
 impl Absent {
     pub const fn sentence(self) -> &'static str {
         match self {
-            Absent::LocalDirectories => {
-                "this workspace runs on a server, so it cannot open a directory on your own \
-                 machine. Link the repository by its remote instead, and the workspace clones \
-                 it into a directory of its own"
-            }
             Absent::LoopbackEndpoints => {
                 "this workspace runs on a server, so it cannot reach a model running on your own \
                  machine. Point it at an endpoint the server can reach, or run this crew in a \
@@ -158,7 +147,6 @@ impl Capabilities {
     /// one fact.
     pub const fn require(self, what: Absent) -> Result<(), Absent> {
         let have = match what {
-            Absent::LocalDirectories => self.local_directories,
             Absent::LoopbackEndpoints => self.loopback_endpoints,
             Absent::ClaudeProvider => self.claude_provider,
             Absent::ClaudeCodeHarness => self.claude_code_harness,
@@ -229,7 +217,6 @@ mod tests {
         let desktop = Deployment::Desktop.capabilities();
         let server = Deployment::Server.capabilities();
         for what in [
-            Absent::LocalDirectories,
             Absent::LoopbackEndpoints,
             Absent::ClaudeProvider,
             Absent::ClaudeCodeHarness,
@@ -237,10 +224,9 @@ mod tests {
         ] {
             assert_eq!(desktop.require(what), Ok(()), "a desktop has {what:?}");
             let expected = match what {
-                Absent::LocalDirectories
-                | Absent::LoopbackEndpoints
-                | Absent::ClaudeCodeHarness
-                | Absent::ClaudeProvider => Ok(()),
+                Absent::LoopbackEndpoints | Absent::ClaudeCodeHarness | Absent::ClaudeProvider => {
+                    Ok(())
+                }
                 _ => Err(what),
             };
             assert_eq!(server.require(what), expected);
@@ -254,7 +240,6 @@ mod tests {
         // person. Each of these has to carry a way forward, and the cheapest
         // check that it does is that it offers an alternative in words.
         for what in [
-            Absent::LocalDirectories,
             Absent::LoopbackEndpoints,
             Absent::ClaudeProvider,
             Absent::ClaudeCodeHarness,

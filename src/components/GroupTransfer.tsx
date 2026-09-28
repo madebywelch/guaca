@@ -74,8 +74,8 @@ export function GroupTransfer({ group }: { group?: Group }) {
       <h3>Move a group</h3>
       <p className="field__hint">
         Export agents, instructions, memory, conversations, attachments, calendar entries and
-        routines. Sign-ins and repository working files stay on the original host. Exports include
-        conversation content; keep them somewhere private.
+        routines. Sign-ins and the files in agents’ terminals stay on the original host. Exports
+        include conversation content; keep them somewhere private.
       </p>
       {group && (
         <button
@@ -126,9 +126,8 @@ export function GroupTransfer({ group }: { group?: Group }) {
             messages · {archive.tables.routines?.length ?? 0} routines
           </p>
           <p className="field__hint">
-            This creates a separate group. Routines arrive paused. Reconnect providers,
-            repositories, connectors and agent computers before resuming work. The original group
-            stays in place.
+            This creates a separate group. Routines arrive paused. Reconnect providers, connectors,
+            terminals and agent computers before resuming work. The original group stays in place.
           </p>
           <Connections items={archive.reconnect} />
           <button

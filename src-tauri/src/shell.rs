@@ -1,35 +1,28 @@
-//! One shell line, in a directory on this machine, with two bounds on it.
+//! One shell line, in an agent's terminal, with two bounds on it.
 //!
-//! This is the second way into a repository and the small one. [`crate::coding`]
-//! is the other: a whole harness, in its own process, on its own budget, for
-//! minutes at a time. That is the right unit for a change to a codebase and the
-//! wrong unit for every question an agent has about the tree it is standing in.
-//! Before this existed there was only the big one, and the shape of the failure
-//! was consistent: an agent asked to merge a pull request either spent a coding
-//! job on `gh pr merge`, or, when the harness would not start — a spent plan, a
-//! program not installed, another job already in the work tree — reported to the
-//! operator that it had no shell and no way to reach GitHub. Both are true
-//! sentences about a design with one door in it.
+//! The small door into a terminal. [`crate::coding`] is the other: a whole
+//! harness, in its own process, on its own budget, for minutes at a time. That
+//! is the right unit for a change to a codebase and the wrong unit for every
+//! question an agent has about the directory it is standing in: `git status`,
+//! `gh pr view`, cloning a repository, running one test. Before this door
+//! existed there was only the big one, and an agent asked to merge a pull
+//! request either spent a coding job on `gh pr merge` or, when the harness
+//! would not start, reported that it had no shell at all.
 //!
 //! ## It is not a sandbox, and must never be described as one
 //!
-//! The line runs as the operator, in their directory, with their credentials
-//! and their network. That is the same sentence `docs/CODING.md` writes under
-//! *What is not here*, and it is not a widening: a coding job in that directory
-//! already ran arbitrary commands as the operator, under
-//! `--permission-mode bypassPermissions`, with the operator's own MCP servers
-//! loaded. What this adds is directness, not reach. What confines it is what
-//! confined that: the directory the operator chose, and the fact that git can
-//! undo what happens inside it.
+//! The line runs as whoever runs Guaca, with their credentials and their
+//! network. It starts in the agent's own directory and can reach anywhere that
+//! user can. What makes handing it over defensible is that the operator
+//! decides which agents get a terminal, and git is the undo for what happens
+//! in a repository. `docs/CODING.md` says the same at more length.
 //!
-//! The one control that does apply is [`crate::domain::repository::Gate`], and
-//! it applies here for the same reason it applies to a job. A push, a merge or
-//! a release leaves the work tree under the operator's own name and git cannot
-//! take it back. `Runtime::run_in_repository` asks `coding::bridge::outward`
-//! about the line before running it, from the same function the `PreToolUse`
-//! hook asks, so the two doors give the same answer to the same command. A gate
-//! that read only one of them would be a gate an agent could walk around by
-//! choosing the other tool.
+//! The one control that does apply is [`crate::domain::terminal::Gate`]. A
+//! push, a merge or a release leaves the directory under the operator's own
+//! name and git cannot take it back. `Runtime::run_in_terminal` asks
+//! `coding::bridge::outward` about the line before running it, from the same
+//! function each harness's gate asks, so every door gives the same answer to
+//! the same command.
 //!
 //! ## The two bounds
 //!
@@ -140,9 +133,8 @@ impl Ran {
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ShellError {
     #[error(
-        "`{0}` is not a directory on this machine any more. The repository was linked when it \
-         was there, so it has been moved, renamed or deleted since. Tell the operator, and say \
-         they can point the repository at where it is now from its panel"
+        "`{0}` is not a directory on this machine any more, so nothing ran. Tell the operator \
+         what you were trying to do; your terminal is made again the next time it is used"
     )]
     Gone(String),
     #[error(
@@ -177,15 +169,12 @@ pub async fn run_with_env(
     env: &crate::secrets::Environment,
 ) -> Result<Ran, ShellError> {
     // Checked here rather than left to the spawn, because the spawn's own error
-    // for a missing directory is an errno the operator cannot act on and this
-    // is the one failure that happens to people: a repository linked last month
-    // and a directory renamed last week.
+    // for a missing directory is an errno nobody can act on.
     if !Path::new(directory).is_dir() {
         return Err(ShellError::Gone(directory.to_string()));
     }
 
     let mut command_process = tokio::process::Command::new(SHELL);
-    crate::repo::github::environment(directory, &mut command_process).await;
     env.apply(&mut command_process);
     let mut child = command_process
         .arg("-c")
@@ -196,7 +185,7 @@ pub async fn run_with_env(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         // So a dropped future is a killed process rather than a shell left
-        // running in somebody's repository with nothing holding a handle to it.
+        // running with nothing holding a handle to it.
         .kill_on_drop(true)
         .spawn()
         .map_err(|err| ShellError::Unstartable(err.to_string()))?;

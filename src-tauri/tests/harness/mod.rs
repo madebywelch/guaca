@@ -110,18 +110,24 @@ pub enum Script {
     ///
     /// Named for the tool rather than for what it is, because there are two
     /// shells now and they run on two machines: this one is the sandbox, and
-    /// [`Script::InRepository`] is the operator's own repository.
+    /// [`Script::Shell`] is the agent's terminal.
     RunCommand(String),
-    /// Emit a `shell` tool call: one line in the agent's repository, on the
-    /// operator's machine, answered in the turn that asked.
-    InRepository(String),
+    /// Emit a `shell` tool call: one line in the agent's terminal, on the
+    /// machine Guaca runs on, answered in the turn that asked.
+    Shell(String),
+    /// Emit one of Guaca's own tools by name with these arguments: `read`,
+    /// `write` and `edit`, whose shapes a scenario is better off spelling out
+    /// than having a variant each.
+    Tool { name: String, arguments: serde_json::Value },
     /// Emit a `use_screen` tool call that looks at the screen. The same reach
     /// at the one place whose entire answer is a picture, which is what a model
     /// running on an endpoint that takes text only must not be served.
     Look,
     /// Emit a `code` tool call: a brief handed to whichever coding harness the
-    /// agent's repository names.
+    /// agent is set to, in the top of its terminal.
     Code(String),
+    /// The same, in one directory of the terminal.
+    CodeIn { task: String, directory: String },
     /// Emit a `browse` tool call that opens a url: the same reach, at the other
     /// place.
     Open(String),
@@ -322,7 +328,7 @@ pub fn render(script: &Script) -> String {
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
             ));
         }
-        Script::InRepository(command) => {
+        Script::Shell(command) => {
             let args = serde_json::json!({ "command": command }).to_string();
             body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"index":0,"id":"call_shell","type":"function",
@@ -342,8 +348,15 @@ pub fn render(script: &Script) -> String {
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
             ));
         }
-        Script::Code(task) => {
-            let args = serde_json::json!({ "task": task }).to_string();
+        Script::Code(_) | Script::CodeIn { .. } => {
+            let args = match script {
+                Script::CodeIn { task, directory } => {
+                    serde_json::json!({ "task": task, "directory": directory })
+                }
+                Script::Code(task) => serde_json::json!({ "task": task }),
+                _ => unreachable!(),
+            }
+            .to_string();
             body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"index":0,"id":"call_code","type":"function",
                  "function":{"name":"code","arguments": args}}
@@ -432,7 +445,7 @@ pub fn render(script: &Script) -> String {
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
             ));
         }
-        Script::Plugin { name, arguments } => {
+        Script::Plugin { name, arguments } | Script::Tool { name, arguments } => {
             body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"index":0,"id":"call_plugin","type":"function",
                  "function":{"name":name,"arguments":arguments.to_string()}}
@@ -829,6 +842,23 @@ pub fn tool_results(stub: &Stub) -> Vec<String> {
                 .map(|m| m["content"].as_str().unwrap_or_default().to_string())
                 .collect::<Vec<_>>()
         })
+        .collect()
+}
+
+/// The tool results the model was shown on its last call, in order.
+///
+/// One turn's results once each, where [`tool_results`] repeats every result
+/// for every later call that carried it. What a scenario that asserts on the
+/// n-th call of a turn wants.
+pub fn last_tool_results(stub: &Stub) -> Vec<String> {
+    stub.transcript
+        .lock()
+        .last()
+        .and_then(|body| body["messages"].as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|m| m["role"] == "tool")
+        .map(|m| m["content"].as_str().unwrap_or_default().to_string())
         .collect()
 }
 

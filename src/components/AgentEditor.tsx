@@ -6,7 +6,6 @@ import { api } from "../lib/ipc";
 import { onOpenRouter, providerFor } from "../lib/providers";
 import { useStore } from "../lib/store";
 import { type AgentCard, type AgentDraft, errorMessage } from "../lib/types";
-import { AgentRepositories } from "./AgentRepositories";
 import { GrantList } from "./GrantList";
 import { ModelSuggestions } from "./ModelSuggestions";
 import { SubscriptionModel } from "./ProviderFields";
@@ -304,8 +303,6 @@ export function AgentEditor({ agent, onClose }: Props) {
         </label>
 
         {agent && <SigninList agent={agent} />}
-
-        {agent && <AgentRepositories agent={agent} />}
 
         {agent && <GrantList agent={agent} />}
 

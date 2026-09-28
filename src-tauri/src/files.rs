@@ -107,16 +107,16 @@ impl FileStore {
         self.put(&name, &bytes)
     }
 
-    /// Imports an output from the agent's repository, never another host
+    /// Imports a file from the agent's terminal, never another host
     /// directory. Resolve symlinks on both sides before comparing the paths.
     pub fn take_from(&self, root: &Path, source: &Path) -> Result<Attachment, String> {
         let directory = fs::canonicalize(root)
-            .map_err(|err| format!("could not open the repository: {err}. Check it with shell"))?;
+            .map_err(|err| format!("could not open your terminal: {err}. Check it with shell"))?;
         let path = fs::canonicalize(directory.join(source)).map_err(|err| {
             format!("could not read {}: {err}. Check the path with shell", source.display())
         })?;
         if !path.starts_with(&directory) {
-            return Err("the file is outside your repository worktree. Copy it into your worktree with shell, then attach that path".into());
+            return Err("the file is outside your terminal's directory. Copy it into your directory with shell, then attach that path".into());
         }
         let about = fs::metadata(&path).map_err(|err| err.to_string())?;
         if !about.is_file() {
@@ -504,7 +504,7 @@ mod tests {
     }
 
     #[test]
-    fn repository_imports_refuse_other_directories_missing_files_folders_and_large_files() {
+    fn terminal_imports_refuse_other_directories_missing_files_folders_and_large_files() {
         let (files, dir) = store();
         let root = dir.path().join("repository");
         let neighbor = dir.path().join("repository-other");
@@ -528,7 +528,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn repository_imports_follow_only_internal_symlinks_and_preserve_the_requested_name() {
+    fn terminal_imports_follow_only_internal_symlinks_and_preserve_the_requested_name() {
         let (files, dir) = store();
         let root = dir.path().join("repository");
         fs::create_dir(&root).unwrap();

@@ -47,7 +47,16 @@ for raw in sys.stdin:
         custom = Path(".codex_custom_provider").exists()
         missing = Path(".codex_signed_out").exists()
         reply(request, {"account": None if custom or missing else {"type": "apiKey"}, "requiresOpenaiAuth": not custom})
-    elif method == "thread/start":
+    elif method == "model/list":
+        reply(request, {"nextCursor": None, "data": [
+            {"id": "gpt-6-astra", "displayName": "GPT-6-Astra", "description": "Frontier", "isDefault": True, "hidden": False,
+             "supportedReasoningEfforts": [{"reasoningEffort": "low"}, {"reasoningEffort": "ultra"}]},
+            {"id": "gpt-hidden", "displayName": "Hidden", "hidden": True},
+        ]})
+    elif method in ("thread/start", "thread/resume"):
+        if method == "thread/resume":
+            thread = request["params"]["threadId"]
+            Path(".resumed").write_text(thread)
         policy = "never" if Path(".codex_bad_policy").exists() else request["params"]["approvalPolicy"]
         reply(request, {"thread": {"id": thread}, "model": "fixture-mini", "approvalPolicy": policy, "approvalsReviewer": "user"})
     elif method == "turn/start":
@@ -74,6 +83,12 @@ for raw in sys.stdin:
             reply(request, {"turnId": turn})
             if not gated:
                 finish()
+    elif method == "turn/interrupt":
+        assert request["params"]["threadId"] == thread
+        assert request["params"]["turnId"] == turn
+        Path(".interrupted").write_text("interrupted")
+        reply(request, {})
+        send({"method": "turn/completed", "params": {"threadId": thread, "turn": {"id": turn, "status": "interrupted", "error": None}}})
     elif request.get("id") == 90:
         if request["result"]["decision"] == "accept":
             Path(".pushed").write_text("accepted")

@@ -252,7 +252,17 @@ function describe(tool: string, args: Args): Described {
     // the two run on different machines and the chip is where an operator
     // finds out which. An agent that has both draws both in one turn.
     case "shell":
-      return { title: "Ran a command in its repository", target: text(args, "command") };
+      return { title: "Ran a command in its terminal", target: text(args, "command") };
+
+    // A disk, not an attachment: `read_file` is the attachment and says so.
+    case "read":
+      return { title: "Read a file", target: text(args, "path") };
+
+    case "write":
+      return { title: "Wrote a file", target: text(args, "path") };
+
+    case "edit":
+      return { title: "Edited a file", target: text(args, "path") };
 
     case "code":
       return { title: "Started a coding agent", target: text(args, "task") };
@@ -482,7 +492,13 @@ export function callInFlight(name: string, raw: unknown): string {
     case "run_command":
       return "Running a command";
     case "shell":
-      return "Running a command in its repository";
+      return "Running a command in its terminal";
+    case "read":
+      return "Reading a file";
+    case "write":
+      return "Writing a file";
+    case "edit":
+      return "Editing a file";
     case "code":
       return "Starting a coding agent";
     case "errand":
@@ -544,7 +560,13 @@ function manyLabel(group: TrailGroup): string {
     case "run_command":
       return `Ran ${count} commands`;
     case "shell":
-      return `Ran ${count} commands in its repository`;
+      return `Ran ${count} commands in its terminal`;
+    case "read":
+      return `Read ${count} files`;
+    case "write":
+      return `Wrote ${count} files`;
+    case "edit":
+      return `Made ${count} edits`;
     case "errand":
       return `Sent errands ${count} times`;
     case "browse": {

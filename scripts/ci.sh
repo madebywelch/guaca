@@ -39,9 +39,6 @@ run_web() {
 run_rust() {
   ensure_dist
 
-  step "GitHub credential service tests"
-  python3 -m unittest discover -s deploy/github -p 'test_*.py'
-
   step "Rust format"
   cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 

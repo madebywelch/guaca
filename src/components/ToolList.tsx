@@ -7,7 +7,7 @@ import { errorMessage, type ToolSummary } from "../lib/types";
  * Guaca's own tools, read from the definitions agents are sent.
  *
  * A list rather than switches. Which agent may use which tool is decided by
- * what it was given (a computer, a browser, a repository) and, for a
+ * what it was given (a computer, a browser, a terminal) and, for a
  * connector's tools, under Connectors; this is where an operator reads what
  * the functions are, in the words the agent reads them.
  */

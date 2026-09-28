@@ -25,7 +25,6 @@ let decisionRead = 0;
 
 /** A desktop's answer, which is every capability there is. */
 const EVERYTHING: Capabilities = {
-  localDirectories: true,
   loopbackEndpoints: true,
   claudeProvider: true,
   claudeCodeHarness: true,
@@ -53,9 +52,6 @@ import type {
   GroupUsage,
   MessageId,
   Participant,
-  RepoStatus,
-  Repository,
-  RepositoryId,
   RoutineId,
   RunId,
   Settings,
@@ -107,27 +103,13 @@ export interface State {
   agents: AgentCard[];
   groups: Group[];
   /**
-   * Every repository in the workspace, filtered per crew where it is drawn.
-   *
-   * Beside the roster rather than fetched by whoever draws it, for the reason
-   * groups are: an agent given a repository changes what two panels say, and
-   * one refresh keeps them consistent.
-   */
-  repositories: Repository[];
-  /**
-   * Agents with a coding job running, and the repository each is working in.
-   *
-   * Keyed by agent rather than by repository, because a repository that gives
-   * each agent a worktree of its own can have two jobs running in it and would
-   * name neither. An agent works in at most one repository and holds at most
-   * one work tree in it, so it names exactly one. It is also the direction both
-   * readers wanted: `CodingPanel` had to search the map by agent, and the rail
-   * only asks whether anything at all is building in a repository.
+   * Agents with a coding job running, and the directory in its terminal each
+   * is working in. One job per agent, so the agent names it.
    *
    * In memory and event-driven, like the job itself. It does not survive a
    * restart, which is correct: neither does the job.
    */
-  building: Record<AgentId, RepositoryId>;
+  building: Record<AgentId, string>;
   /**
    * What each running job is doing, newest last, by the agent that started it.
    *
@@ -136,15 +118,6 @@ export interface State {
    * whose channel draws it.
    */
   coding: Record<AgentId, CodingLine[]>;
-  /**
-   * What each linked repository is doing, by id.
-   *
-   * Separate from the repositories themselves because it has a different
-   * lifetime: the row changes when the operator links or renames one, and this
-   * changes when they commit, in a terminal Guaca never sees. Absent for a
-   * repository whose directory could not be read.
-   */
-  repoStatus: Record<RepositoryId, RepoStatus>;
   activity: Record<AgentId, Activity>;
   /** Newest message timestamp per agent. Drives the sidebar order. */
   lastActive: Record<AgentId, number>;
@@ -372,14 +345,6 @@ export interface State {
   bootstrap: () => Promise<void>;
   resynchronize: () => Promise<void>;
   refreshAgents: () => Promise<void>;
-  /**
-   * Asks git, and `gh`, what the linked repositories are doing.
-   *
-   * Polled rather than pushed. Nothing that changes a branch or opens a pull
-   * request goes through Guaca, so there is no event to listen for and the
-   * only honest options are asking again or being wrong.
-   */
-  refreshRepoStatuses: () => Promise<void>;
   refreshUsage: () => Promise<void>;
   refreshApprovals: () => Promise<void>;
   /**
@@ -529,10 +494,8 @@ function keptChannel(state: State, group: GroupId | null): boolean {
 export const useStore = create<State>((set, get) => ({
   agents: [],
   groups: [],
-  repositories: [],
   building: {},
   coding: {},
-  repoStatus: {},
   activity: {},
   lastActive: {},
   settings: null,
@@ -585,7 +548,6 @@ export const useStore = create<State>((set, get) => ({
     const [
       agents,
       groups,
-      repositories,
       activity,
       lastActive,
       settings,
@@ -598,7 +560,6 @@ export const useStore = create<State>((set, get) => ({
     ] = await Promise.all([
       api.listAgents(),
       api.listGroups(),
-      api.listRepositories(),
       hosted ? Promise.resolve(null) : api.agentActivity(),
       api.agentLastActive(),
       api.getSettings(),
@@ -618,7 +579,6 @@ export const useStore = create<State>((set, get) => ({
     set({
       agents,
       groups,
-      repositories,
       ...(activity ? { activity } : {}),
       lastActive,
       settings,
@@ -656,33 +616,17 @@ export const useStore = create<State>((set, get) => ({
       ),
     }));
     if (next) await get().loadChannel(next);
-    await get().refreshRepoStatuses();
-  },
-
-  async refreshRepoStatuses() {
-    try {
-      set({ repoStatus: await api.repositoryStatuses() });
-    } catch {
-      // Left as it was rather than cleared. A failed poll is usually a
-      // directory that is momentarily busy, and blanking every branch name for
-      // one bad read makes the rail flicker on a timer.
-    }
   },
 
   async refreshAgents() {
     // Groups come back with the roster because an agent moving between them
     // changes both counts, and one refresh keeps the two consistent on screen.
-    const [agents, groups, repositories] = await Promise.all([
-      api.listAgents(),
-      api.listGroups(),
-      api.listRepositories(),
-    ]);
+    const [agents, groups] = await Promise.all([api.listAgents(), api.listGroups()]);
     // A group the rail was looking inside can be deleted from the group editor,
     // and a focus on one that is gone draws an empty rail with no way out of it.
     set((state) => ({
       agents,
       groups,
-      repositories,
       railGroup: groups.some((g) => g.id === state.railGroup) ? state.railGroup : null,
     }));
 
@@ -780,22 +724,6 @@ export const useStore = create<State>((set, get) => ({
 
     if (target.kind === "group") {
       await get().moveAgent(id, { groupId: target.id, before: null });
-      return;
-    }
-
-    // A move, like dropping on a crew, but inside the crew: an agent works in
-    // at most one repository, so this replaces whatever it was in rather than
-    // adding to it. Dropping it back where it already is changes nothing, which
-    // is what makes an accidental drag free.
-    if (target.kind === "repository") {
-      const repository = state.repositories.find((r) => r.id === target.id);
-      if (!repository || repository.id === dragged.repositoryId) return;
-      // The store refuses this anyway. Refused here too so a drag across a
-      // crew boundary is a gesture that does nothing rather than one that
-      // raises an error the rail has nowhere to put.
-      if (repository.groupId !== dragged.groupId) return;
-      await api.setAgentRepository(id, target.id);
-      await get().refreshAgents();
       return;
     }
 
@@ -1286,7 +1214,7 @@ export const useStore = create<State>((set, get) => ({
       // needed doing.
       case "codingJobStarted": {
         set((state) => ({
-          building: { ...state.building, [event.agentId]: event.repositoryId },
+          building: { ...state.building, [event.agentId]: event.directory },
         }));
         break;
       }
@@ -1323,7 +1251,7 @@ export const useStore = create<State>((set, get) => ({
         // running leaves them guessing which sign-in to go and look at.
         get().setBanner({
           tone: "error",
-          text: `A coding job in ${event.repository} could not run on ${event.harness}: ${event.reason}`,
+          text: `A coding job in ${event.directory} could not run on ${event.harness}: ${event.reason}`,
         });
         break;
       }
