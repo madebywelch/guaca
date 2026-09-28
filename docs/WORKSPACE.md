@@ -86,7 +86,7 @@ gmail_search`, is one row saying one thing twice and once in a spelling nobody
 reads. The chip says `Used gmail_search on Google` and the summary is treated
 as the echo it is. What the tool *does* is still never guessed at: a crew's
 plugins are connected after this build shipped, so the server's own name for it
-is the whole of what can be said about it. The seven are spelled the way their
+is the whole of what can be said about it. The eight are spelled the way their
 vendors spell them in `lib/plugins.ts`, beside their marks, because a
 transcript is the one place that draws a plugin with no row under it to read a
 name off; a server the operator added is called what they called it, which is

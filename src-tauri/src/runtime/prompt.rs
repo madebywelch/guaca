@@ -375,7 +375,7 @@ pub fn system_prompt(
                     // model knows what Neon is and has never heard of
                     // `homeassistant`, and the host is the one thing that says
                     // whose machine is on the other end of the call. For the
-                    // seven it would be noise: the name already says it, and the
+                    // eight it would be noise: the name already says it, and the
                     // address is the same on every install.
                     // A program is described rather than quoted: its command
                     // line is the operator's to write and can carry a token.

@@ -1489,7 +1489,7 @@ pub enum ToolInvocation {
     /// Unlike every other variant, what this can be is not known at compile
     /// time: the server said, when the plugin was connected. Parsing splits the
     /// name and resolves the half in front of it, and the two halves of that
-    /// resolution answer to different things. One of the seven is recognized
+    /// resolution answer to different things. One of the eight is recognized
     /// whether or not the crew has it, so an agent that calls a plugin nobody
     /// connected is refused by the runtime with a reason rather than here with
     /// "unknown tool", which is a different and less useful thing to be told.
@@ -2065,7 +2065,7 @@ fn as_chord(value: &serde_json::Value) -> Option<String> {
 /// you, ask a peer", which is what the runtime says when the name resolves and
 /// the reach check refuses it. Given only its own plugins, the name would not
 /// resolve at all and the answer would be "unknown tool", which names no way
-/// forward and is a different answer from the one the seven give.
+/// forward and is a different answer from the one the eight give.
 pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation, ToolParseError> {
     match call.name.as_str() {
         DIRECTORY => Ok(ToolInvocation::Directory),
@@ -2796,7 +2796,7 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
 /// Splits `neon__run_sql` into the plugin and the tool it belongs to.
 ///
 /// The separator is two underscores because MCP servers use one inside tool
-/// names constantly and none of the seven uses two. Split on the first
+/// names constantly and none of the eight uses two. Split on the first
 /// occurrence, not the last: a server with `run__sql` would otherwise have its
 /// own name torn in half. A custom server's name cannot contain a pair at all,
 /// because runs of them collapse when it is normalized.

@@ -152,12 +152,20 @@ and `account.rs`.
   it, so a `firecrawl` row with a pasted key or a program behind it would start
   dialling the catalog's address with a credential issued for something else.
   Migration 54 keeps a row that is exactly what the tile would have written and
-  renames every other one to `firecrawl_added`, address and all. Adding the next
-  vendor means writing the same migration for its slug.
+  renames every other one to `firecrawl_added`, address and all; migration 55 is
+  the same for `supermemory`. Adding the next vendor means writing it again for
+  its slug, and one more call to the shared test in `migrations.rs`.
 - **Firecrawl is `/v2/mcp-oauth`, not `/v2/mcp`.** The shorter address answers
   with no credential, on a keyless daily allowance with no account behind it, so
   it connects as a public server and spends nobody's credits. Only the longer
   one publishes resource metadata and signs in.
+- **An issuer with a path is not only looked up where RFC 8414 says.** The RFC
+  puts the well-known segment before the path, and Stripe's
+  `https://access.stripe.com/mcp` answers only there. Supermemory's
+  `https://api.supermemory.ai/api/auth` answers 404 there and is found by the
+  next two tries, after the path and at the bare origin. Trimming `well_known`
+  to the RFC's form loses Supermemory, trimming it to the usual guess loses
+  Stripe, and only `scripts/plugins.sh` would notice either. `oauth::well_known`.
 - **A header the operator wrote is not a credential, and that is why it
   composes.** It describes how a request *reaches* the server rather than who is
   asking, so it goes on every one — the unauthenticated probe, the handshake,
@@ -194,7 +202,7 @@ and `account.rs`.
   otherwise be unreachable from the panel.
 - **The older transport is offered to a server the operator added and to no
   vendor.** A vendor Guaca vouches for is one it can hold to streamable HTTP,
-  and refusing one of the seven over it is a message somebody at that vendor
+  and refusing one of the eight over it is a message somebody at that vendor
   reads. A box in an operator's own network is not a vendor: refusing it is not
   a migration incentive, it is a plugin that does not work on a server they can
   see working in a browser. `Dial::legacy_transport`, set only in

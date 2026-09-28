@@ -1500,6 +1500,26 @@ WHERE kind = 'firecrawl'
   );
 "#,
     ),
+    (
+        55,
+        r#"
+-- Supermemory joined the catalog, and this is migration 54 for its slug. The
+-- tile's row is an OAuth grant for `https://mcp.supermemory.ai/mcp`. Any other
+-- `supermemory` row (a pasted key, another address, a program on the host) is
+-- the operator's own server and keeps its address under `supermemory_added`.
+UPDATE plugins SET endpoint = ''
+WHERE kind = 'supermemory'
+  AND endpoint = 'https://mcp.supermemory.ai/mcp'
+  AND token_endpoint <> '';
+UPDATE plugins SET kind = 'supermemory_added'
+WHERE kind = 'supermemory'
+  AND endpoint <> ''
+  AND NOT EXISTS (
+      SELECT 1 FROM plugins AS taken
+      WHERE taken.group_id = plugins.group_id AND taken.kind = 'supermemory_added'
+  );
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -1951,15 +1971,48 @@ mod tests {
 
     #[test]
     fn a_server_added_by_hand_under_a_name_the_catalog_takes_keeps_its_address() {
-        // Left alone, `from_row` reads a `firecrawl` row as the catalog's
-        // whatever address it carries, and a crew that pasted a key or ran the
-        // server as a program starts dialling somewhere else with it. Only the
-        // row the tile itself would have written may become the catalog's.
+        // Firecrawl's other address is the keyless one, which answers with no
+        // sign-in at all.
+        a_row_the_tile_did_not_write_keeps_its_address(
+            54,
+            crate::domain::plugin::PluginKind::Firecrawl,
+            "https://www.firecrawl.dev/api/oauth/token",
+            "https://mcp.firecrawl.dev/v2/mcp",
+            "stdio:npx -y firecrawl-mcp",
+        );
+    }
+
+    #[test]
+    fn supermemory_takes_its_name_back_from_a_hand_added_row_the_way_firecrawl_did() {
+        a_row_the_tile_did_not_write_keeps_its_address(
+            55,
+            crate::domain::plugin::PluginKind::Supermemory,
+            "https://api.supermemory.ai/api/auth/oauth2/token",
+            "https://memory.example.com/mcp",
+            "stdio:node supermemory.js",
+        );
+    }
+
+    /// Migrations 54 and 55, which are one rule for two slugs.
+    ///
+    /// Left alone, `from_row` reads a row under a catalog slug as the
+    /// catalog's whatever address it carries, and a crew that pasted a key or
+    /// ran the server as a program starts dialling somewhere else with it. Only
+    /// the row the tile itself would have written may become the catalog's.
+    fn a_row_the_tile_did_not_write_keeps_its_address(
+        version: i32,
+        vendor: crate::domain::plugin::PluginKind,
+        token: &str,
+        elsewhere: &str,
+        program: &str,
+    ) {
         use crate::domain::plugin::PluginKind;
+        let (slug, oauth) = (vendor.slug(), vendor.endpoint());
+        let added = format!("{slug}_added");
         let mut conn = memory();
-        for (version, sql) in MIGRATIONS.iter().filter(|(v, _)| *v < 54) {
+        for (at, sql) in MIGRATIONS.iter().filter(|(v, _)| *v < version) {
             conn.execute_batch(sql).unwrap();
-            conn.pragma_update(None, "user_version", *version).unwrap();
+            conn.pragma_update(None, "user_version", *at).unwrap();
         }
         for group in ["g1", "g2", "g3", "g4", "g5"] {
             conn.execute("INSERT INTO groups (id,name,created_at) VALUES (?1,?1,0)", [group])
@@ -1976,15 +2029,13 @@ mod tests {
                           (id,group_id,kind,account,tools,token_endpoint,access_token,
                            connected_at,endpoint)
                       VALUES (?1,?2,?3,'','[]',?4,'tok',0,?5)";
-        let oauth = "https://mcp.firecrawl.dev/v2/mcp-oauth";
-        let token = "https://www.firecrawl.dev/api/oauth/token";
         for (id, group, kind, token_endpoint, endpoint) in [
-            ("signed", "g1", "firecrawl", token, oauth),
-            ("keyed", "g2", "firecrawl", "", "https://mcp.firecrawl.dev/v2/mcp"),
-            ("pasted", "g3", "firecrawl", "", oauth),
-            ("program", "g4", "firecrawl", "", "stdio:npx -y firecrawl-mcp"),
-            ("crowded", "g5", "firecrawl", "", "https://mcp.firecrawl.dev/v2/mcp"),
-            ("taken", "g5", "firecrawl_added", "", "https://example.com/mcp"),
+            ("signed", "g1", slug, token, oauth),
+            ("keyed", "g2", slug, "", elsewhere),
+            ("pasted", "g3", slug, "", oauth),
+            ("program", "g4", slug, "", program),
+            ("crowded", "g5", slug, "", elsewhere),
+            ("taken", "g5", added.as_str(), "", "https://example.com/mcp"),
             ("vendor", "g1", "neon", token, ""),
         ] {
             conn.execute(insert, rusqlite::params![id, group, kind, token_endpoint, endpoint])
@@ -2005,16 +2056,12 @@ mod tests {
             let (kind, endpoint) = row(id);
             PluginKind::from_row(&kind, &endpoint).unwrap()
         };
-        assert_eq!(row("signed"), ("firecrawl".into(), "".into()));
-        assert_eq!(resolved("signed"), PluginKind::Firecrawl, "a grant for the same resource");
-        for (id, endpoint) in [
-            ("keyed", "https://mcp.firecrawl.dev/v2/mcp"),
-            ("pasted", oauth),
-            ("program", "stdio:npx -y firecrawl-mcp"),
-        ] {
+        assert_eq!(row("signed"), (slug.to_string(), "".into()));
+        assert_eq!(resolved("signed"), vendor, "a grant for the same resource");
+        for (id, endpoint) in [("keyed", elsewhere), ("pasted", oauth), ("program", program)] {
             assert_eq!(
                 resolved(id),
-                PluginKind::Custom { slug: "firecrawl_added".into(), endpoint: endpoint.into() },
+                PluginKind::Custom { slug: added.clone(), endpoint: endpoint.into() },
                 "{id} is still the operator's own server"
             );
         }
@@ -2026,8 +2073,8 @@ mod tests {
         assert_eq!(named, 1, "who may spend it hangs off the id and survives the rename");
         // A crew that already has the fallback name keeps both rows rather than
         // failing to open on the unique index.
-        assert_eq!(row("crowded").0, "firecrawl");
-        assert_eq!(row("taken").0, "firecrawl_added");
+        assert_eq!(row("crowded").0, slug);
+        assert_eq!(row("taken").0, added);
         assert_eq!(resolved("vendor"), PluginKind::Neon);
     }
 
