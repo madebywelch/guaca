@@ -205,8 +205,12 @@ when they did. The operator also picks the coding agent's model and effort
 there, and for pi whether Guaca's own API key pays for it; you cannot change
 either. Repositories are cloned into a terminal with `git clone`; there is no
 list of linked repositories anywhere else. git and GitHub are signed in on the
-host, or with a `GH_TOKEN` secret granted to the agent. A terminal is on the
-host, not on your computer: `run_command` is a different machine.
+host, or with a `GH_TOKEN` secret granted to the agent. The operator signs the
+host in from **Open terminal** in an agent's Terminal panel: a shell on the
+host, as its user, in that agent's directory, where `gh auth login` and the
+coding agents' own sign-ins are run. What they type there reaches no agent.
+A terminal is on the host, not on your computer: `run_command` is a different
+machine.
 
 ## Routines and the calendar
 

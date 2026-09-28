@@ -79,6 +79,12 @@ tower-http = { version = "0.6", features = ["fs", "cors", "trace"], optional = t
 # `upgrade`, and the adapter is what makes the taken-over socket a tokio one.
 hyper = { version = "1", optional = true }
 hyper-util = { version = "0.1", features = ["tokio"], optional = true }
+# The operator's own shell in an agent's terminal needs a pseudo-terminal, not
+# pipes: `gh auth login` and each harness's sign-in draw a menu and wait for a
+# key. This is openpty, setsid and the controlling terminal on the rustix
+# already in the tree, with tokio's reactor under it. Unix only, which every
+# host is; the window never builds it.
+pty-process = { version = "0.5", features = ["async"], optional = true }
 
 rusqlite = { version = "0.32", features = ["bundled"] }
 r2d2 = "0.8"
@@ -136,7 +142,7 @@ desktop = [
 custom-protocol = ["tauri/custom-protocol"]
 
 # The daemon: the same runtime, reached over HTTP and a socket.
-server = ["dep:axum", "dep:tower-http", "dep:hyper", "dep:hyper-util"]
+server = ["dep:axum", "dep:tower-http", "dep:hyper", "dep:hyper-util", "dep:pty-process"]
 
 [[bin]]
 name = "guac"

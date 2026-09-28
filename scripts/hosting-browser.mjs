@@ -364,6 +364,31 @@ try {
   assert.equal(await evaluate("getComputedStyle(document.querySelector('.mobile-nav')).display"),"none");
   console.log("PASS: phone widths, touch navigation, preserved drafts, keyboard-sized viewport, settings and desktop layout.");
 
+  // The operator's own shell in the agent's terminal: xterm, the socket and a
+  // real pty. What is typed runs in the agent's directory, and Done ends the
+  // shell along with the program it was running.
+  await call("give_agent_terminal", { id: agent.id });
+  const { path: terminal } = await call("agent_terminal", { id: agent.id });
+  const openTerminal = `[...document.querySelectorAll('button')].find(b=>b.textContent==='Open terminal')`;
+  await until(() => evaluate(`!!${openTerminal} && !${openTerminal}.disabled`), "Open terminal is offered");
+  await evaluate(`${openTerminal}.click()`);
+  await until(() => evaluate(`document.querySelector('.console .screen__state')?.textContent==='running'`), "the shell starts");
+  assert.ok(await evaluate("document.activeElement?.classList.contains('xterm-helper-textarea')"), "the keyboard is in the terminal");
+  const printed = () => evaluate("document.querySelector('.console .xterm-rows')?.innerText ?? ''");
+  const enter = async (line) => {
+    await cdp("Input.insertText", { text: line }, session);
+    for (const type of ["keyDown", "keyUp"])
+      await cdp("Input.dispatchKeyEvent", { type, key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, ...(type === "keyDown" ? { text: "\r" } : {}) }, session);
+  };
+  await enter(`echo "here:$PWD"; echo "shell:$$"; sleep 600`);
+  await until(async () => /shell:\d+/.test(await printed()), "the shell answers");
+  assert.ok((await printed()).includes(`here:${terminal}`), "it starts in the agent's directory");
+  const shell = Number((await printed()).match(/shell:(\d+)/)[1]);
+  await evaluate(`[...document.querySelectorAll('.console button')].find(b=>b.textContent==='Done').click()`);
+  assert.ok(await evaluate("!document.querySelector('.console')"), "Done closes it");
+  await until(() => { try { process.kill(shell, 0); return false; } catch { return true; } }, "closing ends the shell");
+  console.log("PASS: an agent's terminal opens in the browser, runs in its directory, and ends on Done.");
+
   // Exercise the real artifact route in Chromium, including its opaque origin.
   const artifact = await call("frame_artifact", {
     html: `<script>let isolated=false;try{parent.localStorage.getItem('guaca.workspace.token')}catch{isolated=true}guaca.answer({isolated});</script>`,

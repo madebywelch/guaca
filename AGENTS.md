@@ -61,6 +61,8 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/announce.ts     What that interruption would say. One event in, one line out.
   lib/keybinds.ts     Every key the app answers to, in one list.
   lib/limits.ts       The five bounds a conversation runs inside, in words.
+  lib/console.ts      What the host says on the operator's shell's socket, and
+                      how its ending is said. No DOM.
   components/         One file per surface.
     Memory.tsx        What an agent remembers, and what happens when both of
                       you write it at once.
@@ -72,6 +74,8 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
                       doing what, and a line to any of them. A second client
                       of the host, on `menubar.html`, not a view the window
                       feeds.
+    Console.tsx       The operator's own shell in an agent's terminal, drawn
+                      by xterm.js over the window.
 src-tauri/src/
   domain/             AgentCard, Envelope, Routine, Connector, Signin, Approval,
                       Search, ids. No I/O.
@@ -168,6 +172,9 @@ src-tauri/src/
   boot.rs             Opening a workspace, which is the same act in both hosts.
   server/mod.rs       The second host: the same runtime over HTTP and a
                       socket, behind one token.
+  server/console.rs   The operator's own shell in an agent's terminal: `bash`
+                      on a pseudo-terminal, over a socket, for as long as the
+                      socket is open, with none of the agent's secrets.
   bin/guacad.rs       The daemon that starts it, configured from the
                       environment because systemd starts it, not a person.
   host.rs             A guacad container, and the one sequence that backs it
@@ -215,6 +222,7 @@ repo: the frontend renders state and forwards intent.
 | Why there is no repository row, and where its credential, identity, harness and gate went | *Why a directory of the agent's own, and not a repository* in `docs/CODING.md`, then migration 54 |
 | An agent running one command, reading or editing a file, and which of the three doors a piece of work goes through | *Three doors, sized by the work* in `docs/CODING.md`, then `src-tauri/src/shell.rs`, `src-tauri/src/terminal.rs` and `Runtime::run_in_terminal` |
 | git and GitHub sign-ins, commit identity, a token for one agent | *Credentials belong to the host* in `docs/CODING.md`, then the `git config --system` line in `Dockerfile` |
+| The operator's own shell: Open terminal, its socket, what it is given, when it ends | *The operator has a door of their own* in `docs/CODING.md`, then `server/console.rs` and `src/components/Console.tsx`, and run the console tests in `tests/server.rs` under `--no-default-features --features server` |
 | Which program writes the code, a spent plan, a harness that will not start | *There are three harnesses because a subscription is spent by one program* in `docs/CODING.md`, then `domain::terminal::Harness` and `coding/mod.rs` |
 | What branch a coding job starts on, and what it is told about the tree | *A job is told where it is standing before it is told what to do* in `docs/CODING.md`, then `repo::footing` and the brief assembled in `Runtime::start_job` |
 | An argument a harness is started with, or how its stream is read | *One process lifecycle, three of what genuinely differs* in `docs/CODING.md`, then `coding/pi.rs`, `coding/claude_code.rs` and `coding/codex.rs`, and run the live half of `tests/coding.rs` |

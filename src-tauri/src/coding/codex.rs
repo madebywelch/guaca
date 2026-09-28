@@ -318,7 +318,7 @@ async fn drive(
                         // login check can disagree with a custom provider.
                         if result["requiresOpenaiAuth"] == true && result["account"].is_null() {
                             return Err(failed(format!(
-                                "Codex is not signed in on this backend. Run `{}` as the backend user, then retry the coding job. Guaca's own ChatGPT sign-in does not sign in Codex.",
+                                "Codex is not signed in on this backend. Run `{}` on it, from Open terminal in this agent's Terminal panel, then retry the coding job. Guaca's own ChatGPT sign-in does not sign in Codex.",
                                 super::sign_in(crate::domain::terminal::Harness::Codex)
                             )));
                         }

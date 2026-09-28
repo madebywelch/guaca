@@ -17,6 +17,7 @@ import {
   type TerminalView,
   type Tuning,
 } from "../lib/types";
+import { Console } from "./Console";
 
 interface Props {
   agent: AgentCard;
@@ -50,12 +51,19 @@ function labelOf(harness: Harness): string {
  * The last coding session is here too, because it is what the operator's own
  * terminal would offer them: the line that opens it in its own program, and a
  * box that carries it on from where it stopped.
+ *
+ * And the operator's own shell in it, because every sign-in an agent is
+ * refused for is a command somebody has to type on the host, and this is the
+ * one place in the app that names where that is.
  */
 export function TerminalPanel({ agent }: Props) {
   const [machine, setMachine] = useState<HarnessOnMachine[] | null>(null);
   const [view, setView] = useState<TerminalView | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [shell, setShell] = useState(false);
+  // Where the keyboard goes back to when the shell is closed.
+  const opener = useRef<HTMLButtonElement>(null);
   // Which agent the panel is currently about. A lookup started for one agent
   // landing after the operator switched would paint its path under another.
   const showing = useRef(agent.id);
@@ -84,6 +92,7 @@ export function TerminalPanel({ agent }: Props) {
     setMachine(null);
     setBusy(false);
     setError(null);
+    setShell(false);
   }, [agent.id]);
 
   useEffect(() => {
@@ -145,12 +154,36 @@ export function TerminalPanel({ agent }: Props) {
             {view ? (
               <>
                 Its directory is <code>{view.path}</code>. Commands run there as the backend's user,
-                with that machine's git and GitHub sign-ins. This is not a sandbox.
+                with that machine's git and GitHub sign-ins. This is not a sandbox. Open terminal
+                gives you a shell there, and a sign-in made in it, like <code>gh auth login</code>,
+                is every agent's.
               </>
             ) : (
               "Finding its directory…"
             )}
           </p>
+          <div className="field">
+            <button
+              ref={opener}
+              type="button"
+              className="btn btn--small btn--primary"
+              disabled={!view}
+              onClick={() => setShell(true)}
+              title={`A shell in ${agent.name}'s directory, on the backend`}
+            >
+              Open terminal
+            </button>
+          </div>
+          {view && shell && (
+            <Console
+              agent={agent}
+              path={view.path}
+              onClose={() => {
+                setShell(false);
+                opener.current?.focus();
+              }}
+            />
+          )}
 
           <div className="field">
             <span className="field__label">Writes code with</span>
@@ -183,9 +216,9 @@ export function TerminalPanel({ agent }: Props) {
                 </>
               ) : chosen.signedIn === false ? (
                 <>
-                  {labelOf(agent.harness)} is not signed in on the backend. Run{" "}
-                  <code>{chosen.signIn}</code> as the backend's user. Guaca's own sign-in does not
-                  sign in the coding tool.
+                  {labelOf(agent.harness)} is not signed in on the backend. Open the terminal and
+                  run <code>{chosen.signIn}</code>. Guaca's own sign-in does not sign in the coding
+                  tool.
                 </>
               ) : lent ? (
                 "pi runs on the backend, paid for with Guaca's key as set below."
@@ -310,7 +343,7 @@ function LastSession({ agent, session, resume, running }: LastSessionProps) {
         {resume && (
           <>
             {" "}
-            To open it yourself, run this on the backend as its user: <code>{resume}</code>
+            To open it yourself, open the terminal and run <code>{resume}</code>
           </>
         )}
       </span>

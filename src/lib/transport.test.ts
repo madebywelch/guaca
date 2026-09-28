@@ -335,3 +335,17 @@ describe("reconnecting", () => {
     }
   });
 });
+
+describe("the operator's shell", () => {
+  it("is a socket on the workspace's origin, with the token and the size measured", async () => {
+    setToken("a token/with=odd&bits");
+    const { consoleUrl } = await import("./transport");
+    const url = new URL(consoleUrl("a1", 100, 30));
+
+    expect(url.origin).toBe(window.location.origin.replace(/^http/, "ws"));
+    expect(url.pathname).toBe("/v1/console/a1");
+    expect(url.searchParams.get("token")).toBe("a token/with=odd&bits");
+    expect(url.searchParams.get("cols")).toBe("100");
+    expect(url.searchParams.get("rows")).toBe("30");
+  });
+});

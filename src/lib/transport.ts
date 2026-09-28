@@ -279,6 +279,18 @@ export function workspaceOrigin(): string {
 }
 
 /**
+ * Where the operator's own shell in one agent's terminal is opened.
+ *
+ * A socket, with the token on the query for the reason the event socket's is,
+ * and the size the page measured, so the first prompt is drawn at the width
+ * it is read at rather than at a default and then redrawn.
+ */
+export function consoleUrl(agent: string, cols: number, rows: number): string {
+  const query = new URLSearchParams({ token: token(), cols: String(cols), rows: String(rows) });
+  return `${origin().replace(/^http/, "ws")}/v1/console/${encodeURIComponent(agent)}?${query}`;
+}
+
+/**
  * Hands one document to a hosted workspace and gets back what a message
  * carries.
  *
