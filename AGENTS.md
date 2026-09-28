@@ -45,8 +45,13 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/transport.ts    How a call travels: Tauri's bridge in a window, HTTP and
                       a socket in a browser or in a window pointed at a box.
                       Which one is read at runtime.
-  lib/menubar.ts      The strip's view of the store, for a window showing a
-                      box. One projection, and the test beside it is the gate.
+  lib/menubar.ts      The menu bar, from this side: what the window reports
+                      to the icon, and what the panel under it decides about
+                      its own store. The test beside it is the gate.
+  lib/doing.ts        What a row says an agent is doing. The rail's words, and
+                      the panel's.
+  lib/runtime.ts      The one subscription a page keeps to the host, for both
+                      pages that draw a workspace.
   lib/prefs.ts        What the operator sets and the runtime never reads.
   lib/appearance.ts   Scale, surface, faces and theme, each one write to the document.
   lib/theme.ts        A theme as three choices, and every color solved from them.
@@ -63,6 +68,10 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
                       and the one that expires.
     TokenEntry.tsx    The one screen a browser sees before the workspace, and
                       only a browser.
+    MenubarPanel.tsx  Guaca under the menu bar icon: what is waiting, who is
+                      doing what, and a line to any of them. A second client
+                      of the host, on `menubar.html`, not a view the window
+                      feeds.
 src-tauri/src/
   domain/             AgentCard, Envelope, Routine, Connector, Signin, Approval,
                       Search, ids. No I/O.
@@ -169,8 +178,10 @@ src-tauri/src/
                       what the host may ask it. Two things.
   rebuild.rs          A source build of the app rebuilding itself from the
                       checkout it came from, by running `install.sh`.
-  menubar.rs          What the menu bar says. No Tauri, no menu, no drawing.
-  tray.rs             Drawing that, and turning a click back into a decision.
+  menubar.rs          What the menu bar icon says, and where its panel
+                      stands. No Tauri, no window, no drawing.
+  tray.rs             Drawing that, and the panel's window: when it is made,
+                      what it is told, and how it gives the keyboard back.
   app.rs              Where Tauri is wired up. It and `tray.rs` are the only
                       two files that know Tauri exists.
 ```
@@ -294,7 +305,7 @@ repo: the frontend renders state and forwards intent.
 | A typeface, the reading face or size, a label's case, the smallest size on screen | *Type is one interface face, one reading face and a reading size* in `docs/WORKSPACE.md`, then the type ladder and the `data-typeface` blocks in `src/styles.css` |
 | Anything announced to a screen reader, or a live region | *A transcript is a log, and says one thing out loud* in `docs/WORKSPACE.md` |
 | Scrolling a transcript, following the newest line, when the view may move | *A transcript follows the end for whoever is at the end, and nobody else* in `docs/WORKSPACE.md`, then `src/lib/follow.ts` |
-| The menu bar: the glyph, the count, what the menu offers, closing the window | *The menu bar is Guaca with the window shut* in `docs/WORKSPACE.md`, then `src-tauri/src/menubar.rs` |
+| The menu bar: the glyph, the count, the panel under the icon, closing the window | *The menu bar is Guaca with the window shut* in `docs/WORKSPACE.md`, then `src-tauri/src/menubar.rs`, `src-tauri/src/tray.rs` and `src/components/MenubarPanel.tsx`, and the `Presence` check in `ipc.contract.test.ts`, which is the gate between the window and the icon |
 | The rail's corner: the icon's pair, the name that folds away, the one thing it reports | *The corner is the icon's pair* in `docs/WORKSPACE.md`, then `src/lib/brand.ts` and the suite beside it, which is the gate, and `gaze` in `AgentAvatar` |
 | The rail's order, dragging a row, groups as places you go inside | *The rail is arranged by hand*, *A drop is one call* and *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/rail.ts` and `src/lib/orb.ts` |
 | Deleting an agent, putting one back, what the thirty days hold | *Deleting an agent is a thirty-day hold* in `docs/WORKSPACE.md`, then `Runtime::discard_agent` and `Runtime::purge_agent`, which are the two halves of what used to be one act |
@@ -527,7 +538,7 @@ the gotchas file says what it already cost somebody to change it.
 | Attachments, previews, a file in a reply | `docs/gotchas/files.md` |
 | Anything in `src/styles.css` | `docs/gotchas/styles.md` |
 | The rail, the crews' column, deleting an agent | `docs/gotchas/workspace.md` |
-| The menu bar, the tray, closing the window | `docs/gotchas/menubar.md` |
+| The menu bar, its panel, the tray, closing the window | `docs/gotchas/menubar.md` |
 | A test, a stub, or which suite would catch this | `docs/TESTING.md` |
 
 ## Conventions

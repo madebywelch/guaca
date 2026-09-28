@@ -71,6 +71,7 @@ vi.mock("./lib/ipc", () => ({
         ],
       })),
     reportPresence: async () => {},
+    reportHost: async () => {},
     capabilities: async () => ({
       loopbackEndpoints: true,
       claudeProvider: true,
@@ -95,7 +96,6 @@ vi.mock("./lib/ipc", () => ({
     return () => {};
   }),
   onRevealRequest: async () => () => {},
-  onMenubarAsk: async () => () => {},
   onFileDrop: async () => () => {},
 }));
 

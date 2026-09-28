@@ -275,7 +275,7 @@ describe("the columns that are not the page", () => {
     // group stops at a newline: this rule names its three scopes one per line.
     const remap = css.match(/([^{}]*)\{\s*--sunken: var\(--rail-sunken\);\s*\}/);
     expect(remap, "no rule remaps --sunken onto --rail-sunken").toBeTruthy();
-    for (const scope of [".rail,", ".grail,", ".inspector"]) {
+    for (const scope of [".rail,", ".grail,", ".inspector,", ".menubar"]) {
       expect(remap![1]!).toContain(scope);
     }
     expect(PAPER.has("--rail-sunken")).toBe(true);
@@ -293,7 +293,7 @@ describe("the navigation columns", () => {
    * make: the declaration is the whole of the fix, so the declaration is what
    * is read.
    */
-  it.each(["rail", "grail"])("select nothing under a right-click (.%s)", (column) => {
+  it.each(["rail", "grail", "menubar"])("select nothing under a right-click (.%s)", (column) => {
     expect(getComputedStyle(nest(column)).userSelect).toBe("none");
   });
 });

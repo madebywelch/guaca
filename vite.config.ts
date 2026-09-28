@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
@@ -57,6 +58,14 @@ export default defineConfig({
   },
   envPrefix: ["VITE_", "TAURI_ENV_*"],
   build: {
+    // Two pages from one bundle: the window, and the panel under the menu bar
+    // icon, which is a second webview the tray opens on `menubar.html`.
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL("./index.html", import.meta.url)),
+        menubar: fileURLToPath(new URL("./menubar.html", import.meta.url)),
+      },
+    },
     target: "safari15",
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
     minify: process.env.TAURI_ENV_DEBUG ? false : "esbuild",

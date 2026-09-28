@@ -1,48 +1,76 @@
 # The menu bar
 
-Guaca with the window shut: what the strip says, what the menu offers, and why
-closing the window does not end the app. *The menu bar is Guaca with the window
-shut* in `docs/WORKSPACE.md`, then `menubar.rs`, `tray.rs` and `app.rs`.
+Guaca with the window shut: what the icon says, what the panel under it shows,
+and why closing the window does not end the app. *The menu bar is Guaca with the
+window shut* in `docs/WORKSPACE.md`, then `menubar.rs`, `tray.rs`, `app.rs` and
+`src/components/MenubarPanel.tsx`.
 
-- **The menu bar's presence is read, not accumulated.** Every number on it but
-  the session total is a fresh read of the roster, the activity map, the pending
-  requests and the usage table. One assembled by adding up events drifts the
-  moment one is missed, and what drifts is the number the operator is using to
-  decide whether to go and look.
-- **`menubar::plan` exists so an open menu is not replaced under the operator.**
-  Same row shapes in the same order is the same menu saying different numbers,
-  which is a text edit; anything else is a rebuild. The spend on that menu moves
-  every few seconds while a crew works, so a strip that rebuilt on every change
-  would close itself exactly when it was worth reading.
-- **A crew is named only when there is another crew to tell it from.** The rule
-  is the crews' column's, and it is what keeps the change invisible to the
-  workspace that has never made a second crew: `Presence::crew_named` returns
-  nothing while `crews` holds fewer than two, which collapses the working list's
-  sort back to the two keys it always had and takes every heading out of it. A
-  strip that always named the crew would put the same word on every row of a
-  menu shared with every other app on the machine.
-- **A crew's heading is emitted with the first row under it, never before the
-  run.** The working list is capped, and the cap is counted in agents; a heading
-  written ahead of a crew whose rows all fall past it is the menu naming a crew
-  that is working and then listing nobody from it.
-- **The count on a crew's heading is out of `Row::shape` on purpose.** It moves
-  whenever an agent starts or stops, and past the cap it moves with no row
-  arriving or leaving, which is exactly the case `plan` exists to edit in place
-  rather than rebuild.
+- **A presence field the window does not send refuses the whole report.** The
+  tray process holds no workspace, so the icon is drawn from nothing but what
+  the window reports, and serde turns a missing field into a refused call, not
+  a missing number. `onMachine` outlived the only code that wrote it, every
+  report after that was turned away, the frontend swallowed the refusal, and
+  the icon sat at "nothing running" whatever the crew was doing.
+  `ipc.contract.test.ts` compares the fields of `Presence` on both sides, and
+  a refusal is logged to the window's console.
+- **The panel is a second client, and must not be fed.** It has its own store
+  and its own socket to the host. Handing it the window's state instead would
+  be a second copy to keep in step, which is the thing the host already does
+  for both of them.
+- **Only the window notifies, and only the window reports to the icon.** The
+  panel runs the same store and sees the same events, so either of those in
+  the panel is every interruption twice and two reports racing for one icon.
+- **The panel is told its host by the tray, not by storage.** The window
+  writes its host to `localStorage` and the panel could read it there, but the
+  panel would then decide for itself when that value is current. The tray makes
+  the panel only after the window reports a host, and reloads it when the
+  window reports a different one, so the value and the moment to act on it
+  arrive together. `adoptRemote` holds it for the load and never stores it.
+- **The same host twice is not a reload.** The window reports its host every
+  time it loads. Reloading the panel for each would drop whatever the operator
+  was typing in it.
+- **No panel until the window has a host, and the icon opens the window
+  instead.** Before setup there is nothing for the panel to connect to, and the
+  window is where the host is chosen.
+- **A click on the icon while the panel is open is first a click outside it.**
+  Where the panel hides on losing the focus before the click arrives, the click
+  would read as "open" and bring it straight back. `REOPEN` in `tray.rs` is the
+  window in which a click after a hide is the click that caused it.
+- **The panel is an ordinary window, and that is why closing it hides the
+  app.** Showing it activates Guaca. Put away from the icon or with Escape
+  while the window is not open, it hides the app, which is what hands the
+  keyboard back to whatever had it. Put away by clicking somewhere else, it
+  does nothing more, because somewhere else already has the keyboard. Making it
+  an `NSPanel` instead means changing its class under tao, which objc2
+  documents as undefined, and it still would not reach another app's
+  full-screen space without that.
+- **The icon's rectangle is in pixels, and which display's pixels is not
+  said.** Each display reports itself at its own scale, and a Retina laptop
+  beside a monitor at one pixel a point can place the same pixels on both.
+  `menubar::place` keeps the display that reads the icon at a menu bar's
+  height. Asking tao which display holds a point does not help: it compares
+  points, and the tray hands over pixels.
+- **The panel's height is measured inside the scroller, not off the window.**
+  The body scrolls once the content outgrows the ceiling, and a panel measured
+  by its own box then never learns it could be taller again. `useFit` adds the
+  chrome to the content's own height.
+- **A conversation follows its end and the list does not, and they share one
+  scroller.** `useFollowBottom` is attached only while a conversation is open,
+  and going back to the list puts the scroller at its top. Attached for good,
+  its resize watch would drag the list to its bottom every time the window
+  grew.
+- **The panel is a page of its own, in three places.** `menubar.html` is a
+  second Vite input, the daemon's image copies it into the web stage, and the
+  panel's window has its own capability in `src-tauri/capabilities/`. A page
+  missing from any of them is a panel that fails to load, an image that fails
+  to build, or links in a reply that refuse to open.
 - **The attention glyph is the one tray image that is not a template.** macOS
   tints a template image to match the menu bar, so a template glyph cannot have
   a color. Giving up the tint buys the one state that must not be missed, and
   the count beside the icon says the same thing in text.
-- **An ampersand in a menu item has to be doubled.** Every platform's menu reads
-  `&` as a mnemonic marker and eats it, so an agent called `R&D` draws as `RD`.
-  `menubar::escape_mnemonic` is applied on the way into an item and nowhere
-  earlier, so the rows a test reads are the words a person would.
-- **The strip points at two things and the window answers them differently.**
-  `Reveal` is a tagged union rather than an agent id because an agent is
-  `select`, which follows it into whatever crew it is in, and a crew is
-  `focusGroup`, which opens the crew and picks nobody: a crew answered by
-  choosing one of its agents puts somebody's history on screen as a side effect
-  of a click that was about the crew. The two lists are compared by
+- **The panel points the window at two things, and the window answers them
+  differently.** `Reveal` is a tagged union rather than an agent id because an
+  agent is `select` and For you is the desk. The two lists are compared by
   `ipc.contract.test.ts`, because a variant added on one side is a click that
   arrives and does nothing.
 - **Closing the window hides it, and only while the tray exists.** Tauri exits

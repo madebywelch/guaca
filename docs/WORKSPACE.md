@@ -2052,130 +2052,112 @@ standing, for as long as the window is not what you are looking at. Those are
 different questions and neither answers the other: a banner about a parked turn
 is gone in four seconds, and the turn is still parked.
 
-So there is a presence in the menu bar, and it has four channels doing four
-jobs. `menubar.rs` decides all of it and `tray.rs` draws it, which is what makes
-every judgment below arguable in a test rather than by squinting at a corner of
-the screen.
+So there is a presence in the menu bar: an icon, and the panel it opens.
+`menubar.rs` decides what the icon says and where the panel stands, `tray.rs`
+draws both, and `components/MenubarPanel.tsx` is what the panel shows, which is
+what makes every judgment below arguable in a test rather than by squinting at
+a corner of the screen.
 
 - **The glyph** is state without being looked at. An outline when nothing is
-  running, filled when something is, and warm red when an agent is blocked on
+  running, filled when something is, and warm red when something is waiting on
   you. That last one is the only glyph that is not a template image, and giving
   up the menu bar's own light-and-dark tinting is the price of it: macOS tints a
   template image to match the bar, so a template glyph cannot have a color.
   Worth paying exactly once, for the one state that must not be missed.
-- **The title** is the count of turns waiting on you, and nothing else. Menu bar
-  width is shared with every other app on the machine. A number that is always
-  there becomes furniture and stops being read; one that appears only when
-  something is parked is information. The spend is deliberately not here.
+- **The title** is the count of things waiting on you, and nothing else. Menu
+  bar width is shared with every other app on the machine. A number that is
+  always there becomes furniture and stops being read; one that appears only
+  when something is waiting is information. The spend is deliberately not here.
 - **The tooltip** is one line on hover: what is happening, and what the session
   has cost. The glance that costs no click and no width.
-- **The menu** is the whole picture. What is waiting, who is working, what has
-  been spent, and the two things worth doing from here.
+- **The panel** is a left click. What is waiting, answerable where it is seen;
+  who is doing what; and a line to any one of them without bringing the window
+  back. The right click is a two-item menu, Open Guaca and Quit, for the times
+  the panel is not what is wanted.
 
-A working row says which machine an agent is on, when it is on one. The
-activity map has one word for a turn in flight, and a model thinking and a
-model driving a rented desktop are the same word there and not the same thing
-to go and look at: one has a screen to watch, and a sign-in may be happening on
-it in the operator's name. So the runtime keeps a second, smaller read beside
-the activity map, `Runtime::machines_in_use`, held by a guard for exactly the
-length of a machine tool call and cleared when the call ends or the run is
-stopped mid-call. The strip reads it fresh like everything else, the row says
-*on its computer* or *in its browser* instead of *thinking*, and the rail says
-the same off the trail it already holds, through `machineInUse` in
-`src/lib/trail.ts`. `tools::surface_of` is the one place the four machine tools
-are named as machine tools, and the two readers mirror it.
+**The panel replaced a menu, and the reason is one sentence the menu's own code
+wrote.** A question from an agent was counted in the menu and could not be
+answered there, because its answer is a word and a menu item is a thing you
+click. The same is true of a line to an agent and of a reply to read: a native
+menu can list who is working and take a verdict on a permission, and nothing
+past that. A panel is a page, so it can hold the desk's own cards, the rail's
+own rows and a field to type in. This document used to say a popover was a
+whole webview to position, blur and keep in step for the sake of drawing a
+sparkline nobody asked for. That was right about the sparkline. It was wrong
+about what a person wants from the corner of the screen, which turned out to be
+answering and replying, and neither fits in a menu.
 
-**The picture is drawn by crew, once there is more than one crew to draw.** A
-workspace is agents to the runtime and crews to the operator: two of them can
-hold two agents with the same name and the same face, and *Scout is thinking* on
-its own is a row that does not say which Scout and cannot be acted on without
-clicking it to find out. So the working list is arranged by crew under a heading
-per crew, and the rows that are about the operator rather than about the
-workspace carry the crew on the end of them, because those two sections are
-ordered by how long somebody has been waiting and reordering them by crew would
-bury the oldest.
+**The panel is a second client of the host, not a view the window feeds.** It is
+this frontend again, on `menubar.html`, with a store of its own and its own
+socket to whichever host the window is attached to. The tray tells it which
+host that is, because the window reports it, and makes the panel only once it
+has: until then the icon opens the window, which is where the host is chosen.
+A different host is a reload, like the window's own. Two stores reading one
+host agree because both read the host, and an answer given in one reaches the
+other the same way any change does. What must not happen twice is what the
+window does for the whole app: notifications and the icon's report stay the
+window's alone, and the panel does neither.
 
-The naming stops at one crew, which is the state most workspaces are in and the
-same rule the crews' column is drawn by: a name that is the only name
-distinguishes nobody, and every row carrying it has spent menu width saying where
-the only place is. A workspace that has never made a second crew sees exactly the
-strip it saw before.
+**What it shows is the window's, smaller.** The desk from For you, card for card,
+with "Open channel" bringing the window back at that channel. The rail's rows,
+ordered for the question the panel is opened to answer: whoever is working,
+then whoever spoke last, then the paused. A crew named on a row only when there
+is another crew to tell it from, which is the rule the crews' column is drawn
+by. A conversation is the last three things the operator and that agent said to
+each other, the reply being written if there is one, and a field; peer traffic,
+tool calls and routines are the window's, one click away, and a reply taller
+than the panel can spare is cut with a way to the rest of it. The spend is the
+session's, under the same floor the meters use.
 
-A crew's heading is a destination and not just a label. The rows under it name
-agents, and an operator who wanted the crew rather than one of its agents would
-otherwise have to pick somebody to get there and then let go of them; the click
-lands on `focusGroup`, which opens the crew and chooses nobody in it, exactly as
-the column does. The count on the heading is the crew's own rather than what the
-menu had room for, and what did not fit is the note at the end of the section.
+**The panel is exactly as tall as what it shows.** The page measures itself and
+the tray sizes the window to it, up to a ceiling past which it is not a glance
+any more, and never past the room under the menu bar. It stands centered under
+the icon, pulled in from a screen's edge rather than hanging off it. Which
+screen is less simple than it looks: the icon's position arrives in pixels at
+the scale of whichever display its menu bar is on, and a Retina laptop beside an
+older monitor can read those pixels as being on either. `menubar::place` asks
+each display and keeps the one that reads the icon at a menu bar's height.
 
-The heading goes in with the first of its rows rather than ahead of the run. A
-crew whose agents all fell past the cap is then a crew with no heading, rather
-than a heading claiming a crew is working over a list that does not mention
-anybody from it.
-
-**A permission request is answered from the strip.** That is the point of the
-whole feature. A parked turn is the one thing in Guaca that stops until you deal
-with it, and the flow-preserving move is to answer it where you noticed it rather
-than to go and find the channel. The request's own fields are under it, because a
-decision made without them is a decision made blind, and every one of them is
-`label: value` with the label being Guaca's word: a value crafted to read like an
-answer then sits behind a heading the runtime wrote rather than loose in a menu of
-answers. The same refusal as the card in the transcript applies, for the same
-reason: `actOnBehalf` is never offered an "always".
-
-**Spend is two lines, session and all time.** A price with no places is a working
-crew reading `$0.00` for its first hour, so the precision follows the number,
-exactly as a crew's spend card does. The token count is always there and the
-price joins it only when there is one worth the width, under the same floor as
-that card: a local server and a subscription plan price nothing at all, and a free
-model prices every call at a real zero, so `$0.0000` is what a strip shared with
-every other app would otherwise spend seven characters saying. No price is not a
-price of zero either, which is why a workspace with one local crew and one hosted
-one reports the hosted one's bill rather than the average of a number and a
-silence.
-
-That floor is written twice, once in Rust and once in TypeScript, and
-`ipc.contract.test.ts` compares them. Two readings of one number that disagree
-give the operator no way to tell which is lying.
+**Opening the panel brings Guaca forward.** A menu bar panel on macOS is
+usually an `NSPanel`, which can take the keyboard without making its app the
+front one, and Tauri makes no such window. Turning this one into one means
+changing its class under the windowing library, which objc2 documents as
+undefined unless the new class descends from the old, and it does not. So the
+panel is an ordinary window: clicking the icon activates Guaca, as clicking any
+of its windows would; clicking elsewhere hides it; and closing it with the icon
+or Escape while the window is not open hides the app, which is what hands the
+keyboard back to whatever had it. What that costs is the one place a panel
+could not go: over another app's full-screen space.
 
 **Closing the window puts Guaca in the menu bar instead of ending it.** Tauri
 exits when the last window closes, and for this app that is the wrong default:
 agents keep their own appointments, so quitting on a close means a routine set
 for every morning stops firing the first time somebody tidies their screen, with
 nothing said. A hidden window is not a closed one, so preventing the close is the
-whole mechanism and no exit handling goes with it. Command-Q and the strip's own
+whole mechanism and no exit handling goes with it. Command-Q and the menu's own
 Quit still quit.
 
-That is conditional on the strip having built, and the condition is the point
+That is conditional on the icon having built, and the condition is the point
 rather than caution: an app with no window and no menu bar icon is one the
 operator cannot see, cannot reach and cannot stop. If the tray did not build,
 closing the window quits exactly as it used to.
 
-**"Stop everything running" is the counterpart to that change.** A window that is
-gone is not a workspace that has stopped, and the cost of finding that out late
-is money. It sits beside the spend it is about, appears only when there is
-something to stop, and is a run-level stop like the one in the working line: what
-the operator wants to end reached however many agents it reached.
+**"Stop" is the counterpart to that change.** A window that is gone is not a
+workspace that has stopped, and the cost of finding that out late is money. It
+sits beside the spend in the panel, appears only when there is something to
+stop, and is a run-level stop like the one in the working line: what the
+operator wants to end reached however many agents it reached.
 
-Two implementation decisions are load-bearing and read as fussiness.
-
-The presence is **read, not accumulated**. Every number but the session total is
-a fresh read of whatever already holds the truth: the roster, the activity map,
-the pending requests, the usage table. A presence assembled by adding up events
-drifts the moment one is missed, and the thing that would drift is the number
-being used to decide whether to go and look. The reads are local, coalesced, and
-happen only while something is happening.
-
-The menu is **edited in place when it can be**. Replacing a menu closes one the
-operator is reading, and the spend on it moves every few seconds while a crew
-works, so a strip that rebuilt on every change would be unreadable exactly when
-it was worth reading. `menubar::plan` compares the shape of the rows: same shapes
-in the same order is the same menu saying different numbers, which is a text
-edit, and anything else is a rebuild.
-
-What is deliberately not here: a second window. A popover would be a whole
-webview to position, blur and keep in step for the sake of drawing a sparkline
-nobody asked for, and none of the four questions this answers needs one.
+**The icon is read, not accumulated.** The tray process holds no workspace, so
+the icon is drawn from a presence the window reports: the roster, the activity
+map, what is waiting and what the session spent, as the window's store holds
+them. Each report replaces the last rather than adding to it, so a missed one
+is corrected by the next instead of carried forward. It is also the whole of
+what the icon knows, so a report the tray refuses is an icon that never
+changes: one field Rust required and the window had stopped sending did exactly
+that, and the icon sat at "nothing running" whatever the crew was doing. The
+two lists are compared by `ipc.contract.test.ts` now, and a refusal is logged
+to the window's console rather than swallowed.
 
 ## Every key the app answers to is in one list
 

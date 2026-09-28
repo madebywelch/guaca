@@ -67,6 +67,18 @@ export function activateRemote(remote: Remote): void {
   setRemote(remote);
 }
 
+/**
+ * Shows a host this page was handed rather than one it chose.
+ *
+ * The menu bar panel's, which is told by the tray which host the window is
+ * attached to. Held for this load and never stored: what is stored is the
+ * window's decision, and a second page writing it back is a second place for
+ * it to be decided.
+ */
+export function adoptRemote(remote: Remote): void {
+  ATTACHED = remote;
+}
+
 export function setRemote(remote: Remote | null): void {
   try {
     if (remote) window.localStorage.setItem(REMOTE_KEY, JSON.stringify(remote));

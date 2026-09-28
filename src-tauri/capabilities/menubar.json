@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "menubar",
+  "description": "Capabilities for the panel under the menu bar icon. It reaches the workspace over HTTP like the window does and calls the tray through the app's own commands, so the one plugin permission it needs is opening a link from a reply in the operating system browser, granted as the command and the url scope together because the command alone refuses every url. It raises no notification and moves no window itself: both are the tray's.",
+  "windows": ["menubar"],
+  "permissions": ["opener:allow-open-url", "opener:allow-default-urls"]
+}

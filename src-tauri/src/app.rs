@@ -84,6 +84,35 @@ async fn report_presence(app: tauri::AppHandle, presence: Option<crate::menubar:
         tray.feed(presence);
     }
 }
+/// The window's host, which the menu bar panel is made or reloaded to show.
+#[tauri::command]
+async fn report_host(app: tauri::AppHandle, host: tray::Host) {
+    if let Some(tray) = app.try_state::<Arc<Tray>>() {
+        tray.attach(host);
+    }
+}
+#[tauri::command]
+async fn menubar_host(app: tauri::AppHandle) -> Option<tray::Host> {
+    app.try_state::<Arc<Tray>>().and_then(|tray| tray.host())
+}
+#[tauri::command]
+async fn open_window(app: tauri::AppHandle, target: Option<tray::Reveal>) {
+    if let Some(tray) = app.try_state::<Arc<Tray>>() {
+        tray.open_window(target);
+    }
+}
+#[tauri::command]
+async fn close_menubar(app: tauri::AppHandle) {
+    if let Some(tray) = app.try_state::<Arc<Tray>>() {
+        tray.close();
+    }
+}
+#[tauri::command]
+async fn fit_menubar(app: tauri::AppHandle, height: f64) {
+    if let Some(tray) = app.try_state::<Arc<Tray>>() {
+        tray.fit(height);
+    }
+}
 
 fn hide_rather_than_quit(window: &tauri::Window, event: &tauri::WindowEvent) {
     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -138,6 +167,11 @@ pub fn run() {
             forward_files,
             download_file,
             report_presence,
+            report_host,
+            menubar_host,
+            open_window,
+            close_menubar,
+            fit_menubar,
             legacy_groups,
             export_legacy_group,
             save_group_export,

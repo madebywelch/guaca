@@ -1174,17 +1174,14 @@ export interface DeviceCode {
 }
 
 /**
- * Where the menu bar is asking the window to go.
+ * Where the menu bar panel is asking the window to go.
  *
- * One gesture, two destinations, and neither is the other's fallback: an agent
- * is `select`, which follows it into whatever crew it is in, and a crew is
- * `focusGroup`, which opens the crew and chooses nobody in it. Kept in step
- * with `Reveal` in `tray.rs`, which `ipc.contract.test.ts` checks.
+ * Two destinations, and neither is the other's fallback: an agent is
+ * `select`, which follows it into whatever crew it is in, and For you is the
+ * desk. Kept in step with `Reveal` in `tray.rs`, which `ipc.contract.test.ts`
+ * checks.
  */
-export type Reveal =
-  | { kind: "forYou" }
-  | { kind: "agent"; id: AgentId }
-  | { kind: "crew"; id: GroupId };
+export type Reveal = { kind: "forYou" } | { kind: "agent"; id: AgentId };
 
 export type UiEvent =
   | {
@@ -1678,11 +1675,13 @@ export interface LinkHit {
 }
 
 /**
- * What the menu bar draws, as the window hands it over.
+ * What the menu bar icon is drawn from, as the window hands it over.
  *
- * Mirrors `menubar::Presence` in Rust. The strip reads this machine's runtime
- * when the window shows this machine's workspace, and reads this when the
- * window shows a box: the window is the one thing holding the box's state.
+ * Mirrors `menubar::Presence` in Rust, field for field, and
+ * `ipc.contract.test.ts` holds the two lists equal. The tray process has no
+ * workspace of its own, so this is the only way the icon learns anything, and
+ * a field one side expects and the other never sends is a report turned away
+ * whole.
  */
 export interface Presence {
   roster: Record<AgentId, { name: string; crew: GroupId }>;
@@ -1693,14 +1692,8 @@ export interface Presence {
   decisions: WorkDecision[];
   /** Spent since this window opened. */
   session: Tokens;
-  allTime: Tokens;
   running: number;
 }
-
-/** A click on a menu bar row drawn from a box, handed back to the window. */
-export type MenubarAsk =
-  | { kind: "stopAll" }
-  | { kind: "decide"; approval: ApprovalId; decision: Decision };
 
 /** Structured error from a command. `kind` is safe to branch on. */
 export interface CommandError {

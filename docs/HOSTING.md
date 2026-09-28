@@ -219,10 +219,11 @@ not establish acceptance of a production hostname.
 
 ## The desktop app can show a box, and the menu bar follows
 
-The desktop shows exactly one host at a time. Its menu bar reads the presence
-fed by the connected frontend, and sends actions back through that connection.
-It has no local runtime to fall back to. Closing the window hides it; quitting
-the app ends the client and leaves the host running.
+The desktop shows exactly one host at a time. Its menu bar icon reads the
+presence fed by the connected frontend, and the panel under the icon is a
+second client of the same host, told which one by the tray once the window has
+reported it. It has no local runtime to fall back to. Closing the window hides
+it; quitting the app ends the client and leaves the host running.
 
 The webview policy admits HTTPS/WSS and loopback HTTP/WS for Docker. Scripts
 remain restricted to the bundled application. Host setup and Docker errors
