@@ -150,11 +150,19 @@ describe("TerminalPanel", () => {
     // Nothing about a directory that does not exist yet could change what is
     // drawn, and asking would make one.
     render(<TerminalPanel agent={card(false)} />);
-    expect(screen.getByText(/Engineer has no terminal/)).toBeTruthy();
+    const grant = screen.getByRole("switch", { name: "Terminal" });
+    expect(grant.getAttribute("aria-checked")).toBe("false");
     expect(agentTerminal).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Give one" }));
+    fireEvent.click(grant);
     await waitFor(() => expect(giveAgentTerminal).toHaveBeenCalledWith("a1"));
+  });
+
+  it("says it is not a sandbox where the decision to give one is made", () => {
+    render(<TerminalPanel agent={card(false)} />);
+    expect(screen.getByRole("switch", { name: "Terminal" }).getAttribute("title")).toMatch(
+      /not a sandbox/,
+    );
   });
 
   it("offers no shell to an agent with no terminal", () => {
@@ -172,9 +180,9 @@ describe("TerminalPanel", () => {
   it("opens a shell in the agent's directory, and hands the keyboard back when it closes", async () => {
     render(<TerminalPanel agent={card(true)} />);
     await screen.findByText(PATH);
-    expect(screen.getByText(/a sign-in made in it, like/)).toBeTruthy();
 
     const open = screen.getByRole("button", { name: "Open terminal" });
+    expect(open.getAttribute("title")).toMatch(/gh auth login, is every agent's/);
     fireEvent.click(open);
     const shell = screen.getByRole("dialog", { name: "Engineer's terminal" });
     expect(shell.getAttribute("data-path")).toBe(PATH);
@@ -194,10 +202,31 @@ describe("TerminalPanel", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("says where the directory is, and that it is not a sandbox", async () => {
+  it("says where the directory is, whole, however narrow the panel", async () => {
+    // Cut at the column's edge on screen, so the whole of it has to be one
+    // hover away.
     render(<TerminalPanel agent={card(true)} />);
-    expect(await screen.findByText(PATH)).toBeTruthy();
-    expect(screen.getByText(/This is not a sandbox/)).toBeTruthy();
+    expect((await screen.findByText(PATH)).getAttribute("title")).toBe(PATH);
+  });
+
+  it("explains nothing while every part of it works", async () => {
+    // The section used to be a paragraph per control, and read as a manual
+    // with the controls somewhere inside it. A hint is for something wrong,
+    // and the gate's one line is the only other sentence it keeps.
+    codingModels.mockResolvedValue([offer("gpt-6-astra", { default: true })]);
+    const { container } = render(<TerminalPanel agent={card(true, "codex")} />);
+    await screen.findByText(PATH);
+    await waitFor(() => expect(codingModels).toHaveBeenCalled());
+    await waitFor(() =>
+      expect((screen.getByLabelText("Codex model") as HTMLInputElement).placeholder).toBe(
+        "gpt-6-astra",
+      ),
+    );
+
+    const hints = Array.from(container.querySelectorAll(".field__hint")).map(
+      (hint) => hint.textContent,
+    );
+    expect(hints).toEqual(["Pushes, pull requests, merges and releases wait for your approval."]);
   });
 
   it("switches the harness on the click, keeping the gate it had", async () => {
@@ -252,12 +281,19 @@ describe("TerminalPanel", () => {
     expect(screen.getByText(/does not sign in the coding tool/)).toBeTruthy();
   });
 
-  it("takes it back, and says the directory is kept", async () => {
+  it("takes it back from the switch beside its name, and says the directory is kept", async () => {
+    // The button this replaced said "Take it back" without saying what, and
+    // sat at the foot of the section above the next heading, where it read as
+    // belonging to the schedule.
     render(<TerminalPanel agent={card(true)} />);
-    const take = await screen.findByRole("button", { name: "Take it back" });
-    expect(take.getAttribute("title")).toMatch(/directory is kept/);
+    await screen.findByText(PATH);
+    expect(screen.queryByRole("button", { name: /Take it back/ })).toBeNull();
 
-    fireEvent.click(take);
+    const grant = screen.getByRole("switch", { name: "Terminal" });
+    expect(grant.getAttribute("aria-checked")).toBe("true");
+    expect(grant.getAttribute("title")).toMatch(/directory is kept/);
+
+    fireEvent.click(grant);
     await waitFor(() => expect(takeAgentTerminal).toHaveBeenCalledWith("a1"));
   });
 
@@ -332,8 +368,12 @@ describe("TerminalPanel", () => {
     const field = await screen.findByLabelText("Claude Code model");
     await waitFor(() => expect(codingModels).toHaveBeenCalledWith("claude", "own"));
     // What runs when nothing is chosen, in the program's own name for it.
-    expect((field as HTMLInputElement).placeholder).toBe("Fable 5.1");
-    expect(await screen.findByText(/Suggested from Claude Code's own list/)).toBeTruthy();
+    await waitFor(() => expect((field as HTMLInputElement).placeholder).toBe("Fable 5.1"));
+    const suggested = document.getElementById(field.getAttribute("list") ?? "");
+    expect(Array.from(suggested?.querySelectorAll("option") ?? []).map((o) => o.value)).toEqual([
+      "claude-fable-5-1",
+      "haiku",
+    ]);
 
     fireEvent.change(field, { target: { value: " haiku " } });
     fireEvent.keyDown(field, { key: "Enter" });

@@ -18,6 +18,7 @@ import {
   type Tuning,
 } from "../lib/types";
 import { Console } from "./Console";
+import { Grant } from "./Grant";
 
 interface Props {
   agent: AgentCard;
@@ -38,12 +39,16 @@ function labelOf(harness: Harness): string {
  * An agent's terminal, in its panel: whether it has one, which program writes
  * its code, and whether its pushes ask first.
  *
- * Given and taken back like a computer, and for the same reason: it is a
- * decision about this agent, and what it can reach follows from it. The two
- * answers under it are written the moment they are clicked, which is what a
- * `.choice` means everywhere else in this app; staged under a Save button, a
- * harness switch made because a plan just ran out is the change most likely to
- * be lost.
+ * Given and taken back by the switch in its head, like a computer, and for the
+ * same reason: it is a decision about this agent, and what it can reach follows
+ * from it. The answers under it are written the moment they are clicked, which
+ * is what a `.choice` means everywhere else in this app; staged under a Save
+ * button, a harness switch made because a plan just ran out is the change most
+ * likely to be lost.
+ *
+ * Nothing under it explains itself unless something is wrong. What each part
+ * is for was a paragraph apiece, and the panel read as a manual with the
+ * controls somewhere inside it.
  *
  * Taking it back keeps the directory and both answers. The work in it is the
  * agent's, and a change of mind about access is not a reason to delete it.
@@ -122,57 +127,58 @@ export function TerminalPanel({ agent }: Props) {
     return row === undefined || (row.installed && !row.withheld);
   };
   const chosen = machine?.find((row) => row.harness === agent.harness);
-  const lent = view !== null && tuningOf(view, agent.harness).pays === "guacaKey";
+
+  // Said only when the chosen program cannot run a job. When it can, the
+  // choice drawn pressed is the whole of the answer.
+  const trouble = !chosen ? null : chosen.withheld ? (
+    `${labelOf(agent.harness)}: ${chosen.withheld}.`
+  ) : !chosen.installed ? (
+    <>
+      {labelOf(agent.harness)} is not installed. On the backend, run <code>{chosen.install}</code>.
+    </>
+  ) : chosen.signedIn === false ? (
+    <>
+      {labelOf(agent.harness)} is not signed in on the backend. Open the terminal and run{" "}
+      <code>{chosen.signIn}</code>. Guaca's own sign-in does not sign in the coding tool.
+    </>
+  ) : null;
 
   return (
-    <section className="worknotes" aria-label={`${agent.name}'s terminal`}>
-      <div className="worknotes__head">
-        <h3 className="worknotes__title">Terminal</h3>
-      </div>
+    <section className="place" data-given={given} aria-label={`${agent.name}'s terminal`}>
+      <Grant
+        name="Terminal"
+        given={given}
+        busy={busy}
+        about={
+          given
+            ? "Take it back. A running coding job stops, and the directory is kept."
+            : `Gives ${agent.name} a directory of its own on the backend to run commands and coding agents in. Commands run as the backend's user, with its git and GitHub sign-ins: this is not a sandbox.`
+        }
+        onChange={(next) =>
+          void decide(() =>
+            next ? api.giveAgentTerminal(agent.id) : api.takeAgentTerminal(agent.id),
+          )
+        }
+      />
 
-      {!given ? (
+      {given && (
         <>
-          <p className="worknotes__empty">
-            {agent.name} has no terminal. Give it one and it gets a directory of its own on the
-            machine Guaca runs on: it can run commands there, clone repositories, change files, and
-            hand bigger changes to a coding agent.
-          </p>
-          <div className="screen__offer">
-            <button
-              type="button"
-              className="btn btn--small btn--primary"
-              disabled={busy}
-              onClick={() => void decide(() => api.giveAgentTerminal(agent.id))}
-            >
-              {busy ? "Working…" : "Give one"}
-            </button>
-          </div>
-        </>
-      ) : (
-        <>
-          <p className="field__hint">
-            {view ? (
-              <>
-                Its directory is <code>{view.path}</code>. Commands run there as the backend's user,
-                with that machine's git and GitHub sign-ins. This is not a sandbox. Open terminal
-                gives you a shell there, and a sign-in made in it, like <code>gh auth login</code>,
-                is every agent's.
-              </>
-            ) : (
-              "Finding its directory…"
-            )}
-          </p>
-          <div className="field">
+          <div className="field terminal__where">
             <button
               ref={opener}
               type="button"
-              className="btn btn--small btn--primary"
+              className="btn btn--small"
               disabled={!view}
               onClick={() => setShell(true)}
-              title={`A shell in ${agent.name}'s directory, on the backend`}
+              title="A shell in this directory, on the backend. A sign-in made in it, like gh auth login, is every agent's."
             >
               Open terminal
             </button>
+            {view && (
+              <code className="terminal__line" title={view.path}>
+                {view.path}
+              </code>
+            )}
           </div>
           {view && shell && (
             <Console
@@ -186,7 +192,7 @@ export function TerminalPanel({ agent }: Props) {
           )}
 
           <div className="field">
-            <span className="field__label">Writes code with</span>
+            <span className="field__label">Coding agent</span>
             <div className="choices">
               {HARNESSES.map((harness) => (
                 <button
@@ -204,28 +210,7 @@ export function TerminalPanel({ agent }: Props) {
                 </button>
               ))}
             </div>
-            <span className="field__hint">
-              {!chosen ? (
-                `${labelOf(agent.harness)}: status not checked yet.`
-              ) : chosen.withheld ? (
-                `${labelOf(agent.harness)}: ${chosen.withheld}.`
-              ) : !chosen.installed ? (
-                <>
-                  {labelOf(agent.harness)} is not installed. On the backend, run{" "}
-                  <code>{chosen.install}</code>.
-                </>
-              ) : chosen.signedIn === false ? (
-                <>
-                  {labelOf(agent.harness)} is not signed in on the backend. Open the terminal and
-                  run <code>{chosen.signIn}</code>. Guaca's own sign-in does not sign in the coding
-                  tool.
-                </>
-              ) : lent ? (
-                "pi runs on the backend, paid for with Guaca's key as set below."
-              ) : (
-                `${labelOf(agent.harness)} runs on the backend with its own sign-in. Its model and effort can be chosen below.`
-              )}
-            </span>
+            {trouble && <span className="field__hint">{trouble}</span>}
           </div>
 
           {view && (
@@ -254,9 +239,7 @@ export function TerminalPanel({ agent }: Props) {
             <span>
               <span className="field__label">Ask me before pushing</span>
               <span className="field__hint">
-                A push, pull request, merge or release waits on your desk first, whether{" "}
-                {agent.name} runs it or its coding agent does. Everything else runs without asking.
-                This is an approval step, not a sandbox.
+                Pushes, pull requests, merges and releases wait for your approval.
               </span>
             </span>
           </label>
@@ -270,18 +253,6 @@ export function TerminalPanel({ agent }: Props) {
               running={running !== undefined}
             />
           )}
-
-          <div className="screen__offer">
-            <button
-              type="button"
-              className="btn btn--small btn--ghost"
-              disabled={busy}
-              onClick={() => void decide(() => api.takeAgentTerminal(agent.id))}
-              title="Take it back. A running coding job stops, and the directory is kept."
-            >
-              Take it back
-            </button>
-          </div>
         </>
       )}
 
@@ -340,21 +311,21 @@ function LastSession({ agent, session, resume, running }: LastSessionProps) {
       <span className="field__label">Last coding session</span>
       <span className="field__hint">
         {labelOf(session.harness)} in {where}, {age === "now" ? "just now" : `${age} ago`}.
-        {resume && (
-          <>
-            {" "}
-            To open it yourself, open the terminal and run <code>{resume}</code>
-          </>
-        )}
       </span>
+      {resume && (
+        <code
+          className="terminal__line"
+          title={`To resume it yourself, in the terminal: ${resume}`}
+        >
+          {resume}
+        </code>
+      )}
       {running ? (
-        <span className="field__hint">
-          A job is running now. Steer it from {agent.name}'s channel.
-        </span>
+        <span className="field__hint">A job is running. Steer it from {agent.name}'s channel.</span>
       ) : switched ? (
         <span className="field__hint">
           {labelOf(agent.harness)} cannot carry on a {labelOf(session.harness)} session. The next
-          job starts a fresh one.
+          job starts fresh.
         </span>
       ) : (
         <div className="coding__say">
@@ -468,6 +439,7 @@ function Tuner({ agent, harness, tuning, guacaKey, efforts, usable, onSaved }: T
   // The model's own list when the program gave one, and every word the
   // program takes when it did not.
   const levels = offer ? offer.efforts : efforts;
+  const takesNone = offer !== undefined && offer.efforts.length === 0;
   const fallback =
     pays === "guacaKey"
       ? guacaKey.defaultModel
@@ -498,88 +470,84 @@ function Tuner({ agent, harness, tuning, guacaKey, efforts, usable, onSaved }: T
               </button>
             ))}
           </div>
-          <span className="field__hint">
-            {pays === "guacaKey" ? (
-              <>
-                Paid for with the key in Settings &gt; Provider, at <code>{guacaKey.endpoint}</code>
-                . pi is handed a loopback address and a token for the job, never the key.
-                {!guacaKey.set && " There is no key there now, so a job will be refused."}
-              </>
-            ) : guacaKey.set ? (
-              "Whatever pi is signed in to on the backend pays."
-            ) : (
-              "Whatever pi is signed in to on the backend pays. Guaca has no API key in Settings > Provider to lend it."
-            )}
-          </span>
+          {pays === "guacaKey" ? (
+            <span className="field__hint">
+              The key in Settings &gt; Provider, at <code>{guacaKey.endpoint}</code>. pi gets a
+              token for the job, never the key.
+              {!guacaKey.set && " There is no key there now, so a job will be refused."}
+            </span>
+          ) : (
+            !guacaKey.set && (
+              <span className="field__hint">
+                Guaca has no API key in Settings &gt; Provider to lend it.
+              </span>
+            )
+          )}
         </div>
       )}
 
-      <label className="field">
-        <span className="field__label">Model</span>
-        <input
-          className="input input--slim input--mono"
-          list={`models-${agent.id}`}
-          value={model}
-          placeholder={fallback}
-          disabled={saving}
-          aria-label={`${label} model`}
-          onChange={(event) => {
-            setModel(event.target.value);
-            setNote(null);
-          }}
-          onBlur={commitModel}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") commitModel();
-          }}
-        />
-        <datalist id={`models-${agent.id}`}>
-          {(offers ?? []).map((known) => (
-            <option key={known.id} value={known.id}>
-              {known.detail ? `${known.label} · ${known.detail}` : known.label}
-            </option>
-          ))}
-        </datalist>
-        <span className="field__hint">
-          {!usable
-            ? `${label} is not here to ask for its models. A name typed here is passed to it as it is.`
-            : listing
-              ? listing
-              : offers === null
-                ? `Asking ${label} for its models…`
-                : offers.length === 0
-                  ? pays === "guacaKey"
-                    ? "This endpoint publishes no list pi can read. Type the model name it serves."
-                    : `${label} listed no models. Type a name it takes.`
-                  : pays === "guacaKey"
-                    ? `Suggested from pi's catalog for this endpoint. Empty is the key's own model, ${guacaKey.defaultModel}.`
-                    : `Suggested from ${label}'s own list. Empty is ${label}'s default.`}
-        </span>
-      </label>
+      <div className="tuner">
+        <label className="field">
+          <span className="field__label">Model</span>
+          <input
+            className="input input--slim input--mono"
+            list={`models-${agent.id}`}
+            value={model}
+            placeholder={fallback}
+            disabled={saving}
+            aria-label={`${label} model`}
+            onChange={(event) => {
+              setModel(event.target.value);
+              setNote(null);
+            }}
+            onBlur={commitModel}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") commitModel();
+            }}
+          />
+          <datalist id={`models-${agent.id}`}>
+            {(offers ?? []).map((known) => (
+              <option key={known.id} value={known.id}>
+                {known.detail ? `${known.label} · ${known.detail}` : known.label}
+              </option>
+            ))}
+          </datalist>
+        </label>
 
-      <label className="field">
-        <span className="field__label">Effort</span>
-        <select
-          className="select"
-          value={tuning.effort ?? ""}
-          disabled={saving || (offer !== undefined && offer.efforts.length === 0)}
-          aria-label={`${label} effort`}
-          onChange={(event) => void save({ ...tuning, effort: event.target.value || null })}
-        >
-          <option value="">{`${label}'s default`}</option>
-          {levels.map((level) => (
-            <option key={level} value={level}>
-              {level}
-            </option>
-          ))}
-          {tuning.effort && !levels.includes(tuning.effort) && (
-            <option value={tuning.effort}>{tuning.effort}</option>
-          )}
-        </select>
-        {offer !== undefined && offer.efforts.length === 0 && (
-          <span className="field__hint">{`${offer.label} takes no effort setting.`}</span>
+        <label className="field">
+          <span className="field__label">Effort</span>
+          <select
+            className="select"
+            value={tuning.effort ?? ""}
+            disabled={saving || takesNone}
+            title={takesNone ? `${offer.label} takes no effort setting.` : undefined}
+            aria-label={`${label} effort`}
+            onChange={(event) => void save({ ...tuning, effort: event.target.value || null })}
+          >
+            <option value="">Default</option>
+            {levels.map((level) => (
+              <option key={level} value={level}>
+                {level}
+              </option>
+            ))}
+            {tuning.effort && !levels.includes(tuning.effort) && (
+              <option value={tuning.effort}>{tuning.effort}</option>
+            )}
+          </select>
+        </label>
+
+        {/* Said only when the list could not help. The placeholder already
+            names what an empty field runs, and the list drops down on its own. */}
+        {usable && (listing || offers?.length === 0) && (
+          <span className="field__hint tuner__wide">
+            {listing ??
+              (pays === "guacaKey"
+                ? "This endpoint publishes no list pi can read. Type the model name it serves."
+                : `${label} listed no models. Type a name it takes.`)}
+          </span>
         )}
-      </label>
-      {note && <span className="field__hint">{note}</span>}
+        {note && <span className="field__hint tuner__wide">{note}</span>}
+      </div>
     </>
   );
 }

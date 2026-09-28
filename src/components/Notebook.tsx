@@ -68,10 +68,7 @@ export function Notebook({ agentId }: Props) {
       {entries === null ? (
         <p className="worknotes__empty">Loading…</p>
       ) : entries.length === 0 ? (
-        <p className="worknotes__empty">
-          Empty. The agent keeps files here with <code>notebook</code>: a log, a tracker, research
-          it wants to come back to.
-        </p>
+        <p className="worknotes__empty">Empty.</p>
       ) : (
         <ol className="worknotes__list">
           {entries.map((entry) => (

@@ -109,22 +109,24 @@ describe("Inspector", () => {
     // Every switch added another dead card, and only closing the panel, which
     // unmounts their container, cleared them.
     const view = render(<Inspector agent={card("a1", "Cook")} onEditProfile={vi.fn()} />);
-    await screen.findByText("Cook's screen");
+    await screen.findByRole("region", { name: "Cook's computer" });
 
     for (const [id, name] of [
       ["a2", "Scribe"],
       ["a3", "Runner"],
     ] as const) {
       view.rerender(<Inspector agent={card(id, name)} onEditProfile={vi.fn()} />);
-      await screen.findByText(`${name}'s screen`);
+      await screen.findByRole("region", { name: `${name}'s computer` });
     }
 
-    await waitFor(() => expect(screen.getAllByText(/'s screen$/)).toHaveLength(1));
-    expect(screen.getAllByText(/'s browser$/)).toHaveLength(1);
+    await waitFor(() =>
+      expect(screen.getAllByRole("region", { name: /'s computer$/ })).toHaveLength(1),
+    );
+    expect(screen.getAllByRole("region", { name: /'s browser$/ })).toHaveLength(1);
     expect(screen.getAllByRole("heading", { name: "Routines" })).toHaveLength(1);
     expect(screen.getAllByLabelText("Memory")).toHaveLength(1);
-    expect(screen.queryByText("Cook's screen")).toBeNull();
-    expect(screen.queryByText("Scribe's screen")).toBeNull();
+    expect(screen.queryByRole("region", { name: "Cook's computer" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Scribe's computer" })).toBeNull();
   });
 
   it("draws the terminal with the places, the schedule above the stores, and the notebook last", async () => {
@@ -138,10 +140,18 @@ describe("Inspector", () => {
       .getAllByRole("heading", { level: 3 })
       .map((heading) => heading.textContent);
 
-    // The terminal is a place the agent works, like its screens above it. The
+    // The three places the agent works lead, each a name and a switch. The
     // notebook is last: it is what the agent reads when it needs it, and the
     // two above it are what it carries on every turn.
-    expect(order).toEqual(["Terminal", "Routines", "Working notes", "Memory", "Notebook"]);
+    expect(order).toEqual([
+      "Browser",
+      "Computer",
+      "Terminal",
+      "Routines",
+      "Working notes",
+      "Memory",
+      "Notebook",
+    ]);
   });
 
   it("switches the memory over with everything else, rather than under the new name", async () => {
