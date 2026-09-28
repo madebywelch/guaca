@@ -1,7 +1,7 @@
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { AgentAvatar } from "./AgentAvatar";
+import { AgentAvatar, knockAway } from "./AgentAvatar";
 import { CastContext } from "./cast";
 import { FORM } from "./form";
 
@@ -129,5 +129,55 @@ describe("the two casts", () => {
     const id = body?.getAttribute("clip-path")?.match(/url\(#(.+)\)/)?.[1];
     const circle = container.querySelector(`[id="${id}"] circle`);
     expect(circle?.getAttribute("r")).toBe(String(FORM.reach));
+  });
+});
+
+describe("a directed gaze", () => {
+  const pupils = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll(".avatar__pupil")).map((p) =>
+      Number(p.getAttribute("cx")),
+    );
+
+  // The pair in the rail's corner looks at each other, which is across, and
+  // an aimed look only goes up or down.
+  it("looks where it is told, across as well as up and down", () => {
+    const at = (gaze: [number, number] | null) =>
+      pupils(
+        render(<AgentAvatar avatar="slab" color="#7293aa" mood="idle" gaze={gaze} />).container,
+      );
+    const ahead = at(null);
+    const right = at([0.36, 0]);
+    const left = at([-0.36, 0]);
+    expect(right).toHaveLength(2);
+    for (const [i, x] of right.entries()) expect(x).toBeGreaterThan(ahead[i] as number);
+    for (const [i, x] of left.entries()) expect(x).toBeLessThan(ahead[i] as number);
+  });
+
+  it("gives way to an aimed look, which is for somebody", () => {
+    const aimed = pupils(
+      render(<AgentAvatar avatar="slab" color="#7293aa" mood="idle" look="down" />).container,
+    );
+    const both = pupils(
+      render(<AgentAvatar avatar="slab" color="#7293aa" mood="idle" look="down" gaze={[0.36, 0]} />)
+        .container,
+    );
+    expect(both).toEqual(aimed);
+  });
+});
+
+describe("the knock", () => {
+  it("shoves exactly as it did for an aimed look, or for none", () => {
+    expect(knockAway("down", null)).toEqual([0, -1]);
+    expect(knockAway("up", null)).toEqual([0, 1]);
+    expect(knockAway(null, null)).toEqual([0, 1]);
+    expect(knockAway("down", [0.36, 0])).toEqual([0, -1]);
+  });
+
+  it("shoves away from whoever a directed gaze is on", () => {
+    const [x, y] = knockAway(null, [-0.36, 0]);
+    expect(x).toBeCloseTo(1);
+    expect(y).toBeCloseTo(0);
+    // A gaze held at the operator is barely a direction, and is not one.
+    expect(knockAway(null, [0, 0.02])).toEqual([0, 1]);
   });
 });

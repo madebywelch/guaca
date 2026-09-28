@@ -61,7 +61,7 @@
      is a column every agent's color is competing with.
 
      They follow the surface now rather than pinning ink under both of them,
-     which is why the dark block below redeclares all seven. */
+     which is why the dark block below redeclares all eight. */
   --rail-ground: #f2f3f5;
   --rail-raised: #ffffff;
   --rail-edge: #e1e2e5;
@@ -72,6 +72,9 @@
      page: `--sunken` is a hair off white, which is a field on paper and
      nothing at all on an off-white panel. */
   --rail-sunken: #e6e7ea;
+  /* The ink one of the icon's pair in the rail's corner. The icon's own ink,
+     which on the dark column is the column, so there it is paper. */
+  --rail-pair: #2e2f2a;
   /* A shade under the rail. The crews sit behind the crew, and a column that
      is the same ground as the one it borders needs a rule drawn between them
      to be a second surface at all. */
@@ -145,6 +148,10 @@
   --measure-attention: 46rem;
   --control-touch: 2.75rem;
   --type-touch: max(16px, 1rem);
+  /* The window's own three buttons, which a Mac draws over the top left corner
+     of the rail. Pixels rather than rems, like the insets below: the buttons
+     are the operating system's and do not grow with the interface scale. */
+  --space-lights: 80px;
   --space-safe-top: env(safe-area-inset-top, 0px);
   --space-safe-bottom: env(safe-area-inset-bottom, 0px);
   --space-safe-left: env(safe-area-inset-left, 0px);
@@ -190,11 +197,11 @@
 
   /* Tracking is a function of the step and the case, never a free parameter.
      It was 18 values, six of them the same uppercase-label job at 0.1, 0.11,
-     0.12, 0.14, 0.16 and 0.18em. Two things are still set in capitals, and
-     neither is a label. */
+     0.12, 0.14, 0.16 and 0.18em. One thing is still set in capitals, and it
+     is not a label. */
   --track-tight: -0.02em; /* Display face at title sizes, and agent names. */
   --track-flat: -0.01em; /* Anything read as words. */
-  --track-caps: 0.18em; /* The wordmark, and a code somebody types by hand. */
+  --track-caps: 0.18em; /* A code somebody types by hand. */
 
   /* Leading, four steps. `--lead-flush` is a glyph or a single line in a box
      already the right height; it is not typography and it is not 0, which is
@@ -354,6 +361,7 @@
   --rail-muted: #a7a9ab;
   --rail-wire: #2e2f31;
   --rail-sunken: #0d0e0f;
+  --rail-pair: #e8e3d6;
   --grail-ground: #0a0b0d;
 
   --ground: #0e0f10;
@@ -914,26 +922,80 @@ input[type="file"]::file-selector-button {
   position: relative;
 }
 
+/* The title bar's strip, which the rail shares with the window's own buttons.
+   The pair and the plus live in it, and there is no row under it: the name
+   used to be one, in tracked capitals, where it read as one more label and
+   cost the column 45 pixels. `lib/brand.ts` has the rest. */
 .rail__brand {
-  padding: var(--space-8) var(--space-6) var(--space-5);
+  min-height: var(--space-8);
+  padding: 0 var(--space-6);
   display: flex;
   align-items: center;
   gap: var(--space-4);
 }
 
-.rail__wordmark {
+.rail__brand[data-lights] {
+  padding-left: var(--space-lights);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.brand__pair {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+
+/* They arrive one at a time on launch, and a creature arriving is a creature
+   appearing where it stands: a slide would be a sprite being moved. */
+.brand__seat {
+  display: inline-flex;
+  opacity: 0;
+  transition: opacity var(--tempo-enter) var(--ease);
+}
+
+.brand__seat[data-shown] {
+  opacity: 1;
+}
+
+/* Closer than their boxes and the second a little higher, as the icon has them.
+   A box is a fifth empty on either side of a body, for a mood to swell into. */
+.brand__seat + .brand__seat {
+  margin-left: calc(var(--space-2) * -1);
+  margin-bottom: var(--space-2);
+}
+
+/* Written in from the left and folded back into the pair, rather than faded:
+   a name that fades is a name that was there all along. Plain on purpose: the
+   characters are the brand, and this is the label on them. */
+.brand__name {
+  max-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  clip-path: inset(0 100% 0 0);
   font-family: var(--font-ui);
-  font-size: var(--type-lede);
+  font-size: var(--type-body);
   font-weight: 600;
-  letter-spacing: var(--track-caps);
-  text-transform: uppercase;
+  letter-spacing: var(--track-tight);
+  line-height: var(--lead-tight);
   color: var(--rail-text);
+  transition: max-width var(--tempo-enter) var(--ease), clip-path var(--tempo-enter) var(--ease);
+}
+
+.brand[data-named] .brand__name {
+  max-width: 4em;
+  clip-path: inset(0);
 }
 
 /* The one plus in the app, at the top of the list it adds to. Drawn at the
    rail's full text weight rather than the muted weight its other chrome uses:
-   the wordmark beside it is the only thing on this row, and a control that is
-   the only way to make an agent cannot be quieter than the furniture. */
+   the pair beside it is the only other thing on this row, and a control that
+   is the only way to make an agent cannot be quieter than the furniture. */
 .rail__new {
   margin-left: auto;
   flex: none;

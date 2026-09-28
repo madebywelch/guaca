@@ -2,16 +2,22 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 
 import { AgentAvatar, type Look } from "../avatars/AgentAvatar";
 import { FLIGHT_MS, roleOf, usePulseChoreography } from "../lib/choreography";
+import { IS_MAC } from "../lib/keybinds";
 import { prefersReducedMotion } from "../lib/motion";
 import { type DropTarget, railOrder } from "../lib/rail";
 import { useLiveAgents, useStore } from "../lib/store";
 import { relativeTime, useNow } from "../lib/time";
 import { machineInUse } from "../lib/trail";
+import { desktop } from "../lib/transport";
 import type { Activity, AgentCard, AgentId, Group } from "../lib/types";
+import { Brand } from "./Brand";
 import { GroupRail } from "./GroupRail";
 import { NewMenu } from "./NewMenu";
 import { RailRepositories } from "./RailRepositories";
 import { SpendTag, useSpendTag } from "./Spend";
+
+/** Only a Mac window draws its own buttons over the rail's top left corner. */
+const LIGHTS = desktop && IS_MAC;
 
 interface Props {
   onOpenChannel?: () => void;
@@ -22,7 +28,7 @@ interface Props {
   onOpenCalendar: () => void;
   onOpenSettings: () => void;
   onOpenSearch: () => void;
-  /** The plus beside the wordmark. App-level, not any one row's. */
+  /** The plus in the title strip, beside the pair. App-level, not any one row's. */
   onNewAgent: () => void;
   onNewGroup: () => void;
   /** Where the operator right-clicked, and on whom. */
@@ -507,8 +513,8 @@ export function Sidebar({
         {/* The plus rides the drag region rather than sitting under it: a button
             inside one is still a button, and this is the row an operator reads
             first. */}
-        <div className="rail__brand" data-tauri-drag-region>
-          <span className="rail__wordmark">Guaca</span>
+        <div className="rail__brand" data-tauri-drag-region data-lights={LIGHTS ? "" : undefined}>
+          <Brand waiting={pending.length > 0} />
           <NewMenu onNewAgent={onNewAgent} onNewGroup={onNewGroup} />
         </div>
 

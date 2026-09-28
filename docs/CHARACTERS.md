@@ -328,6 +328,18 @@ directions at once. It is the gate: move either number, or any eye in the
 catalog, and it says which creature loses its eyes. The square is the one it
 binds on, looking up and to the right at its badge.
 
+**A directed gaze goes any way, and no agent has one.** `gaze` on `AgentAvatar`
+is a look in body radii that outranks the mood's own glances and gives way to
+an aimed look. It exists for the icon's pair in the rail's corner
+(`docs/WORKSPACE.md`), who look at each other and at the pointer, and both of
+those are across. Three things hold it to the rest of this file. It asks for
+nothing past the idle mood's own range, so no face is sent further than faces
+already go and the sixteen-direction suites already cover it. A throw or a
+catch shoves the mass away from whoever it is on, which `knockAway` states for
+both kinds of look. And it blinks into a turn and not into every step: a gaze
+following the pointer moves a little every frame, and a creature that blinked
+into each of those would have its eyes shut.
+
 ## Moods
 
 Ten expressions, in one table. Adding one is a row and nothing else: no

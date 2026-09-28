@@ -46,7 +46,8 @@ export interface Binding {
   fixed?: boolean;
 }
 
-const IS_MAC = /mac/i.test(navigator.platform || navigator.userAgent);
+/** A Mac, which spells its keys as glyphs and floats its window buttons over the rail. */
+export const IS_MAC = /mac/i.test(navigator.platform || navigator.userAgent);
 
 export const BINDINGS: Binding[] = [
   {

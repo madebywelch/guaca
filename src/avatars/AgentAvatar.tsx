@@ -36,6 +36,13 @@ interface Props {
   /** Where its own clock starts and how fast it runs. Pass the agent id. */
   seed?: string;
   look?: Look;
+  /**
+   * Where to look instead of wherever the mood would, in body radii. For a
+   * creature that is directed rather than read off an agent: the pair in the
+   * rail's corner, looking at each other or at the pointer. An aimed `look`
+   * still outranks it, because the point of that look is who it is for.
+   */
+  gaze?: Point | null;
   gesture?: Gesture;
   /** A short shout shown in a bubble, e.g. "!" when a message is thrown. */
   says?: string | null;
@@ -47,6 +54,28 @@ const KNOCK = {
   send: { amp: 0.26, hz: 1.5, decay: 0.28, life: 0.9 },
   receive: { amp: 0.3, hz: 2.2, decay: 0.3, life: 0.8 },
 };
+
+/**
+ * How far a directed gaze has to move to be a turn rather than a step. A turn
+ * is blinked into, as a mood's own large saccade is; a gaze following the
+ * pointer moves a little every frame, and blinking into each of those would
+ * be a creature with its eyes shut.
+ */
+const TURN = 0.2;
+
+/**
+ * Which way a throw or a catch shoves the mass, as a unit vector: away from
+ * whoever it is aimed at. An aimed look is up or down, so the shove is down or
+ * up; a directed gaze can be any way; with nobody looked at, a parcel thrown
+ * from above presses the creature down, which is the way an unexplained shove
+ * reads best.
+ */
+export function knockAway(look: Look, gaze: Point | null | undefined): Point {
+  if (look) return [0, look === "down" ? -1 : 1];
+  const l = gaze ? Math.hypot(gaze[0], gaze[1]) : 0;
+  if (gaze && l > 0.05) return [-gaze[0] / l, -gaze[1] / l];
+  return [0, 1];
+}
 
 /** Everything one avatar remembers between frames. */
 interface Cell {
@@ -66,6 +95,8 @@ interface Cell {
   gestureAt: number;
   look: Look;
   lookAt: number;
+  /** The directed gaze a blink was last cued for. */
+  cued: Point | null;
 }
 
 /**
@@ -93,6 +124,7 @@ export function AgentAvatar({
   cast,
   seed,
   look = null,
+  gaze = null,
   gesture = null,
   says = null,
   title,
@@ -114,6 +146,7 @@ export function AgentAvatar({
     gestureAt: 0,
     look: null,
     lookAt: Number.NEGATIVE_INFINITY,
+    cued: null,
   });
 
   /* Read by the painter rather than closed over, so the loop never holds a
@@ -126,6 +159,7 @@ export function AgentAvatar({
     finishedAt,
     mood,
     look,
+    gaze,
     gesture,
     character,
     size,
@@ -151,6 +185,15 @@ export function AgentAvatar({
       state.gesture === "receive" ? Date.now() - (seconds - state.gestureAt) * 1000 : undefined;
     if (now.look !== state.look) {
       state.look = now.look;
+      state.lookAt = seconds;
+    }
+    const was = state.cued;
+    const is = now.gaze;
+    if (
+      (was === null) !== (is === null) ||
+      (was && is && Math.hypot(is[0] - was[0], is[1] - was[1]) > TURN)
+    ) {
+      state.cued = is;
       state.lookAt = seconds;
     }
 
@@ -182,6 +225,8 @@ export function AgentAvatar({
     let eyeGaze: Point;
     if (now.look) {
       eyeGaze = [0, now.look === "up" ? -AIM.up : AIM.down];
+    } else if (now.gaze) {
+      eyeGaze = [now.gaze[0], now.gaze[1]];
     } else if (!live) {
       eyeGaze = [0, 0];
     } else {
@@ -220,11 +265,13 @@ export function AgentAvatar({
            a parcel thrown from above presses the creature down and a throw
            recoils against itself. The look is what says where the peer is, so
            an exchange whose other end is not drawn in the rail falls back to
-           down, which is the way an unexplained shove reads best. */
-        const away = now.look === "down" ? -1 : 1;
-        const push = away * knock.amp * wave * Math.exp(-age / knock.decay);
-        bodyGaze[1] += push;
-        eyeGaze[1] += push * 0.35;
+           down. `knockAway` holds the rule. */
+        const away = knockAway(now.look, now.gaze);
+        const push = knock.amp * wave * Math.exp(-age / knock.decay);
+        bodyGaze[0] += away[0] * push;
+        bodyGaze[1] += away[1] * push;
+        eyeGaze[0] += away[0] * push * 0.35;
+        eyeGaze[1] += away[1] * push * 0.35;
       }
     }
 
@@ -265,6 +312,7 @@ export function AgentAvatar({
       finishedAt,
       mood,
       look,
+      gaze,
       gesture,
       character,
       size,

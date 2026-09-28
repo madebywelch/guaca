@@ -1,0 +1,381 @@
+/* The review page. Everything a creature needs comes from src/styles.css,
+   which make.sh bundles ahead of this; what is here is the page around them
+   and the two things the brand adds: the name beside the cast and the bubble
+   over it. */
+
+/* The app pins these to the window and hides the overflow, because the app
+   scrolls inside its own panes. This page is one long document. */
+html,
+body,
+#root {
+  height: auto;
+}
+
+body {
+  overflow: auto;
+  margin: 0;
+  background: #fff;
+  color: var(--text);
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+section {
+  width: 1440px;
+  padding: 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+section + section {
+  border-top: 1px solid var(--rail-edge);
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--muted);
+}
+
+header span:first-child {
+  letter-spacing: 0.12em;
+}
+
+h2 {
+  margin: 0 0 14px;
+  font: 600 28px/34px var(--font-display);
+}
+
+h3 {
+  margin: 0 0 14px;
+  font-weight: 400;
+  font-size: 14px;
+  line-height: 20px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+p {
+  margin: 0 0 12px;
+  font-size: 17px;
+  line-height: 27px;
+  color: var(--muted);
+}
+
+/* --- the mark ------------------------------------------------------------- */
+
+.bm-mark {
+  display: inline-flex;
+  align-items: center;
+  position: relative;
+}
+
+.bm-mark__cast {
+  display: inline-flex;
+  align-items: center;
+  position: relative;
+}
+
+.bm-actor {
+  transition: opacity 220ms var(--ease);
+}
+
+.bm-mark__name {
+  display: inline-block;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.bm-mark__word {
+  display: inline-block;
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  padding-bottom: 0.08em;
+  color: var(--rail-text);
+}
+
+/* The app's shout, grown to carry a name: the creature's own pigment, the
+   corner nearest the speaker left square, in and out once. */
+.bm-mark__says {
+  position: absolute;
+  /* Beside the face rather than over it: in the title bar there is no room
+     above a creature, only the window's edge. */
+  left: 94%;
+  bottom: 34%;
+  padding: 0.18em 0.5em 0.24em;
+  border-radius: 0.5em 0.5em 0.5em 0.08em;
+  font-family: var(--font-display);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  color: #16201a;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform-origin: 0 100%;
+}
+
+.bm-mark__says.on {
+  animation: brand-says 2.3s var(--ease) forwards;
+}
+
+@keyframes brand-says {
+  0% {
+    opacity: 0;
+    transform: translateY(0.2em) scale(0.6);
+  }
+
+  12% {
+    opacity: 1;
+    transform: translateY(0) scale(1.08);
+  }
+
+  20% {
+    transform: scale(1);
+  }
+
+  82% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+/* --- a direction ---------------------------------------------------------- */
+
+.bm-stage {
+  height: 300px;
+  background: var(--rail-ground);
+  display: flex;
+  align-items: center;
+  padding: 0 112px;
+}
+
+.bm-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: -12px;
+}
+
+.bm-controls button {
+  font: 500 13px/18px var(--font-ui);
+  padding: 6px 12px;
+  border: 1px solid var(--rail-edge);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.bm-controls button[aria-pressed="true"] {
+  background: var(--text);
+  border-color: var(--text);
+  color: #fff;
+}
+
+.bm-controls__rule {
+  width: 1px;
+  height: 20px;
+  background: var(--rail-edge);
+  margin: 0 6px;
+}
+
+.bm-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 64px;
+  padding-top: 8px;
+}
+
+.bm-why {
+  width: 600px;
+}
+
+.bm-beats {
+  list-style: none;
+  margin: 18px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  font-size: 15px;
+  line-height: 22px;
+  color: var(--text);
+}
+
+.bm-beats li span {
+  display: inline-block;
+  width: 48px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--faint);
+}
+
+/* --- the top of the rail, to the app's own measurements -------------------- */
+
+.bm-zoom {
+  zoom: 2;
+}
+
+.bm-railtop {
+  width: 248px;
+  background: var(--rail-ground);
+  border: 1px solid var(--rail-edge);
+  border-radius: 10px 0 0 0;
+  padding-bottom: 12px;
+  color: var(--rail-text);
+}
+
+.bm-railtop__band {
+  height: 36px;
+  display: flex;
+  align-items: center;
+  padding-right: 16px;
+}
+
+.bm-lights {
+  display: inline-flex;
+  gap: 8px;
+  padding-left: 13px;
+  flex: none;
+}
+
+.bm-lights i {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #ff5f57;
+  box-shadow: inset 0 0 0 0.5px rgb(0 0 0 / 0.12);
+}
+
+.bm-lights i:nth-child(2) {
+  background: #febc2e;
+}
+
+.bm-lights i:nth-child(3) {
+  background: #28c840;
+}
+
+.bm-railtop__mark {
+  margin-left: 14px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.bm-railtop__band .bm-plus {
+  margin-left: auto;
+}
+
+.bm-railtop__brand {
+  padding: 0 16px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* 33px: the rail sets no line-height of its own, so the wordmark inherits
+   Tailwind's 1.5 from the root, and that line box is the row's height. */
+.bm-railtop__wordmark {
+  font: 600 22px/33px var(--font-display);
+  letter-spacing: 0.18em;
+}
+
+.bm-plus {
+  flex: none;
+  width: 25.6px;
+  height: 25.6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--rail-edge);
+  background: var(--rail-raised);
+  border-radius: 3px;
+  font-size: 17px;
+  line-height: 1;
+}
+
+/* `.rail__search`: 2px over, 8px either side and under, 36px tall. */
+.bm-railtop__search {
+  margin: 2px 8px 8px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid var(--rail-edge);
+  border-radius: 3px;
+  background: var(--rail-raised);
+  font-size: 13px;
+  color: var(--rail-muted);
+}
+
+.bm-railtop__crew {
+  padding: 4px 16px 6px;
+  font: 600 11px/16px var(--font-ui);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--rail-muted);
+}
+
+.bm-railtop__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 16px;
+  font-size: 15px;
+  line-height: 20px;
+}
+
+/* --- the corner ----------------------------------------------------------- */
+
+.bm-corner {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.bm-corner__pair {
+  display: flex;
+  gap: 40px;
+}
+
+figure {
+  margin: 0;
+}
+
+figcaption {
+  margin-bottom: 12px;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--muted);
+}
+
+.bm-corner > .bm-why {
+  width: 760px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bm-actor {
+    transition: none;
+  }
+
+  /* The app's own rule ends every animation at once under reduced motion,
+     and a finished one holds its last frame, which here is invisible. So the
+     bubble has no animation at all, and is simply there while the pointer is. */
+  .bm-mark__says.on {
+    animation: none;
+  }
+
+  .bm-mark[data-hover] .bm-mark__says {
+    opacity: 1;
+  }
+}

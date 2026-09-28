@@ -325,6 +325,37 @@ describe("what a crew has spent", () => {
   });
 });
 
+describe("the rail's corner", () => {
+  /**
+   * The strip beside the window's own buttons, and nothing under it.
+   *
+   * The name used to be a row of its own below the buttons, 45 pixels of the
+   * column spent on a word. What gets them back is that the strip holds the
+   * pair and the plus in the clearance the buttons need anyway: padding above
+   * or below it is that row coming back. It is the same clearance the crews'
+   * zone starts under, and the two have to agree on where the buttons end.
+   */
+  it("is the strip the window's buttons already leave, with no row under it", () => {
+    const strip = getComputedStyle(nest("rail__brand"));
+    // jsdom keeps a shorthand with a variable in it as written, so the top and
+    // bottom are read off it rather than off the long-hands it never expands.
+    const [top, , bottom = top] = strip.padding.split(" ");
+    expect([top, bottom]).toEqual(["0", "0"]);
+    expect(strip.minHeight).toBe(getComputedStyle(nest("grail__reach")).top);
+  });
+
+  /**
+   * Folded away by its width and a clip, so the rail is still named for a
+   * screen reader. `display: none` or `visibility: hidden` would take it out of
+   * the accessibility tree along with the pixels.
+   */
+  it("keeps the folded name in the document", () => {
+    const name = getComputedStyle(nest("brand", "brand__name"));
+    expect(name.display).not.toBe("none");
+    expect(name.visibility).not.toBe("hidden");
+  });
+});
+
 describe("dialog modifiers", () => {
   /**
    * A modifier declared above `.dialog` silently loses to it.
