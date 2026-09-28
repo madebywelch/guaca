@@ -14,6 +14,14 @@ the code is `llm/codex.rs`, `llm/claude.rs` and `subscription.rs`.
   401 from the backend is what triggers a refresh, and the same request goes
   again under the new token. `Subscription::renew`, and *A token's `exp` is a
   floor on its life* in `docs/ARCHITECTURE.md`.
+- **The catalog's `client_version` is `999.0.0` on purpose.** The service
+  leaves out every model whose Codex CLI floor is above the version asked for,
+  and says nothing about what it left out. Pinned to `0.153.3`, the release the
+  image's CLI was on, the ChatGPT selector showed `gpt-6-astra` and silently
+  dropped `gpt-6-sol` and `gpt-6-luna` beside it. The floor protects the CLI's
+  own tooling, which Guaca does not use, and a model call carries no version at
+  all. Setting it to a real release number, or tying it to `CODEX_VERSION` in
+  the `Dockerfile`, turns it back into a compiled model list.
 - **A refresh is serialized, and one the service refuses forgets the sign-in.**
   The refresh token rotates, so a crew that all hit the dead token at once would
   race to retire each other's and the losers would hold one the service already

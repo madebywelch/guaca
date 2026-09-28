@@ -77,10 +77,20 @@ pub const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 /// the software.
 const ORIGINATOR: &str = "codex_cli_rs";
 
-/// The catalog protocol revision Guaca understands, independent of the coding
-/// harness installed in the image. The service requires a client version even
-/// though this request does not run the CLI.
-const CATALOG_CLIENT_VERSION: &str = "0.153.3";
+/// The client version the catalog is asked for, which is a floor the service
+/// filters on and not a protocol Guaca speaks.
+///
+/// Each model carries the oldest Codex CLI that can drive it, and the service
+/// leaves out any model newer than the version asked for. What that protects is
+/// the CLI's own tooling. Guaca sends its own tools over plain Responses and no
+/// version on a model call, so none of it applies here. A real release number
+/// pinned here is a compiled model list by another name: `0.153.3` hid
+/// `gpt-6-sol` and `gpt-6-luna` while `gpt-6-astra` beside them showed, and
+/// nothing on screen said why. Measured on 2026-09-28: every version from
+/// `0.155.0` to `999.0.0` returns the same list, and one that does not parse is
+/// refused with 400. A model Guaca cannot drive is refused by name on the first
+/// turn, which costs a turn. A model left out costs every turn, unexplained.
+const CATALOG_CLIENT_VERSION: &str = "999.0.0";
 
 /// The model a fresh sign-in starts on.
 ///

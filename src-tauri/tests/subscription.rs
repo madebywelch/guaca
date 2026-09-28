@@ -919,6 +919,10 @@ async fn a_real_subscription_answers_a_real_turn() {
         operator_name: String::new(),
         inference: InferenceConfig {
             provider: Provider::Chatgpt,
+            // A family the catalog has just started offering is the question
+            // this test gets asked most, and the default model cannot answer it.
+            subscription_model: std::env::var("GUAC_SUBSCRIPTION_MODEL")
+                .unwrap_or_else(|_| guac_lib::llm::codex::DEFAULT_MODEL.into()),
             reasoning_effort: guac_lib::domain::effort::ReasoningEffort::Low,
             request_timeout_secs: 120,
             ..Default::default()
