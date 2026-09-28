@@ -22,6 +22,7 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
     clock.ts          The clock every creature shares, and the one each keeps.
   lib/transcript.ts   What a channel shows, and what it collapses. Read first.
   lib/rail.ts         What order the rail draws agents in, and where a drop lands.
+  lib/brand.ts        The corner: the icon's pair, and when the name is out.
   lib/presence.ts     A crew, in the two marks its circle can carry.
   lib/orb.ts          How a crew stands inside its circle, and when it counts.
   lib/reach.ts        How close the pointer comes before the crews slide out.
@@ -274,6 +275,7 @@ repo: the frontend renders state and forwards intent.
 | Anything announced to a screen reader, or a live region | *A transcript is a log, and says one thing out loud* in `docs/WORKSPACE.md` |
 | Scrolling a transcript, following the newest line, when the view may move | *A transcript follows the end for whoever is at the end, and nobody else* in `docs/WORKSPACE.md`, then `src/lib/follow.ts` |
 | The menu bar: the glyph, the count, what the menu offers, closing the window | *The menu bar is Guaca with the window shut* in `docs/WORKSPACE.md`, then `src-tauri/src/menubar.rs` |
+| The rail's corner: the icon's pair, the name that folds away, the one thing it reports | *The corner is the icon's pair* in `docs/WORKSPACE.md`, then `src/lib/brand.ts` and the suite beside it, which is the gate, and `gaze` in `AgentAvatar` |
 | The rail's order, dragging a row, groups as places you go inside | *The rail is arranged by hand*, *A drop is one call* and *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/rail.ts` and `src/lib/orb.ts` |
 | Deleting an agent, putting one back, what the thirty days hold | *Deleting an agent is a thirty-day hold* in `docs/WORKSPACE.md`, then `Runtime::discard_agent` and `Runtime::purge_agent`, which are the two halves of what used to be one act |
 | Deleting a group, and why a disband does not use the compost | *Deleting a group deletes the crew, and the machines they were renting* in `docs/WORKSPACE.md`, then `disband_group` in `src-tauri/src/commands.rs` |

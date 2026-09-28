@@ -18,14 +18,14 @@ const MARGIN = 8;
  * something new became makeable. A plus is the one control that can absorb the
  * next one without the rail paying for it, which is why it is a menu.
  *
- * It sits at the top of the rail, beside the wordmark. It spent a while at the
- * end of the channel header instead, on the grounds that the rail is a list of
- * agents and this is about none of them, and that turned out to be the wrong
- * half of the argument: an agent is a row in the rail and a group is a heading
- * in it, so the rail is exactly where somebody looks to add one. It was also
- * the one place the plus could not be drawn when the workspace is empty, since
- * there is no channel open to hang a header on, which is the state where making
- * an agent is the only thing left to do.
+ * It sits at the top of the rail, in the title strip beside the pair. It spent
+ * a while at the end of the channel header instead, on the grounds that the rail
+ * is a list of agents and this is about none of them, and that turned out to be
+ * the wrong half of the argument: an agent is a row in the rail and a group is
+ * a heading in it, so the rail is exactly where somebody looks to add one. It
+ * was also the one place the plus could not be drawn when the workspace is
+ * empty, since there is no channel open to hang a header on, which is the state
+ * where making an agent is the only thing left to do.
  */
 export function NewMenu({ onNewAgent, onNewGroup }: Props) {
   const buttonRef = useRef<HTMLButtonElement>(null);

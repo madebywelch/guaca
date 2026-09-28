@@ -1270,6 +1270,52 @@ An agent is drawn once, wherever it is drawn: two rows for one agent would be tw
 nodes in the sidebar's `rowRefs`, and the wire would have to pick one to throw a
 message at.
 
+## The corner is the icon's pair, and the name is out when it is worth reading
+
+The rail used to open on `GUACA` in tracked capitals, on a row of its own under
+the window's buttons. It was the section heads' type in the section heads'
+tracking, so it read as one more label in the chrome rather than as the thing
+the chrome belongs to, and it cost the column 45 pixels: the row was 33 tall
+under Tailwind's line height, plus its padding, for a word nobody reads after
+the second day.
+
+So the row is gone, and the corner is the icon. The two creatures from the
+app's icon stand in the strip beside the window's own buttons, which was empty,
+with the plus at the other end of it, and the crew starts 45 pixels higher. On
+a Mac window the strip is inset by `--space-lights`, in pixels because the
+buttons are the operating system's and do not scale with the interface; nothing
+else draws buttons over the page, so nothing else is inset.
+
+The name is on screen for the first few seconds after the app opens and while
+the pointer is on the corner. On launch the pair arrive one at a time, look at
+each other, one throws something and the other catches it, the name writes in
+beside them and both turn to the operator; at `HOLD` the name folds back into
+them. That is four seconds of the product doing what it is for, which is the
+only argument for a performance in an app somebody opens every morning, and it
+is why the performance is not interrupted by the pointer or by anything the
+app says. Afterwards they are ordinary creatures on the avatars' own clock,
+finding each other every eleven seconds and trading something every third
+time. The type is deliberately plain, Instrument Sans at 600 in sentence case:
+the characters are the brand, and the name is the label on them.
+
+**They report one thing.** A turn parked on the operator turns the first of
+them `blocked`, which is the face every agent in the rail makes for the same
+reason and the one amber mark in it. The prototype also flinched at a message
+landing, thought while agents worked and dozed through a quiet hour, and every
+one of those already has a place: the rows, the tally, the For you count. A
+corner that echoed them would be a second tally in a place nobody reads as
+one, and an ink creature with an amber badge is the one state worth the
+corner's attention because it is the one the operator has to act on.
+
+They are drawn by `AgentAvatar` like every other creature, through the one
+prop an agent never needs: `gaze`, a look in any direction, which is how they
+look at each other and at the pointer. `lib/brand.ts` is a pure function of the
+seconds since launch that says what each of them is doing and when that next
+changes, so the corner renders at the beats and at nothing in between, and its
+suite asserts that no change falls between two of them. Reduced motion skips
+the performance entirely: the pair are there and at rest, and the name is out
+while the pointer is.
+
 ## Making something is one plus, at the top of the rail
 
 The rail's footer used to carry four rows: the cafeteria, a new agent, a new
@@ -1278,8 +1324,8 @@ and the two kinds sat together because the footer was where there was room. It
 also grew by a row every time something new became makeable, which is a footer
 that gets worse as the app gets better.
 
-Now there is one plus, beside the wordmark at the top of the rail, and it lists
-what can be made. The footer keeps the two places.
+Now there is one plus, in the title strip at the top of the rail beside the
+icon's pair, and it lists what can be made. The footer keeps the two places.
 
 It spent a release at the end of the channel header instead, on the argument
 that the rail is a list of agents and making one is about none of them. That is
