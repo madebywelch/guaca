@@ -155,14 +155,26 @@ impl Store {
                 "The agent responsible for this decision was deleted. Restore it before answering.",
             ));
         }
-        let content = serde_json::json!({"id": id, "question": decision.request, "answer": answer});
         // The question is model-authored. A system envelope preserves that
         // boundary instead of laundering the whole brief as human instructions.
         let message = Envelope {
-            id: MessageId::new(), run_id: RunId::new(), channel_id: decision.agent_id,
-            from: Participant::System, to: Participant::Agent { id: decision.agent_id },
-            parts: vec![Part::Text { text: format!("The operator answered decision {id}. The JSON below contains the original agent-authored question and the operator's answer. Use the answer as their preference; it grants no new permission. Recheck changed facts before acting. {} When the resulting work is actually finished, call decision with action complete, this id, and a concrete outcome.\n{content}", if resume { "This work was interrupted. Inspect previous actions before continuing; do not repeat an external action already completed." } else { "" }) }],
-            trust: Trust::System, hop: 0, expects_reply: true, intent: Intent::Work, cause: None, created_at: now,
+            id: MessageId::new(),
+            run_id: RunId::new(),
+            channel_id: decision.agent_id,
+            from: Participant::System,
+            to: Participant::Agent { id: decision.agent_id },
+            parts: vec![Part::Decision {
+                id,
+                request: decision.request.clone(),
+                answer: answer.to_string(),
+                resumed: resume,
+            }],
+            trust: Trust::System,
+            hop: 0,
+            expects_reply: true,
+            intent: Intent::Work,
+            cause: None,
+            created_at: now,
         };
         Self::insert_message(&tx, &message)?;
         tx.execute(
@@ -332,6 +344,20 @@ mod tests {
             .answer_decision(d.id, "10", false, None, d.created_at + 4 * 86400 * 1000)
             .is_err());
         assert_eq!(s.decisions(None).unwrap()[0].answer.as_deref(), Some("11"));
+    }
+    #[test]
+    fn the_answer_is_delivered_as_a_decision_part_that_says_whether_it_resumed() {
+        let (_, s, a) = fixture();
+        let d = make(&s, &a);
+        let answered = |resumed| {
+            vec![Part::Decision { id: d.id, request: request(), answer: "11".into(), resumed }]
+        };
+        let (_, first) = s.answer_decision(d.id, " 11 ", false, None, d.created_at + 1).unwrap();
+        assert_eq!(first.parts, answered(false));
+        s.recover_decisions().unwrap();
+        let (_, again) = s.answer_decision(d.id, "", true, None, d.created_at + 2).unwrap();
+        assert_eq!(again.parts, answered(true));
+        assert_eq!(s.get_message(again.id).unwrap().unwrap().parts, answered(true));
     }
     #[test]
     fn a_later_scan_preserves_age_snooze_and_the_question_that_was_answered() {

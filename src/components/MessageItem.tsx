@@ -162,6 +162,11 @@ export const MessageItem = memo(function MessageItem({
     );
   }
 
+  const answered = message.parts.find((part) => part.type === "decision");
+  if (answered) {
+    return <DecisionReply part={answered} at={message.createdAt} />;
+  }
+
   if (from.kind === "agent" && to.kind === "system") {
     return <ActivityRecord message={message} />;
   }
@@ -233,6 +238,58 @@ function ActivityRecord({ message }: { message: Envelope }) {
   close();
 
   return <>{rows}</>;
+}
+
+/**
+ * The operator's answer to a decision, in the channel of the agent that asked.
+ *
+ * Guaca delivers it, and it was drawn as Guaca's bubble: the paragraph telling
+ * the agent what to do with an answer, then the question and the answer as a
+ * line of JSON. What the operator did was answer a question, so it is drawn
+ * as their reply, on their side of the column, under the question it answers.
+ * What else the agent asked with is behind the question.
+ *
+ * Every word of the request is the agent's, and so is an answer picked from
+ * its options, so all of it is drawn as text and none of it as markdown.
+ */
+function DecisionReply({ part, at }: { part: Extract<Part, { type: "decision" }>; at: number }) {
+  const { request } = part;
+  const more = (
+    [
+      ["Context", request.context],
+      ["Recommended", request.recommendation],
+      ["Source", request.source],
+    ] as const
+  ).filter(([, text]) => text !== "");
+
+  return (
+    <article className="msg" data-operator="true">
+      <div className="msg__body">
+        <p className="decision__label">
+          {part.resumed ? "Resumed in For you" : "Answered in For you"}
+        </p>
+        {more.length > 0 ? (
+          <details className="decision__asked">
+            <summary title="Show what it was asked with">{request.question}</summary>
+            <dl className="decision__more">
+              {more.map(([label, text]) => (
+                <div key={label}>
+                  <dt>{label}</dt>
+                  <dd>{text}</dd>
+                </div>
+              ))}
+            </dl>
+          </details>
+        ) : (
+          <p className="decision__asked">{request.question}</p>
+        )}
+        <p className="decision__answer">{part.answer}</p>
+      </div>
+      <time className="msg__at" dateTime={new Date(at).toISOString()}>
+        {clockTime(at)}
+      </time>
+    </article>
+  );
 }
 
 function ChatBubble({

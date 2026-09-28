@@ -3640,6 +3640,10 @@ impl Store {
     /// JSON, and a substring search over it also matches the keys: "text",
     /// "name" and "type" are in every row, so searching for any of them
     /// returned the entire transcript.
+    ///
+    /// A decision's answer is matched on the answer and the question, which
+    /// are what the operator remembers of it. It was a text part once, and
+    /// findable by its words.
     fn matching_messages(&self, pattern: &str, limit: u32) -> Result<Vec<Envelope>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -3648,8 +3652,11 @@ impl Store {
                WHERE to_kind <> 'system'
                  AND EXISTS (
                      SELECT 1 FROM json_each(messages.parts) AS part
-                      WHERE json_extract(part.value, '$.type') = 'text'
-                        AND json_extract(part.value, '$.text') LIKE ?1 ESCAPE '\'
+                      WHERE (json_extract(part.value, '$.type') = 'text'
+                             AND json_extract(part.value, '$.text') LIKE ?1 ESCAPE '\')
+                         OR (json_extract(part.value, '$.type') = 'decision'
+                             AND (json_extract(part.value, '$.answer') LIKE ?1 ESCAPE '\'
+                                  OR json_extract(part.value, '$.request.question') LIKE ?1 ESCAPE '\'))
                  )
                ORDER BY created_at DESC, id DESC LIMIT ?2",
         )?;
@@ -6876,6 +6883,38 @@ mod tests {
         assert_eq!(found.len(), 2, "the two bodies that say it: {found:?}");
         assert!(found.iter().all(|e| e.to_lowercase().contains("budget")), "{found:?}");
         assert!(hits.messages.iter().all(|m| m.channel_id == s.writer), "a hit says where to go");
+    }
+
+    #[test]
+    fn a_decision_answer_is_found_by_its_words_and_not_by_its_keys() {
+        use crate::domain::decision::DecisionRequest;
+        use crate::domain::ids::DecisionId;
+
+        let s = searchable();
+        let mut answer =
+            envelope(Participant::System, Participant::Agent { id: s.writer }, "", RunId::new());
+        answer.parts = vec![Part::Decision {
+            id: DecisionId::new(),
+            request: DecisionRequest {
+                question: "Which footer address?".into(),
+                context: String::new(),
+                recommendation: "Use the office.".into(),
+                options: vec![],
+                source: String::new(),
+            },
+            answer: "Leave the address out.".into(),
+            resumed: false,
+        }];
+        s.f.store.append(&answer).unwrap();
+
+        for query in ["address out", "footer address"] {
+            let hits = s.f.store.search(query, 20).unwrap();
+            let found: Vec<MessageId> = hits.messages.iter().map(|m| m.id).collect();
+            assert_eq!(found, vec![answer.id], "{query:?}");
+        }
+        for key in ["recommendation", "resumed", "question"] {
+            assert!(s.f.store.search(key, 20).unwrap().messages.is_empty(), "{key:?}");
+        }
     }
 
     #[test]

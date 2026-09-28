@@ -128,6 +128,15 @@ commit in one immediate transaction. The runtime books the run under its run
 lock before enqueueing. Duplicate clicks have one winner. Answers arriving
 during another turn use ordinary inbox intake and can be read at its next round.
 
+The envelope carries a `decision` part, not text. The agent reads what
+`decision::delivery` builds from it: a paragraph on what an answer permits and
+how to finish, then the request and the answer as JSON. The transcript draws
+the operator's answer as their own reply, quoting the question it answers, with
+the context, recommendation and source behind the question. It was a text part
+first, and every channel drew the paragraph and the JSON as a bubble from Guaca;
+migration 61 converts those rows, and the paragraph the agent reads is the same
+either way.
+
 Completion requires a separate tool call with a concrete outcome after the work
 is done. It cannot be inferred from a turn ending. Outstanding answered records
 remain visible and continue to receive review reminders.

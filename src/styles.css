@@ -2695,6 +2695,77 @@ input[type="file"]::file-selector-button {
   margin-top: var(--space-1);
 }
 
+/* A decision answered in For you. The operator's own bubble, because the
+   answer is theirs, carrying the question it answers: it was asked somewhere
+   else, and an answer under nothing reads as a non sequitur. The question is
+   quoted as a blockquote is, in the agent's words, and the line above both
+   says where the answer was given. */
+.decision__label {
+  margin: 0 0 var(--space-2);
+  font-family: var(--font-ui);
+  font-size: var(--type-meta);
+  color: var(--faint);
+}
+
+.decision__asked {
+  margin: 0 0 var(--space-4);
+  padding-left: var(--space-4);
+  border-left: 2px solid var(--edge);
+  font-family: var(--font-read);
+  font-size: var(--type-aside);
+  line-height: var(--lead-ui);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* The question is the control, so it carries no marker and no underline: the
+   pointer and the ink it takes on hover say it opens. */
+.decision__asked > summary {
+  list-style: none;
+}
+
+.decision__asked > summary::-webkit-details-marker {
+  display: none;
+}
+
+.decision__asked > summary:hover {
+  text-decoration: none;
+}
+
+.decision__asked[open] > summary {
+  color: var(--text);
+}
+
+.decision__more {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+}
+
+.decision__more dt {
+  font-family: var(--font-ui);
+  font-size: var(--type-meta);
+  font-weight: 600;
+  color: var(--faint);
+}
+
+.decision__more dd {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+/* Set as the reading face is in every other bubble, but as text: a choice
+   clicked in For you is one of the agent's options, and never markup. */
+.decision__answer {
+  margin: 0;
+  font-family: var(--font-read);
+  font-size: var(--type-read);
+  line-height: var(--lead-read);
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .msg__head {
   display: flex;
   align-items: baseline;

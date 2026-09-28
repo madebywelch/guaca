@@ -643,6 +643,11 @@ fn render(messages: &[Envelope], names: &HashMap<AgentId, String>, report: &RunR
                     )
                 }
                 Part::Routine { name, what, .. } => format!("\n[routine {name:?}] {what}\n"),
+                Part::Decision { request, answer, resumed, .. } => format!(
+                    "\n[{} {:?}]\n{answer}\n",
+                    if *resumed { "resumes decision" } else { "answers decision" },
+                    request.question
+                ),
                 Part::Json { name, value } => format!("\n[{name}]\n\n```json\n{value}\n```\n"),
             });
         }

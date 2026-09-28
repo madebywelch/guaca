@@ -1711,6 +1711,67 @@ ALTER TABLE artifact_history
     ADD COLUMN condensed TEXT CHECK (condensed IS NULL OR page IS NOT NULL);
 "#,
     ),
+    (
+        61,
+        r#"
+-- A decision's answer, as the part the transcript draws as the operator's
+-- reply. It was written as one text part from Guaca: a paragraph telling the
+-- agent what to do with the answer, then the request and the answer as JSON on
+-- a line of their own, and every channel holding one drew all of it as a
+-- bubble. The agent is sent the same paragraph either way, because
+-- `decision::delivery` builds it from the fields kept here, byte for byte.
+--
+-- Only rows that are unmistakably that write are converted: from Guaca, one
+-- text part, the sentence it always opened with, and a last line carrying
+-- every field the part requires. A row this cannot read stays text and draws
+-- as it did. A row it misread would fail to parse and take its channel with
+-- it, and a malformed argument makes a JSON function raise rather than return
+-- null, so every one of them sits behind a CASE: SQLite promises the order a
+-- CASE is evaluated in and promises nothing about an AND.
+WITH texts AS (
+    SELECT id,
+           CASE WHEN json_valid(parts) THEN
+               CASE WHEN json_array_length(parts) = 1
+                         AND json_extract(parts, '$[0].type') = 'text'
+                    THEN json_extract(parts, '$[0].text') END
+           END AS text
+      FROM messages
+     WHERE from_kind = 'system'
+),
+split AS (
+    SELECT id,
+           substr(text, 1, instr(text, char(10)) - 1) AS lead,
+           substr(text, instr(text, char(10)) + 1) AS body
+      FROM texts
+     WHERE text GLOB 'The operator answered decision *'
+       AND instr(text, char(10)) > 0
+),
+sound AS (
+    SELECT id, lead, body
+      FROM split
+     WHERE CASE WHEN json_valid(body) THEN
+               json_type(body, '$.id') = 'text'
+               AND length(json_extract(body, '$.id')) = 36
+               AND json_type(body, '$.answer') = 'text'
+               AND json_type(body, '$.question') = 'object'
+               AND json_type(body, '$.question.question') = 'text'
+               AND coalesce(json_type(body, '$.question.options'), 'array') = 'array'
+           END
+)
+UPDATE messages
+   SET parts = (
+       SELECT json_array(json_object(
+                  'type', 'decision',
+                  'id', json_extract(body, '$.id'),
+                  'request', json(json_extract(body, '$.question')),
+                  'answer', json_extract(body, '$.answer'),
+                  'resumed', json(CASE WHEN instr(lead, 'This work was interrupted.') > 0
+                                       THEN 'true' ELSE 'false' END)))
+         FROM sound
+        WHERE sound.id = messages.id)
+ WHERE id IN (SELECT id FROM sound);
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -3062,5 +3123,94 @@ mod tests {
             .query_row("SELECT count(*) FROM sqlite_master WHERE name='ok'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(leftover, 0, "rollback must remove the partially created table");
+    }
+
+    #[test]
+    fn a_decision_answer_written_as_text_becomes_the_part_and_says_the_same_thing() {
+        use crate::domain::decision::{delivery, DecisionRequest};
+        use crate::domain::envelope::{Envelope, Intent, Part, Participant, Trust};
+        use crate::domain::ids::{AgentId, DecisionId, MessageId, RunId};
+
+        let mut conn = memory();
+        let tx = conn.transaction().unwrap();
+        for (version, sql) in MIGRATIONS.iter().take_while(|(v, _)| *v < 61) {
+            tx.execute_batch(sql).unwrap();
+            tx.pragma_update(None, "user_version", *version).unwrap();
+        }
+        tx.commit().unwrap();
+
+        let agent = AgentId::new();
+        let request = DecisionRequest {
+            question: "Which address goes in the footer?".into(),
+            context: "FTC guidance says \"valid postal address\".\nTwo lines.".into(),
+            recommendation: String::new(),
+            options: vec![],
+            source: "https://www.ftc.gov/business-guidance".into(),
+        };
+        let write = |from: Participant, text: String| {
+            let message = Envelope {
+                id: MessageId::new(),
+                run_id: RunId::new(),
+                channel_id: agent,
+                from,
+                to: Participant::Agent { id: agent },
+                parts: vec![Part::text(text)],
+                trust: Trust::System,
+                hop: 0,
+                expects_reply: true,
+                intent: Intent::Work,
+                cause: None,
+                created_at: 1,
+            };
+            crate::db::Store::insert_message(&conn, &message).unwrap();
+            message
+        };
+        let answered = DecisionId::new();
+        let resumed = DecisionId::new();
+        let answer = "No address.\nShow me the copy before \"sending\" anything.";
+        let plain = write(Participant::System, delivery(answered, &request, answer, false));
+        let again = write(Participant::System, delivery(resumed, &request, answer, true));
+        // Everything this must leave alone: the same words typed by the
+        // operator, the opening sentence over a line that is not the request,
+        // and Guaca saying something else.
+        let typed = write(Participant::Human, delivery(answered, &request, answer, false));
+        let broken = write(
+            Participant::System,
+            "The operator answered decision x. Nothing below.\n{\"answer\":".into(),
+        );
+        let other = write(Participant::System, "The run was stopped.".into());
+
+        run(&mut conn).unwrap();
+
+        let parts = |message: &Envelope| -> Vec<Part> {
+            let raw: String = conn
+                .query_row(
+                    "SELECT parts FROM messages WHERE id=?1",
+                    [message.id.to_string()],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            serde_json::from_str(&raw).unwrap()
+        };
+        assert_eq!(
+            parts(&plain),
+            vec![Part::Decision {
+                id: answered,
+                request: request.clone(),
+                answer: answer.into(),
+                resumed: false
+            }]
+        );
+        assert_eq!(
+            parts(&again),
+            vec![Part::Decision { id: resumed, request, answer: answer.into(), resumed: true }]
+        );
+        for message in [&plain, &again] {
+            let now = Envelope { parts: parts(message), ..message.clone() };
+            assert_eq!(now.plain_text(), message.plain_text(), "the agent must read what it read");
+        }
+        for message in [&typed, &broken, &other] {
+            assert_eq!(parts(message), message.parts, "not an answer this wrote");
+        }
     }
 }

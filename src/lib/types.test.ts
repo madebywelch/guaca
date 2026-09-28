@@ -61,6 +61,30 @@ describe("plainText", () => {
     });
     expect(plainText(message)).toBe("check the listings");
   });
+
+  it("counts a decision's answer, not the brief the model was sent around it", () => {
+    // The flow board names what opened a run with the first 140 characters.
+    // Of the brief, that is Guaca introducing the answer and nothing of it.
+    const message = envelope({
+      from: { kind: "system" },
+      parts: [
+        {
+          type: "decision",
+          id: "d1",
+          request: {
+            question: "10 or 11?",
+            context: "",
+            recommendation: "",
+            options: [],
+            source: "",
+          },
+          answer: "11, and move the call",
+          resumed: false,
+        },
+      ],
+    });
+    expect(plainText(message)).toBe("11, and move the call");
+  });
 });
 
 describe("isInterAgent", () => {

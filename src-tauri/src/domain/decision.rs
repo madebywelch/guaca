@@ -51,6 +51,23 @@ impl DecisionRequest {
     }
 }
 
+/// What the agent that filed a decision is told when the operator answers it.
+///
+/// The whole of what the model reads about the answer. `Part::Decision`
+/// projects it through `as_plain_text`, so the transcript can draw the answer
+/// as the operator's reply while the prompt stays exactly this. The request is
+/// quoted as JSON because every field of it is agent-authored, and data is
+/// what it has to arrive as.
+pub fn delivery(id: DecisionId, request: &DecisionRequest, answer: &str, resumed: bool) -> String {
+    let content = serde_json::json!({"id": id, "question": request, "answer": answer});
+    let resumed = if resumed {
+        "This work was interrupted. Inspect previous actions before continuing; do not repeat an external action already completed."
+    } else {
+        ""
+    };
+    format!("The operator answered decision {id}. The JSON below contains the original agent-authored question and the operator's answer. Use the answer as their preference; it grants no new permission. Recheck changed facts before acting. {resumed} When the resulting work is actually finished, call decision with action complete, this id, and a concrete outcome.\n{content}")
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DecisionStatus {
@@ -159,6 +176,29 @@ mod tests {
         };
         assert_eq!(request.options, vec!["10", "11"]);
         assert!(deadline(due_at.as_deref()).unwrap().is_some());
+    }
+    /// Pinned to the byte: this is prompt text, and it was a text part before
+    /// the transcript learned to draw it. A change here is a prompt change and
+    /// wants the live evals, not an updated literal.
+    #[test]
+    fn the_model_is_told_exactly_what_it_was_told_as_a_text_part() {
+        let id: DecisionId = "6bd01bb1-068b-433e-a520-fb87b0f85f5f".parse().unwrap();
+        let request = DecisionRequest {
+            question: "10 or 11?".into(),
+            context: "A meeting tomorrow.".into(),
+            recommendation: "11 leaves a break.".into(),
+            options: vec!["10".into(), "11".into()],
+            source: "email:thread-one".into(),
+        };
+        let json = r#"{"answer":"11","id":"6bd01bb1-068b-433e-a520-fb87b0f85f5f","question":{"context":"A meeting tomorrow.","options":["10","11"],"question":"10 or 11?","recommendation":"11 leaves a break.","source":"email:thread-one"}}"#;
+        assert_eq!(
+            delivery(id, &request, "11", false),
+            format!("The operator answered decision 6bd01bb1-068b-433e-a520-fb87b0f85f5f. The JSON below contains the original agent-authored question and the operator's answer. Use the answer as their preference; it grants no new permission. Recheck changed facts before acting.  When the resulting work is actually finished, call decision with action complete, this id, and a concrete outcome.\n{json}")
+        );
+        assert_eq!(
+            delivery(id, &request, "11", true),
+            format!("The operator answered decision 6bd01bb1-068b-433e-a520-fb87b0f85f5f. The JSON below contains the original agent-authored question and the operator's answer. Use the answer as their preference; it grants no new permission. Recheck changed facts before acting. This work was interrupted. Inspect previous actions before continuing; do not repeat an external action already completed. When the resulting work is actually finished, call decision with action complete, this id, and a concrete outcome.\n{json}")
+        );
     }
     #[test]
     fn ambiguous_deadlines_are_refused_and_briefings_advance() {
