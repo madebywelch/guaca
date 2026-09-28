@@ -41,6 +41,7 @@ import type {
   Approval,
   ApprovalId,
   ApprovalState,
+  ArtifactId,
   Capabilities,
   CodingLine,
   Decision,
@@ -223,6 +224,15 @@ export interface State {
   decisionError: string | null;
   forYou: boolean;
   showForYou: (open: boolean) => void;
+  /**
+   * The Artifacts dialog: closed, open on the list, or open on one artifact.
+   *
+   * Here rather than in `App` beside the calendar's flag, because a card in a
+   * transcript opens it on the artifact that card names, and a card is several
+   * components below the one that would otherwise own the flag.
+   */
+  artifactsOpen: { id: ArtifactId | null } | null;
+  showArtifacts: (open: { id: ArtifactId | null } | null) => void;
   refreshDecisions: () => Promise<void>;
 
   selected: ChannelKey | null;
@@ -316,6 +326,12 @@ export interface State {
    * count on the others to be right.
    */
   calendarVersion: number;
+
+  /**
+   * The same counter for artifacts, one for the workspace for the calendar's
+   * reason: the dialog reads every crew's while the rail is showing every crew.
+   */
+  artifactsVersion: number;
 
   /**
    * The same counter for each agent's memory, and it is a second one rather
@@ -532,6 +548,8 @@ export const useStore = create<State>((set, get) => ({
   decisionError: null,
   forYou: false,
   showForYou: (open) => set({ forYou: open }),
+  artifactsOpen: null,
+  showArtifacts: (open) => set({ artifactsOpen: open }),
   async refreshDecisions() {
     const read = ++decisionRead;
     try {
@@ -553,6 +571,7 @@ export const useStore = create<State>((set, get) => ({
   openingRoutine: null,
   routineVersion: {},
   calendarVersion: 0,
+  artifactsVersion: 0,
   memoryVersion: {},
   workingNotesVersion: {},
   skillsVersion: {},
@@ -1315,6 +1334,13 @@ export const useStore = create<State>((set, get) => ({
         // with the one the component already has — the argument `routineVersion`
         // makes one field up.
         set((state) => ({ calendarVersion: state.calendarVersion + 1 }));
+        break;
+      }
+
+      case "artifactsChanged": {
+        // No payload kept, for the calendar's reason: the dialog reads what it
+        // is showing back from Rust.
+        set((state) => ({ artifactsVersion: state.artifactsVersion + 1 }));
         break;
       }
 

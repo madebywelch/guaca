@@ -301,7 +301,7 @@ mod tests {
         );
 
         let echoed = call_tool(&session, "echo", &serde_json::json!({ "text": "hi" }), None).await;
-        assert_eq!(echoed.unwrap(), "said: hi");
+        assert_eq!(echoed.unwrap().text, "said: hi");
 
         // The operator's variable arrives; the host's own environment does
         // not, and a question the server asks mid-call is refused, not ignored.
@@ -309,7 +309,7 @@ mod tests {
         // absence in the program's a finding.
         assert!(std::env::var("CARGO_PKG_NAME").is_ok());
         let said = call_tool(&session, "whoami", &serde_json::json!({}), None).await.unwrap();
-        assert_eq!(said, "token=abc leaked=False refused=True");
+        assert_eq!(said.text, "token=abc leaked=False refused=True");
 
         let refused = call_tool(&session, "fail", &serde_json::json!({}), None).await;
         assert!(

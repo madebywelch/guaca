@@ -39,7 +39,7 @@ function group(name: string): Group {
   return aGroup({ id: `group-${name}`, name, agentCount: 2, createdAt: 1 });
 }
 
-const NOTHING: SearchHits = { messages: [], files: [], links: [], routines: [] };
+const NOTHING: SearchHits = { messages: [], files: [], links: [], routines: [], artifacts: [] };
 
 function input(over: Partial<SearchInput> = {}): SearchInput {
   return {
@@ -126,15 +126,33 @@ describe("searchResults", () => {
           createdAt: 1,
         },
       ],
+      artifacts: [
+        {
+          id: "k1",
+          groupId: "id-Budget",
+          owner: { id: "id-Chef", name: "Chef", gone: false },
+          title: "Budget by month",
+          version: 2,
+          editedBy: { kind: "agent", id: "id-Chef", name: "Chef" },
+          createdAt: 1,
+          updatedAt: NOW - 4000,
+          sources: [],
+          sourcesAllowed: false,
+        },
+      ],
     };
 
     const results = searchResults(
       input({ query: "budget", agents: [agent("Chef")], groups: [group("Budget")], hits }),
     );
     const kinds = new Set(results.map((r) => r.kind));
-    // Six of the seven. No agent is called Budget, and "Budget settings" is,
+    // Seven of the eight. No agent is called Budget, and "Budget settings" is,
     // so the action for the group is in here and the agent row is not.
-    expect(kinds).toEqual(new Set(["messages", "files", "links", "routines", "groups", "actions"]));
+    expect(kinds).toEqual(
+      new Set(["messages", "files", "links", "routines", "artifacts", "groups", "actions"]),
+    );
+    const page = results.find((r) => r.kind === "artifacts");
+    expect(page?.action).toEqual({ do: "openArtifact", artifactId: "k1" });
   });
 
   it("ranks a name typed in full above the same word inside a message", () => {

@@ -26,6 +26,8 @@ interface Props {
   onOpenCafeteria: () => void;
   /** The workspace calendar: every crew's dates, in one place. */
   onOpenCalendar: () => void;
+  /** The pages the crews keep, scoped to whichever crew the rail is inside. */
+  onOpenArtifacts: () => void;
   onOpenSettings: () => void;
   onOpenSearch: () => void;
   /** The plus in the title strip, beside the pair. App-level, not any one row's. */
@@ -67,6 +69,7 @@ export function Sidebar({
   onEditGroup,
   onOpenCafeteria,
   onOpenCalendar,
+  onOpenArtifacts,
   onOpenSettings,
   onOpenSearch,
   onNewAgent,
@@ -720,6 +723,14 @@ export function Sidebar({
               ▤
             </span>
             Calendar
+          </button>
+          {/* Before settings rather than after it: a phone hides the last
+              button in this row, and settings has its own tab there. */}
+          <button type="button" className="btn btn--rail" onClick={onOpenArtifacts}>
+            <span aria-hidden="true" className="rail__hash">
+              ❏
+            </span>
+            Artifacts
           </button>
           <button type="button" className="btn btn--rail" onClick={onOpenSettings}>
             <span aria-hidden="true" className="rail__hash">

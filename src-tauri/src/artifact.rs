@@ -112,7 +112,10 @@ const KEPT: usize = 24;
 /// A document that is too big to be a figure is too big to be worth framing.
 ///
 /// Also the ceiling on what one of these can cost in memory: `KEPT` times this.
-const MOST_BYTES: usize = 512 * 1024;
+/// The same number a kept artifact is held to, by reference rather than by
+/// agreement: a page the crew kept that this then refused to frame would be a
+/// version nobody can open.
+const MOST_BYTES: usize = crate::domain::artifact::MAX_PAGE;
 
 /// Request head must arrive within this. A connection that opens and says
 /// nothing is a probe or a mistake, and should not hold a task forever.
@@ -281,6 +284,17 @@ fn wrap(page: &str) -> String {
 /// load, since a page that draws after a timer, or grows when something in it
 /// is clicked, has a different answer a second later.
 ///
+/// **Data**, for a kept page with reads the operator allowed. It arrives from
+/// the window that framed the page and from nothing else, which is the check
+/// `event.source !== parent` makes: another frame posting "data" at this one is
+/// not where the numbers come from. `guaca.data()` waits for the first arrival
+/// and `guaca.onData` hears every one, because a refresh sends them again.
+///
+/// **A send**, from a kept page, which is posted exactly like an answer. The
+/// difference is on the other side: a kept page's host carries it to the
+/// page's owner when the operator's click is what caused it, and a fenced
+/// page's host treats it as an answer. See `HtmlArtifact`.
+///
 /// **The answer**, which is a value and never a send. `guaca.answer` posts and
 /// nothing else happens: whether that value ever becomes a message is the
 /// operator's decision, taken in Guaca's own chrome. See the note on this
@@ -308,17 +322,46 @@ const BRIDGE: &str = r#"<script>
       new ResizeObserver(tell).observe(document.documentElement);
     });
   }
+  function post(kind, value) {
+    var said;
+    try {
+      said = JSON.stringify(value);
+    } catch (err) {
+      said = null;
+    }
+    if (typeof said !== "string") return false;
+    parent.postMessage({ guaca: kind, value: said }, "*");
+    return true;
+  }
+  var latest = null;
+  var waiting = [];
+  var watching = [];
+  addEventListener("message", function (event) {
+    if (event.source !== parent) return;
+    var said = event.data;
+    if (!said || said.guaca !== "artifact-data") return;
+    latest = said.data;
+    var ready = waiting;
+    waiting = [];
+    for (var i = 0; i < ready.length; i++) ready[i](latest);
+    for (var j = 0; j < watching.length; j++) watching[j](latest);
+  });
   window.guaca = {
     answer: function (value) {
-      var said;
-      try {
-        said = JSON.stringify(value);
-      } catch (err) {
-        said = null;
-      }
-      if (typeof said !== "string") return false;
-      parent.postMessage({ guaca: "artifact-answer", value: said }, "*");
-      return true;
+      return post("artifact-answer", value);
+    },
+    send: function (value) {
+      return post("artifact-send", value);
+    },
+    data: function () {
+      if (latest !== null) return Promise.resolve(latest);
+      return new Promise(function (resolve) {
+        waiting.push(resolve);
+      });
+    },
+    onData: function (watch) {
+      watching.push(watch);
+      if (latest !== null) watch(latest);
     }
   };
 })();
@@ -540,12 +583,23 @@ mod tests {
     }
 
     #[test]
+    fn data_reaches_a_page_only_from_the_window_that_framed_it() {
+        // Another frame posting "data" at a page is not where its numbers come
+        // from, and a page that believed one would draw whatever it was told.
+        assert!(BRIDGE.contains("if (event.source !== parent) return;"), "{BRIDGE}");
+        assert!(BRIDGE.contains(r#"said.guaca !== "artifact-data""#), "{BRIDGE}");
+        // A send is posted like an answer: a value, serialized in the page.
+        assert!(BRIDGE.contains(r#"return post("artifact-send", value);"#), "{BRIDGE}");
+    }
+
+    #[test]
     fn the_answer_bridge_posts_a_value_and_never_a_message() {
         // The distinction this whole feature rests on. A page hands a value to
         // the window that framed it; whether that value ever becomes a message
         // is decided in Guaca's own chrome, by the operator, and there is
         // nothing in here that could take that step on its own.
-        assert!(BRIDGE.contains(r#"parent.postMessage({ guaca: "artifact-answer""#), "{BRIDGE}");
+        assert!(BRIDGE.contains(r#"return post("artifact-answer", value);"#), "{BRIDGE}");
+        assert!(BRIDGE.contains("parent.postMessage({ guaca: kind, value: said }"), "{BRIDGE}");
         // Serialized in the page, so a value that cannot survive it fails
         // where the page can be told about it rather than in the app.
         assert!(BRIDGE.contains("JSON.stringify(value)"), "{BRIDGE}");

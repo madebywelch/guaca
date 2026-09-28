@@ -7290,6 +7290,260 @@ input[type="file"]:disabled {
 }
 
 /* ==========================================================================
+   Artifacts
+
+   The pages the crews keep. The calendar's shape, a panel owning its own
+   height with a head and a foot pinned to it, because it is the same kind of
+   place: somewhere you go and come back from. Wider than the calendar, because
+   a page an agent laid out for a window is wider than a line of text.
+
+   The page is the point. Everything else about an artifact, its crew, owner,
+   version and when it changed, is one faint line, and the history is behind a
+   button rather than beside the page: it is for working out what happened,
+   and nobody reads it on the way to the page.
+   ========================================================================== */
+
+.dialog--artifacts:focus,
+.dialog--artifacts:focus-visible {
+  outline: none;
+}
+
+.dialog.dialog--artifacts {
+  width: min(64rem, 100%);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 3rem);
+  padding: 0;
+}
+
+.artifacts__head {
+  padding: var(--space-7) var(--space-7) var(--space-5);
+  border-bottom: 1px solid var(--edge);
+  flex: none;
+}
+
+.artifacts__title-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+.artifacts__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Everything that is not the page, said once and quietly. */
+.artifacts__details {
+  margin: var(--space-2) 0 0;
+  font-size: var(--type-small);
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifacts__body {
+  overflow-y: auto;
+  flex: 1;
+  padding: var(--space-5) var(--space-7) var(--space-6);
+}
+
+.artifacts__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* The whole row is the target, and the name is what it says. */
+.artifacts__row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  width: 100%;
+  padding: var(--space-4) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--tempo-tap) var(--ease);
+}
+
+.artifacts__row:hover {
+  background: var(--sunken);
+}
+
+.artifacts__name {
+  font-family: var(--font-ui);
+  font-size: var(--type-ui);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifacts__row .artifacts__details {
+  margin: 0;
+}
+
+.artifacts__old {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  font-size: var(--type-small);
+  color: var(--muted);
+}
+
+.artifacts__owner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+  font-size: var(--type-small);
+  color: var(--muted);
+}
+
+/* As wide as a name, not as wide as the dialog: handing a page over is a
+   rare act, and a full-width field reads as the thing this view is for. */
+.artifacts__owner .input {
+  width: auto;
+}
+
+/* A record, read line by line when something needs explaining. Small, and
+   one line per change where it fits. */
+.artifacts__log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: var(--type-small);
+  color: var(--text);
+}
+
+.artifacts__entry {
+  display: grid;
+  grid-template-columns: 2.5rem minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--space-4);
+  padding: var(--space-2) 0;
+}
+
+.artifacts__version {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: var(--font-mono);
+  font-size: var(--type-meta);
+  color: var(--faint);
+  text-align: left;
+}
+
+button.artifacts__version {
+  color: var(--flesh);
+  cursor: pointer;
+}
+
+button.artifacts__version:hover {
+  text-decoration: underline;
+}
+
+button.artifacts__version[aria-pressed="true"] {
+  color: var(--text);
+}
+
+.artifacts__entry-note {
+  color: var(--muted);
+}
+
+.artifacts__entry-at {
+  font-family: var(--font-mono);
+  font-size: var(--type-mark);
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.artifacts__error {
+  margin: 0 var(--space-7);
+}
+
+.artifacts__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-7);
+  border-top: 1px solid var(--edge);
+  flex: none;
+}
+
+.artifacts__note {
+  flex: 1;
+  margin: 0;
+  font-size: var(--type-small);
+  color: var(--faint);
+  line-height: var(--lead-ui);
+}
+
+.artifacts__spacer {
+  flex: 1;
+}
+
+/* The card a turn leaves when it made or changed a kept page. In the trail's
+   column rather than as a bubble, because it is what the agent did, and set
+   apart from the chips because it is the one thing in the record that is a
+   place to go rather than a line to read. */
+.artifact-card {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-4);
+  max-width: min(32rem, 100%);
+  margin: var(--space-2) var(--space-7) var(--space-2) var(--column-inset);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--tempo-tap) var(--ease);
+}
+
+.artifact-card:hover {
+  border-color: var(--flesh);
+}
+
+.artifact-card__kind {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--type-mark);
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.artifact-card__title {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-ui);
+  font-size: var(--type-ui);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-card__open {
+  flex: none;
+  font-size: var(--type-small);
+  color: var(--flesh);
+}
+
+/* ==========================================================================
    Settings
 
    Settings stopped being one column the moment it stopped being one subject.
@@ -8306,7 +8560,8 @@ input[type="file"]:disabled {
   .cafeteria__head,
   .cafeteria__foot,
   .calendar__title-row,
-  .calendar__foot {
+  .calendar__foot,
+  .artifacts__foot {
     flex-wrap: wrap;
   }
 
@@ -8330,6 +8585,7 @@ input[type="file"]:disabled {
   .scrim > .dialog--settings,
   .scrim > .dialog--cafeteria,
   .scrim > .dialog--calendar,
+  .scrim > .dialog--artifacts,
   .scrim > .for-you {
     height: 100%;
     padding: 0;
@@ -8363,9 +8619,13 @@ input[type="file"]:disabled {
   .cafeteria__foot,
   .calendar__head,
   .calendar__body,
-  .calendar__foot {
+  .calendar__foot,
+  .artifacts__head,
+  .artifacts__body,
+  .artifacts__foot {
     padding: var(--space-5);
   }
+
 
   .settings__pane {
     min-width: 0;

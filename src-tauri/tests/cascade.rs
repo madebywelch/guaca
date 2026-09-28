@@ -2162,6 +2162,245 @@ async fn an_agent_cannot_move_another_crews_meeting() {
     assert_eq!(untouched.starts_at, hidden.starts_at, "and it must not have moved");
 }
 
+/// The id at the end of the last thing the operator said, for a script that
+/// has to name an artifact the test made before the turn.
+fn last_word(body: &serde_json::Value) -> String {
+    body["messages"]
+        .as_array()
+        .and_then(|turns| turns.last())
+        .and_then(|turn| turn["content"].as_str())
+        .unwrap_or("")
+        .rsplit(' ')
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('.')
+        .to_string()
+}
+
+/// Every `artifact` call an agent's own record holds, with what it made.
+fn artifact_calls(
+    h: &Harness,
+    name: &str,
+) -> Vec<(ToolOutcome, Option<guac_lib::domain::artifact::Made>)> {
+    h.runtime
+        .store()
+        .channel_messages(h.id(name), 200)
+        .unwrap()
+        .into_iter()
+        .flat_map(|message| message.parts)
+        .filter_map(|part| match part {
+            Part::ToolCall { name, outcome, artifact, .. } if name == "artifact" => {
+                Some((outcome, artifact))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn an_agent_keeps_a_page_and_its_turn_records_a_card_for_it() {
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("The board is in your Artifacts.".into())
+        } else {
+            Script::Plugin {
+                name: "artifact".into(),
+                arguments: serde_json::json!({
+                    "action": "create",
+                    "title": "Pipeline by stage",
+                    "page": "<!doctype html><p>Pipeline</p>",
+                }),
+            }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Make me a pipeline board.").unwrap();
+    h.settle(run).await;
+
+    let kept = h.runtime.store().artifacts(None, 10).unwrap();
+    assert_eq!(kept.len(), 1, "one page kept");
+    assert_eq!(kept[0].owner.as_ref().map(|o| o.id), Some(h.id("Manager")), "its maker owns it");
+
+    let results = tool_results(&stub).join("\n");
+    assert!(results.contains("You own it"), "the maker is told it owns it: {results:?}");
+
+    let calls = artifact_calls(&h, "Manager");
+    let made = calls.iter().find_map(|(_, made)| made.clone());
+    let made = made.expect("the call records what it made, which is what the card is drawn from");
+    assert_eq!((made.id, made.version), (kept[0].id, 1));
+    assert_eq!(made.title, "Pipeline by stage");
+}
+
+#[tokio::test]
+async fn a_crewmate_edits_without_messaging_the_owner_who_reads_it_on_its_next_turn() {
+    // Anyone in the crew edits, one agent owns. The editor is told the owner
+    // will read about it, and the owner does, from its own prompt, without a
+    // message waking it: a message would be a paid turn, and an owner woken by
+    // every edit edits back.
+    let stub = serve(|body| {
+        let asked = last_word(body);
+        if has_tool_result(body) || !asked.contains('-') {
+            Script::Say("Done.".into())
+        } else {
+            Script::Plugin {
+                name: "artifact".into(),
+                arguments: serde_json::json!({
+                    "action": "update",
+                    "id": asked,
+                    "page": "<p>with Q4</p>",
+                    "note": "Added a Q4 column",
+                }),
+            }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Rae", "Milo"], GuardLimits::default());
+    let crew = h.runtime.store().get_agent(h.id("Rae")).unwrap().unwrap().group_id;
+    let page = h
+        .runtime
+        .store()
+        .create_artifact(
+            crew,
+            h.id("Rae"),
+            "Rae",
+            guac_lib::db::ArtifactDraft {
+                title: "Pipeline",
+                page: "<p>v1</p>",
+                sources: &[],
+                note: "First cut",
+            },
+        )
+        .unwrap();
+
+    let run = h
+        .runtime
+        .send_from_human(h.id("Milo"), &format!("Add Q4 to the pipeline, id {}", page.id))
+        .unwrap();
+    h.settle(run).await;
+
+    let after = h.runtime.store().artifact(page.id, crew).unwrap().unwrap();
+    assert_eq!(after.version, 2);
+    assert_eq!(after.owner.map(|o| o.id), Some(h.id("Rae")), "an edit is not a take-over");
+    let results = tool_results(&stub).join("\n");
+    assert!(results.contains("no need to message it"), "got {results:?}");
+    assert!(
+        h.runtime.store().channel_messages(h.id("Rae"), 50).unwrap().is_empty(),
+        "nothing reached the owner's channel"
+    );
+
+    let run = h.runtime.send_from_human(h.id("Rae"), "Anything new?").unwrap();
+    h.settle(run).await;
+    let prompt = prompts_by_agent(&stub).remove("Rae").unwrap_or_default();
+    assert!(prompt.contains("\"Pipeline\" v2, yours, updated"), "got {prompt}");
+    assert!(prompt.contains("by Milo"), "the owner reads who changed it: {prompt}");
+}
+
+#[tokio::test]
+async fn an_edit_without_a_note_is_refused_and_changes_nothing() {
+    let stub = serve(|body| {
+        let asked = last_word(body);
+        if has_tool_result(body) {
+            Script::Say("I will say what changed.".into())
+        } else {
+            Script::Plugin {
+                name: "artifact".into(),
+                arguments: serde_json::json!({ "action": "update", "id": asked, "page": "<p/>" }),
+            }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Rae"], GuardLimits::default());
+    let crew = h.runtime.store().get_agent(h.id("Rae")).unwrap().unwrap().group_id;
+    let page = h
+        .runtime
+        .store()
+        .create_artifact(
+            crew,
+            h.id("Rae"),
+            "Rae",
+            guac_lib::db::ArtifactDraft {
+                title: "Pipeline",
+                page: "<p>v1</p>",
+                sources: &[],
+                note: "",
+            },
+        )
+        .unwrap();
+
+    let run = h.runtime.send_from_human(h.id("Rae"), &format!("Tidy it, id {}", page.id)).unwrap();
+    h.settle(run).await;
+
+    let results = tool_results(&stub).join("\n");
+    assert!(results.contains("needs a `note`"), "the refusal says what to send: {results:?}");
+    assert_eq!(h.runtime.store().artifact(page.id, crew).unwrap().unwrap().version, 1);
+    assert!(
+        matches!(artifact_calls(&h, "Rae")[..], [(ToolOutcome::Refused { .. }, None)]),
+        "drawn as a refusal, and with no card: {:?}",
+        artifact_calls(&h, "Rae")
+    );
+}
+
+#[tokio::test]
+async fn an_agent_cannot_touch_another_crews_artifact() {
+    // The wall, end to end. The id is real and the page exists; the only thing
+    // stopping the edit is the crew on the caller's card, and the refusal is
+    // the one an id that never existed gets.
+    let stub = serve(|body| {
+        let asked = last_word(body);
+        if has_tool_result(body) {
+            Script::Say("Understood.".into())
+        } else {
+            Script::Plugin {
+                name: "artifact".into(),
+                arguments: serde_json::json!({
+                    "action": "update",
+                    "id": asked,
+                    "page": "<p>mine now</p>",
+                    "note": "Took it",
+                }),
+            }
+        }
+    })
+    .await;
+
+    let h = harness_in_groups(
+        &stub,
+        &[("Manager", Some("Front")), ("Chef", Some("Back"))],
+        GuardLimits::default(),
+    );
+    let theirs = h.runtime.store().get_agent(h.id("Chef")).unwrap().unwrap().group_id;
+    let hidden = h
+        .runtime
+        .store()
+        .create_artifact(
+            theirs,
+            h.id("Chef"),
+            "Chef",
+            guac_lib::db::ArtifactDraft {
+                title: "Menu",
+                page: "<p>menu</p>",
+                sources: &[],
+                note: "",
+            },
+        )
+        .unwrap();
+
+    let run = h
+        .runtime
+        .send_from_human(h.id("Manager"), &format!("Edit the menu, id {}", hidden.id))
+        .unwrap();
+    h.settle(run).await;
+
+    let results = tool_results(&stub).join("\n");
+    assert!(results.contains("no artifact with the id"), "got {results:?}");
+    let untouched = h.runtime.store().any_artifact(hidden.id).unwrap().unwrap();
+    assert_eq!(untouched.version, 1, "and it must not have changed");
+}
+
 #[tokio::test]
 async fn an_agent_reads_what_its_own_crew_already_has() {
     // The control for the test above: the wall must not be a blanket ban. The

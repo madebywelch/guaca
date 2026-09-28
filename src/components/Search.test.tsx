@@ -14,7 +14,7 @@ import { aGroup } from "../test-fixtures";
  */
 
 const GROUP = "00000000-0000-4000-8000-000000000001";
-const NOTHING: SearchHits = { messages: [], files: [], links: [], routines: [] };
+const NOTHING: SearchHits = { messages: [], files: [], links: [], routines: [], artifacts: [] };
 
 const search = vi.fn<(query: string, limit?: number) => Promise<SearchHits>>(async () => NOTHING);
 const openExternal = vi.fn<(url: string) => Promise<void>>(async () => {});

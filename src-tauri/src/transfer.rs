@@ -23,6 +23,10 @@ const TABLES: &[(&str, &str, &str)] = &[
     ("routines", "id,agent_id,name,what,fires,active,next_run_at,last_run_at,created_at,skip_if_working", "agent_id IN (SELECT id FROM agents WHERE group_id = ?1)"),
     ("messages", "id,run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,cause,created_at,intent", "channel_id IN (SELECT id FROM agents WHERE group_id = ?1)"),
     ("occasions", "id,group_id,agent_id,title,detail,place,starts_at,minutes,all_day,created_at,updated_at", "group_id = ?1"),
+    ("artifacts", "id,group_id,owner_id,title,version,created_at,updated_at", "group_id = ?1"),
+    // Without `allowed_sources`: which reads a page may make is the operator's
+    // decision on this machine, and a copy asks again once its connectors are.
+    ("artifact_history", "artifact_id,seq,at,change,agent_id,actor,version,owner,note,page,sources", "artifact_id IN (SELECT id FROM artifacts WHERE group_id = ?1)"),
     ("working_notes", "agent_id,at,body", "agent_id IN (SELECT id FROM agents WHERE group_id = ?1)"),
     ("usage", "agent_id,group_id,run_id,model,prompt,completion,cost,created_at", "group_id = ?1"),
     ("routine_runs", "routine_id,run_id,kind,at", "routine_id IN (SELECT id FROM routines WHERE agent_id IN (SELECT id FROM agents WHERE group_id = ?1))"),
@@ -261,6 +265,11 @@ fn validate_row(table: &str, row: &Row) -> Result<()> {
             return Err("An agent has no name.".into());
         }
     }
+    if table == "artifact_history"
+        && crate::domain::artifact::Change::parse(text(row, "change")?).is_none()
+    {
+        return Err("An artifact's history has an unknown kind of change.".into());
+    }
     if table == "routines" && crate::domain::routine::Trigger::parse(text(row, "fires")?).is_none()
     {
         return Err("A routine has an unsupported schedule.".into());
@@ -291,6 +300,7 @@ fn validate_row(table: &str, row: &Row) -> Result<()> {
     for (key, value) in row {
         if [
             "version",
+            "seq",
             "pinned",
             "rail_order",
             "has_computer",
@@ -351,7 +361,9 @@ pub fn import(
                 return Err("The group file contains an unexpected field.".into());
             }
             validate_row(table, row)?;
-            if ["groups", "agents", "routines", "messages", "occasions"].contains(&table.as_str()) {
+            if ["groups", "agents", "routines", "messages", "occasions", "artifacts"]
+                .contains(&table.as_str())
+            {
                 let id = text(row, "id")?;
                 if ids.contains_key(id) {
                     return Err("The group file contains a duplicate identifier.".into());
@@ -362,8 +374,21 @@ pub fn import(
         }
     }
     let belongs = |table: &str, value: &str| members.get(table).is_some_and(|s| s.contains(value));
-    for rows in archive.tables.values() {
+    for (table, rows) in &archive.tables {
         for row in rows {
+            // An artifact's log names whoever acted, and some of them may have
+            // left the crew before it was exported. That is a record of what
+            // happened rather than a reference into this crew, so such an agent
+            // is given an id of its own that points at nothing here, and the
+            // log keeps its name. Refusing the file would lose the crew over
+            // one colleague who moved.
+            if table == "artifact_history" {
+                if let Some(agent) = row.get("agent_id").and_then(Value::as_str) {
+                    if !belongs("agents", agent) {
+                        fresh(&mut ids, agent)?;
+                    }
+                }
+            }
             for (field, target) in [
                 ("group_id", "groups"),
                 ("agent_id", "agents"),
@@ -371,7 +396,11 @@ pub fn import(
                 ("from_agent", "agents"),
                 ("to_agent", "agents"),
                 ("routine_id", "routines"),
+                ("artifact_id", "artifacts"),
             ] {
+                if table == "artifact_history" && field == "agent_id" {
+                    continue;
+                }
                 if let Some(value) = row.get(field).filter(|v| !v.is_null()) {
                     if !value.as_str().is_some_and(|v| belongs(target, v)) {
                         return Err("The group file refers to data outside its group.".into());
@@ -388,6 +417,8 @@ pub fn import(
             return Err("A memory belongs to an unknown agent.".into());
         }
     }
+    // Owned, because the insert below needs it after the archive is edited.
+    let exported_agents = members.get("agents").cloned().unwrap_or_default();
     let group: GroupId = ids[&source].parse().map_err(|_| "Invalid group identifier.")?;
     archive.tables.get_mut("groups").unwrap()[0].insert("name".into(), clean.name.into());
     let mut conn = store.conn().map_err(|e| e.to_string())?;
@@ -415,6 +446,18 @@ pub fn import(
             }
             if *table == "routines" {
                 row.insert("active".into(), 0.into());
+            }
+            // An owner who had moved to another crew is not in this file, and
+            // the copy has nobody by that id to point at. Nobody owns it here,
+            // which is the true state of the copied crew, and an agent in it
+            // takes it over by deciding to.
+            if *table == "artifacts"
+                && original
+                    .get("owner_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|owner| !exported_agents.contains(owner))
+            {
+                row.insert("owner_id".into(), Value::Null);
             }
             let keys = row.keys().map(String::as_str).collect::<Vec<_>>();
             let values = row
@@ -665,6 +708,83 @@ mod tests {
         );
         assert_eq!(reconnect(&f.store, imported).unwrap().len(), 1);
         assert!(!f.store.get_group(imported).unwrap().unwrap().api_key_set);
+    }
+    #[test]
+    fn a_crews_artifacts_travel_with_it_and_an_owner_who_left_does_not() {
+        // The log names whoever acted, including an agent that has since moved
+        // to another crew and so is not in the file. The copy keeps the name,
+        // points the id at nothing here, and has nobody as the owner, rather
+        // than refusing the whole crew over one colleague.
+        let f = Fixture::new();
+        let visitor = f
+            .store
+            .create_agent(&crate::domain::agent::CleanDraft {
+                group_id: Some(f.group),
+                name: "Visitor".into(),
+                avatar: "orb".into(),
+                color: "#7fb069".into(),
+                model: "small".into(),
+                reasoning_effort: None,
+                system_prompt: String::new(),
+                skills: vec![],
+            })
+            .unwrap();
+        let page = f
+            .store
+            .create_artifact(
+                f.group,
+                visitor.id,
+                "Visitor",
+                crate::db::ArtifactDraft {
+                    title: "Board",
+                    page: "<p>v1</p>",
+                    sources: &[],
+                    note: "First",
+                },
+            )
+            .unwrap();
+        let engineer =
+            crate::domain::artifact::Actor::Agent { id: f.agent, name: "Engineer".into() };
+        f.store
+            .edit_artifact(
+                page.id,
+                f.group,
+                &engineer,
+                crate::db::ArtifactRevision {
+                    title: None,
+                    page: Some("<p>v2</p>"),
+                    sources: None,
+                    note: "Tighter",
+                },
+            )
+            .unwrap();
+        let elsewhere = f
+            .store
+            .create_group(&crate::domain::group::CleanGroup {
+                name: "Elsewhere".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        f.store.move_agent(visitor.id, elsewhere.id, None).unwrap();
+
+        let imported = f.import(f.export()).unwrap();
+        let copies = f.store.artifacts(Some(imported), 10).unwrap();
+        assert_eq!(copies.len(), 1);
+        let copy = &copies[0];
+        assert_ne!(copy.id, page.id, "a copy is a new artifact");
+        assert_eq!(copy.owner, None, "the owner is not in this crew");
+        assert_eq!(copy.version, 2);
+
+        let copied = f.store.list_agents().unwrap();
+        let copied = copied.iter().find(|a| a.group_id == imported).unwrap();
+        let log = f.store.artifact_log(copy.id).unwrap();
+        let crate::domain::artifact::Actor::Agent { id, name } = &log[0].by else {
+            panic!("the log still says an agent made it: {log:?}");
+        };
+        assert_eq!(name, "Visitor");
+        assert_ne!(*id, visitor.id, "and does not point at the agent in the other crew");
+        assert_eq!(log[1].by.agent_id(), Some(copied.id), "a member's edits are its copy's");
+        assert_eq!(f.store.artifact_page(copy.id, Some(1)).unwrap().unwrap(), "<p>v1</p>");
     }
     #[test]
     fn invalid_participants_are_refused_without_partial_groups() {

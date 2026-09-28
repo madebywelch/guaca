@@ -70,6 +70,10 @@ export type Part =
    * memory rewrite and absent everywhere else, including on calls recorded
    * before it existed. Empty means the call overwrote nothing, which is not the
    * same as a call that overwrites nothing.
+   *
+   * `artifact` is the kept page an `artifact` call wrote, at the version it
+   * left it, and is what the transcript draws a card from. The id is assigned
+   * by the write, so nothing in `arguments` could say which one a create made.
    */
   | {
       type: "toolCall";
@@ -77,6 +81,7 @@ export type Part =
       arguments: unknown;
       outcome: ToolOutcome;
       replaced?: string;
+      artifact?: ArtifactMade;
     }
   | ({ type: "file" } & Attachment)
   /**
@@ -381,6 +386,7 @@ export type Overlay =
   | "settings"
   | "crewSettings"
   | "calendar"
+  | "artifacts"
   | "forYou"
   | "search"
   | "cafeteria"
@@ -1341,6 +1347,11 @@ export type UiEvent =
    * panel drawing it is usually showing every crew at once.
    */
   | { type: "calendarChanged"; groupId: GroupId }
+  /**
+   * One of a crew's artifacts was made, changed or changed hands, by an agent
+   * or by the operator. The crew, for the reason the calendar's is.
+   */
+  | { type: "artifactsChanged"; groupId: GroupId }
   | { type: "codingJobStarted"; agentId: AgentId; repositoryId: RepositoryId; repository: string }
   | { type: "codingJobFinished"; agentId: AgentId; repositoryId: RepositoryId }
   /**
@@ -1457,6 +1468,95 @@ export interface OccasionDraft {
   minutes: number | null;
 }
 
+export type ArtifactId = string;
+
+/**
+ * Who did something to an artifact. An agent is named as it was at the time,
+ * because the log is a record of what happened and has to keep reading after
+ * the agent is renamed, moved or deleted.
+ */
+export type ArtifactActor = { kind: "operator" } | { kind: "agent"; id: AgentId; name: string };
+
+/**
+ * A page a crew keeps, as the list shows it. The page itself is read on its
+ * own, a version at a time: `api.artifactPage`.
+ */
+export interface Artifact {
+  id: ArtifactId;
+  /** The crew it belongs to, and the wall: an agent reaches only its own crew's. */
+  groupId: GroupId;
+  /**
+   * Who answers for it. `gone` is an owner deleted or moved to another crew,
+   * still named until somebody takes it over: ownership moves by a decision,
+   * never by itself. `null` only once the owning agent's row is gone for good.
+   */
+  owner: { id: AgentId; name: string; gone: boolean } | null;
+  title: string;
+  /** Starts at 1 and only goes up. A restore is a new version, not a rewind. */
+  version: number;
+  /** Who made the current version. */
+  editedBy: ArtifactActor;
+  createdAt: number;
+  /** When the current version was made. Ownership changes do not move it. */
+  updatedAt: number;
+  /** The connector reads the current version declares. Empty for most pages. */
+  sources: ArtifactSource[];
+  /** Whether the operator allowed exactly these reads. Never true for none. */
+  sourcesAllowed: boolean;
+}
+
+/**
+ * One read a page declares: a connector tool and exactly what to send it,
+ * fixed when the page was written. The page cannot change the arguments, which
+ * is what keeps a page that reads from being a page that can send.
+ */
+export interface ArtifactSource {
+  /** The key the page reads the result under. */
+  name: string;
+  /** A connector tool as an agent calls it: `linear__list_issues`. */
+  tool: string;
+  arguments: unknown;
+}
+
+/** What one read came back with, as the page is handed it. */
+export interface ArtifactRead {
+  name: string;
+  /** JSON, when the tool answered with some. */
+  data: unknown;
+  text: string | null;
+  /** Why there is neither, in words the page can show. */
+  error: string | null;
+}
+
+export type ArtifactChange = "created" | "edited" | "restored" | "took" | "handed" | "allowed";
+
+/** One row of an artifact's log. */
+export interface ArtifactEntry {
+  seq: number;
+  at: number;
+  change: ArtifactChange;
+  by: ArtifactActor;
+  /** The version once this was done. Ownership changes leave it where it was. */
+  version: number;
+  /** Who owned it once this was done, by the name they had then. */
+  owner: string | null;
+  note: string;
+}
+
+export interface ArtifactDetail {
+  artifact: Artifact;
+  /** Oldest first, and without any page in it. */
+  log: ArtifactEntry[];
+}
+
+/** What an `artifact` call wrote, as its tool call records it. */
+export interface ArtifactMade {
+  id: ArtifactId;
+  version: number;
+  /** The title at that moment, as a routine's chip keeps its name. */
+  title: string;
+}
+
 export type RoutineId = string;
 
 /**
@@ -1566,6 +1666,8 @@ export interface SearchHits {
   files: FileHit[];
   links: LinkHit[];
   routines: Routine[];
+  /** Kept pages whose title matched, every crew's. */
+  artifacts: Artifact[];
 }
 
 /** A matching message, with a window of its text rather than all of it. */

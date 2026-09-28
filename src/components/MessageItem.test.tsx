@@ -14,9 +14,16 @@ vi.mock("../lib/ipc", () => ({
 }));
 
 const openRoutine = vi.fn<(id: string) => void>();
-vi.mock("../lib/store", () => ({
-  useStore: { getState: () => ({ openRoutine, setBanner: vi.fn() }) },
-}));
+const showArtifacts = vi.fn<(open: { id: string | null } | null) => void>();
+vi.mock("../lib/store", () => {
+  // Read when called rather than when mocked: the mock is hoisted above the
+  // two functions it hands out. Callable as a hook and readable outside one,
+  // which is how the two components this file draws each reach it.
+  const state = () => ({ openRoutine, setBanner: vi.fn(), showArtifacts });
+  const useStore = (pick: (state: object) => unknown) => pick(state());
+  useStore.getState = state;
+  return { useStore };
+});
 
 function card(id: string, name: string): AgentCard {
   return {
@@ -188,6 +195,36 @@ describe("an agent's own record of what it did", () => {
     // Nothing behind it, so nothing to press. A control that opens nothing is
     // one the operator stops trusting the rest of.
     expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("draws a call that wrote a kept page as a card that opens it", () => {
+    // The one call whose result is a place to go. Folded into a chip it would
+    // be a page the operator never learns was made.
+    show(
+      record({
+        type: "toolCall",
+        name: "artifact",
+        arguments: { action: "create", title: "Pipeline by stage", page: "<p/>" },
+        outcome: { status: "ok", summary: "Created" },
+        artifact: { id: "artifact-1", version: 1, title: "Pipeline by stage" },
+      }),
+    );
+    expect(screen.getByText("New artifact")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Pipeline by stage/ }));
+    expect(showArtifacts).toHaveBeenCalledWith({ id: "artifact-1" });
+  });
+
+  it("draws a refused artifact call as a chip, with no card to open", () => {
+    show(
+      record({
+        type: "toolCall",
+        name: "artifact",
+        arguments: { action: "update", id: "artifact-1", page: "<p/>" },
+        outcome: { status: "refused", reason: "`update` needs a `note`" },
+      }),
+    );
+    expect(screen.getByText(/Updated an artifact/)).toBeTruthy();
+    expect(screen.queryByText("New artifact")).toBeNull();
   });
 
   it("does not draw a memory update as a message to nobody", () => {

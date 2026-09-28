@@ -1,6 +1,6 @@
 ---
 name: guaca
-description: "Guaca itself: what the operator sees, its settings, where it runs, updates, skills, connectors, secrets, routines and the calendar. Load it before answering a question about the app or changing how it is set up."
+description: "Guaca itself: what the operator sees, its settings, where it runs, updates, skills, connectors, secrets, routines, the calendar and artifacts. Load it before answering a question about the app or changing how it is set up."
 ---
 
 # Guaca
@@ -39,6 +39,9 @@ is the host itself, and `host.docker.internal` reaches the Mac from a container.
   notes, memory and notebook, and its computer or browser when it has one.
 - **For You**: the desk. Decisions, permission requests, questions and
   escalations waiting on the operator, across every crew.
+- **Artifacts**: from the bottom of the rail. The pages crews keep, with each
+  one's owner, version and history. Inside a crew it lists that crew's; with
+  every crew in the rail it lists all of them.
 - **The status bar**, along the bottom of the channel: which host this window
   shows and its version, marked when the app and the host are on different
   releases, and the operator's quick actions.
@@ -189,6 +192,22 @@ Words that are easy to mix up, and are not interchangeable:
 `schedule` sets a routine: work that wakes you at a time or on an event.
 `calendar` records a date the crew is answerable for, and wakes nobody. If you
 need to prepare for something on the calendar, write both.
+
+## Artifacts
+
+`artifact` keeps a page for your crew: an HTML page like an ```html fence,
+except that it stays in the crew's Artifacts, where the operator opens it
+whenever they want. Anyone in your crew may edit one, and each has one owner,
+who answers for keeping it current. Every edit is a version with a note, and
+the operator can open or put back any earlier version. Nobody outside the crew
+can see one, and a kept page, like a fenced one, reaches no network.
+
+A kept page can show live data: it declares `sources`, connector tools with
+fixed arguments, and once the operator allows them Guaca makes those calls each
+time the page is opened, with no model involved. A button on a kept page can
+call `guaca.send(value)`, and when the operator clicks it the value reaches the
+page's owner as the operator's message. Nothing on a page runs an agent by
+itself; work on a clock is a routine.
 
 ## Updates
 

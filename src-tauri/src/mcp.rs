@@ -604,7 +604,7 @@ pub async fn call_tool(
     tool: &str,
     arguments: &serde_json::Value,
     schema: Option<&serde_json::Value>,
-) -> Result<String, McpError> {
+) -> Result<Called, McpError> {
     let mirrored = match schema {
         Some(schema) if session.modern() => mirror(schema, arguments),
         _ => Vec::new(),
@@ -631,7 +631,22 @@ pub async fn call_tool(
         });
     }
 
-    Ok(if rendered.is_empty() { format!("{tool} returned nothing.") } else { rendered })
+    Ok(Called {
+        text: if rendered.is_empty() { format!("{tool} returned nothing.") } else { rendered },
+        structured: value.get("structuredContent").cloned(),
+    })
+}
+
+/// What a tool answered, in both of the forms it can answer in.
+///
+/// A model reads the text. A page reads data, and a server that answered with
+/// `structuredContent` has handed over exactly that, which flattening it to
+/// text first and parsing it back would put at the mercy of whatever the
+/// server wrote beside it in the content blocks.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Called {
+    pub text: String,
+    pub structured: Option<serde_json::Value>,
 }
 
 // ---- era ------------------------------------------------------------------

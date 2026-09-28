@@ -29,6 +29,7 @@ pub const USE_SCREEN: &str = "use_screen";
 pub const BROWSE: &str = "browse";
 pub const SCHEDULE: &str = "schedule";
 pub const CALENDAR: &str = "calendar";
+pub const ARTIFACT: &str = "artifact";
 pub const SKILL: &str = "skill";
 pub const SETTINGS: &str = "settings";
 pub const NOTEBOOK: &str = "notebook";
@@ -1136,6 +1137,118 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: ARTIFACT.to_string(),
+            // The fence is the thing a model reaches for first, because it is
+            // in the prompt and costs nothing. So the description opens on the
+            // difference between the two, and says which one is the default:
+            // a page for this reply stays a fence.
+            //
+            // The ownership paragraph is the one that stops a cascade. An agent
+            // told a colleague owns the page it just edited will, left to
+            // itself, write to that colleague to say so; the owner is woken,
+            // edits back, and wakes the editor. It reads the edit from its own
+            // list instead, and this says so before the agent thinks of it.
+            description: format!(
+                "Your crew's kept pages. An artifact is an HTML page like an ```html fence, \
+                 except that it is kept: it lives in your crew's Artifacts, where the operator \
+                 opens it whenever they want, every agent in your crew can read and edit it, and \
+                 every change is a version with a note saying what changed. Make one when the \
+                 operator will come back to the page: a board, a tracker, a plan, a comparison \
+                 they will want again next week. A page for this one reply, such as a picker or \
+                 a diagram that answers the question in front of you, stays a fence.\n\n\
+                 Your system prompt lists what your crew already has. When one of those already \
+                 covers what you were asked for, `update` it rather than creating a second. \
+                 `update` takes the whole new `page`, or leave `page` out to change only the \
+                 `title`, and always a `note`: one line on what changed, like a commit message. \
+                 `view` shows an artifact's current page and its history; `list` shows all of \
+                 your crew's.\n\n\
+                 Each artifact has one owner, who answers for keeping it current. You own what \
+                 you create. Anyone in your crew may edit any of them, and the owner reads your \
+                 edit in its own list, so do not message it to say you made one. `take` makes you \
+                 the owner, with a `note` saying why. Do it deliberately: when the owner has \
+                 left the crew, or the work it tracks has become yours.\n\n\
+                 The page runs on an origin of its own and reaches nothing: no network, no \
+                 remote script, image or font. For live data it declares `sources`: each is one \
+                 of your crew's connector tools, named the way you call it, with the exact \
+                 arguments to call it with, under a `name`. Call the tool yourself once first so \
+                 you know the shape it returns. The operator allows a page's sources once; after \
+                 that Guaca makes those calls each time the page is opened, as the page's owner, \
+                 and `await guaca.data()` in the page resolves to an object with one entry per \
+                 source name, each holding `data` (parsed JSON, or null), `text` (what the tool \
+                 said) and `error` (why the read failed, or null). `guaca.onData(fn)` is called \
+                 again whenever the operator refreshes. The page cannot change the arguments, \
+                 so filter and sort in its own script.\n\n\
+                 A button in the page can call `guaca.send(value)` with any JSON value. When the \
+                 operator clicks it, the value reaches the page's owner as a message from the \
+                 operator, naming the page, and the owner is expected to act on it, usually by \
+                 doing the work and updating the page. Send only from a click handler: a send \
+                 the operator did not click is dropped. A page over {} KB is refused. Titles are \
+                 cut past {} characters.",
+                crate::domain::artifact::MAX_PAGE / 1024,
+                crate::domain::artifact::MAX_TITLE
+            ),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["list", "view", "create", "update", "take"]
+                    },
+                    "id": {
+                        "type": "string",
+                        "description": "The artifact to `view`, `update` or `take`, as your \
+                                        system prompt or `list` shows it."
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "What the page is, in a few words: `Pipeline by stage`. \
+                                        Needed to `create`; on `update` it renames."
+                    },
+                    "page": {
+                        "type": "string",
+                        "description": "The whole HTML document, with its own style and script. \
+                                        Needed to `create`; on `update` it replaces the page \
+                                        entirely, so send all of it."
+                    },
+                    "note": {
+                        "type": "string",
+                        "description": "One line. On `update`, what changed; on `take`, why \
+                                        you are taking it over. Optional on `create`."
+                    },
+                    "sources": {
+                        "type": "array",
+                        "maxItems": crate::domain::artifact::MAX_SOURCES,
+                        "description": "The connector reads the page shows live. On `update`, \
+                                        leave it out to keep the ones it has; send `[]` to drop \
+                                        them. A changed list waits for the operator to allow it.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "description": "The key the page reads it under: \
+                                                    `open_issues`."
+                                },
+                                "tool": {
+                                    "type": "string",
+                                    "description": "A connector tool as you call it: \
+                                                    `linear__list_issues`."
+                                },
+                                "arguments": {
+                                    "type": "object",
+                                    "description": "Exactly what to call it with, every time."
+                                }
+                            },
+                            "required": ["name", "tool"],
+                            "additionalProperties": false
+                        }
+                    }
+                },
+                "required": ["action"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
             name: SKILL.to_string(),
             // Read before write, in the description as in the design: the
             // point of a skill is the agent that loads one before a task, and
@@ -1525,6 +1638,11 @@ pub enum ToolInvocation {
     Calendar {
         action: CalendarAction,
     },
+    /// A read or write of the crew's kept pages. The crew is read off the
+    /// calling agent's card at dispatch, like the calendar's.
+    Artifact {
+        action: ArtifactAction,
+    },
     /// A read or write of a skill. The crew is read off the calling agent's
     /// card at dispatch, like the calendar's, so a call cannot name another.
     Skill {
@@ -1711,6 +1829,40 @@ pub enum CalendarAction {
     },
 }
 
+/// What an agent can do to its crew's artifacts.
+///
+/// No delete: what the operator keeps is the operator's to throw away, and an
+/// agent that has written something wrong has `update`, which keeps the version
+/// it replaced. The note is carried unchecked, because whether one is required
+/// depends on the action and is answered in `domain::artifact`, where the
+/// refusal can say what to send.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ArtifactAction {
+    List,
+    View {
+        id: String,
+    },
+    Create {
+        title: String,
+        page: String,
+        note: Option<String>,
+        sources: Vec<crate::domain::artifact::Source>,
+    },
+    /// A new version. At least one of `title`, `page` and `sources` is
+    /// present; an absent one keeps what the current version has.
+    Update {
+        id: String,
+        title: Option<String>,
+        page: Option<String>,
+        note: Option<String>,
+        sources: Option<Vec<crate::domain::artifact::Source>>,
+    },
+    Take {
+        id: String,
+        note: Option<String>,
+    },
+}
+
 /// What an agent can do to the screen it is looking at.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScreenAction {
@@ -1772,6 +1924,10 @@ pub enum ToolParseError {
     UnknownCalendarAction,
     #[error("calendar needs {needs}")]
     IncompleteCalendar { needs: String },
+    #[error("artifact needs a known `action`")]
+    UnknownArtifactAction,
+    #[error("artifact needs {needs}")]
+    IncompleteArtifact { needs: String },
     #[error("skill needs a known `action`")]
     UnknownSkillAction,
     #[error("settings needs a known `action`")]
@@ -1835,6 +1991,17 @@ impl ToolParseError {
                  \"2026-09-14 15:00\", \"minutes\": 60}}. A date on its own is a whole day. \
                  To move one your crew already has: {{\"action\": \"update\", \"id\": \
                  \"...\", \"starts_at\": \"2026-09-15 10:00\"}}."
+            ),
+            ToolParseError::UnknownArtifactAction => {
+                "Error: `action` must be list, view, create, update or take. Use \
+                 {\"action\": \"list\"} to see what your crew already keeps."
+                    .to_string()
+            }
+            ToolParseError::IncompleteArtifact { needs } => format!(
+                "Error: that `artifact` call needs {needs}. To make one: {{\"action\": \
+                 \"create\", \"title\": \"Pipeline by stage\", \"page\": \"<!doctype html>...\"}}. \
+                 To change one your crew has: {{\"action\": \"update\", \"id\": \"...\", \
+                 \"page\": \"<!doctype html>...\", \"note\": \"Added a Q4 column\"}}."
             ),
             ToolParseError::UnknownNotebookAction => {
                 "Error: `action` must be list, read, write, append, move or delete. Use \
@@ -2651,6 +2818,102 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                 _ => Err(ToolParseError::UnknownCalendarAction),
             }
         }
+        ARTIFACT => {
+            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                name: ARTIFACT.to_string(),
+                detail: e.to_string(),
+            })?;
+            // Blank is absent, for the reason it is on the calendar: an update
+            // padded with `"title": ""` means "keep the title", not "erase it".
+            // The page is not trimmed here; `domain::artifact::page` does that
+            // once, where its size is also checked.
+            let text = |keys: &[&str]| {
+                keys.iter().find_map(|key| {
+                    value
+                        .get(*key)
+                        .and_then(|v| v.as_str())
+                        .filter(|text| !text.trim().is_empty())
+                        .map(str::to_string)
+                })
+            };
+            let title = || text(&["title", "name"]).map(|t| t.trim().to_string());
+            // `html` and `content` are what a model reaches for when it has not
+            // read the schema, and both mean the page.
+            let page = || text(&["page", "html", "content", "body"]);
+            let note = || text(&["note", "reason", "why", "summary", "message"]);
+            let needs = |what: &str| ToolParseError::IncompleteArtifact { needs: what.to_string() };
+            let id = |doing: &str| {
+                text(&["id", "artifact", "artifact_id"]).map(|id| id.trim().to_string()).ok_or_else(
+                    || {
+                        needs(&format!(
+                            "the `id` of the artifact to {doing}, which your system prompt and \
+                             `list` show"
+                        ))
+                    },
+                )
+            };
+
+            // Read loosely, as every argument here is: `args` and `input` are
+            // what a model calls a tool's arguments when it has not read the
+            // schema. Whether the list means anything is `domain::artifact`'s
+            // and the runtime's to say, where the refusal can say what to do.
+            let sources =
+                || -> Result<Option<Vec<crate::domain::artifact::Source>>, ToolParseError> {
+                    let Some(raw) = value.get("sources").filter(|v| !v.is_null()) else {
+                        return Ok(None);
+                    };
+                    let shaped =
+                        || needs("`sources` as a list of `{\"name\", \"tool\", \"arguments\"}`");
+                    let items = raw.as_array().ok_or_else(shaped)?;
+                    items
+                        .iter()
+                        .map(|item| {
+                            let field = |keys: &[&str]| {
+                                keys.iter().find_map(|key| item.get(*key).and_then(|v| v.as_str()))
+                            };
+                            Ok(crate::domain::artifact::Source {
+                                name: field(&["name", "key"]).ok_or_else(shaped)?.to_string(),
+                                tool: field(&["tool", "connector_tool"])
+                                    .ok_or_else(shaped)?
+                                    .to_string(),
+                                arguments: ["arguments", "args", "input"]
+                                    .iter()
+                                    .find_map(|key| item.get(*key).cloned())
+                                    .unwrap_or(serde_json::Value::Null),
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()
+                        .map(Some)
+                };
+
+            let action = match value.get("action").and_then(|v| v.as_str()).unwrap_or("list") {
+                "list" => ArtifactAction::List,
+                "view" | "read" | "open" | "get" | "show" => {
+                    ArtifactAction::View { id: id("view")? }
+                }
+                "create" | "add" | "new" | "make" => ArtifactAction::Create {
+                    title: title().ok_or_else(|| needs("a `title` saying what the page is"))?,
+                    page: page().ok_or_else(|| needs("a `page`: the whole HTML document"))?,
+                    note: note(),
+                    sources: sources()?.unwrap_or_default(),
+                },
+                "update" | "edit" | "change" | "revise" | "rename" => {
+                    let id = id("update")?;
+                    let (title, page, sources) = (title(), page(), sources()?);
+                    if title.is_none() && page.is_none() && sources.is_none() {
+                        return Err(needs(
+                            "a new `page`, a new `title`, new `sources`, or some of those",
+                        ));
+                    }
+                    ArtifactAction::Update { id, title, page, note: note(), sources }
+                }
+                "take" | "take_over" | "take_ownership" | "claim" | "own" => {
+                    ArtifactAction::Take { id: id("take over")?, note: note() }
+                }
+                _ => return Err(ToolParseError::UnknownArtifactAction),
+            };
+            Ok(ToolInvocation::Artifact { action })
+        }
         NOTEBOOK => {
             let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
                 name: NOTEBOOK.to_string(),
@@ -2967,7 +3230,7 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
 /// plugin call, which is what stops a model composing `use_screen__click` from
 /// being reported as a plugin nobody has ever heard of rather than as a tool
 /// that does not exist.
-fn split_plugin_tool(name: &str, connected: &[PluginKind]) -> Option<(PluginKind, String)> {
+pub fn split_plugin_tool(name: &str, connected: &[PluginKind]) -> Option<(PluginKind, String)> {
     let (prefix, tool) = name.split_once(PLUGIN_SEPARATOR)?;
     if tool.is_empty() {
         return None;
@@ -4163,6 +4426,116 @@ mod tests {
     }
 
     #[test]
+    fn an_artifact_update_with_nothing_to_change_is_refused_with_both_shapes() {
+        // A note on its own changes nothing, and taking it as a version would
+        // put a row in the log for an edit that did not happen.
+        let err =
+            parse(&call(ARTIFACT, "{\"action\": \"update\", \"id\": \"a\", \"note\": \"x\"}"))
+                .unwrap_err();
+        assert!(matches!(err, ToolParseError::IncompleteArtifact { .. }), "{err:?}");
+        assert!(err.guidance().contains("\"update\""), "{}", err.guidance());
+    }
+
+    #[test]
+    fn an_artifact_call_without_an_id_says_where_the_ids_are() {
+        for action in ["view", "update", "take"] {
+            let err =
+                parse(&call(ARTIFACT, &format!("{{\"action\": \"{action}\", \"page\": \"p\"}}")))
+                    .unwrap_err();
+            let ToolParseError::IncompleteArtifact { needs } = err else {
+                panic!("{action}: {err:?}");
+            };
+            assert!(needs.contains("`id`") && needs.contains("`list`"), "{action}: {needs}");
+        }
+        assert_eq!(
+            parse(&call(ARTIFACT, "{\"action\": \"delete\", \"id\": \"a\"}")),
+            Err(ToolParseError::UnknownArtifactAction),
+            "agents have no delete"
+        );
+    }
+
+    #[test]
+    fn an_artifact_create_takes_the_words_a_model_reaches_for() {
+        // `html` for the page and `name` for the title are what a model sends
+        // when it has not read the schema. Refusing them costs a round trip to
+        // learn a synonym.
+        let parsed = parse(&call(
+            ARTIFACT,
+            "{\"action\": \"make\", \"name\": \" Board \", \"html\": \"<p>hi</p>\"}",
+        ))
+        .unwrap();
+        assert_eq!(
+            parsed,
+            ToolInvocation::Artifact {
+                action: ArtifactAction::Create {
+                    title: "Board".into(),
+                    page: "<p>hi</p>".into(),
+                    note: None,
+                    sources: vec![],
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn an_artifacts_sources_are_read_under_the_words_a_model_uses() {
+        let parsed = parse(&call(
+            ARTIFACT,
+            "{\"action\": \"update\", \"id\": \"a1\", \"note\": \"Live\", \
+              \"sources\": [{\"name\": \"issues\", \"tool\": \"linear__list_issues\", \
+              \"args\": {\"team\": \"ENG\"}}]}",
+        ))
+        .unwrap();
+        let ToolInvocation::Artifact { action: ArtifactAction::Update { sources, .. } } = parsed
+        else {
+            panic!("{parsed:?}");
+        };
+        let sources = sources.expect("a list was sent");
+        assert_eq!(sources[0].tool, "linear__list_issues");
+        assert_eq!(sources[0].arguments, serde_json::json!({ "team": "ENG" }));
+
+        let err = parse(&call(
+            ARTIFACT,
+            "{\"action\": \"create\", \"title\": \"B\", \
+              \"page\": \"<p/>\", \"sources\": \"linear\"}",
+        ))
+        .unwrap_err();
+        assert!(matches!(err, ToolParseError::IncompleteArtifact { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn a_blank_artifact_title_on_update_keeps_the_title() {
+        let parsed = parse(&call(
+            ARTIFACT,
+            "{\"action\": \"edit\", \"id\": \" a1 \", \"title\": \"\", \"page\": \"<p/>\", \
+              \"reason\": \"Fixed totals\"}",
+        ))
+        .unwrap();
+        assert_eq!(
+            parsed,
+            ToolInvocation::Artifact {
+                action: ArtifactAction::Update {
+                    id: "a1".into(),
+                    title: None,
+                    page: Some("<p/>".into()),
+                    note: Some("Fixed totals".into()),
+                    sources: None,
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn the_artifact_tool_says_how_it_differs_from_a_fence_and_not_to_message_the_owner() {
+        // The two sentences that carry the design. Without the first a model
+        // keeps writing fences; without the second an edit becomes a message
+        // to the owner, which is a turn somebody pays for.
+        let spec = spec(ARTIFACT);
+        assert!(spec.description.contains("stays a fence"), "{}", spec.description);
+        assert!(spec.description.contains("do not message it"), "{}", spec.description);
+    }
+
+    #[test]
     fn a_calendar_add_carries_the_date_exactly_as_it_was_written() {
         // Unparsed on purpose. A date the runtime cannot read has to come back
         // to the model as a date with the two working shapes beside it, and a
@@ -4357,11 +4730,11 @@ mod tests {
         let specs = specs(Surfaces::both(), Modalities::seeing());
         assert_eq!(
             specs.len(),
-            24,
+            25,
             "directory, run_command, open_on_desktop, use_screen, browse, code, errand, shell, \
-             schedule, calendar, skill, notebook, settings, create_agent, request_permission, \
-             ask_operator, decision, escalate, send_message, read_file, write_document, \
-             attach_file, update_memory, note_progress"
+             schedule, calendar, artifact, skill, notebook, settings, create_agent, \
+             request_permission, ask_operator, decision, escalate, send_message, read_file, \
+             write_document, attach_file, update_memory, note_progress"
         );
         for spec in &specs {
             assert_eq!(

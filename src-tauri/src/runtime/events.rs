@@ -326,6 +326,16 @@ pub enum UiEvent {
         group_id: GroupId,
     },
 
+    /// One of a crew's artifacts was made, changed or changed hands.
+    ///
+    /// The crew, for the reason the calendar's is: the list it moves is drawn
+    /// for every crew at once when the rail is showing all of them. Emitted for
+    /// the operator's own changes too, because the Artifacts dialog is not the
+    /// only view of one: a card in a transcript names the version it made.
+    ArtifactsChanged {
+        group_id: GroupId,
+    },
+
     /// One agent's memory was rewritten by the agent itself.
     ///
     /// Same argument as `RoutinesChanged`, one panel over: the operator reads

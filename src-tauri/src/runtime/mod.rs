@@ -263,6 +263,15 @@ struct ToolResult {
     image: Option<String>,
 }
 
+/// What `keep_artifact` answered. Three shapes because the transcript draws
+/// three: a chip that says what happened, a card for a page that was written,
+/// and a chip that says the call was refused and why.
+enum Kept {
+    Said(String),
+    Made(String, crate::domain::artifact::Made),
+    Refused(String),
+}
+
 /// The placeholder the UI draws while a model call is in flight.
 ///
 /// Owns its own id because a retry has to be able to throw one away: text that
@@ -428,6 +437,17 @@ const MAX_BATCH: usize = 12;
 /// not enough, and cutting it to the same window would make the tool useless
 /// for the one case it exists for.
 const LISTED_OCCASIONS: u32 = 60;
+
+/// How many of its crew's artifacts an agent reads, from `list` and for the
+/// prompt, which draws the first `domain::artifact::LISTED` and counts the rest.
+const LISTED_ARTIFACTS: u32 = 100;
+
+/// What an agent is told about reads it declared that nobody has allowed yet.
+/// Said on the write, because otherwise the first it hears of it is a page that
+/// shows an error for every number.
+const AWAITING_READS: &str = " Its sources wait for the operator to allow them, from the page \
+     in Artifacts. Until then each one in `guaca.data()` has an `error` saying so, so the page \
+     should show that rather than empty numbers.";
 
 /// How much transcript is replayed into a prompt.
 const HISTORY_WINDOW: u32 = 40;
@@ -1001,6 +1021,62 @@ impl Runtime {
             return Err(crate::account::AccountError::NotSignedIn);
         };
         account.access().await
+    }
+
+    /// Calls one of a crew's connector tools as one of its agents.
+    ///
+    /// The one path to a connector outside a connect or a check, shared by a
+    /// turn and by a kept page's reads so the two cannot differ about which
+    /// credential or which address a call goes out with. What an agent may
+    /// reach is still `plugins::call`'s to decide, from the crew and the agent
+    /// named here.
+    pub async fn call_connector(
+        &self,
+        group: GroupId,
+        agent: AgentId,
+        kind: &crate::domain::plugin::PluginKind,
+        tool: &str,
+        arguments: &serde_json::Value,
+    ) -> Result<crate::mcp::Called, plugins::PluginError> {
+        // Read per call rather than held: the account refreshes its own
+        // token, and a copy taken when the turn started is one that can be
+        // stale by the time the tool is reached.
+        let account = if kind.account_backed() { Some(self.account_token().await) } else { None };
+        // Which identity this crew chose, and therefore which address. Read
+        // off the stored row rather than remembered, because the operator can
+        // move a group between accounts between turns.
+        let connection = if kind.account_backed() {
+            self.store()
+                .group_plugins(group)
+                .ok()
+                .and_then(|all| all.into_iter().find(|held| held.kind.slug() == kind.slug()))
+                .map(|held| held.connection)
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let endpoint = if kind.account_backed() {
+            plugins::AccountUse::endpoint(self.account_origin(), &connection)
+        } else {
+            self.plugin_endpoint(kind)
+        };
+        plugins::call(
+            self.store(),
+            plugins::Target {
+                group,
+                agent,
+                kind,
+                endpoint: &endpoint,
+                account: match &account {
+                    Some(read) => plugins::Held::read(read, &connection),
+                    // Not an account-backed kind, so nothing reads it.
+                    None => plugins::Held::Absent,
+                },
+            },
+            tool,
+            arguments,
+        )
+        .await
     }
 
     /// Where one plugin's server is for this runtime.
@@ -4016,6 +4092,13 @@ impl Runtime {
         // a moment ago is offered on this one.
         prompt::add_skills(&mut messages, &self.inner.skills.visible(card.group_id));
         prompt::add_notebook(&mut messages, &self.inner.notebooks.list(card.id));
+        // Read every turn, like the skills above it: a page a crewmate made or
+        // edited a moment ago is in this one's list, and that list is how an
+        // owner learns somebody else changed its page without being messaged.
+        match self.inner.store.artifacts(Some(card.group_id), LISTED_ARTIFACTS) {
+            Ok(kept) => prompt::add_artifacts(&mut messages, &kept, card.id, now_ms()),
+            Err(err) => tracing::warn!(%err, "could not read the crew's artifacts for this prompt"),
+        }
         match self.inner.store.decisions(Some(card.id)) {
             Ok(decisions) => prompt::add_decisions(&mut messages, &decisions),
             Err(err) => tracing::warn!(%err, "could not read the agent's decisions"),
@@ -5382,6 +5465,32 @@ impl Runtime {
                 (rendered, Part::tool_call(tools::CALENDAR, arguments, outcome))
             }
 
+            ToolInvocation::Artifact { action } => match self.keep_artifact(card, &action) {
+                // The chip says the first line; a page read in full with `view`
+                // is the model's to read, not the transcript's to keep twice.
+                Ok(Kept::Said(said)) => {
+                    let summary = said.lines().next().unwrap_or_default().to_string();
+                    (said, Part::tool_call(tools::ARTIFACT, arguments, ToolOutcome::Ok { summary }))
+                }
+                Ok(Kept::Made(said, made)) => {
+                    let summary = said.lines().next().unwrap_or_default().to_string();
+                    let outcome = ToolOutcome::Ok { summary };
+                    (said, Part::tool_call_making(tools::ARTIFACT, arguments, outcome, made))
+                }
+                Ok(Kept::Refused(reason)) => (
+                    format!("Refused: {reason}"),
+                    Part::tool_call(tools::ARTIFACT, arguments, ToolOutcome::Refused { reason }),
+                ),
+                Err(err) => (
+                    format!("Error: {err}"),
+                    Part::tool_call(
+                        tools::ARTIFACT,
+                        arguments,
+                        ToolOutcome::Failed { error: err.to_string() },
+                    ),
+                ),
+            },
+
             ToolInvocation::Browse { action, args } => {
                 // The one place wording is not enough. Reading a page is free;
                 // pressing a button on a site the operator is signed in to
@@ -5704,52 +5813,11 @@ impl Runtime {
                 // work went to; `run_sql` on its own is not a chip anybody can
                 // read a week later.
                 let name = format!("{}{}{tool}", kind.slug(), tools::PLUGIN_SEPARATOR);
-                // Read per call rather than held: the account refreshes its own
-                // token, and a copy taken when the turn started is one that can
-                // be stale by the time the tool is reached.
-                let account =
-                    if kind.account_backed() { Some(self.account_token().await) } else { None };
-                // Which identity this crew chose, and therefore which address.
-                // Read off the stored row rather than remembered, because the
-                // operator can move a group between accounts between turns.
-                let connection = if kind.account_backed() {
-                    self.store()
-                        .group_plugins(card.group_id)
-                        .ok()
-                        .and_then(|all| {
-                            all.into_iter().find(|held| held.kind.slug() == kind.slug())
-                        })
-                        .map(|held| held.connection)
-                        .unwrap_or_default()
-                } else {
-                    String::new()
-                };
-                let endpoint = if kind.account_backed() {
-                    plugins::AccountUse::endpoint(self.account_origin(), &connection)
-                } else {
-                    self.plugin_endpoint(&kind)
-                };
-                let called = plugins::call(
-                    self.store(),
-                    plugins::Target {
-                        group: card.group_id,
-                        agent: card.id,
-                        kind: &kind,
-                        endpoint: &endpoint,
-                        account: match &account {
-                            Some(read) => plugins::Held::read(read, &connection),
-                            // Not an account-backed kind, so nothing reads it.
-                            None => plugins::Held::Absent,
-                        },
-                    },
-                    &tool,
-                    &sent,
-                )
-                .await;
+                let called = self.call_connector(card.group_id, card.id, &kind, &tool, &sent).await;
                 let (rendered, outcome) = match called {
                     Ok(answer) => {
                         let summary = format!("{} · {tool}", kind.label());
-                        (answer, ToolOutcome::Ok { summary })
+                        (answer.text, ToolOutcome::Ok { summary })
                     }
                     // Handed to the model rather than raised, like every other
                     // tool that reaches outside this process. A plugin that is
@@ -7757,6 +7825,411 @@ impl Runtime {
                 ))
             }
         }
+    }
+
+    /// What an agent does to its crew's artifacts.
+    ///
+    /// Every read and write is scoped to the crew on the calling agent's card,
+    /// never to anything the call names, which is the wall `keep_calendar`
+    /// keeps and for the same reason: an id is something a model can invent.
+    ///
+    /// The answer to an edit says who owns the page and that the owner will
+    /// read about it, because the alternative an agent reaches for is a message
+    /// to the owner, and that is a turn the operator pays for.
+    fn keep_artifact(
+        &self,
+        card: &AgentCard,
+        action: &tools::ArtifactAction,
+    ) -> Result<Kept, crate::db::StoreError> {
+        use crate::domain::artifact::{self as kept, Actor, Artifact};
+
+        let now = now_ms();
+        let mine = |id: &str| -> Result<Option<Artifact>, crate::db::StoreError> {
+            let Ok(parsed) = id.trim().parse() else {
+                return Ok(None);
+            };
+            self.inner.store.artifact(parsed, card.group_id)
+        };
+        let missing = |id: &str| {
+            Kept::Refused(format!(
+                "your crew has no artifact with the id {id}. `list` shows every one it does \
+                 have, with its id; `create` is how a new one starts."
+            ))
+        };
+        let changed = || self.emit(UiEvent::ArtifactsChanged { group_id: card.group_id });
+
+        match action {
+            tools::ArtifactAction::List => {
+                let all = self.inner.store.artifacts(Some(card.group_id), LISTED_ARTIFACTS)?;
+                if all.is_empty() {
+                    return Ok(Kept::Said(
+                        "Your crew keeps no artifacts yet. `create` makes one.".to_string(),
+                    ));
+                }
+                let mut out = String::from("Your crew's artifacts, most recently changed first:\n");
+                for one in &all {
+                    out.push_str(&one.index_line(card.id, now));
+                    out.push('\n');
+                }
+                out.push_str("`view` and an id shows one's page and its history.");
+                Ok(Kept::Said(out))
+            }
+
+            tools::ArtifactAction::View { id } => {
+                let Some(found) = mine(id)? else {
+                    return Ok(missing(id));
+                };
+                let log = self.inner.store.artifact_log(found.id)?;
+                let page = self.inner.store.artifact_page(found.id, None)?.unwrap_or_default();
+                let lines = kept::log_lines(&log, card.id, now);
+                let hidden = lines.len().saturating_sub(kept::LOG_SHOWN);
+                let mut out = format!(
+                    "\"{}\" ({}), version {}, {}.\n\nHistory, oldest first:\n",
+                    found.title,
+                    found.id,
+                    found.version,
+                    found.owner_words(card.id)
+                );
+                if !found.sources.is_empty() {
+                    out = out.replacen(
+                        "\n\nHistory, oldest first:\n",
+                        &format!(
+                            "\n\nIt reads, {}:\n{}\n\nHistory, oldest first:\n",
+                            if found.sources_allowed {
+                                "as the operator allowed"
+                            } else {
+                                "once the operator allows it"
+                            },
+                            found
+                                .sources
+                                .iter()
+                                .map(|source| {
+                                    format!(
+                                        "- {}: {} {}",
+                                        source.name, source.tool, source.arguments
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        ),
+                        1,
+                    );
+                }
+                if hidden > 0 {
+                    out.push_str(&format!("({hidden} earlier changes not shown)\n"));
+                }
+                for line in &lines[hidden..] {
+                    out.push_str(&format!("- {line}\n"));
+                }
+                out.push_str(&format!(
+                    "\nThe page at version {}:\n```html\n{page}\n```",
+                    found.version
+                ));
+                Ok(Kept::Said(out))
+            }
+
+            tools::ArtifactAction::Create { title, page, note, sources } => {
+                let (title, cut) = match kept::title(title) {
+                    Ok(title) => title,
+                    Err(err) => return Ok(Kept::Refused(format!("{err}."))),
+                };
+                let page = match kept::page(page) {
+                    Ok(page) => page,
+                    Err(err) => return Ok(Kept::Refused(format!("{err}."))),
+                };
+                let (note, _) =
+                    crate::domain::cut_to(note.as_deref().unwrap_or_default(), kept::MAX_NOTE);
+                // Checked against the caller, who is about to be the owner and
+                // so the one every read will run as.
+                let sources = match self.checked_sources(
+                    card.group_id,
+                    card.id,
+                    &card.name,
+                    sources.clone(),
+                )? {
+                    Ok(sources) => sources,
+                    Err(why) => return Ok(Kept::Refused(why)),
+                };
+                let made = self.inner.store.create_artifact(
+                    card.group_id,
+                    card.id,
+                    &card.name,
+                    crate::db::ArtifactDraft {
+                        title: &title,
+                        page: &page,
+                        sources: &sources,
+                        note: &note,
+                    },
+                )?;
+                changed();
+                let mut said = format!(
+                    "Created \"{}\", version 1, id {}. You own it. It is in your crew's \
+                     Artifacts, and a card for it is on this turn where the operator reads it, so \
+                     say what it is for rather than describing the page.",
+                    made.title, made.id
+                );
+                if cut {
+                    said.push_str(
+                        " The title was cut to fit; check it still says what the page is.",
+                    );
+                }
+                if !made.sources.is_empty() {
+                    said.push_str(AWAITING_READS);
+                }
+                Ok(Kept::Made(said, made.made()))
+            }
+
+            tools::ArtifactAction::Update { id, title, page, note, sources } => {
+                let Some(found) = mine(id)? else {
+                    return Ok(missing(id));
+                };
+                let (note, note_cut) = match kept::note(note.as_deref(), "`update`", "what changed")
+                {
+                    Ok(note) => note,
+                    Err(err) => {
+                        return Ok(Kept::Refused(format!("{err}. {} is unchanged.", found.id)))
+                    }
+                };
+                let title = match title.as_deref().map(kept::title).transpose() {
+                    Ok(title) => title,
+                    Err(err) => {
+                        return Ok(Kept::Refused(format!("{err}. {} is unchanged.", found.id)))
+                    }
+                };
+                let page = match page.as_deref().map(kept::page).transpose() {
+                    Ok(page) => page,
+                    Err(err) => {
+                        return Ok(Kept::Refused(format!("{err}. {} is unchanged.", found.id)))
+                    }
+                };
+                // Checked against the owner rather than the caller, because the
+                // owner is who every read runs as. A page nobody in the crew
+                // owns has nobody to read as, so it is taken before its reads
+                // are changed.
+                let sources = match sources.clone() {
+                    None => None,
+                    Some(declared) => {
+                        let Some(owner) = found.owner.as_ref().filter(|owner| !owner.gone) else {
+                            return Ok(Kept::Refused(format!(
+                                "nobody in your crew owns {}, and a page's reads run as its owner. \
+                                 `take` it first, then change its sources.",
+                                found.id
+                            )));
+                        };
+                        match self.checked_sources(
+                            card.group_id,
+                            owner.id,
+                            &owner.name,
+                            declared,
+                        )? {
+                            Ok(sources) => Some(sources),
+                            Err(why) => return Ok(Kept::Refused(why)),
+                        }
+                    }
+                };
+                let me = Actor::Agent { id: card.id, name: card.name.clone() };
+                let Some(written) = self.inner.store.edit_artifact(
+                    found.id,
+                    card.group_id,
+                    &me,
+                    crate::db::ArtifactRevision {
+                        title: title.as_ref().map(|(title, _)| title.as_str()),
+                        page: page.as_deref(),
+                        sources: sources.as_deref(),
+                        note: &note,
+                    },
+                )?
+                else {
+                    return Ok(missing(id));
+                };
+                changed();
+
+                let mut said =
+                    format!("Updated \"{}\" to version {}.", written.title, written.version);
+                match &written.owner {
+                    Some(owner) if owner.id == card.id => {}
+                    Some(owner) if owner.gone => said.push_str(&format!(
+                        " Its owner, {}, is no longer in this crew. If keeping it current is \
+                         yours now, `take` it.",
+                        owner.name
+                    )),
+                    Some(owner) => said.push_str(&format!(
+                        " {} owns it and will see your edit in its own list of your crew's \
+                         artifacts, so there is no need to message it about this.",
+                        owner.name
+                    )),
+                    None => {
+                        said.push_str(" Nobody owns it. If keeping it current is yours, `take` it.")
+                    }
+                }
+                if title.as_ref().is_some_and(|(_, cut)| *cut) {
+                    said.push_str(
+                        " The title was cut to fit; check it still says what the page is.",
+                    );
+                }
+                if note_cut {
+                    said.push_str(" The note was cut to fit.");
+                }
+                if !written.sources.is_empty() && !written.sources_allowed {
+                    said.push_str(AWAITING_READS);
+                }
+                Ok(Kept::Made(said, written.made()))
+            }
+
+            tools::ArtifactAction::Take { id, note } => {
+                let Some(found) = mine(id)? else {
+                    return Ok(missing(id));
+                };
+                if found.owner.as_ref().is_some_and(|owner| owner.id == card.id) {
+                    return Ok(Kept::Said(format!(
+                        "You already own \"{}\"; nothing changed.",
+                        found.title
+                    )));
+                }
+                let (note, _) =
+                    match kept::note(note.as_deref(), "`take`", "why you are taking it over") {
+                        Ok(note) => note,
+                        Err(err) => {
+                            return Ok(Kept::Refused(format!("{err}. {} is unchanged.", found.id)))
+                        }
+                    };
+                let Some(taken) = self.inner.store.take_artifact(
+                    found.id,
+                    card.group_id,
+                    card.id,
+                    &card.name,
+                    &note,
+                )?
+                else {
+                    return Ok(missing(id));
+                };
+                changed();
+                let from = match &found.owner {
+                    Some(owner) => format!(", instead of {}", owner.name),
+                    None => String::new(),
+                };
+                Ok(Kept::Said(format!(
+                    "You own \"{}\" now{from}. The log records that you took it over and why.",
+                    taken.title
+                )))
+            }
+        }
+    }
+
+    /// A page's declared reads, or the sentence that says why they cannot be.
+    ///
+    /// Each has to be one of this crew's connector tools that `reader` may call,
+    /// because `reader` is the owner and every read runs as the owner. Asked now
+    /// rather than discovered on the first open, which is where an operator
+    /// would find a page that reads nothing and nobody to tell them why.
+    fn checked_sources(
+        &self,
+        group: GroupId,
+        reader: AgentId,
+        reader_name: &str,
+        declared: Vec<crate::domain::artifact::Source>,
+    ) -> Result<Result<Vec<crate::domain::artifact::Source>, String>, crate::db::StoreError> {
+        use crate::db::store::PluginReach;
+        let sources = match crate::domain::artifact::sources(declared) {
+            Ok(sources) => sources,
+            Err(err) => return Ok(Err(format!("{err}."))),
+        };
+        if sources.is_empty() {
+            return Ok(Ok(sources));
+        }
+        let crew: Vec<_> =
+            self.inner.store.group_plugins(group)?.into_iter().map(|held| held.kind).collect();
+        for source in &sources {
+            let Some((kind, tool)) = tools::split_plugin_tool(&source.tool, &crew) else {
+                return Ok(Err(format!(
+                    "your crew has no connector for `{}`. A source is one of your crew's \
+                     connector tools, named the way you call it.",
+                    source.tool
+                )));
+            };
+            if !matches!(
+                self.inner.store.plugin_reach(group, reader, &kind, &tool)?,
+                PluginReach::Granted(_)
+            ) {
+                return Ok(Err(format!(
+                    "{reader_name} cannot call `{}`, and a page's reads run as its owner. Use a \
+                     tool {reader_name} can call, or ask the operator to give {reader_name} that \
+                     connector.",
+                    source.tool
+                )));
+            }
+        }
+        Ok(Ok(sources))
+    }
+
+    /// A kept page's reads, made now, as its owner, with no model involved.
+    ///
+    /// Only reads the operator allowed, and only for a version that declares
+    /// exactly that list: an earlier version whose reads were different gets
+    /// every read refused rather than the current list run against a page
+    /// written for another. Every source comes back, read or refused, so the
+    /// page can always say which of its numbers are missing and why. `None` is
+    /// an artifact or a version that is not there.
+    pub async fn read_artifact(
+        &self,
+        id: crate::domain::ids::ArtifactId,
+        version: Option<u32>,
+    ) -> Result<Option<Vec<crate::domain::artifact::Read>>, crate::db::StoreError> {
+        use crate::domain::artifact::Read;
+        let Some(artifact) = self.inner.store.any_artifact(id)? else {
+            return Ok(None);
+        };
+        let Some((sources, allowed)) = self.inner.store.artifact_sources(id, version)? else {
+            return Ok(None);
+        };
+        let refused = |why: &str| -> Vec<Read> {
+            sources.iter().map(|source| Read::refused(&source.name, why)).collect()
+        };
+        if !allowed {
+            return Ok(Some(refused(
+                "The operator has not allowed this page's reads yet. They can, from the page \
+                 in Artifacts.",
+            )));
+        }
+        let Some(owner) = artifact.owner.as_ref().filter(|owner| !owner.gone) else {
+            return Ok(Some(refused(
+                "Nobody in the crew owns this page, so there is nobody to read as. Hand it to \
+                 one of the crew's agents from its History.",
+            )));
+        };
+        let crew: Vec<_> = self
+            .inner
+            .store
+            .group_plugins(artifact.group_id)?
+            .into_iter()
+            .map(|held| held.kind)
+            .collect();
+        let reads = sources.iter().map(|source| {
+            let crew = &crew;
+            async move {
+                let Some((kind, tool)) = tools::split_plugin_tool(&source.tool, crew) else {
+                    return Read::refused(
+                        &source.name,
+                        &format!("The crew no longer has the connector `{}` needs.", source.tool),
+                    );
+                };
+                match self
+                    .call_connector(artifact.group_id, owner.id, &kind, &tool, &source.arguments)
+                    .await
+                {
+                    Ok(called) => Read::answered(&source.name, called.text, called.structured),
+                    Err(err) => Read::refused(&source.name, &err.to_string()),
+                }
+            }
+        });
+        let reads = futures_util::future::join_all(reads).await;
+        tracing::info!(
+            artifact = %id,
+            reads = reads.len(),
+            failed = reads.iter().filter(|read| read.error.is_some()).count(),
+            "read a kept page's sources"
+        );
+        Ok(Some(reads))
     }
 
     fn my_routine(

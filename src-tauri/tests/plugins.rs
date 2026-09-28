@@ -816,7 +816,7 @@ async fn a_tool_call_carries_the_grant_and_the_answer_comes_back() {
     .await
     .expect("the call goes through");
 
-    assert_eq!(answer, "run_sql ran");
+    assert_eq!(answer.text, "run_sql ran");
     assert_eq!(
         server.called.lock().first().map(|(name, _)| name.clone()),
         Some("run_sql".to_string()),
@@ -1036,7 +1036,7 @@ mod account_backed {
         .await
         .expect("the call goes through on the account's token");
 
-        assert_eq!(answer, "run_sql ran");
+        assert_eq!(answer.text, "run_sql ran");
     }
 
     #[tokio::test]
@@ -1256,7 +1256,7 @@ async fn the_real_account_server_still_speaks_what_this_client_sends() {
         .await;
         match called {
             Ok(answer) => {
-                println!("{tool} answered: {}", answer.chars().take(200).collect::<String>())
+                println!("{tool} answered: {}", answer.text.chars().take(200).collect::<String>())
             }
             // A tool that ran and said no is an MCP answer, not a broken one:
             // calling it with no arguments is exactly how a tool refuses. What
@@ -1341,7 +1341,7 @@ mod added {
         )
         .await
         .expect("the crew's own server answers");
-        assert_eq!(answer, "run_sql ran");
+        assert_eq!(answer.text, "run_sql ran");
         assert_eq!(server.seen.lock().last().cloned().flatten(), Some("access-0".to_string()));
     }
 
@@ -1726,7 +1726,7 @@ mod added {
         )
         .await
         .expect("the grant was stale, so this had to renew before it could call");
-        assert_eq!(answer, "run_sql ran");
+        assert_eq!(answer.text, "run_sql ran");
         assert_eq!(server.refreshes.load(Ordering::SeqCst), 1);
     }
 }
@@ -1948,7 +1948,7 @@ mod eras {
         )
         .await
         .expect("the header the server asked for is on the request");
-        assert_eq!(answer, "deploy ran");
+        assert_eq!(answer.text, "deploy ran");
 
         let noted = server.noted.lock().clone();
         let called = noted
@@ -2000,7 +2000,7 @@ async fn a_connector_run_on_the_host_is_called_with_the_environment_it_was_given
     )
     .await
     .expect("the call goes through");
-    assert!(answer.starts_with("token=abc leaked=False"), "{answer}");
+    assert!(answer.text.starts_with("token=abc leaked=False"), "{}", answer.text);
 }
 
 #[tokio::test]
@@ -2116,7 +2116,7 @@ async fn a_grant_revoked_at_the_vendor_is_renewed_once_and_the_call_retried() {
     .await
     .expect("one refresh and one retry is enough");
 
-    assert_eq!(answer, "run_sql ran");
+    assert_eq!(answer.text, "run_sql ran");
     assert_eq!(server.refreshes.load(Ordering::SeqCst), 1, "exactly one renewal, not a loop");
 
     // And the renewed grant is written back, or every later turn pays for the
@@ -2322,6 +2322,114 @@ async fn a_crew_with_a_plugin_calls_it_through_a_real_turn() {
     assert!(results.iter().any(|r| r.contains("run_sql ran")), "got {results:?}");
 
     h.expect_normal(run, "a turn that calls a plugin");
+}
+
+#[tokio::test]
+async fn a_kept_page_reads_what_the_operator_allowed_with_no_model_in_the_loop() {
+    // Live data, end to end. An agent declares a read when it makes the page;
+    // nothing is read until the operator allows it; after that, opening the
+    // page makes the call as the page's owner and hands back what the server
+    // said, and the model is not asked anything.
+    let server = serve(Rules::default()).await;
+    let endpoint = format!("{}/mcp", server.base());
+
+    let model = harness::serve(|body| {
+        if harness::has_tool_result(body) {
+            harness::Script::Say("The board reads the database.".into())
+        } else {
+            harness::Script::Plugin {
+                name: "artifact".into(),
+                arguments: serde_json::json!({
+                    "action": "create",
+                    "title": "Rows",
+                    "page": "<p>rows</p>",
+                    "sources": [{
+                        "name": "rows",
+                        "tool": "neon__run_sql",
+                        "arguments": { "sql": "select 1" }
+                    }],
+                }),
+            }
+        }
+    })
+    .await;
+
+    let h =
+        harness::harness(&model, &["Manager"], guac_lib::runtime::guard::GuardLimits::default());
+    h.runtime.plugins_at(HashMap::from([(PluginKind::Neon.slug().to_string(), endpoint.clone())]));
+    let group = h.runtime.store().get_agent(h.id("Manager")).unwrap().unwrap().group_id;
+    plugins::connect(
+        h.runtime.store(),
+        group,
+        &PluginKind::Neon,
+        &endpoint,
+        plugins::Credential::Discover,
+        &Headers::none(),
+        &Landing::Loopback,
+        browser(Outcome::Allowed),
+    )
+    .await
+    .unwrap();
+
+    let run = h.runtime.send_from_human(h.id("Manager"), "Make me a board of rows.").unwrap();
+    h.settle(run).await;
+
+    let page = h.runtime.store().artifacts(Some(group), 10).unwrap().pop().expect("a page kept");
+    assert_eq!(page.sources.len(), 1);
+    assert!(!page.sources_allowed, "declared is not allowed");
+    let results = harness::tool_results(&model).join("\n");
+    assert!(results.contains("wait for the operator to allow them"), "got {results:?}");
+
+    let refused = h.runtime.read_artifact(page.id, None).await.unwrap().unwrap();
+    assert!(
+        refused[0].error.as_deref().is_some_and(|why| why.contains("not allowed")),
+        "{refused:?}"
+    );
+    assert!(server.called.lock().is_empty(), "nothing is read before the operator allows it");
+
+    h.runtime.store().allow_artifact_sources(page.id).unwrap();
+    let asked = model.transcript.lock().len();
+    let read = h.runtime.read_artifact(page.id, None).await.unwrap().unwrap();
+    assert_eq!(read[0].name, "rows");
+    assert_eq!(read[0].text.as_deref(), Some("run_sql ran"), "{read:?}");
+    assert_eq!(read[0].error, None);
+    assert_eq!(
+        server.called.lock().first().cloned(),
+        Some(("run_sql".to_string(), serde_json::json!({ "sql": "select 1" }))),
+        "exactly the arguments the operator allowed"
+    );
+    assert_eq!(model.transcript.lock().len(), asked, "and no model was asked anything");
+}
+
+#[tokio::test]
+async fn a_page_cannot_declare_a_read_its_owner_could_not_make() {
+    // Refused when it is written, where the agent can fix it, rather than on
+    // the first open, where the operator finds a page that reads nothing.
+    let model = harness::serve(|body| {
+        if harness::has_tool_result(body) {
+            harness::Script::Say("It cannot read that.".into())
+        } else {
+            harness::Script::Plugin {
+                name: "artifact".into(),
+                arguments: serde_json::json!({
+                    "action": "create",
+                    "title": "Rows",
+                    "page": "<p>rows</p>",
+                    "sources": [{ "name": "rows", "tool": "neon__run_sql" }],
+                }),
+            }
+        }
+    })
+    .await;
+
+    let h =
+        harness::harness(&model, &["Manager"], guac_lib::runtime::guard::GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Make me a board of rows.").unwrap();
+    h.settle(run).await;
+
+    let results = harness::tool_results(&model).join("\n");
+    assert!(results.contains("cannot call `neon__run_sql`"), "got {results:?}");
+    assert!(h.runtime.store().artifacts(None, 10).unwrap().is_empty(), "and nothing was kept");
 }
 
 #[tokio::test]
@@ -3062,7 +3170,7 @@ mod deployments {
         )
         .await
         .expect("and its tools are callable");
-        assert_eq!(answer, "turn_on ran");
+        assert_eq!(answer.text, "turn_on ran");
     }
 
     #[tokio::test]

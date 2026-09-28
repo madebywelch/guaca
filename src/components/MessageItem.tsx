@@ -18,6 +18,7 @@ import {
   type RoutineId,
 } from "../lib/types";
 import { ApprovalRequest } from "./ApprovalRequest";
+import { ArtifactCard } from "./Artifacts";
 import { FileCard } from "./FileCard";
 import { Markdown } from "./Markdown";
 import { QuestionRequest } from "./QuestionRequest";
@@ -207,6 +208,14 @@ function ActivityRecord({ message }: { message: Envelope }) {
   };
 
   for (const { part, key } of keyed(message)) {
+    // A call that wrote a kept page ends the run and is drawn as a card. It is
+    // the one call whose result is a thing the operator will open, and folded
+    // into "Used 4 tools" it would be a page they never learn was made.
+    if (part.type === "toolCall" && part.artifact) {
+      close();
+      rows.push(<ArtifactCard key={key} made={part.artifact} />);
+      continue;
+    }
     if (part.type === "toolCall") {
       const step = trailStep(part, key);
       if (run) run.steps.push(step);
