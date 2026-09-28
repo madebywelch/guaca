@@ -42,9 +42,18 @@ export function HtmlArtifact({
   title,
   data,
   onSend,
+  fill = false,
 }: {
   html: string;
   title: string;
+  /**
+   * Set by a surface that is already the reading view, as Artifacts is: the
+   * frame takes the room it is given and offers no Open. A full view opened
+   * from inside one is a second modal showing the same page, and it is trapped
+   * in the first: `pop` leaves a transform on every dialog, which makes that
+   * dialog the box a `position: fixed` scrim is drawn in.
+   */
+  fill?: boolean;
   /**
    * What a kept page's `guaca.data()` resolves to, posted into the frame when
    * it loads and again whenever it changes. Absent for a fenced page, which
@@ -199,7 +208,7 @@ export function HtmlArtifact({
         post();
       }}
       title={title}
-      style={full ? undefined : { height }}
+      style={full || fill ? undefined : { height }}
     />
   );
 
@@ -261,18 +270,20 @@ export function HtmlArtifact({
 
   return (
     <>
-      <div className="artifact">
+      <div className={fill ? "artifact artifact--fill" : "artifact"}>
         {src ? page : <p className="hint">Opening…</p>}
         {/* A transcript is a conversation, so a page in one is bounded however
             tall it says it is. The full view is where the reading happens, the
             same way a document works. */}
-        <button
-          type="button"
-          className="btn btn--ghost btn--small artifact__open"
-          onClick={() => setFull(true)}
-        >
-          Open
-        </button>
+        {!fill && (
+          <button
+            type="button"
+            className="btn btn--ghost btn--small artifact__open"
+            onClick={() => setFull(true)}
+          >
+            Open
+          </button>
+        )}
       </div>
       {answer}
     </>

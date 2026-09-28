@@ -122,6 +122,7 @@ export function Artifacts({ onClose }: Props) {
       <button type="button" className="scrim__close" aria-label="Close dialog" onClick={onClose} />
       <div
         className="dialog dialog--artifacts"
+        data-open={id ? "" : undefined}
         role="dialog"
         aria-modal="true"
         aria-label="Artifacts"
@@ -433,7 +434,7 @@ function ArtifactView({
           </ol>
         </div>
       ) : (
-        <div className="artifacts__body">
+        <div className="artifacts__body artifacts__page">
           {/* A permission, so it is drawn in full rather than kept quiet: the
               operator is allowing exactly these calls, with exactly these
               arguments, every time the page is opened. */}
@@ -500,6 +501,7 @@ function ArtifactView({
               title={artifact.title}
               data={reads === null ? undefined : pageData(reads)}
               onSend={send}
+              fill
             />
           )}
         </div>
@@ -592,11 +594,32 @@ export function ArtifactCard({ made }: { made: ArtifactMade }) {
   const show = useStore((state) => state.showArtifacts);
   return (
     <button type="button" className="artifact-card" onClick={() => show({ id: made.id })}>
-      <span className="artifact-card__kind">
-        {made.version === 1 ? "New artifact" : `Artifact, version ${made.version}`}
+      <span className="artifact-card__mark">
+        <ArtifactMark />
       </span>
-      <span className="artifact-card__title">{made.title}</span>
-      <span className="artifact-card__open">Open</span>
+      <span className="artifact-card__text">
+        <span className="artifact-card__title">{made.title}</span>
+        <span className="artifact-card__kind">
+          {made.version === 1 ? "New artifact" : `Artifact, version ${made.version}`}
+        </span>
+      </span>
+      <svg className="artifact-card__go" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M9.5 6l6 6-6 6" />
+      </svg>
     </button>
+  );
+}
+
+/**
+ * The mark for Artifacts: a page with a folded corner. One drawing for the
+ * rail's button and the card a turn leaves, because the card is a way into the
+ * same place and has to look like it.
+ */
+export function ArtifactMark() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M13.5 3.5H7A1.5 1.5 0 0 0 5.5 5v14A1.5 1.5 0 0 0 7 20.5h10a1.5 1.5 0 0 0 1.5-1.5V8.5z" />
+      <path d="M13.5 3.5v5h5M9 13h6M9 16.5h4" />
+    </svg>
   );
 }

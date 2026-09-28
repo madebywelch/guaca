@@ -243,6 +243,17 @@ describe("one artifact", () => {
     expect(screen.queryByText("Put this version back")).toBeNull();
   });
 
+  it("is the reading view, with no second view to open the page into", async () => {
+    // The dialog framed the page the way a message does, capped and with an
+    // Open over it. Pressed, that opened a second modal inside this one,
+    // trapped in the dialog's box by the transform its arrival leaves on it:
+    // a strip of the page, a window's height too short, scrolling sideways.
+    await openOne();
+    const frame = await screen.findByTitle("Pipeline by stage");
+    expect(screen.queryByRole("button", { name: "Open" })).toBeNull();
+    expect((frame as HTMLIFrameElement).style.height).toBe("");
+  });
+
   it("opens an earlier version from the history and puts it back as a new one", async () => {
     await openOne();
     await openHistory();

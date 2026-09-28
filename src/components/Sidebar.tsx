@@ -10,6 +10,7 @@ import { useLiveAgents, useStore } from "../lib/store";
 import { useNow } from "../lib/time";
 import { desktop } from "../lib/transport";
 import type { AgentCard, AgentId, Group } from "../lib/types";
+import { ArtifactMark } from "./Artifacts";
 import { Brand } from "./Brand";
 import { GroupRail } from "./GroupRail";
 import { NewMenu } from "./NewMenu";
@@ -615,10 +616,7 @@ export function Sidebar({
             Calendar
           </button>
           <button type="button" className="rail__place" onClick={onOpenArtifacts}>
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M13.5 3.5H7A1.5 1.5 0 0 0 5.5 5v14A1.5 1.5 0 0 0 7 20.5h10a1.5 1.5 0 0 0 1.5-1.5V8.5z" />
-              <path d="M13.5 3.5v5h5M9 13h6M9 16.5h4" />
-            </svg>
+            <ArtifactMark />
             Artifacts
           </button>
           {/* Named in full for anything that reads the label rather than the

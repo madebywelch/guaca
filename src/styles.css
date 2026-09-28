@@ -1878,7 +1878,7 @@ input[type="file"]::file-selector-button {
   font-family: var(--font-ui);
   font-size: var(--type-meta);
   font-weight: 600;
-  color: color-mix(in oklab, var(--ink) 62%, transparent);
+  color: color-mix(in oklab, var(--text) 62%, transparent);
 }
 
 .coding__waiting,
@@ -1888,7 +1888,7 @@ input[type="file"]::file-selector-button {
   list-style: none;
   font-size: var(--type-small);
   line-height: var(--lead-ui);
-  color: color-mix(in oklab, var(--ink) 70%, transparent);
+  color: color-mix(in oklab, var(--text) 70%, transparent);
 }
 
 .coding__waiting {
@@ -1927,7 +1927,7 @@ input[type="file"]::file-selector-button {
    clipped: this is prose and it is the part worth reading. */
 .coding__said {
   font-style: italic;
-  color: color-mix(in oklab, var(--ink) 85%, transparent);
+  color: color-mix(in oklab, var(--text) 85%, transparent);
 }
 
 @keyframes building {
@@ -4420,11 +4420,11 @@ input[type="file"]::file-selector-button {
 }
 
 .turn-work__call[data-failed] {
-  border-color: var(--alarm);
+  border-color: var(--danger);
 }
 
 .turn-work__call[data-failed] .turn-work__status {
-  color: var(--alarm);
+  color: var(--danger);
 }
 
 .turn-work__description {
@@ -7341,7 +7341,7 @@ input[type="file"]:disabled {
   font-weight: 600;
   letter-spacing: var(--track-tight);
   line-height: var(--lead-tight);
-  color: var(--ink);
+  color: var(--text);
 }
 
 .compost__crew {
@@ -7686,6 +7686,37 @@ input[type="file"]:disabled {
   padding: var(--space-5) var(--space-7) var(--space-6);
 }
 
+/* One artifact, open. The dialog is the height of the window rather than of
+   what it holds, because this is the reading view: there is no larger one to
+   open the page into, so the page is given every line the head and the foot
+   leave. The history, behind a button in the same place, opens at the same
+   size rather than making the dialog jump. */
+.dialog--artifacts[data-open] {
+  height: calc(100vh - 3rem);
+}
+
+.artifacts__page {
+  display: flex;
+  flex-direction: column;
+}
+
+/* What a page says above itself, a request for its reads or which version is
+   on screen, keeps its own height. The page is what gives. */
+.artifacts__page > * {
+  flex: none;
+}
+
+/* Floored at the full view's floor, so a window short enough to squeeze the
+   page scrolls the body instead of shrinking the page to a strip. */
+.artifacts__page > .artifact--fill {
+  flex: 1;
+  min-height: 60vh;
+}
+
+.artifact--fill .artifact__frame {
+  height: 100%;
+}
+
 .artifacts__list {
   list-style: none;
   margin: 0;
@@ -7786,7 +7817,7 @@ input[type="file"]:disabled {
 }
 
 button.artifacts__version {
-  color: var(--flesh);
+  color: var(--system);
   cursor: pointer;
 }
 
@@ -7804,7 +7835,7 @@ button.artifacts__version[aria-pressed="true"] {
 
 .artifacts__entry-at {
   font-family: var(--font-mono);
-  font-size: var(--type-mark);
+  font-size: var(--type-fine);
   color: var(--faint);
   white-space: nowrap;
 }
@@ -7837,50 +7868,90 @@ button.artifacts__version[aria-pressed="true"] {
 /* The card a turn leaves when it made or changed a kept page. In the trail's
    column rather than as a bubble, because it is what the agent did, and set
    apart from the chips because it is the one thing in the record that is a
-   place to go rather than a line to read. */
+   place to go rather than a line to read.
+
+   Drawn as the thing it opens: the rail's mark for Artifacts, the page's name,
+   and one faint line saying what the turn did to it. The name is the largest
+   thing on it. The label that used to lead it was uppercase mono in a size
+   the type ladder had since deleted, so it fell back to the button's own and
+   came out louder than the title it labeled. */
 .artifact-card {
   display: flex;
-  align-items: baseline;
-  gap: var(--space-4);
-  max-width: min(32rem, 100%);
-  margin: var(--space-2) var(--space-7) var(--space-2) var(--column-inset);
-  padding: var(--space-4) var(--space-5);
+  align-items: center;
+  gap: var(--space-5);
+  width: fit-content;
+  min-width: min(18rem, 100%);
+  max-width: min(28rem, 100%);
+  /* The trail's own two insets, so the card starts where the chips it is
+     drawn among do. */
+  margin: var(--space-3) var(--space-7) var(--space-3) calc(var(--column-inset) + var(--column-indent));
+  padding: var(--space-4) var(--space-5) var(--space-4) var(--space-4);
   border: 1px solid var(--edge);
-  border-radius: var(--radius-sm);
-  background: var(--sunken);
+  border-radius: var(--radius);
+  background: var(--raised);
+  box-shadow: var(--lift-1);
+  color: var(--faint);
   text-align: left;
   cursor: pointer;
-  transition: border-color var(--tempo-tap) var(--ease);
+  transition: border-color var(--tempo-tap) var(--ease), color var(--tempo-tap) var(--ease);
 }
 
 .artifact-card:hover {
-  border-color: var(--flesh);
+  border-color: var(--edge-control);
+  color: var(--text);
 }
 
-.artifact-card__kind {
+.artifact-card__mark {
   flex: none;
-  font-family: var(--font-mono);
-  font-size: var(--type-mark);
-  letter-spacing: var(--track-caps);
-  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h);
+  height: var(--control-h);
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
   color: var(--muted);
 }
 
-.artifact-card__title {
+.artifact-card svg {
+  width: 1.25rem;
+  height: 1.25rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.artifact-card__text {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.artifact-card__title {
   font-family: var(--font-ui);
   font-size: var(--type-ui);
+  font-weight: 500;
+  line-height: var(--lead-tight);
   color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.artifact-card__open {
-  flex: none;
+.artifact-card__kind {
   font-size: var(--type-small);
-  color: var(--flesh);
+  line-height: var(--lead-tight);
+  color: var(--faint);
+}
+
+/* Where the card goes, in the color of the card's own state: faint at rest,
+   ink under the pointer. */
+.artifact-card__go {
+  flex: none;
 }
 
 /* ==========================================================================

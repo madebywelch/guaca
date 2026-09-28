@@ -14,6 +14,14 @@ and *Every length is named* in `AGENTS.md` is the rule they all sit under.
   A one-class modifier above the base rule loses every property they share on
   source order, which is invisible in a diff: the reading view opened at the
   ordinary 38rem for that reason. `styles.test.ts` walks the modifiers.
+- **Renaming or deleting a token means finding every `var()` that spends it.**
+  A `var()` naming nothing is not an error anywhere: the property falls back to
+  what it inherits and the page still draws. The color rename and the type
+  ladder left eleven rules spending names that were gone, and the artifact
+  card's label came out in the button's own size, louder than the title it
+  labeled, while a failed call's red border came out in the text color.
+  `styles.test.ts` fails on a token this file does not declare and no
+  component sets by name.
 - **A chip's label is never shrunk to make room for what came back.** Flex
   shrinks in proportion to what each item asked for, so a refusal running to a
   paragraph took the row and left the label as `U…`: a chip saying one

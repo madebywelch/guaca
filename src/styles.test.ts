@@ -21,7 +21,7 @@
  * of it the whole time. Nobody chose that and no review would have caught it.
  */
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { beforeAll, describe, expect, it } from "vitest";
@@ -816,6 +816,36 @@ describe("every length is named, not spelled", () => {
       // is claiming height off the page.
       .filter((d) => !/^0 0 /.test(d.value));
     expect(bad.map((d) => `${d.selector} { box-shadow: ${d.value} }`)).toEqual([]);
+  });
+});
+
+describe("every token a rule spends exists", () => {
+  /**
+   * A `var()` that names nothing is not an error anywhere. The declaration is
+   * invalid at computed-value time and the property falls back to whatever it
+   * inherits, so the page still draws and nothing says why it looks wrong.
+   * The color rename and the type ladder both took names away, and eleven
+   * rules went on spending them: the artifact card's label came out larger
+   * than the title it labels, and a failed call's red border came out in the
+   * text color. The family checks above cannot see it, because `--type-mark`
+   * is a perfectly good name for a type step that is not there.
+   *
+   * A token is declared in this file or set on an element by a component, by
+   * name, in a string. Nothing else can give one a value.
+   */
+  it("names a property this file declares or a component sets", () => {
+    const rules = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    const declared = new Set([...rules.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]));
+    const root = join(process.cwd(), "src");
+    const code = readdirSync(root, { recursive: true, encoding: "utf8" })
+      .filter((file) => /\.tsx?$/.test(file) && !/\.test\.tsx?$/.test(file))
+      .map((file) => readFileSync(join(root, file), "utf8"))
+      .join("\n");
+    const spent = new Set([...rules.matchAll(/var\((--[a-z0-9-]+)/g)].map((m) => m[1] ?? ""));
+    const nowhere = [...spent].filter(
+      (token) => !declared.has(token) && !new RegExp(`["'\`]${token}["'\`]`).test(code),
+    );
+    expect(nowhere).toEqual([]);
   });
 });
 
