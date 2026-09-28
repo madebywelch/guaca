@@ -294,11 +294,16 @@ release of the app has no checkout and is never offered it. On this Mac the
 order is the other way round and needs nothing new: the app build is what
 produces the host image, and the existing local update installs it after.
 
-**CI does not move the feed backward or past what a box can pull.** A run is
-cancelled when a newer push arrives, a re-run of an older commit builds but
-does not publish, and a build whose image cannot be pulled without
-credentials fails before the feed changes, with the setting to fix in the
-message. The first run fails that way until the package is made public once.
+**CI does not move the feed backward or past what a box can pull.** A build
+that is running is never cancelled: `main` takes pushes every few minutes and
+a build takes longer, so cancelling on each push left the feed unpublished for
+as long as the pushes kept coming, which is what the first run did. Pushes that
+arrive during a build collapse into one queued run of the newest. A finished
+build is published if it is newer than the published one, whether or not it is
+still the tip; a re-run of an older commit builds and publishes nothing. A
+build whose image cannot be pulled without credentials fails before the feed
+changes, with the setting to fix in the message. The first run fails that way
+until the package is made public once.
 
 ## Delivery and verification
 
