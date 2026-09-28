@@ -128,7 +128,8 @@ describe("BrowserScreen", () => {
     view.rerender(<BrowserScreen agent={card("has-none", "Scribe")} />);
     settle(HAS_ONE);
 
-    await waitFor(() => expect(screen.getByText("Scribe's browser")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Opens when it needs the web/)).toBeTruthy());
+    expect(screen.getByRole("region", { name: "Scribe's browser" })).toBeTruthy();
     expect(screen.queryByTitle("Cook's browser")).toBeNull();
   });
 
@@ -140,7 +141,7 @@ describe("BrowserScreen", () => {
     render(<BrowserScreen agent={card("a", "Cook")} />);
 
     expect(await screen.findByText(/sign this agent in/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Open one" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open" })).toBeTruthy();
   });
 
   it("offers a browser to an agent that has not been given one, and asks nobody", async () => {
@@ -149,10 +150,11 @@ describe("BrowserScreen", () => {
     // not have one: the answer could not change what is drawn.
     render(<BrowserScreen agent={card("a", "Cook", false)} />);
 
-    await waitFor(() => expect(screen.getByText(/Cook has no browser/)).toBeTruthy());
+    const grant = await screen.findByRole("switch", { name: "Browser" });
+    expect(grant.getAttribute("aria-checked")).toBe("false");
     expect(agentBrowser).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Give one" }));
+    fireEvent.click(grant);
     await waitFor(() => expect(giveAgentBrowser).toHaveBeenCalledWith("a"));
   });
 
@@ -176,12 +178,16 @@ describe("BrowserScreen", () => {
     expect(screen.queryByTitle("Cook's browser")).toBeNull();
   });
 
-  it("takes it back from the empty pane as well as from the bar", async () => {
-    agentBrowser.mockResolvedValue(null);
+  it("takes it back from the switch beside its name, and from nowhere else", async () => {
+    // A decision about the agent, not about the browser in front of you, so it
+    // is not in the full-screen bar either.
+    agentBrowser.mockResolvedValue(HAS_ONE);
     render(<BrowserScreen agent={card("a", "Cook")} />);
 
-    await waitFor(() => expect(screen.getByRole("button", { name: "Open one" })).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "Take it back" }));
+    fireEvent.click(await screen.findByRole("button", { name: /take over/i }));
+    expect(screen.queryByRole("button", { name: /Take it back/ })).toBeNull();
+
+    fireEvent.click(screen.getByRole("switch", { name: "Browser" }));
     await waitFor(() => expect(takeAgentBrowser).toHaveBeenCalledWith("a"));
   });
 
@@ -192,7 +198,9 @@ describe("BrowserScreen", () => {
 
     view.rerender(<BrowserScreen agent={card("a", "Cook", false)} />);
     await waitFor(() => expect(screen.queryByTitle("Cook's browser")).toBeNull());
-    expect(screen.getByText(/Cook has no browser/)).toBeTruthy();
+    expect(screen.getByRole("switch", { name: "Browser" }).getAttribute("aria-checked")).toBe(
+      "false",
+    );
   });
 
   it("keeps a click out of the browser until the operator asks for it", async () => {
@@ -277,7 +285,7 @@ describe("BrowserScreen", () => {
     agentBrowser.mockResolvedValue(null);
     render(<BrowserScreen agent={card("a", "Cook", false)} />);
 
-    await screen.findByRole("button", { name: /Give one/ });
+    await screen.findByRole("switch", { name: "Browser" });
     expect(screen.queryByLabelText(/Ask me before it acts in my name/)).toBeNull();
   });
 

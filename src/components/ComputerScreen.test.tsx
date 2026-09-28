@@ -109,16 +109,17 @@ describe("ComputerScreen", () => {
     view.rerender(<ComputerScreen agent={card("has-none", "Scribe")} />);
     settleWithMachine(HAS_ONE);
 
-    await waitFor(() => expect(screen.getByText("Scribe's screen")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Starts when it needs one/)).toBeTruthy());
+    expect(screen.getByRole("region", { name: "Scribe's computer" })).toBeTruthy();
     expect(screen.queryByTitle(/'s computer$/)).toBeNull();
-    expect(screen.getByText(/Scribe has a computer and no machine yet/)).toBeTruthy();
   });
 
   it("shows the machine of the agent actually being looked at", async () => {
     agentComputer.mockResolvedValue(HAS_ONE);
     render(<ComputerScreen agent={card("has-one", "Cook")} />);
     await waitFor(() => expect(screen.getByTitle("Cook's computer")).toBeTruthy());
-    expect(screen.getByText("Cook's screen")).toBeTruthy();
+    // Its state beside its name, where it can be read without opening it.
+    expect(screen.getByText("running")).toBeTruthy();
   });
 
   it("keeps a click off the desktop until the operator asks for it", async () => {
@@ -207,26 +208,28 @@ describe("ComputerScreen", () => {
     // answer that cannot change what the panel draws.
     render(<ComputerScreen agent={card("has-none", "Scribe", false)} />);
 
-    await waitFor(() => expect(screen.getByText(/Scribe has no computer/)).toBeTruthy());
+    const grant = await screen.findByRole("switch", { name: "Computer" });
+    expect(grant.getAttribute("aria-checked")).toBe("false");
     expect(agentComputer).not.toHaveBeenCalled();
-    expect(screen.queryByRole("button", { name: "Take it back" })).toBeNull();
+    // Off, the switch is the whole section.
+    expect(screen.queryByRole("button")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Give one" }));
+    fireEvent.click(grant);
     await waitFor(() => expect(giveAgentComputer).toHaveBeenCalledWith("has-none"));
     // And nothing is rented by saying yes: a machine is still made the first
     // time one is needed.
     expect(screen.queryByTitle("Scribe's computer")).toBeNull();
   });
 
-  it("takes it back without waiting for the operator to open the screen", async () => {
-    // A live picture fills the panel, so the control that ends the arrangement
-    // has to be reachable from the empty state and from the bar above the
-    // picture. This is the empty one: given, with no machine yet.
-    agentComputer.mockResolvedValue(null);
+  it("takes it back from the switch beside its name, whatever the screen is doing", async () => {
+    // The switch is above the picture, so a live desktop filling the panel
+    // does not put the control that ends the arrangement out of reach.
+    agentComputer.mockResolvedValue(HAS_ONE);
     render(<ComputerScreen agent={card("has-one", "Cook")} />);
 
-    await waitFor(() => expect(screen.getByText(/Cook has a computer/)).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "Take it back" }));
+    await waitFor(() => expect(screen.getByTitle("Cook's computer")).toBeTruthy());
+    expect(screen.queryByRole("button", { name: /Take it back/ })).toBeNull();
+    fireEvent.click(screen.getByRole("switch", { name: "Computer" }));
     await waitFor(() => expect(takeAgentComputer).toHaveBeenCalledWith("has-one"));
   });
 
@@ -240,7 +243,9 @@ describe("ComputerScreen", () => {
 
     view.rerender(<ComputerScreen agent={card("has-one", "Cook", false)} />);
     await waitFor(() => expect(screen.queryByTitle("Cook's computer")).toBeNull());
-    expect(screen.getByText(/Cook has no computer/)).toBeTruthy();
+    expect(screen.getByRole("switch", { name: "Computer" }).getAttribute("aria-checked")).toBe(
+      "false",
+    );
   });
 
   it("says nothing at all when computers were never set up", async () => {

@@ -131,10 +131,7 @@ export function WorkingNotes({ agentId }: Props) {
       {notes === null ? (
         <p className="worknotes__empty">Loading…</p>
       ) : notes.length === 0 ? (
-        <p className="worknotes__empty">
-          Nothing in flight. The agent notes here with <code>note_progress</code> when it hands
-          something over or starts waiting on somebody.
-        </p>
+        <p className="worknotes__empty">Nothing in flight.</p>
       ) : (
         <ol className="worknotes__list">
           {held.length > SHOWN && (

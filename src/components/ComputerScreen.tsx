@@ -6,6 +6,7 @@ import { prefersReducedMotion } from "../lib/motion";
 import { useStore } from "../lib/store";
 import { hosted } from "../lib/transport";
 import { type AgentCard, type Computer, errorMessage } from "../lib/types";
+import { Grant } from "./Grant";
 
 interface Props {
   agent: AgentCard;
@@ -209,7 +210,7 @@ export function ComputerScreen({ agent }: Props) {
     }
   };
 
-  if (!configured || !checked) return null;
+  if (!configured) return null;
 
   const running = given && computer?.state === "running";
   const asleep = given && computer?.state === "asleep";
@@ -223,195 +224,171 @@ export function ComputerScreen({ agent }: Props) {
     : {};
 
   return (
-    // Two elements, one connection. The outer one stays in the panel and holds
-    // the space the screen had; the inner one is what covers the window. The
-    // frame inside that is the same element in both sizes, which is what keeps
-    // the desktop connected across the change.
-    <div className="screen" data-full={full ? "true" : undefined}>
-      <div className="screen__stage" ref={stage} {...asDialog}>
-        {full && (
-          <div className="screen__bar">
-            <span className="screen__title">{agent.name}'s computer</span>
-            <span className="screen__state" data-state={computer?.state}>
-              {computer?.state}
-            </span>
-            <span style={{ flex: 1 }} />
+    <section className="place" data-given={given} aria-label={`${agent.name}'s computer`}>
+      <Grant
+        name="Computer"
+        given={given}
+        busy={busy}
+        state={given ? computer?.state : undefined}
+        about={
+          given
+            ? "Take it back. The machine sleeps, and its disk is kept."
+            : `Lets ${agent.name} use a desktop in a cloud sandbox, started when it first needs one.`
+        }
+        onChange={(next) =>
+          void decide(() =>
+            next ? api.giveAgentComputer(agent.id) : api.takeAgentComputer(agent.id),
+          )
+        }
+      />
 
-            {confirming === "sleep" ? (
-              <>
-                <button
-                  type="button"
-                  className="btn btn--small btn--danger"
-                  disabled={busy}
-                  onClick={() => void act(() => api.stopAgentComputer(agent.id))}
-                >
-                  Sleep it
-                </button>
-                <button
-                  type="button"
-                  className="btn btn--small btn--ghost"
-                  onClick={() => setConfirming(null)}
-                >
-                  Keep awake
-                </button>
-              </>
-            ) : confirming === "destroy" ? (
-              <>
-                <button
-                  type="button"
-                  className="btn btn--small btn--danger"
-                  disabled={busy}
-                  onClick={() =>
-                    void act(async () => {
-                      await api.deleteAgentComputer(agent.id);
-                      return null;
-                    })
-                  }
-                >
-                  Destroy it and its disk
-                </button>
-                <button
-                  type="button"
-                  className="btn btn--small btn--ghost"
-                  onClick={() => setConfirming(null)}
-                >
-                  Keep
-                </button>
-              </>
+      {given && checked && (
+        // Two elements, one connection. The outer one stays in the panel and
+        // holds the space the screen had; the inner one is what covers the
+        // window. The frame inside that is the same element in both sizes,
+        // which is what keeps the desktop connected across the change.
+        <div className="screen" data-full={full ? "true" : undefined}>
+          <div className="screen__stage" ref={stage} {...asDialog}>
+            {full && (
+              <div className="screen__bar">
+                <span className="screen__title">{agent.name}'s computer</span>
+                <span className="screen__state" data-state={computer?.state}>
+                  {computer?.state}
+                </span>
+                <span style={{ flex: 1 }} />
+
+                {confirming === "sleep" ? (
+                  <>
+                    <button
+                      type="button"
+                      className="btn btn--small btn--danger"
+                      disabled={busy}
+                      onClick={() => void act(() => api.stopAgentComputer(agent.id))}
+                    >
+                      Sleep it
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--small btn--ghost"
+                      onClick={() => setConfirming(null)}
+                    >
+                      Keep awake
+                    </button>
+                  </>
+                ) : confirming === "destroy" ? (
+                  <>
+                    <button
+                      type="button"
+                      className="btn btn--small btn--danger"
+                      disabled={busy}
+                      onClick={() =>
+                        void act(async () => {
+                          await api.deleteAgentComputer(agent.id);
+                          return null;
+                        })
+                      }
+                    >
+                      Destroy it and its disk
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--small btn--ghost"
+                      onClick={() => setConfirming(null)}
+                    >
+                      Keep
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      className="btn btn--small btn--ghost"
+                      disabled={busy}
+                      onClick={() => setConfirming("sleep")}
+                      title="Sleep. The disk is kept, so it wakes signed in."
+                    >
+                      Sleep
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--small btn--ghost"
+                      disabled={busy}
+                      onClick={() => setConfirming("destroy")}
+                    >
+                      Destroy
+                    </button>
+                  </>
+                )}
+
+                <div className="screen__actions">
+                  <button type="button" className="btn btn--small" onClick={() => setFull(false)}>
+                    Done
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {live ? (
+              <div className="screen__frame">
+                <iframe
+                  // Keyed on the machine alone, never on the size, so growing to
+                  // fill the window keeps the same connection.
+                  //
+                  // Which is also why noVNC's own `view_only` is not used: it is
+                  // read once when the connection opens, so switching it would
+                  // mean reconnecting. The veil below does that job instead,
+                  // without touching the connection.
+                  key={computer.sandboxId}
+                  ref={frame}
+                  sandbox={hosted ? "allow-scripts" : undefined}
+                  referrerPolicy="no-referrer"
+                  title={`${agent.name}'s computer`}
+                  src={computer.vncUrl ? screenUrl(computer.vncUrl) : ""}
+                />
+                {!full && (
+                  // Swallows clicks aimed at the desktop while it is only meant
+                  // to be watched, which is what makes noVNC's own read-only
+                  // mode unnecessary and the connection worth keeping.
+                  <button
+                    type="button"
+                    className="screen__veil"
+                    onClick={grow}
+                    title={`Open ${agent.name}'s screen and take over`}
+                    aria-label={`Open ${agent.name}'s screen and take over`}
+                  />
+                )}
+              </div>
             ) : (
-              <>
-                <button
-                  type="button"
-                  className="btn btn--small btn--ghost"
-                  disabled={busy}
-                  onClick={() => setConfirming("sleep")}
-                  title="Sleep. The disk is kept, so it wakes signed in."
-                >
-                  Sleep
-                </button>
-                <button
-                  type="button"
-                  className="btn btn--small btn--ghost"
-                  disabled={busy}
-                  onClick={() => void decide(() => api.takeAgentComputer(agent.id))}
-                  title="Take it back. The machine sleeps, and its disk is kept."
-                >
-                  Take it back
-                </button>
-                <button
-                  type="button"
-                  className="btn btn--small btn--ghost"
-                  disabled={busy}
-                  onClick={() => setConfirming("destroy")}
-                >
-                  Destroy
-                </button>
-              </>
-            )}
-
-            <div className="screen__actions">
-              <button type="button" className="btn btn--small" onClick={() => setFull(false)}>
-                Done
-              </button>
-            </div>
-          </div>
-        )}
-
-        {live ? (
-          <div className="screen__frame">
-            <iframe
-              // Keyed on the machine alone, never on the size, so growing to
-              // fill the window keeps the same connection.
-              //
-              // Which is also why noVNC's own `view_only` is not used: it is
-              // read once when the connection opens, so switching it would mean
-              // reconnecting. The veil below does that job instead, without
-              // touching the connection.
-              key={computer.sandboxId}
-              ref={frame}
-              sandbox={hosted ? "allow-scripts" : undefined}
-              referrerPolicy="no-referrer"
-              title={`${agent.name}'s computer`}
-              src={computer.vncUrl ? screenUrl(computer.vncUrl) : ""}
-            />
-            {!full && (
-              // Swallows clicks aimed at the desktop while it is only meant to
-              // be watched, which is what makes noVNC's own read-only mode
-              // unnecessary and the connection worth keeping.
-              <button
-                type="button"
-                className="screen__veil"
-                onClick={grow}
-                title={`Open ${agent.name}'s screen and take over`}
-                aria-label={`Open ${agent.name}'s screen and take over`}
-              />
-            )}
-          </div>
-        ) : (
-          <div className="screen__frame screen__frame--empty">
-            <p className="screen__note">
-              {error ??
-                (busy
-                  ? "Working on it. This takes a few seconds."
-                  : !given
-                    ? `${agent.name} has no computer, so it cannot run a command, open anything on
-                       a screen or look at one. Give it one and it starts a machine the first time
-                       it needs one.`
-                    : asleep
-                      ? `Asleep. Its disk is kept, so it wakes up where it left off, still signed
-                         into anything it was signed into. It sleeps again after
-                         ${settings?.computerIdleMinutes ?? 15} idle minutes.`
-                      : running
-                        ? "Running, but the desktop is not up yet."
-                        : `${agent.name} has a computer and no machine yet. It starts one the
-                           first time it needs one; start it now to sign it in to something.`)}
-            </p>
-            <div className="screen__offer">
-              {given ? (
-                <>
-                  <button
-                    type="button"
-                    className="btn btn--small btn--primary"
-                    disabled={busy}
-                    onClick={() => void act(() => api.startAgentComputer(agent.id))}
-                  >
-                    {busy ? "Working…" : asleep ? "Wake" : "Start the desktop"}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn--small btn--ghost"
-                    disabled={busy}
-                    onClick={() => void decide(() => api.takeAgentComputer(agent.id))}
-                    title="Take it back. Any machine sleeps, and its disk is kept."
-                  >
-                    Take it back
-                  </button>
-                </>
-              ) : (
+              <div className="screen__frame screen__frame--empty">
+                <p className="screen__note">
+                  {error ??
+                    (busy
+                      ? "Working on it. This takes a few seconds."
+                      : asleep
+                        ? "Asleep. Its disk is kept, so it wakes where it left off."
+                        : running
+                          ? "Running. The desktop is not up yet."
+                          : "Starts when it needs one. Start it yourself to sign this agent in to something.")}
+                </p>
                 <button
                   type="button"
                   className="btn btn--small btn--primary"
                   disabled={busy}
-                  onClick={() => void decide(() => api.giveAgentComputer(agent.id))}
+                  onClick={() => void act(() => api.startAgentComputer(agent.id))}
                 >
-                  {busy ? "Working…" : "Give one"}
+                  {busy ? "Working…" : asleep ? "Wake" : "Start"}
                 </button>
-              )}
-            </div>
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
-      {/* Left in place while the stage covers the window: it is out of sight
-          behind it, and it is part of the space the panel is holding open. */}
-      <p className="screen__caption">
-        <span>{agent.name}'s screen</span>
-        {computer && (
-          <span className="screen__state" data-state={computer.state}>
-            {computer.state}
-          </span>
-        )}
-      </p>
-    </div>
+      {!given && error && (
+        <p className="field__error" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
   );
 }

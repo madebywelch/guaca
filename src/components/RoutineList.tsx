@@ -90,10 +90,7 @@ export function RoutineList({ agentId, onOpen }: Props) {
       {routines === null ? (
         <p className="routines__note">Loading…</p>
       ) : routines.length === 0 ? (
-        <p className="routines__note">
-          Nothing standing. Agents set these for themselves, and you can set one here: it reaches
-          the agent as an instruction when it fires.
-        </p>
+        <p className="routines__note">Nothing standing.</p>
       ) : (
         routines.map((routine) => (
           <button

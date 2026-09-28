@@ -4,6 +4,7 @@ import { api } from "../lib/ipc";
 import { prefersReducedMotion } from "../lib/motion";
 import { useStore } from "../lib/store";
 import { type AgentCard, type Browser, errorMessage } from "../lib/types";
+import { Grant } from "./Grant";
 
 interface Props {
   agent: AgentCard;
@@ -202,7 +203,7 @@ export function BrowserScreen({ agent }: Props) {
     }
   };
 
-  if (!configured || !checked) return null;
+  if (!configured) return null;
 
   const live = given && browser?.state === "running" && browser?.liveViewUrl;
 
@@ -211,173 +212,141 @@ export function BrowserScreen({ agent }: Props) {
     : {};
 
   return (
-    // Two elements, one connection. The outer one stays in the panel and holds
-    // the space the pane had; the inner one is what covers the window. The
-    // frame inside that is the same element in both sizes, which is what keeps
-    // the live view connected across the change.
-    <div className="screen" data-full={full ? "true" : undefined}>
-      <div className="screen__stage" ref={stage} {...asDialog}>
-        {full && (
-          <div className="screen__bar">
-            <span className="screen__title">{agent.name}'s browser</span>
-            <span className="screen__state" data-state={browser?.state}>
-              {browser?.state}
-            </span>
-            <span style={{ flex: 1 }} />
+    <section className="place" data-given={given} aria-label={`${agent.name}'s browser`}>
+      <Grant
+        name="Browser"
+        given={given}
+        busy={busy}
+        state={given ? browser?.state : undefined}
+        about={
+          given
+            ? "Take it back. An open browser closes, and its sign-ins are saved."
+            : `Lets ${agent.name} open and read web pages in a hosted browser.`
+        }
+        onChange={(next) =>
+          void decide(() =>
+            next ? api.giveAgentBrowser(agent.id) : api.takeAgentBrowser(agent.id),
+          )
+        }
+      />
 
-            {confirming ? (
-              <>
-                <button
-                  type="button"
-                  className="btn btn--small btn--danger"
-                  disabled={busy}
-                  onClick={() =>
-                    void act(async () => {
-                      await api.stopAgentBrowser(agent.id);
-                      return null;
-                    })
-                  }
-                >
-                  Close it and save the sign-ins
-                </button>
-                <button
-                  type="button"
-                  className="btn btn--small btn--ghost"
-                  onClick={() => {
-                    setConfirming(false);
-                    grabKeyboard();
-                  }}
-                >
-                  Keep it open
-                </button>
-              </>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  className="btn btn--small btn--ghost"
-                  disabled={busy}
-                  onClick={() => setConfirming(true)}
-                  title="Close it. What it is signed in to is saved, and the next one opens signed in."
-                >
-                  Close
-                </button>
-                <button
-                  type="button"
-                  className="btn btn--small btn--ghost"
-                  disabled={busy}
-                  onClick={() => void decide(() => api.takeAgentBrowser(agent.id))}
-                  title="Take it back. It closes, and what it is signed in to is saved."
-                >
-                  Take it back
-                </button>
-              </>
-            )}
+      {given && checked && (
+        // Two elements, one connection. The outer one stays in the panel and
+        // holds the space the pane had; the inner one is what covers the
+        // window. The frame inside that is the same element in both sizes,
+        // which is what keeps the live view connected across the change.
+        <div className="screen" data-full={full ? "true" : undefined}>
+          <div className="screen__stage" ref={stage} {...asDialog}>
+            {full && (
+              <div className="screen__bar">
+                <span className="screen__title">{agent.name}'s browser</span>
+                <span className="screen__state" data-state={browser?.state}>
+                  {browser?.state}
+                </span>
+                <span style={{ flex: 1 }} />
 
-            <div className="screen__actions">
-              <button type="button" className="btn btn--small" onClick={() => setFull(false)}>
-                Done
-              </button>
-            </div>
-          </div>
-        )}
-
-        {live ? (
-          <div className="screen__frame">
-            <iframe
-              // Keyed on the session alone, never on the size, so growing to fill
-              // the window keeps the same connection. Clipboard is allowed
-              // because signing in means pasting a password out of a manager, and
-              // without it the paste silently does nothing.
-              key={browser.sessionId}
-              ref={frame}
-              title={`${agent.name}'s browser`}
-              src={browser.liveViewUrl ?? ""}
-              allow="autoplay; clipboard-read; clipboard-write"
-            />
-            {!full && (
-              <button
-                type="button"
-                className="screen__veil"
-                onClick={grow}
-                title={`Open ${agent.name}'s browser and take over`}
-                aria-label={`Open ${agent.name}'s browser and take over`}
-              />
-            )}
-          </div>
-        ) : (
-          <div className="screen__frame screen__frame--empty">
-            <p className="screen__note">
-              {error ??
-                (busy
-                  ? "Working on it. This takes a moment."
-                  : !given
-                    ? `${agent.name} has no browser, so it cannot open a page or read one. Give it
-                       one and it opens a browser the first time it uses the web.`
-                    : browser?.unwatchable
-                      ? `${agent.name}'s browser is open and working, and this build cannot show
-                         it: Kernel is serving the live view from ${browser.unwatchable}, which
-                         this window is not allowed to frame. The agent can still use the web.
-                         Update Guaca, or allow that address in the window's CSP.`
-                      : browser
-                        ? `Closed. What it was signed in to is saved, so the next one opens signed
-                           in to the same accounts.`
-                        : `${agent.name} has a browser and none open. It opens one the first time
-                           it uses the web. Open it yourself to sign this agent in to something:
-                           that is the one thing an agent cannot do for itself.`)}
-            </p>
-            <div className="screen__offer">
-              {given ? (
-                <>
-                  <button
-                    type="button"
-                    className="btn btn--small btn--primary"
-                    disabled={busy}
-                    onClick={() => void act(() => api.startAgentBrowser(agent.id))}
-                  >
-                    {busy ? "Working…" : browser ? "Open another" : "Open one"}
-                  </button>
+                {confirming ? (
+                  <>
+                    <button
+                      type="button"
+                      className="btn btn--small btn--danger"
+                      disabled={busy}
+                      onClick={() =>
+                        void act(async () => {
+                          await api.stopAgentBrowser(agent.id);
+                          return null;
+                        })
+                      }
+                    >
+                      Close it and save the sign-ins
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--small btn--ghost"
+                      onClick={() => {
+                        setConfirming(false);
+                        grabKeyboard();
+                      }}
+                    >
+                      Keep it open
+                    </button>
+                  </>
+                ) : (
                   <button
                     type="button"
                     className="btn btn--small btn--ghost"
                     disabled={busy}
-                    onClick={() => void decide(() => api.takeAgentBrowser(agent.id))}
-                    title="Take it back. Any open browser closes, and its sign-ins are saved."
+                    onClick={() => setConfirming(true)}
+                    title="Close it. What it is signed in to is saved, and the next one opens signed in."
                   >
-                    Take it back
+                    Close
                   </button>
-                </>
-              ) : (
+                )}
+
+                <div className="screen__actions">
+                  <button type="button" className="btn btn--small" onClick={() => setFull(false)}>
+                    Done
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {live ? (
+              <div className="screen__frame">
+                <iframe
+                  // Keyed on the session alone, never on the size, so growing to
+                  // fill the window keeps the same connection. Clipboard is
+                  // allowed because signing in means pasting a password out of a
+                  // manager, and without it the paste silently does nothing.
+                  key={browser.sessionId}
+                  ref={frame}
+                  title={`${agent.name}'s browser`}
+                  src={browser.liveViewUrl ?? ""}
+                  allow="autoplay; clipboard-read; clipboard-write"
+                />
+                {!full && (
+                  <button
+                    type="button"
+                    className="screen__veil"
+                    onClick={grow}
+                    title={`Open ${agent.name}'s browser and take over`}
+                    aria-label={`Open ${agent.name}'s browser and take over`}
+                  />
+                )}
+              </div>
+            ) : (
+              <div className="screen__frame screen__frame--empty">
+                <p className="screen__note">
+                  {error ??
+                    (busy
+                      ? "Working on it. This takes a moment."
+                      : browser?.unwatchable
+                        ? `Open and working, but this window cannot show a live view from
+                           ${browser.unwatchable}. ${agent.name} can still use the web. Update
+                           Guaca, or allow that address in the window's CSP.`
+                        : browser
+                          ? "Closed. Its sign-ins are saved."
+                          : "Opens when it needs the web. Open it yourself to sign this agent in to a site.")}
+                </p>
                 <button
                   type="button"
                   className="btn btn--small btn--primary"
                   disabled={busy}
-                  onClick={() => void decide(() => api.giveAgentBrowser(agent.id))}
+                  onClick={() => void act(() => api.startAgentBrowser(agent.id))}
                 >
-                  {busy ? "Working…" : "Give one"}
+                  {busy ? "Working…" : "Open"}
                 </button>
-              )}
-            </div>
+              </div>
+            )}
           </div>
-        )}
-      </div>
-
-      {!full && (
-        <p className="screen__caption">
-          <span>{agent.name}'s browser</span>
-          {browser && (
-            <span className="screen__state" data-state={browser.state}>
-              {browser.state}
-            </span>
-          )}
-        </p>
+        </div>
       )}
 
-      {/* Under the caption rather than in the offer above it, because the offer
-          is only drawn when there is no live view and this has to be reachable
-          while the agent is working. Not in the full-screen bar: that is a
-          toolbar for the browser in front of you, and this is a decision about
-          the agent that outlives every browser it is given. */}
+      {/* Under the picture rather than beside the button inside it, because
+          that button is only drawn when there is no live view and this has to
+          be reachable while the agent is working. Not in the full-screen bar:
+          that is a toolbar for the browser in front of you, and this is a
+          decision about the agent that outlives every browser it is given. */}
       {!full && given && (
         <label className="field field--row">
           <input
@@ -396,18 +365,17 @@ export function BrowserScreen({ agent }: Props) {
           <span>
             <span className="field__label">Ask me before it acts in my name</span>
             <span className="field__hint">
-              A press or a typed line on a site this browser is signed in to waits on your desk
-              first, once the turn has read a page. Off, which is the default: giving {agent.name} a
-              browser is what said the accounts in it are its to use. Leave it off for research. An
-              agent that searches presses something every few seconds, and a question asked that
-              often is one you answer without reading. Turn it on for an agent holding an account
-              you want a hand on. It cannot tell one account on a site from another: which of your
-              accounts {agent.name} may act on is something you tell it, and this is only whether
-              you are asked first.
+              Clicks and typing on sites it is signed in to wait for your approval.
             </span>
           </span>
         </label>
       )}
-    </div>
+
+      {!given && error && (
+        <p className="field__error" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
   );
 }
