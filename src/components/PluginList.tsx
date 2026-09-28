@@ -234,7 +234,7 @@ function callers(plugin: Plugin, tool: PluginToolCard, crew: AgentCard[]): strin
 /**
  * One line in the panel: a server, whether or not this crew has it.
  *
- * Assembled so the seven on offer and the ones the operator added draw through
+ * Assembled so the eight on offer and the ones the operator added draw through
  * one piece of code. They differ in exactly two places — where the name and
  * address come from, and whether anybody vouched for the server — and every
  * other decision on the row is the same question about the same thing. Two
@@ -257,7 +257,7 @@ interface Row {
  * The catalog's order is the backend's and is drawn as it arrives: a list the
  * webview sorted would be a second opinion about which servers exist. What the
  * operator added comes after it, in the order the store returns, which is by
- * name: the seven are a starting point and the crew's own are the additions to
+ * name: the eight are a starting point and the crew's own are the additions to
  * it, so that is the order somebody reads them in.
  */
 function rows(offers: PluginOffer[], connected: Plugin[]): Row[] {
@@ -307,7 +307,7 @@ function rows(offers: PluginOffer[], connected: Plugin[]): Row[] {
  * disconnecting above it: there is no Save on this panel, so a draft nobody
  * submitted would be a permission the operator thinks they granted.
  *
- * The seven at the top are a catalog rather than a limit, and the difference
+ * The eight at the top are a catalog rather than a limit, and the difference
  * matters. Each is on the list because somebody checked that it publishes its
  * own tools, acts on the operator's account and lets an application register
  * itself, and what that buys is a name, a sentence and a working sign-in behind
@@ -1004,7 +1004,7 @@ export function PluginList({ groupId, crew }: Props) {
         );
       })}
 
-      {/* Adding one. Below the seven rather than beside them, because the order
+      {/* Adding one. Below the eight rather than beside them, because the order
           says what it is: the catalog is where to look first, and this is what
           to do when the server you want is not on it. */}
       <div className="access__item">
@@ -1026,7 +1026,7 @@ export function PluginList({ groupId, crew }: Props) {
                   be wrong — so the row shows the name that came back instead of
                   predicting it. */}
               <span className="field__hint">
-                {/* Not one of the seven above, which would read as an instruction
+                {/* Not one of the eight above, which would read as an instruction
                     to name it after a server that is already on the list. */}
                 Your agents call this server's tools by this name: a server named
                 <code> vault </code> offers <code>vault__read_secret</code>. Spaces and punctuation
@@ -1180,7 +1180,7 @@ export function PluginList({ groupId, crew }: Props) {
             </button>
             <p className="field__hint">
               Any MCP server: one you run, one your company runs, or a vendor that is not on this
-              list. Nobody has checked it, and it gets exactly what the seven above get, so add one
+              list. Nobody has checked it, and it gets exactly what the eight above get, so add one
               you would give the account to.
             </p>
           </>

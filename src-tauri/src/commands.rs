@@ -1374,7 +1374,7 @@ pub async fn connect_plugin(
 ///
 /// Two fields, because two is what the catalog was supplying: a name, which
 /// becomes the prefix every one of this server's tools is called by, and the
-/// URL its MCP endpoint answers on. Everything after that is the flow the seven
+/// URL its MCP endpoint answers on. Everything after that is the flow the eight
 /// go through — the same era probe, the same sign-in, the same tool list, the
 /// same per-agent and per-tool answers, and a grant that never reaches a model.
 ///

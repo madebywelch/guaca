@@ -31,11 +31,12 @@
 //! Steps 1 and 2 are [`discover`], and every one of their fallbacks is a real
 //! server rather than defensiveness. Stripe's authorization server is
 //! `https://access.stripe.com/mcp`, and RFC 8414 says the well-known segment
-//! goes *before* that path; Linear publishes its resource metadata under the
-//! endpoint's path and Neon's under the bare one. Getting any of those wrong is
-//! a plugin that cannot be connected at all, which is why `scripts/plugins.sh`
-//! runs this same function against the live vendors instead of rebuilding the
-//! URLs beside it.
+//! goes *before* that path; Supermemory's also has one, answers 404 there, and
+//! publishes only after its path and at the bare origin. Linear publishes its
+//! resource metadata under the endpoint's path and Neon's under the bare one.
+//! Getting any of those wrong is a plugin that cannot be connected at all,
+//! which is why `scripts/plugins.sh` runs this same function against the live
+//! vendors instead of rebuilding the URLs beside it.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -563,7 +564,7 @@ pub struct Discovered {
 /// Steps 1 and 2 of the dance, on their own.
 ///
 /// Split out because the live vendor test needs exactly this and nothing after
-/// it: whether the six servers still publish what this build knows how to
+/// it: whether the seven servers still publish what this build knows how to
 /// read. A test that rebuilt the metadata URLs beside these ones would pass
 /// while an operator could not connect, which is the only failure it exists to
 /// catch.
@@ -753,7 +754,8 @@ fn well_known(url: &str, name: &str) -> Vec<String> {
     let mut out = Vec::new();
     if !path.is_empty() {
         out.push(format!("{origin}/.well-known/{name}{path}"));
-        // The other reading of the same rule, which some servers implement.
+        // The other reading of the same rule, which some servers implement:
+        // Supermemory's issuer answers here and 404s at the form above.
         out.push(format!("{origin}{path}/.well-known/{name}"));
     }
     out.push(format!("{origin}/.well-known/{name}"));
@@ -1324,7 +1326,9 @@ mod tests {
         // The part of RFC 8414 that is most often got wrong, and the reason
         // Stripe's authorization server is found at all: its issuer is
         // `https://access.stripe.com/mcp`, and the first form below is the only
-        // one of the three that answers.
+        // one of the three that answers. Supermemory's, which also has a path,
+        // answers the other two and not the first, so the first alone is not
+        // enough either.
         assert_eq!(
             well_known("https://example.test/tenant", "oauth-authorization-server"),
             vec![

@@ -64,7 +64,7 @@ describe("the catalog", () => {
 });
 
 describe("nameFor", () => {
-  it("spells the seven the way their vendors do", () => {
+  it("spells the eight the way their vendors do", () => {
     // The one thing a slug cannot supply. A transcript is the only place that
     // needs this, because it is the only place with no row to read a name off.
     expect(nameFor("agentmail")).toBe("AgentMail");

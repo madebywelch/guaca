@@ -10,10 +10,10 @@
  * path data rather than pulled as a dependency: a handful of glyphs do not
  * justify a package carrying three thousand. Trademarks belong to their owners.
  *
- * AgentMail and Firecrawl are the exceptions and are drawn here, because
- * neither is in that set. A generic envelope and a generic flame rather than an
- * approximation of either logo: a mark nobody can check against the original is
- * a mark that quietly becomes wrong.
+ * AgentMail, Supermemory and Firecrawl are the exceptions and are drawn here,
+ * because none of them is in that set. A generic envelope, memory chip and
+ * flame rather than an approximation of any of their logos: a mark nobody can
+ * check against the original is a mark that quietly becomes wrong.
  *
  * Google is the one row whose server is not the vendor's: the tools come from
  * the operator's own Guaca account, which holds the grant. The mark is still
@@ -61,6 +61,10 @@ export const BRANDS: Record<CatalogKind, Brand> = {
     path: "M21.9 4.1H2.1L12 10.9ZM1.2 6.4v11.9a1.6 1.6 0 0 0 1.6 1.6h18.4a1.6 1.6 0 0 0 1.6-1.6V6.4L12 13.5Z",
     color: "#0a0a0a",
   },
+  supermemory: {
+    path: "M7.5 6h9A1.5 1.5 0 0 1 18 7.5v9a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 16.5v-9A1.5 1.5 0 0 1 7.5 6ZM8.2 2.5h1.6V6H8.2Zm3 0h1.6V6h-1.6Zm3 0h1.6V6h-1.6ZM8.2 18h1.6v3.5H8.2Zm3 0h1.6v3.5h-1.6Zm3 0h1.6v3.5h-1.6ZM2.5 8.2H6v1.6H2.5Zm0 3H6v1.6H2.5Zm0 3H6v1.6H2.5ZM18 8.2h3.5v1.6H18Zm0 3h3.5v1.6H18Zm0 3h3.5v1.6H18Z",
+    color: "#0b1015",
+  },
   firecrawl: {
     path: "M12 1.5c.6 3.5 5.5 6.1 6.6 10.9 1.1 4.9-2.2 10.1-6.6 10.1-4.4 0-7.6-3.3-6.9-7.9.4-2.6 1.9-4.4 3.3-5.6-.1 2 .8 3.6 2.2 4.2C10 9.5 11.5 5 12 1.5Z",
     color: "#fa5d19",
@@ -87,7 +91,7 @@ const ADDED: Brand = {
  * Its mark, whichever kind it turns out to be.
  *
  * Keyed on what the backend said rather than on the shape of the slug: the
- * seven are the seven, and everything else is a server somebody added. A lookup that
+ * eight are the eight, and everything else is a server somebody added. A lookup that
  * missed would otherwise draw an empty square, which reads as a broken row.
  *
  * `Object.hasOwn` rather than a lookup with a fallback, because a name here is
@@ -100,11 +104,11 @@ export function markFor(kind: PluginKind): Brand {
 }
 
 /**
- * The seven, spelled the way their vendors spell them.
+ * The eight, spelled the way their vendors spell them.
  *
  * The spelling is the whole of what this adds: `agentmail` is AgentMail, and a
  * slug run through a capitalizer is a claim about somebody's name that nobody
- * checked. Seven strings, and the day one of them is wrong is the day the mark
+ * checked. Eight strings, and the day one of them is wrong is the day the mark
  * beside it is wrong too.
  */
 const NAMES: Record<CatalogKind, string> = {
@@ -113,6 +117,7 @@ const NAMES: Record<CatalogKind, string> = {
   linear: "Linear",
   stripe: "Stripe",
   agentmail: "AgentMail",
+  supermemory: "Supermemory",
   firecrawl: "Firecrawl",
   google: "Google",
 };

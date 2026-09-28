@@ -808,7 +808,7 @@ struct Inner {
     /// Where each plugin's MCP server is, when it is not where it usually is.
     ///
     /// Keyed by slug rather than by kind, so a server the operator added can be
-    /// moved by the same seam the seven are. Empty in the app, and written at
+    /// moved by the same seam the eight are. Empty in the app, and written at
     /// most once. See `Runtime::plugins_at`.
     plugin_endpoints: std::sync::OnceLock<HashMap<String, String>>,
     /// The machine's Guaca account, when it has one.

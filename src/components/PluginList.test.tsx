@@ -724,7 +724,7 @@ describe("a server the operator added", () => {
     expect(await screen.findByText("home_assistant")).toBeTruthy();
     expect(screen.getByText("ha.example.com")).toBeTruthy();
     // And it says out loud that nobody checked it, which is the whole of the
-    // difference between this row and the seven above it.
+    // difference between this row and the eight above it.
     expect(screen.getByText(/nobody has checked it/)).toBeTruthy();
   });
 

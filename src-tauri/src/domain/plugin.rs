@@ -50,7 +50,7 @@ use super::ids::{AgentId, GroupId, PluginId};
 
 /// Which server a plugin is, and where the runtime dials it.
 ///
-/// Seven Guaca ships the address of, and whatever the operator added. The seven
+/// Eight Guaca ships the address of, and whatever the operator added. The eight
 /// are a catalog rather than a limit: each one is on the list because somebody
 /// checked that it publishes its own tools, acts on the operator's account and
 /// lets an application register itself, and what that check buys is a tile with
@@ -70,6 +70,7 @@ pub enum PluginKind {
     Linear,
     Stripe,
     Agentmail,
+    Supermemory,
     Firecrawl,
     /// The operator's own Guaca account, as a server. See [`PluginKind::account_backed`].
     Google,
@@ -510,12 +511,13 @@ fn is_token(b: u8) -> bool {
 impl PluginKind {
     /// The servers Guaca ships the address of. Not every kind: a custom one is
     /// not offered, it is added.
-    pub const ALL: [PluginKind; 7] = [
+    pub const ALL: [PluginKind; 8] = [
         PluginKind::Neon,
         PluginKind::Cloudflare,
         PluginKind::Linear,
         PluginKind::Stripe,
         PluginKind::Agentmail,
+        PluginKind::Supermemory,
         PluginKind::Firecrawl,
         PluginKind::Google,
     ];
@@ -567,13 +569,14 @@ impl PluginKind {
             PluginKind::Linear => "linear",
             PluginKind::Stripe => "stripe",
             PluginKind::Agentmail => "agentmail",
+            PluginKind::Supermemory => "supermemory",
             PluginKind::Firecrawl => "firecrawl",
             PluginKind::Google => "google",
             PluginKind::Custom { slug, .. } => slug,
         }
     }
 
-    /// One of the seven, by the name it is stored under. Never a custom one:
+    /// One of the eight, by the name it is stored under. Never a custom one:
     /// those carry an address a slug alone cannot supply, and the caller that
     /// has one is reading a row. See [`PluginKind::from_row`].
     pub fn from_slug(slug: &str) -> Option<PluginKind> {
@@ -613,6 +616,7 @@ impl PluginKind {
             PluginKind::Linear => "Linear",
             PluginKind::Stripe => "Stripe",
             PluginKind::Agentmail => "AgentMail",
+            PluginKind::Supermemory => "Supermemory",
             PluginKind::Firecrawl => "Firecrawl",
             PluginKind::Google => "Google",
             PluginKind::Custom { slug, .. } => slug,
@@ -623,7 +627,7 @@ impl PluginKind {
     ///
     /// Read by the panel, which has to say that nobody vouched for it, and by
     /// nothing on the call path: a custom server is dialled, signed in to and
-    /// narrowed by exactly the code the other seven are.
+    /// narrowed by exactly the code the other eight are.
     pub fn is_custom(&self) -> bool {
         matches!(self, PluginKind::Custom { .. })
     }
@@ -633,7 +637,7 @@ impl PluginKind {
     /// Written out in full rather than assembled from a host and a path,
     /// because this string is two things at once: the URL the runtime POSTs to
     /// and the RFC 8707 resource indicator the sign-in is scoped to. Stripe's
-    /// has no path and the other five do, and each is the identifier that
+    /// has no path and the other six do, and each is the identifier that
     /// vendor publishes in its own protected-resource metadata. A tidier
     /// `format!("{host}/mcp")` would be a resource the server does not
     /// recognize, and the refusal arrives in the operator's browser.
@@ -659,6 +663,7 @@ impl PluginKind {
             PluginKind::Linear => "https://mcp.linear.app/mcp",
             PluginKind::Stripe => "https://mcp.stripe.com",
             PluginKind::Agentmail => "https://mcp.agentmail.to/mcp",
+            PluginKind::Supermemory => "https://mcp.supermemory.ai/mcp",
             PluginKind::Firecrawl => "https://mcp.firecrawl.dev/v2/mcp-oauth",
             // The operator's own account. `account.rs` may be pointed elsewhere
             // for development, and `Runtime::plugin_endpoint` is what moves it;
@@ -685,7 +690,7 @@ impl PluginKind {
     /// Whether this plugin's credential is the machine's Guaca account rather
     /// than a grant of its own.
     ///
-    /// The other six are somebody else's servers, and a crew signs in to each
+    /// The other seven are somebody else's servers, and a crew signs in to each
     /// one separately because there is nothing else it could do. Google is not
     /// a server: it is the operator's own account at `guaca.bot`, which already
     /// holds the grant and already refreshes it. Running a second OAuth dance
@@ -715,6 +720,7 @@ impl PluginKind {
             PluginKind::Linear => "Issues and projects: find them, file them, move them on.",
             PluginKind::Stripe => "The live account: payments, customers, invoices, refunds.",
             PluginKind::Agentmail => "Inboxes an agent owns: read a thread, send, reply, forward.",
+            PluginKind::Supermemory => "Memory your other assistants share: search, save, forget.",
             PluginKind::Firecrawl => "The live web on your credits: search, scrape, crawl, watch.",
             PluginKind::Google => {
                 "Your Gmail, Calendar and Drive, through the Guaca account you signed in to."
@@ -735,6 +741,7 @@ impl PluginKind {
             PluginKind::Linear => "https://linear.app/docs/mcp",
             PluginKind::Stripe => "https://docs.stripe.com/mcp",
             PluginKind::Agentmail => "https://www.agentmail.to/docs/integrations/mcp",
+            PluginKind::Supermemory => "https://supermemory.ai/docs/supermemory-mcp/mcp",
             PluginKind::Firecrawl => "https://docs.firecrawl.dev/mcp-server",
             PluginKind::Google => "https://guaca.bot/app",
             // Nobody wrote a page about this one. The protocol it has to speak
@@ -838,7 +845,7 @@ pub fn canonical_url(url: &str) -> Result<String, CustomError> {
 /// Serializing is the whole story going out: the webview draws a row from the
 /// name it was handed, and every command that acts on a connected plugin takes
 /// its id. Coming in is narrower on purpose. The two commands that take a kind
-/// (connecting one of the seven, and pointing an account-backed one at another
+/// (connecting one of the eight, and pointing an account-backed one at another
 /// identity) are both about servers this build ships the address of, and a
 /// slug alone cannot rebuild a custom server anyway: its address is the half
 /// that makes it dialable. Adding one is its own command, which takes both.
