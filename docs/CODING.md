@@ -3,8 +3,9 @@
 An agent can be given a terminal: a directory of its own on the host, the
 shell that starts there, three file tools, and a coding harness it can hand a
 change to. `domain/terminal.rs` is the shape and the rules that need no disk,
-`terminal.rs` is the disk, `shell.rs` is the small door, and `coding/` is the
-program that does the long work.
+`terminal.rs` is the disk, `shell.rs` is the small door, `coding/` is the
+program that does the long work, and `server/console.rs` is the operator's
+own way in.
 
 The host is wherever `guacad` runs: a container on the operator's Mac, or a
 box they connected to. Nothing here runs on the operator's own machine outside
@@ -113,8 +114,9 @@ GitHub credentials (`credential.https://github.com.helper = !gh auth
 git-credential`), so two arrangements work without anything in Guaca holding a
 token:
 
-- **The host's own sign-in.** `gh auth login` as the host's user, in the
-  container: `docker exec -it <container> gh auth login` on a desktop,
+- **The host's own sign-in.** `gh auth login` as the host's user, from
+  **Open terminal** in any agent's Terminal panel (below). Outside the app the
+  same user is `docker exec -it <container> gh auth login` on a desktop and
   `docker compose exec guacad gh auth login` on a box. It lives on the
   persistent volume.
 - **A secret per agent.** A `GH_TOKEN` secret granted to one agent reaches its
@@ -132,6 +134,49 @@ repositories, per-repository identity, and a GitHub App broker with its own
 container, private key and `gh` wrapper. Every one of those was a second place
 for a credential to live beside the one the harness programs already read, and
 the programs were the ones pushing.
+
+## The operator has a door of their own
+
+Every sign-in an agent is refused for is a command somebody types on the host:
+`gh auth login`, `claude auth login`, `codex login --device-auth`. Each asks
+questions, draws a menu or waits for a code, so none of them can go through
+`shell`, whose stdin is closed. Before this door, an agent refused a push said
+*run `gh auth login`*, correctly, to an operator with no idea where: the
+answer was `docker exec -it` into a container they may never have looked at,
+or `ssh` to a box and then that.
+
+**Open terminal**, in the agent's Terminal panel, is that door.
+`server/console.rs` starts `bash` on a pseudo-terminal in the agent's
+directory, as the host's user, and a socket at `/v1/console/<agent>` carries
+it to xterm.js over the window. It is what `docker exec -it <container> bash`
+gave and nothing more, behind the token every other route asks for, and it
+grants nothing that token did not: a connector run as a program is already a
+command of the operator's choosing, run on this host. Four decisions in it are
+not defaults.
+
+- **No secret Guaca holds is in it.** A secret granted to the agent reaches the
+  agent's `shell` and its jobs and never this, because this draws in the
+  webview and a secret's value never does. The names are removed as well as
+  not added, so a `GH_TOKEN` the host was started with cannot stand in for the
+  sign-in being made: `gh auth login` will not store one while it is set.
+- **It lives exactly as long as its socket.** Done, a dropped network and a
+  heartbeat nobody answers all close the master side, which hangs up `bash`,
+  which hangs up what it started; a shell still there two seconds later is
+  killed. Nothing is kept for a page that might come back, because a shell
+  nobody is watching, holding the host's sign-ins, is the one thing this must
+  not leave behind. `nohup` and `setsid` still work, because that is what they
+  are for.
+- **Nothing typed reaches a transcript.** It is the operator's shell standing
+  in the agent's directory, not the agent's. The agent sees what changed on
+  disk and nothing of how.
+- **Escape is the shell's.** A sign-in's menu, readline and every editor read
+  it, so the only way out of the view is Done.
+
+It is `bash` because that is what `shell` runs, so the operator sees what the
+agent sees, and interactive because its input is a terminal, so it reads the
+host user's `~/.bashrc` as `docker exec -it` did. The prompt's credentials
+bullet names the button, so an agent refused for a sign-in says where to make
+it.
 
 ## The gate is asked from one function, for every door
 
@@ -659,6 +704,12 @@ turn, that the gate stops the same commands through every door and that a
 denial runs no part of the line, that an ordinary line is not stopped, that
 what `write` made `edit` changes and `shell` reads back, and that a line still
 runs while the agent's job is going.
+
+The operator's shell is tested over its socket in `tests/server.rs`, against
+real `bash`: refused with a sentence for an agent with no terminal, closed to
+a wrong token, drawn at the size the page measured and told when it changes,
+started without the agent's secrets, and gone, with the program it was
+running, once the socket closes.
 
 The three stand-ins are Python programs in `tests/fixtures/` that speak each
 protocol's real shapes: Claude Code's stream-json in both directions, including

@@ -104,8 +104,11 @@ Claude Code can use its backend CLI sign-in or a configured API credential.
 ## A browser is admitted by a token, and the token arrives by fragment
 
 A hosted workspace holds inference keys, plugin refresh tokens and every
-transcript a crew has written, so there is no anonymous mode and no read-only
-mode: a caller is the operator or it is nobody. One bearer token per
+transcript a crew has written, and it runs commands on the box: a connector
+run as a program, and a shell in any agent's terminal through **Open
+terminal**. So there is no anonymous mode and no read-only mode, and the token
+is a password to the backend's user: a caller is the operator or it is
+nobody. One bearer token per
 workspace, compared in constant time on every route but `/health`, generated
 on the first run and written beside the settings with mode 0600 so a first run
 needs nothing prepared.
@@ -240,7 +243,10 @@ has the model.
 
 git and `gh` are signed in once, as the backend's user, and every terminal uses
 that. The image configures git system-wide to ask `gh` for GitHub credentials,
-so either of these is enough:
+so either of these is enough. The place to run them is **Open terminal** in any
+agent's Terminal panel: a shell on the backend, as its user, in that agent's
+directory, in a desktop window and a browser alike. From the box itself the
+same user is `docker compose exec guacad`:
 
 ```sh
 docker compose exec guacad gh auth login
@@ -488,7 +494,9 @@ These configure the coding tools; the inference key entered in Guaca Settings
 is separate and is never silently reused by a harness.
 
 For a personally operated backend, sign in as the container's `guaca` user
-(the default), after starting it:
+(the default), after starting it. **Open terminal** in an agent's Terminal
+panel is that user; from the box, the same commands follow
+`docker compose exec guacad`:
 
 ```sh
 docker compose exec guacad codex login --device-auth

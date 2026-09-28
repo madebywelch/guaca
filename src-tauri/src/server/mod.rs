@@ -35,6 +35,7 @@
 //! it is why the token is per-workspace and rotatable rather than derived from
 //! anything longer-lived.
 
+mod console;
 mod live;
 
 use std::net::SocketAddr;
@@ -55,6 +56,7 @@ use tower_http::cors::CorsLayer;
 use crate::commands::{AppState, Reach};
 use crate::domain::attachment::MAX_FILE_BYTES;
 use crate::domain::deployment::Deployment;
+use crate::domain::ids::AgentId;
 use crate::runtime::events::{EventSink, UiEvent};
 
 /// How many events a client may fall behind before it starts losing them.
@@ -200,6 +202,10 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
         .route("/v1/host/update", post(host_update))
         .route("/v1/call", post(call))
         .route("/v1/events", get(events_socket))
+        // The operator's own shell in an agent's terminal. A socket rather
+        // than a command, because a terminal is a stream both ways for as long
+        // as it is open; `console.rs` is the argument.
+        .route("/v1/console/:agent", get(console_socket))
         .route(
             "/events/:service/:topic",
             post(routine_event).layer(DefaultBodyLimit::max(crate::webhook::MOST_BODY_BYTES)),
@@ -854,6 +860,35 @@ async fn events_socket(
         )
     };
     upgrade.on_upgrade(move |socket| pump(socket, feed, snapshot))
+}
+
+#[derive(Deserialize)]
+struct ConsoleRequest {
+    token: Option<String>,
+    /// The size the page measured, so the first prompt is drawn at the width
+    /// it is read at.
+    cols: Option<u16>,
+    rows: Option<u16>,
+}
+
+/// A shell in one agent's terminal, for as long as this socket is open.
+///
+/// The token is on the query for the reason the event socket's is. Whether
+/// the agent has a terminal is decided before the upgrade and said after it,
+/// because a browser reads nothing of a refused handshake but the fact of it.
+async fn console_socket(
+    State(serving): State<Serving>,
+    headers: HeaderMap,
+    Path(agent): Path<AgentId>,
+    Query(request): Query<ConsoleRequest>,
+    upgrade: WebSocketUpgrade,
+) -> Response {
+    if let Err(refused) = authorized(&serving, &headers, request.token.as_deref()) {
+        return *refused;
+    }
+    let opening = console::prepare(&serving.state.runtime, agent);
+    let window = console::size(request.cols.unwrap_or(80), request.rows.unwrap_or(24));
+    upgrade.on_upgrade(move |socket| console::serve(socket, opening, window))
 }
 
 /// Forwards events to one client until it goes away.

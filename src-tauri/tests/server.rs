@@ -190,6 +190,195 @@ async fn an_agent_is_given_a_terminal_on_the_box_and_keeps_how_it_codes() {
     assert!(std::path::Path::new(&path).join("notes.md").exists());
 }
 
+type Socket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// An agent with a terminal, and the directory it was given.
+async fn agent_with_a_terminal(addr: SocketAddr) -> (String, String) {
+    let (_, agent) = call(addr, "create_agent", json!({"draft": {
+        "name":"Engineer", "avatar":"avocado", "color":"#7ab55c", "model":"", "systemPrompt":"Test"
+    }}))
+    .await;
+    let id = agent["ok"]["id"].as_str().unwrap().to_string();
+    call(addr, "give_agent_terminal", json!({"id": id})).await;
+    let (_, terminal) = call(addr, "agent_terminal", json!({"id": id})).await;
+    (id, terminal["ok"]["path"].as_str().unwrap().to_string())
+}
+
+/// The operator's shell in one agent's terminal, as the page opens it.
+async fn console(addr: SocketAddr, agent: &str, query: &str) -> Socket {
+    let url = format!("ws://{addr}/v1/console/{agent}?token={TOKEN}&{query}");
+    tokio_tungstenite::connect_async(url).await.expect("the console socket opens").0
+}
+
+/// Reads a console until what it printed satisfies `done`, or it says
+/// something that is not the shell's bytes, which is returned.
+async fn read_until(
+    socket: &mut Socket,
+    printed: &mut String,
+    done: impl Fn(&str) -> bool,
+) -> Option<Value> {
+    use tokio_tungstenite::tungstenite::Message;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+    while !done(printed) {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        assert!(!left.is_zero(), "the console never got there; printed {printed:?}");
+        match tokio::time::timeout(left, socket.next()).await {
+            Ok(Some(Ok(Message::Binary(bytes)))) => {
+                printed.push_str(&String::from_utf8_lossy(&bytes))
+            }
+            Ok(Some(Ok(Message::Text(text)))) => return Some(serde_json::from_str(&text).unwrap()),
+            Ok(Some(Ok(_))) => {}
+            other => panic!("the console ended without a word ({other:?}); printed {printed:?}"),
+        }
+    }
+    None
+}
+
+/// Reads a console until the host says something, and returns it.
+async fn said(socket: &mut Socket, printed: &mut String) -> Value {
+    read_until(socket, printed, |_| false).await.expect("the host says something")
+}
+
+/// The number printed after `label`, skipping the line the shell echoed back,
+/// where `label` is followed by the `$$` that was typed.
+fn number_after(printed: &str, label: &str) -> Option<u32> {
+    printed.match_indices(label).find_map(|(at, _)| {
+        let digits: String =
+            printed[at + label.len()..].chars().take_while(char::is_ascii_digit).collect();
+        digits.parse().ok()
+    })
+}
+
+fn alive(pid: u32) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[tokio::test]
+async fn a_console_is_refused_with_what_to_do_for_an_agent_with_no_terminal() {
+    let (addr, _dir) = workspace().await;
+    let (_, agent) = call(addr, "create_agent", json!({"draft": {
+        "name":"Writer", "avatar":"avocado", "color":"#7ab55c", "model":"", "systemPrompt":"Test"
+    }}))
+    .await;
+    let without = agent["ok"]["id"].as_str().unwrap().to_string();
+    let gone = "8d7f0c2e-1f3a-4b5c-9d6e-7f8a9b0c1d2e".to_string();
+
+    // Refused after the upgrade rather than before it, because a browser
+    // reads nothing of a refused handshake but the fact of it.
+    for (agent, says) in [(without, "Give it one from the Terminal section"), (gone, "is gone")] {
+        let mut socket = console(addr, &agent, "cols=80&rows=24").await;
+        let refusal = said(&mut socket, &mut String::new()).await;
+        assert_eq!(refusal["type"], "refused", "{refusal}");
+        assert!(refusal["message"].as_str().unwrap().contains(says), "{refusal}");
+        let next = tokio::time::timeout(std::time::Duration::from_secs(5), socket.next()).await;
+        assert!(
+            matches!(next, Ok(None | Some(Ok(tokio_tungstenite::tungstenite::Message::Close(_))))),
+            "and then the socket closes: {next:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_console_needs_the_token() {
+    let (addr, _dir) = workspace().await;
+    let (agent, _) = agent_with_a_terminal(addr).await;
+    for token in ["", "not-the-token"] {
+        let url = format!("ws://{addr}/v1/console/{agent}?token={token}");
+        match tokio_tungstenite::connect_async(url).await {
+            Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+                assert_eq!(response.status(), 401)
+            }
+            other => panic!("a shell on the host opened with {token:?}: {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_operator_types_into_an_agents_terminal_at_the_size_of_their_window() {
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let (addr, _dir) = workspace().await;
+    let (agent, path) = agent_with_a_terminal(addr).await;
+    let (_, groups) = call(addr, "list_groups", json!({})).await;
+    // A secret granted to this very agent. Its `shell` gets it; the operator's
+    // shell draws in the webview, where a secret's value never goes.
+    let (_, secret) = call(
+        addr,
+        "create_connector",
+        json!({"draft": {
+            "groupId": groups["ok"][0]["id"], "service": "GitHub", "account": "",
+            "envVar": "CONSOLE_PROBE_TOKEN", "secret": "ghp-never-in-the-webview",
+            "agents": [agent],
+        }}),
+    )
+    .await;
+    assert!(secret.get("ok").is_some(), "{secret}");
+
+    let mut socket = console(addr, &agent, "cols=100&rows=30").await;
+    let mut printed = String::new();
+    socket
+        .send(Message::binary(
+            &b"stty size; echo \"here:$PWD\"; echo \"secret:${CONSOLE_PROBE_TOKEN:-unset}\"\n"[..],
+        ))
+        .await
+        .unwrap();
+    let early = read_until(&mut socket, &mut printed, |p| p.contains("secret:unset")).await;
+    assert_eq!(early, None, "{printed:?}");
+    // `stty size` is rows, then columns. The first prompt was drawn at the
+    // size the page measured, not at a default and then corrected.
+    assert!(printed.contains("30 100"), "{printed:?}");
+    assert!(printed.contains(&format!("here:{path}")), "it starts in the agent's directory");
+    assert!(!printed.contains("ghp-never-in-the-webview"));
+
+    // Waited for above, so the resize cannot land before the first `stty`.
+    socket.send(Message::text(r#"{"type":"resize","cols":120,"rows":40}"#)).await.unwrap();
+    socket.send(Message::binary(&b"stty size; exit 7\n"[..])).await.unwrap();
+    let ended = said(&mut socket, &mut printed).await;
+    assert!(printed.contains("40 120"), "the shell was told the window changed: {printed:?}");
+    assert_eq!(ended, json!({"type": "exit", "code": 7}));
+}
+
+#[tokio::test]
+async fn closing_a_console_ends_the_shell_and_what_it_was_running() {
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let (addr, _dir) = workspace().await;
+    let (agent, _) = agent_with_a_terminal(addr).await;
+    let mut socket = console(addr, &agent, "cols=80&rows=24").await;
+    let mut printed = String::new();
+    // A foreground program waiting on nothing, which is what a sign-in left
+    // at its prompt looks like. `exec` so the pid printed is the sleep's own.
+    socket
+        .send(Message::binary(&b"echo \"shell:$$\"; sh -c 'echo \"job:$$\"; exec sleep 600'\n"[..]))
+        .await
+        .unwrap();
+    let early = read_until(&mut socket, &mut printed, |p| number_after(p, "job:").is_some()).await;
+    assert_eq!(early, None, "the shell ended on its own: {printed:?}");
+    let shell = number_after(&printed, "shell:").expect("the shell said its pid");
+    let job = number_after(&printed, "job:").expect("the job said its pid");
+    assert!(alive(shell) && alive(job));
+
+    socket.close(None).await.unwrap();
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while alive(shell) || alive(job) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "a closed console left something running: shell {} job {}",
+            alive(shell),
+            alive(job)
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
 #[tokio::test]
 async fn nothing_is_reachable_without_the_token() {
     let (addr, _dir) = workspace().await;

@@ -871,7 +871,9 @@ pub fn system_prompt(
               the work is and where it should end up.\n\
              - git and GitHub are signed in on this machine by the operator, or not at all. If a \
               clone or a push is refused for credentials, say so and stop there: do not put a \
-              token in a command or ask for one in chat.\n\
+              token in a command or ask for one in chat. Say where they fix it: Open terminal, \
+              in the Terminal section of your panel, is a shell on this machine, and \
+              `gh auth login` there signs in every terminal.\n\
              - Commands run as the operator, with their credentials. Pushing, merging, opening a \
               pull request and cutting a release leave this machine under their name and git \
               cannot undo them, so say afterward what you did, and ask first when you are not \
@@ -1430,6 +1432,35 @@ mod tests {
         add_skills(&mut messages, &many[..1]);
         let ChatMessage::System { content } = &messages[0] else { panic!("no system message") };
         assert!(content.starts_with("You are Pip.") && content.contains("- s0 (operator)"));
+    }
+
+    #[test]
+    fn an_agent_refused_for_credentials_can_say_where_the_operator_signs_in() {
+        // It said "run `gh auth login`", correctly, to an operator with no idea
+        // where: the host's shell was a `docker exec` away.
+        let prompt = system_prompt(
+            &card("Engineer"),
+            "",
+            &[],
+            &[],
+            &[],
+            &[],
+            "",
+            &[],
+            &[],
+            &[],
+            ReplyMode::ToOperator,
+            &[],
+            None,
+            Some("/var/lib/guaca/terminals/a1"),
+            Surfaces::both(),
+            Modalities::seeing(),
+        );
+        assert!(
+            prompt.contains("Open terminal, in the Terminal section of your panel")
+                && prompt.contains("`gh auth login` there"),
+            "{prompt}"
+        );
     }
 
     #[test]

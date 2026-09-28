@@ -238,3 +238,24 @@ and `programs.rs` are the code.
   one: a zsh user's `PATH` is written in `.zshrc`, which `zsh -l -c` never
   reads, so a login-only probe is a fix that changes nothing and looks like it
   worked.
+- **The operator's shell is a pseudo-terminal, not `shell` with a box in front
+  of it.** Every sign-in an agent is refused for draws a menu or waits for a
+  code, and with pipes each one refuses or hangs. It ends with its socket and
+  is never kept for a page that might reconnect: a shell nobody is watching,
+  holding the host's sign-ins, is the thing it must not leave behind. The
+  agent's secrets are not in it, names and all, or `gh auth login` refuses to
+  store a sign-in over an inherited `GH_TOKEN`. `docs/CODING.md`.
+- **What the operator types is written on a task of its own.** A paste into a
+  program that is not reading fills the terminal, and a write awaited inside
+  the loop stops that loop reading the output the program is blocked writing.
+  Nothing short of a large paste shows it.
+- **Linux answers a read of a terminal nobody holds with EIO, not zero.** The
+  loop reads either as the shell gone. A job left in the background can hold
+  the terminal open forever, so what `bash` printed last is read until a pause,
+  not until the end.
+- **xterm measures a cell once, when it opens.** Opened before the mono face
+  has loaded, every glyph after it is drawn at the fallback's width and the
+  cursor walks away from the text, so `Console` waits for
+  `document.fonts.load` first. The fit reads the height of the box it is drawn
+  in, so that box carries no padding: under `border-box` the padding is rows
+  the fit hands over and nothing can draw in.

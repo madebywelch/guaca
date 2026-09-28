@@ -40,6 +40,20 @@ vi.mock("../lib/ipc", () => ({
   },
 }));
 
+// The shell draws on a canvas jsdom does not have, and `Console.test.tsx` is
+// where its wiring is checked. Here it is what the panel opens and closes.
+vi.mock("./Console", async () => {
+  const { createElement } = await import("react");
+  return {
+    Console: ({ agent, path, onClose }: { agent: AgentCard; path: string; onClose: () => void }) =>
+      createElement(
+        "div",
+        { role: "dialog", "aria-label": `${agent.name}'s terminal`, "data-path": path },
+        createElement("button", { type: "button", onClick: onClose }, "Done"),
+      ),
+  };
+});
+
 const PATH = "/var/lib/guaca/data/terminals/a1";
 
 const NO_KEY: GuacaKey = {
@@ -143,6 +157,43 @@ describe("TerminalPanel", () => {
     await waitFor(() => expect(giveAgentTerminal).toHaveBeenCalledWith("a1"));
   });
 
+  it("offers no shell to an agent with no terminal", () => {
+    render(<TerminalPanel agent={card(false)} />);
+    expect(screen.queryByRole("button", { name: "Open terminal" })).toBeNull();
+  });
+
+  it("offers no shell before it knows where the directory is", () => {
+    agentTerminal.mockReturnValue(new Promise(() => {}));
+    render(<TerminalPanel agent={card(true)} />);
+    const open = screen.getByRole("button", { name: "Open terminal" }) as HTMLButtonElement;
+    expect(open.disabled).toBe(true);
+  });
+
+  it("opens a shell in the agent's directory, and hands the keyboard back when it closes", async () => {
+    render(<TerminalPanel agent={card(true)} />);
+    await screen.findByText(PATH);
+    expect(screen.getByText(/a sign-in made in it, like/)).toBeTruthy();
+
+    const open = screen.getByRole("button", { name: "Open terminal" });
+    fireEvent.click(open);
+    const shell = screen.getByRole("dialog", { name: "Engineer's terminal" });
+    expect(shell.getAttribute("data-path")).toBe(PATH);
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(open);
+  });
+
+  it("closes the shell when the terminal is taken back", async () => {
+    const { rerender } = render(<TerminalPanel agent={card(true)} />);
+    await screen.findByText(PATH);
+    fireEvent.click(screen.getByRole("button", { name: "Open terminal" }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    rerender(<TerminalPanel agent={card(false)} />);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("says where the directory is, and that it is not a sandbox", async () => {
     render(<TerminalPanel agent={card(true)} />);
     expect(await screen.findByText(PATH)).toBeTruthy();
@@ -197,6 +248,7 @@ describe("TerminalPanel", () => {
     render(<TerminalPanel agent={card(true, "claude")} />);
 
     expect(await screen.findByText("claude login")).toBeTruthy();
+    expect(screen.getByText(/Open the terminal and run/)).toBeTruthy();
     expect(screen.getByText(/does not sign in the coding tool/)).toBeTruthy();
   });
 
