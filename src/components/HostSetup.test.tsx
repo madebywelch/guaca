@@ -223,6 +223,72 @@ describe("desktop host setup", () => {
     await waitFor(() => expect(restart).toHaveBeenCalled());
     expect(persist).toHaveBeenCalledWith({ origin: "https://vps.example", token: "private" });
   });
+  it("keeps the form for a saved remote host the workspace is not open on", async () => {
+    // Onboarding and a host turned away both reach here with a remote attached,
+    // and the operator needs the fields to correct it, not a claim it works.
+    current.mockReturnValue({ origin: "https://vps.example", token: "private" });
+    render(<HostChoice />);
+    expect(screen.queryByRole("button", { name: "Change host" })).toBeNull();
+    expect((screen.getByLabelText("Host address") as HTMLInputElement).value).toBe(
+      "https://vps.example",
+    );
+    expect(screen.getByLabelText("Access key")).toBeTruthy();
+  });
+  it("states the remote host in use instead of drawing an empty access key", () => {
+    current.mockReturnValue({ origin: "https://vps.example", token: "private" });
+    const { container } = render(<HostChoice inUse />);
+    expect(screen.getByRole("status").textContent).toBe(
+      "Connected to https://vps.example. Your access key is saved on this Mac.",
+    );
+    expect(screen.queryByLabelText("Access key")).toBeNull();
+    expect(screen.queryByLabelText("Host address")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Connect to host" })).toBeNull();
+    expect(container.innerHTML).not.toContain("private");
+  });
+  it("changes the host in use only once the new one accepts its key, and can go back", async () => {
+    current.mockReturnValue({ origin: "https://vps.example", token: "private" });
+    render(<HostChoice inUse />);
+    fireEvent.click(screen.getByRole("button", { name: "Change host" }));
+    const address = screen.getByLabelText("Host address") as HTMLInputElement;
+    expect(address.value).toBe("https://vps.example");
+    expect(document.activeElement).toBe(address);
+    expect((screen.getByLabelText("Access key") as HTMLInputElement).value).toBe("");
+    const connectButton = screen.getByRole("button", { name: "Connect to host" });
+    expect((connectButton as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.change(address, { target: { value: "https://other.example" } });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await screen.findByText(/Connected to https:\/\/vps\.example\./);
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Change host" })),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Change host" }));
+    expect((screen.getByLabelText("Host address") as HTMLInputElement).value).toBe(
+      "https://vps.example",
+    );
+    fireEvent.change(screen.getByLabelText("Host address"), {
+      target: { value: "https://other.example" },
+    });
+    fireEvent.change(screen.getByLabelText("Access key"), { target: { value: "other" } });
+    probe.mockRejectedValueOnce("Access key was not accepted.");
+    fireEvent.click(screen.getByRole("button", { name: "Connect to host" }));
+    await screen.findByRole("alert");
+    expect(persist).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Connected to/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Connect to host" }));
+    await waitFor(() => expect(restart).toHaveBeenCalled());
+    expect(persist).toHaveBeenCalledWith({ origin: "https://other.example", token: "other" });
+  });
+  it("does not offer a local host's loopback address as a remote host", async () => {
+    mode.mockReturnValue("existing");
+    current.mockReturnValue({ origin: "http://127.0.0.1:8788", token: "private" });
+    render(<HostChoice inUse />);
+    await screen.findByText("Docker is ready.");
+    fireEvent.click(screen.getByRole("button", { name: "Remote host" }));
+    expect(screen.queryByRole("button", { name: "Change host" })).toBeNull();
+    expect((screen.getByLabelText("Host address") as HTMLInputElement).value).toBe("");
+  });
   it("makes an update explicit and reports that jobs will be interrupted", async () => {
     status.mockResolvedValue({ state: "running", message: "Ready", updateAvailable: true });
     update.mockResolvedValue({ origin: "http://127.0.0.1:54321", token: "private" });

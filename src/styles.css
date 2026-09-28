@@ -7872,9 +7872,10 @@ input[type="file"]:disabled {
   line-height: var(--lead-ui);
 }
 
-/* What Docker says about this Mac, and only the actions that answer it. A
-   stack, not a row: it was drawn as a provider preset, which is one line, and
-   its five parts stood side by side in columns a word wide. */
+/* What Docker says about this Mac, or which remote host is in use, and only
+   the actions that answer it. A stack, not a row: it was drawn as a provider
+   preset, which is one line, and its five parts stood side by side in columns
+   a word wide. */
 .host-status {
   display: flex;
   flex-direction: column;

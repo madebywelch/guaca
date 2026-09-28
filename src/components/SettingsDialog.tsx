@@ -1711,7 +1711,7 @@ function WorkspacePane() {
   return (
     <div className="workspace-settings">
       <HostUpdatePanel />
-      <HostChoice showUpdate={false} />
+      <HostChoice showUpdate={false} inUse />
       <GroupTransfer />
       <LegacyGroups />
     </div>
