@@ -144,22 +144,26 @@ note "$(codesign -dv "$BUILT" 2>&1 | sed -n 's/^Signature=//p')"
 INSTALLED="$DEST/Guaca.app"
 EXEC="$INSTALLED/Contents/MacOS/guac"
 
-if pgrep -f "^$EXEC" >/dev/null 2>&1; then
+# -a on every pgrep and pkill: without it they leave out their own ancestors,
+# and when the app rebuilds itself (rebuild.rs) the app is one. The script
+# found nothing to quit, replaced the bundle under the live app, and `open`
+# brought that old process forward instead of the new build.
+if pgrep -a -f "^$EXEC" >/dev/null 2>&1; then
   step "Quitting the running Guaca"
 
   osascript -e "quit app id \"$BUNDLE_ID\"" >/dev/null 2>&1 || true
 
   waited=0
-  while pgrep -f "^$EXEC" >/dev/null 2>&1 && [ "$waited" -lt 40 ]; do
+  while pgrep -a -f "^$EXEC" >/dev/null 2>&1 && [ "$waited" -lt 40 ]; do
     sleep 0.25
     waited=$((waited + 1))
   done
 
   # A window with an unsaved dialog, an agent mid-turn, or an app that never
   # got the event. The turn is lost either way; a half-copied bundle is worse.
-  if pgrep -f "^$EXEC" >/dev/null 2>&1; then
+  if pgrep -a -f "^$EXEC" >/dev/null 2>&1; then
     note "it did not quit on its own; ending it"
-    pkill -f "^$EXEC" || true
+    pkill -a -f "^$EXEC" || true
     sleep 1
   fi
 fi
