@@ -17,8 +17,8 @@ describe("paper relief", () => {
   it("keeps each creature's layers on its own outline when a neighbor changes", () => {
     const crew = (avatar: string) => (
       <>
-        <AgentAvatar avatar={avatar} color="#7293aa" mood="working" />
-        <AgentAvatar avatar="drop" color="#a2ada1" mood="pleased" />
+        <AgentAvatar avatar={avatar} color="#7293aa" mood="working" cast="cut" />
+        <AgentAvatar avatar="drop" color="#a2ada1" mood="pleased" cast="cut" />
       </>
     );
     const { container, rerender } = render(crew("orb"));
@@ -43,7 +43,7 @@ describe("paper relief", () => {
 
   it("contains the relief without clipping a request for the operator", () => {
     const { container, rerender } = render(
-      <AgentAvatar avatar="slab" color="#7293aa" mood="blocked" look="down" />,
+      <AgentAvatar avatar="slab" color="#7293aa" mood="blocked" look="down" cast="cut" />,
     );
     const skin = container.querySelector(".avatar__skin");
     const clip = container.querySelector("clipPath");
@@ -55,7 +55,7 @@ describe("paper relief", () => {
     expect(container.querySelector(".avatar__halo")).not.toBeNull();
     expect(skin?.querySelector(".avatar__mark")).toBeNull();
 
-    rerender(<AgentAvatar avatar="slab" color="#7293aa" mood="paused" />);
+    rerender(<AgentAvatar avatar="slab" color="#7293aa" mood="paused" cast="cut" />);
     expect(container.querySelector(".avatar")?.getAttribute("data-mood")).toBe("paused");
     expect(container.querySelector(".avatar__halo")).toBeNull();
     expect(container.querySelector(".avatar__z")).not.toBeNull();
@@ -63,8 +63,10 @@ describe("paper relief", () => {
 });
 
 describe("the two casts", () => {
-  it("draws cut eyes by default: a white, a pupil and a lid line for each", () => {
-    const { container } = render(<AgentAvatar avatar="orb" color="#7293aa" mood="idle" />);
+  it("draws cut eyes: a white, a pupil and a lid line for each", () => {
+    const { container } = render(
+      <AgentAvatar avatar="orb" color="#7293aa" mood="idle" cast="cut" />,
+    );
     expect(container.querySelector('[data-cast="cut"]')).not.toBeNull();
     expect(container.querySelectorAll(".avatar__white")).toHaveLength(2);
     expect(container.querySelectorAll(".avatar__pupil")).toHaveLength(2);
@@ -81,7 +83,9 @@ describe("the two casts", () => {
   });
 
   it("hides the second eye of a one-eyed character rather than drawing it anywhere", () => {
-    const { container } = render(<AgentAvatar avatar="cell" color="#7293aa" mood="idle" />);
+    const { container } = render(
+      <AgentAvatar avatar="cell" color="#7293aa" mood="idle" cast="cut" />,
+    );
     const eyes = container.querySelectorAll(".avatar__eyes > g");
     expect(eyes).toHaveLength(2);
     expect(eyes[0]?.getAttribute("display")).toBeNull();
@@ -114,9 +118,9 @@ describe("the two casts", () => {
 
   // Outside the app there is no choice to read, and the default is the one an
   // operator who never opened Settings has.
-  it("draws the cut cast where nothing says otherwise", () => {
+  it("draws the drawn cast where nothing says otherwise", () => {
     const { container } = render(<AgentAvatar avatar="orb" color="#7293aa" />);
-    expect(container.querySelector(".avatar")?.getAttribute("data-cast")).toBe("cut");
+    expect(container.querySelector(".avatar")?.getAttribute("data-cast")).toBe("drawn");
   });
 
   // Nothing drawn outside the circle a crew is seated in, which the cut cast
@@ -143,7 +147,8 @@ describe("a directed gaze", () => {
   it("looks where it is told, across as well as up and down", () => {
     const at = (gaze: [number, number] | null) =>
       pupils(
-        render(<AgentAvatar avatar="slab" color="#7293aa" mood="idle" gaze={gaze} />).container,
+        render(<AgentAvatar avatar="slab" color="#7293aa" mood="idle" gaze={gaze} cast="cut" />)
+          .container,
       );
     const ahead = at(null);
     const right = at([0.36, 0]);
@@ -155,12 +160,22 @@ describe("a directed gaze", () => {
 
   it("gives way to an aimed look, which is for somebody", () => {
     const aimed = pupils(
-      render(<AgentAvatar avatar="slab" color="#7293aa" mood="idle" look="down" />).container,
-    );
-    const both = pupils(
-      render(<AgentAvatar avatar="slab" color="#7293aa" mood="idle" look="down" gaze={[0.36, 0]} />)
+      render(<AgentAvatar avatar="slab" color="#7293aa" mood="idle" look="down" cast="cut" />)
         .container,
     );
+    const both = pupils(
+      render(
+        <AgentAvatar
+          avatar="slab"
+          color="#7293aa"
+          mood="idle"
+          look="down"
+          gaze={[0.36, 0]}
+          cast="cut"
+        />,
+      ).container,
+    );
+    expect(aimed).toHaveLength(2);
     expect(both).toEqual(aimed);
   });
 });

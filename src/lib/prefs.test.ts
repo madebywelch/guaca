@@ -41,8 +41,8 @@ const KEY = "guac.prefs";
 /**
  * The defaults, written out independently of the module's own constant.
  *
- * 100, light and the cut cast are what the app has always drawn. Neutral grays,
- * amber, Inter and 16px reading are the first look a new operator gets. Every
+ * 100 and light are what the app has always drawn. Neutral grays, amber, Inter,
+ * 16px reading and the drawn cast are the first look a new operator gets. Every
  * notification is on because a blob that cannot be read must not be able to
  * switch interruptions off. Asserting against the module constant would pass
  * whatever it said.
@@ -56,7 +56,7 @@ const DEFAULTS: Prefs = {
   typeface: "inter",
   reading: "interface",
   readingSize: 16,
-  cast: "cut",
+  cast: "drawn",
   showReasoning: false,
   notify: {
     on: true,
@@ -235,7 +235,7 @@ describe("a preference that outlives the window", () => {
       typeface: "legible",
       reading: "serif",
       readingSize: 20,
-      cast: "drawn",
+      cast: "cut",
       showReasoning: true,
       notify: {
         on: false,
