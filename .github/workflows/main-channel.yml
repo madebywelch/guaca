@@ -140,7 +140,7 @@ jobs:
         run: |
           docker logout ghcr.io
           if ! docker buildx imagetools inspect "$IMAGE@${{ steps.image.outputs.digest }}" > /dev/null; then
-            echo "::error::$IMAGE is not public, so no box can pull it. Open https://github.com/users/madebywelch/packages/container/guaca%2Fguacad/settings, set the visibility to Public, then re-run this workflow."
+            echo "::error::$IMAGE is not public, so no box can pull it. Open https://github.com/madebywelch/guaca/pkgs/container/guaca%2Fguacad, choose Package settings, set the visibility to Public, then re-run this workflow."
             exit 1
           fi
 

@@ -302,8 +302,9 @@ arrive during a build collapse into one queued run of the newest. A finished
 build is published if it is newer than the published one, whether or not it is
 still the tip; a re-run of an older commit builds and publishes nothing. A
 build whose image cannot be pulled without credentials fails before the feed
-changes, with the setting to fix in the message. The first run fails that way
-until the package is made public once.
+changes, with the setting to fix in the message. The package is public: the
+first run created it from this public repository, and GitHub made it public
+with it, so the check is for a package somebody later makes private.
 
 ## Delivery and verification
 
