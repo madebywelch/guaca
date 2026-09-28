@@ -345,6 +345,15 @@ in the secrets manager. Losing it means every box needs one manual reinstall
 from a release signed with a new key. Rotating it means adding the new public
 key to `release-keys.pub`, releasing, and signing with the new key only from
 the release after that.
+
+Builds of `main` are signed with a different key, which CI holds as the
+`GUACA_MAIN_SIGNING_KEY` Actions secret and whose public half is
+`main-keys.pub`; the copy it was made from is
+`~/.config/guaca/main-signing-key.pem`. It never signs a release, and a test
+fails if the two key lists share a key. Rotating it follows the same rule: the
+new public key ships in `main-keys.pub` in one build of `main`, signed with the
+old key, before the secret changes. [The main channel](UPDATES.md#the-main-channel)
+has the rest.
 Do not publish the manifest until both artifacts have passed verification.
 The public stable feed is GitHub's
 `/madebywelch/guaca/releases/latest/download/guaca-release.json`; verify an

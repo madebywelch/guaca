@@ -6,7 +6,7 @@ import { COMMIT, VERSION } from "../lib/build";
 import { artifactUrl } from "../lib/files";
 import { api } from "../lib/ipc";
 import { quickTitle } from "../lib/quick";
-import { skew } from "../lib/releases";
+import { shortBuild, skew } from "../lib/releases";
 import { useStore } from "../lib/store";
 import { desktop } from "../lib/transport";
 import {
@@ -56,7 +56,12 @@ export function StatusBar({ onOpen, onMessage }: Props) {
   const drift = desktop
     ? skew({ version: VERSION, commit: COMMIT }, host?.health ?? null)
     : "unknown";
-  const hostLabel = version ? `Host ${version}` : "Host";
+  // One version on two builds reads as a match unless the label says which.
+  const hostLabel = !version
+    ? "Host"
+    : drift === "otherBuild"
+      ? `Host ${version} · ${shortBuild(host?.health?.build ?? "")}`
+      : `Host ${version}`;
   const hostTitle =
     drift === "hostBehind"
       ? `This host runs Guaca ${version} and this app is ${VERSION}. Open Workspace settings to update it.`

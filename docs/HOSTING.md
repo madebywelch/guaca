@@ -763,6 +763,19 @@ host's workspace token authorizes it. Why the updater is a second container,
 what it can be asked and why that list is short are in
 [Updates](UPDATES.md#updating-a-remote-or-externally-managed-host).
 
+A box that should follow `main` instead of releases is installed with
+`GUACA_CHANNEL=main`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/madebywelch/guaca/main/deploy/box/install.sh | sudo GUACA_CHANNEL=main sh
+```
+
+It is offered every build of `main` a few minutes after CI finishes it, named
+by commit (**Update this host to main at `c5bf1f7`**), and installs only builds
+signed with the key CI holds. Running the installer again with the other value
+moves a box between channels. The channel is the installer's to set and nothing
+else's: [The main channel](UPDATES.md#the-main-channel) says why.
+
 To move a Compose host onto the updater, keep its volume and adopt it:
 
 ```sh

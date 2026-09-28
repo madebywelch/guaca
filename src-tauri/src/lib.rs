@@ -25,6 +25,9 @@ pub mod oauth;
 pub mod plugins;
 pub mod programs;
 pub mod proxy;
+/// A source build rebuilding itself. Only a window has an app to replace.
+#[cfg(feature = "desktop")]
+pub mod rebuild;
 pub mod repo;
 pub mod runtime;
 pub mod secrets;

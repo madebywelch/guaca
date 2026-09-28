@@ -33,6 +33,16 @@ async fn connect_local_host(
     state.connect_existing(&name).await
 }
 #[tauri::command]
+async fn app_source(
+    state: tauri::State<'_, crate::rebuild::Rebuild>,
+) -> Result<crate::rebuild::Status, String> {
+    Ok(state.status().await)
+}
+#[tauri::command]
+async fn rebuild_app(state: tauri::State<'_, crate::rebuild::Rebuild>) -> Result<(), String> {
+    state.start()
+}
+#[tauri::command]
 async fn open_docker() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
@@ -104,6 +114,10 @@ pub fn run() {
             app.manage(
                 LocalHost::new(&app.config().identifier, crate::host::IMAGE).with_journal(journal),
             );
+            app.manage(crate::rebuild::Rebuild::new(
+                crate::rebuild::Origin::this_app(),
+                app.path().app_log_dir()?.join("rebuild.log"),
+            ));
             match Tray::install(app.handle()) {
                 Ok(tray) => {
                     app.manage(tray);
@@ -118,6 +132,8 @@ pub fn run() {
             local_host_update,
             local_hosts,
             connect_local_host,
+            app_source,
+            rebuild_app,
             open_docker,
             forward_files,
             download_file,

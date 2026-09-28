@@ -1,0 +1,6 @@
+# Ed25519 keys a build of main may be signed with: base64 of the raw 32-byte
+# public key, one per line. CI holds the private half, as the Actions secret
+# GUACA_MAIN_SIGNING_KEY; it is not a release key, and release-keys.pub must
+# never list it. A new key ships here one build before anything is signed
+# with it, because an updater only knows the keys it was built with.
+C50qFYjoIotpTSUyEMP55BdQBuTBYuATylX5tmIXb70=

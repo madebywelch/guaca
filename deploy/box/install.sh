@@ -14,7 +14,10 @@
 #                 (GUACA_TOKEN, GUACA_ORIGIN, ANTHROPIC_API_KEY, GH_TOKEN; the
 #                 full list is HOST_ENV in src-tauri/src/updater.rs).
 #                 Default /etc/guaca/guaca.env, if it exists. Keep it 0600.
-#   GUACA_IMAGE   the image to install. Default: the latest release.
+#   GUACA_CHANNEL release, the default, or main. A box on main is offered
+#                 every build of main a few minutes after it is pushed, and
+#                 installs only builds signed with the key CI holds.
+#   GUACA_IMAGE   the image to install. Default: the newest on the channel.
 #   GUACA_PORT    the loopback port. Default 8787.
 #   GUACA_VOLUME  the workspace volume. Default guacad-data. Name an existing
 #                 one to adopt its workspace, e.g. a Compose host's.
@@ -23,6 +26,7 @@ set -eu
 ENV_FILE="${GUACA_ENV:-/etc/guaca/guaca.env}"
 IMAGE="${GUACA_IMAGE:-}"
 PORT="${GUACA_PORT:-8787}"
+CHANNEL="${GUACA_CHANNEL:-release}"
 
 fail() {
   echo "$1" >&2
@@ -32,11 +36,25 @@ fail() {
 command -v docker >/dev/null 2>&1 || fail "Docker is not installed. Install Docker Engine, then run this again."
 docker info >/dev/null 2>&1 || fail "Docker is not running, or this user cannot use it. Start Docker, or run this with sudo."
 
+case "$CHANNEL" in
+  release | main) ;;
+  *) fail "GUACA_CHANNEL is '$CHANNEL'. Set it to release or main, or leave it out for release." ;;
+esac
+
+# The first image is taken on the channel's word; every later one is checked
+# against its signature by the updater, which is the part that has to hold.
 if [ -z "$IMAGE" ]; then
-  manifest=$(curl -fsSL https://github.com/madebywelch/guaca/releases/latest/download/guaca-release.json) ||
-    fail "Could not read the latest Guaca release. Check this box's connection, then run this again."
+  if [ "$CHANNEL" = main ]; then
+    feed=$(curl -fsSL https://github.com/madebywelch/guaca/releases/download/channel-main/guaca-main.json) ||
+      fail "Could not read the latest build of main. Check this box's connection, then run this again."
+    manifest=$(printf '%s' "$feed" | sed -n 's/.*"manifest": *"\([A-Za-z0-9+\/=]*\)".*/\1/p' | base64 -d 2>/dev/null) ||
+      fail "The latest build of main is unreadable. Try again after the next push."
+  else
+    manifest=$(curl -fsSL https://github.com/madebywelch/guaca/releases/latest/download/guaca-release.json) ||
+      fail "Could not read the latest Guaca release. Check this box's connection, then run this again."
+  fi
   IMAGE=$(printf '%s' "$manifest" | sed -n 's/.*"image": *"\(ghcr\.io\/madebywelch\/guaca\/guacad@sha256:[0-9a-f]\{64\}\)".*/\1/p')
-  [ -n "$IMAGE" ] || fail "The latest Guaca release names no host image. Try again later."
+  [ -n "$IMAGE" ] || fail "The latest Guaca $CHANNEL build names no host image. Try again later."
 fi
 
 # A container by either name that guaca-updater did not make is somebody
@@ -63,6 +81,9 @@ if [ -n "${GUACA_PORT:-}" ]; then
 fi
 if [ -n "${GUACA_VOLUME:-}" ]; then
   set -- "$@" --env GUACA_VOLUME="$GUACA_VOLUME"
+fi
+if [ -n "${GUACA_CHANNEL:-}" ]; then
+  set -- "$@" --env GUACA_CHANNEL="$CHANNEL"
 fi
 docker run "$@" "$IMAGE" install "$IMAGE"
 

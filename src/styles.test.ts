@@ -903,3 +903,25 @@ describe("native settings controls show that they are interactive", () => {
     ).toBe(true);
   });
 });
+
+describe("a host and this app on different builds", () => {
+  /**
+   * The two rows in Workspace settings carry the status bar's mark.
+   *
+   * Both rows read "0.2.0" for a week-old host and a new app, and nothing
+   * about them said they disagreed. The component sets the attribute; this is
+   * the half no DOM assertion sees, the rule that makes it visible.
+   */
+  it("marks the rows that name them the way it marks the status bar", () => {
+    const facts = document.createElement("dl");
+    facts.className = "host-update-facts";
+    const plain = facts.appendChild(document.createElement("dd"));
+    const marked = facts.appendChild(document.createElement("dd"));
+    marked.setAttribute("data-drift", "");
+    const label = nest("statusbar__host");
+    label.setAttribute("data-drift", "");
+    document.body.append(facts);
+    expect(getComputedStyle(marked).color).toBe(getComputedStyle(label).color);
+    expect(getComputedStyle(marked).color).not.toBe(getComputedStyle(plain).color);
+  });
+});

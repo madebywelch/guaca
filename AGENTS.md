@@ -167,6 +167,8 @@ src-tauri/src/
   updater.rs          guaca-updater: the container beside a box's host that
                       holds the Docker socket, so the host never does, and
                       what the host may ask it. Two things.
+  rebuild.rs          A source build of the app rebuilding itself from the
+                      checkout it came from, by running `install.sh`.
   menubar.rs          What the menu bar says. No Tauri, no menu, no drawing.
   tray.rs             Drawing that, and turning a click back into a decision.
   app.rs              Where Tauri is wired up. It and `tray.rs` are the only
@@ -245,6 +247,7 @@ repo: the frontend renders state and forwards intent.
 | Anything about the wire: protocol versions, the handshake, headers | *Two protocol eras* in `docs/PLUGINS.md`, then `mcp.rs`, whose era probe is the one thing no offline test of a single server can check |
 | Running Guaca somewhere other than the operator's machine: the daemon, the token, a browser as the client | `docs/HOSTING.md`, then `server/mod.rs` and `src/lib/transport.ts`, and run `tests/server.rs` under `--no-default-features --features server` |
 | Updating a host from the app: the button, the updater on a box, the signed manifest, the restore after a failed update | *Updating a remote or externally managed host* in `docs/UPDATES.md`, then `host.rs` and `updater.rs`, and run `scripts/image.sh` and `scripts/box.sh` |
+| A box that follows `main`, the image CI builds for every push, its feed and key, and the app rebuilding itself after the host | *The main channel* in `docs/UPDATES.md`, then `.github/workflows/main-channel.yml`, `updates::feed` and `rebuild.rs` |
 | What a hosted workspace refuses, and why each refusal is a fact about a machine rather than a missing feature | *Resources belong to the backend* in `docs/HOSTING.md`, then `domain/deployment.rs` and every reader of `capabilities` in `src/` |
 | A command that works at a desk and fails on a box, or a new command at all | *One list, three readers* in `docs/HOSTING.md`, then the `surface!` block in `src-tauri/src/ipc.rs` and `ipc.contract.test.ts` |
 | An invitation, a token that stopped working, the screen a browser sees before the app | *A browser is admitted by a token, and the token arrives by fragment* in `docs/HOSTING.md`, then `src/components/TokenEntry.tsx` and `adoptInvitation` |
