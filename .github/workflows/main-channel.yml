@@ -4,8 +4,8 @@
 # laptop is usually not, and compiling the daemon under emulation takes the
 # better part of an hour. Each architecture builds on a runner of its own kind.
 #
-# What a box reads is one file, guaca-main.json on the channel-main release:
-# the image's digest and the commit it came from, signed with the key in the
+# What a box reads is one file, guaca-main.json on the main-feed branch: the
+# image's digest and the commit it came from, signed with the key in the
 # GUACA_MAIN_SIGNING_KEY secret, whose public half is main-keys.pub. The
 # updater installs nothing that key did not sign, so pushing to this registry
 # is not by itself a way onto anybody's box. docs/UPDATES.md, *The main
@@ -150,12 +150,10 @@ jobs:
       # with the published build (a rewritten main) is published as the tip.
       - name: Check that this build is newer than the published one
         id: tip
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           published=""
-          if gh release download channel-main --pattern guaca-main.json --output "$RUNNER_TEMP/published.json" 2> /dev/null; then
-            published=$(jq -r .manifest "$RUNNER_TEMP/published.json" | base64 -d | jq -r .commit)
+          if git fetch --quiet origin main-feed 2> /dev/null; then
+            published=$(git show FETCH_HEAD:guaca-main.json | jq -r .manifest | base64 -d | jq -r .commit)
           fi
           tip=$(git ls-remote origin refs/heads/main | cut -f1)
           if [ "$published" = "$GITHUB_SHA" ]; then
@@ -180,15 +178,20 @@ jobs:
           fi
           node scripts/release-manifest.mjs --channel main "$RUNNER_TEMP/guaca-main.json"
 
+      # A branch, because this repository's releases are immutable and this
+      # file is replaced on every push. Appended to and never force-pushed, so
+      # a rule against rewriting branches never stands in its way.
       - name: Publish the feed
         if: steps.tip.outputs.current == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          if ! gh release view channel-main > /dev/null 2>&1; then
-            gh release create channel-main --prerelease --latest=false --target main \
-              --title "main" \
-              --notes "The newest build of main, for boxes installed with GUACA_CHANNEL=main. Replaced on every push; not a release."
+          if git fetch --quiet origin main-feed 2> /dev/null; then
+            git switch --quiet --force-create main-feed FETCH_HEAD
+          else
+            git switch --quiet --orphan main-feed
           fi
-          gh release upload channel-main "$RUNNER_TEMP/guaca-main.json" --clobber
+          cp "$RUNNER_TEMP/guaca-main.json" guaca-main.json
+          git add guaca-main.json
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit --quiet --message "main at $GITHUB_SHA"
+          git push --quiet origin main-feed
           echo "Published $GITHUB_SHA as ${{ steps.image.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"

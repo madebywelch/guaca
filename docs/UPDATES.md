@@ -248,13 +248,21 @@ takes most of an hour. A box should not either: it is the machine agents run
 on, and a release build of the daemon on every push would take its CPU and
 memory from them for minutes at a time.
 
-**What a box reads is one file.** `guaca-main.json` on the `channel-main`
-prerelease holds the manifest's exact bytes and the signature over them.
-Releases publish the two as separate files because a release is immutable and
-its signature has a stable address per version; this file is replaced on every
-push, and two files replaced one after the other can be read one from each, so
-a correct build would be refused as unsigned for a moment after every push. A
-prerelease is never `latest`, so a release box never reads it.
+**What a box reads is one file.** `guaca-main.json` on the `main-feed` branch,
+read from `raw.githubusercontent.com`, holds the manifest's exact bytes and the
+signature over them. Releases publish the two as separate files because a
+release is immutable and its signature has a stable address per version; this
+file is replaced on every push, and two files replaced one after the other can
+be read one from each, so a correct build would be refused as unsigned for a
+moment after every push.
+
+It is a branch and not a release because this repository's releases are
+immutable: GitHub refuses to replace a published release's files, which is
+what protects the signed manifest and the disk image of a real release, and
+the first publish failed on exactly that (`Cannot upload assets to an
+immutable release`). CI appends a commit to the branch for every build it
+publishes and never force-pushes it. The raw address is cached for about five minutes, which the
+checker's own cache on this channel already is.
 
 **It is signed with a key of its own.** CI holds the private half as the
 `GUACA_MAIN_SIGNING_KEY` secret; `main-keys.pub` is the public half. It is not

@@ -15,9 +15,10 @@ pub const KEYS: &str = include_str!("../../release-keys.pub");
 
 /// The newest build of `main`, as CI published it: one file carrying the
 /// manifest and its signature, because the file is replaced on every push
-/// and two files replaced one after the other can be read one from each.
+/// and two files replaced one after the other can be read one from each. On
+/// a branch, because this repository's releases are immutable.
 pub const MAIN_FEED: &str =
-    "https://github.com/madebywelch/guaca/releases/download/channel-main/guaca-main.json";
+    "https://raw.githubusercontent.com/madebywelch/guaca/refs/heads/main-feed/guaca-main.json";
 
 /// The keys a build of `main` may be signed with. Not the release keys: CI
 /// holds this one, and a leak of it reaches only the boxes that chose `main`.

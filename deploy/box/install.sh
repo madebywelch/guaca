@@ -45,7 +45,7 @@ esac
 # against its signature by the updater, which is the part that has to hold.
 if [ -z "$IMAGE" ]; then
   if [ "$CHANNEL" = main ]; then
-    feed=$(curl -fsSL https://github.com/madebywelch/guaca/releases/download/channel-main/guaca-main.json) ||
+    feed=$(curl -fsSL https://raw.githubusercontent.com/madebywelch/guaca/refs/heads/main-feed/guaca-main.json) ||
       fail "Could not read the latest build of main. Check this box's connection, then run this again."
     manifest=$(printf '%s' "$feed" | sed -n 's/.*"manifest": *"\([A-Za-z0-9+\/=]*\)".*/\1/p' | base64 -d 2>/dev/null) ||
       fail "The latest build of main is unreadable. Try again after the next push."

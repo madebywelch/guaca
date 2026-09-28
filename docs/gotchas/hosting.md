@@ -229,6 +229,11 @@ The daemon, a browser as a client, and the boot both hosts share.
   is replaced on every push, so a manifest and a signature read as a pair could
   come from two builds and a correct build would be refused as unsigned. The
   envelope is what `feed` reads; do not split it to match the release layout.
+- **Main's feed is a branch because releases here are immutable.** A rolling
+  prerelease was the first design, and GitHub answered the first upload with
+  `Cannot upload assets to an immutable release`. Turning immutability off to
+  fix that would unprotect every real release's signed manifest. The feed is
+  `main-feed`, appended to by CI and never force-pushed.
 - **The key CI holds is not a release key.** `main-keys.pub` and
   `release-keys.pub` are separate lists and `updates.rs` fails the build if
   they share a key. Adding the main key to the release list would let anyone
