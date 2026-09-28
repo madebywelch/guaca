@@ -7,13 +7,13 @@
 //! of things it can do, drawn by the app's own code, so an agent that adds one
 //! has chosen a label and a destination and nothing else.
 //!
-//! One of those destinations is not harmless, and it decides the rest of the
-//! design. A button that sends a message sends it as the operator: the text an
-//! agent wrote arrives in another agent's channel as `[OPERATOR]`, on a click
-//! the operator makes without reading it again. So an agent never puts a
-//! button there on its own. Its request is a settings change, approved on the
-//! desk with the whole text shown, and the one click after that is the
-//! operator's own words because they read them once and said yes.
+//! One of those destinations is not harmless, and it decides who may add one. A
+//! button that sends a message sends it as the operator, on a click made without
+//! reading the text again. So a quick action is the operator's own and only
+//! theirs. Agents used to ask for them through `settings`; what an agent puts on
+//! the bar now is a widget (`domain::widget`), a page its crew keeps, whose
+//! clicks open the page rather than speak for anybody. A button an agent asked
+//! for before then is still drawn, and still says it was.
 
 use serde::{Deserialize, Serialize};
 
@@ -83,7 +83,7 @@ pub enum QuickError {
         "the status bar already holds {MAX_ACTIONS} quick actions. Remove one before adding another"
     )]
     Full,
-    #[error("no quick action has the id `{0}`. `read` lists them with their ids")]
+    #[error("no quick action has the id `{0}`; another window may already have removed it")]
     Unknown(String),
 }
 
@@ -125,8 +125,8 @@ impl QuickAction {
         Ok(Self { id, label, does, added_by: added_by.trim().to_string() })
     }
 
-    /// What it does, in one line, with names the caller looked up. The words
-    /// the operator approves are these, so the message is quoted whole.
+    /// What it does, in one line, with names the caller looked up. What an
+    /// agent reading the settings is told, so the message is quoted whole.
     pub fn describe(&self, agent: impl Fn(AgentId) -> String) -> String {
         match &self.does {
             Does::Message { agent_id, text } => {
@@ -214,7 +214,7 @@ mod tests {
     }
 
     #[test]
-    fn what_the_operator_approves_quotes_the_whole_message() {
+    fn what_an_agent_is_told_quotes_the_whole_message() {
         let made = QuickAction::new("Brief", message("Give me the brief."), "Pip").unwrap();
         let said = made.describe(|_| "Scout".into());
         assert_eq!(said, "\u{201c}Brief\u{201d} sends Scout: \u{201c}Give me the brief.\u{201d}");

@@ -36,6 +36,7 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/reasoning.ts    A turn's own thinking: how much is held, what is drawn.
   lib/calendar.ts     What a calendar shows, and in what order. No DOM.
   lib/artifacts.ts    What the Artifacts dialog says about a kept page. No DOM.
+  lib/widget.ts       What a condensed view is framed in on the bar. No DOM.
   lib/cafeteria.ts    Preset agents, waiting to be hired. Content, not runtime.
   lib/compost.ts      Where a deleted agent waits, and how long it has left.
   lib/roles.ts        What an agent is for, in OpenRouter's twelve words.
@@ -72,8 +73,10 @@ src-tauri/src/
                       three places one lives, and who may write each.
     view.rs           What the operator is looking at, as a sentence an agent
                       can read. Reported by the focused window, kept in memory.
-    quick.rs          A button on the status bar: a closed set of things it
-                      can do, and why an agent's needs the operator's yes.
+    quick.rs          The operator's own button on the status bar: a closed
+                      set of things it can do, and why only they add one.
+    widget.rs         A kept page pinned to the status bar: where, how wide,
+                      how often its reads run, and why it may be code.
     occasion.rs       A date the crew is answerable for. It fires nothing, which
                       is the whole of what separates it from a routine.
     artifact.rs       A page a crew keeps: who owns it, who may edit it, and
@@ -192,7 +195,7 @@ repo: the frontend renders state and forwards intent.
 | A sign-in that stopped working, refreshing, expiry, signing out | *A token's `exp` is a floor on its life, not a ceiling* in `docs/ARCHITECTURE.md`, then `Subscription::renew` and the 401 path in `codex::stream` |
 | What a group decides for itself: provider, models, timeout, limits | *A group chooses its own provider*, *Nothing about who pays is inferred* and *A run is measured against the limits of the group it happens in*, then `domain/group.rs` |
 | Stopping a conversation: what a stop marks, wakes, and must never release | *A stop marks the run and releases nothing*, then `Runtime::stop_run` |
-| The status bar, quick actions, a button an agent asked for | *The status bar is data, and an agent's button is the operator's yes* in `docs/WORKSPACE.md`, then `domain/quick.rs` and `src/components/StatusBar.tsx` |
+| The status bar, a page pinned to it, its condensed view, quick actions | *The status bar holds pages the crews keep, and a click on one is the bar's* in `docs/WORKSPACE.md`, then `domain/widget.rs`, `src/lib/widget.ts` and `src/components/StatusBar.tsx`, and `widget.test.ts`, which holds the widths the `artifact` tool states |
 | An agent reading the settings or asking to change them, the operator's current view | *An agent can read the settings, and what the operator is looking at* in `docs/WORKSPACE.md` and *A settings change is a permission with its own diff* in `docs/ATTENTION.md`, then `config::agent_patch` and `Runtime::use_settings` |
 | Permission prompts, parked turns, acting in the operator's name | *A protected action parks the turn that asked for it* |
 | An agent writing code at all: the terminal, the grant, the `code` tool, the job | `docs/CODING.md`, then `domain/terminal.rs` and `Runtime::start_job` |

@@ -1,9 +1,10 @@
 /**
  * The status bar's quick actions, described for a person.
  *
- * The same sentence the host puts on the approval card when an agent asks for
- * one (`QuickAction::describe`), so the tooltip on a button and the card the
- * operator said yes to read alike.
+ * The same sentence the host tells an agent reading the settings
+ * (`QuickAction::describe`), so the tooltip on a button and what an agent says
+ * about it read alike. A button an agent asked for, from before agents pinned
+ * pages instead, still says who asked.
  */
 import type { AgentId, QuickAction } from "./types";
 

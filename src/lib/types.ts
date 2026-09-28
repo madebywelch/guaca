@@ -1032,6 +1032,24 @@ export interface Settings {
   subscriptionModels: string[];
   /** The status bar's buttons. Absent from a host older than them. */
   quickActions?: QuickAction[];
+  /** Kept pages pinned to the status bar. Absent from a host older than them. */
+  widgets?: Widget[];
+}
+
+/** How much of the status bar a pinned page takes. */
+export type WidgetWidth = "narrow" | "wide";
+
+/**
+ * A kept page on the status bar, drawn from its condensed view. An agent's is
+ * only there because the operator approved it, reads included.
+ */
+export interface Widget {
+  artifactId: ArtifactId;
+  width: WidgetWidth;
+  /** Minutes between the page's reads while it is on the bar. */
+  everyMinutes: number;
+  /** "the operator", or the agent that asked for it. */
+  addedBy: string;
 }
 
 /** Somewhere a quick action can open. */
@@ -1452,6 +1470,18 @@ export interface Artifact {
   sources: ArtifactSource[];
   /** Whether the operator allowed exactly these reads. Never true for none. */
   sourcesAllowed: boolean;
+  /**
+   * Whether the current version has a condensed view: the one-row document the
+   * status bar draws, and so what a page needs before it can be pinned.
+   */
+  condensed: boolean;
+}
+
+/** What the status bar draws for a pinned page. */
+export interface CondensedView {
+  artifact: Artifact;
+  /** `null` for a version without one, which a restore can put back. */
+  page: string | null;
 }
 
 /**

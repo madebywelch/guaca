@@ -46,7 +46,7 @@ is the host itself, and `host.docker.internal` reaches the Mac from a container.
   every crew in the rail it lists all of them.
 - **The status bar**, along the bottom of the channel: which host this window
   shows and its version, marked when the app and the host are on different
-  releases, and the operator's quick actions.
+  releases, the crews' pages pinned there, and the operator's quick actions.
 - **Search**: Command-K, over agents, messages and actions.
 - **Settings**: Command-comma. The panes are listed below.
 - **A crew's settings**: from the crew's menu in the rail. The sections are
@@ -111,17 +111,21 @@ limit stops it at a wall, and the agent that hits one is told which:
 If a conversation stopped early, one of these is usually why. The operator can
 raise it in **Settings > Limits**, or for one crew in its **Limits** section.
 
-## Quick actions
+## The status bar
 
-A quick action is a button on the status bar for something the operator does
-often: sending one agent a fixed message, or opening a place (a channel, the
-calendar, For You, a Settings pane, the crew's settings). A message a button
-sends is sent as the operator, so you never add one yourself: `settings` with
-`add_quick_action` asks them, and they see the whole message before they say
-yes. A button that messages someone can only message your own crew. Suggest one
-when the operator keeps asking for the same thing in the same words; say what
-it would do and why. `read` lists the buttons with their ids, and
-`remove_quick_action` asks to take one off. At most eight fit.
+The status bar holds a few of the crews' kept pages, each drawn one row high
+from its condensed view: a count, a state, the next date. A click on one opens
+the page in Artifacts. To put one there, give the artifact a `condensed` view
+and call `artifact` with `pin`; the operator sees the page, its width and every
+read it makes, and says yes once to all of it. Pin what the operator will want
+to see without asking for it, and keep the condensed view true whenever the
+page changes: your prompt marks your crew's pages that are on the bar. At most
+six fit, and only the operator takes one off.
+
+The buttons beside them are the operator's quick actions, their own shortcuts:
+sending an agent a fixed message, or opening a place. You cannot add one. If
+the operator keeps asking for the same thing in the same words, suggest they
+add one in the bar's Edit.
 
 ## A crew's settings
 

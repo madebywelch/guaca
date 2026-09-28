@@ -571,12 +571,18 @@ input[type="file"]::file-selector-button {
 /* ==========================================================================
    The status bar
 
-   The last row of the reading column: the host this window shows, and the
-   operator's quick actions. `components/StatusBar.tsx` says why a button is
-   data rather than code, and why an agent's needs the operator's yes.
+   The last row of the reading column: the host this window shows, the pages
+   pinned to it, and the operator's quick actions. `components/StatusBar.tsx`
+   says why a pinned page can be code and a click on it is still the bar's.
    ========================================================================== */
 
 .statusbar {
+  /* The two widths a condensed view is written for, and the one height. The
+     `artifact` tool tells agents these in pixels at scale 100, so a change
+     here is a change to that sentence too. */
+  --widget-narrow: 7.5rem;
+  --widget-wide: 15rem;
+  --widget-h: var(--control-h-sm);
   position: relative;
   flex: none;
   display: flex;
@@ -616,6 +622,63 @@ input[type="file"]::file-selector-button {
    color: it is the one that breaks commands. */
 .statusbar__host[data-drift] {
   color: var(--system);
+}
+
+/* Scrolls rather than wraps: a second row would take a line from the channel
+   above, which is what the operator was reading. */
+.statusbar__widgets {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.widget {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  width: var(--widget-narrow);
+  height: var(--widget-h);
+}
+
+.widget[data-width="wide"] {
+  width: var(--widget-wide);
+}
+
+/* The page's own pixels, and nothing else: the button over it takes every
+   click, and the frame is transparent onto the bar's ground. */
+.widget__frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  pointer-events: none;
+}
+
+.widget__title {
+  overflow: hidden;
+  padding: 0 var(--space-2);
+  color: var(--text);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.widget__open {
+  position: absolute;
+  inset: 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  cursor: pointer;
+  transition: border-color var(--tempo-tap) var(--ease);
+}
+
+.widget__open:hover {
+  border-color: var(--edge-control);
 }
 
 .statusbar__actions {
@@ -7279,6 +7342,11 @@ input[type="file"]:disabled {
    rare act, and a full-width field reads as the thing this view is for. */
 .artifacts__owner .input {
   width: auto;
+}
+
+/* The same small field, in the foot beside the controls it sits with. */
+.artifacts__pin {
+  margin-bottom: 0;
 }
 
 /* A record, read line by line when something needs explaining. Small, and

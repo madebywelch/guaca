@@ -77,6 +77,7 @@ describe("the line under a name", () => {
     updatedAt: new Date(2026, 8, 27, 14, 5).getTime(),
     sources: [],
     sourcesAllowed: false,
+    condensed: false,
   };
   const now = new Date(2026, 8, 27, 18, 0).getTime();
 
@@ -122,6 +123,7 @@ describe("what a page is handed", () => {
       updatedAt: 0,
       sources: [],
       sourcesAllowed: false,
+      condensed: false,
     };
     const text = sentMessage(page, '{"snippet":"```"}');
     expect(text).toContain('````json\n{"snippet":"```"}\n````');

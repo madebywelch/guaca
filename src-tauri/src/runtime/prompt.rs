@@ -1271,6 +1271,7 @@ pub fn notebook_section(entries: &[crate::notebook::Entry]) -> String {
 /// thing nobody should send it a message to say.
 pub fn artifacts_section(
     kept: &[crate::domain::artifact::Artifact],
+    pinned: &[crate::domain::ids::ArtifactId],
     reader: AgentId,
     now: i64,
 ) -> String {
@@ -1286,7 +1287,7 @@ pub fn artifacts_section(
          marked yours are yours to keep current.\n",
     );
     for one in kept.iter().take(LISTED) {
-        out.push_str(&one.index_line(reader, now));
+        out.push_str(&one.index_line(reader, now, pinned.contains(&one.id)));
         out.push('\n');
     }
     if kept.len() > LISTED {
@@ -1302,11 +1303,12 @@ pub fn artifacts_section(
 pub fn add_artifacts(
     messages: &mut [ChatMessage],
     kept: &[crate::domain::artifact::Artifact],
+    pinned: &[crate::domain::ids::ArtifactId],
     reader: AgentId,
     now: i64,
 ) {
     if let Some(ChatMessage::System { content }) = messages.first_mut() {
-        content.push_str(&artifacts_section(kept, reader, now));
+        content.push_str(&artifacts_section(kept, pinned, reader, now));
     }
 }
 
@@ -3555,6 +3557,7 @@ mod tests {
             updated_at: 0,
             sources: vec![],
             sources_allowed: false,
+            condensed: false,
         }
     }
 
@@ -3562,7 +3565,7 @@ mod tests {
     fn a_crew_that_keeps_no_artifacts_gets_no_heading() {
         // The tool description already says the shelf exists. A heading over
         // nothing costs every turn of every agent and reads as a broken feature.
-        assert_eq!(artifacts_section(&[], AgentId::new(), 0), "");
+        assert_eq!(artifacts_section(&[], &[], AgentId::new(), 0), "");
     }
 
     #[test]
@@ -3571,13 +3574,33 @@ mod tests {
         // an editor not to send it a message.
         let rae = AgentId::new();
         let milo = AgentId::new();
-        let section = artifacts_section(&[kept("Pipeline", Some((rae, "Rae")), milo)], rae, 0);
+        let section = artifacts_section(&[kept("Pipeline", Some((rae, "Rae")), milo)], &[], rae, 0);
         assert!(section.contains("## Your crew's artifacts"), "{section}");
         assert!(section.contains("\"Pipeline\" v3, yours, updated just now by Milo"), "{section}");
         assert!(section.contains("`update` it rather than making another"), "{section}");
 
-        let theirs = artifacts_section(&[kept("Pipeline", Some((rae, "Rae")), milo)], milo, 0);
+        let theirs = artifacts_section(&[kept("Pipeline", Some((rae, "Rae")), milo)], &[], milo, 0);
         assert!(theirs.contains("owned by Rae, updated just now by you"), "{theirs}");
+    }
+
+    #[test]
+    fn a_page_on_the_status_bar_says_so_to_its_crew() {
+        // The condensed view is what the operator sees all day. An owner that
+        // does not know its page is up there changes the board and leaves the
+        // number on the bar saying last week's.
+        let rae = AgentId::new();
+        let (up, down) = (kept("Pipeline", Some((rae, "Rae")), rae), kept("Plan", None, rae));
+        let section = artifacts_section(&[up.clone(), down], &[up.id], rae, 0);
+        assert!(
+            section.contains(
+                "\"Pipeline\" v3, yours, updated just now by you, on the operator's status bar"
+            ),
+            "{section}"
+        );
+        assert!(
+            !section.contains("\"Plan\" v3, owned by nobody, updated just now by you, on"),
+            "{section}"
+        );
     }
 
     #[test]
@@ -3586,7 +3609,7 @@ mod tests {
         let editor = AgentId::new();
         let many: Vec<_> =
             (0..LISTED + 3).map(|n| kept(&format!("Page {n}"), None, editor)).collect();
-        let section = artifacts_section(&many, AgentId::new(), 0);
+        let section = artifacts_section(&many, &[], AgentId::new(), 0);
         assert!(section.contains("(3 more; `artifact` with `list`"), "{section}");
         assert!(!section.contains(&format!("Page {}", LISTED)), "{section}");
     }

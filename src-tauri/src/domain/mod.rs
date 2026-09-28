@@ -22,6 +22,7 @@ pub mod skill;
 pub mod terminal;
 pub mod usage;
 pub mod view;
+pub mod widget;
 pub mod worknote;
 
 use std::sync::atomic::{AtomicI64, Ordering};

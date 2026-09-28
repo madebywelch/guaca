@@ -795,6 +795,7 @@ fn build(
         kernel,
         webhook: Default::default(),
         quick_actions: Vec::new(),
+        widgets: Vec::new(),
     };
 
     let sink = RecordingSink::new();

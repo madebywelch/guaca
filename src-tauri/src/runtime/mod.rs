@@ -272,6 +272,46 @@ enum Kept {
     Refused(String),
 }
 
+/// An `artifact` call's answer, as the model reads it and as its record keeps it.
+/// The chip says the first line; a page read in full with `view` is the model's
+/// to read, not the transcript's to keep twice.
+fn kept_part(
+    kept: Result<Kept, crate::db::StoreError>,
+    arguments: serde_json::Value,
+) -> (String, Part) {
+    match kept {
+        Ok(Kept::Said(said)) => {
+            let summary = said.lines().next().unwrap_or_default().to_string();
+            (said, Part::tool_call(tools::ARTIFACT, arguments, ToolOutcome::Ok { summary }))
+        }
+        Ok(Kept::Made(said, made)) => {
+            let summary = said.lines().next().unwrap_or_default().to_string();
+            let outcome = ToolOutcome::Ok { summary };
+            (said, Part::tool_call_making(tools::ARTIFACT, arguments, outcome, made))
+        }
+        Ok(Kept::Refused(reason)) => (
+            format!("Refused: {reason}"),
+            Part::tool_call(tools::ARTIFACT, arguments, ToolOutcome::Refused { reason }),
+        ),
+        Err(err) => (
+            format!("Error: {err}"),
+            Part::tool_call(
+                tools::ARTIFACT,
+                arguments,
+                ToolOutcome::Failed { error: err.to_string() },
+            ),
+        ),
+    }
+}
+
+/// What an agent is told about an artifact id its crew does not have.
+fn no_such_artifact(id: &str) -> Kept {
+    Kept::Refused(format!(
+        "your crew has no artifact with the id {id}. `list` shows every one it does have, with \
+         its id; `create` is how a new one starts."
+    ))
+}
+
 /// The placeholder the UI draws while a model call is in flight.
 ///
 /// Owns its own id because a retry has to be able to throw one away: text that
@@ -374,8 +414,6 @@ struct Proposal {
 /// What an allowed [`Proposal`] does to the settings.
 enum SettingsEdit {
     Patch(crate::config::SettingsPatch),
-    AddQuick(crate::domain::quick::QuickAction),
-    RemoveQuick(String),
 }
 
 /// What the operator said, from the point of view of the parked turn.
@@ -4048,7 +4086,10 @@ impl Runtime {
         // edited a moment ago is in this one's list, and that list is how an
         // owner learns somebody else changed its page without being messaged.
         match self.inner.store.artifacts(Some(card.group_id), LISTED_ARTIFACTS) {
-            Ok(kept) => prompt::add_artifacts(&mut messages, &kept, card.id, now_ms()),
+            Ok(kept) => {
+                let pinned: Vec<_> = self.config().widgets.iter().map(|w| w.artifact_id).collect();
+                prompt::add_artifacts(&mut messages, &kept, &pinned, card.id, now_ms())
+            }
             Err(err) => tracing::warn!(%err, "could not read the crew's artifacts for this prompt"),
         }
         match self.inner.store.decisions(Some(card.id)) {
@@ -5101,6 +5142,17 @@ impl Runtime {
             return (rendered, part, None);
         }
 
+        // The one `artifact` action that parks: the bar is the operator's, so a
+        // page goes on it only once they have said yes.
+        if let ToolInvocation::Artifact {
+            action: tools::ArtifactAction::Pin { id, width, every_minutes },
+        } = invocation
+        {
+            let pinned = self.pin_widget(card, run_id, &id, width.as_deref(), every_minutes).await;
+            let (rendered, part) = kept_part(pinned, arguments);
+            return (rendered, part, None);
+        }
+
         if let ToolInvocation::AskOperator { question, options } = invocation {
             let (rendered, part) =
                 self.put_to_operator(card, run_id, question, options, arguments).await;
@@ -5417,31 +5469,9 @@ impl Runtime {
                 (rendered, Part::tool_call(tools::CALENDAR, arguments, outcome))
             }
 
-            ToolInvocation::Artifact { action } => match self.keep_artifact(card, &action) {
-                // The chip says the first line; a page read in full with `view`
-                // is the model's to read, not the transcript's to keep twice.
-                Ok(Kept::Said(said)) => {
-                    let summary = said.lines().next().unwrap_or_default().to_string();
-                    (said, Part::tool_call(tools::ARTIFACT, arguments, ToolOutcome::Ok { summary }))
-                }
-                Ok(Kept::Made(said, made)) => {
-                    let summary = said.lines().next().unwrap_or_default().to_string();
-                    let outcome = ToolOutcome::Ok { summary };
-                    (said, Part::tool_call_making(tools::ARTIFACT, arguments, outcome, made))
-                }
-                Ok(Kept::Refused(reason)) => (
-                    format!("Refused: {reason}"),
-                    Part::tool_call(tools::ARTIFACT, arguments, ToolOutcome::Refused { reason }),
-                ),
-                Err(err) => (
-                    format!("Error: {err}"),
-                    Part::tool_call(
-                        tools::ARTIFACT,
-                        arguments,
-                        ToolOutcome::Failed { error: err.to_string() },
-                    ),
-                ),
-            },
+            ToolInvocation::Artifact { action } => {
+                kept_part(self.keep_artifact(card, &action), arguments)
+            }
 
             ToolInvocation::Browse { action, args } => {
                 // The one place wording is not enough. Reading a page is free;
@@ -7342,23 +7372,6 @@ impl Runtime {
                 return answer(rendered, ToolOutcome::Ok { summary }, arguments);
             }
             tools::SettingsAction::Update { changes } => self.propose_update(&changes),
-            tools::SettingsAction::AddQuickAction { label, send, to, open, agent, section } => {
-                self.propose_quick_action(card, &label, send, to, open, agent, section)
-            }
-            tools::SettingsAction::RemoveQuickAction { id } => {
-                let config = self.config();
-                match config.quick_actions.iter().find(|action| action.id == id) {
-                    Some(found) => {
-                        let said = found.describe(|agent| self.agent_name(agent));
-                        Ok(Some(Proposal {
-                            detail: vec![DetailField::new("Status bar", format!("remove {said}"))],
-                            said: format!("removed {said} from the status bar"),
-                            apply: SettingsEdit::RemoveQuick(id),
-                        }))
-                    }
-                    None => Err(format!("no quick action has the id `{id}`; `read` lists them")),
-                }
-            }
         };
         let proposal = match proposal {
             Ok(Some(proposal)) => proposal,
@@ -7388,13 +7401,6 @@ impl Runtime {
                 // agent asked for.
                 let applied = self.change_config(|config| match proposal.apply {
                     SettingsEdit::Patch(patch) => config.apply(patch),
-                    SettingsEdit::AddQuick(action) => {
-                        Ok(crate::domain::quick::add(&mut config.quick_actions, action)?)
-                    }
-                    SettingsEdit::RemoveQuick(id) => {
-                        crate::domain::quick::remove(&mut config.quick_actions, &id)?;
-                        Ok(())
-                    }
                 });
                 match applied {
                     Ok(_) => {
@@ -7468,69 +7474,6 @@ impl Runtime {
                 .collect(),
             said: format!("changed {said}"),
             apply: SettingsEdit::Patch(patch),
-        }))
-    }
-
-    /// A button for the status bar, with names resolved against the asking
-    /// agent's own crew: a button is the operator's voice, and one that spoke
-    /// to another crew would carry an agent's words across the wall.
-    #[allow(clippy::too_many_arguments)]
-    fn propose_quick_action(
-        &self,
-        card: &AgentCard,
-        label: &str,
-        send: Option<String>,
-        to: Option<String>,
-        open: Option<String>,
-        agent: Option<String>,
-        section: Option<String>,
-    ) -> Result<Option<Proposal>, String> {
-        use crate::domain::quick::{Does, Place, QuickAction, MAX_ACTIONS};
-        let crew: Vec<AgentCard> = self
-            .inner
-            .store
-            .list_agents()
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|a| a.group_id == card.group_id && a.lifecycle != Lifecycle::Terminated)
-            .collect();
-        let named = |name: Option<String>, what: &str| -> Result<AgentId, String> {
-            let name =
-                name.ok_or_else(|| format!("{what} needs the name of an agent in your crew"))?;
-            crew.iter().find(|a| a.name.eq_ignore_ascii_case(name.trim())).map(|a| a.id).ok_or_else(
-                || format!("nobody in your crew is called {name}; `directory` lists them"),
-            )
-        };
-        let does = match (send, open.as_deref()) {
-            (Some(text), _) => Does::Message { agent_id: named(to, "`send`")?, text },
-            (None, Some("channel")) => {
-                Does::Open { place: Place::Channel { agent_id: named(agent, "`open: channel`")? } }
-            }
-            (None, Some("calendar")) => Does::Open { place: Place::Calendar },
-            (None, Some("for_you")) => Does::Open { place: Place::ForYou },
-            (None, Some("settings")) => Does::Open { place: Place::Settings { section } },
-            (None, Some("crew_settings")) => {
-                Does::Open { place: Place::CrewSettings { group_id: card.group_id } }
-            }
-            (None, other) => {
-                return Err(format!(
-                    "`open` must be channel, calendar, for_you, settings or crew_settings, not {}",
-                    other.unwrap_or("nothing")
-                ))
-            }
-        };
-        let action = QuickAction::new(label, does, &card.name).map_err(|err| err.to_string())?;
-        if self.config().quick_actions.len() >= MAX_ACTIONS {
-            return Err(crate::domain::quick::QuickError::Full.to_string());
-        }
-        let said = action.describe(|agent| self.agent_name(agent));
-        Ok(Some(Proposal {
-            detail: vec![
-                DetailField::new("Status bar", format!("add {said}")),
-                DetailField::new("Asked for by", &card.name),
-            ],
-            said: format!("added {said} to the status bar"),
-            apply: SettingsEdit::AddQuick(action),
         }))
     }
 
@@ -7935,13 +7878,8 @@ impl Runtime {
             };
             self.inner.store.artifact(parsed, card.group_id)
         };
-        let missing = |id: &str| {
-            Kept::Refused(format!(
-                "your crew has no artifact with the id {id}. `list` shows every one it does \
-                 have, with its id; `create` is how a new one starts."
-            ))
-        };
         let changed = || self.emit(UiEvent::ArtifactsChanged { group_id: card.group_id });
+        let pinned: Vec<_> = self.config().widgets.iter().map(|w| w.artifact_id).collect();
 
         match action {
             tools::ArtifactAction::List => {
@@ -7953,7 +7891,7 @@ impl Runtime {
                 }
                 let mut out = String::from("Your crew's artifacts, most recently changed first:\n");
                 for one in &all {
-                    out.push_str(&one.index_line(card.id, now));
+                    out.push_str(&one.index_line(card.id, now, pinned.contains(&one.id)));
                     out.push('\n');
                 }
                 out.push_str("`view` and an id shows one's page and its history.");
@@ -7962,7 +7900,7 @@ impl Runtime {
 
             tools::ArtifactAction::View { id } => {
                 let Some(found) = mine(id)? else {
-                    return Ok(missing(id));
+                    return Ok(no_such_artifact(id));
                 };
                 let log = self.inner.store.artifact_log(found.id)?;
                 let page = self.inner.store.artifact_page(found.id, None)?.unwrap_or_default();
@@ -8010,16 +7948,32 @@ impl Runtime {
                     "\nThe page at version {}:\n```html\n{page}\n```",
                     found.version
                 ));
+                // Shown whole, because an edit to the strip sends a whole new
+                // one, and one written without reading this is written blind.
+                if let Some(condensed) = self.inner.store.artifact_condensed(found.id)? {
+                    let bar = if pinned.contains(&found.id) {
+                        "on the operator's status bar now"
+                    } else {
+                        "not on the status bar"
+                    };
+                    out.push_str(&format!(
+                        "\n\nIts condensed view, {bar}:\n```html\n{condensed}\n```"
+                    ));
+                }
                 Ok(Kept::Said(out))
             }
 
-            tools::ArtifactAction::Create { title, page, note, sources } => {
+            tools::ArtifactAction::Create { title, page, note, sources, condensed } => {
                 let (title, cut) = match kept::title(title) {
                     Ok(title) => title,
                     Err(err) => return Ok(Kept::Refused(format!("{err}."))),
                 };
                 let page = match kept::page(page) {
                     Ok(page) => page,
+                    Err(err) => return Ok(Kept::Refused(format!("{err}."))),
+                };
+                let condensed = match condensed.as_deref().map(kept::condensed).transpose() {
+                    Ok(condensed) => condensed,
                     Err(err) => return Ok(Kept::Refused(format!("{err}."))),
                 };
                 let (note, _) =
@@ -8043,6 +7997,7 @@ impl Runtime {
                         title: &title,
                         page: &page,
                         sources: &sources,
+                        condensed: condensed.as_deref(),
                         note: &note,
                     },
                 )?;
@@ -8061,12 +8016,18 @@ impl Runtime {
                 if !made.sources.is_empty() {
                     said.push_str(AWAITING_READS);
                 }
+                if made.condensed {
+                    said.push_str(
+                        " It has a condensed view, so it can go on the operator's status bar; \
+                         `pin` asks them.",
+                    );
+                }
                 Ok(Kept::Made(said, made.made()))
             }
 
-            tools::ArtifactAction::Update { id, title, page, note, sources } => {
+            tools::ArtifactAction::Update { id, title, page, note, sources, condensed } => {
                 let Some(found) = mine(id)? else {
-                    return Ok(missing(id));
+                    return Ok(no_such_artifact(id));
                 };
                 let (note, note_cut) = match kept::note(note.as_deref(), "`update`", "what changed")
                 {
@@ -8083,6 +8044,12 @@ impl Runtime {
                 };
                 let page = match page.as_deref().map(kept::page).transpose() {
                     Ok(page) => page,
+                    Err(err) => {
+                        return Ok(Kept::Refused(format!("{err}. {} is unchanged.", found.id)))
+                    }
+                };
+                let condensed = match condensed.as_deref().map(kept::condensed).transpose() {
+                    Ok(condensed) => condensed,
                     Err(err) => {
                         return Ok(Kept::Refused(format!("{err}. {} is unchanged.", found.id)))
                     }
@@ -8121,11 +8088,12 @@ impl Runtime {
                         title: title.as_ref().map(|(title, _)| title.as_str()),
                         page: page.as_deref(),
                         sources: sources.as_deref(),
+                        condensed: condensed.as_deref(),
                         note: &note,
                     },
                 )?
                 else {
-                    return Ok(missing(id));
+                    return Ok(no_such_artifact(id));
                 };
                 changed();
 
@@ -8158,12 +8126,21 @@ impl Runtime {
                 if !written.sources.is_empty() && !written.sources_allowed {
                     said.push_str(AWAITING_READS);
                 }
+                if pinned.contains(&written.id) {
+                    said.push_str(if condensed.is_some() {
+                        " It is on the operator's status bar, which draws the new condensed view \
+                         now."
+                    } else {
+                        " It is on the operator's status bar. If what its condensed view shows \
+                         has changed too, send a new `condensed`."
+                    });
+                }
                 Ok(Kept::Made(said, written.made()))
             }
 
             tools::ArtifactAction::Take { id, note } => {
                 let Some(found) = mine(id)? else {
-                    return Ok(missing(id));
+                    return Ok(no_such_artifact(id));
                 };
                 if found.owner.as_ref().is_some_and(|owner| owner.id == card.id) {
                     return Ok(Kept::Said(format!(
@@ -8186,7 +8163,7 @@ impl Runtime {
                     &note,
                 )?
                 else {
-                    return Ok(missing(id));
+                    return Ok(no_such_artifact(id));
                 };
                 changed();
                 let from = match &found.owner {
@@ -8198,6 +8175,168 @@ impl Runtime {
                     taken.title
                 )))
             }
+
+            tools::ArtifactAction::Pin { .. } => unreachable!("taken by `pin_widget`, which parks"),
+        }
+    }
+
+    /// An agent asking to put one of its crew's pages on the operator's status
+    /// bar.
+    ///
+    /// Asked as a settings change, because the bar is a setting and the one
+    /// surface every crew shares. The card names the page, its width, and every
+    /// read it makes and how often, and a yes allows those reads too: one
+    /// decision about one thing on the operator's screen, rather than a
+    /// placement approved now and reads found refused on the bar later.
+    /// Everything that could make a yes useless is refused before the operator
+    /// is asked, for the reason a settings patch is checked first.
+    async fn pin_widget(
+        &self,
+        card: &AgentCard,
+        run_id: RunId,
+        id: &str,
+        width: Option<&str>,
+        every_minutes: Option<u64>,
+    ) -> Result<Kept, crate::db::StoreError> {
+        use crate::domain::widget::{self, Widget, Width};
+
+        let Ok(parsed) = id.trim().parse() else {
+            return Ok(no_such_artifact(id));
+        };
+        let Some(found) = self.inner.store.artifact(parsed, card.group_id)? else {
+            return Ok(no_such_artifact(id));
+        };
+        let every = every_minutes.map(|minutes| u32::try_from(minutes).unwrap_or(u32::MAX));
+        let asked =
+            Width::parse(width).and_then(|width| Widget::new(found.id, width, every, &card.name));
+        let asked = match asked {
+            Ok(asked) => asked,
+            Err(err) => return Ok(Kept::Refused(format!("{err}."))),
+        };
+        if !found.condensed {
+            return Ok(Kept::Refused(format!(
+                "\"{}\" has no condensed view, and the condensed view is what the status bar \
+                 draws. `update` it with `condensed` first: one line, a number or a state.",
+                found.title
+            )));
+        }
+        let bar = self.config().widgets;
+        if bar.iter().any(|pinned| pinned.artifact_id == found.id) {
+            return Ok(Kept::Said(format!(
+                "\"{}\" is already on the operator's status bar; nothing to ask.",
+                found.title
+            )));
+        }
+        if bar.len() >= widget::MAX_WIDGETS {
+            return Ok(Kept::Refused(format!("{}.", widget::WidgetError::Full)));
+        }
+
+        let mut detail = vec![DetailField::new(
+            "Status bar",
+            format!("\"{}\", {}", found.title, asked.width.as_str()),
+        )];
+        if !found.sources.is_empty() {
+            let reads = found
+                .sources
+                .iter()
+                .map(|source| format!("{} {}", source.tool, source.arguments))
+                .collect::<Vec<_>>()
+                .join("; ");
+            let owner = found.owner.as_ref().map_or("nobody", |owner| owner.name.as_str());
+            detail.push(DetailField::new(
+                if found.sources_allowed {
+                    "Reads, already allowed"
+                } else {
+                    "Reads, allowed with this"
+                },
+                format!("{reads}, every {} min, as {owner}", asked.every_minutes),
+            ));
+        }
+        detail.push(DetailField::new("Asked for by", &card.name));
+        let summary = format!("{} wants to put \"{}\" on your status bar", card.name, found.title);
+        let every = asked.every_minutes;
+
+        let answer = self
+            .ask_permission(card, run_id, ProtectedAction::ChangeSettings, summary, detail)
+            .await;
+        Ok(match answer {
+            Permission::Granted => {
+                // Placed on the bar as it is now rather than as it was when the
+                // operator was asked: another window may have pinned something
+                // in between, and a full bar is said rather than overfilled.
+                let placed = self.change_config(|config| {
+                    widget::pin(&mut config.widgets, asked)
+                        .map_err(crate::config::ConfigError::from)
+                });
+                if let Err(err) = placed {
+                    return Ok(Kept::Refused(format!(
+                        "the operator allowed it, but it could not be placed: {err}."
+                    )));
+                }
+                let reads_allowed = if found.sources.is_empty() || found.sources_allowed {
+                    found.sources_allowed
+                } else {
+                    self.inner
+                        .store
+                        .allow_artifact_sources_seen(found.id, &found.sources)?
+                        .is_some_and(|now| now.sources_allowed)
+                };
+                self.emit(UiEvent::ArtifactsChanged { group_id: card.group_id });
+                tracing::info!(agent = %card.name, artifact = %found.id, "an agent pinned a page to the status bar");
+                let mut said = format!(
+                    "The operator allowed it: \"{}\" is on their status bar, drawn from its \
+                     condensed view, and a click on it opens the page. Keep the condensed view \
+                     true whenever you change the page.",
+                    found.title
+                );
+                if reads_allowed {
+                    said.push_str(&format!(
+                        " Its reads run every {every} minutes while it is there."
+                    ));
+                } else if !found.sources.is_empty() {
+                    said.push_str(
+                        " Its reads changed while the operator was deciding, so they are not \
+                         allowed yet; the operator can allow them from the page in Artifacts.",
+                    );
+                }
+                Kept::Said(said)
+            }
+            Permission::Refused => Kept::Refused(
+                "the operator said no, so it is not on the status bar. That is final for this \
+                 request: do not ask again this turn."
+                    .to_string(),
+            ),
+            Permission::Unanswered => Kept::Refused(
+                "nobody answered, so it is not on the status bar. The operator is away rather \
+                 than opposed: say in your reply what you wanted to pin and why."
+                    .to_string(),
+            ),
+            Permission::Failed(err) => {
+                Kept::Refused(format!("the request could not be put to the operator ({err})."))
+            }
+        })
+    }
+
+    /// Takes off the status bar every page that no longer exists, after the
+    /// two acts that delete pages: deleting one, and disbanding its crew. A pin
+    /// that outlived its page would hold a slot on the bar and draw nothing.
+    pub fn unpin_missing(&self) {
+        let gone: Vec<_> = self
+            .config()
+            .widgets
+            .iter()
+            .filter(|pinned| matches!(self.inner.store.any_artifact(pinned.artifact_id), Ok(None)))
+            .map(|pinned| pinned.artifact_id)
+            .collect();
+        if gone.is_empty() {
+            return;
+        }
+        let unpinned = self.change_config(|config| {
+            config.widgets.retain(|pinned| !gone.contains(&pinned.artifact_id));
+            Ok::<_, crate::config::ConfigError>(())
+        });
+        if let Err(err) = unpinned {
+            tracing::warn!(%err, "could not take deleted pages off the status bar");
         }
     }
 

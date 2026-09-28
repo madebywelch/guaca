@@ -140,6 +140,7 @@ describe("searchResults", () => {
           updatedAt: NOW - 4000,
           sources: [],
           sourcesAllowed: false,
+          condensed: false,
         },
       ],
     };

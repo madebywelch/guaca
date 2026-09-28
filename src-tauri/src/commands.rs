@@ -1711,6 +1711,62 @@ pub async fn artifact_page(
     })
 }
 
+/// What the status bar draws for a pinned page: the artifact, for its title,
+/// owner and reads, and the current version's condensed view. One call rather
+/// than two, because the bar asks for every widget it holds each time a crew
+/// changes a page.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CondensedView {
+    pub artifact: Artifact,
+    /// `None` for a version without one, which a restore can put back.
+    pub page: Option<String>,
+}
+
+pub async fn artifact_condensed(state: &AppState, id: ArtifactId) -> Reply<CondensedView> {
+    let store = state.runtime.store();
+    let artifact = store.any_artifact(id)?.ok_or_else(|| no_artifact(id))?;
+    Ok(CondensedView { artifact, page: store.artifact_condensed(id)? })
+}
+
+/// The operator putting a page on the status bar, or changing how much of it a
+/// pinned one takes. Theirs, so it needs nobody's approval, and it allows no
+/// reads: those are allowed on the page itself, where the list is shown.
+pub async fn pin_artifact(
+    state: &AppState,
+    id: ArtifactId,
+    width: crate::domain::widget::Width,
+) -> Reply<RedactedConfig> {
+    use crate::domain::widget::{self, Widget};
+    let artifact = state.runtime.store().any_artifact(id)?.ok_or_else(|| no_artifact(id))?;
+    if !artifact.condensed {
+        return Err(CommandError::new(
+            "validation",
+            "This page has no condensed view, which is what the status bar draws. Ask its owner \
+             for one.",
+        ));
+    }
+    let config = state.runtime.change_config(|config| {
+        if config.widgets.iter().any(|pinned| pinned.artifact_id == id) {
+            widget::resize(&mut config.widgets, id, width)
+        } else {
+            Widget::new(id, width, None, "the operator")
+                .and_then(|made| widget::pin(&mut config.widgets, made))
+        }
+        .map_err(config::ConfigError::from)
+    })?;
+    Ok(config.redacted())
+}
+
+pub async fn unpin_artifact(state: &AppState, id: ArtifactId) -> Reply<RedactedConfig> {
+    let config = state.runtime.change_config(|config| {
+        crate::domain::widget::unpin(&mut config.widgets, id)
+            .map(|_| ())
+            .map_err(config::ConfigError::from)
+    })?;
+    Ok(config.redacted())
+}
+
 /// A kept page's reads, made now, for the page on screen.
 ///
 /// Refused sources come back refused rather than failing the call, so the page
@@ -1773,6 +1829,7 @@ pub async fn delete_artifact(state: &AppState, id: ArtifactId) -> Reply<()> {
         return Ok(());
     };
     state.runtime.store().delete_artifact(id)?;
+    state.runtime.unpin_missing();
     state.runtime.emit(UiEvent::ArtifactsChanged { group_id: existing.group_id });
     Ok(())
 }
@@ -1895,6 +1952,7 @@ pub async fn disband_group(state: &AppState, id: GroupId) -> Reply<()> {
     // Emitted either way. A disband that stopped part-way has still deleted
     // whoever it reached, and a rail left drawing them is rows the operator can
     // click on to open channels belonging to agents that are gone.
+    state.runtime.unpin_missing();
     state.runtime.emit(UiEvent::AgentsChanged);
     outcome
 }
