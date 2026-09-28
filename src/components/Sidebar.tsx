@@ -435,7 +435,11 @@ export function Sidebar({
             first. */}
         <div className="rail__brand" data-tauri-drag-region data-lights={LIGHTS ? "" : undefined}>
           <Brand waiting={pending.length > 0} />
-          <NewMenu onNewAgent={onNewAgent} onNewGroup={onNewGroup} />
+          <NewMenu
+            onNewAgent={onNewAgent}
+            onNewGroup={onNewGroup}
+            onOpenCafeteria={onOpenCafeteria}
+          />
         </div>
 
         <label className="mobile-crews field">
@@ -592,32 +596,45 @@ export function Sidebar({
           </div>
         </div>
 
+        {/* The places the rail does not list, as one row. Four stacked links
+            were a fifth of the column's height taken from the agents, and a
+            row per place is a footer that gets taller every time the app gains
+            one. Settings stays last: a phone hides it, because it has a tab of
+            its own there. */}
         <div className="rail__foot">
-          <button type="button" className="btn btn--rail" onClick={onOpenCafeteria}>
-            <span aria-hidden="true" className="rail__hash">
-              ☰
-            </span>
-            Cafeteria
-          </button>
-          <button type="button" className="btn btn--rail" onClick={onOpenCalendar}>
-            <span aria-hidden="true" className="rail__hash">
-              ▤
-            </span>
+          <button type="button" className="rail__place" onClick={onOpenCalendar}>
+            {/* Today's date, which is the one thing a calendar can say before
+                it is opened, and what makes the mark read as one. */}
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="4" y="5" width="16" height="15.5" rx="2" />
+              <path d="M4 9.5h16M8.5 3v4M15.5 3v4" />
+              <text x="12" y="17.8" textAnchor="middle" fontSize="8" fontWeight="600">
+                {new Date(now).getDate()}
+              </text>
+            </svg>
             Calendar
           </button>
-          {/* Before settings rather than after it: a phone hides the last
-              button in this row, and settings has its own tab there. */}
-          <button type="button" className="btn btn--rail" onClick={onOpenArtifacts}>
-            <span aria-hidden="true" className="rail__hash">
-              ❏
-            </span>
+          <button type="button" className="rail__place" onClick={onOpenArtifacts}>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M13.5 3.5H7A1.5 1.5 0 0 0 5.5 5v14A1.5 1.5 0 0 0 7 20.5h10a1.5 1.5 0 0 0 1.5-1.5V8.5z" />
+              <path d="M13.5 3.5v5h5M9 13h6M9 16.5h4" />
+            </svg>
             Artifacts
           </button>
-          <button type="button" className="btn btn--rail" onClick={onOpenSettings}>
-            <span aria-hidden="true" className="rail__hash">
-              ⚙
-            </span>
-            App settings
+          {/* Named in full for anything that reads the label rather than the
+              position: inside a crew, the crew's own settings are one click
+              away at the top of the column. */}
+          <button
+            type="button"
+            className="rail__place"
+            onClick={onOpenSettings}
+            aria-label="App settings"
+            title="App settings"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 6h16M4 12h16M4 18h16M8 3v6M16 9v6M10 15v6" />
+            </svg>
+            Settings
           </button>
         </div>
 

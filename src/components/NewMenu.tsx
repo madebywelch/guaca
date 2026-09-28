@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 interface Props {
   onNewAgent: () => void;
   onNewGroup: () => void;
+  onOpenCafeteria: () => void;
 }
 
 /** Roughly what the menu measures. Only used to keep it inside the window. */
@@ -18,6 +19,10 @@ const MARGIN = 8;
  * something new became makeable. A plus is the one control that can absorb the
  * next one without the rail paying for it, which is why it is a menu.
  *
+ * The cafeteria followed them here. It stayed in the footer as a place, but
+ * nothing is ever left in it: an operator goes in to come out with agents, so
+ * what it is for is making them, and making things is this menu.
+ *
  * It sits at the top of the rail, in the title strip beside the pair. It spent
  * a while at the end of the channel header instead, on the grounds that the rail
  * is a list of agents and this is about none of them, and that turned out to be
@@ -27,7 +32,7 @@ const MARGIN = 8;
  * empty, since there is no channel open to hang a header on, which is the state
  * where making an agent is the only thing left to do.
  */
-export function NewMenu({ onNewAgent, onNewGroup }: Props) {
+export function NewMenu({ onNewAgent, onNewGroup, onOpenCafeteria }: Props) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
@@ -130,6 +135,7 @@ export function NewMenu({ onNewAgent, onNewGroup }: Props) {
           >
             {item("New agent", "Somebody new in this workspace", onNewAgent)}
             {item("New group", "A crew that cannot see the others", onNewGroup)}
+            {item("Hire from the cafeteria", "Agents who are already set up", onOpenCafeteria)}
           </div>
         </>
       )}

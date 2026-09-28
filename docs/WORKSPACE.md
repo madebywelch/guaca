@@ -1425,7 +1425,9 @@ also grew by a row every time something new became makeable, which is a footer
 that gets worse as the app gets better.
 
 Now there is one plus, in the title strip at the top of the rail beside the
-icon's pair, and it lists what can be made. The footer keeps the two places.
+icon's pair, and it lists what can be made. The cafeteria is on it too, though
+it spent a while in the footer as a place: nothing is ever left in it, and an
+operator goes in to come out with agents, so what it is for is making them.
 
 It spent a release at the end of the channel header instead, on the argument
 that the rail is a list of agents and making one is about none of them. That is
@@ -1442,6 +1444,31 @@ It is the shared menu, so it closes on Escape, on a click that lands away from
 it, and on anything that moves the button underneath it. The listeners are bound
 by name rather than as inline arrows, which is not a style point: `removeEventListener`
 matches by reference, so two arrows leave a listener behind on every open.
+
+## The footer is the places, in one row
+
+Calendar, Artifacts and Settings: the three things in the app an operator goes
+to rather than makes, and which no row in the rail already reaches. Each is a
+mark over its name, in equal shares of one row, the way a tab bar is drawn.
+
+It was a stack of links, one row each, and it grew the way the plus's argument
+said it would: the cafeteria and settings, then the calendar, then artifacts,
+until the footer took a fifth of the column's height from the agents it sits
+under. A row is the unit that let it, because a row costs nothing to add and
+the column pays for it. A cell in a row of three is shared width, so a fourth
+place has to be argued for against the other three rather than slipped in
+under them.
+
+The calendar's mark carries today's date. It is the one thing any of the three
+can say before it is opened, and it is what makes a box with two rings on top
+read as a calendar at twenty pixels. The other two say nothing: neither has a
+state the operator needs before opening it, and a number in the rail is a claim
+on attention that has to earn it like any other interruption.
+
+Settings is last, and named *App settings* to anything that reads the label
+rather than the position, because a crew's own settings are a gear at the top of
+the same column. A phone hides it, since the phone has a Settings tab of its
+own, and the other two split the row between them.
 
 ## The cafeteria is a copy machine, not a registry
 

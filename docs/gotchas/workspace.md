@@ -37,6 +37,13 @@ of `Runtime::discard_agent` and `Runtime::purge_agent`.
   scoped in SQL, because the board is the newest four hundred messages and a
   busy crew filling that window would hand a quiet one an empty board.
   `docs/WORKSPACE.md`.
+- **A new place is a cell in the footer's row, not a row under it.** The
+  footer was a stack of links and reached four, a fifth of the column's height
+  taken from the agents, one reasonable addition at a time. A row is free to
+  add and the column pays for it; a cell shares a fixed width, so a fourth place
+  has to be argued in against the other three. Something an operator makes goes
+  behind the plus, which is where the cafeteria went.
+  `docs/WORKSPACE.md`.
 - **A crew's spend is a card over the rail, and nothing may put it back on the
   heading.** A readout is a fixed width and a crew's name is not, so the name is
   the only item on that line with anything to give and flex takes it:
