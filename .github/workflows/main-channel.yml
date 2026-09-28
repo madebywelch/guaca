@@ -18,11 +18,13 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Only the newest push matters: a box installs the tip, never a build of a
-# commit main has already moved past.
+# One build at a time, and never cancelled: main takes pushes every few
+# minutes and a build takes longer than that, so cancelling on each push can
+# starve the feed for an afternoon. Pushes that arrive while one builds
+# collapse into a single queued run of the newest.
 concurrency:
   group: main-channel
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -94,7 +96,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
+      # All of history, to tell whether the published build is older than this one.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -139,15 +144,27 @@ jobs:
             exit 1
           fi
 
-      # A re-run of an older push would move the feed backward.
-      - name: Check that main is still here
+      # Forward only. A build newer than the published one is published even
+      # if main has moved on since, because the run for the tip may still be
+      # queued; a re-run of an older push is not. A tip that shares no line
+      # with the published build (a rewritten main) is published as the tip.
+      - name: Check that this build is newer than the published one
         id: tip
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          published=""
+          if gh release download channel-main --pattern guaca-main.json --output "$RUNNER_TEMP/published.json" 2> /dev/null; then
+            published=$(jq -r .manifest "$RUNNER_TEMP/published.json" | base64 -d | jq -r .commit)
+          fi
           tip=$(git ls-remote origin refs/heads/main | cut -f1)
-          if [ "$tip" = "$GITHUB_SHA" ]; then
+          if [ "$published" = "$GITHUB_SHA" ]; then
+            echo "::notice::$GITHUB_SHA is already published."
+            echo "current=false" >> "$GITHUB_OUTPUT"
+          elif [ -z "$published" ] || git merge-base --is-ancestor "$published" "$GITHUB_SHA" || [ "$tip" = "$GITHUB_SHA" ]; then
             echo "current=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::notice::main moved to $tip while $GITHUB_SHA built; its own run publishes it."
+            echo "::notice::$published is published and newer than $GITHUB_SHA; not moving the feed backward."
             echo "current=false" >> "$GITHUB_OUTPUT"
           fi
 
