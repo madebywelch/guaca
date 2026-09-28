@@ -298,6 +298,30 @@ describe("the navigation columns", () => {
   });
 });
 
+describe("the window's columns", () => {
+  /**
+   * Each scrolls down and never across.
+   *
+   * Setting `overflow-y` alone computes the other axis to `auto`, so a column
+   * that only says which way it scrolls also scrolls sideways the moment
+   * anything in it is a pixel too wide. The inspector said only that, and the
+   * terminal's directory, one unbroken path, gave it a horizontal scrollbar.
+   */
+  it.each(["rail__list", "grail__list", "pane__scroll", "inspector__body"])(
+    "scrolls .%s on one axis",
+    (column) => {
+      const shown = getComputedStyle(nest(column));
+
+      expect(shown.overflowY).toBe("auto");
+      expect(shown.overflowX).toBe("hidden");
+    },
+  );
+
+  it("breaks a path in the inspector rather than cutting it off", () => {
+    expect(getComputedStyle(nest("inspector__body")).overflowWrap).toBe("break-word");
+  });
+});
+
 describe("what a crew has spent", () => {
   /**
    * The card is held open by the heading underneath it.

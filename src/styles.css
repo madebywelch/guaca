@@ -5890,10 +5890,19 @@ input[type="file"]:disabled {
   background: var(--sunken);
 }
 
+/* Scrolls down and never across, for the reason `.pane__scroll` states its
+   other axis. What pushed it sideways was a path: the terminal's directory and
+   the line that resumes its session are one unbroken token each, much wider
+   than the column. Wrapping breaks them where they would overflow and nowhere
+   else. `break-word` rather than the transcript's `anywhere`, because this is
+   inherited by every row and button in the panel, and `anywhere` would let a
+   squeezed flex item shrink to a letter (see `.md th`). */
 .inspector__body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
+  overflow-wrap: break-word;
   padding: 0 var(--space-5) var(--space-6);
 }
 
