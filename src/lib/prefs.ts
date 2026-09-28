@@ -151,7 +151,7 @@ export const DEFAULT_PREFS: Prefs = Object.freeze({
   typeface: "inter",
   reading: "interface",
   readingSize: 16,
-  cast: "cut",
+  cast: "drawn",
   showReasoning: false,
   notify: Object.freeze({
     on: true,

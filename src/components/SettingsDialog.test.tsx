@@ -1472,14 +1472,14 @@ describe("appearance", () => {
     // not chosen is still there to be looked at.
     expect(choice("Characters: Cut").querySelectorAll('[data-cast="cut"]')).toHaveLength(3);
     expect(choice("Characters: Drawn").querySelectorAll('[data-cast="drawn"]')).toHaveLength(3);
-    expect(choice("Characters: Cut").getAttribute("aria-pressed")).toBe("true");
-
-    fireEvent.click(choice("Characters: Drawn"));
-
-    expect(useStore.getState().prefs.cast).toBe("drawn");
     expect(choice("Characters: Drawn").getAttribute("aria-pressed")).toBe("true");
-    expect(choice("Characters: Cut").getAttribute("aria-pressed")).toBe("false");
-    expect(choice("Characters: Cut").querySelectorAll('[data-cast="cut"]')).toHaveLength(3);
+
+    fireEvent.click(choice("Characters: Cut"));
+
+    expect(useStore.getState().prefs.cast).toBe("cut");
+    expect(choice("Characters: Cut").getAttribute("aria-pressed")).toBe("true");
+    expect(choice("Characters: Drawn").getAttribute("aria-pressed")).toBe("false");
+    expect(choice("Characters: Drawn").querySelectorAll('[data-cast="drawn"]')).toHaveLength(3);
     // And the surface is left alone: this is not a third way to write it.
     expect(useStore.getState().prefs.surface).toBe(DEFAULT_PREFS.surface);
   });
