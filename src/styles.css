@@ -8920,6 +8920,48 @@ button.artifacts__version[aria-pressed="true"] {
 .host-update-facts { display: grid; grid-template-columns: auto 1fr; gap: var(--space-2) var(--space-4); }
 .host-update-facts dd { margin: 0; overflow-wrap: anywhere; }
 
+/* An update, one segment per step its manager reports. A filled segment is a
+   step reported finished. The one underway sweeps in place rather than
+   filling, because nothing that runs an update knows how long a step has
+   left, and a bar growing toward a guess is a promise nobody made. When a
+   box's host is silent, every step it could be in sweeps together. */
+.update-progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.update-progress__bar {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.update-progress__step {
+  flex: 1;
+  height: var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--edge);
+}
+
+.update-progress__step[data-state="done"] {
+  background: var(--system);
+}
+
+/* Tinted as well as swept, so the step underway still reads as one with motion
+   turned off, which stops the sweep where it started: off the segment. */
+.update-progress__step[data-state="now"] {
+  background:
+    linear-gradient(90deg, transparent, var(--system), transparent) -100% 0 / 50% 100% no-repeat,
+    color-mix(in oklab, var(--system) 30%, var(--edge));
+  animation: update-sweep 1.6s var(--ease-loop) infinite;
+}
+
+@keyframes update-sweep {
+  to {
+    background-position: 200% 0;
+  }
+}
+
 /* skills.sh, inside a skills pane. The ranking is two hundred rows a page, so
    it scrolls in place rather than pushing the pane's own skills off screen. */
 .directory__search {

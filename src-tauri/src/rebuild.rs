@@ -71,6 +71,8 @@ pub struct Status {
     /// The commit that branch is at on `origin`, when it could be read.
     pub upstream: Option<String>,
     pub running: bool,
+    /// The step `install.sh` last announced, while it runs.
+    pub stage: Option<String>,
     /// The end of the log of the rebuild that last failed.
     pub failure: Option<String>,
     /// Where the whole log is.
@@ -138,6 +140,10 @@ impl Rebuild {
         let running = self.settle();
         let mut status = Status {
             running,
+            stage: running
+                .then(|| std::fs::read_to_string(&self.log).ok())
+                .flatten()
+                .and_then(|log| announced(&log)),
             failure: self.failure.lock().clone(),
             log: self.log.display().to_string(),
             ..Status::default()
@@ -221,6 +227,16 @@ fn tail(log: &Path) -> String {
     } else {
         said
     }
+}
+
+/// The step `install.sh` last announced in its log. Its `step` function prints
+/// each as a line of its own, in bold, and nothing else in the log is written
+/// that way: a line merely containing `==> ` is some tool's output, not a step.
+fn announced(log: &str) -> Option<String> {
+    log.lines().rev().find_map(|line| {
+        let said = line.strip_prefix("\u{1b}[1m==> ")?.strip_suffix("\u{1b}[0m")?;
+        Some(said.to_string())
+    })
 }
 
 async fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
@@ -340,6 +356,33 @@ mod tests {
         assert!(refused.contains("already being rebuilt"), "{refused}");
         assert!(rebuild.status().await.running);
         rebuild.child.lock().as_mut().unwrap().kill().unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_status_says_which_step_the_script_last_announced_while_it_runs() {
+        let script = r#"step() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
+step "Checking what this needs"
+step "Building"
+echo "==> Compiling guac"
+echo "done" > "$GUACA_DEST/announced"
+exec sleep 30
+"#;
+        let (dir, origin) = checkout(script);
+        let announced = origin.dest.clone().unwrap().join("announced");
+        let rebuild = Rebuild::new(origin, dir.path().join("rebuild.log"));
+        assert_eq!(rebuild.status().await.stage, None, "nothing is running");
+        rebuild.start().unwrap();
+        for _ in 0..200 {
+            if announced.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        let status = rebuild.status().await;
+        assert!(status.running);
+        assert_eq!(status.stage.as_deref(), Some("Building"));
+        rebuild.child.lock().as_mut().unwrap().kill().unwrap();
+        assert_eq!(settled(&rebuild).await.stage, None, "a finished rebuild is at no step");
     }
 
     #[tokio::test]
@@ -480,6 +523,8 @@ mod tests {
         let (app, log) = install_from_the_app(false, Duration::from_secs(10));
         assert_eq!(app, "gone", "{log}");
         assert!(log.contains("Quitting the running Guaca"), "{log}");
+        // The copy is where the stubs stop it, so that is the step it is at.
+        assert_eq!(announced(&log).as_deref(), Some("Installing"), "{log}");
         assert!(!log.contains("did not quit on its own"), "{log}");
     }
 

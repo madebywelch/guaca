@@ -71,6 +71,8 @@ export interface AppSource {
   /** The commit that branch is at on origin, when it could be read. */
   upstream: string | null;
   running: boolean;
+  /** The step `install.sh` last announced, while it runs. */
+  stage: string | null;
   /** The end of the log of the rebuild that last failed. */
   failure: string | null;
   log: string;

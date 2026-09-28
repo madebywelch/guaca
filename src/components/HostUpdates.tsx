@@ -45,6 +45,7 @@ import {
   workspaceOrigin,
 } from "../lib/transport";
 import { errorMessage } from "../lib/types";
+import { hostProgress, type Progress, rebuildProgress } from "../lib/updating";
 import { HostChoice } from "./HostSetup";
 
 interface UpdateState {
@@ -369,6 +370,7 @@ function AppRebuild({ hostFirst }: { hostFirst: boolean }) {
           ? `Rebuilding this app from ${branch}. Guaca closes and reopens when the build finishes.`
           : `This app is at ${shortBuild(COMMIT) || "an unknown build"}, and ${branch} is at ${shortBuild(source.upstream)}.`}
       </p>
+      {running && <UpdateProgress progress={rebuildProgress(source.stage ?? null)} />}
       {!running &&
         !current &&
         (hostFirst ? (
@@ -391,6 +393,34 @@ function AppRebuild({ hostFirst }: { hostFirst: boolean }) {
           </p>
         </>
       )}
+    </div>
+  );
+}
+
+/**
+ * Where an update is, in the steps whatever runs it reports. The bar is the
+ * words drawn: every segment is a step, and the status line says everything
+ * it shows, so it is hidden from a screen reader rather than said twice.
+ */
+function UpdateProgress({ progress, hint }: { progress: Progress; hint?: string }) {
+  const { steps, done, now, label } = progress;
+  return (
+    <div className="update-progress">
+      <div className="update-progress__bar" aria-hidden="true">
+        {steps.map((step, at) => (
+          <span
+            key={step}
+            className="update-progress__step"
+            title={step}
+            data-state={at < done ? "done" : at < done + now ? "now" : undefined}
+          />
+        ))}
+      </div>
+      <p role="status">
+        {label}
+        {now === 1 && ` · step ${done + 1} of ${steps.length}`}
+      </p>
+      {hint && <p className="field__hint">{hint}</p>}
     </div>
   );
 }
@@ -519,6 +549,17 @@ export function HostUpdatePanel() {
   const operation = docker?.operation ?? manager?.operation ?? null;
   // While a box restarts its host, not answering is the update working.
   const restarting = boxBusy && !answered;
+  // The journal of the update running now, and what it installs: on a box
+  // the updater's, and on this Mac this app's.
+  const underway = boxed
+    ? hostProgress(
+        manager?.operation ?? null,
+        // A box installs only the latest build on its channel, so a panel
+        // opened after another client started the update knows its target.
+        accepted ?? { image: onMain ? latest?.image : undefined, version: latest?.version },
+        restarting,
+      )
+    : hostProgress(docker?.operation ?? null, { image: docker?.targetImage }, false);
   return (
     <section className="host-choice" aria-label="Host updates" aria-busy={updating}>
       <h3>{title}</h3>
@@ -593,7 +634,7 @@ export function HostUpdatePanel() {
       {!release?.automatic && release && (
         <p className="field__hint">Automatic release checks are disabled on this host.</p>
       )}
-      {(failure || (!restarting && (error || release?.error || manager?.error))) && (
+      {(failure || (!updating && (error || release?.error || manager?.error))) && (
         <p className="field__error" role="alert">
           {failure || error || release?.error || manager?.error}
         </p>
@@ -603,30 +644,40 @@ export function HostUpdatePanel() {
           {onMain ? "The commit" : "Release notes"}
         </a>
       )}
-      {((canUpdate && match !== "clientOld") || canUpdateBox) && (
-        <div className="field">
-          <p>
-            {canUpdateBox && latest
-              ? `Update this host to ${target}.`
-              : `Update this host to the build included with this desktop app${
-                  docker?.targetVersion ? ` (${docker.targetVersion})` : ""
-                }.`}
-          </p>
-          <p className="field__hint">
-            {working} agents and {Object.keys(building).length} coding jobs are working. Updating
-            interrupts current work, including work from other clients. Guaca saves a complete
-            backup before replacing the host, and puts the previous version back if the update does
-            not finish.
-          </p>
-          <button
-            className="btn btn--primary"
-            disabled={updating}
-            type="button"
-            onClick={() => void (canUpdateBox ? runOnBox() : run())}
-          >
-            Back up and update host
-          </button>
-        </div>
+      {updating ? (
+        <UpdateProgress
+          progress={underway}
+          hint={
+            boxed
+              ? "The update runs on the host, so closing Guaca does not stop it."
+              : "Keep Guaca open until the update finishes."
+          }
+        />
+      ) : (
+        ((canUpdate && match !== "clientOld") || canUpdateBox) && (
+          <div className="field">
+            <p>
+              {canUpdateBox && latest
+                ? `Update this host to ${target}.`
+                : `Update this host to the build included with this desktop app${
+                    docker?.targetVersion ? ` (${docker.targetVersion})` : ""
+                  }.`}
+            </p>
+            <p className="field__hint">
+              {working} agents and {Object.keys(building).length} coding jobs are working. Updating
+              interrupts current work, including work from other clients. Guaca saves a complete
+              backup before replacing the host, and puts the previous version back if the update
+              does not finish.
+            </p>
+            <button
+              className="btn btn--primary"
+              type="button"
+              onClick={() => void (canUpdateBox ? runOnBox() : run())}
+            >
+              Back up and update host
+            </button>
+          </div>
+        )
       )}
       {boxed && boxNewer && !reachable && (
         <p>
@@ -635,13 +686,6 @@ export function HostUpdatePanel() {
             Download it
           </a>
           , then update the host from it.
-        </p>
-      )}
-      {updating && (
-        <p role="status">
-          {boxBusy
-            ? `${restarting ? "Starting updated host" : (manager?.operation?.stage ?? "Starting update")}. The update runs on the host, so closing Guaca does not stop it.`
-            : `${docker?.operation?.stage ?? "Starting update"}. Keep Guaca open until the update finishes.`}
         </p>
       )}
       {operation && !updating && (
@@ -692,7 +736,7 @@ export function HostUpdatePanel() {
           type="button"
           onClick={() => void refresh(true)}
         >
-          {checking ? "Checking…" : "Check for updates"}
+          {checking && !updating ? "Checking…" : "Check for updates"}
         </button>
         {!boxed && (
           <button

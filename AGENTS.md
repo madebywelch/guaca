@@ -61,6 +61,7 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/announce.ts     What that interruption would say. One event in, one line out.
   lib/keybinds.ts     Every key the app answers to, in one list.
   lib/limits.ts       The five bounds a conversation runs inside, in words.
+  lib/updating.ts     How far an update has got, in steps and never in time.
   lib/console.ts      What the host says on the operator's shell's socket, and
                       how its ending is said. No DOM.
   components/         One file per surface.
@@ -266,6 +267,7 @@ repo: the frontend renders state and forwards intent.
 | Anything about the wire: protocol versions, the handshake, headers | *Two protocol eras* in `docs/PLUGINS.md`, then `mcp.rs`, whose era probe is the one thing no offline test of a single server can check |
 | Running Guaca somewhere other than the operator's machine: the daemon, the token, a browser as the client | `docs/HOSTING.md`, then `server/mod.rs` and `src/lib/transport.ts`, and run `tests/server.rs` under `--no-default-features --features server` |
 | Updating a host from the app: the button, the updater on a box, the signed manifest, the restore after a failed update | *Updating a remote or externally managed host* in `docs/UPDATES.md`, then `host.rs` and `updater.rs`, and run `scripts/image.sh` and `scripts/box.sh` |
+| What an update shows while it runs: the bar, its steps, a box's host going silent, a rebuild's log | *Updating a host managed by the desktop* in `docs/UPDATES.md`, then `src/lib/updating.ts` and the suite beside it, which reads the step names from `host.rs` and `install.sh` |
 | A box that follows `main`, the image CI builds for every push, its feed and key, and the app rebuilding itself after the host | *The main channel* in `docs/UPDATES.md`, then `.github/workflows/main-channel.yml`, `updates::feed` and `rebuild.rs` |
 | What a hosted workspace refuses, and why each refusal is a fact about a machine rather than a missing feature | *Resources belong to the backend* in `docs/HOSTING.md`, then `domain/deployment.rs` and every reader of `capabilities` in `src/` |
 | A command that works at a desk and fails on a box, or a new command at all | *One list, three readers* in `docs/HOSTING.md`, then the `surface!` block in `src-tauri/src/ipc.rs` and `ipc.contract.test.ts` |

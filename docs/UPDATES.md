@@ -125,7 +125,18 @@ The update manager owns one serialized, durable operation per host:
 Render real stages: **Downloading**, **Stopping host**, **Backing up**,
 **Starting updated host**, **Reconnecting**, **Complete** or **Recovery needed**.
 Use indeterminate progress unless the manager has actual byte counts. Never
-animate a guessed percentage. Persist enough state outside the replaced
+animate a guessed percentage.
+
+Shipped as a bar of one segment per journal stage (`src/lib/updating.ts`). A
+segment fills only when the manager reports the step after it, and the step
+underway sweeps in place: a pull, a volume copy and a build all have no length
+anybody knows in advance, so the bar counts steps and never time. It replaces
+the update button while an update runs, on this Mac and on a box. A box's host
+is silent from the moment it is stopped until a new one answers, and the
+updater can only be read through it, so for that stretch every step the update
+could be in (stopping, backing up, starting) sweeps together rather than one
+being picked. A source build's **Rebuild this app** draws the same bar from the
+steps `install.sh` announces in its log, up to quitting this app. Persist enough state outside the replaced
 container to explain a crash or reconnect midway through the operation. Closing
 the panel does not cancel it. Prevent app exit during the critical replacement
 phase until a separate long-lived manager owns the operation.
