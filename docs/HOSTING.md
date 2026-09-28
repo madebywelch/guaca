@@ -743,10 +743,13 @@ When their versions differ the notice says which runs what and which one to
 update, before any news of a newer published release: a skew breaks commands,
 and a release is only news. A desktop also learns of a release newer than
 itself, even from a source-built host that is never claimed to be behind.
-Every call names the client's version in its JSON body, so a host that cannot
-answer a command says which side is older instead of "whichever is older". It
-is not a header, because an older host's CORS refuses a header it does not
-know and every call from a newer client would fail its preflight.
+Every call names the client's version and build in its JSON body, so a host
+that cannot answer a command says which side is older instead of "whichever is
+older". A source build carries the version of the last release, so when the
+versions tie the two commits are named instead, in that message and in the
+Host pane, which stops calling the pair compatible. It is not a header,
+because an older host's CORS refuses a header it does not know and every call
+from a newer client would fail its preflight.
 
 A browser whose frontend and backend are both old can detect a new release.
 A stale open page offers to preserve its current text and uploaded attachment

@@ -332,16 +332,6 @@ async fn stopped() {
     }
 }
 
-/// The commit this daemon was built from, told to the build rather than read
-/// from a repository it does not ship with. Empty for a build made without
-/// one, which `/health` says rather than hides: a box and a laptop that
-/// disagree about this string are running different code, and that is the
-/// first thing worth knowing about a bug that reproduces on one of them.
-const BUILD: &str = match option_env!("GUACA_COMMIT") {
-    Some(commit) => commit,
-    None => "",
-};
-
 /// Liveness, and the one route with no token on it.
 ///
 /// It says the process is up and nothing about the workspace. A provider's
@@ -351,7 +341,7 @@ async fn health() -> Json<Value> {
     let mut value = crate::updates::metadata();
     value["status"] = json!("ok");
     value["service"] = json!("guacad");
-    value["build"] = json!(BUILD);
+    value["build"] = json!(crate::updates::BUILD);
     Json(value)
 }
 
@@ -499,7 +489,9 @@ async fn call(
                 tracing::warn!(
                     command = %body.name,
                     client = body.client.as_ref().map(|c| c.version.as_str()).unwrap_or("unstated"),
+                    client_build = body.client.as_ref().and_then(|c| c.build()).unwrap_or("unstated"),
                     host = env!("CARGO_PKG_VERSION"),
+                    host_build = crate::updates::BUILD,
                     "a client of another build called a command this host cannot answer"
                 );
             }

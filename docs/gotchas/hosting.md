@@ -212,3 +212,14 @@ The daemon, a browser as a client, and the boot both hosts share.
   Docker a long-term-support distribution ships and speaks an API above the
   floor the newest daemons require. The newest CLI narrows the first half.
 
+- **A source build and the release it is numbered after are the same
+  version.** The version moves only in a release commit, so an app built from
+  `main` says 0.2.0 against a 0.2.0 host that lacks every command added since.
+  The Skills pane said "different versions; update whichever is older" while
+  the Host pane showed 0.2.0 twice and "Compatible", because the message, the
+  pane and the notice compared versions only, and the API generation moves
+  only for incompatible changes. Each call now names its build as well, and a
+  tie in version is broken by commit on both sides: `otherBuild` in
+  `releases.ts` and `different_builds` in `ipc.rs`, one rule written twice.
+  A host older than the field still gives the generic sentence; the pane
+  is the client's and says the truth either way.

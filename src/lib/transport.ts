@@ -1,6 +1,6 @@
 /** One backend transport for browsers and the native desktop client. */
 
-import { VERSION } from "./build";
+import { COMMIT, VERSION } from "./build";
 import { compatibility, parseHealth } from "./releases";
 import type { UiEvent } from "./types";
 
@@ -13,10 +13,11 @@ export const PAGE_ID: string =
     ? crypto.randomUUID()
     : Math.random().toString(36).slice(2);
 
-/** Said on every call, so a host of another version can name the older side
- *  and a sign-in finds its way back to this page. In the body, because a header
- *  an older host's CORS does not admit would fail every preflight. */
-const CLIENT = { version: VERSION, desktop, id: PAGE_ID };
+/** Said on every call, so a host of another version or build can name the
+ *  difference and a sign-in finds its way back to this page. In the body,
+ *  because a header an older host's CORS does not admit would fail every
+ *  preflight. */
+const CLIENT = { version: VERSION, build: COMMIT, desktop, id: PAGE_ID };
 
 /**
  * A box the desktop app is showing instead of its own workspace.

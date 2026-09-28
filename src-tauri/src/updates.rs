@@ -33,6 +33,16 @@ pub fn protocol() -> Protocol {
         .expect("release-protocol.json is checked by the build gates")
 }
 
+/// The commit this daemon was built from, told to the build rather than read
+/// from a repository it does not ship with. Empty for a build made without
+/// one, which `/health` says rather than hides: a box and a laptop that
+/// disagree about this string are running different code, and that is the
+/// first thing worth knowing about a bug that reproduces on one of them.
+pub const BUILD: &str = match option_env!("GUACA_COMMIT") {
+    Some(commit) => commit,
+    None => "",
+};
+
 pub fn metadata() -> serde_json::Value {
     serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),

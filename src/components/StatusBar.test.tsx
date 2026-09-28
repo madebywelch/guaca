@@ -12,11 +12,11 @@ vi.mock("../lib/ipc", () => ({
     removeQuickAction: (id: string) => removeQuickAction(id),
   },
 }));
-const host = vi.hoisted(() => ({ version: "0.1.0" as string | undefined }));
+const host = vi.hoisted(() => ({ version: "0.1.0" as string | undefined, build: "aaaaaaa" }));
 vi.mock("./HostUpdates", () => ({
-  useHostState: () => ({ health: { service: "guacad", build: "", version: host.version } }),
+  useHostState: () => ({ health: { service: "guacad", build: host.build, version: host.version } }),
 }));
-vi.mock("../lib/build", () => ({ VERSION: "0.1.0", COMMIT: "" }));
+vi.mock("../lib/build", () => ({ VERSION: "0.1.0", COMMIT: "aaaaaaa" }));
 
 import { StatusBar } from "./StatusBar";
 
@@ -72,6 +72,7 @@ describe("StatusBar", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     host.version = "0.1.0";
+    host.build = "aaaaaaa";
     onMessage.mockResolvedValue();
   });
 
@@ -101,6 +102,17 @@ describe("StatusBar", () => {
     const behind = screen.getByRole("button", { name: "Host 0.2.0" });
     expect(behind.hasAttribute("data-drift")).toBe(true);
     expect(behind.title).toContain("Update this app");
+  });
+
+  it("flags a host on the same version and another build", () => {
+    seed([]);
+    host.build = "bbbbbbb";
+    render(<StatusBar onOpen={onOpen} onMessage={onMessage} />);
+    const other = screen.getByRole("button", { name: "Host 0.1.0" });
+    expect(other.hasAttribute("data-drift")).toBe(true);
+    expect(other.title).toBe(
+      "This host and this app are different builds of Guaca 0.1.0. Open Workspace settings to see which.",
+    );
   });
 
   it("adds the operator's own button, and takes one off in edit mode", async () => {

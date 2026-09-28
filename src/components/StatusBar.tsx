@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { VERSION } from "../lib/build";
+import { COMMIT, VERSION } from "../lib/build";
 import { api } from "../lib/ipc";
 import { quickTitle } from "../lib/quick";
 import { skew } from "../lib/releases";
@@ -43,14 +43,18 @@ export function StatusBar({ onOpen, onMessage }: Props) {
   const nameOf = (id: AgentId) => agents.find((a) => a.id === id)?.name ?? "a deleted agent";
 
   const version = host?.health?.version;
-  const drift = desktop ? skew(VERSION, host?.health ?? null) : "unknown";
+  const drift = desktop
+    ? skew({ version: VERSION, commit: COMMIT }, host?.health ?? null)
+    : "unknown";
   const hostLabel = version ? `Host ${version}` : "Host";
   const hostTitle =
     drift === "hostBehind"
       ? `This host runs Guaca ${version} and this app is ${VERSION}. Open Workspace settings to update it.`
       : drift === "clientBehind"
         ? `This host runs Guaca ${version} and this app is ${VERSION}. Update this app.`
-        : "Which host this window shows, and its updates";
+        : drift === "otherBuild"
+          ? `This host and this app are different builds of Guaca ${version}. Open Workspace settings to see which.`
+          : "Which host this window shows, and its updates";
 
   const run = async (action: QuickAction) => {
     setError(null);
@@ -82,7 +86,7 @@ export function StatusBar({ onOpen, onMessage }: Props) {
       <button
         type="button"
         className="statusbar__host"
-        data-drift={drift === "hostBehind" || drift === "clientBehind" ? "" : undefined}
+        data-drift={drift === "same" || drift === "unknown" ? undefined : ""}
         title={hostTitle}
         onClick={() => onOpen({ kind: "settings", section: "workspace" })}
       >
