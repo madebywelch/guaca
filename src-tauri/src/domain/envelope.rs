@@ -15,7 +15,8 @@ use sha2::{Digest, Sha256};
 use super::approval::{DetailField, ProtectedAction};
 use super::artifact::Made;
 use super::attachment::Attachment;
-use super::ids::{AgentId, ApprovalId, MessageId, RoutineId, RunId};
+use super::decision::{self, DecisionRequest};
+use super::ids::{AgentId, ApprovalId, DecisionId, MessageId, RoutineId, RunId};
 
 /// Who is at one end of an envelope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -255,6 +256,27 @@ pub enum Part {
         question: String,
         options: Vec<String>,
     },
+    /// The operator's answer to a decision, delivered to the agent that filed
+    /// it.
+    ///
+    /// The routine's argument again. This used to be a text part from Guaca,
+    /// a paragraph of instructions and the whole request as JSON, and the
+    /// transcript drew it as a bubble: the operator's own answer, buried in
+    /// the system prompting their agent about it. The model still reads that
+    /// paragraph, built by `decision::delivery` in `as_plain_text`; the part
+    /// exists so the transcript can draw the answer as the operator's reply to
+    /// the question it answers.
+    ///
+    /// `request` is the question as it stood when it was answered, which the
+    /// store has frozen by then, so the record does not move if the row does.
+    /// `resumed` is the operator resuming follow-through a restart interrupted,
+    /// which carries the same answer and one more sentence.
+    Decision {
+        id: DecisionId,
+        request: DecisionRequest,
+        answer: String,
+        resumed: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -344,7 +366,9 @@ impl Part {
     ///
     /// A routine's instruction is here rather than only in the part, because
     /// what a fired routine says to the model must not depend on how the
-    /// transcript chose to draw it. The part exists to change the drawing.
+    /// transcript chose to draw it. The part exists to change the drawing. A
+    /// decision's answer is here for the same reason, as the brief the agent
+    /// was sent when it was a text part.
     ///
     /// Borrowed where the part already holds the text and built where it does
     /// not: a routine fired by an event carries the event's body, and that is
@@ -355,6 +379,9 @@ impl Part {
             Part::Routine { what, payload: None, .. } => Some(Cow::Borrowed(what)),
             Part::Routine { what, payload: Some(payload), .. } => {
                 Some(Cow::Owned(with_payload(what, payload)))
+            }
+            Part::Decision { id, request, answer, resumed } => {
+                Some(Cow::Owned(decision::delivery(*id, request, answer, *resumed)))
             }
             _ => None,
         }
@@ -590,6 +617,31 @@ mod tests {
             payload: None,
         };
         assert_eq!(bare.as_plain_text().unwrap(), "check the listings");
+    }
+
+    #[test]
+    fn a_decision_answer_is_its_own_part_and_the_model_reads_the_same_brief() {
+        let request = DecisionRequest {
+            question: "10 or 11?".into(),
+            context: String::new(),
+            recommendation: String::new(),
+            options: vec!["10".into(), "11".into()],
+            source: String::new(),
+        };
+        let id = DecisionId::new();
+        let part =
+            Part::Decision { id, request: request.clone(), answer: "11".into(), resumed: false };
+        let wire = serde_json::to_value(&part).unwrap();
+        assert_eq!(wire["type"], "decision");
+        assert_eq!(wire["request"]["question"], "10 or 11?");
+        assert_eq!(wire["answer"], "11");
+        assert_eq!(wire["resumed"], false);
+        assert_eq!(serde_json::from_value::<Part>(wire).unwrap(), part);
+        assert_eq!(
+            part.as_plain_text().unwrap(),
+            decision::delivery(id, &request, "11", false),
+            "the transcript draws a reply; the model is still sent the brief"
+        );
     }
 
     #[test]

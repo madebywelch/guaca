@@ -360,6 +360,37 @@ describe("saying when a conversation picked up again", () => {
   });
 });
 
+describe("a decision the operator answered", () => {
+  it("is never continued by what Guaca says after it", () => {
+    // Drawn as the operator's reply, with no header of Guaca's. Merged, the
+    // next Guaca line would lose its own header to a bubble that never had one.
+    const answered = envelope({
+      from: { kind: "system" },
+      trust: "system",
+      parts: [
+        {
+          type: "decision",
+          id: "d1",
+          request: {
+            question: "10 or 11?",
+            context: "",
+            recommendation: "",
+            options: [],
+            source: "",
+          },
+          answer: "11",
+          resumed: false,
+        },
+      ],
+    });
+    const after = envelope({ from: { kind: "system" }, trust: "system" });
+
+    const rows = transcriptRows([answered, after], lookups);
+    expect(rows.map((row) => row.kind)).toEqual(["message", "message"]);
+    expect(rows[1]).toMatchObject({ continued: false });
+  });
+});
+
 describe("a request for permission", () => {
   it("is never folded into a burst, whoever the envelope says it is from", () => {
     // The one thing in a transcript the operator is expected to act on.

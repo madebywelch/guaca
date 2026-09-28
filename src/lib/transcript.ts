@@ -217,6 +217,14 @@ export function transcriptRows(messages: Envelope[], lookups: Lookups): Row[] {
       continue;
     }
 
+    // The operator's answer to a decision. Guaca delivers it, and it is drawn
+    // as the operator's reply, so it is continued by nothing Guaca says next.
+    if (message.parts.some((part) => part.type === "decision")) {
+      interrupt({ kind: "message", key: message.id, message, continued: false });
+      spoken = undefined;
+      continue;
+    }
+
     if (from.kind === "agent" && to.kind === "agent") {
       count(toPeer(lookups.byId(from.id), from.id), from.id, "received", message.id, message.id);
       spoken = undefined;

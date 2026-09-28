@@ -563,6 +563,75 @@ describe("redrawing a transcript", () => {
   });
 });
 
+describe("a decision the operator answered in For you", () => {
+  const request = {
+    question: "Which address goes in the footer?",
+    context: "FTC guidance asks for a valid postal address.",
+    recommendation: "",
+    options: [],
+    source: "FTC CAN-SPAM compliance guide",
+  };
+  const answered = (part: Partial<Extract<Part, { type: "decision" }>> = {}) =>
+    envelope({
+      from: { kind: "system" },
+      trust: "system",
+      intent: "work",
+      parts: [
+        {
+          type: "decision",
+          id: "6bd01bb1-068b-433e-a520-fb87b0f85f5f",
+          request,
+          answer: "Leave it out.\nShow me the copy before you send anything.",
+          resumed: false,
+          ...part,
+        },
+      ],
+    });
+
+  it("is the operator's reply under the question it answers, not Guaca's brief", () => {
+    // What this replaces: a bubble from Guaca holding the paragraph the agent
+    // is told, then the question and the answer as one line of JSON.
+    const { container } = show(answered());
+
+    expect(container.querySelector('[data-operator="true"]')).not.toBeNull();
+    expect(screen.getByText("Answered in For you")).toBeTruthy();
+    expect(screen.getByText(request.question)).toBeTruthy();
+    expect(screen.getByText(/Leave it out\./)).toBeTruthy();
+    expect(screen.queryByText("Guaca")).toBeNull();
+    expect(container.textContent).not.toMatch(/answered decision|"answer"|6bd01bb1/);
+  });
+
+  it("keeps what the agent asked with behind the question", () => {
+    const { container } = show(answered());
+    const asked = container.querySelector("details");
+
+    expect(asked?.open).toBe(false);
+    expect(asked?.querySelector("summary")?.textContent).toBe(request.question);
+    expect(asked?.textContent).toContain(request.context);
+    expect(asked?.textContent).toContain(request.source);
+    expect(asked?.textContent).not.toContain("Recommended");
+  });
+
+  it("draws the agent's words as text, and a bare question opens nothing", () => {
+    // A choice clicked in For you is one of the agent's own options.
+    const { container } = show(
+      answered({
+        request: { ...request, question: "Ship **now**?", context: "", source: "" },
+        answer: "[yes](https://example.com)",
+      }),
+    );
+
+    expect(screen.getByText("Ship **now**?")).toBeTruthy();
+    expect(screen.getByText("[yes](https://example.com)")).toBeTruthy();
+    expect(container.querySelector("a, strong, details")).toBeNull();
+  });
+
+  it("says so when it resumed follow-through", () => {
+    show(answered({ resumed: true }));
+    expect(screen.getByText("Resumed in For you")).toBeTruthy();
+  });
+});
+
 describe("a routine coming due", () => {
   const fired = (parts?: Part[]) =>
     envelope({

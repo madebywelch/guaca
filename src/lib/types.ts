@@ -121,6 +121,20 @@ export type Part =
       question: string;
       /** What the operator may pick. Empty is a written answer. */
       options: string[];
+    }
+  /**
+   * The operator's answer to a decision, on its way to the agent that filed
+   * it. The model is sent a paragraph built from these fields; the transcript
+   * draws the answer as the operator's reply to `request.question`, which the
+   * agent wrote and is drawn as text. `resumed` is follow-through restarted
+   * after an interruption, with the same answer.
+   */
+  | {
+      type: "decision";
+      id: string;
+      request: DecisionRequest;
+      answer: string;
+      resumed: boolean;
     };
 
 /**
@@ -1733,10 +1747,20 @@ export function errorMessage(value: unknown): string {
  * the model was sent, so the flow board naming what opened a run has to be
  * able to say it. Drawing a firing as a bubble is prevented by the transcript
  * choosing a row for the part, not by this hiding the words.
+ *
+ * A decision's answer is where the two part ways. The model is sent a
+ * paragraph of instructions around the answer, and a board naming what
+ * opened a run should name the answer rather than the first 140 characters
+ * of how Guaca introduced it.
  */
 export function plainText(envelope: Envelope): string {
   return envelope.parts
-    .map((part) => (part.type === "text" ? part.text : part.type === "routine" ? part.what : null))
+    .map((part) => {
+      if (part.type === "text") return part.text;
+      if (part.type === "routine") return part.what;
+      if (part.type === "decision") return part.answer;
+      return null;
+    })
     .filter((text): text is string => text !== null)
     .join("\n")
     .trim();
@@ -1758,18 +1782,21 @@ export interface WorkingNote {
   body: string;
 }
 
+/** What an agent asked, every field of it in the agent's own words. */
+export interface DecisionRequest {
+  question: string;
+  context: string;
+  recommendation: string;
+  options: string[];
+  source: string;
+}
+
 export interface WorkDecision {
   id: string;
   agentId: AgentId;
   groupId: GroupId;
   topic: string;
-  request: {
-    question: string;
-    context: string;
-    recommendation: string;
-    options: string[];
-    source: string;
-  };
+  request: DecisionRequest;
   status: "pending" | "answered" | "completed" | "withdrawn";
   answer: string | null;
   outcome: string | null;

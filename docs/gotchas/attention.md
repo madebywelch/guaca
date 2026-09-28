@@ -61,6 +61,12 @@ Live requests, operational blockers, and durable decisions that stop no turn. `d
 - **Answer acceptance and delivery are one transaction.** A saved answer without
   a transcript envelope and recovery point is lost work that looks accepted.
   `Store::answer_decision` commits all three; the runtime books before enqueueing.
+- **The answer is a `decision` part, and the agent's text is built from it.**
+  As text it was a bubble from Guaca holding the brief and a line of JSON, in
+  the middle of the operator's conversation. Trimming that text to tidy the
+  transcript would have changed the prompt; the part changes only the drawing.
+  `decision::delivery` is pinned to the byte by its test, so rewording it is a
+  prompt change and wants the live evals.
 - **Answered is not completed.** Only an explicit outcome moves follow-through
   to history. A restart marks answered work interrupted and requires Resume;
   silently replaying it could repeat an external effect.

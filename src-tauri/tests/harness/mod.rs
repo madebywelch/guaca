@@ -887,6 +887,11 @@ fn parts_of(envelope: &Envelope) -> String {
                 format!("[asks the operator: {question} ({})]", options.join(" | "))
             }
             Part::Routine { name, what, .. } => format!("[routine {name:?}] {what}"),
+            Part::Decision { request, answer, resumed, .. } => format!(
+                "[{} {:?}] {answer}",
+                if *resumed { "resumes decision" } else { "answers decision" },
+                request.question
+            ),
             Part::Json { name, .. } => format!("[{name}]"),
         })
         .collect::<Vec<_>>()
