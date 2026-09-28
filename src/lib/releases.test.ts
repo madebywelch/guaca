@@ -84,13 +84,38 @@ describe("a desktop and its host, updated separately", () => {
       localUpdate: null,
       ...over,
     });
+  const ours = (version: string, commit = "aaaaaaa") => ({ version, commit });
   it("orders a client and its host only by stable releases", () => {
-    expect(skew("0.1.0", health)).toBe("same");
-    expect(skew("0.2.0", health)).toBe("hostBehind");
-    expect(skew("0.0.9", health)).toBe("clientBehind");
-    expect(skew("0.1.0", { ...health, version: undefined })).toBe("unknown");
-    expect(skew("0.1.0-dev", health)).toBe("unknown");
-    expect(skew("0.1.0", null)).toBe("unknown");
+    expect(skew(ours("0.1.0"), health)).toBe("same");
+    expect(skew(ours("0.2.0"), health)).toBe("hostBehind");
+    expect(skew(ours("0.0.9"), health)).toBe("clientBehind");
+    expect(skew(ours("0.1.0"), { ...health, version: undefined })).toBe("unknown");
+    expect(skew(ours("0.1.0-dev"), health)).toBe("unknown");
+    expect(skew(ours("0.1.0"), null)).toBe("unknown");
+  });
+  it("tells one version on two builds from one build", () => {
+    // A source build carries the last release's version, so against that
+    // release's host a version alone said "same" while the host was missing
+    // every command added since, and the Host pane said Compatible.
+    expect(skew(ours("0.1.0", "bbbbbbb"), health)).toBe("otherBuild");
+    expect(skew(ours("0.1.0", "bbbbbbb-dirty"), health)).toBe("otherBuild");
+    expect(skew(ours("0.1.0", "aaaaaaa-dirty"), health)).toBe("otherBuild");
+    // One commit at two lengths, one dirty tree on both sides, or a side that
+    // names no commit, is not a difference anyone can show.
+    expect(skew(ours("0.1.0", "a".repeat(40)), health)).toBe("same");
+    const dirty = { ...health, build: "aaaaaaa-dirty" };
+    expect(skew(ours("0.1.0", "aaaaaaa-dirty"), dirty)).toBe("same");
+    expect(skew(ours("0.1.0", ""), health)).toBe("same");
+    expect(skew(ours("0.1.0"), { ...health, build: "" })).toBe("same");
+    expect(skew(ours("0.1.0", "unknown"), health)).toBe("same");
+  });
+  it("says one version on two builds before any release news", () => {
+    const notice = facts({ client: ours("0.1.0", "bbbbbbb"), release: status });
+    expect(notice?.text).toBe(
+      "This app and its host are different builds of Guaca 0.1.0, so features one has may be missing from the other. Run both from the same build.",
+    );
+    expect(notice?.key).toBe("otherBuild:aaaaaaa:bbbbbbb");
+    expect(facts({ desktop: false, client: ours("0.1.0", "bbbbbbb-dirty") })).toBeNull();
   });
   it("says which side to update when they differ, before any release news", () => {
     const ahead = facts({ client: { version: "0.3.0", commit: "b" }, release: status });

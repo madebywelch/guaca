@@ -112,6 +112,11 @@ impl Refused {
 #[serde(rename_all = "camelCase")]
 pub struct Client {
     pub version: String,
+    /// The commit it was built from. A source build carries the version of
+    /// the last release, so two builds that agree on a version can disagree
+    /// about which commands exist, and only this tells them apart.
+    #[serde(default)]
+    pub build: String,
     #[serde(default)]
     pub desktop: bool,
     /// One page load. What a sign-in's browser tab is addressed to, so the
@@ -129,16 +134,51 @@ impl Client {
                 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
         })
     }
+
+    /// The build, if it is one: a commit, possibly `-dirty`, never text to
+    /// repeat.
+    pub fn build(&self) -> Option<&str> {
+        is_build(&self.build).then_some(self.build.as_str())
+    }
+}
+
+fn commit(s: &str) -> bool {
+    (7..=40).contains(&s.len())
+        && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+fn is_build(s: &str) -> bool {
+    commit(s.strip_suffix("-dirty").unwrap_or(s))
+}
+
+/// Two builds known to be different code: both commits, and not one commit
+/// spelled at two lengths. A `-dirty` build matches only itself. The page's
+/// copy of this rule is `otherBuild` in `src/lib/releases.ts`.
+fn different_builds(a: &str, b: &str) -> bool {
+    let same = a == b || (commit(a) && commit(b) && (a.starts_with(b) || b.starts_with(a)));
+    is_build(a) && is_build(b) && !same
+}
+
+/// A commit as a person reads it: seven characters, and whether it was dirty.
+fn short(build: &str) -> String {
+    let (hash, dirty) = match build.strip_suffix("-dirty") {
+        Some(hash) => (hash, "-dirty"),
+        None => (build, ""),
+    };
+    format!("{}{dirty}", hash.get(..7).unwrap_or(hash))
 }
 
 /// The sentence that says which side of a skew to update.
 ///
 /// Only a comparable release is ordered. Equal versions with different
-/// commands are two development builds, and a guess about which is older is
-/// worse than saying both are possible.
+/// commands are two builds under one number, at least one of them from
+/// source, and a guess about which is older is worse than naming both.
 pub fn skew(client: Option<&Client>) -> String {
+    skew_from(client, env!("CARGO_PKG_VERSION"), crate::updates::BUILD)
+}
+
+fn skew_from(client: Option<&Client>, host: &str, build: &str) -> String {
     use std::cmp::Ordering;
-    let host = env!("CARGO_PKG_VERSION");
     let order = client.and_then(|c| {
         let theirs = semver::Version::parse(&c.version).ok()?;
         Some(theirs.cmp(&semver::Version::parse(host).ok()?))
@@ -159,7 +199,21 @@ pub fn skew(client: Option<&Client>) -> String {
             if c.desktop { "app" } else { "page" },
             c.version
         ),
-        _ => "The app and the workspace it is connected to are different versions; update \
+        (Some(c), Some(Ordering::Equal)) if different_builds(&c.build, build) => {
+            let side = if c.desktop { "app" } else { "page" };
+            format!(
+                "This {side} and the host are both Guaca {host} but different builds ({side} {}, \
+                 host {}); {}",
+                short(&c.build),
+                short(build),
+                if c.desktop {
+                    "run an app and a host built from the same commit"
+                } else {
+                    "reload the page to load the host's own version"
+                }
+            )
+        }
+        _ => "The app and the workspace it is connected to are different builds; update \
               whichever is older"
             .into(),
     }
@@ -417,25 +471,67 @@ mod tests {
         assert!(body.message.contains("update"), "{}", body.message);
     }
 
+    fn client(version: &str, build: &str, desktop: bool) -> Client {
+        Client { version: version.into(), build: build.into(), desktop, id: None }
+    }
+
     #[test]
     fn a_skewed_client_is_told_which_side_to_update() {
         let host = semver::Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
-        let older = Client { version: "0.0.1".into(), desktop: true, id: None };
-        let newer = Client { version: format!("{}.0.0", host.major + 1), desktop: true, id: None };
+        let older = client("0.0.1", "", true);
+        let newer = client(&format!("{}.0.0", host.major + 1), "", true);
         let message = Refused::Unknown("x".into()).body_for(Some(&older)).message;
         assert!(message.contains("download the latest Guaca"), "{message}");
         let message = Refused::Unknown("x".into()).body_for(Some(&newer)).message;
         assert!(message.contains("update the host"), "{message}");
-        let page = Client { version: "0.0.1".into(), desktop: false, id: None };
+        let page = client("0.0.1", "", false);
         let message = Refused::Unknown("x".into()).body_for(Some(&page)).message;
         assert!(message.contains("reload the page"), "{message}");
-        // A development build at the host's own version, or no claim at all,
-        // cannot be ordered, and the message does not pretend otherwise.
-        let same = Client { version: env!("CARGO_PKG_VERSION").into(), desktop: true, id: None };
+        // A client at the host's own version that names no build, or no claim
+        // at all, cannot be told apart, and the message does not pretend otherwise.
+        let same = client(env!("CARGO_PKG_VERSION"), "", true);
         for client in [Some(&same), None] {
             let message = Refused::Unknown("x".into()).body_for(client).message;
             assert!(message.contains("whichever is older"), "{message}");
         }
+    }
+
+    #[test]
+    fn one_version_on_two_builds_names_both_builds() {
+        // The failure this is for: a source-built app carries the version of
+        // the release before it, so against that release's host the versions
+        // agree and the commands do not. "Different versions" was false and
+        // the Host pane agreed with neither side.
+        let release = "c15bd9a58d5e4406c92f4ad65ca263a35d68a492";
+        let app = client("0.2.0", "79961bb-dirty", true);
+        let message = skew_from(Some(&app), "0.2.0", release);
+        assert_eq!(
+            message,
+            "This app and the host are both Guaca 0.2.0 but different builds (app 79961bb-dirty, \
+             host c15bd9a); run an app and a host built from the same commit"
+        );
+        let page = client("0.2.0", "79961bb", false);
+        assert!(skew_from(Some(&page), "0.2.0", release).contains("reload the page"));
+
+        // One commit at two lengths, and one dirty tree on both sides, are one build.
+        for build in ["c15bd9a", release] {
+            let same = client("0.2.0", build, true);
+            assert!(skew_from(Some(&same), "0.2.0", release).contains("whichever is older"));
+        }
+        let dirty = client("0.2.0", "d02c114-dirty", true);
+        assert!(skew_from(Some(&dirty), "0.2.0", "d02c114-dirty").contains("whichever is older"));
+        assert!(skew_from(Some(&dirty), "0.2.0", "d02c114").contains("different builds"));
+
+        // A client older than the field still parses, and names no build.
+        let older: Client =
+            serde_json::from_value(serde_json::json!({"version": "0.2.0"})).unwrap();
+        assert_eq!(older.build(), None);
+
+        // A host built without a commit knows nothing to compare, and a
+        // build that is not a commit is not repeated back.
+        assert!(skew_from(Some(&app), "0.2.0", "").contains("whichever is older"));
+        let odd = client("0.2.0", "<script>", true);
+        assert!(skew_from(Some(&odd), "0.2.0", release).contains("whichever is older"));
     }
 
     #[test]

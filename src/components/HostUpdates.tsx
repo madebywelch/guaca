@@ -348,7 +348,10 @@ export function HostUpdatePanel() {
   const boxNewer = order === -1 || (order === 0 && !health?.release);
   const canUpdateBox = boxed && boxNewer && reachable && match !== "clientOld";
   const pageChanged = pageStale(desktop, COMMIT, health);
-  const drift = desktop ? skew(VERSION, health) : "unknown";
+  const drift = desktop ? skew({ version: VERSION, commit: COMMIT }, health) : "unknown";
+  // The API generation says this app can talk to the host at all. Commands
+  // added since the older build are missing whatever the generation says.
+  const apart = drift === "otherBuild" || drift === "hostBehind" || drift === "clientBehind";
   const appBehind = desktop && (drift === "clientBehind" || clientUpdate(VERSION, release));
   const title =
     match === "hostOld"
@@ -424,15 +427,17 @@ export function HostUpdatePanel() {
                   ? "This host runs an older Guaca than this app."
                   : drift === "clientBehind"
                     ? "This app runs an older Guaca than its host."
-                    : newer
-                      ? "A newer host release is available."
-                      : release?.error
-                        ? "Could not check for updates."
-                        : !health.release
-                          ? "This is an unverified or development build."
-                          : !release?.latest
-                            ? "Release status has not been checked."
-                            : "No newer stable host release was found."}
+                    : drift === "otherBuild"
+                      ? "This app and its host are different builds of the same version."
+                      : newer
+                        ? "A newer host release is available."
+                        : release?.error
+                          ? "Could not check for updates."
+                          : !health.release
+                            ? "This is an unverified or development build."
+                            : !release?.latest
+                              ? "Release status has not been checked."
+                              : "No newer stable host release was found."}
       </p>
       {health && (
         <dl className="host-update-facts">
@@ -452,7 +457,9 @@ export function HostUpdatePanel() {
           <dt>Compatibility</dt>
           <dd>
             {match === "compatible"
-              ? "Compatible"
+              ? apart
+                ? "Connects; features may differ"
+                : "Compatible"
               : match === "unknown"
                 ? "Unverified"
                 : "Update required"}
@@ -465,7 +472,7 @@ export function HostUpdatePanel() {
         </dl>
       )}
       {health && (
-        <details>
+        <details open={drift === "otherBuild"}>
           <summary>Build details</summary>
           <p>
             Guaca frontend: {VERSION} ({COMMIT || "unknown commit"})

@@ -218,6 +218,25 @@ describe("host updates in either client", () => {
       screen.queryByRole("link", { name: "Download the latest Guaca desktop app" }),
     ).toBeNull();
   });
+  it("does not call one version on two builds compatible", async () => {
+    // A source-built app against the release its version names: every
+    // version on the pane agreed while the host refused the app's commands.
+    health.build = "c".repeat(40);
+    release = { ...published, latest: null };
+    mount();
+    await screen.findByText("This app and its host are different builds of the same version.");
+    expect(screen.getByText("Connects; features may differ")).toBeTruthy();
+    expect(screen.queryByText("Compatible")).toBeNull();
+    expect(screen.getByText("Build details").closest("details")?.open).toBe(true);
+    expect(screen.getByText(`Host commit: ${"c".repeat(40)}`)).toBeTruthy();
+  });
+  it("calls one build on both sides compatible", async () => {
+    health.build = "a".repeat(40);
+    release = { ...published, latest: null };
+    mount();
+    await screen.findByText("Compatible");
+    expect(screen.getByText("Build details").closest("details")?.open).toBe(false);
+  });
 });
 
 describe("a box that updates itself", () => {

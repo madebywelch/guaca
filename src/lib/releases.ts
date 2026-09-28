@@ -56,17 +56,20 @@ export function available(health: Health | null, status: ReleaseStatus | null): 
   );
 }
 /**
- * How this client and its host differ, by release version.
+ * How this client and its host differ, by release version, then by build.
  *
  * A desktop and its host are updated separately, so either can be ahead. Only
  * stable versions are ordered; a development build or a legacy host with no
- * version is `unknown`, never assumed current.
+ * version is `unknown`, never assumed current. `otherBuild` is one version and
+ * two commits: a source build carries the version of the last release, so a
+ * version alone reads "same" while one side is missing commands the other has.
  */
-export type Skew = "same" | "clientBehind" | "hostBehind" | "unknown";
-export function skew(client: string, health: Health | null): Skew {
-  const order = health?.version ? compareVersions(client, health.version) : null;
-  if (order === null) return "unknown";
-  return order === 0 ? "same" : order < 0 ? "clientBehind" : "hostBehind";
+export type Skew = "same" | "otherBuild" | "clientBehind" | "hostBehind" | "unknown";
+export function skew(client: { version: string; commit: string }, health: Health | null): Skew {
+  const order = health?.version ? compareVersions(client.version, health.version) : null;
+  if (!health || order === null) return "unknown";
+  if (order === 0) return otherBuild(client.commit, health.build) ? "otherBuild" : "same";
+  return order < 0 ? "clientBehind" : "hostBehind";
 }
 
 /** Whether a published release is newer than this client's own version. */
@@ -113,13 +116,18 @@ export function updateNotice(facts: UpdateFacts): UpdateNotice | null {
   const latest = release?.latest?.version;
   const appBehindRelease = desktop && clientUpdate(client.version, release);
   if (desktop) {
-    const drift = skew(client.version, health);
+    const drift = skew(client, health);
     if (drift === "hostBehind" || drift === "clientBehind")
       return {
         key: `${drift}:${health.version}:${client.version}`,
         text: `This host runs Guaca ${health.version} and this app is ${client.version}. ${
           drift === "hostBehind" ? "Update the host to match." : "Update this app to match."
         }`,
+      };
+    if (drift === "otherBuild")
+      return {
+        key: `otherBuild:${health.build}:${client.commit}`,
+        text: `This app and its host are different builds of Guaca ${health.version}, so features one has may be missing from the other. Run both from the same build.`,
       };
   }
   if (available(health, release))
@@ -139,6 +147,19 @@ export function sameBuild(a: string, b: string): boolean {
   return (
     /^[a-f0-9]{7,40}$/.test(a) && /^[a-f0-9]{7,40}$/.test(b) && (a.startsWith(b) || b.startsWith(a))
   );
+}
+
+const BUILD = /^[a-f0-9]{7,40}(-dirty)?$/;
+
+/**
+ * Two builds known to be different code. Both have to be commits: an empty
+ * build was made without a repository, and nothing is known about it. A
+ * `-dirty` build matches only the identical string, which is the most either
+ * side can say about a tree with uncommitted edits. `ipc::different_builds`
+ * is the host's copy of this rule.
+ */
+function otherBuild(a: string, b: string): boolean {
+  return BUILD.test(a) && BUILD.test(b) && a !== b && !sameBuild(a, b);
 }
 
 export function parseHealth(value: unknown): Health {

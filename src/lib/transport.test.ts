@@ -205,6 +205,7 @@ describe("a call", () => {
     // preflight of every call that carried one it does not know.
     expect(sent.client).toEqual({
       version: expect.stringMatching(/^\d+\.\d+\.\d+/),
+      build: expect.any(String),
       desktop: false,
       id: expect.stringMatching(/^[a-z0-9-]{8,}$/),
     });
