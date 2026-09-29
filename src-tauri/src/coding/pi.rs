@@ -310,12 +310,13 @@ async fn drive(
         })
     };
 
-    // The gate is checked before the brief is sent, so a job the operator
-    // asked to be stopped before a push never starts ungated.
-    if job.gate.asks() {
-        write(stdin, json!({"id": "gate", "type": "get_commands"})).await?;
+    // A chosen model is checked against pi's catalog before anything else,
+    // because pi runs one it has no entry for rather than refusing it.
+    let mut resolved = Value::Null;
+    if job.tuning.model.is_some() {
+        write(stdin, json!({"id": "state", "type": "get_state"})).await?;
     } else {
-        write(stdin, json!({"id": "brief", "type": "prompt", "message": job.brief})).await?;
+        begin(job, stdin).await?;
     }
 
     loop {
@@ -361,7 +362,30 @@ async fn drive(
                         let id = event["id"].as_str().unwrap_or_default();
                         let ok = event["success"] == Value::Bool(true);
                         let error = event["error"].as_str().unwrap_or("pi refused it").to_string();
-                        if id == "gate" {
+                        if id == "state" {
+                            resolved = event["data"]["model"].clone();
+                            write(stdin, listing()).await?;
+                        } else if listed(&event) {
+                            match standing(&resolved, &event) {
+                                Standing::Listed => begin(job, stdin).await?,
+                                Standing::Behind => {
+                                    let (provider, model) = (&resolved["provider"], &resolved["id"]);
+                                    write(stdin, json!({"id": "model", "type": "set_model", "provider": provider, "modelId": model})).await?;
+                                }
+                                Standing::Unlisted => {
+                                    return Err(CodingError::UnknownModel {
+                                        model: job.tuning.model.clone().unwrap_or_default(),
+                                    });
+                                }
+                            }
+                        } else if id == "model" {
+                            if !ok {
+                                return Err(failed(format!(
+                                    "pi could not take its catalog's entry for the model: {error}"
+                                )));
+                            }
+                            begin(job, stdin).await?;
+                        } else if id == "gate" {
                             let loaded = event["data"]["commands"]
                                 .as_array()
                                 .is_some_and(|all| all.iter().any(|c| c["name"] == GATE_COMMAND));
@@ -394,6 +418,62 @@ async fn drive(
                 }
             }
         }
+    }
+}
+
+/// The gate's check when there is a gate, and otherwise the brief.
+///
+/// The gate is checked before the brief is sent, so a job the operator asked
+/// to be stopped before a push never starts ungated.
+async fn begin(job: &Job<'_>, stdin: &mut tokio::process::ChildStdin) -> Result<(), CodingError> {
+    if job.gate.asks() {
+        write(stdin, json!({"id": "gate", "type": "get_commands"})).await
+    } else {
+        write(stdin, json!({"id": "brief", "type": "prompt", "message": job.brief})).await
+    }
+}
+
+/// Where the model pi resolved stands against its catalog.
+#[derive(Debug, PartialEq)]
+enum Standing {
+    /// The catalog's own entry, or no model at all, which pi reports itself.
+    Listed,
+    /// The catalog has an entry with other limits than the model pi resolved:
+    /// it arrived after pi had already settled on a copy. `set_model` takes
+    /// the entry, and writes nothing to pi's settings.
+    Behind,
+    /// The catalog has no entry, so a copy is all pi has.
+    Unlisted,
+}
+
+/// Reads `get_state`'s model against a `get_available_models` answer.
+///
+/// pi does not refuse a `--model` it has no entry for under the provider it
+/// was given. It copies that provider's default, renames the copy, and runs
+/// it with the default's context and output limits. And it settles the model
+/// before its first download of pi.dev's catalog lands, which RPC mode starts
+/// in the background once the session exists: on a box's first job that
+/// resolved `xiaomi/mimo-v2.6-pro` as Kimi K2.6 200 ms before the catalog that
+/// listed it arrived. It asked for 209970 output tokens where the model's
+/// providers take 131072; the provider OpenRouter routed to first accepted
+/// that, and twelve minutes in, the one it fell back to refused it.
+fn standing(resolved: &Value, catalog: &Value) -> Standing {
+    if resolved.is_null() {
+        return Standing::Listed;
+    }
+    let entry =
+        catalog["data"]["models"].as_array().into_iter().flatten().find(|model| {
+            model["provider"] == resolved["provider"] && model["id"] == resolved["id"]
+        });
+    match entry {
+        None => Standing::Unlisted,
+        Some(entry)
+            if entry["contextWindow"] == resolved["contextWindow"]
+                && entry["maxTokens"] == resolved["maxTokens"] =>
+        {
+            Standing::Listed
+        }
+        Some(_) => Standing::Behind,
     }
 }
 
@@ -757,6 +837,33 @@ mod tests {
         let ids: Vec<&str> = lent.iter().map(|offer| offer.id.as_str()).collect();
         assert_eq!(ids, ["anthropic/claude-sonnet-4.5", "qwen/qwen3-coder"]);
         assert!(lent[1].efforts.is_empty(), "a model that does not think offers no level");
+    }
+
+    #[test]
+    fn a_model_pi_copied_from_its_default_is_told_apart_from_one_it_knows() {
+        let kimi = json!({"id":"moonshotai/kimi-k2.6","provider":"openrouter","contextWindow":262144,"maxTokens":235929});
+        // What pi settled on: the default's limits under the id it was asked for.
+        let copied = json!({"id":"xiaomi/mimo-v2.6-pro","name":"xiaomi/mimo-v2.6-pro","provider":"openrouter","contextWindow":262144,"maxTokens":235929});
+        let before =
+            json!({"data":{"models":[kimi, {"id":"claude-opus-4-7","provider":"anthropic"}]}});
+        assert_eq!(standing(&copied, &before), Standing::Unlisted);
+        let elsewhere = json!({"id":"claude-opus-4-7","provider":"openrouter"});
+        assert_eq!(
+            standing(&elsewhere, &before),
+            Standing::Unlisted,
+            "an id is a model only under its provider"
+        );
+        assert_eq!(standing(&kimi, &before), Standing::Listed);
+
+        // The catalog landed after pi settled: the entry is there, and the
+        // copy in use still has the default's limits.
+        let mimo = json!({"id":"xiaomi/mimo-v2.6-pro","provider":"openrouter","contextWindow":1048576,"maxTokens":131072});
+        let after = json!({"data":{"models":[kimi, mimo]}});
+        assert_eq!(standing(&copied, &after), Standing::Behind);
+        assert_eq!(standing(&mimo, &after), Standing::Listed);
+
+        // No model at all is pi's to report, in its own words.
+        assert_eq!(standing(&Value::Null, &after), Standing::Listed);
     }
 
     #[test]

@@ -26,6 +26,15 @@ because the environment is process-wide and these tests run concurrently:
 A provider an extension registers is called for real: the turn posts one chat
 completion to the `baseUrl` it names with the `apiKey` it names, which is what
 pi does with an override, so a test can watch the call reach the other end.
+
+A `--model` it has no entry for is run rather than refused, as pi runs one: its
+provider's default, renamed, with the default's limits. `get_state` reports
+that copy and `get_available_models` does not list it.
+
+  .pi_catalog_late  the catalog lists the model, with its own limits, but only
+                    after the copy was settled on, as pi's first download of
+                    its catalog does
+  .model_set        written: the entry `set_model` put in the copy's place
 """
 import json
 import os
@@ -54,8 +63,46 @@ provider = None
 for source in extensions:
     found = re.search(r'registerProvider\("([^"]+)", \{.*?baseUrl: ("[^"]*"), apiKey: ("[^"]*")', source, re.S)
     if found:
-        provider = {"id": found.group(1), "baseUrl": json.loads(found.group(2)), "apiKey": json.loads(found.group(3))}
+        provider = {"id": found.group(1), "baseUrl": json.loads(found.group(2)), "apiKey": json.loads(found.group(3)),
+                    "models": [json.loads(id) for id in re.findall(r'\{ id: ("[^"]*")', source)]}
 model = args[args.index("--model") + 1] if "--model" in args else ""
+
+
+def entry(id, owner, name, reasoning=False, context=128000, output=16384):
+    return {"id": id, "provider": owner, "name": name, "reasoning": reasoning, "contextWindow": context, "maxTokens": output}
+
+
+def asked():
+    if "--provider" in args:
+        return args[args.index("--provider") + 1], model
+    owner, _, name = model.partition("/")
+    return owner, name
+
+
+def catalog(settled=False):
+    models = [entry("claude-opus-4-7", "anthropic", "Claude Opus 4.7", True, 1000000, 128000)]
+    if provider and provider["id"] == "openrouter":
+        models.append(entry("moonshotai/kimi-k2.6", "openrouter", "Kimi K2.6", True, 262144, 235929))
+        models.append(entry("qwen/qwen3-coder", "openrouter", "Qwen3 Coder"))
+    elif provider:
+        models += [entry(id, provider["id"], id) for id in provider["models"]]
+    if Path(".pi_catalog_late").exists() and not settled:
+        owner, name = asked()
+        models.append(entry(name, owner, name, True, 1048576, 131072))
+    return models
+
+
+def resolved():
+    """The model pi settles on at start, before the catalog it downloads lands."""
+    known = catalog(settled=True)
+    if not model:
+        return known[0]
+    owner, name = asked()
+    found = next((m for m in known if m["provider"] == owner and m["id"] == name), None)
+    if found:
+        return found
+    default = next((m for m in known if m["provider"] == owner), known[0])
+    return {**default, "id": name, "name": name, "provider": owner}
 incoming = queue.Queue()
 
 
@@ -182,10 +229,17 @@ while True:
         break
     kind = command["type"]
     if kind == "get_available_models":
-        models = [{"id": "claude-opus-4-7", "provider": "anthropic", "name": "Claude Opus 4.7", "reasoning": True}]
-        if provider and provider["id"] == "openrouter":
-            models.append({"id": "qwen/qwen3-coder", "provider": "openrouter", "name": "Qwen3 Coder", "reasoning": False})
-        respond(command, data={"models": models})
+        respond(command, data={"models": catalog()})
+    elif kind == "get_state":
+        respond(command, data={"model": resolved(), "sessionId": session, "isStreaming": False})
+    elif kind == "set_model":
+        found = next((m for m in catalog() if m["provider"] == command["provider"] and m["id"] == command["modelId"]), None)
+        if found:
+            Path(".model_set").write_text(json.dumps(found))
+            respond(command, data=found)
+        else:
+            send({"id": command.get("id"), "type": "response", "command": "set_model", "success": False,
+                  "error": "Model not found: %s/%s" % (command["provider"], command["modelId"])})
     elif kind == "get_commands":
         commands = [{"name": "guaca-gate", "description": "Guaca's push gate", "source": "extension"}] if gated else []
         respond(command, data={"commands": commands})

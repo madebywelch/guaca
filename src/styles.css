@@ -5899,6 +5899,15 @@ input[type="file"]:disabled {
   justify-content: space-between;
   gap: var(--space-5);
   flex: none;
+  /* Anywhere, not break-word: only `anywhere` lowers the text's min-content
+     width, which is the width a flex item will not shrink below. A provider's
+     error is JSON with no space in it for a line and a half, and it pushed
+     Dismiss past the column's edge and under the inspector. */
+  overflow-wrap: anywhere;
+}
+
+.banner > .btn {
+  flex: none;
 }
 
 .banner--error {

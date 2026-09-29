@@ -158,6 +158,17 @@ pub enum CodingError {
         .needs.1
     )]
     TooOld { harness: &'static str, needs: (u32, u32), install: &'static str },
+    /// A model pi has no entry for, which it runs on another model's limits
+    /// rather than refusing. Nothing was started.
+    #[error(
+        "pi has no entry for the model `{model}`, so it would run it on another model's context \
+         and output limits, which a provider can refuse partway through the job. Nothing was \
+         started. pi fetches its catalog in the background, so a model added recently can be \
+         there on the next try; otherwise update pi with `{}`, or choose a model it lists in the \
+         agent's terminal settings",
+        pi::INSTALL
+    )]
+    UnknownModel { model: String },
     /// A program asked for its models that did not list them. Nothing was
     /// started; the model field still takes a name typed by hand.
     #[error("{0}. The model field still takes a name typed by hand")]

@@ -139,6 +139,16 @@ and `programs.rs` are the code.
   `agent_end` (the event carries `willRetry`), and closing stdin on the first
   one would cut the retry off and report a job that was still working as
   finished.
+- **pi runs a model it has no entry for, on its provider's default.** A
+  `--model` its catalog lacks is the default copied under the new id, with the
+  default's context and output limits, and pi settles the model before its
+  first download of pi.dev's catalog lands. A box's first job ran
+  `xiaomi/mimo-v2.6-pro` as Kimi K2.6, asked for 209970 output tokens where the
+  model's providers take 131072, and failed twelve minutes in when OpenRouter
+  fell back to a provider that checks. The driver asks `get_state` against
+  `get_available_models` before the brief: an entry that arrived late is taken
+  with `set_model`, which persists nothing, and no entry at all refuses the job.
+  An id alone cannot tell the copy from the entry once the catalog has landed.
 - **pi's gate fails closed, unlike the Claude bridge.** The extension is asked
   for by `-e` and confirmed by `get_commands` before the brief is sent. A pi
   that did not load it (an old version, a broken extension directory) would
