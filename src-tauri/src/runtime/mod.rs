@@ -10,10 +10,13 @@
 //! particular is locked, consulted, and released before any inference starts.
 
 mod decisions;
+mod drain;
 mod errand;
 pub mod events;
 pub mod guard;
 pub mod prompt;
+
+pub use drain::Drained;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
@@ -598,6 +601,9 @@ struct Running {
     /// ends depends on it: an agent that stopped its own job needs no message
     /// about it, and one whose job the operator stopped needs to hear why.
     stopped_by: Option<Origin>,
+    /// The host asked it to stop, so the next one can carry it on in the same
+    /// session. Nobody is told anything: the job is not over.
+    put_down: bool,
 }
 
 /// A job about to be spawned: where, what, and which session it is.
@@ -698,6 +704,13 @@ pub enum RuntimeError {
          is when the next piece of work can begin. Say that it is already in progress"
     )]
     JobRunning { directory: String },
+    /// The host is being stopped, and nothing started now would get to finish.
+    #[error(
+        "the host is restarting for an update, so no coding job can start until it is back. \
+         Work already under way is put down and picked up where it stopped: start this again \
+         once the host has restarted"
+    )]
+    Stopping,
     #[error(transparent)]
     Terminal(#[from] crate::terminal::TerminalError),
     /// pi is set to be paid for with Guaca's key, and neither the agent's group
@@ -821,6 +834,16 @@ struct Runs {
     ///
     /// Held exactly as long as the run is, on the same path `stopped` is.
     refused: HashMap<RunId, HashSet<(AgentId, String)>>,
+    /// Set once, when the host is asked to stop, and never cleared: the
+    /// process ends. Here rather than in an atomic of its own because
+    /// `deliver` reads it in the same critical section it books a run in, and
+    /// a message accepted between the two would be queued behind actors that
+    /// have already put their work down. See [`Runtime::drain`].
+    draining: bool,
+    /// Runs some of whose work a drain has put down. One of these that runs
+    /// out of bookings is marked whole for the next host rather than settled:
+    /// it is not finished, only put down.
+    put_down: HashSet<RunId>,
 }
 
 struct Inner {
@@ -870,9 +893,11 @@ struct Inner {
     /// and nothing downstream would say which of them wrote what. Two changes
     /// at once are two agents, talking in the crew they share.
     ///
-    /// In memory rather than on the row: a job does not survive a restart, and
-    /// a stored flag would come back true forever after a crash and lock an
-    /// agent out of its own terminal.
+    /// In memory rather than on the row: a process does not survive a
+    /// restart, and a stored flag would come back true forever after a crash
+    /// and lock an agent out of its own terminal. A job a stopping host puts
+    /// down is a different record, `put_down_jobs`, which the next host reads
+    /// once and starts again from.
     coding: Mutex<HashMap<AgentId, Running>>,
     /// Each agent's own directory. See `terminal.rs`.
     terminals: crate::terminal::Terminals,
@@ -924,6 +949,10 @@ struct Inner {
     /// Actor tasks currently running. Registration and the task are separate
     /// things, and a leaked task is invisible without counting it.
     live_actors: Arc<AtomicUsize>,
+    /// Turns the last host put down, by the message each was answering, and
+    /// the records of what each had done before it stopped. Filled once at
+    /// boot by [`Runtime::pick_up`] and emptied by the turns themselves.
+    resuming: Mutex<HashMap<MessageId, Vec<MessageId>>>,
     events: Arc<dyn EventSink>,
 }
 
@@ -1042,6 +1071,7 @@ impl Runtime {
                 account: std::sync::OnceLock::new(),
                 modalities: modality::Registry::new(),
                 live_actors: Arc::new(AtomicUsize::new(0)),
+                resuming: Mutex::new(HashMap::new()),
                 events,
             }),
         }
@@ -1709,9 +1739,24 @@ impl Runtime {
     /// thirty seconds.
     fn deliver(&self, envelope: Envelope) -> Result<(), RuntimeError> {
         if matches!(envelope.to, Participant::Agent { .. }) {
+            let steps = self.steps_of(envelope.run_id);
             // Serialize acceptance with settlement: a finishing turn cannot
             // erase a new delivery's recovery point between write and booking.
             let mut runs = self.inner.runs.lock();
+            // Nothing in this process will start another turn, so a message
+            // arriving now is the next host's from the start. Put down here
+            // rather than queued for an actor to put down, because the actor it
+            // would wait behind may be the one still inside a tool call when
+            // the process ends, and the message would end with it. Whole at
+            // once unless something of its conversation is still running.
+            if runs.draining && !runs.stopped.contains(&envelope.run_id) {
+                let whole = (!runs.outstanding.contains_key(&envelope.run_id)).then_some(steps);
+                self.inner.store.append_put_down(&envelope, whole)?;
+                runs.put_down.insert(envelope.run_id);
+                drop(runs);
+                self.inner.events.emit(UiEvent::MessageAppended { message: Box::new(envelope) });
+                return Ok(());
+            }
             if runs.stopped.contains(&envelope.run_id) {
                 self.inner.store.append(&envelope)?;
             } else {
@@ -1728,7 +1773,15 @@ impl Runtime {
     /// Enqueue a delivery whose persistence and run booking have committed.
     fn enqueue_delivery(&self, envelope: Envelope) {
         self.inner.events.emit(UiEvent::MessageAppended { message: Box::new(envelope.clone()) });
+        self.queue(envelope);
+    }
 
+    /// Hands a booked envelope to its recipient's actor.
+    ///
+    /// Apart from `enqueue_delivery` for the one caller that must not announce
+    /// the message: a pickup after a restart delivers envelopes the transcript
+    /// already holds, and announcing them would draw each one twice.
+    fn queue(&self, envelope: Envelope) {
         if let Participant::Agent { id } = envelope.to {
             // Booked here rather than by the sender, because this is the only
             // place that knows whether anybody took it. A run settles when
@@ -2324,6 +2377,12 @@ impl Runtime {
     /// is now the safe thing to write, which is why the fix is a boundary
     /// rather than a rule about which keyword to avoid.
     async fn sweep_schedule(&self) {
+        // Nothing fires on a host that is stopping. The slot is left where it
+        // is, so the next host's first sweep, which runs at boot, finds it due
+        // and fires it there once.
+        if self.draining() {
+            return;
+        }
         let now = now_ms();
         let due = match self.inner.store.due_routines(now) {
             Ok(due) => due,
@@ -2614,11 +2673,19 @@ impl Runtime {
         };
         {
             let mut coding = self.inner.coding.lock();
+            // Read under the job lock, so a drain that has not seen this job
+            // yet is one this launch sees: it either refuses here or is in the
+            // map before the drain looks.
+            if self.draining() {
+                return Err(RuntimeError::Stopping);
+            }
             if let Some(busy) = coding.get(&card.id) {
                 return Err(RuntimeError::JobRunning { directory: busy.directory.clone() });
             }
-            coding
-                .insert(card.id, Running { directory: shown.clone(), controls, stopped_by: None });
+            coding.insert(
+                card.id,
+                Running { directory: shown.clone(), controls, stopped_by: None, put_down: false },
+            );
         }
         // Recorded before anything runs, so a job that dies at once still
         // leaves a session a follow-up can find and the operator can open.
@@ -2639,6 +2706,7 @@ impl Runtime {
             // the first edit or it is not read at all: a harness handed a brief
             // starts working where it is standing, and where it is standing is
             // wherever the last job left it. `repo::footing` is the argument.
+            let asked = task.clone();
             let mut brief = String::new();
             match crate::repo::footing(&working).await {
                 Some(footing) => {
@@ -2726,6 +2794,34 @@ impl Runtime {
                 }
             };
 
+            // Stopped for the next host to carry on. Written before the entry
+            // below is removed, because a drain waits for that entry and the
+            // process ends soon after it goes.
+            let put_down = matches!(&outcome, Ok(done) if done.stopped)
+                && runtime
+                    .inner
+                    .coding
+                    .lock()
+                    .get(&agent)
+                    .is_some_and(|job| job.put_down && job.stopped_by.is_none());
+            if put_down {
+                let named = match &outcome {
+                    Ok(done) if !done.session_id.is_empty() => done.session_id.clone(),
+                    _ => session.clone(),
+                };
+                let job = crate::db::PutDownJob {
+                    agent,
+                    harness,
+                    session: named,
+                    directory: shown.clone(),
+                    task: asked,
+                    by_operator: origin == Origin::Operator,
+                };
+                if let Err(err) = runtime.inner.store.put_down_job(&job) {
+                    tracing::error!(%err, "could not keep a stopped coding job for the next host");
+                }
+            }
+
             // Whatever the job was waiting on is over, however it ended. The
             // window would close it in ten minutes anyway; this is what keeps a
             // card for a job that is already gone off the operator's desk.
@@ -2748,6 +2844,9 @@ impl Runtime {
                     // It asked, and was told in the turn that asked. A second
                     // message would be a turn spent saying so again.
                     Some(Origin::Agent) => {}
+                    // Nobody stopped it: the host did, and the next one
+                    // carries it on. The job is not over, so nothing is said.
+                    None if put_down => {}
                     _ => runtime.job_stopped(agent, &shown),
                 },
                 outcome => runtime.job_finished(agent, &shown, harness, outcome, origin),
@@ -3090,13 +3189,21 @@ impl Runtime {
                 *entry = entry.saturating_sub((-delta) as usize);
             }
             if *entry == 0 {
-                if let Err(err) = self.inner.store.settle_run(run) {
-                    tracing::error!(%err, %run, "could not settle the recovery journal");
-                }
                 runs.outstanding.remove(&run);
                 runs.stopped.remove(&run);
                 runs.refused.remove(&run);
-                true
+                // Part of it is put down, so the last of it ending here is the
+                // conversation handed on whole, not finished: the next host
+                // picks it up, and a run it picks up has not settled.
+                if runs.put_down.contains(&run) {
+                    self.mark_whole(&[run]);
+                    false
+                } else {
+                    if let Err(err) = self.inner.store.settle_run(run) {
+                        tracing::error!(%err, %run, "could not settle the recovery journal");
+                    }
+                    true
+                }
             } else {
                 false
             }
@@ -3233,12 +3340,33 @@ impl Runtime {
         Ok(approval)
     }
 
-    /// True while a stop the operator asked for is still in force.
+    /// True while a stop the operator asked for is still in force, or while
+    /// the host is being stopped.
+    ///
+    /// One question for both, because every boundary that honors one has to
+    /// honor the other: a turn stops at the same places and for the same
+    /// reason, which is that anything it started now would not get to finish.
+    /// What differs is only how it ends, and [`Self::called_off`] is what tells
+    /// the two apart there.
     ///
     /// Read into a `bool` and the lock dropped, because every caller is about
     /// to await something.
     fn stopped(&self, run: RunId) -> bool {
+        let runs = self.inner.runs.lock();
+        runs.draining || runs.stopped.contains(&run)
+    }
+
+    /// True when the operator stopped this run, as against the host stopping.
+    ///
+    /// The operator's stop wins where both hold: they called the work off, and
+    /// work called off is never picked up again.
+    fn called_off(&self, run: RunId) -> bool {
         self.inner.runs.lock().stopped.contains(&run)
+    }
+
+    /// True once the host has been asked to stop. See [`Self::drain`].
+    pub fn draining(&self) -> bool {
+        self.inner.runs.lock().draining
     }
 
     /// True when any run at all has been stopped and not yet settled.
@@ -3286,6 +3414,13 @@ impl Runtime {
             runs.stopped.insert(run);
             if let Err(err) = self.inner.store.settle_run(run) {
                 tracing::error!(%err, %run, "could not mark the stopped conversation in the recovery journal");
+            }
+            // Called off is never picked up, including whatever of it a drain
+            // had already put down for the next host.
+            if runs.put_down.remove(&run) {
+                if let Err(err) = self.inner.store.forget_put_down(run) {
+                    tracing::error!(%err, %run, "could not take a stopped conversation off the put-down list");
+                }
             }
         }
 
@@ -3819,6 +3954,10 @@ impl Runtime {
 
         let inbound_hop = batch.iter().map(|e| e.hop).max().unwrap_or(0);
         let cause = batch.last().map(|e| e.id);
+        // Picked up after a restart: what this turn had already done when the
+        // last host stopped it. Taken before anything can put it down again, so
+        // a second restart carries the first one's record too.
+        let resumed = self.resumed(&batch);
 
         // The most recent envelope that wants an answer decides where the
         // reply goes. Everything else in the batch is context.
@@ -3852,6 +3991,13 @@ impl Runtime {
         // reached eight agents leaves eight channels each saying plainly why
         // nothing came back, rather than eight messages nobody answered.
         if self.stopped(run_id) {
+            // The host is stopping and this never started, so it is the next
+            // host's exactly as it arrived.
+            if !self.called_off(run_id) {
+                self.put_down(&batch, &[], &resumed);
+                self.idle(agent_id);
+                return;
+            }
             self.notice(
                 agent_id,
                 run_id,
@@ -3866,6 +4012,34 @@ impl Runtime {
             self.finish_turn(agent_id, run_id, batch.len());
             return;
         }
+
+        // What it had done before the restart, read back before anything is
+        // spent. A record that cannot be read is a turn that would carry on
+        // blind and repeat whatever is in it, so it does not carry on at all:
+        // it is reported as a restart always used to be, for the operator to
+        // review and send again.
+        let before: Vec<Envelope> = match resumed
+            .iter()
+            .map(|id| self.inner.store.get_message(*id).ok().flatten())
+            .collect::<Option<Vec<_>>>()
+        {
+            Some(before) => before,
+            None => {
+                tracing::error!(agent = %card.name, "could not read back what a turn did before the restart");
+                self.notice(
+                    agent_id,
+                    run_id,
+                    cause,
+                    NoticeKind::Interrupted,
+                    "The backend restarted during this, and what was already done could not be \
+                     read back, so it did not carry on. Review any actions already taken before \
+                     retrying."
+                        .into(),
+                );
+                self.finish_turn(agent_id, run_id, batch.len());
+                return;
+            }
+        };
 
         // Peek rather than claim: the budget is spent per model call inside the
         // loop below, but there is no point building a prompt or telling the UI
@@ -3908,8 +4082,9 @@ impl Runtime {
             })
             .into_iter()
             // The batch is rendered separately; including it twice would make
-            // the model answer itself.
-            .filter(|e| !batch.iter().any(|b| b.id == e.id))
+            // the model answer itself. What it had done before a restart is
+            // told to it once, by the brief below, in the order it happened.
+            .filter(|e| !batch.iter().any(|b| b.id == e.id) && !resumed.contains(&e.id))
             .collect::<Vec<_>>();
 
         // Everything the prompt already carries, which is what stops a message
@@ -4099,6 +4274,9 @@ impl Runtime {
             Err(err) => tracing::warn!(%err, "could not read the agent's decisions"),
         }
         self.deliver_files(&card, &batch, modalities, &mut messages).await;
+        if let Some(brief) = prompt::resumed(&before) {
+            messages.push(ChatMessage::user(brief));
+        }
 
         // Where the finished message will land, and who it is for. Both are
         // known before the first token, so the UI never has to guess and then
@@ -4130,6 +4308,10 @@ impl Runtime {
         // belong on the message the agent is still composing: a file delivered
         // the moment it was named would sit above the sentence explaining it.
         let mut attached: Vec<Attachment> = Vec::new();
+        // What this turn took in from its inbox while it ran. Released as it
+        // was read, and still this turn's to answer: a host that stops it
+        // puts these down with the batch.
+        let mut taken_in: Vec<Envelope> = Vec::new();
         let mut failure: Option<LlmError> = None;
         let mut hit_tool_ceiling = false;
         let mut budget_exhausted = false;
@@ -4175,6 +4357,7 @@ impl Runtime {
             }
 
             let arrived = self.take_in(mode, &names, &mut rendered, &mut messages, intake);
+            taken_in.extend(arrived.iter().cloned());
             if !arrived.is_empty() {
                 self.deliver_files(&card, &arrived, modalities, &mut messages).await;
                 // Work taken in mid-turn carries the same obligation work in the
@@ -4397,11 +4580,33 @@ impl Runtime {
         // the mode it started with and write to the peer that was waiting —
         // which is the one thing a stop exists to prevent. Costs one lock read
         // per turn.
-        if !called_off && self.stopped(run_id) {
+        //
+        // The operator's stop only. A turn that finished its answer while the
+        // host began to stop has nothing left to carry on, and delivering it
+        // is better than putting down a finished answer for the next host to
+        // write again.
+        if !called_off && self.called_off(run_id) {
             called_off = true;
         }
 
         stream.close(&*self.inner.events);
+
+        // Stopped by the host rather than the operator: put down with a record
+        // of what it did, for the next host to carry on from here.
+        if called_off && !self.called_off(run_id) {
+            self.put_turn_down(
+                &card,
+                run_id,
+                inbound_hop,
+                cause,
+                &batch,
+                &taken_in,
+                collected_text,
+                tool_parts,
+                resumed,
+            );
+            return;
+        }
 
         // A turn that was called off did not reach the ceiling; it stopped
         // short of it. Saying both would tell the operator their own stop was
@@ -4732,6 +4937,12 @@ impl Runtime {
     }
 
     fn finish_turn(&self, agent_id: AgentId, run_id: RunId, consumed: usize) {
+        self.idle(agent_id);
+        self.track_inflight(run_id, -(consumed as i64));
+    }
+
+    /// Puts the badge back to what the queue says, once a turn is over.
+    fn idle(&self, agent_id: AgentId) {
         let depth = {
             let inboxes = self.inner.inboxes.lock();
             inboxes.get(&agent_id).map(|i| i.depth.load(Ordering::SeqCst)).unwrap_or(0)
@@ -4740,7 +4951,6 @@ impl Runtime {
             agent_id,
             if depth == 0 { Activity::Idle } else { Activity::Queued { depth } },
         );
-        self.track_inflight(run_id, -(consumed as i64));
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -8805,6 +9015,14 @@ async fn actor_loop(
         };
         depth.fetch_sub(1, Ordering::SeqCst);
 
+        // The host is stopping, so nothing starts: what this actor is holding
+        // is the next host's. Reached by anything that was already queued when
+        // the drain began and by anything that slipped in beside it.
+        if runtime.draining() {
+            runtime.put_down_queue(id, first, &mut carry, &mut rx, &depth);
+            continue;
+        }
+
         // A paused agent holds what it has and lets the rest queue behind it.
         //
         // Deletion has to be distinguished from pausing here. Both stop the
@@ -8814,6 +9032,7 @@ async fn actor_loop(
         // the envelope it is holding for the life of the process.
         let mut abandoned = false;
         let mut called_off = false;
+        let mut put_down = false;
         loop {
             match runtime.inner.store.get_agent(id).ok().flatten() {
                 None => {
@@ -8838,6 +9057,15 @@ async fn actor_loop(
                     let waiter = resume.notified();
                     tokio::pin!(waiter);
                     waiter.as_mut().enable();
+
+                    // The drain wakes every parked actor for this: a paused
+                    // agent's held work is put down like anybody else's, and
+                    // stays paused on the next host, where the card still says
+                    // so.
+                    if runtime.draining() && !runtime.called_off(first.run_id) {
+                        put_down = true;
+                        break;
+                    }
 
                     // The only place a stopped run has to be noticed before the
                     // turn: an agent that is not accepting work cannot reach
@@ -8876,7 +9104,7 @@ async fn actor_loop(
                     // place in line in the holding queue.
                     if runtime.anything_stopped() {
                         while let Ok(queued) = rx.try_recv() {
-                            if runtime.stopped(queued.run_id) {
+                            if runtime.called_off(queued.run_id) {
                                 depth.fetch_sub(1, Ordering::SeqCst);
                                 runtime.notice(
                                     id,
@@ -8899,6 +9127,10 @@ async fn actor_loop(
                     waiter.await;
                 }
             }
+        }
+        if put_down {
+            runtime.put_down_queue(id, first, &mut carry, &mut rx, &depth);
+            continue;
         }
         if called_off {
             // `finish_turn`, not `abandon`: it resets the badge as well as

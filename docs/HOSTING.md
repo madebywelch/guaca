@@ -58,8 +58,9 @@ construction from returning to desktop startup.
 `boot.rs` opens the database, expires stale approvals, loads settings and
 starts the runtime, scheduler, sign-in sweep, compost and viewers. Only the
 backend invokes it. Opening, closing or switching desktop windows does not
-start another copy of these loops. Pending turns cannot survive a backend
-restart; recovery notices explain interrupted work without replaying it.
+start another copy of these loops. Work in flight is put down when the backend
+stops and picked up when it starts; what could not be put down is reported
+interrupted and never replayed.
 
 ## Resources belong to the backend
 
@@ -457,27 +458,49 @@ Thinking and past live tool chips are not replayed; completed tool records
 remain in the transcript. Live reply snapshots hold at most 512 KiB per turn;
 the completed message remains authoritative for larger replies.
 
-## A restart preserves work and asks before repeating it
+## A stopping host puts its work down, and the next one picks it up
 
 Closing or disconnecting a client never stops the daemon's actors, schedules,
-or coding jobs. Restarting the daemon is different: process state and an
-external tool's unrecorded result cannot be recovered reliably.
+or coding jobs. Stopping the daemon does, and an update stops it every time:
+on a box that follows `main`, several times a day.
 
-Every accepted conversation now records its first delivery in `pending_runs`,
-in the same SQLite transaction as the message. Settlement removes that entry;
-an operator stop also removes it without releasing the in-memory bookings.
-Startup converts remaining entries into durable interruption notices, once,
-before starting actors. Each notice links the original message to **Try again**.
-Completed messages, attachments, memories, working notes and agents' terminals
-remain on the volume. Pending approvals expire because their waiting turns no
-longer exist. No interrupted tool action or approval is automatically replayed.
+So the daemon drains before it exits. On the stop signal it starts nothing
+more (no turn, no routine firing, no coding job) and keeps serving while every
+turn in flight reaches its next boundary, the same boundaries the operator's
+stop uses. A model call in the air is dropped rather than waited out, because
+it has no effect outside the process. A tool call already running is let
+finish. Each turn then writes down what it did in its own channel and puts its
+messages down with that record (`put_down`). Coding jobs are stopped through
+each program's own interface, which keeps the session (`put_down_jobs`). A
+message that arrives meanwhile is put down as it arrives. `Runtime::drain`,
+bounded by `DRAIN_WINDOW` in `server/mod.rs`, inside the thirty seconds every
+way the daemon is run allows before a kill.
+
+The next host picks all of it up before its scheduler starts. Each message is
+delivered again on its own conversation, against the budget that conversation
+had already spent. A turn that had made calls is told each one and how it came
+out, because its history cannot tell it: a message projects to its text, and a
+call is a part the projection skips (`prompt::resumed`). A coding job is
+continued in its own session and told its last step may not have finished.
+
+What a drain cannot vouch for is reported exactly as a restart always was.
+Every accepted conversation records its first delivery in `pending_runs`, in
+the same SQLite transaction as the message. Settlement removes that entry; an
+operator stop also removes it without releasing the in-memory bookings. A
+conversation is picked up only if all of it was put down (`put_down_runs`).
+Anything else the next host finds, whether a crash or a turn still inside a
+tool call when the window closed, becomes a durable interruption notice on the
+conversation's first message, once, before actors start, with **Try again**.
 
 This is a deliberate recovery policy: an external action can succeed just
-before the process dies, so automatic replay could send or push twice. Review
-the conversation before retrying. Retry starts a new run with the original
-request and the normal limits. This journal does not checkpoint a model's
-thinking or resume a coding subprocess. Back up the volume before deploying;
-SQLite migrations are forward-only.
+before the process dies, so nothing interrupted in the middle of an action is
+ever repeated automatically. It is why the drain waits for a boundary instead
+of checkpointing anything. Pending approvals expire because their waiting
+turns no longer exist; a turn put down while it waited asks again when it is
+picked up. A conversation the operator stopped is never picked up. Completed
+messages, attachments, memories, working notes and agents' terminals remain on
+the volume. Back up the volume before deploying; SQLite migrations are
+forward-only.
 
 A workspace also holds a process lock for its runtime's lifetime. A second
 host pointed at the same data directory refuses to start, rather than running
@@ -658,7 +681,9 @@ receiver.
 
 The desktop compares the managed container's image reference with the one
 built into the application. It offers **Back up and update host** when they
-differ. Updating is explicit because it interrupts jobs. The manager downloads
+differ. Updating is explicit because it stops the host: work pauses and
+carries on once it restarts, and a command still running when it stops is
+reported for review. The manager downloads
 the image first and refuses, with the old host still running, an image whose
 version label is not the app's own version. Then it stops the container, copies the whole volume to a new backup
 volume, and only then replaces the container. The running port and token are
@@ -724,8 +749,8 @@ and recreate process. For systemd, stop the service, copy its state directory,
 replace the binary and matching served frontend, then restart it.
 
 Verify `/health` reports the intended build, version and API generation, and
-that authenticated workspace access succeeds. The client reconnects without
-replaying interrupted actions. Review its recovery notices before retrying work.
+that authenticated workspace access succeeds. Work the stop put down carries
+on by itself; review any interruption notice before retrying what could not.
 A plain container restart does not change the image. This app does not hold
 SSH or Docker privileges on an externally managed server; its update panel
 provides instructions for one. A box installed as below is not externally

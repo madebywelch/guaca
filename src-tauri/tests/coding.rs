@@ -1547,6 +1547,95 @@ async fn a_finished_job_is_continued_in_the_session_it_ran_in() {
     }
 }
 
+/// A job the host stops for an update is carried on in its own session by the
+/// next host, and nobody is told it stopped.
+///
+/// Stopped through each program's own interface, the way the operator's Stop
+/// does it, which ends the program's turn and keeps its session: the program
+/// holds its own record of every step, and the next job is the same session
+/// told the host restarted and to check its last step before going on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_job_an_update_stops_is_carried_on_in_its_session_by_the_next_host() {
+    stand_ins();
+    for which in Which::ALL {
+        let repo = a_repository(&format!("drained-{}", which.as_str()));
+        std::fs::write(repo.join(LINGER), "30").unwrap();
+        std::fs::write(repo.join(".codex_hold"), "").unwrap();
+        let stub = serve(|body| {
+            if anyone_said(body, "has finished") {
+                Script::Say("reported".into())
+            } else {
+                Script::Code("fix the flaky test".into())
+            }
+        })
+        .await;
+        let h = harness(&stub, &["Engineer"], GuardLimits::default());
+        let engineer = h.agent_named("Engineer").unwrap();
+        let repo = give_terminal(&h, "Engineer", repo, which, Gate::Open);
+
+        let run = h.runtime.send_from_human(h.id("Engineer"), "fix the flaky test").unwrap();
+        h.settle(run).await;
+        h.wait_until("the harness is working", |_| match which {
+            Which::Codex => brief_seen(which, &repo).contains("turn/start"),
+            Which::Claude | Which::Pi => !brief_seen(which, &repo).is_empty(),
+        })
+        .await;
+        let first = argv_at(&repo);
+        // The next one answers at once.
+        std::fs::remove_file(repo.join(LINGER)).unwrap();
+        let _ = std::fs::remove_file(repo.join(".codex_hold"));
+
+        let (h, drained) = h.restart(std::time::Duration::from_secs(20)).await;
+        assert!(drained.is_complete(), "{which:?}: {drained:?}");
+        match which {
+            Which::Codex => assert!(repo.join(".interrupted").exists(), "turn/interrupt"),
+            Which::Pi => assert!(repo.join(".aborted").exists(), "abort"),
+            Which::Claude => assert!(repo.join(".interrupted").exists(), "the SDK's interrupt"),
+        }
+
+        h.wait_until("the carried-on job is reported", |h| {
+            h.channel_texts("Engineer").iter().any(|line| line.contains("has finished"))
+        })
+        .await;
+        assert!(
+            !h.channel_texts("Engineer")
+                .iter()
+                .any(|line| line.contains("stopped the coding agent")),
+            "{which:?}: the job was not over, so nobody is told it stopped: {:?}",
+            h.channel_texts("Engineer")
+        );
+        assert!(
+            brief_seen(which, &repo).contains("restarted for an update"),
+            "{which:?}: {}",
+            brief_seen(which, &repo)
+        );
+        let session = h.runtime.store().coding_session(engineer.id).unwrap().expect("kept");
+        match which {
+            Which::Claude => {
+                let argv = argv_at(&repo);
+                let after = |flag: &str, argv: &[String]| {
+                    argv.iter().position(|arg| arg == flag).map(|at| argv[at + 1].clone())
+                };
+                assert_eq!(after("--session-id", &first), Some(session.id.clone()));
+                assert_eq!(after("--resume", &argv), Some(session.id.clone()), "{argv:?}");
+            }
+            Which::Codex => {
+                assert_eq!(
+                    std::fs::read_to_string(repo.join(".resumed")).unwrap(),
+                    "codex-session"
+                );
+            }
+            Which::Pi => {
+                let history = std::fs::read_to_string(repo.join(".pi_history")).unwrap();
+                let sessions: Vec<&str> =
+                    history.lines().map(|line| line.split(' ').next().unwrap()).collect();
+                assert_eq!(sessions, [session.id.as_str(), session.id.as_str()], "{history}");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+}
+
 /// A session is carried on by the program that wrote it, or not at all.
 ///
 /// Switching an agent from Claude Code to Codex because a plan ran out is the

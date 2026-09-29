@@ -1772,6 +1772,46 @@ UPDATE messages
  WHERE id IN (SELECT id FROM sound);
 "#,
     ),
+    (
+        62,
+        r#"
+-- Work a stopping host put down, for the next one to pick up.
+--
+-- A host asked to stop lets every turn reach a boundary where everything it
+-- did is written down, and puts its messages down here instead of ending them.
+-- `pending_runs` stays what it was: the record of a conversation still owed an
+-- answer, which a restart that was not a drain reports as interrupted.
+--
+-- A message the next host delivers again, and the records of the turn it was
+-- in the middle of, oldest first, as a JSON array of message ids. Empty for a
+-- message no turn had started.
+CREATE TABLE put_down (
+    message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    records    TEXT NOT NULL DEFAULT '[]'
+);
+
+-- A conversation all of whose work was put down, and what it had spent. Only
+-- these are picked up: a message put down in a conversation that still had a
+-- turn in the middle of a tool call when the host stopped is part of work
+-- nobody can vouch for, and is reported with the rest of it.
+CREATE TABLE put_down_runs (
+    run_id TEXT PRIMARY KEY,
+    steps  INTEGER NOT NULL
+);
+
+-- A coding job a stopping host interrupted, for the next one to carry on in
+-- the same session. An empty session is a job stopped before its program had
+-- named one, which is started over from `task`.
+CREATE TABLE put_down_jobs (
+    agent_id   TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    harness    TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    directory  TEXT NOT NULL,
+    task       TEXT NOT NULL,
+    origin     TEXT NOT NULL CHECK (origin IN ('agent', 'operator'))
+);
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

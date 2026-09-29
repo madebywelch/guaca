@@ -169,7 +169,7 @@ describe("host updates in either client", () => {
     const button = await screen.findByRole("button", { name: "Back up and update host" });
     expect(update).not.toHaveBeenCalled();
     fireEvent.click(button);
-    await screen.findByText(/Host updated. Review/);
+    await screen.findByText("Host updated.");
     expect(update).toHaveBeenCalledWith("https://host.example");
     expect(reload).not.toHaveBeenCalled();
   });
@@ -234,7 +234,7 @@ describe("host updates in either client", () => {
 
     docker.mockResolvedValue(status(false, journal("Host updated")));
     await act(async () => finish());
-    await screen.findByText(/Host updated. Review/);
+    await screen.findByText("Host updated.");
     expect(screen.queryByText(/step \d of 5/)).toBeNull();
   });
   it("does not offer to replace a different local container", async () => {
@@ -421,9 +421,7 @@ describe("a box that updates itself", () => {
       },
     };
     await poke();
-    await screen.findByText(
-      "Host updated to Guaca 0.2.0. Review any interrupted work before trying it again.",
-    );
+    await screen.findByText("Host updated to Guaca 0.2.0.");
   });
 
   it("says the previous version was put back when the update did not finish", async () => {
@@ -641,9 +639,7 @@ describe("a box that follows main", () => {
       },
     };
     await poke();
-    await screen.findByText(
-      "Host updated to main at ddddddd. Review any interrupted work before trying it again.",
-    );
+    await screen.findByText("Host updated to main at ddddddd.");
     expect(screen.getByText("The commit").getAttribute("href")).toBe(
       `https://github.com/madebywelch/guaca/commit/${tip}`,
     );

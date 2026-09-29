@@ -17,7 +17,7 @@ use crate::domain::approval::{
     Approval, ApprovalState, DetailField, ProtectedAction, Request, QUESTION,
 };
 use crate::domain::connector::{CleanConnector, Connector};
-use crate::domain::envelope::{Envelope, Intent, NoticeKind, Part, Participant, Trust};
+use crate::domain::envelope::{Envelope, Intent, Part, Participant, Trust};
 use crate::domain::escalation::{Escalation, Raised};
 use crate::domain::group::{CleanGroup, Group, GroupInference, GroupLimits, InferenceOverrides};
 use crate::domain::ids::{
@@ -3296,48 +3296,6 @@ impl Store {
         Ok(())
     }
 
-    /// Called before actors start. Recording each interruption and clearing
-    /// the journal are atomic, so repeated boots cannot duplicate notices.
-    pub fn recover_interrupted_runs(&self) -> Result<usize, StoreError> {
-        let mut conn = self.conn()?;
-        let tx = conn.transaction()?;
-        let pending = {
-            let mut stmt = tx.prepare(
-                "SELECT id,m.run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,intent,cause,created_at
-                 FROM messages m JOIN pending_runs p ON p.message_id=m.id ORDER BY created_at,id",
-            )?;
-            let rows = stmt.query_map([], row_to_envelope)?;
-            let mut pending = Vec::new();
-            for row in rows {
-                pending.push(row??);
-            }
-            pending
-        };
-        for original in &pending {
-            let notice = Envelope {
-                id: MessageId::new(),
-                run_id: original.run_id,
-                channel_id: original.channel_id,
-                from: Participant::System,
-                to: original.to,
-                parts: vec![Part::Notice {
-                    kind: NoticeKind::Interrupted,
-                    text: "The backend restarted before this conversation finished. Previous messages and files are preserved. Review any actions already taken before retrying; an external action may have completed without its result being recorded.".into(),
-                }],
-                trust: Trust::System,
-                hop: 0,
-                expects_reply: false,
-                intent: Intent::Courtesy,
-                cause: Some(original.id),
-                created_at: now_ms(),
-            };
-            Self::insert_message(&tx, &notice)?;
-        }
-        tx.execute("DELETE FROM pending_runs", [])?;
-        tx.commit()?;
-        Ok(pending.len())
-    }
-
     /// The newest `limit` messages in a channel, returned oldest-first for
     /// direct rendering.
     /// One message, by id. Used to put a failed turn back on its feet: what to
@@ -3978,7 +3936,7 @@ fn participant_from_columns(kind: &str, agent: Option<String>) -> Result<Partici
 
 /// Returns a nested Result so a malformed row surfaces as a domain error
 /// rather than being coerced into a rusqlite error with no context.
-type RowResult<T> = Result<Result<T, StoreError>, rusqlite::Error>;
+pub(super) type RowResult<T> = Result<Result<T, StoreError>, rusqlite::Error>;
 
 /// Every column [`row_to_card`] reads, in the order it reads them.
 ///
@@ -4581,7 +4539,7 @@ fn row_to_group(row: &Row<'_>) -> RowResult<Group> {
     })())
 }
 
-fn row_to_envelope(row: &Row<'_>) -> RowResult<Envelope> {
+pub(super) fn row_to_envelope(row: &Row<'_>) -> RowResult<Envelope> {
     let id_raw: String = row.get(0)?;
     let run_raw: String = row.get(1)?;
     let channel_raw: String = row.get(2)?;
@@ -4636,6 +4594,7 @@ mod tests {
     use super::*;
     use crate::domain::attachment::Attachment;
     use crate::domain::envelope::channel_for;
+    use crate::domain::envelope::NoticeKind;
     use crate::domain::ids::RunId;
     use crate::domain::plugin::HeaderPair;
     use crate::domain::routine::Cadence;
@@ -4717,8 +4676,8 @@ mod tests {
         followup.id = MessageId::new();
         f.store.append_delivery(&followup).unwrap();
         let reopened = Store::open(&f._dir.path().join("guac.db")).unwrap();
-        assert_eq!(reopened.recover_interrupted_runs().unwrap(), 1);
-        assert_eq!(reopened.recover_interrupted_runs().unwrap(), 0);
+        assert_eq!(reopened.recover().unwrap().interrupted, 1);
+        assert_eq!(reopened.recover().unwrap().interrupted, 0);
         let messages = reopened.channel_messages(agent.id, 20).unwrap();
         let notice = messages.iter().find(|m| m.cause == Some(original.id)).unwrap();
         assert!(matches!(notice.parts[0], Part::Notice { kind: NoticeKind::Interrupted, .. }));
@@ -4742,7 +4701,7 @@ mod tests {
             f.store.append_delivery(&original).is_err(),
             "duplicate acceptance fails atomically"
         );
-        assert_eq!(f.store.recover_interrupted_runs().unwrap(), 0);
+        assert_eq!(f.store.recover().unwrap().interrupted, 0);
         assert_eq!(f.store.channel_messages(agent.id, 20).unwrap().len(), 1);
     }
 
@@ -4971,8 +4930,8 @@ mod tests {
         // Everything the migrations after 51 made, so the database is the one a
         // version-51 install really has. Each new migration adds its undo here:
         // 58's puts back the repository column and table it rebuilds away, and
-        // 59's drops the two tables it adds.
-        conn.execute_batch("DROP TABLE coding_tuning; DROP TABLE coding_sessions; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
+        // 59's and 62's drop the tables they add.
+        conn.execute_batch("DROP TABLE put_down_jobs; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE coding_tuning; DROP TABLE coding_sessions; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
         migrations::run(&mut conn).unwrap();
         drop(conn);
         assert_eq!(f.store.connector_env(mine.id).unwrap()["TOKEN"], "private-token");

@@ -571,6 +571,14 @@ pipe open for the SDK's control requests. In that mode it does not exit at
 Measured against 2.1.260 and 2.1.283, and the live half of `tests/coding.rs`
 interrupts one and resumes it.
 
+A host that is stopping stops every job this way too, and that is what lets an
+update carry a job on rather than end it. Nobody is told the job stopped,
+because it has not: it is kept in `put_down_jobs`, and the next host continues
+the same session, told the host restarted and that its last step may not have
+finished. A job stopped before Codex named its thread has no session to
+continue and is started over on its brief. *A stopping host puts its work
+down* in `HOSTING.md` is the rest of it.
+
 ### A program is ended by closing its input, not by a kill
 
 All three exit in milliseconds when their stdin closes, and a kill is not the

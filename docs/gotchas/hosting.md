@@ -286,4 +286,15 @@ The daemon, a browser as a client, and the boot both hosts share.
   `VOLUME /var/lib/guaca`, which the updater never mounts, so each updater
   got an anonymous volume that outlived it. `--volumes` removes only anonymous
   ones; the updater's named state and socket volumes stay.
-
+- **`DRAIN_WINDOW` has to stay under the time the host is given to stop.**
+  Every way the daemon is run allows thirty seconds between the stop signal
+  and a kill: `--stop-timeout` on the container `host.rs` makes,
+  `stop_grace_period` in `docker-compose.yml`, `TimeoutStopSec` in
+  `deploy/guacad.service`. Change one and the drain is killed partway, which
+  is safe and wasteful: whatever had not been put down is reported
+  interrupted. A container made before `--stop-timeout` existed is stopped
+  after Docker's default ten seconds.
+- **The drain runs inside axum's graceful shutdown, before it.** The server
+  keeps answering while agents put their work down, so every client watches
+  them stop and draws the notice saying why, rather than losing its socket
+  first and reconnecting to a host that is gone.

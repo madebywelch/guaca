@@ -306,7 +306,8 @@ impl From<crate::runtime::RuntimeError> for CommandError {
             // instead, which for the first is nothing at all.
             RuntimeError::NoJobRunning
             | RuntimeError::JobStillStarting
-            | RuntimeError::JobUnreachable(_) => CommandError::new("badRequest", err.to_string()),
+            | RuntimeError::JobUnreachable(_)
+            | RuntimeError::Stopping => CommandError::new("badRequest", err.to_string()),
             // All three are this side answering a request with the wrong shape
             // of answer, which is a defect here rather than something the
             // operator did. Reported as an ordinary failure so it lands in the

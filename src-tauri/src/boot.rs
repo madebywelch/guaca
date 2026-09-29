@@ -3,9 +3,9 @@
 //! A workspace is a database, three settings files and two directories, and
 //! bringing one up is the same sequence whether the runtime ends up behind a
 //! window or behind a socket: open the store, close whatever a restart
-//! stranded, read the settings, build the runtime, start the loops that keep
-//! their own time, and release anything a previous process left running at a
-//! provider.
+//! stranded, read the settings, build the runtime, pick up what the last one
+//! put down, start the loops that keep their own time, and release anything a
+//! previous process left running at a provider.
 //!
 //! It lives here rather than in `app.rs` because two copies would drift, and
 //! the drift would be silent in the worst way: a loop started in one host and
@@ -114,29 +114,7 @@ pub async fn open(
 
     let store =
         Store::open(&db_path).map_err(|err| format!("could not open the workspace: {err}"))?;
-    // A permission request is answered by a turn that is holding the line for
-    // it, and nothing holds a line across a restart. Anything still pending
-    // here is waiting on an agent that no longer exists, so it is closed rather
-    // than left drawing live buttons.
-    //
-    // On a server this stops being the rare case. A container is recycled, a
-    // host is drained, a deploy happens, and every one of those lands here.
-    match store.expire_pending_approvals() {
-        Ok(0) => {}
-        Ok(n) => tracing::info!(expired = n, "closed permission requests left by a restart"),
-        Err(err) => tracing::warn!(%err, "could not close stale permission requests"),
-    }
-
-    store
-        .recover_decisions()
-        .map_err(|err| format!("could not recover decision answers: {err}"))?;
-
-    let interrupted = store
-        .recover_interrupted_runs()
-        .map_err(|err| format!("could not recover interrupted conversations: {err}"))?;
-    if interrupted > 0 {
-        tracing::warn!(interrupted, "conversations interrupted by restart are ready for review");
-    }
+    let recovered = recover(&store)?;
 
     let mut app_config =
         config::load(&config_path).map_err(|err| format!("could not read the settings: {err}"))?;
@@ -168,6 +146,9 @@ pub async fn open(
     runtime.hold_workspace_lease(lease);
 
     let started = runtime.start_all().map_err(|err| format!("could not start the crew: {err}"))?;
+    // Before the scheduler, so an agent with work to carry on reads as busy
+    // to its first sweep.
+    runtime.pick_up(recovered);
     // Agents keep their own appointments.
     runtime.start_scheduler();
     // And find out what their browsers are already signed in to, so the roster
@@ -271,6 +252,42 @@ fn sweep_providers(runtime: &Runtime) {
             }
         });
     }
+}
+
+/// Reads back what the last process left in the store, before any actor
+/// starts: closes what nothing can answer any more, reports what nobody can
+/// vouch for, and returns what the last host put down for `Runtime::pick_up`.
+///
+/// Its own function so the suites that restart a runtime run exactly this
+/// rather than a copy of it.
+pub fn recover(store: &Store) -> Result<crate::db::Recovered, String> {
+    // A permission request is answered by a turn that is holding the line for
+    // it, and nothing holds a line across a restart. Anything still pending
+    // here is waiting on an agent that no longer exists, so it is closed rather
+    // than left drawing live buttons.
+    //
+    // On a server this stops being the rare case. A container is recycled, a
+    // host is drained, a deploy happens, and every one of those lands here.
+    match store.expire_pending_approvals() {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(expired = n, "closed permission requests left by a restart"),
+        Err(err) => tracing::warn!(%err, "could not close stale permission requests"),
+    }
+
+    let recovered = store
+        .recover()
+        .map_err(|err| format!("could not recover interrupted conversations: {err}"))?;
+    if recovered.interrupted > 0 {
+        tracing::warn!(
+            interrupted = recovered.interrupted,
+            "conversations interrupted by restart are ready for review"
+        );
+    }
+
+    store
+        .recover_decisions(&recovered.runs())
+        .map_err(|err| format!("could not recover decision answers: {err}"))?;
+    Ok(recovered)
 }
 
 /// The account store, pointed wherever `GUACA_ACCOUNT_ORIGIN` says.

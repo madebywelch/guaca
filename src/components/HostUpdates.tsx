@@ -311,7 +311,7 @@ function outcome(manager: Manager, asked: Accepted): { result: string } | { fail
     };
   if (op.stage === "Host updated")
     return {
-      result: `Host updated to ${asked.name}. Review any interrupted work before trying it again.`,
+      result: `Host updated to ${asked.name}.`,
     };
   if (op.stage === "Previous version restored")
     return {
@@ -500,7 +500,7 @@ export function HostUpdatePanel() {
     try {
       await localHost.update(workspaceOrigin());
       await refresh(true);
-      setResult("Host updated. Review any interrupted work before trying it again.");
+      setResult("Host updated.");
     } catch (cause) {
       setFailure(errorMessage(cause));
       void refresh(true);
@@ -664,10 +664,10 @@ export function HostUpdatePanel() {
                   }.`}
             </p>
             <p className="field__hint">
-              {working} agents and {Object.keys(building).length} coding jobs are working. Updating
-              interrupts current work, including work from other clients. Guaca saves a complete
-              backup before replacing the host, and puts the previous version back if the update
-              does not finish.
+              {working} agents and {Object.keys(building).length} coding jobs are working. They
+              pause before the host stops and carry on once it restarts; a command still running at
+              that moment is left for you to review instead. Guaca saves a complete backup before
+              replacing the host, and puts the previous version back if the update does not finish.
             </p>
             <button
               className="btn btn--primary"

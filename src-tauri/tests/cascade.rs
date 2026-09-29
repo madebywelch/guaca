@@ -5664,3 +5664,221 @@ async fn the_sweep_takes_whoever_is_past_the_deadline_and_nobody_else() {
     );
     assert!(h.runtime.store().get_agent(waiting).unwrap().unwrap().discarded());
 }
+
+// ---- a host that stops ---------------------------------------------------
+
+use guac_lib::domain::envelope::NoticeKind;
+
+/// A request from a turn picked up after a restart, carrying what it had done.
+fn picked_up(body: &serde_json::Value) -> bool {
+    anyone_said(body, "restarted for an update partway through your turn")
+}
+
+fn notices_of(h: &Harness, name: &str, kind: NoticeKind) -> Vec<String> {
+    h.runtime
+        .store()
+        .channel_messages(h.id(name), 200)
+        .unwrap()
+        .iter()
+        .flat_map(|m| m.parts.clone())
+        .filter_map(|part| match part {
+            Part::Notice { kind: found, text } if found == kind => Some(text),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_turn_an_update_stops_carries_on_after_it_without_making_its_calls_again() {
+    // The case the drain exists for. The turn has already done something (a
+    // working note stands in for an email) and is waiting on the model when
+    // the host is told to stop. Its history cannot show it the call, because
+    // a message projects to its text, so a turn rebuilt from history alone
+    // reads the request again with no sign of what it did, and does it again.
+    let stub = serve(|body| {
+        if picked_up(body) {
+            Script::Say("Noted, and done.".into())
+        } else if has_tool_result(body) {
+            Script::Hang
+        } else {
+            Script::Progress("Checking the vendor's hours.".into())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let researcher = h.id("Researcher");
+    let run = h.runtime.send_from_human(researcher, "Find the vendor's hours.").unwrap();
+    h.wait_until("the second model call to be in the air", |_| {
+        stub.calls.load(Ordering::SeqCst) >= 2
+    })
+    .await;
+
+    let (h, drained) = h.restart(Duration::from_secs(5)).await;
+    assert!(drained.is_complete(), "{drained:?}");
+    h.settle(run).await;
+
+    let fresh =
+        stub.transcript.lock().iter().filter(|b| !picked_up(b) && !has_tool_result(b)).count();
+    assert_eq!(fresh, 1, "asked once as though nothing had been done, and never again");
+    assert_eq!(h.runtime.store().working_notes(researcher).unwrap().len(), 1);
+    let resumed: Vec<serde_json::Value> =
+        stub.transcript.lock().iter().filter(|b| picked_up(b)).cloned().collect();
+    assert_eq!(resumed.len(), 1);
+    assert!(anyone_said(&resumed[0], "note_progress"), "told which call it made");
+    assert!(anyone_said(&resumed[0], "Find the vendor's hours."), "and what it was answering");
+
+    let channel = h.runtime.store().channel_messages(researcher, 50).unwrap();
+    let answer = channel.last().unwrap();
+    assert_eq!(answer.to, Participant::Human, "the answer goes where it was always going");
+    assert_eq!(answer.plain_text(), "Noted, and done.");
+    assert!(
+        notices_of(&h, "Researcher", NoticeKind::Lifecycle)
+            .iter()
+            .any(|text| text.contains("the host is restarting")),
+        "the transcript says why it stopped: {}",
+        h.transcript()
+    );
+    assert!(notices_of(&h, "Researcher", NoticeKind::Interrupted).is_empty(), "nothing to review");
+
+    // The budget it had spent came with it: one call before the restart (the
+    // one in the air was dropped and given back) and one after. A fresh budget
+    // would say one, and would let every update hand a cascade another.
+    let steps = h.sink.snapshot().into_iter().find_map(|event| match event {
+        UiEvent::RunSettled { run_id, steps_used } if run_id == run => Some(steps_used),
+        _ => None,
+    });
+    assert_eq!(steps, Some(2));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn work_queued_behind_a_busy_agent_is_carried_across_an_update() {
+    let restarted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let after = restarted.clone();
+    let stub = serve(move |_| {
+        if after.load(Ordering::SeqCst) {
+            Script::Say("Both handled.".into())
+        } else {
+            Script::Hang
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let researcher = h.id("Researcher");
+    let first = h.runtime.send_from_human(researcher, "The first thing.").unwrap();
+    h.wait_until("the first turn to be in the air", |_| stub.calls.load(Ordering::SeqCst) >= 1)
+        .await;
+    let second = h.runtime.send_from_human(researcher, "The second thing.").unwrap();
+    h.wait_until("the second to queue", |h| h.runtime.inbox_depth(researcher) == 1).await;
+
+    restarted.store(true, Ordering::SeqCst);
+    let (h, drained) = h.restart(Duration::from_secs(5)).await;
+    assert!(drained.is_complete(), "{drained:?}");
+    h.settle(first).await;
+    h.settle(second).await;
+
+    // One turn, because the second is the operator's and a running turn takes
+    // the operator's messages in. What matters is that both reached it, in the
+    // order they were sent, and neither is waiting on anybody to send it again.
+    let after_restart: Vec<serde_json::Value> = stub.transcript.lock()[1..].to_vec();
+    assert_eq!(after_restart.len(), 1, "the first turn was dropped mid-call and never answered");
+    let prompt = after_restart[0].to_string();
+    let (one, two) =
+        (prompt.find("The first thing.").unwrap(), prompt.find("The second thing.").unwrap());
+    assert!(one < two, "in the order they were sent");
+    assert!(notices_of(&h, "Researcher", NoticeKind::Interrupted).is_empty());
+    assert_eq!(h.channel_texts("Researcher").last().unwrap(), "Both handled.");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_message_sent_while_the_host_is_stopping_is_answered_by_the_next_one() {
+    let stub = serve(|_| Script::Say("Here.".into())).await;
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let researcher = h.id("Researcher");
+
+    assert!(h.runtime.drain(Duration::from_secs(5)).await.is_complete());
+    let run = h.runtime.send_from_human(researcher, "Are you there?").unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(stub.calls.load(Ordering::SeqCst), 0, "nothing starts on a host that is stopping");
+
+    let (h, _) = h.restart(Duration::from_secs(5)).await;
+    h.settle(run).await;
+    assert_eq!(h.channel_texts("Researcher"), ["Are you there?", "Here."]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_turn_still_inside_a_tool_call_when_the_host_stops_is_reported_and_not_repeated() {
+    // The rule the drain keeps. Nobody can say whether a call the process
+    // died inside of finished, so what it was part of is put in front of the
+    // operator to review, as every restart used to do, rather than picked up
+    // and done a second time.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Built.".into())
+        } else {
+            Script::Shell("sleep 30".into())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Builder"], GuardLimits::default());
+    let builder = h.id("Builder");
+    h.runtime.store().set_has_terminal(builder, true).unwrap();
+    let run = h.runtime.send_from_human(builder, "Build it.").unwrap();
+    h.wait_until("the command to be running", |h| {
+        h.sink.snapshot().iter().any(|event| matches!(event, UiEvent::ToolStarted { .. }))
+    })
+    .await;
+
+    let (h, drained) = h.restart(Duration::from_millis(500)).await;
+    assert_eq!(drained.working, ["Builder"]);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    assert_eq!(stub.calls.load(Ordering::SeqCst), 1, "nothing was picked up");
+    let asked = h.runtime.store().channel_messages(builder, 50).unwrap()[0].clone();
+    assert_eq!(asked.run_id, run);
+    let reported = h.runtime.store().channel_messages(builder, 50).unwrap().into_iter().any(|m| {
+        m.cause == Some(asked.id)
+            && m.parts
+                .iter()
+                .any(|p| matches!(p, Part::Notice { kind: NoticeKind::Interrupted, .. }))
+    });
+    assert!(reported, "on the message Try again sends again: {}", h.transcript());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_conversation_the_operator_stopped_is_not_carried_on_by_the_next_host() {
+    let stub = serve(|_| Script::Hang).await;
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let researcher = h.id("Researcher");
+    let run = h.runtime.send_from_human(researcher, "Start something.").unwrap();
+    h.wait_until("the call to be in the air", |_| stub.calls.load(Ordering::SeqCst) >= 1).await;
+    h.runtime.stop_run(run);
+    h.settle(run).await;
+
+    let (h, _) = h.restart(Duration::from_secs(5)).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(stub.calls.load(Ordering::SeqCst), 1, "called off is never picked up");
+    assert!(notices_of(&h, "Researcher", NoticeKind::Interrupted).is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_paused_agents_held_work_waits_for_it_on_the_next_host() {
+    let stub = serve(|_| Script::Say("Done as asked.".into())).await;
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let researcher = h.id("Researcher");
+    let run = h.park("Researcher", "When you are back, do this.").await;
+
+    let (h, drained) = h.restart(Duration::from_secs(5)).await;
+    assert!(drained.is_complete(), "{drained:?}");
+    h.wait_until("it to hold the message again", |h| {
+        h.sink.snapshot().iter().any(|event| {
+            matches!(event, UiEvent::ActivityChanged { agent_id, activity: Activity::Paused }
+                if *agent_id == researcher)
+        })
+    })
+    .await;
+    assert_eq!(stub.calls.load(Ordering::SeqCst), 0, "still paused: the card says so");
+
+    h.resume("Researcher");
+    h.settle(run).await;
+    assert_eq!(h.channel_texts("Researcher").last().unwrap(), "Done as asked.");
+}

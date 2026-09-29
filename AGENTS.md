@@ -113,6 +113,8 @@ src-tauri/src/
     mod.rs            Agent actors and the message bus.
     errand.rs         Running errands inside the turn that sent them, on its
                       run, its budget and its stop.
+    drain.rs          A host stopping without ending the work on it, and the
+                      next one picking that work up.
     prompt.rs         Prompt assembly, including the trust boundary.
     events.rs         Events pushed to the UI.
   llm/                OpenAI-compatible client, SSE decoding, tool definitions.
@@ -216,6 +218,7 @@ repo: the frontend renders state and forwards intent.
 | A sign-in that stopped working, refreshing, expiry, signing out | *A token's `exp` is a floor on its life, not a ceiling* in `docs/ARCHITECTURE.md`, then `Subscription::renew` and the 401 path in `codex::stream` |
 | What a group decides for itself: provider, models, timeout, limits | *A group chooses its own provider*, *Nothing about who pays is inferred* and *A run is measured against the limits of the group it happens in*, then `domain/group.rs` |
 | Stopping a conversation: what a stop marks, wakes, and must never release | *A stop marks the run and releases nothing*, then `Runtime::stop_run` |
+| A host stopping or restarting: the drain, what is put down, what the next host picks up and what it reports interrupted | *A stopping host puts its work down, and the next one picks it up* in `docs/HOSTING.md`, then `runtime/drain.rs` and `db/put_down.rs`, and run the scenarios under *a host that stops* in `tests/cascade.rs` |
 | The status bar, a page pinned to it, its condensed view, quick actions | *The status bar holds pages the crews keep, and a click on one is the bar's* in `docs/WORKSPACE.md`, then `domain/widget.rs`, `src/lib/widget.ts` and `src/components/StatusBar.tsx`, and `widget.test.ts`, which holds the widths the `artifact` tool states |
 | An agent reading the settings or asking to change them, the operator's current view | *An agent can read the settings, and what the operator is looking at* in `docs/WORKSPACE.md` and *A settings change is a permission with its own diff* in `docs/ATTENTION.md`, then `config::agent_patch` and `Runtime::use_settings` |
 | Permission prompts, parked turns, acting in the operator's name | *A protected action parks the turn that asked for it* |

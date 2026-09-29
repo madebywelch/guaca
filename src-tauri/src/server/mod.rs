@@ -140,13 +140,33 @@ pub struct Bound {
     pub agents: usize,
     listener: tokio::net::TcpListener,
     app: Router,
+    runtime: crate::runtime::Runtime,
 }
 
+/// How long a stopping host gives its agents to put their work down.
+///
+/// Inside the thirty seconds every way this daemon is run allows between the
+/// stop signal and a kill: `--stop-timeout 30` on the container `host.rs`
+/// makes, `stop_grace_period` in `docker-compose.yml` and `TimeoutStopSec` in
+/// `deploy/guacad.service`. The rest of the thirty is the server winding down
+/// and the process ending. A drain usually takes well under a second: a model
+/// call is dropped rather than waited for, so what it waits on is tool calls
+/// already running and coding jobs ending their turns.
+const DRAIN_WINDOW: std::time::Duration = std::time::Duration::from_secs(20);
+
 impl Bound {
-    /// Serves until the process is asked to stop.
+    /// Serves until the process is asked to stop, then puts every agent's work
+    /// down for the next host before it stops serving.
+    ///
+    /// The drain runs while the server still answers, so every client watches
+    /// its agents stop and says why rather than losing the connection first.
     pub async fn serve(self) -> Result<(), String> {
+        let runtime = self.runtime;
         axum::serve(self.listener, self.app)
-            .with_graceful_shutdown(stopped())
+            .with_graceful_shutdown(async move {
+                stopped().await;
+                runtime.drain(DRAIN_WINDOW).await;
+            })
             .await
             .map_err(|err| format!("the server stopped: {err}"))
     }
@@ -165,8 +185,9 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
     let paths = crate::boot::Paths::under(&settings.root);
     let booted = crate::boot::open(&paths, tokio::runtime::Handle::current(), sink.clone()).await?;
 
+    let runtime = booted.runtime;
     let state = Arc::new(AppState {
-        runtime: booted.runtime,
+        runtime: runtime.clone(),
         secret: Some(Arc::from(settings.token.as_str())),
         // A box has no corner of a screen. A window showing this workspace
         // feeds its own machine's strip, and that call never reaches here.
@@ -286,7 +307,7 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
         );
     }
 
-    Ok(Bound { addr, agents: booted.started, listener, app })
+    Ok(Bound { addr, agents: booted.started, listener, app, runtime })
 }
 
 /// The one link a browser needs, with the token where a browser keeps it.
@@ -309,9 +330,9 @@ fn invitation(addr: SocketAddr, token: &str) -> String {
 
 /// Waits for the signal a container is stopped with.
 ///
-/// Graceful rather than abrupt because a turn in flight is a model call
-/// somebody paid for. It does not make one resumable: what this buys is the
-/// requests already in the router finishing, and the log line saying so.
+/// What follows it is `Runtime::drain`, which is what lets an update carry
+/// work on instead of ending it, and then the requests already in the router
+/// finishing.
 async fn stopped() {
     let interrupt = tokio::signal::ctrl_c();
     #[cfg(unix)]

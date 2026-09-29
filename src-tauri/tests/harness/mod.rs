@@ -33,7 +33,7 @@ use guac_lib::domain::ids::{AgentId, RunId};
 use guac_lib::llm::openrouter::LlmClient;
 use guac_lib::runtime::events::{Activity, RecordingSink, UiEvent};
 use guac_lib::runtime::guard::GuardLimits;
-use guac_lib::runtime::{OnDisk, Runtime};
+use guac_lib::runtime::{Drained, OnDisk, Runtime};
 use guac_lib::trajectory::{self, Trajectory};
 
 // ---- scripted model ------------------------------------------------------
@@ -1139,6 +1139,34 @@ impl Harness {
     pub fn resume(&self, name: &str) {
         self.runtime.store().set_lifecycle(self.id(name), Lifecycle::Active).unwrap();
         self.runtime.resume_agent(self.id(name));
+    }
+
+    /// Stops this host the way an update stops it and opens the same
+    /// workspace on a new one, with the recovery and the pickup boot runs.
+    ///
+    /// The old runtime cannot be made to end the way a process does, so its
+    /// actors are told to stop and anything still inside a tool call runs on
+    /// in the background against a store the new host has already read. A real
+    /// stop kills it there, and a scenario about that case asserts on the new
+    /// host only.
+    pub async fn restart(self, within: Duration) -> (Harness, Drained) {
+        let drained = self.runtime.drain(within).await;
+        for id in self.ids.values() {
+            self.runtime.stop_agent(*id);
+        }
+        let store = Store::open(&self._dir.path().join("guac.db")).unwrap();
+        let recovered = guac_lib::boot::recover(&store).unwrap();
+        let sink = RecordingSink::new();
+        let runtime = Runtime::new(
+            store,
+            LlmClient::new().unwrap(),
+            self.runtime.config(),
+            OnDisk::under(self._dir.path()),
+            sink.clone(),
+        );
+        runtime.start_all().unwrap();
+        runtime.pick_up(recovered);
+        (Harness { runtime, sink, ids: self.ids, _dir: self._dir }, drained)
     }
 
     /// Waits for the run to settle, or panics with what actually happened.
