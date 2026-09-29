@@ -14,6 +14,17 @@ the operator. `docs/WORKSPACE.md`, then `src/lib/reasoning.ts`,
   so a round that turns out to be tool calls and nothing said leaves none
   behind, and it decides from what has been *drawn* rather than from what has
   been collected: a retry throws the bubble away and keeps the accumulator.
+- **The thinking is joined the same way, and by the transports as well.** A
+  summarizing model publishes one bold heading per round, sometimes one per
+  summary part, and none of them ends with a newline. Joined as they came, a
+  thirteen-round turn was one line, `**Updating skill memory****Checking
+  suppression and site****…`, in the panel and above the composer, and no
+  line of it was alone to be read as a heading. The pen writes `ROUND_BREAK`
+  in front of a round's first thought, decided from `Stream::thought` because
+  no completion carries one, and `llm/codex.rs` and `llm/claude.rs` write
+  `THOUGHT_BREAK` where a summary part or a content block changes. The
+  OpenAI-compatible wire has no such seam to read, so a provider that glues
+  parts inside one `reasoning` string is still glued.
 - **The live trail is a count, and the chips behind it share the working's
   slot.** Both look like the drawing being timid about what it has. Drawn open,
   a long turn's whole record sits between the transcript and the composer,

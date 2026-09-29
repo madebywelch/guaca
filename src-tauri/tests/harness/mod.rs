@@ -68,6 +68,11 @@ pub enum Script {
     /// than one round of a turn, and therefore the only one that can run the end
     /// of one round into the start of the next.
     Narrate { text: String, then: Box<Script> },
+    /// Publish some working and then do what `then` does, in one reply.
+    ///
+    /// A reasoning model working through tools: a thought before every call.
+    /// The only shape that puts thinking in more than one round of a turn.
+    Mull { about: String, then: Box<Script> },
     /// Emit a `directory` tool call.
     Directory,
     /// Call one of a connected plugin's tools, by its prefixed name. Nothing in
@@ -260,6 +265,15 @@ pub fn render(script: &Script) -> String {
             // The call it was narrating, with its own arguments and its own
             // finish reason. A provider sends the text first and settles the
             // reply once, which is what this concatenation is.
+            body.push_str(&render(then));
+        }
+        Script::Mull { about, then } => {
+            for piece in about.as_bytes().chunks(9) {
+                let piece = String::from_utf8_lossy(piece).to_string();
+                body.push_str(&frame(
+                    serde_json::json!({"choices":[{"delta":{"reasoning": piece}}]}),
+                ));
+            }
             body.push_str(&render(then));
         }
         Script::Notes(content) | Script::Memory(content) => {

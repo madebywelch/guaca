@@ -1643,6 +1643,78 @@ async fn a_thought_is_coalesced_on_the_same_clock_as_the_text() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_turn_that_thinks_twice_is_watched_with_the_break_between_its_rounds() {
+    // What an operator was shown: a model publishing one heading per round,
+    // thirteen rounds of it run into one line with nothing between them, so the
+    // line above the composer read "Updating skill memoryChecking suppression".
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Thinking { about: "**Answering**".into(), say: "Two of us.".into() }
+        } else {
+            Script::Mull {
+                about: "**Checking who is here**".into(),
+                then: Box::new(Script::Directory),
+            }
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "who else is here?").unwrap();
+    h.settle(run).await;
+
+    let stream_id = h
+        .sink
+        .snapshot()
+        .into_iter()
+        .find_map(|e| match e {
+            UiEvent::StreamStarted { message_id, .. } => Some(message_id),
+            _ => None,
+        })
+        .expect("a stream should have started");
+    assert_eq!(h.sink.streamed_reasoning(stream_id), "**Checking who is here**\n\n**Answering**");
+    // The break belongs to the thinking alone. The round that thought and said
+    // nothing leaves nothing in front of the words.
+    assert_eq!(h.channel_texts("Manager").pop().unwrap(), "Two of us.");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_retried_round_opens_its_thinking_at_the_left_margin() {
+    // The retry reopens under a new id and the window throws away the thinking
+    // of the attempt that broke, so the replacement is the first thing in its
+    // buffer however many rounds came before it.
+    let answers = Arc::new(AtomicUsize::new(0));
+    let stub = serve(move |body| {
+        if !has_tool_result(body) {
+            return Script::Mull {
+                about: "**Checking who is here**".into(),
+                then: Box::new(Script::Directory),
+            };
+        }
+        if answers.fetch_add(1, Ordering::SeqCst) == 0 {
+            Script::Unavailable
+        } else {
+            Script::Thinking { about: "**Answering**".into(), say: "Two of us.".into() }
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "who else is here?").unwrap();
+    h.settle(run).await;
+
+    let opened: Vec<_> = h
+        .sink
+        .snapshot()
+        .into_iter()
+        .filter_map(|e| match e {
+            UiEvent::StreamStarted { message_id, .. } => Some(message_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(opened.len(), 2, "the failed attempt should have been replaced, not appended to");
+    assert_eq!(h.sink.streamed_reasoning(opened[1]), "**Answering**");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_long_reply_reaches_the_window_in_far_fewer_events_than_tokens() {
     // Every event is an IPC hop and a re-render in the operator's window, and a
     // model writes faster than a screen refreshes. Emitting one per token spent

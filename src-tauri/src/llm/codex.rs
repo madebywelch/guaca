@@ -57,7 +57,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::InferenceConfig;
 use crate::llm::openrouter::{
     ChatMessage, ChatRequest, Completion, ContentPart, LlmError, Token, ToolCall, ToolSpec, Usage,
-    UserContent,
+    UserContent, THOUGHT_BREAK,
 };
 use crate::llm::sse::SseDecoder;
 use crate::subscription::{SigninError, Subscription};
@@ -410,8 +410,16 @@ fn build<'a>(
 enum Event {
     #[serde(rename = "response.output_text.delta")]
     TextDelta { delta: String },
+    /// The summary is published in parts, and each delta says which one it
+    /// belongs to. Nothing in the text says where a part ends.
     #[serde(rename = "response.reasoning_summary_text.delta")]
-    ReasoningDelta { delta: String },
+    ReasoningDelta {
+        delta: String,
+        #[serde(default)]
+        item_id: String,
+        #[serde(default)]
+        summary_index: u32,
+    },
     /// The completed form of one output item. Authoritative for a tool call:
     /// it carries the id, the name and the whole argument string, so the
     /// argument deltas do not have to be reassembled.
@@ -596,6 +604,9 @@ where
     let mut calls: BTreeMap<usize, ToolCall> = BTreeMap::new();
     let mut usage = None;
     let mut settled = false;
+    // Which summary part the last thought belonged to, so the next part starts
+    // on a line of its own.
+    let mut part: Option<(String, u32)> = None;
 
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
@@ -636,8 +647,13 @@ where
                 }
                 // Shown as it happens and accumulated nowhere, which is the
                 // same rule the other transport follows.
-                Event::ReasoningDelta { delta } => {
+                Event::ReasoningDelta { delta, item_id, summary_index } => {
                     if !delta.is_empty() {
+                        let this = (item_id, summary_index);
+                        if part.as_ref().is_some_and(|last| *last != this) {
+                            on_token(Token::Reasoning(THOUGHT_BREAK));
+                        }
+                        part = Some(this);
                         on_token(Token::Reasoning(&delta));
                     }
                 }
@@ -1175,6 +1191,32 @@ mod tests {
 
         assert_eq!(seen, vec!["think:weighing it", "text:answer"]);
         assert_eq!(completion.content, "answer", "reasoning must not reach the transcript");
+    }
+
+    #[tokio::test]
+    async fn each_summary_part_starts_on_a_line_of_its_own() {
+        // What an operator was shown: one heading per part, joined into
+        // `**Updating skill memory****Checking suppression and site**`, which
+        // nothing reads as two headings.
+        let (result, seen) = decode(
+            &[
+                r#"data: {"type":"response.reasoning_summary_text.delta","item_id":"rs_1","summary_index":0,"delta":"**Updating skill "}"#,
+                r#"data: {"type":"response.reasoning_summary_text.delta","item_id":"rs_1","summary_index":0,"delta":"memory**"}"#,
+                r#"data: {"type":"response.reasoning_summary_text.delta","item_id":"rs_1","summary_index":1,"delta":"**Checking suppression and site**"}"#,
+                r#"data: {"type":"response.reasoning_summary_text.delta","item_id":"rs_2","summary_index":0,"delta":"**Sending outreach**"}"#,
+                r#"data: {"type":"response.completed","response":{}}"#,
+            ],
+            usize::MAX,
+        )
+        .await;
+        result.unwrap();
+
+        let thought: String =
+            seen.iter().filter_map(|token| token.strip_prefix("think:")).collect();
+        assert_eq!(
+            thought,
+            "**Updating skill memory**\n\n**Checking suppression and site**\n\n**Sending outreach**"
+        );
     }
 
     #[tokio::test]

@@ -105,7 +105,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use crate::config::InferenceConfig;
 use crate::llm::openrouter::{
     ChatMessage, ChatRequest, Completion, ContentPart, LlmError, Token, ToolCall, ToolSpec, Usage,
-    UserContent,
+    UserContent, THOUGHT_BREAK,
 };
 
 /// The program, found on `PATH` rather than configured, for the reason
@@ -432,6 +432,19 @@ impl ProgramUsage {
     }
 }
 
+/// Which content block the last piece of working came from.
+///
+/// The program streams a thinking block and then a text block, a call can hold
+/// more than one message, and no block ends its text with a newline. The first
+/// piece from anywhere else is written after a [`THOUGHT_BREAK`], or the end of
+/// one block reads as the start of the next: "two thingsboth are independent".
+#[derive(Debug, Default)]
+struct Seam {
+    /// Counted at each `message_start`, because a block index restarts there.
+    message: u32,
+    last: Option<(u32, u64)>,
+}
+
 /// Folds one line of the program's stdout into the call's state.
 ///
 /// Split out from the read loop so the whole translation is a pure function of
@@ -445,7 +458,12 @@ impl ProgramUsage {
 /// token at a time. Streaming it would mean decoding a JSON string that is still
 /// arriving, and a half-decoded escape drawn into a channel is a worse failure
 /// than a message that appears at once.
-fn fold<F>(line: &str, out: &mut Completion, on_token: &mut F) -> Result<bool, LlmError>
+fn fold<F>(
+    line: &str,
+    out: &mut Completion,
+    seam: &mut Seam,
+    on_token: &mut F,
+) -> Result<bool, LlmError>
 where
     F: FnMut(Token<'_>),
 {
@@ -457,15 +475,26 @@ where
 
     match event.get("type").and_then(serde_json::Value::as_str) {
         Some("stream_event") => {
-            let delta = event.get("event").and_then(|e| e.get("delta"));
-            if let Some(delta) = delta {
+            let Some(inner) = event.get("event") else { return Ok(false) };
+            if inner.get("type").and_then(serde_json::Value::as_str) == Some("message_start") {
+                seam.message += 1;
+            }
+            if let Some(delta) = inner.get("delta") {
                 let kind = delta.get("type").and_then(serde_json::Value::as_str);
                 let text = match kind {
                     Some("thinking_delta") => delta.get("thinking"),
                     Some("text_delta") => delta.get("text"),
                     _ => None,
                 };
-                if let Some(text) = text.and_then(serde_json::Value::as_str) {
+                if let Some(text) =
+                    text.and_then(serde_json::Value::as_str).filter(|text| !text.is_empty())
+                {
+                    let block = inner.get("index").and_then(serde_json::Value::as_u64);
+                    let here = (seam.message, block.unwrap_or(0));
+                    if seam.last.is_some_and(|last| last != here) {
+                        on_token(Token::Reasoning(THOUGHT_BREAK));
+                    }
+                    seam.last = Some(here);
                     on_token(Token::Reasoning(text));
                 }
             }
@@ -633,6 +662,7 @@ where
     let stderr = child.stderr.take();
 
     let mut completion = Completion::default();
+    let mut seam = Seam::default();
     let mut answered = false;
 
     let read = async {
@@ -640,7 +670,7 @@ where
         while let Some(line) = lines.next_line().await.map_err(|err| {
             LlmError::Decode(format!("could not read what {PROGRAM} wrote: {err}"))
         })? {
-            if fold(&line, &mut completion, on_token)? {
+            if fold(&line, &mut completion, &mut seam, on_token)? {
                 answered = true;
             }
         }
@@ -825,15 +855,45 @@ mod tests {
             Token::Text(text) => panic!("the reply must not stream: {text}"),
         };
 
+        let mut seam = Seam::default();
         for line in [
             r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"two things"}}}"#,
             r#"{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"both are independent"}}}"#,
         ] {
-            assert!(!fold(line, &mut out, &mut pen).unwrap());
+            assert!(!fold(line, &mut out, &mut seam, &mut pen).unwrap());
         }
 
-        assert_eq!(seen, ["two things", "both are independent"]);
+        // Two blocks are two paragraphs. Run together they were one sentence
+        // with nothing between the end of one and the start of the next.
+        assert_eq!(seen, ["two things", THOUGHT_BREAK, "both are independent"]);
         assert!(out.content.is_empty());
+    }
+
+    #[test]
+    fn a_block_is_one_paragraph_however_many_pieces_it_arrives_in() {
+        let mut seen = String::new();
+        let mut out = Completion::default();
+        let mut seam = Seam::default();
+        let mut pen = |token: Token<'_>| {
+            if let Token::Reasoning(text) = token {
+                seen.push_str(text);
+            }
+        };
+
+        for line in [
+            r#"{"type":"stream_event","event":{"type":"message_start","message":{}}}"#,
+            r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"reading "}}}"#,
+            r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"the inbox."}}}"#,
+            r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":""}}}"#,
+            // A second message restarts the block index, so the same index is
+            // still somewhere else.
+            r#"{"type":"stream_event","event":{"type":"message_start","message":{}}}"#,
+            r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Now the reply."}}}"#,
+        ] {
+            assert!(!fold(line, &mut out, &mut seam, &mut pen).unwrap());
+        }
+
+        assert_eq!(seen, "reading the inbox.\n\nNow the reply.");
     }
 
     #[test]
@@ -847,7 +907,7 @@ mod tests {
                      "cache_read_input_tokens":1000,"output_tokens":5},
             "total_cost_usd":0.42}"#;
 
-        assert!(fold(line, &mut out, &mut sink()).unwrap());
+        assert!(fold(line, &mut out, &mut Seam::default(), &mut sink()).unwrap());
         assert_eq!(out.content, "told Pat");
         assert_eq!(out.finish_reason.as_deref(), Some("end_turn"));
 
@@ -876,14 +936,15 @@ mod tests {
         let line = r#"{"type":"result","subtype":"success","is_error":false,
             "structured_output":{"say":"","calls":[
                 {"name":"a","arguments":{}},{"name":"b","arguments":{}}]}}"#;
-        assert!(fold(line, &mut out, &mut sink()).unwrap());
+        assert!(fold(line, &mut out, &mut Seam::default(), &mut sink()).unwrap());
         assert_ne!(out.tool_calls[0].id, out.tool_calls[1].id);
     }
 
     #[test]
     fn a_line_that_is_not_json_does_not_fail_a_call_that_may_still_answer() {
         let mut out = Completion::default();
-        assert!(!fold("Warning: something happened", &mut out, &mut sink()).unwrap());
+        assert!(!fold("Warning: something happened", &mut out, &mut Seam::default(), &mut sink())
+            .unwrap());
     }
 
     #[test]
@@ -895,7 +956,7 @@ mod tests {
         let line = r#"{"type":"result","subtype":"error_during_execution","is_error":true,
             "result":"Credit balance is too low"}"#;
 
-        let err = fold(line, &mut out, &mut sink()).unwrap_err();
+        let err = fold(line, &mut out, &mut Seam::default(), &mut sink()).unwrap_err();
         assert!(matches!(err, LlmError::ProgramFailed { .. }));
         assert!(err.to_string().contains("Credit balance is too low"), "{err}");
         // A plan is over until somebody tops it up. Three attempts at it is
@@ -914,7 +975,7 @@ mod tests {
             "api_error_status":null,"stop_reason":"refusal",
             "result":"API Error: Opus 5's safeguards flagged this message. Details: `[reasoning_extraction]` Request ID: req_011"}"#;
 
-        let err = fold(line, &mut out, &mut sink()).unwrap_err();
+        let err = fold(line, &mut out, &mut Seam::default(), &mut sink()).unwrap_err();
         assert!(matches!(err, LlmError::ModelRefused { .. }), "{err}");
         // The whole point of telling it apart: the check ran on what the model
         // was writing, so the next draw is a different question.
@@ -937,7 +998,7 @@ mod tests {
         let line = r#"{"type":"result","subtype":"success","is_error":true,
             "api_error_status":401,"stop_reason":"refusal","result":"API Error: flagged"}"#;
 
-        let err = fold(line, &mut out, &mut sink()).unwrap_err();
+        let err = fold(line, &mut out, &mut Seam::default(), &mut sink()).unwrap_err();
         assert!(matches!(err, LlmError::ModelRefused { .. }), "{err}");
     }
 
@@ -947,7 +1008,7 @@ mod tests {
         let line = r#"{"type":"result","subtype":"error_during_execution","is_error":true,
             "api_error_status":529,"result":"overloaded"}"#;
 
-        let err = fold(line, &mut out, &mut sink()).unwrap_err();
+        let err = fold(line, &mut out, &mut Seam::default(), &mut sink()).unwrap_err();
         assert!(matches!(err, LlmError::Upstream { status: 529, .. }), "{err}");
         // The whole reason to classify it rather than fold it into the words.
         assert!(err.is_transient());
@@ -961,7 +1022,7 @@ mod tests {
         let mut out = Completion::default();
         let line = r#"{"type":"result","subtype":"success","is_error":false,"result":"hello"}"#;
 
-        let err = fold(line, &mut out, &mut sink()).unwrap_err();
+        let err = fold(line, &mut out, &mut Seam::default(), &mut sink()).unwrap_err();
         assert!(err.to_string().contains("without answering in the requested shape"), "{err}");
         assert!(!err.is_transient());
     }

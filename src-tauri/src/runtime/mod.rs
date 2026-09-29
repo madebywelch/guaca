@@ -335,6 +335,13 @@ struct Stream {
     /// read from the accumulator instead, a turn that retried its second round
     /// would open the replacement bubble with a blank line.
     drawn: bool,
+    /// The same question asked of the thinking, which is a buffer of its own.
+    ///
+    /// Set from the pen rather than from the completion, because the
+    /// completion never carries a thought. Kept apart from `drawn` because a
+    /// round can think without saying anything, which is most rounds of a turn
+    /// that works through tools, and a round can say something without thinking.
+    thought: bool,
 }
 
 impl Stream {
@@ -360,6 +367,7 @@ impl Stream {
         self.close(events);
         self.message_id = MessageId::new();
         self.drawn = false;
+        self.thought = false;
         self.open(events);
     }
 }
@@ -372,6 +380,11 @@ impl Stream {
 /// the directory instead.Directory loaded". The message that lands at the end
 /// of the turn and the bubble the operator watches being written are joined by
 /// this same string, or the two disagree for as long as the turn runs.
+///
+/// A turn's thinking is joined by it too. A model that publishes a heading per
+/// round (`**Checking the inbox**`) ran thirteen of them into one line, and a
+/// heading that is not alone on its line is not read as one by anything that
+/// draws it.
 const ROUND_BREAK: &str = "\n\n";
 
 /// What a turn closing on work it has not done is told, once.
@@ -4292,6 +4305,7 @@ impl Runtime {
             run_id,
             to: stream_to,
             drawn: false,
+            thought: false,
         };
         stream.open(&*self.inner.events);
 
@@ -4749,12 +4763,19 @@ impl Runtime {
             // several agents answering at once it stopped painting at all,
             // which read as the app freezing and the text arriving in a lump.
             //
-            // The lead is read here rather than inside the pen: a reopen above
-            // has already cleared it, so a retry starts its bubble at the left
-            // margin.
+            // The leads are read here rather than inside the pen: a reopen above
+            // has already cleared them, so a retry starts its bubble and its
+            // thinking at the left margin.
             let mut pen = stream.as_deref().map(|stream| {
                 let lead = if stream.drawn { ROUND_BREAK } else { "" };
-                Pen::new(self.inner.events.clone(), stream.message_id, stream.channel_id, lead)
+                let thought_lead = if stream.thought { ROUND_BREAK } else { "" };
+                Pen::new(
+                    self.inner.events.clone(),
+                    stream.message_id,
+                    stream.channel_id,
+                    lead,
+                    thought_lead,
+                )
             });
             let call = self.inner.llm.stream_chat(inference, request, |token| {
                 if let Some(pen) = pen.as_mut() {
@@ -4767,6 +4788,11 @@ impl Runtime {
             // placeholder is still open. The turn closes it on its way out.
             if let Some(pen) = pen.as_mut() {
                 pen.flush();
+                // Unlike the text, which the turn marks from the completion it
+                // keeps, a thought is marked here because nothing keeps it.
+                if let Some(stream) = stream.as_deref_mut() {
+                    stream.thought |= pen.thought_drawn;
+                }
             }
 
             match result {
@@ -9254,6 +9280,12 @@ struct Pen {
     /// before the call would leave a blank line under a bubble for the length
     /// of the tool call, and a trailing one on a turn that never speaks again.
     lead: &'static str,
+    /// The same, in front of the first thought, for the same reason: a round
+    /// that thinks nothing leaves no break behind it.
+    thought_lead: &'static str,
+    /// Whether this call published any thinking, which is what decides the
+    /// next call's `thought_lead`.
+    thought_drawn: bool,
     held: String,
     thought: String,
     last: Instant,
@@ -9265,12 +9297,15 @@ impl Pen {
         message_id: MessageId,
         channel_id: AgentId,
         lead: &'static str,
+        thought_lead: &'static str,
     ) -> Self {
         Self {
             events,
             message_id,
             channel_id,
             lead,
+            thought_lead,
+            thought_drawn: false,
             held: String::new(),
             thought: String::new(),
             last: Instant::now(),
@@ -9283,7 +9318,12 @@ impl Pen {
                 self.held.push_str(std::mem::take(&mut self.lead));
                 self.held.push_str(text);
             }
-            Token::Reasoning(text) => self.thought.push_str(text),
+            Token::Reasoning(text) if !text.is_empty() => {
+                self.thought.push_str(std::mem::take(&mut self.thought_lead));
+                self.thought.push_str(text);
+                self.thought_drawn = true;
+            }
+            Token::Reasoning(_) => {}
         }
         if self.last.elapsed() >= PEN_FLUSH {
             self.flush();
