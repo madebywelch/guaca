@@ -606,6 +606,11 @@ app: there is one on this machine, performed in Settings, and a group only
 decides whether to spend it. `GroupInference::apply` resolves the provider
 first, then lays both model overrides on top, then collapses to the resolved
 provider's model, so every case lands on a model its own provider can run.
+An agent is the third layer and keeps the same two fields, `model` and
+`subscription_model`; `AgentCard::own_model` hands a turn the one belonging to
+whoever pays, and Claude neither. With one field, a model chosen while a key
+paid went to ChatGPT after the crew moved, and was refused by name on every
+turn.
 
 **Nothing about who pays is inferred.** A group that named an endpoint used to be
 taken to have chosen one, because until the provider column there was no way for

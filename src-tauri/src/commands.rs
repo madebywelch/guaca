@@ -2279,6 +2279,7 @@ pub async fn duplicate_agent(state: &AppState, id: AgentId) -> Reply<AgentCard> 
         avatar: original.avatar,
         color: original.color,
         model: original.model,
+        subscription_model: Some(original.subscription_model),
         reasoning_effort: original.reasoning_effort,
         system_prompt: original.system_prompt,
         skills: original.skills,

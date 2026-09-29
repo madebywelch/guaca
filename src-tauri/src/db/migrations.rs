@@ -1812,6 +1812,42 @@ CREATE TABLE put_down_jobs (
 );
 "#,
     ),
+    (
+        63,
+        r#"
+-- An agent's own model for turns the ChatGPT subscription pays for.
+--
+-- The app and every group keep two model fields because the providers share no
+-- model names. The agent kept one and sent it to whichever provider paid, so a
+-- model chosen while a key paid was refused by name on every turn once its crew
+-- moved to the subscription, and the other way round.
+--
+-- Which field a value already stored belongs in is decided once, from what its
+-- crew pays with now:
+--
+-- - A value with a slash is an endpoint's. ChatGPT's model names never carry
+--   one and OpenRouter's always do, so on the subscription it was refused on
+--   every turn, and leaving it on the endpoint is the only reading that runs.
+-- - Otherwise, on a crew the subscription pays for, it is the subscription's:
+--   it is what those turns have been running on.
+-- - On a crew a key pays for, it stays the endpoint's.
+-- - On a crew that follows the app or runs on Claude, which of the two pays is
+--   in settings this cannot read, so it goes in both and each provider keeps
+--   running what it ran before.
+ALTER TABLE agents ADD COLUMN subscription_model TEXT NOT NULL DEFAULT '';
+
+UPDATE agents
+   SET subscription_model = model
+ WHERE model <> '' AND instr(model, '/') = 0
+   AND coalesce((SELECT provider FROM groups WHERE groups.id = agents.group_id), '')
+       <> 'compatible';
+
+UPDATE agents
+   SET model = ''
+ WHERE subscription_model <> ''
+   AND (SELECT provider FROM groups WHERE groups.id = agents.group_id) = 'chatgpt';
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -3146,6 +3182,72 @@ mod tests {
             .query_row("SELECT browser_consent FROM agents WHERE id='a1'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(consent, "open", "an upgrade must not start asking about work already running");
+    }
+
+    #[test]
+    fn an_agents_model_lands_in_the_field_of_the_provider_that_ran_it() {
+        // The engineer that found this: its crew on the subscription and an
+        // OpenRouter slug on the agent, refused by ChatGPT on every turn. Every
+        // other row has to run tomorrow on exactly what it ran today.
+        let mut conn = memory();
+        let tx = conn.transaction().unwrap();
+        for (version, sql) in MIGRATIONS.iter().take_while(|(v, _)| *v < 63) {
+            tx.execute_batch(sql).unwrap();
+            tx.pragma_update(None, "user_version", *version).unwrap();
+        }
+        tx.commit().unwrap();
+
+        for (group, provider) in [
+            ("plan", Some("chatgpt")),
+            ("key", Some("compatible")),
+            ("claude", Some("claude")),
+            ("follows", None),
+        ] {
+            conn.execute(
+                "INSERT INTO groups (id,name,created_at,provider) VALUES (?1,?1,0,?2)",
+                rusqlite::params![group, provider],
+            )
+            .unwrap();
+        }
+        let agents = [
+            ("engineer", "plan", "xiaomi/mimo-v2.6-pro"),
+            ("assistant", "plan", "gpt-6-astra"),
+            ("inheritor", "plan", ""),
+            ("router", "key", "anthropic/claude-sonnet-4.5"),
+            ("local", "key", "qwen2.5-coder"),
+            ("kept", "claude", "gpt-6-astra"),
+            ("unsure", "follows", "gpt-6-astra"),
+            ("routed", "follows", "openai/gpt-5"),
+        ];
+        for (id, group, model) in agents {
+            conn.execute(
+                "INSERT INTO agents (id,name,avatar,color,model,system_prompt,lifecycle,created_at,
+                                     updated_at,group_id)
+                 VALUES (?1,?1,'orb','#7fb069',?2,'','active',1,1,?3)",
+                rusqlite::params![id, model, group],
+            )
+            .unwrap();
+        }
+
+        run(&mut conn).unwrap();
+
+        let read = |id: &str| -> (String, String) {
+            conn.query_row("SELECT model, subscription_model FROM agents WHERE id=?1", [id], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap()
+        };
+        let both = |model: &str| (model.to_string(), model.to_string());
+        let endpoint = |model: &str| (model.to_string(), String::new());
+        let plan = |model: &str| (String::new(), model.to_string());
+        assert_eq!(read("engineer"), endpoint("xiaomi/mimo-v2.6-pro"), "off the subscription");
+        assert_eq!(read("assistant"), plan("gpt-6-astra"));
+        assert_eq!(read("inheritor"), endpoint(""), "blank still inherits on both");
+        assert_eq!(read("router"), endpoint("anthropic/claude-sonnet-4.5"));
+        assert_eq!(read("local"), endpoint("qwen2.5-coder"), "a key pays, whatever the name");
+        assert_eq!(read("kept"), both("gpt-6-astra"));
+        assert_eq!(read("unsure"), both("gpt-6-astra"));
+        assert_eq!(read("routed"), endpoint("openai/gpt-5"));
     }
 
     #[test]

@@ -75,6 +75,7 @@ function agent(id: string, name: string, groupId = DEFAULT_GROUP): AgentCard {
     avatar: "avocado",
     color: "#c7d96b",
     model: "m",
+    subscriptionModel: "",
     systemPrompt: "",
     skills: [],
     lifecycle: "active",

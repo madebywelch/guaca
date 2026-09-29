@@ -7,6 +7,7 @@
 //! boundary that a local single-process app does not have: no `.well-known`
 //! hosting, no DIDs, no signatures, no registry.
 
+use crate::config::Provider;
 use crate::domain::effort::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 
@@ -142,9 +143,15 @@ pub struct AgentCard {
     pub avatar: String,
     /// Accent color as `#rrggbb`. Validated on write, never on read.
     pub color: String,
-    /// OpenRouter model slug. Per-agent so a cheap agent and an expensive one
-    /// can share a room.
+    /// The model this agent runs when a key pays for its turns: the endpoint's
+    /// own slug. Per-agent so a cheap agent and an expensive one can share a
+    /// room. Blank inherits. Read through [`AgentCard::own_model`].
     pub model: String,
+    /// The model it runs when the ChatGPT subscription pays. A second field
+    /// for the reason the group and the app keep two: the providers share no
+    /// model names, so one field is refused by name after every switch.
+    #[serde(default)]
+    pub subscription_model: String,
     #[serde(default)]
     pub reasoning_effort: Option<ReasoningEffort>,
     pub system_prompt: String,
@@ -256,6 +263,21 @@ impl AgentCard {
         self.discarded_at.is_some()
     }
 
+    /// The model this agent names for a turn `provider` pays for, or `None` to
+    /// run the group's.
+    ///
+    /// Each provider reads only its own field, so a model chosen while one
+    /// provider paid is kept, and never sent, while the other does. Claude
+    /// reads neither: which model answers is the program's own setting.
+    pub fn own_model(&self, provider: Provider) -> Option<&str> {
+        let named = match provider {
+            Provider::Compatible => &self.model,
+            Provider::Chatgpt => &self.subscription_model,
+            Provider::Claude => return None,
+        };
+        Some(named.trim()).filter(|model| !model.is_empty())
+    }
+
     /// The directory entry a peer sees. Deliberately excludes `system_prompt`:
     /// one agent should not be able to read another's instructions just by
     /// listing the directory.
@@ -272,6 +294,25 @@ impl AgentCard {
             lifecycle: self.lifecycle,
             version: self.version,
         }
+    }
+}
+
+/// Splits a model written when an agent had one field for both providers into
+/// `(model, subscription_model)`, by what its crew pays with.
+///
+/// Migration 63's reading, for a group copy made before it: a slash is an
+/// endpoint's, since ChatGPT's names never carry one; otherwise the provider
+/// the crew names has it, and a crew that follows the app or runs on Claude
+/// gets it in both, because which provider ran it is not in the file.
+pub fn split_legacy_model(model: &str, crew: Option<Provider>) -> (String, String) {
+    let model = model.trim().to_string();
+    if model.is_empty() || model.contains('/') {
+        return (model, String::new());
+    }
+    match crew {
+        Some(Provider::Compatible) => (model, String::new()),
+        Some(Provider::Chatgpt) => (String::new(), model),
+        Some(Provider::Claude) | None => (model.clone(), model),
     }
 }
 
@@ -309,6 +350,11 @@ pub struct AgentDraft {
     pub avatar: String,
     pub color: String,
     pub model: String,
+    /// Absent means "leave it as it is" on update, and blank on create. A
+    /// client from before this field sends none, and an edit it makes must not
+    /// clear a subscription model it never showed.
+    #[serde(default)]
+    pub subscription_model: Option<String>,
     #[serde(default)]
     pub reasoning_effort: Option<ReasoningEffort>,
     pub system_prompt: String,
@@ -365,6 +411,7 @@ impl AgentDraft {
             avatar: avatar.to_string(),
             color,
             model: model.to_string(),
+            subscription_model: self.subscription_model.as_deref().map(|m| m.trim().to_string()),
             reasoning_effort: self.reasoning_effort,
             system_prompt: self.system_prompt.trim().to_string(),
             skills: self
@@ -384,6 +431,8 @@ pub struct CleanDraft {
     pub avatar: String,
     pub color: String,
     pub model: String,
+    /// `None` keeps what is stored; see [`AgentDraft::subscription_model`].
+    pub subscription_model: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub system_prompt: String,
     pub skills: Vec<String>,
@@ -522,6 +571,7 @@ mod tests {
             avatar: "orb".into(),
             color: "#7FB069".into(),
             model: "anthropic/claude-sonnet-4.5".into(),
+            subscription_model: None,
             reasoning_effort: None,
             system_prompt: "  You coordinate.  ".into(),
             skills: vec!["  delegation  ".into(), "   ".into()],
@@ -565,6 +615,36 @@ mod tests {
     }
 
     #[test]
+    fn a_model_is_sent_only_to_the_provider_it_was_chosen_for() {
+        // The crew that found this: turns on a ChatGPT sign-in, and an
+        // OpenRouter slug on the agent itself. One field sent it to ChatGPT,
+        // which refused it by name on every turn.
+        let engineer = AgentCard {
+            model: "xiaomi/mimo-v2.6-pro".into(),
+            subscription_model: "gpt-6-astra".into(),
+            ..card()
+        };
+        assert_eq!(engineer.own_model(Provider::Chatgpt), Some("gpt-6-astra"));
+        assert_eq!(engineer.own_model(Provider::Compatible), Some("xiaomi/mimo-v2.6-pro"));
+        assert_eq!(engineer.own_model(Provider::Claude), None, "the program chooses");
+
+        // Blank on the paying side is the group's model, whatever the other
+        // side holds.
+        let unset = AgentCard { subscription_model: "  ".into(), ..engineer };
+        assert_eq!(unset.own_model(Provider::Chatgpt), None);
+    }
+
+    #[test]
+    fn an_absent_subscription_model_is_left_alone_and_a_blank_one_clears() {
+        let mut d = draft();
+        assert_eq!(d.validate().unwrap().subscription_model, None);
+        d.subscription_model = Some("  ".into());
+        assert_eq!(d.validate().unwrap().subscription_model.as_deref(), Some(""));
+        d.subscription_model = Some(" gpt-6-astra ".into());
+        assert_eq!(d.validate().unwrap().subscription_model.as_deref(), Some("gpt-6-astra"));
+    }
+
+    #[test]
     fn color_accepts_short_and_long_forms() {
         assert_eq!(normalize_color("#7FB069").as_deref(), Some("#7fb069"));
         assert_eq!(normalize_color("7fb069").as_deref(), Some("#7fb069"));
@@ -580,15 +660,15 @@ mod tests {
         assert_eq!(normalize_color("rgb(1,2,3)"), None);
     }
 
-    #[test]
-    fn directory_entry_never_leaks_the_system_prompt() {
-        let card = AgentCard {
+    fn card() -> AgentCard {
+        AgentCard {
             id: AgentId::new(),
             group_id: GroupId::new(),
             name: "Manager".into(),
             avatar: "orb".into(),
             color: "#7fb069".into(),
             model: "m".into(),
+            subscription_model: String::new(),
             reasoning_effort: None,
             system_prompt: "SECRET INSTRUCTIONS".into(),
             skills: vec!["delegation".into()],
@@ -610,9 +690,13 @@ mod tests {
             created_at: 0,
             updated_at: 0,
             discarded_at: None,
-        };
-        let json =
-            serde_json::to_string(&card.directory_entry(vec!["Gmail as robert@x".into()])).unwrap();
+        }
+    }
+
+    #[test]
+    fn directory_entry_never_leaks_the_system_prompt() {
+        let json = serde_json::to_string(&card().directory_entry(vec!["Gmail as robert@x".into()]))
+            .unwrap();
         assert!(!json.contains("SECRET"), "directory entry leaked the prompt: {json}");
         assert!(json.contains("Gmail as robert@x"), "a peer has to be able to see who to ask");
     }

@@ -837,19 +837,43 @@ async fn a_model_the_plan_cannot_run_is_named_in_the_refusal() {
     assert!(!all.contains("own setting"), "{all}");
 }
 
-/// A model an agent names for itself is refused with where it was named.
+/// An endpoint's model on the agent is not sent to the subscription.
 ///
-/// The case that sent an operator the wrong way: pi's model chosen in the
-/// Terminal panel, an OpenRouter model on the agent itself, and a crew paying
-/// for turns with a ChatGPT sign-in whose refusal says "Codex". Nothing in that
-/// sentence points at the agent's own settings, which is the one place it is
-/// fixed.
+/// The crew that found this: turns on a ChatGPT sign-in, pi on OpenRouter, and
+/// an OpenRouter slug on the agent itself. The agent had one model field and
+/// sent it to whichever provider paid, so ChatGPT refused every turn by name
+/// and the agent never got as far as starting a coding job.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_endpoint_model_on_the_agent_is_never_sent_to_the_subscription() {
+    let stub = serve(|_| Say::Text("Cloning it now.".into())).await;
+    let app = signed_in(&stub, &["Engineer"], "pro");
+    let card = app.runtime.store().get_agent(app.id("Engineer")).unwrap().unwrap();
+    let mut own = draft("Engineer", &["testing"]);
+    own.model = "xiaomi/mimo-v2.6-pro".into();
+    own.group_id = Some(card.group_id);
+    app.runtime.store().update_agent(card.id, &own).unwrap();
+
+    let run = app.ask("Engineer", "Clone the repo.");
+    app.settle(run).await;
+
+    let body = stub.bodies().first().cloned().expect("the subscription was called");
+    assert_eq!(body["model"], "gpt-5.6-luna", "the group's subscription model runs");
+    let said = app.texts("Engineer").join("\n");
+    assert!(said.contains("Cloning it now."), "{}", app.everything("Engineer"));
+    // Kept for when a key pays again, not dropped.
+    let kept = app.runtime.store().get_agent(card.id).unwrap().unwrap();
+    assert_eq!(kept.model, "xiaomi/mimo-v2.6-pro");
+}
+
+/// A ChatGPT model an agent names for itself is refused with where it was
+/// named: ChatGPT's own sentence says "Codex", which reads as the coding
+/// harness, and nothing in it points at the agent's settings.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_model_an_agent_names_for_itself_is_refused_with_where_it_was_named() {
     let app = signed_in(&refusing(400).await, &["Engineer"], "pro");
     let card = app.runtime.store().get_agent(app.id("Engineer")).unwrap().unwrap();
     let mut own = draft("Engineer", &["testing"]);
-    own.model = "xiaomi/mimo-v2.6-pro".into();
+    own.subscription_model = Some("gpt-5.6-luna".into());
     own.group_id = Some(card.group_id);
     app.runtime.store().update_agent(card.id, &own).unwrap();
 
@@ -857,7 +881,7 @@ async fn a_model_an_agent_names_for_itself_is_refused_with_where_it_was_named() 
     app.settle(run).await;
 
     let all = app.everything("Engineer");
-    assert!(all.contains("xiaomi/mimo-v2.6-pro"), "{all}");
+    assert!(all.contains("gpt-5.6-luna"), "{all}");
     assert!(all.contains("Engineer's own setting, not its group's"), "{all}");
     assert!(all.contains("use the group default"), "the way on: {all}");
     assert!(all.contains("Terminal panel"), "and which model it is not: {all}");

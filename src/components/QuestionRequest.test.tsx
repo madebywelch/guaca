@@ -32,6 +32,7 @@ const ANALYST: AgentCard = {
   avatar: "avocado",
   color: "#c7d96b",
   model: "",
+  subscriptionModel: "",
   systemPrompt: "",
   skills: [],
   lifecycle: "active",

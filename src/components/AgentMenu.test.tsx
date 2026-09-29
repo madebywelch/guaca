@@ -1,7 +1,7 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { AgentCard, Group } from "../lib/types";
+import type { AgentCard, Group, Provider } from "../lib/types";
 import { aGroup } from "../test-fixtures";
 import { AgentMenu } from "./AgentMenu";
 
@@ -22,6 +22,7 @@ function card(over: Partial<AgentCard> = {}): AgentCard {
     avatar: "avocado",
     color: "#c7d96b",
     model: "m",
+    subscriptionModel: "",
     systemPrompt: "",
     skills: [],
     lifecycle: "active",
@@ -39,7 +40,12 @@ function group(id: string, name: string): Group {
   return aGroup({ id, name, agentCount: 1 });
 }
 
-function open(agent: AgentCard, at = { x: 40, y: 40 }, groups: Group[] = []) {
+function open(
+  agent: AgentCard,
+  at = { x: 40, y: 40 },
+  groups: Group[] = [],
+  provider: Provider = "compatible",
+) {
   const handlers = {
     onClose: vi.fn(),
     onEditProfile: vi.fn(),
@@ -50,7 +56,7 @@ function open(agent: AgentCard, at = { x: 40, y: 40 }, groups: Group[] = []) {
     onDelete: vi.fn(),
     onMoveToGroup: vi.fn(),
   };
-  render(<AgentMenu target={{ agent, ...at }} groups={groups} {...handlers} />);
+  render(<AgentMenu target={{ agent, ...at }} groups={groups} provider={provider} {...handlers} />);
   return handlers;
 }
 
@@ -79,6 +85,21 @@ describe("AgentMenu", () => {
     // It used to sit under the agent's name over every message it ever wrote.
     open(card({ model: "openai/gpt-5.6-terra" }));
     expect(screen.getByText("openai/gpt-5.6-terra")).toBeTruthy();
+  });
+
+  it("names the model its provider runs, never the one kept for the other", () => {
+    // The engineer whose every reply ChatGPT refused: an OpenRouter slug on
+    // an agent whose crew is on the subscription. That slug is not what runs,
+    // and a menu that names it sends the operator after the wrong setting.
+    const engineer = card({ model: "xiaomi/mimo-v2.6-pro", subscriptionModel: "" });
+    open(engineer, undefined, [], "chatgpt");
+    expect(screen.queryByText("xiaomi/mimo-v2.6-pro")).toBeNull();
+    cleanup();
+    open({ ...engineer, subscriptionModel: "gpt-6-astra" }, undefined, [], "chatgpt");
+    expect(screen.getByText("gpt-6-astra")).toBeTruthy();
+    cleanup();
+    open({ ...engineer, subscriptionModel: "gpt-6-astra" }, undefined, [], "claude");
+    expect(screen.queryByText(/gpt-6-astra|xiaomi/)).toBeNull();
   });
 
   it("says unpin on an agent that is already pinned", () => {

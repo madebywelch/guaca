@@ -4207,9 +4207,10 @@ impl Runtime {
             None
         });
         // Settings resolve agent over group over app. An agent that names its own
-        // model keeps it; otherwise the group's choice applies; otherwise the
-        // app default. The endpoint resolves the same way, so one crew can run
-        // against a local server while another uses a hosted one.
+        // model for the provider paying keeps it; otherwise the group's choice
+        // applies; otherwise the app default. The endpoint resolves the same
+        // way, so one crew can run against a local server while another uses a
+        // hosted one.
         //
         // Read here rather than at the first model call, which is where it used
         // to be: what the model can be sent decides what goes into the prompt
@@ -4217,11 +4218,9 @@ impl Runtime {
         // token is spent.
         let config = self.config();
         let inference = self.inference_for(&card, &config);
-        let model = if card.model.trim().is_empty() {
-            inference.default_model.clone()
-        } else {
-            card.model.clone()
-        };
+        let model = card
+            .own_model(inference.provider)
+            .map_or_else(|| inference.default_model.clone(), str::to_string);
         // What Guaca will put in front of that model, decided once and used
         // four times: the prompt says it, the tool list agrees with it,
         // `deliver_files` obeys it, and `not_given` refuses a screen the model
@@ -4652,7 +4651,9 @@ impl Runtime {
             // from, and ChatGPT's says "Codex", which reads as the coding
             // harness. An operator who chose pi's model in the Terminal panel
             // and found a model on the agent itself read it exactly that way.
-            if matches!(err, LlmError::ModelRejected { .. }) && !card.model.trim().is_empty() {
+            if matches!(err, LlmError::ModelRejected { .. })
+                && card.own_model(inference.provider).is_some()
+            {
                 said.push_str(&format!(
                     "\n\nThat model is {name}'s own setting, not its group's. Choose one its \
                      group's provider runs in {name}'s settings, or use the group default. A \
@@ -6548,6 +6549,7 @@ impl Runtime {
             // Blank means inherit, which is how an agent created in the UI
             // starts too. What a new agent costs to run stays the operator's.
             model: String::new(),
+            subscription_model: None,
             reasoning_effort: None,
             system_prompt: draft.instructions.clone(),
             skills: draft.skills.clone(),
@@ -9396,6 +9398,7 @@ mod tests {
             avatar: "orb".into(),
             color: "#7fb069".into(),
             model: "m".into(),
+            subscription_model: String::new(),
             reasoning_effort: None,
             system_prompt: String::new(),
             skills: Vec::new(),

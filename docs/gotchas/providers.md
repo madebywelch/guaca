@@ -72,3 +72,11 @@ the code is `llm/codex.rs`, `llm/claude.rs` and `subscription.rs`.
   hour and goes back has to find their model where they left it. Both panels say
   so on the row, because a model field that is quietly ignored is the one thing
   nothing else on screen would explain.
+- **An agent keeps a model per provider, like the group and the app, and a turn
+  reads only the paying provider's.** It had one field, sent to whoever paid. A
+  crew on a ChatGPT sign-in with pi on OpenRouter ended up with an OpenRouter
+  slug on the agent itself, and ChatGPT refused every turn by name before the
+  agent could start a job; switching any crew between providers did the same to
+  every agent in it that named a model. `AgentCard::own_model` is the one read.
+  Migration 63 sorted what was stored by the crew's provider now, and a slash
+  is an endpoint's whatever the crew says, because no ChatGPT name has one.

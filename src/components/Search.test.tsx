@@ -50,6 +50,7 @@ function agent(name: string, extra: Partial<AgentCard> = {}): AgentCard {
     avatar: "avocado",
     color: "#c7d96b",
     model: "test/model",
+    subscriptionModel: "",
     systemPrompt: "",
     skills: [],
     lifecycle: "active",

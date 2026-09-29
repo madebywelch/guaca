@@ -33,6 +33,7 @@ export function AgentEditor({ agent, onClose }: Props) {
     avatar: agent?.avatar ?? suggestCharacter(agents.map((a) => a.avatar)),
     color: agent?.color ?? suggestAccent(agents.map((a) => a.color)),
     model: agent?.model ?? "",
+    subscriptionModel: agent?.subscriptionModel ?? "",
     reasoningEffort: agent?.reasoningEffort ?? null,
     systemPrompt: agent?.systemPrompt ?? "",
     skills: agent?.skills ?? [],
@@ -232,7 +233,7 @@ export function AgentEditor({ agent, onClose }: Props) {
 
         {provider === "chatgpt" ? (
           <SubscriptionModel
-            value={draft.model}
+            value={draft.subscriptionModel ?? ""}
             effort={draft.reasoningEffort ?? null}
             onEffortChange={(reasoningEffort) => patch({ reasoningEffort })}
             inheritedModel={inheritedModel}
@@ -240,7 +241,7 @@ export function AgentEditor({ agent, onClose }: Props) {
             effortInherit="Use group default"
             models={settings?.subscriptionModels ?? []}
             inherit={inherit}
-            onChange={(model) => patch({ model })}
+            onChange={(subscriptionModel) => patch({ subscriptionModel })}
             hint="Choose a ChatGPT model for this agent, or use the group default. Choices come from your signed-in account."
           />
         ) : provider === "claude" ? (

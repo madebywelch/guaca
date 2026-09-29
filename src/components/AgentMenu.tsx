@@ -1,7 +1,8 @@
 import type { CSSProperties, FocusEvent } from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import type { AgentCard, Group } from "../lib/types";
+import { ownModel } from "../lib/providers";
+import type { AgentCard, Group, Provider } from "../lib/types";
 
 export interface MenuTarget {
   agent: AgentCard;
@@ -13,6 +14,8 @@ interface Props {
   target: MenuTarget;
   /** Every group, so the ones this agent is not in can be offered. */
   groups: Group[];
+  /** Who pays for this agent's turns, which decides which of its models runs. */
+  provider: Provider | undefined;
   onClose: () => void;
   onEditProfile: (agent: AgentCard) => void;
   onTogglePin: (agent: AgentCard) => void;
@@ -47,6 +50,7 @@ const MARGIN = 8;
 export function AgentMenu({
   target,
   groups,
+  provider,
   onClose,
   onEditProfile,
   onTogglePin,
@@ -57,6 +61,7 @@ export function AgentMenu({
   onMoveToGroup,
 }: Props) {
   const { agent } = target;
+  const model = ownModel(agent, provider);
   const elsewhere = groups.filter((group) => group.id !== agent.groupId);
   const ref = useRef<HTMLDivElement>(null);
   const [at, setAt] = useState({ x: target.x, y: target.y, origin: "top left" });
@@ -154,7 +159,7 @@ export function AgentMenu({
       >
         <p className="menu__head">
           {agent.name}
-          {agent.model && <span className="menu__model">{agent.model}</span>}
+          {model && <span className="menu__model">{model}</span>}
         </p>
         {item(agent.lifecycle === "paused" ? "Resume" : "Pause", () => onTogglePause(agent))}
         {item("Edit profile", () => onEditProfile(agent))}

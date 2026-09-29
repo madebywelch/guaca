@@ -106,6 +106,7 @@ function card(given: boolean, harness: Harness = "claude", gate: Gate = "open"):
     avatar: "plain",
     color: "#c7d96b",
     model: "m",
+    subscriptionModel: "",
     systemPrompt: "",
     skills: [],
     lifecycle: "active",

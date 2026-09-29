@@ -350,6 +350,7 @@ mod tests {
                 avatar: "avocado".into(),
                 color: "#7fb069".into(),
                 model: String::new(),
+                subscription_model: None,
                 reasoning_effort: None,
                 system_prompt: String::new(),
                 skills: vec![],

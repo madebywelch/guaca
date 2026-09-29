@@ -55,7 +55,7 @@ const crew = aGroup({
   name: "Research",
   inference: { ...aGroup().inference, provider: "chatgpt", subscriptionModel: "crew-default" },
 });
-function card(model = ""): AgentCard {
+function card(model = "", subscriptionModel = ""): AgentCard {
   return {
     id: "agent-1",
     groupId: crew.id,
@@ -63,6 +63,7 @@ function card(model = ""): AgentCard {
     avatar: "avocado",
     color: "#c7d96b",
     model,
+    subscriptionModel,
     systemPrompt: "",
     skills: [],
     sandboxId: null,
@@ -116,20 +117,38 @@ beforeEach(() => {
   );
 });
 
-it("keeps a legacy endpoint override visible and explains it after the account list loads", async () => {
-  open(card("anthropic/endpoint-model"));
-  expect(modelSelect().value).toBe("anthropic/endpoint-model");
+it("keeps an endpoint's model out of the ChatGPT list, and keeps it for the endpoint", async () => {
+  // The engineer ChatGPT refused on every turn: an OpenRouter slug on an agent
+  // whose crew is on the subscription. It is the endpoint's, so the ChatGPT
+  // picker neither offers it nor sends it, and saving leaves it where it was.
+  open(card("xiaomi/mimo-v2.6-pro"));
+  await screen.findByRole("option", { name: "chat-specialist" });
+  expect(modelSelect().value).toBe("");
+  expect(screen.queryByRole("option", { name: "xiaomi/mimo-v2.6-pro" })).toBeNull();
+  await save();
+  expect(api.updateAgent).toHaveBeenCalledWith(
+    "agent-1",
+    expect.objectContaining({ model: "xiaomi/mimo-v2.6-pro", subscriptionModel: "" }),
+  );
+});
+
+it("keeps a retired ChatGPT choice visible and explains it after the account list loads", async () => {
+  open(card("", "retired-model"));
+  expect(modelSelect().value).toBe("retired-model");
   expect((await screen.findByRole("status")).textContent).toContain(
     "not in your account's current ChatGPT model list",
   );
   fireEvent.change(modelSelect(), { target: { value: "" } });
   await save();
-  expect(api.updateAgent).toHaveBeenCalledWith("agent-1", expect.objectContaining({ model: "" }));
+  expect(api.updateAgent).toHaveBeenCalledWith(
+    "agent-1",
+    expect.objectContaining({ subscriptionModel: "" }),
+  );
 });
 
 it("keeps inheritance and the saved override usable when discovery fails", async () => {
   api.subscriptionModels.mockRejectedValue(new Error("offline"));
-  open(card("saved-model"));
+  open(card("", "saved-model"));
   expect((await screen.findByRole("status")).textContent).toContain(
     "Could not load current ChatGPT models",
   );
@@ -138,7 +157,7 @@ it("keeps inheritance and the saved override usable when discovery fails", async
   await save();
   expect(api.updateAgent).toHaveBeenCalledWith(
     "agent-1",
-    expect.objectContaining({ model: "saved-model" }),
+    expect.objectContaining({ subscriptionModel: "saved-model" }),
   );
 });
 
@@ -153,7 +172,7 @@ it("uses the group's ChatGPT provider and saves an account model for just this a
   await save();
   expect(api.updateAgent).toHaveBeenCalledWith(
     "agent-1",
-    expect.objectContaining({ model: "chat-specialist" }),
+    expect.objectContaining({ model: "", subscriptionModel: "chat-specialist" }),
   );
   expect(api.rankedModels).not.toHaveBeenCalled();
 });
@@ -166,7 +185,9 @@ it("creates agents inheriting the group model instead of pinning the app's endpo
   });
   fireEvent.click(screen.getByRole("button", { name: "Create agent" }));
   await waitFor(() =>
-    expect(api.createAgent).toHaveBeenCalledWith(expect.objectContaining({ model: "" })),
+    expect(api.createAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "", subscriptionModel: "" }),
+    ),
   );
 });
 
@@ -203,21 +224,34 @@ it("uses the endpoint and model of a group that overrides an app on ChatGPT", as
   expect(api.rankedModels).not.toHaveBeenCalled();
 });
 
-it("updates the model control when moving groups and preserves an explicit override", async () => {
-  open(card("chat-specialist"), [crew, aGroup({ id: "endpoint", name: "Endpoint" })]);
+it("keeps each provider's override when moving groups, and shows only the one that runs", async () => {
+  // One field for both is how a ChatGPT name reached an endpoint's box and an
+  // endpoint's slug reached ChatGPT, each refused by name on every turn.
+  open(card("anthropic/specialist", "chat-specialist"), [
+    crew,
+    aGroup({ id: "endpoint", name: "Endpoint" }),
+  ]);
   await screen.findByRole("option", { name: "chat-specialist" });
+  expect(modelSelect().value).toBe("chat-specialist");
   fireEvent.change(screen.getByRole("combobox", { name: /^Group/ }), {
     target: { value: "endpoint" },
   });
   expect(screen.getByText("Provider · OpenRouter")).toBeTruthy();
   expect((screen.getByRole("textbox", { name: /^Model/ }) as HTMLInputElement).value).toBe(
-    "chat-specialist",
+    "anthropic/specialist",
   );
   fireEvent.change(screen.getByRole("combobox", { name: /^Group/ }), {
     target: { value: crew.id },
   });
   expect(modelSelect().value).toBe("chat-specialist");
-  await screen.findByRole("option", { name: "chat-default" });
+  await save();
+  expect(api.updateAgent).toHaveBeenCalledWith(
+    "agent-1",
+    expect.objectContaining({
+      model: "anthropic/specialist",
+      subscriptionModel: "chat-specialist",
+    }),
+  );
 });
 
 it("explains Claude's model ownership and preserves the inactive override when saving", async () => {

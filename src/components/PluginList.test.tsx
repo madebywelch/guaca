@@ -146,6 +146,7 @@ function member(id: string, name: string): AgentCard {
     avatar: "avocado",
     color: "#7fb069",
     model: "",
+    subscriptionModel: "",
     systemPrompt: "",
     skills: [],
     sandboxId: null,

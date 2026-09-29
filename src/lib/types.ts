@@ -903,7 +903,11 @@ export interface AgentCard {
   name: string;
   avatar: string;
   color: string;
+  /** The model this agent runs when a key pays. Blank inherits. */
   model: string;
+  /** The model it runs when the ChatGPT subscription pays. Blank inherits. The
+   *  providers share no model names, so each keeps its own. See `ownModel`. */
+  subscriptionModel: string;
   reasoningEffort?: ReasoningEffort | null;
   systemPrompt: string;
   skills: string[];
@@ -937,6 +941,8 @@ export interface AgentDraft {
   avatar: string;
   color: string;
   model: string;
+  /** Omitted means "leave it as it is" on update, blank on create. */
+  subscriptionModel?: string;
   reasoningEffort?: ReasoningEffort | null;
   systemPrompt: string;
   skills: string[];

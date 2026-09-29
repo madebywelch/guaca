@@ -20,7 +20,7 @@ pub const MAX_ARCHIVE: usize = 64 * 1024 * 1024;
 // a terminal, a computer and a browser are given again on the host a crew lands on.
 const TABLES: &[(&str, &str, &str)] = &[
     ("groups", "id,name,created_at,base_url,default_model,provider,subscription_model,reasoning_effort,request_timeout_secs,max_hops,max_steps_per_run,max_fanout_per_call,max_sends_per_pair,max_tool_rounds", "id = ?1"),
-    ("agents", "id,group_id,name,avatar,color,model,reasoning_effort,system_prompt,skills,lifecycle,version,created_at,updated_at,pinned,rail_order,discarded_at,browser_consent,harness,gate", "group_id = ?1"),
+    ("agents", "id,group_id,name,avatar,color,model,subscription_model,reasoning_effort,system_prompt,skills,lifecycle,version,created_at,updated_at,pinned,rail_order,discarded_at,browser_consent,harness,gate", "group_id = ?1"),
     ("routines", "id,agent_id,name,what,fires,active,next_run_at,last_run_at,created_at,skip_if_working", "agent_id IN (SELECT id FROM agents WHERE group_id = ?1)"),
     ("messages", "id,run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,cause,created_at,intent", "channel_id IN (SELECT id FROM agents WHERE group_id = ?1)"),
     ("occasions", "id,group_id,agent_id,title,detail,place,starts_at,minutes,all_day,created_at,updated_at", "group_id = ?1"),
@@ -411,6 +411,10 @@ pub fn import(
     }
     // Owned, because the insert below needs it after the archive is edited.
     let exported_agents = members.get("agents").cloned().unwrap_or_default();
+    let crew_provider = archive.tables["groups"][0]
+        .get("provider")
+        .and_then(Value::as_str)
+        .and_then(crate::config::Provider::parse);
     let group: GroupId = ids[&source].parse().map_err(|_| "Invalid group identifier.")?;
     archive.tables.get_mut("groups").unwrap()[0].insert("name".into(), clean.name.into());
     let mut conn = store.conn().map_err(|e| e.to_string())?;
@@ -438,6 +442,14 @@ pub fn import(
             }
             if *table == "routines" {
                 row.insert("active".into(), 0.into());
+            }
+            // A copy made before agents had a subscription model of their own
+            // carries one field for both providers.
+            if *table == "agents" && !row.contains_key("subscription_model") {
+                let (model, subscription) =
+                    crate::domain::agent::split_legacy_model(text(&row, "model")?, crew_provider);
+                row.insert("model".into(), model.into());
+                row.insert("subscription_model".into(), subscription.into());
             }
             // An owner who had moved to another crew is not in this file, and
             // the copy has nobody by that id to point at. Nobody owns it here,
@@ -603,7 +615,10 @@ mod tests {
                 .unwrap()
         }
         fn import(&self, archive: Archive) -> Result<GroupId> {
-            import(&self.store, archive, "Copy".into(), &self.workspace, &self.files)
+            self.import_named(archive, "Copy")
+        }
+        fn import_named(&self, archive: Archive, name: &str) -> Result<GroupId> {
+            import(&self.store, archive, name.into(), &self.workspace, &self.files)
         }
     }
     #[test]
@@ -723,6 +738,7 @@ mod tests {
                 avatar: "orb".into(),
                 color: "#7fb069".into(),
                 model: "small".into(),
+                subscription_model: None,
                 reasoning_effort: None,
                 system_prompt: String::new(),
                 skills: vec![],
@@ -871,6 +887,43 @@ mod tests {
             .insert("channel_id".into(), AgentId::new().to_string().into());
         assert!(f.import(archive).is_err());
         assert_eq!(f.store.list_groups().unwrap().len(), before);
+    }
+    #[test]
+    fn a_copy_from_before_the_subscription_model_splits_it_the_way_the_migration_did() {
+        // One field for both providers, on a crew the subscription paid for:
+        // the name is the subscription's, and a slash is never one.
+        let f = Fixture::new();
+        for (model, expected) in [
+            ("gpt-6-astra", (String::new(), "gpt-6-astra".to_string())),
+            ("xiaomi/mimo-v2.6-pro", ("xiaomi/mimo-v2.6-pro".to_string(), String::new())),
+        ] {
+            let mut archive = f.export();
+            archive.tables.get_mut("groups").unwrap()[0]
+                .insert("provider".into(), "chatgpt".into());
+            let agent = &mut archive.tables.get_mut("agents").unwrap()[0];
+            agent.remove("subscription_model");
+            agent.insert("model".into(), model.into());
+            let imported = f.import_named(archive, model).unwrap();
+            let copied = f.store.group_crew(imported).unwrap().remove(0);
+            assert_eq!((copied.model, copied.subscription_model), expected, "{model}");
+        }
+
+        // A copy made now carries both, and they arrive as they left.
+        f.store
+            .conn()
+            .unwrap()
+            .execute(
+                "UPDATE agents SET model='router/model', subscription_model='gpt-6-astra'
+                  WHERE id=?1",
+                [f.agent.to_string()],
+            )
+            .unwrap();
+        let imported = f.import(f.export()).unwrap();
+        let copied = f.store.group_crew(imported).unwrap().remove(0);
+        assert_eq!(
+            (copied.model.as_str(), copied.subscription_model.as_str()),
+            ("router/model", "gpt-6-astra")
+        );
     }
     #[test]
     fn damaged_files_and_truncated_memories_roll_back_the_entire_group() {
