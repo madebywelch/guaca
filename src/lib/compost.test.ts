@@ -23,6 +23,7 @@ function agent(name: string, discardedAt: number | null): AgentCard {
     avatar: "avocado",
     color: "#c7d96b",
     model: "",
+    subscriptionModel: "",
     systemPrompt: "",
     skills: [],
     lifecycle: discardedAt === null ? "active" : "terminated",

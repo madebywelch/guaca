@@ -1665,6 +1665,7 @@ mod tests {
             avatar: "orb".into(),
             color: "#7fb069".into(),
             model: "test/model".into(),
+            subscription_model: String::new(),
             reasoning_effort: None,
             system_prompt: "You coordinate the kitchen.".into(),
             skills: vec!["delegation".into(), "scheduling".into()],

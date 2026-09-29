@@ -55,6 +55,7 @@ function agent(name: string, groupId = KITCHEN): AgentCard {
     avatar: "avocado",
     color: "#c7d96b",
     model: "",
+    subscriptionModel: "",
     systemPrompt: "",
     skills: [],
     lifecycle: "active",

@@ -31,6 +31,7 @@ function card(over: Partial<AgentCard> = {}): AgentCard {
     avatar: "plain",
     color: "#c7d96b",
     model: "m",
+    subscriptionModel: "",
     systemPrompt: "",
     skills: [],
     lifecycle: "active",

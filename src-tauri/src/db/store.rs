@@ -173,6 +173,7 @@ fn new_card(draft: &CleanDraft, rail_order: i32, fallback: GroupId) -> AgentCard
         avatar: draft.avatar.clone(),
         color: draft.color.clone(),
         model: draft.model.clone(),
+        subscription_model: draft.subscription_model.clone().unwrap_or_default(),
         reasoning_effort: draft.reasoning_effort,
         system_prompt: draft.system_prompt.clone(),
         skills: draft.skills.clone(),
@@ -216,8 +217,8 @@ fn bottom_of_rail(conn: &rusqlite::Connection) -> Result<i32, StoreError> {
 /// single create and a batch inside a transaction; `Transaction` derefs here.
 fn insert_agent(conn: &rusqlite::Connection, card: &AgentCard) -> Result<(), StoreError> {
     conn.execute(
-        "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,rail_order,reasoning_effort)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+        "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,rail_order,reasoning_effort,subscription_model)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
         params![
             card.id.to_string(),
             card.name,
@@ -233,6 +234,7 @@ fn insert_agent(conn: &rusqlite::Connection, card: &AgentCard) -> Result<(), Sto
             card.group_id.to_string(),
             card.rail_order,
             card.reasoning_effort.map(|e| e.as_str()),
+            card.subscription_model,
         ],
     )
     .map_err(|e| classify(e, &card.name))?;
@@ -377,11 +379,14 @@ impl Store {
             .execute(
                 // `coalesce` is what makes an omitted group mean "do not move
                 // it" rather than "move it to the default", which would
-                // silently relocate an agent on an unrelated edit.
+                // silently relocate an agent on an unrelated edit. The same for
+                // the subscription model, which a client from before it sends
+                // no value for.
                 "UPDATE agents
                     SET name=?2, avatar=?3, color=?4, model=?5, system_prompt=?6, skills=?7,
                         version = version + 1, updated_at=?8,
-                        group_id = coalesce(?9, group_id), reasoning_effort=?10
+                        group_id = coalesce(?9, group_id), reasoning_effort=?10,
+                        subscription_model = coalesce(?11, subscription_model)
                   WHERE id=?1",
                 params![
                     id.to_string(),
@@ -394,6 +399,7 @@ impl Store {
                     now,
                     draft.group_id.map(|g| g.to_string()),
                     draft.reasoning_effort.map(|e| e.as_str()),
+                    draft.subscription_model,
                 ],
             )
             .map_err(|e| classify(e, &draft.name))?;
@@ -3944,7 +3950,7 @@ pub(super) type RowResult<T> = Result<Result<T, StoreError>, rusqlite::Error>;
 /// one of the five queries that share this mapper and not the others is four
 /// reads that silently take the wrong field, which is what a card carrying
 /// somebody else's sandbox token looks like on the way out.
-const AGENT_COLUMNS: &str = "id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser,browser_consent,has_terminal,discarded_at,reasoning_effort,harness,gate,runs_errands";
+const AGENT_COLUMNS: &str = "id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser,browser_consent,has_terminal,discarded_at,reasoning_effort,harness,gate,runs_errands,subscription_model";
 
 fn read_effort(
     row: &Row<'_>,
@@ -3984,6 +3990,7 @@ fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
             avatar: row.get(2)?,
             color: row.get(3)?,
             model: row.get(4)?,
+            subscription_model: row.get(27)?,
             reasoning_effort: read_effort(row, 23)?,
             system_prompt: row.get(5)?,
             skills,
@@ -4637,6 +4644,7 @@ mod tests {
             avatar: "orb".into(),
             color: "#7fb069".into(),
             model: "anthropic/claude-sonnet-4.5".into(),
+            subscription_model: None,
             reasoning_effort: None,
             system_prompt: "be useful".into(),
             skills: vec!["coordination".into()],

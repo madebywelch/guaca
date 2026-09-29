@@ -1625,8 +1625,11 @@ the same reason, as the memory cap.
 The agent profile names the provider inherited from its group, resolving the
 group's choice over the app's. New agents leave their model blank, which means
 use the group default. Opening a profile never copies that default into an
-override. Changing groups updates the provider and inherited model immediately,
-while keeping any explicit override visible.
+override. Changing groups updates the provider and inherited model immediately.
+An agent keeps one override per provider, as a group does, and the control on
+screen is the paying provider's: a ChatGPT choice and an endpoint slug are each
+kept while the other provider pays, never shown in its control and never sent
+to it.
 
 On ChatGPT the field is the same account-backed selector used in Settings and
 the group editor, with a first row that says "Use group default" and names that

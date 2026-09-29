@@ -24,7 +24,7 @@
  * it does not have. It gets its own block in the pane, above this list.
  */
 
-import type { Group, Settings } from "./types";
+import type { AgentCard, Group, Provider as ProviderKind, Settings } from "./types";
 
 export interface Provider {
   id: string;
@@ -143,6 +143,19 @@ export function onOpenRouter(group: Group | undefined, settings: Settings | null
   if (provider !== "compatible") return false;
   const baseUrl = group?.inference?.baseUrl || settings?.baseUrl || "";
   return providerFor(baseUrl)?.id === "openrouter";
+}
+
+/**
+ * The model an agent names for turns `provider` pays for, or blank to run its
+ * group's. `AgentCard::own_model` on the Rust side, which is what a turn reads.
+ *
+ * Each provider has a field of its own because they share no model names, so a
+ * model kept for the other one is never shown as the one running. Claude reads
+ * neither. An unknown provider is the default the backend has, a key.
+ */
+export function ownModel(agent: AgentCard, provider: ProviderKind | null | undefined): string {
+  if (provider === "claude") return "";
+  return (provider === "chatgpt" ? agent.subscriptionModel : agent.model).trim();
 }
 
 /**

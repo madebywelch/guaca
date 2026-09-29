@@ -120,6 +120,7 @@ function agent(name: string, railOrder = 0): AgentCard {
     avatar: "avocado",
     color: "#c7d96b",
     model: "test/model",
+    subscriptionModel: "",
     systemPrompt: "",
     skills: ["testing"],
     lifecycle: "active",

@@ -78,6 +78,7 @@ function anAgent(name: string, group = CREW): AgentCard {
     avatar: "plain",
     color: "#c7d96b",
     model: "",
+    subscriptionModel: "",
     systemPrompt: "",
     skills: [],
     lifecycle: "active",

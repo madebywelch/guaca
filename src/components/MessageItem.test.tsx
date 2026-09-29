@@ -42,6 +42,7 @@ function card(id: string, name: string): AgentCard {
     avatar: "plain",
     color: "#c7d96b",
     model: "m",
+    subscriptionModel: "",
     systemPrompt: "",
     skills: [],
     lifecycle: "active",

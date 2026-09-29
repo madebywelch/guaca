@@ -417,6 +417,10 @@ export default function App() {
         <AgentMenu
           target={menu}
           groups={groups}
+          provider={
+            groups.find((group) => group.id === menu.agent.groupId)?.inference.provider ??
+            settings?.provider
+          }
           onClose={() => setMenu(null)}
           onEditProfile={(agent) => setEditing(agent)}
           onTogglePin={(agent) => void onAgent(() => api.setAgentPinned(agent.id, !agent.pinned))}
