@@ -126,6 +126,15 @@ describe("the heading above it", () => {
     expect(thoughtNow(held)).toEqual({ heading: "Drafting the reply", line: "" });
   });
 
+  it("is the newest of a turn that publishes nothing but headings", () => {
+    // One heading per round, as a summarizing model publishes them, joined by
+    // the break the runtime writes between rounds. Joined by nothing they were
+    // one line of run-together titles, drawn in full above the composer.
+    const held = "**Updating skill memory**\n\n**Checking suppression and site**\n\n**Sending";
+    expect(thoughtNow(held)).toEqual({ heading: "Checking suppression and site", line: "" });
+    expect(thoughtNow(`${held} outreach**`)).toEqual({ heading: "Sending outreach", line: "" });
+  });
+
   it("is not a sentence with emphasis in it", () => {
     // Only a line that is nothing but a heading is one. A model emphasizing
     // two words mid-thought is writing prose.

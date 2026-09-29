@@ -205,6 +205,15 @@ pub enum Token<'a> {
     Reasoning(&'a str),
 }
 
+/// What a transport writes between two pieces of working the wire kept apart.
+///
+/// A Responses summary arrives in parts and a Claude answer in content blocks,
+/// and neither piece ends with a newline. Joined as they came, a summary that
+/// is one heading per part reads `**Checking the inbox****Drafting the reply**`,
+/// which nothing that draws it recognizes as two headings. Written in front of
+/// the next piece rather than after the last, so a call never ends on one.
+pub const THOUGHT_BREAK: &str = "\n\n";
+
 impl ToolCall {
     /// Parses the argument string, tolerating an empty one.
     ///
