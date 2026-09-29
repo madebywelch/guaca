@@ -1,6 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  type PointerEvent as ReactPointerEvent,
+  type RefObject,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
-import type { DropTarget } from "../lib/rail";
+import { type DropTarget, landsBefore } from "../lib/rail";
 import { reaches } from "../lib/reach";
 import type { Activity, AgentCard, AgentId, Escalation, Group, GroupId } from "../lib/types";
 import { GroupOrb } from "./GroupOrb";
@@ -31,6 +37,12 @@ interface Props {
    * most drags are. `lib/reach.ts` has the rest of it.
    */
   dragging: boolean;
+  /** The crew whose circle is in the operator's hand, if one is. */
+  held: GroupId | null;
+  /** A press on a crew's circle, which becomes a drag if the pointer travels. */
+  onPress: (id: GroupId, event: ReactPointerEvent) => void;
+  /** The scrolling list of circles, for the drag that has to reach past its end. */
+  listRef: RefObject<HTMLDivElement | null>;
 }
 
 /**
@@ -68,6 +80,13 @@ interface Props {
  * drop target that cannot move anybody anywhere, and with one crew the rail is
  * that crew: every row of it is already on screen, saying the same thing the
  * badge would.
+ *
+ * The circles are arranged by hand, by dragging one along the column, and the
+ * order they stand in is the order of every list of crews in the app. A circle
+ * therefore means two things as a target, decided by what is in the hand: an
+ * agent dropped on one joins that crew, and a crew dropped on one takes the
+ * place beside it. The first is a fill and the second a line, because "into
+ * this" and "next to this" are different answers.
  */
 export function GroupRail({
   groups,
@@ -80,6 +99,9 @@ export function GroupRail({
   onDragOver,
   onDragOut,
   dragging,
+  held,
+  onPress,
+  listRef,
 }: Props) {
   const all = useOrbTag();
   const zone = useRef<HTMLSpanElement>(null);
@@ -108,8 +130,26 @@ export function GroupRail({
 
   if (groups.length < 2) return null;
 
+  /**
+   * Which side of a circle the crew in hand would land on, if it were let go
+   * over that circle now. Read off `landsBefore`, which is what the drop
+   * itself is decided by, so the line cannot say one place and the drop pick
+   * another.
+   */
+  const lands = (id: GroupId): "before" | "after" | undefined => {
+    if (held === null || !isOver({ kind: "group", id })) return undefined;
+    const before = landsBefore(groups, held, id);
+    if (before === undefined) return undefined;
+    return before === id ? "before" : "after";
+  };
+
   return (
-    <nav className="grail" aria-label="Groups" data-out={near ? "true" : undefined}>
+    <nav
+      className="grail"
+      aria-label="Groups"
+      data-out={near ? "true" : undefined}
+      data-dragging={dragging ? "true" : undefined}
+    >
       {/* The proximity zone, as a box. It carries no pixels and cannot be
           clicked; what it is for is that its size and its distance from the top
           of the window are lengths, and every length in this app is named in
@@ -147,7 +187,7 @@ export function GroupRail({
             upright: a workspace can hold more crews than fit down the side of a
             window, and the ones that do not fit have to be reachable rather than
             folded into a second column. */}
-        <div className="grail__list">
+        <div className="grail__list" ref={listRef}>
           {groups.map((group) => (
             <GroupOrb
               key={group.id}
@@ -156,7 +196,10 @@ export function GroupRail({
               activity={activity}
               stuck={stuck}
               current={focused === group.id}
-              over={isOver({ kind: "group", id: group.id })}
+              over={held === null && isOver({ kind: "group", id: group.id })}
+              held={held === group.id}
+              lands={lands(group.id)}
+              onPress={(event) => onPress(group.id, event)}
               // Clicking the crew the rail is already inside does nothing. It
               // used to take the rail back out to the overview, which made the
               // circle a toggle: a double-click on a crew went in and straight

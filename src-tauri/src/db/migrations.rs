@@ -1848,6 +1848,26 @@ UPDATE agents
    AND (SELECT provider FROM groups WHERE groups.id = agents.group_id) = 'chatgpt';
 "#,
     ),
+    (
+        64,
+        r#"
+-- Where a crew is drawn: its circle in the column, its section in the rail, and
+-- its place in every list of crews the app shows. The operator arranges it by
+-- dragging a circle, for the reason agents got `rail_order` in 20: an order
+-- nobody chose cannot be learned, and creation order was the only one there was.
+--
+-- Backfilled in creation order, so an upgrade draws the column it drew before,
+-- and distinct from the start, so the first drag has somewhere to land.
+ALTER TABLE groups ADD COLUMN rail_order INTEGER NOT NULL DEFAULT 0;
+
+UPDATE groups SET rail_order = (
+    SELECT COUNT(*)
+      FROM groups AS earlier
+     WHERE earlier.created_at < groups.created_at
+        OR (earlier.created_at = groups.created_at AND earlier.rowid < groups.rowid)
+);
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -3058,6 +3078,50 @@ mod tests {
             arranged,
             vec![("early".into(), 0), ("middle".into(), 1), ("late".into(), 2)],
             "an upgrade must draw the rail it drew before, and give every row its own place"
+        );
+    }
+
+    #[test]
+    fn an_upgrade_arranges_the_crews_in_the_order_they_were_already_drawn() {
+        // The column was drawn in creation order and nothing else. Backfilling
+        // any other order would move every circle on launch, with no gesture.
+        let mut conn = memory();
+        let tx = conn.transaction().unwrap();
+        for (version, sql) in MIGRATIONS.iter().take_while(|(v, _)| *v < 64) {
+            tx.execute_batch(sql).unwrap();
+            tx.pragma_update(None, "user_version", *version).unwrap();
+        }
+        tx.commit().unwrap();
+
+        // Two made in the same millisecond, which is what a script or an
+        // import can do, and which still have to come out as two places.
+        for (id, made) in [("late", 300), ("early", 100), ("twin-a", 200), ("twin-b", 200)] {
+            conn.execute(
+                "INSERT INTO groups (id,name,created_at) VALUES (?1,?1,?2)",
+                rusqlite::params![id, made],
+            )
+            .unwrap();
+        }
+
+        run(&mut conn).unwrap();
+
+        let arranged: Vec<(String, i64)> = conn
+            .prepare("SELECT id, rail_order FROM groups ORDER BY rail_order")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(
+            arranged,
+            vec![
+                (DEFAULT_GROUP_ID.into(), 0),
+                ("early".into(), 1),
+                ("twin-a".into(), 2),
+                ("twin-b".into(), 3),
+                ("late".into(), 4),
+            ],
+            "an upgrade must draw the column it drew before, and give every crew its own place"
         );
     }
 

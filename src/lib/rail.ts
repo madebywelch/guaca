@@ -114,8 +114,8 @@ export function railOrder(agents: AgentCard[], options: RailOptions): AgentCard[
 }
 
 /**
- * Which row a dragged agent lands in front of, given the row it was dropped on.
- * `null` is the end of the group.
+ * Which row a dragged agent lands in front of, given the row it was dropped on,
+ * or which crew a dragged circle does. `null` is the end of the list.
  *
  * Read off two positions rather than measured against a pointer. A row's
  * midpoint is geometry a test cannot see and a hand cannot aim at; the
@@ -123,14 +123,15 @@ export function railOrder(agents: AgentCard[], options: RailOptions): AgentCard[
  * Dragging down puts it after what it passed, dragging up puts it in front,
  * which is what both look like while the drag is happening.
  *
- * `order` is the section as drawn, so an agent arriving from another group has
- * no position in it and lands in front of the row it was dropped on.
+ * `order` is the list as drawn, so an agent arriving from another group has no
+ * position in it and lands in front of the row it was dropped on. A crew is
+ * always in the one list there is.
  */
 export function landsBefore(
-  order: AgentCard[],
-  dragged: AgentId,
-  onto: AgentId,
-): AgentId | null | undefined {
+  order: readonly { id: string }[],
+  dragged: string,
+  onto: string,
+): string | null | undefined {
   if (dragged === onto) return undefined;
   const to = order.findIndex((a) => a.id === onto);
   if (to < 0) return undefined;

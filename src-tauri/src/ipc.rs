@@ -367,6 +367,7 @@ surface! {
     list_groups() -> Vec<Group>,
     create_group(draft: GroupDraft) -> Group,
     update_group(id: GroupId, draft: GroupDraft) -> Group,
+    move_group(id: GroupId, before: Option<GroupId>) -> Vec<Group>,
     test_group_connection(id: Option<GroupId>, draft: GroupDraft) -> String,
     delete_group(id: GroupId) -> (),
     disband_group(id: GroupId) -> (),

@@ -484,6 +484,15 @@ pub fn import(
             ))?;
         }
     }
+    // At the bottom of the column, like any crew made here. Where it stood on
+    // the machine it came from is not in the file, because it is about that
+    // machine's other crews.
+    sql(tx.execute(
+        "UPDATE groups SET rail_order =
+             (SELECT coalesce(max(rail_order), -1) + 1 FROM groups WHERE id <> ?1)
+          WHERE id = ?1",
+        [group.to_string()],
+    ))?;
     sql(tx.execute(
         "INSERT INTO group_imports (group_id,reconnect) VALUES (?1,?2)",
         params![
@@ -638,6 +647,19 @@ mod tests {
         assert_eq!(agent["harness"], "codex");
         assert_eq!(agent["gate"], "askBeforePushing");
         assert!(!agent.contains_key("has_terminal"), "{agent:?}");
+    }
+    #[test]
+    fn an_imported_crew_arrives_at_the_bottom_of_the_column() {
+        // The archive carries the original's creation time and no place, so a
+        // copy left to the default would be filed among circles the operator
+        // arranged, wherever that old timestamp happened to sort.
+        let f = Fixture::new();
+        let everyone = f.store.list_groups().unwrap()[0].id;
+        f.store.move_group(f.group, Some(everyone)).unwrap();
+
+        let imported = f.import(f.export()).unwrap();
+        let order: Vec<GroupId> = f.store.list_groups().unwrap().iter().map(|g| g.id).collect();
+        assert_eq!(order, vec![f.group, everyone, imported]);
     }
     #[test]
     fn reasoning_efforts_survive_export_and_invalid_efforts_are_refused() {

@@ -142,7 +142,7 @@ fn default_group_id() -> GroupId {
     migrations::DEFAULT_GROUP_ID.parse().expect("the pinned default group id is a valid uuid")
 }
 
-/// The oldest surviving group, in the same order as the group list. Excluding
+/// The first surviving group, in the same order as the group list. Excluding
 /// the group being deleted keeps retained transcripts attached to a real crew.
 fn fallback_group(
     conn: &rusqlite::Connection,
@@ -151,7 +151,7 @@ fn fallback_group(
     let id: Option<String> = conn
         .query_row(
             "SELECT id FROM groups WHERE (?1 IS NULL OR id <> ?1)
-         ORDER BY created_at, rowid LIMIT 1",
+         ORDER BY rail_order, created_at, rowid LIMIT 1",
             params![excluding.map(|id| id.to_string())],
             |row| row.get(0),
         )
@@ -2976,10 +2976,8 @@ impl Store {
 
     // ---- groups ----------------------------------------------------------
 
-    /// Every group, with its live agent count, oldest first.
-    ///
-    /// The default group sorts first because it was created at timestamp 0 by
-    /// the migration, which is what keeps it at the top of the rail.
+    /// Every group, with its live agent count, in the order the operator
+    /// arranged them. Every list of crews the app draws is this one.
     pub fn list_groups(&self) -> Result<Vec<Group>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -2991,7 +2989,7 @@ impl Store {
                     g.max_hops, g.max_steps_per_run, g.max_fanout_per_call,
                     g.max_sends_per_pair, g.max_tool_rounds, g.reasoning_effort
                FROM groups g
-              ORDER BY g.created_at, g.rowid",
+              ORDER BY g.rail_order, g.created_at, g.rowid",
         )?;
         let rows = stmt.query_map([], row_to_group)?;
         let mut out = Vec::new();
@@ -3006,12 +3004,16 @@ impl Store {
         let id = GroupId::new();
         let over = draft.inference.clone().unwrap_or_default();
         let limits = draft.limits.unwrap_or_default();
+        // At the bottom of the column, read in the same statement that writes
+        // it so two crews made at once cannot both take the last place.
         conn.execute(
             "INSERT INTO groups (id,name,created_at,base_url,api_key,default_model,
                                  provider,subscription_model,request_timeout_secs,
                                  max_hops,max_steps_per_run,max_fanout_per_call,
-                                 max_sends_per_pair,max_tool_rounds,reasoning_effort)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+                                 max_sends_per_pair,max_tool_rounds,reasoning_effort,
+                                 rail_order)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,
+                     (SELECT coalesce(max(rail_order), -1) + 1 FROM groups))",
             params![
                 id.to_string(),
                 draft.name,
@@ -3153,6 +3155,56 @@ impl Store {
         Ok(self.list_groups()?.into_iter().find(|g| g.id == id))
     }
 
+    /// Puts a crew where the operator dropped its circle, and answers with
+    /// every crew in the order that now stands.
+    ///
+    /// `before` is the crew it lands in front of, and `None` is the end. The
+    /// rules are `move_agent`'s, for its reasons: an anchor that is gone lands
+    /// the crew at the end rather than losing the gesture, a crew dropped on
+    /// itself asks for nothing and is left where it is, and every crew is
+    /// renumbered densely because a workspace holds a handful of them. Not an
+    /// edit either: where a circle is drawn is nothing an agent reads.
+    pub fn move_group(
+        &self,
+        id: GroupId,
+        before: Option<GroupId>,
+    ) -> Result<Vec<Group>, StoreError> {
+        let mut conn = self.conn()?;
+        // Immediate, so the order read here is still the order when it is
+        // rewritten: a crew made in between would be numbered over.
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        {
+            let mut stmt =
+                tx.prepare("SELECT id FROM groups ORDER BY rail_order, created_at, rowid")?;
+            let mut order = stmt
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+
+            let moving = id.to_string();
+            let from =
+                order.iter().position(|g| *g == moving).ok_or(StoreError::GroupNotFound(id))?;
+            if before == Some(id) {
+                drop(stmt);
+                drop(tx);
+                return self.list_groups();
+            }
+            order.remove(from);
+
+            let at = before
+                .map(|b| b.to_string())
+                .and_then(|b| order.iter().position(|g| *g == b))
+                .unwrap_or(order.len());
+            order.insert(at, moving);
+
+            let mut renumber = tx.prepare("UPDATE groups SET rail_order=?2 WHERE id=?1")?;
+            for (position, group) in order.iter().enumerate() {
+                renumber.execute(params![group, position as i32])?;
+            }
+        }
+        tx.commit()?;
+        self.list_groups()
+    }
+
     /// The refusals that do not depend on the group being empty: it has to
     /// exist, and at least one other group has to remain.
     ///
@@ -3176,7 +3228,7 @@ impl Store {
     ///
     /// Deleted agents are a different matter. They are kept only so their
     /// transcripts still render, and they cannot be reached or act, so they are
-    /// moved to the oldest surviving group rather than holding a group open forever.
+    /// moved to the first surviving group rather than holding a group open forever.
     /// Counting them was why deleting every agent in a group still reported
     /// three agents in it.
     pub fn delete_group(&self, id: GroupId) -> Result<(), StoreError> {
@@ -4937,9 +4989,10 @@ mod tests {
         let mut conn = f.store.conn().unwrap();
         // Everything the migrations after 51 made, so the database is the one a
         // version-51 install really has. Each new migration adds its undo here:
-        // 58's puts back the repository column and table it rebuilds away, and
-        // 59's and 62's drop the tables they add.
-        conn.execute_batch("DROP TABLE put_down_jobs; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE coding_tuning; DROP TABLE coding_sessions; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
+        // 58's puts back the repository column and table it rebuilds away,
+        // 59's and 62's drop the tables they add, and 64's drops the column it
+        // adds to groups, which no migration since 51 rebuilds.
+        conn.execute_batch("ALTER TABLE groups DROP COLUMN rail_order; DROP TABLE put_down_jobs; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE coding_tuning; DROP TABLE coding_sessions; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
         migrations::run(&mut conn).unwrap();
         drop(conn);
         assert_eq!(f.store.connector_env(mine.id).unwrap()["TOKEN"], "private-token");
@@ -5613,6 +5666,102 @@ mod tests {
             f.store.move_agent(card.id, group, None),
             Err(StoreError::AgentNotFound(_))
         ));
+    }
+
+    /// The crews, by name, in the order every list of them is drawn.
+    fn column(f: &Fixture) -> Vec<String> {
+        f.store.list_groups().unwrap().into_iter().map(|g| g.name).collect()
+    }
+
+    #[test]
+    fn moving_a_crew_that_is_not_there_is_an_error_rather_than_a_silent_renumber() {
+        let f = fixture();
+        let research = f.store.create_group(&group_named("Research")).unwrap();
+        assert!(matches!(
+            f.store.move_group(GroupId::new(), Some(research.id)),
+            Err(StoreError::GroupNotFound(_))
+        ));
+        assert_eq!(column(&f), vec!["Everyone", "Research"]);
+    }
+
+    #[test]
+    fn a_crew_dropped_on_itself_stays_where_it_is() {
+        // The fallback for an anchor that is not there is the end, so a null
+        // gesture that reached it would send the crew to the bottom.
+        let f = fixture();
+        let research = f.store.create_group(&group_named("Research")).unwrap();
+        f.store.create_group(&group_named("Kitchen")).unwrap();
+
+        let drawn = f.store.move_group(research.id, Some(research.id)).unwrap();
+        assert_eq!(drawn.len(), 3, "answered with every crew, not an empty list");
+        assert_eq!(column(&f), vec!["Everyone", "Research", "Kitchen"]);
+    }
+
+    #[test]
+    fn a_move_with_nothing_to_land_in_front_of_goes_to_the_end_of_the_column() {
+        let f = fixture();
+        let research = f.store.create_group(&group_named("Research")).unwrap();
+        let kitchen = f.store.create_group(&group_named("Kitchen")).unwrap();
+
+        f.store.move_group(default_group_id(), None).unwrap();
+        assert_eq!(column(&f), vec!["Research", "Kitchen", "Everyone"]);
+
+        // An anchor deleted since the operator saw it loses the place and
+        // keeps the move, which is the half of the gesture that still applies.
+        f.store.delete_group(kitchen.id).unwrap();
+        f.store.move_group(research.id, Some(kitchen.id)).unwrap();
+        assert_eq!(column(&f), vec!["Everyone", "Research"]);
+    }
+
+    #[test]
+    fn a_move_puts_a_crew_in_front_of_the_one_it_was_dropped_on() {
+        let f = fixture();
+        f.store.create_group(&group_named("Research")).unwrap();
+        let kitchen = f.store.create_group(&group_named("Kitchen")).unwrap();
+
+        let drawn = f.store.move_group(kitchen.id, Some(default_group_id())).unwrap();
+        assert_eq!(
+            drawn.into_iter().map(|g| g.name).collect::<Vec<_>>(),
+            vec!["Kitchen", "Everyone", "Research"],
+            "the answer is the order that now stands"
+        );
+        assert_eq!(column(&f), vec!["Kitchen", "Everyone", "Research"]);
+
+        // Densely renumbered, so the next drop has a whole place to land in.
+        let conn = f.store.conn().unwrap();
+        let slots: Vec<i32> = conn
+            .prepare("SELECT rail_order FROM groups ORDER BY rail_order")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(slots, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn crews_arrive_at_the_bottom_of_the_column_whatever_was_arranged_above_them() {
+        // Created at the bottom rather than by timestamp: a new crew that
+        // landed among circles the operator had arranged would look like the
+        // arrangement moved.
+        let f = fixture();
+        let research = f.store.create_group(&group_named("Research")).unwrap();
+        f.store.move_group(research.id, Some(default_group_id())).unwrap();
+        f.store.create_group(&group_named("Kitchen")).unwrap();
+        assert_eq!(column(&f), vec!["Research", "Everyone", "Kitchen"]);
+    }
+
+    #[test]
+    fn an_agent_nobody_placed_joins_the_crew_at_the_top_of_the_column() {
+        // The fallback is the first crew in the list, as it always was. That
+        // used to mean the oldest, and now means the one the operator put
+        // first, which is also the one they can see.
+        let f = fixture();
+        let research = f.store.create_group(&group_named("Research")).unwrap();
+        f.store.move_group(research.id, Some(default_group_id())).unwrap();
+
+        let card = f.store.create_agent(&draft("Scout")).unwrap();
+        assert_eq!(card.group_id, research.id);
     }
 
     #[test]

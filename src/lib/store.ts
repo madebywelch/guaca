@@ -370,6 +370,8 @@ export interface State {
   moveAgent: (id: AgentId, at: Placement) => Promise<void>;
   /** One drop, resolved against the rules that drew the rail. */
   dropAgent: (id: AgentId, target: DropTarget) => Promise<void>;
+  /** A crew's circle, let go over another crew's. */
+  dropGroup: (id: GroupId, onto: GroupId) => Promise<void>;
   loadChannel: (key: ChannelKey, through?: MessageId) => Promise<void>;
   /** Opens a message's channel with the message itself in the window. */
   openMessage: (channel: AgentId, message: MessageId) => Promise<void>;
@@ -739,6 +741,24 @@ export const useStore = create<State>((set, get) => ({
     const before = landsBefore(order, id, onto.id);
     if (before === undefined) return;
     await get().moveAgent(id, { groupId: onto.groupId, before, pinned: onto.pinned });
+  },
+
+  /**
+   * One crew, moved in the column.
+   *
+   * Drawn from what the runtime answers rather than reordered here, for the
+   * reason a moved agent is read back: the runtime renumbers every crew, and
+   * the answer is the order that now stands rather than this window's guess
+   * at it. Every other list of crews in the app is this one, so they all move.
+   */
+  async dropGroup(id, onto) {
+    const { groups } = get();
+    // A crew deleted from another window while it was in the hand. Asked
+    // anyway, the runtime would refuse it by name; there is nothing to move.
+    if (!groups.some((g) => g.id === id)) return;
+    const before = landsBefore(groups, id, onto);
+    if (before === undefined) return;
+    set({ groups: await api.moveGroup(id, before) });
   },
 
   async loadChannel(key, through) {

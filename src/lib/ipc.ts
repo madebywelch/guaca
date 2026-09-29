@@ -560,6 +560,12 @@ export const api = {
   moveAgent: (id: AgentId, groupId: GroupId, before: AgentId | null) =>
     invoke<AgentCard>("move_agent", { id, groupId, before }),
 
+  /**
+   * Puts a crew where the operator dropped its circle. `before` is the crew it
+   * lands in front of; `null` is the end. Answers with every crew, in order.
+   */
+  moveGroup: (id: GroupId, before: GroupId | null) => invoke<Group[]>("move_group", { id, before }),
+
   agentActivity: () => invoke<Record<AgentId, Activity>>("agent_activity"),
 
   agentLastActive: () => invoke<Record<AgentId, number>>("agent_last_active"),

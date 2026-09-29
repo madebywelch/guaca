@@ -1878,6 +1878,19 @@ pub async fn update_group(state: &AppState, id: GroupId, draft: GroupDraft) -> R
     Ok(group)
 }
 
+/// Puts a crew where the operator dropped its circle. `before` is the crew it
+/// lands in front of; `None` is the end. Answers with every crew in the order
+/// that now stands, which is the one thing the window that dropped it needs.
+pub async fn move_group(
+    state: &AppState,
+    id: GroupId,
+    before: Option<GroupId>,
+) -> Reply<Vec<Group>> {
+    let groups = state.runtime.store().move_group(id, before)?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(groups)
+}
+
 /// Verifies a group's endpoint and key without involving one of its agents.
 ///
 /// The group's own answer to `test_connection`, and it has to be a separate

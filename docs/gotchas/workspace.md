@@ -88,6 +88,19 @@ of `Runtime::discard_agent` and `Runtime::purge_agent`.
   three to one against `--grail-ground` on both surfaces, because the element
   was in the document with the right class on it the whole time and no DOM
   assertion sees a color. `docs/WORKSPACE.md`.
+- **A circle is two targets, and what is in the hand decides which.** An agent
+  let go over one joins that crew; a crew let go over one takes the place beside
+  it. The rail's sections report the same `{ kind: "group" }` target a circle
+  does, so a crew carried over a section and released there would read as a
+  crew dropped on a crew and reorder the column by wherever the hand stopped.
+  That is why `aim` in `Sidebar.tsx` is told whether a target is a circle, and
+  why the rail catches an agent and nothing else. The same shared shape lit the
+  crew's own section under a circle it was aimed at, which said the crew was
+  going into itself; `sectionOver` lights a section for an agent only, and no
+  DOM check that looks at the circle alone would see it. The order itself is
+  `rail_order` on the group and every list of crews reads it, including the
+  fallback crew, which is the first in the list rather than the oldest.
+  `docs/WORKSPACE.md`.
 - **`select` follows an agent into its crew; `focusGroup` lets a channel go.**
   One invariant from two ends — the rail draws the row of whatever the pane is
   showing — and the asymmetry is deliberate. `select` is the operator naming an

@@ -1791,13 +1791,16 @@ input[type="file"]::file-selector-button {
 /* The fist is on the whole column rather than on the row that was picked up:
    the pointer leaves that row almost immediately, and a cursor that turns back
    into an arrow over the gap between two rows says the drag ended. */
-.rail[data-dragging="true"] {
+.rail[data-dragging="true"],
+.grail[data-dragging="true"] {
   cursor: grabbing;
 }
 
-/* The row the hand is holding. Left in place rather than removed: a list that
-   closes up under the pointer moves every target while it is being aimed at. */
-.agent-row[data-held="true"] {
+/* The row or the circle the hand is holding. Left in place rather than
+   removed: a list that closes up under the pointer moves every target while it
+   is being aimed at. */
+.agent-row[data-held="true"],
+.orb[data-held="true"] {
   opacity: 0.3;
 }
 
@@ -2056,6 +2059,31 @@ input[type="file"]::file-selector-button {
   transform: translateY(-50%);
   border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
   background: var(--text);
+}
+
+/* Where a crew in hand would land: the line a row gets, on the side of the
+   circle it would go. Drawn in the circle's own padding rather than out in the
+   gap, because the list scrolls and so clips, and the place above the first
+   circle is the one most often aimed at. Sized to the column rather than the
+   ring, so it reads as a place between two crews rather than as something
+   about this one. */
+.orb[data-lands]::after {
+  content: "";
+  position: absolute;
+  left: var(--space-4);
+  right: var(--space-4);
+  height: 2px;
+  border-radius: 1px;
+  background: var(--focus);
+  box-shadow: 0 0 0.375rem color-mix(in oklab, var(--focus) 55%, transparent);
+}
+
+.orb[data-lands="before"]::after {
+  top: 0;
+}
+
+.orb[data-lands="after"]::after {
+  bottom: 0;
 }
 
 /* Faces, standing in a ring. Where each one goes is `lib/orb.ts`: a crew of
