@@ -289,12 +289,12 @@ describe("desktop host setup", () => {
     expect(screen.queryByRole("button", { name: "Change host" })).toBeNull();
     expect((screen.getByLabelText("Host address") as HTMLInputElement).value).toBe("");
   });
-  it("makes an update explicit and reports that jobs will be interrupted", async () => {
+  it("makes an update explicit and says that work pauses for it", async () => {
     status.mockResolvedValue({ state: "running", message: "Ready", updateAvailable: true });
     update.mockResolvedValue({ origin: "http://127.0.0.1:54321", token: "private" });
     render(<HostChoice />);
     const button = await screen.findByRole("button", { name: "Back up and update host" });
-    expect(screen.getByText(/Updating stops work in progress/)).toBeTruthy();
+    expect(screen.getByText(/Work in progress pauses/)).toBeTruthy();
     fireEvent.click(button);
     await waitFor(() => expect(restart).toHaveBeenCalled());
     expect(update).toHaveBeenCalledOnce();

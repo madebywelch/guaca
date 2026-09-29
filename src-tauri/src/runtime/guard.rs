@@ -282,6 +282,15 @@ impl RunState {
         self.limits
     }
 
+    /// Starts a run picked up after a restart at what it had already spent.
+    ///
+    /// Only the budget is carried across, because it is the one limit that
+    /// bounds a whole cascade: every send, every hop and every reply is a model
+    /// call first. Never lowers what this process has already counted.
+    pub fn resume_at(&mut self, spent: u32) {
+        self.steps_used = self.steps_used.max(spent);
+    }
+
     /// Claims one model call. Returns false when the run is spent.
     ///
     /// Called immediately before each invocation, including the extra calls a

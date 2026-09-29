@@ -280,8 +280,8 @@ export function HostChoice({
             {showUpdate && docker?.updateAvailable && (
               <div className="host-status__update">
                 <p>
-                  A host update is ready. Updating stops work in progress and restarts the host.
-                  Guaca backs up its data first.
+                  A host update is ready. Work in progress pauses and carries on once the host
+                  restarts. Guaca backs up its data first.
                 </p>
                 <button
                   type="button"

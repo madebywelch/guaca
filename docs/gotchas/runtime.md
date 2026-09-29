@@ -145,3 +145,36 @@ code.
 - **One lock covers the computer, the browser and the repository.** Separate
   locks, taken in whatever order an errand reaches for them, are two errands each
   holding one and waiting on the other.
+- **A drain is a stop that ends differently, so `stopped()` answers for both.**
+  Every boundary a stop is noticed at is a boundary a stopping host has to
+  honor, and giving the drain its own checks would be a second set to keep in
+  step with the first. What differs is only the ending, and each ending asks
+  `called_off()`, which is the operator's stop alone: work the operator called
+  off is ended with its notice and never picked up, and work the host stopped
+  is put down. The check after the round loop is the one exception and asks
+  `called_off()` directly: a turn that finished its answer while the host began
+  to stop delivers it, rather than putting down a finished answer for the next
+  host to write again.
+- **A turn's history cannot tell it which calls it made.** A message projects
+  to its text, and a call is a part the projection skips, so a turn picked up
+  after a restart and rebuilt from history alone reads the request again with
+  no sign of the email it sent, and sends it again. `prompt::resumed` is the
+  one place a turn's own calls reach a prompt, read from the record the drain
+  wrote, and that record is filtered out of the history so the turn is told
+  once. A record that cannot be read back ends the turn as interrupted rather
+  than letting it carry on blind.
+- **Putting work down releases its booking and does not settle its run.** The
+  run is not finished, so it emits no `RunSettled` and keeps its
+  `pending_runs` row. A run with anything put down that runs out of bookings
+  by some other path, a turn failing on its model call during the drain, is
+  handed on whole by `track_inflight` rather than settled, or the next host
+  would pick up half of a conversation that had reported itself over.
+- **Only a whole run is picked up.** A run is marked whole (`put_down_runs`)
+  once nothing of it is left running, in the same commit as the last message
+  put down for it. A message put down in a run whose other turn was still
+  inside a tool call when the process ended is part of work nobody can vouch
+  for, and the next host reports the whole conversation interrupted.
+- **A picked-up run keeps the budget it had spent.** `pick_up` starts its guard
+  state at the steps the drain recorded. A fresh budget would hand every
+  cascade another one at every update, and a box that follows `main` updates
+  several times a day.

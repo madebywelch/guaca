@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use rusqlite::{params, OptionalExtension, Row, TransactionBehavior};
 
 use super::{Store, StoreError};
@@ -234,10 +236,15 @@ impl Store {
         Ok(())
     }
 
-    pub fn recover_decisions(&self) -> Result<usize, StoreError> {
+    /// Marks follow-through a restart cut off as interrupted, except where the
+    /// conversation carrying it is being picked up where a drain put it down:
+    /// that one is still going, and its agent carries it on without asking.
+    pub fn recover_decisions(&self, resumed: &HashSet<RunId>) -> Result<usize, StoreError> {
+        let resumed: Vec<String> = resumed.iter().map(ToString::to_string).collect();
         Ok(self.conn()?.execute(
-            "UPDATE decisions SET interrupted=1 WHERE status='answered' AND interrupted=0",
-            [],
+            "UPDATE decisions SET interrupted=1 WHERE status='answered' AND interrupted=0
+                AND coalesce(delivery_run, '') NOT IN (SELECT value FROM json_each(?1))",
+            [serde_json::to_string(&resumed).expect("a list of strings serializes")],
         )?)
     }
 
@@ -333,7 +340,7 @@ mod tests {
         drop(s);
         let s = Store::open(&dir.path().join("test.db")).unwrap();
         s.expire_pending_approvals().unwrap();
-        s.recover_decisions().unwrap();
+        s.recover_decisions(&HashSet::new()).unwrap();
         let (answered, envelope) =
             s.answer_decision(d.id, "11", false, None, d.created_at + 3 * 86400 * 1000).unwrap();
         assert_eq!(answered.answer.as_deref(), Some("11"));
@@ -354,7 +361,7 @@ mod tests {
         };
         let (_, first) = s.answer_decision(d.id, " 11 ", false, None, d.created_at + 1).unwrap();
         assert_eq!(first.parts, answered(false));
-        s.recover_decisions().unwrap();
+        s.recover_decisions(&HashSet::new()).unwrap();
         let (_, again) = s.answer_decision(d.id, "", true, None, d.created_at + 2).unwrap();
         assert_eq!(again.parts, answered(true));
         assert_eq!(s.get_message(again.id).unwrap().unwrap().parts, answered(true));
@@ -450,12 +457,39 @@ mod tests {
         assert_eq!(s.decisions(None).unwrap()[0].status, DecisionStatus::Answered);
     }
     #[test]
+    fn follow_through_a_drain_put_down_is_carried_on_rather_than_interrupted() {
+        let (_, s, a) = fixture();
+        let d = make(&s, &a);
+        let (_, delivery) = s.answer_decision(d.id, "11", false, None, d.created_at + 1).unwrap();
+        let other = make_other(&s, &a);
+        s.answer_decision(other.id, "yes", false, None, d.created_at + 1).unwrap();
+
+        let picked_up = HashSet::from([delivery.run_id]);
+        assert_eq!(s.recover_decisions(&picked_up).unwrap(), 1, "only the other one");
+        let decisions = s.decisions(None).unwrap();
+        let carried = decisions.iter().find(|x| x.id == d.id).unwrap();
+        assert!(!carried.interrupted);
+        assert!(decisions.iter().find(|x| x.id == other.id).unwrap().interrupted);
+    }
+    fn make_other(store: &Store, agent: &crate::domain::agent::AgentCard) -> WorkDecision {
+        store
+            .request_decision(
+                agent.id,
+                agent.group_id,
+                "thread-two/send",
+                request(),
+                None,
+                1_700_000_000_000,
+            )
+            .unwrap()
+    }
+    #[test]
     fn restart_keeps_answer_and_requires_explicit_resume_before_completion() {
         let (_, s, a) = fixture();
         let d = make(&s, &a);
         s.answer_decision(d.id, "11", false, None, d.created_at + 1).unwrap();
-        assert_eq!(s.recover_decisions().unwrap(), 1);
-        assert_eq!(s.recover_decisions().unwrap(), 0);
+        assert_eq!(s.recover_decisions(&HashSet::new()).unwrap(), 1);
+        assert_eq!(s.recover_decisions(&HashSet::new()).unwrap(), 0);
         assert!(s
             .finish_decision(d.id, a.id, DecisionStatus::Completed, "sent", d.created_at + 2)
             .is_err());
@@ -473,7 +507,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(completed.status, DecisionStatus::Completed);
-        assert_eq!(s.recover_decisions().unwrap(), 0);
+        assert_eq!(s.recover_decisions(&HashSet::new()).unwrap(), 0);
     }
     #[test]
     fn withdrawal_is_a_receipt_and_cannot_hide_an_answer() {

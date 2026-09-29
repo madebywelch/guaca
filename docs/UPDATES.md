@@ -5,9 +5,10 @@ compatibility checks, a signed release manifest, one update sequence with an
 automatic restore, used by the desktop for On this Mac and by `guaca-updater`
 on a box, and self-hosted instructions for every other deployment.
 [Hosting](HOSTING.md#updating-a-self-hosted-backend) describes shipped behavior.
-Automatic idle scheduling, in-app backup deletion, and a maintenance mode that
-refuses new runs before the host stops remain future work: an update still
-interrupts work by stopping the backend.
+Automatic idle scheduling and in-app backup deletion remain future work. An
+update no longer ends the work it interrupts: the backend drains on the stop
+signal and the new one picks up what it put down, which is
+[*A stopping host puts its work down*](HOSTING.md#a-stopping-host-puts-its-work-down-and-the-next-one-picks-it-up).
 
 The remaining sections describe the full target experience. Where the shipped
 design differs from it, the section says so.
@@ -100,8 +101,9 @@ host after the new app is installed. Do not turn the existing image-reference
 inequality check into a downgrade operation when an older desktop reconnects.
 
 **Review update** opens the current and target versions, affected workspace, and
-current work. Before **Back up and update**, state that running work will be
-interrupted and will need review after restart. Show active conversations and
+current work. Before **Back up and update**, state that running work pauses and
+carries on after the restart, and that a command still running when the host
+stops is left for review. Show active conversations and
 coding jobs from the backend, including other clients' work. Offer **Later**.
 Do not promise "update when idle" in the first version: a correct idle update
 requires stopping admission of new runs and scheduled work atomically, not
@@ -113,7 +115,10 @@ The update manager owns one serialized, durable operation per host:
    connection is the container being managed, not merely a loopback address.
 2. Download and verify the target image before interrupting work.
 3. Enter maintenance mode to refuse new runs and routine firings, then stop the
-   backend. Existing work interruption is explicit; it is not checkpointing.
+   backend. Shipped as the backend's own drain on the stop signal rather than a
+   mode the manager enters: it starts nothing new, puts running work down at
+   its next boundary, and the new backend picks it up. Only work still inside a
+   tool call when the window closes is interrupted. Nothing is checkpointed.
 4. Copy the stopped volume to a distinct backup. Record the old image, volume,
    port, operation ID and backup reference before removing the old container.
 5. Replace the container using the preserved workspace and connection settings.
