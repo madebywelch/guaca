@@ -322,6 +322,24 @@ describe("the window's columns", () => {
   });
 });
 
+describe("a banner", () => {
+  /**
+   * Its words give way before its button does.
+   *
+   * A flex item does not shrink below its longest unbroken word, and a coding
+   * job's failure arrived as a provider's JSON with no space in it for a line
+   * and a half. The banner's Dismiss was pushed past the column's edge and
+   * under the inspector, and the operator could not close it.
+   */
+  it("breaks its words anywhere, which is what lets them shrink", () => {
+    expect(getComputedStyle(nest("banner")).overflowWrap).toBe("anywhere");
+  });
+
+  it("never shrinks its button", () => {
+    expect(getComputedStyle(nest("banner", "btn")).flexShrink).toBe("0");
+  });
+});
+
 describe("what a crew has spent", () => {
   /**
    * The card is held open by the heading underneath it.

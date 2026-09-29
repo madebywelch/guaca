@@ -98,3 +98,8 @@ and *Every length is named* in `AGENTS.md` is the rule they all sit under.
 - **`data-surface` is only ever `light` or `dark`.** `system` is resolved before
   it reaches the document. A stylesheet rule keyed on `system` would have to
   duplicate the one keyed on `dark`, and CSS has no way to share them.
+- **A banner's words wrap anywhere, or its button leaves the window.** A flex
+  item does not shrink below its longest unbroken word, and `break-word` does
+  not lower that width; only `anywhere` does. A coding job's failure arrived as
+  a provider's JSON with no space in it for a line and a half, and it pushed
+  Dismiss past the column's edge and under the inspector.

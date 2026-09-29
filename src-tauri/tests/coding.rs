@@ -2064,7 +2064,7 @@ async fn each_harness_lists_its_models_the_way_its_own_picker_would() {
     let lent =
         coding::models(Which::Pi, Some(&upstream("https://openrouter.ai/api/v1"))).await.unwrap();
     let ids: Vec<&str> = lent.iter().map(|offer| offer.id.as_str()).collect();
-    assert_eq!(ids, ["qwen/qwen3-coder"]);
+    assert_eq!(ids, ["moonshotai/kimi-k2.6", "qwen/qwen3-coder"]);
     // Anywhere else there is no catalog to ask, and pi's own sign-ins would
     // offer models the job cannot reach.
     let elsewhere =
@@ -2395,6 +2395,137 @@ async fn the_real_claude_stops_on_an_interrupt_and_the_session_carries_on() {
     let _ = std::fs::remove_dir_all(&repo);
 }
 
+/// A model pi has no entry for is refused before the brief, not run on its
+/// provider's default renamed.
+///
+/// The job that failed: Guaca's key through OpenRouter, and a model newer than
+/// the installed pi's catalog. pi sent Kimi K2.6's output ceiling for
+/// `xiaomi/mimo-v2.6-pro`, one provider took it, and the next one refused it
+/// partway through the job.
+#[tokio::test]
+async fn pi_refuses_a_model_it_has_no_entry_for_before_the_brief() {
+    stand_ins();
+    let repo = a_repository("unknown-model");
+    let path = repo.to_string_lossy().to_string();
+    let lease = coding::relay::Relay::new()
+        .lend(
+            coding::relay::Upstream {
+                base_url: "https://openrouter.ai/api/v1".into(),
+                api_key: "sk-never-sent".into(),
+                referer: "https://example.com".into(),
+                title: "Guac".into(),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    let tuning = Tuning {
+        model: Some("xiaomi/mimo-v2.6-pro".into()),
+        pays: Payer::GuacaKey,
+        ..Tuning::default()
+    };
+    let env = guac_lib::secrets::Environment::default();
+    let (_controls, controlled) = tokio::sync::mpsc::channel(8);
+    let (signals, _heard) = tokio::sync::mpsc::channel(8);
+    let error = coding::run(
+        coding::Job {
+            tuning: &tuning,
+            lent: Some(&lease),
+            ..job(Which::Pi, &path, "fix the flaky test", Gate::Open, &env)
+        },
+        controlled,
+        signals,
+        |_| {},
+    )
+    .await
+    .expect_err("the model is not in pi's catalog");
+
+    assert!(
+        matches!(&error, coding::CodingError::UnknownModel { model, .. } if model == "xiaomi/mimo-v2.6-pro"),
+        "{error:?}"
+    );
+    let said = error.to_string();
+    assert!(said.contains("Nothing was started"), "{said}");
+    assert!(said.contains("npm install"), "the way out is named: {said}");
+    let argv = argv_at(&repo);
+    let after = |flag: &str| argv.iter().position(|arg| arg == flag).map(|at| argv[at + 1].clone());
+    assert_eq!(after("--provider").as_deref(), Some("openrouter"));
+    assert!(!repo.join(".pi_prompt").exists(), "the brief was never sent");
+    assert!(!repo.join(".relayed").exists(), "nothing was spent");
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// A model pi settled on before its catalog listed it is swapped for the
+/// catalog's entry, and the job runs on the entry's limits.
+///
+/// What happened on a box's first job: pi resolved the model 200 ms before
+/// its first download of the catalog landed, and ran the default's copy for
+/// twelve minutes with the right entry beside it.
+#[tokio::test]
+async fn pi_takes_the_catalogs_entry_for_a_model_it_settled_on_too_early() {
+    stand_ins();
+    let repo = a_repository("late-catalog");
+    std::fs::write(repo.join(".pi_catalog_late"), "").unwrap();
+    let path = repo.to_string_lossy().to_string();
+    let tuning = Tuning { model: Some("anthropic/claude-future-5".into()), ..Tuning::default() };
+    let env = guac_lib::secrets::Environment::default();
+    let (_controls, controlled) = tokio::sync::mpsc::channel(8);
+    let (signals, _heard) = tokio::sync::mpsc::channel(8);
+    let outcome = coding::run(
+        coding::Job {
+            tuning: &tuning,
+            ..job(Which::Pi, &path, "fix the flaky test", Gate::Open, &env)
+        },
+        controlled,
+        signals,
+        |_| {},
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(outcome.failed, None, "{outcome:?}");
+    let taken: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(repo.join(".model_set")).unwrap()).unwrap();
+    assert_eq!(taken["id"], "claude-future-5");
+    assert_eq!(taken["maxTokens"], 131072, "the entry's limits, not the default's");
+    assert!(brief_seen(Which::Pi, &repo).contains("fix the flaky test"));
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// A chosen model pi knows is checked and then gated, and the brief still goes.
+///
+/// The model's check was put in front of the gate's, so a gated job with a
+/// model is the one path that runs both.
+#[tokio::test]
+async fn pi_checks_a_known_model_and_then_the_gate_before_the_brief() {
+    stand_ins();
+    let repo = a_repository("known-model-gated");
+    // A command that reaches nothing outside, so the gate asks and nobody has
+    // to answer.
+    std::fs::write(repo.join(".pi_command"), "npm test").unwrap();
+    let path = repo.to_string_lossy().to_string();
+    let tuning = Tuning { model: Some("anthropic/claude-opus-4-7".into()), ..Tuning::default() };
+    let env = guac_lib::secrets::Environment::default();
+    let (_controls, controlled) = tokio::sync::mpsc::channel(8);
+    let (signals, _heard) = tokio::sync::mpsc::channel(8);
+    let outcome = coding::run(
+        coding::Job {
+            tuning: &tuning,
+            ..job(Which::Pi, &path, "fix the flaky test", Gate::AskBeforePushing, &env)
+        },
+        controlled,
+        signals,
+        |_| {},
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(outcome.failed, None, "{outcome:?}");
+    assert!(brief_seen(Which::Pi, &repo).contains("fix the flaky test"));
+    assert_eq!(std::fs::read_to_string(repo.join(".verdict")).unwrap(), "confirmed");
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
 /// The real `pi` loads the provider Guaca writes, and pays through the relay.
 ///
 /// Against a stand-in endpoint on loopback, so it spends nothing: what is being
@@ -2464,6 +2595,54 @@ async fn the_real_pi_pays_through_the_relay_and_never_holds_the_key() {
     assert_eq!(outcome.failed, None, "{outcome:?}");
     assert_eq!(outcome.said, "relayed hello");
     assert_eq!(*seen.lock(), [r#"Bearer sk-the-real-one "stand-in/model""#]);
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// The real `pi` runs a model it has no entry for rather than refusing it, and
+/// Guaca refuses the job instead.
+///
+/// What this asks of pi is the two answers the refusal is read from: that
+/// `get_state` reports the renamed copy, and that `get_available_models` does
+/// not list it. Nothing is sent: the key is never used and the address is
+/// never called, because the refusal comes before the brief.
+#[tokio::test]
+#[ignore = "live: needs pi on PATH; spends nothing"]
+async fn the_real_pi_is_refused_a_model_it_has_no_entry_for() {
+    let lease = coding::relay::Relay::new()
+        .lend(
+            coding::relay::Upstream {
+                base_url: "https://openrouter.ai/api/v1".into(),
+                api_key: "sk-never-sent".into(),
+                referer: "https://example.com".into(),
+                title: "Guac".into(),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    let repo = a_repository("live-unknown-model");
+    let path = repo.to_string_lossy().to_string();
+    let tuning = Tuning {
+        model: Some("guaca/no-such-model".into()),
+        pays: Payer::GuacaKey,
+        ..Tuning::default()
+    };
+    let env = guac_lib::secrets::Environment::default();
+    let (_controls, controlled) = tokio::sync::mpsc::channel(8);
+    let (signals, _heard) = tokio::sync::mpsc::channel(8);
+    let error = coding::run(
+        coding::Job {
+            tuning: &tuning,
+            lent: Some(&lease),
+            ..job(Which::Pi, &path, "Say hello.", Gate::Open, &env)
+        },
+        controlled,
+        signals,
+        |_| {},
+    )
+    .await
+    .expect_err("pi has no entry for this model");
+    assert!(matches!(error, coding::CodingError::UnknownModel { .. }), "{error:?}");
     let _ = std::fs::remove_dir_all(&repo);
 }
 
