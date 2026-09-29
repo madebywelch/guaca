@@ -1804,11 +1804,83 @@ async fn a_job_on_guacas_key_with_no_key_is_refused_before_anything_starts() {
     h.runtime.set_config(config);
 
     let why = h.runtime.message_job(engineer.id, "carry on").await.unwrap_err().to_string();
-    assert!(why.contains("no key in Settings > Provider"), "{why}");
+    assert!(why.contains("no key in your group's settings or in Settings > Provider"), "{why}");
     // And the two ways on, because a refusal that only says no is retried.
     assert!(why.contains("paste a key") && why.contains("its own sign-in"), "{why}");
     assert!(!repo.join(ARGV).exists(), "pi was never started");
     assert!(h.runtime.stop_job(engineer.id, Origin::Operator).is_err(), "nothing holds the lane");
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// A crew whose turns a ChatGPT sign-in pays for lends pi the key it holds.
+///
+/// The operator's case: the crew's settings hold an OpenRouter key and pay
+/// for turns with the subscription, the app's hold no key at all, and pi is
+/// set to Guaca's key. Reading the app's settings alone refused the job. The
+/// app's endpoint here answers nothing, so a relayed answer can only have come
+/// from the crew's, on the crew's key, running the crew's endpoint model
+/// rather than the subscription's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_crew_on_a_subscription_lends_pi_the_key_it_holds() {
+    use guac_lib::config::Provider;
+    use guac_lib::domain::group::{CleanGroup, InferenceOverrides};
+
+    stand_ins();
+    let stub = serve(|body| {
+        if anyone_said(body, "relay probe") {
+            Script::Say("relayed answer".into())
+        } else {
+            Script::Say("hello".into())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Engineer"], GuardLimits::default());
+    let engineer = h.agent_named("Engineer").unwrap();
+    let repo = give_terminal(&h, "Engineer", a_repository("lent-crew"), Which::Pi, Gate::Open);
+    let lent = Tuning { pays: Payer::GuacaKey, ..Tuning::default() };
+    h.runtime.store().set_coding_tuning(engineer.id, Which::Pi, &lent).unwrap();
+    let session = guac_lib::domain::terminal::Session {
+        harness: Which::Pi,
+        id: "s1".into(),
+        directory: ".".into(),
+        updated_at: 1,
+    };
+    h.runtime.store().set_coding_session(engineer.id, &session).unwrap();
+    let mut config = h.runtime.config();
+    config.inference.api_key = String::new();
+    config.inference.base_url = "http://127.0.0.1:9/v1".into();
+    h.runtime.set_config(config);
+    h.runtime
+        .store()
+        .update_group(
+            engineer.group_id,
+            &CleanGroup {
+                name: "SynopsisMD".into(),
+                inference: Some(InferenceOverrides {
+                    provider: Some(Provider::Chatgpt),
+                    base_url: Some(stub.base_url.clone()),
+                    default_model: Some("crew/model".into()),
+                    subscription_model: Some("gpt-6-astra".into()),
+                    ..Default::default()
+                }),
+                api_key: Some(Some("sk-crew".into())),
+                limits: None,
+            },
+        )
+        .unwrap();
+
+    h.runtime.message_job(engineer.id, "carry on").await.unwrap();
+    h.wait_until("the job calls its provider", |_| repo.join(".relayed").exists()).await;
+
+    let argv = argv_at(&repo);
+    let after = |flag: &str| argv.iter().position(|arg| arg == flag).map(|at| argv[at + 1].clone());
+    assert_eq!(after("--provider").as_deref(), Some("guaca"));
+    assert_eq!(after("--model").as_deref(), Some("crew/model"), "the endpoint's model");
+    let relayed: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(repo.join(".relayed")).unwrap()).unwrap();
+    assert_eq!(relayed["status"], 200, "{relayed}");
+    let handed = std::fs::read_to_string(repo.join(".extensions")).unwrap();
+    assert!(!handed.contains("sk-crew"), "{handed}");
     let _ = std::fs::remove_dir_all(&repo);
 }
 

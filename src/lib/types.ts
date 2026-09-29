@@ -593,10 +593,12 @@ export interface HarnessTuning extends Tuning {
   harness: Harness;
 }
 
-/** Whether Guaca has a key to lend pi, and where it is spent. Never the key. */
+/** Whether Guaca has a key to lend this agent's pi, and where it is spent. Never the key. */
 export interface GuacaKey {
   set: boolean;
   endpoint: string;
+  /** The group whose own key it is, or null when it is the one in Settings > Provider. */
+  group: string | null;
   /** OpenRouter's models are the ones pi can list for it. */
   openrouter: boolean;
   /** What a job runs when no model was chosen: the key's own. */

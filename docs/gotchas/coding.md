@@ -130,6 +130,11 @@ and `programs.rs` are the code.
 - **Guaca's key is never in pi's environment or its files.** Both are places
   pi's own `bash` tool can print, which is a README away from the key being in
   a transcript. The relay holds the key and pi holds a per-job loopback token.
+- **Guaca's key is the agent's group's before it is the app's, whoever pays
+  for the group's turns.** The lend read Settings > Provider alone, so a crew on
+  a ChatGPT sign-in with an OpenRouter key in its own settings was told Guaca
+  had no key. Not `inference_for` either: on a subscription it collapses the
+  model to the subscription's, which the endpoint refuses by name.
 - **pi is done at `agent_settled`, not `agent_end`.** pi can retry after an
   `agent_end` (the event carries `willRetry`), and closing stdin on the first
   one would cut the retry off and report a job that was still working as

@@ -700,11 +700,13 @@ pub enum RuntimeError {
     JobRunning { directory: String },
     #[error(transparent)]
     Terminal(#[from] crate::terminal::TerminalError),
-    /// pi is set to be paid for with Guaca's key, and there is no key.
+    /// pi is set to be paid for with Guaca's key, and neither the agent's group
+    /// nor the app holds one.
     #[error(
         "your coding agent is set to be paid for with Guaca's API key, and there is no key in \
-         Settings > Provider, so nothing was started. Tell the operator: they can paste a key \
-         there, or set pi back to its own sign-in in your terminal panel"
+         your group's settings or in Settings > Provider, so nothing was started. Tell the \
+         operator: they can paste a key in either, or set pi back to its own sign-in in your \
+         terminal panel"
     )]
     NoKeyToLend,
     #[error(transparent)]
@@ -2595,7 +2597,7 @@ impl Runtime {
         let lend = match tuning.pays {
             crate::domain::terminal::Payer::Own => None,
             crate::domain::terminal::Payer::GuacaKey => {
-                let inference = self.inner.config.read().inference.clone();
+                let inference = self.lent_endpoint(card);
                 if inference.api_key.trim().is_empty() || inference.base_url.trim().is_empty() {
                     return Err(RuntimeError::NoKeyToLend);
                 }
@@ -4440,13 +4442,20 @@ impl Runtime {
 
         if let Some(err) = failure {
             tracing::warn!(agent = %card.name, error = %err, "inference failed");
-            self.notice(
-                agent_id,
-                run_id,
-                cause,
-                NoticeKind::UpstreamError,
-                format!("{} could not reply: {}", card.name, err),
-            );
+            let mut said = format!("{} could not reply: {}", card.name, err);
+            // The vendor's sentence names the model and not where the name came
+            // from, and ChatGPT's says "Codex", which reads as the coding
+            // harness. An operator who chose pi's model in the Terminal panel
+            // and found a model on the agent itself read it exactly that way.
+            if matches!(err, LlmError::ModelRejected { .. }) && !card.model.trim().is_empty() {
+                said.push_str(&format!(
+                    "\n\nThat model is {name}'s own setting, not its group's. Choose one its \
+                     group's provider runs in {name}'s settings, or use the group default. A \
+                     coding agent's model is set in the Terminal panel and is not this one.",
+                    name = card.name
+                ));
+            }
+            self.notice(agent_id, run_id, cause, NoticeKind::UpstreamError, said);
         } else {
             self.emit_reply(
                 &card,
@@ -8484,6 +8493,23 @@ impl Runtime {
         };
         inference.reasoning_effort = card.reasoning_effort.unwrap_or(inference.reasoning_effort);
         inference
+    }
+
+    /// The endpoint and key a job set to Guaca's key is lent: this agent's
+    /// group's, over the app's, whoever pays for the group's turns.
+    ///
+    /// Not `inference_for`, which collapses to the provider paying for turns:
+    /// a crew on a subscription would lend a subscription model to an endpoint
+    /// that refuses it by name. `GroupInference::endpoint` has the argument.
+    pub fn lent_endpoint(&self, card: &AgentCard) -> InferenceConfig {
+        let base = self.inner.config.read().inference.clone();
+        match self.inner.store.group_inference(card.group_id) {
+            Ok(group) => group.endpoint(&base),
+            Err(err) => {
+                tracing::warn!(agent = %card.name, %err, "group settings unreadable, lending the app's key");
+                crate::domain::group::GroupInference::default().endpoint(&base)
+            }
+        }
     }
 
     /// How far a conversation this agent is part of may run.

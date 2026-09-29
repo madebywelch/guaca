@@ -334,14 +334,14 @@ and would otherwise be read as a flag.
 ## pi can be paid for with Guaca's key, and never holds it
 
 `pi` takes a key from its auth file or the environment, and either is somewhere
-its own `bash` tool can print. A README the job reads can ask it to, and the key
-the operator pasted into Settings > Provider would leave the machine in a job's
-transcript. So when the operator sets pi to Guaca's key, the key stays in this
-process and `coding/relay.rs` lends it:
+its own `bash` tool can print. A README the job reads can ask it to, and a key
+the operator pasted into Guaca would leave the machine in a job's transcript.
+So when the operator sets pi to Guaca's key, the key stays in this process and
+`coding/relay.rs` lends it:
 
 - The relay listens on loopback and admits one thing: `POST
   /v1/chat/completions` with a live job's token. It sends the body on to the
-  endpoint in settings with the real key on it, and streams the answer back
+  lent endpoint with the real key on it, and streams the answer back
   unchanged, delimited by the connection closing.
 - The job is handed a provider override in a `pi` extension, which pi documents
   for proxies and gateways: against OpenRouter, pi's own `openrouter` provider
@@ -356,9 +356,25 @@ process and `coding/relay.rs` lends it:
   turn's own call is. The key is Guaca's, so its spend is in Guaca's account.
 
 It is chosen, never inferred: *nothing about who pays is inferred* holds here
-as everywhere. No model chosen is the key's own, `default_model`. No key in
-settings is a job refused in the turn that asked, with both ways on: paste a
-key, or set pi back to its own sign-in.
+as everywhere. No model chosen is the key's own, `default_model`. No key is a
+job refused in the turn that asked, with both ways on: paste a key, or set pi
+back to its own sign-in.
+
+### Which key is Guaca's is the agent's group's question
+
+The endpoint, key and endpoint model are layered the way a turn's are, the
+agent's group over the app (`GroupInference::endpoint`), and read whoever pays
+for the group's turns. That last part is the point. A crew on a ChatGPT sign-in
+keeps the endpoint and key it held before, kept rather than blanked so it can go
+back, and an operator who gave a crew an OpenRouter key and its turns a
+subscription wants the replies on the plan and pi on the key. Lending only the
+app's key refused that crew with a key sitting in its own settings, and the
+panel said Guaca had none. The model is the endpoint's own and never the
+subscription's, which the endpoint refuses by name; that is why the lend is not
+`inference_for`, which collapses to the provider paying for turns.
+
+The panel names the group when the key is the group's own, because two crews'
+keys can be two accounts and the bill is the thing the operator is choosing.
 
 ## A job is told where it is standing before it is told what to do
 
