@@ -930,6 +930,11 @@ asks for nothing and is refused in both halves, because the fallback for an
 anchor that is not there is the end of the group, and a null gesture that reached
 it would move the row to the bottom of the rail.
 
+A crew's circle is moved by `move_group` on the same terms, with the crew it
+lands in front of as its anchor: one list rather than one per group, so a gone
+anchor is the end of the column. *A group is a place you can be inside* has
+the gesture.
+
 Which side of the target it lands on is read off two positions rather than
 measured against the pointer. A row's midpoint is geometry a test cannot see and
 a hand cannot aim at; the direction the row traveled says which side it belongs
@@ -1115,6 +1120,39 @@ says which crew, and it is on screen for the whole of the drag. A column makes
 that gesture better rather than worse: the target never scrolls out from under
 the hand, and pointer events cross a column boundary for free where HTML5 drag
 and drop would not.
+
+**The crews are arranged by hand, and a circle is its own handle.** Creation
+order was the only order the column had, which is an order nobody chose and so
+one nobody can learn. A circle
+dragged along the column takes the place beside the circle it is let go over,
+on the side read off the direction it traveled, which is `landsBefore` and the
+same rule a row follows. `move_group` renumbers every crew in one transaction
+and answers with the order that now stands, which the window draws rather than
+guessing at. A press is still a click until it travels five pixels, and one that
+wobbles and lands back on its own circle asks for nothing and opens the crew.
+
+What a circle means as a target is decided by what is in the hand, and it is
+drawn differently for that reason. An agent over a circle fills it, because the
+agent goes *into* that crew. A crew over one gets the line a row gets, on the
+side it would land, because it goes *next to* it; the line is in the circle's
+own padding, since the list scrolls and so clips, and above the first circle is
+the place most often aimed at. A crew lands among the circles and nowhere else.
+The rail's rows and sections are places for an agent, so a circle carried over
+them is aimed at nothing and a release there moves nothing: a crew let go over
+a crew's section would otherwise reorder the column by wherever the hand
+stopped. Near either end of the column the list scrolls under the hand, the way
+the rail does under a row, and that serves an agent aimed at a crew off the end
+as much as it serves a crew.
+
+The order is `rail_order` on the group, and it is the only order crews have.
+The column, the rail's sections in the overview, the phone's picker and every
+other list of crews read `list_groups`, so arranging the column arranges all of
+them. That includes the fallback. An agent nobody placed, and the transcripts of
+deleted agents whose crew is deleted, go to the first crew in the list, which
+used to mean the oldest and now means the one the operator put first. A new
+crew lands at the bottom, and so does an imported one, whose file carries its
+original's timestamp and no place: filed by that timestamp among circles
+somebody arranged, it would look like the arrangement had moved.
 
 **Clicking the crew the rail is already inside does nothing, and that is the
 whole of it.** It used to take the rail back out to the overview, which made

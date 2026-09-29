@@ -9,7 +9,7 @@ import { type DropTarget, railOrder } from "../lib/rail";
 import { useLiveAgents, useStore } from "../lib/store";
 import { useNow } from "../lib/time";
 import { desktop } from "../lib/transport";
-import type { AgentCard, AgentId, Group } from "../lib/types";
+import type { AgentCard, AgentId, Group, GroupId } from "../lib/types";
 import { ArtifactMark } from "./Artifacts";
 import { Brand } from "./Brand";
 import { GroupRail } from "./GroupRail";
@@ -57,9 +57,18 @@ const DRAG_SLOP = 5;
 const EDGE = 36;
 const EDGE_STEP = 14;
 
-/** A row in flight, and what it is currently over. */
+/**
+ * What a press picked up: an agent's row, or a crew's circle.
+ *
+ * One drag for both, because they share every part of the gesture but where it
+ * may land. A row lands on a row or a crew; a circle lands among the circles
+ * and nowhere else, since the rail's rows and sections are places for agents.
+ */
+type Held = { kind: "agent"; id: AgentId } | { kind: "group"; id: GroupId };
+
+/** Something in flight, and what it is currently over. */
 interface Drag {
-  id: AgentId;
+  held: Held;
   over: DropTarget | null;
 }
 
@@ -99,15 +108,18 @@ export function Sidebar({
   const railGroup = useStore((s) => s.railGroup);
   const focusGroup = useStore((s) => s.focusGroup);
   const dropAgent = useStore((s) => s.dropAgent);
+  const dropGroup = useStore((s) => s.dropGroup);
   const now = useNow();
 
   const listRef = useRef<HTMLDivElement>(null);
+  /** The crews' own list, which scrolls under a drag the way the rail's does. */
+  const crewsRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef(new Map<AgentId, HTMLButtonElement>());
   const [rowCenters, setRowCenters] = useState<Map<AgentId, number>>(new Map());
   const previousTops = useRef(new Map<AgentId, number>());
 
   /** The press that has not yet traveled far enough to be a drag. */
-  const press = useRef<{ id: AgentId; x: number; y: number } | null>(null);
+  const press = useRef<{ held: Held; x: number; y: number } | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
   /**
    * Where the pointer is, and the thing that follows it.
@@ -131,13 +143,14 @@ export function Sidebar({
   /**
    * How every section of the rail is ordered right now.
    *
-   * Frozen while something is being dragged, because dragging is arranging: a
-   * row dropped below a peer that is only near the top because it happens to be
+   * Frozen while a row is being dragged, because dragging is arranging: a row
+   * dropped below a peer that is only near the top because it happens to be
    * mid-turn would land somewhere the operator never aimed at, and the rail
-   * would look like it had ignored the gesture the moment that turn ended.
+   * would look like it had ignored the gesture the moment that turn ended. A
+   * crew in hand arranges nothing in the rail, so the rail is left as it was.
    */
-  const shape = { activity, lastActive, frozen: drag !== null };
-  const dragging = drag?.id ?? null;
+  const dragging = drag?.held.kind === "agent" ? drag.held.id : null;
+  const shape = { activity, lastActive, frozen: dragging !== null };
 
   // One layout pass does two jobs: slide rows that moved, and record where
   // every row ended up so the traveling message knows where to fly.
@@ -204,7 +217,7 @@ export function Sidebar({
 
   // The first frame of a drag: the box has only just been put in the tree, so
   // the handler that has been tracking the pointer had nothing to move.
-  useLayoutEffect(place, [place, drag?.id]);
+  useLayoutEffect(place, [place, drag?.held.id]);
 
   /**
    * The rest of a drag, once one has started.
@@ -229,7 +242,7 @@ export function Sidebar({
         // top of this one and lose whatever the pointer had reached.
         press.current = null;
         point.current = { x: event.clientX, y: event.clientY };
-        setDrag({ id: held.id, over: null });
+        setDrag({ held: held.held, over: null });
         return;
       }
       if (!drag) return;
@@ -237,10 +250,17 @@ export function Sidebar({
       point.current = { x: event.clientX, y: event.clientY };
       place();
 
-      // Reaching a row that is off the bottom of the rail has to be possible
-      // without letting go. Stepped per movement rather than on a timer: a
-      // pointer held still in the margin is a pointer that has arrived.
-      const list = listRef.current;
+      // Reaching a row that is off the bottom of the rail, or a crew off the
+      // bottom of the column, has to be possible without letting go. Stepped
+      // per movement rather than on a timer: a pointer held still in the
+      // margin is a pointer that has arrived. The column when the pointer is
+      // over it, which it can only be while it is out, since it is drawn over
+      // the rail; the rail otherwise, and only for a row, which is the one
+      // thing that can land there.
+      const crews = crewsRef.current;
+      const column = crews?.getBoundingClientRect();
+      const overCrews = column && event.clientX >= column.left && event.clientX <= column.right;
+      const list = overCrews ? crews : drag.held.kind === "agent" ? listRef.current : null;
       if (!list || list.scrollHeight <= list.clientHeight) return;
       const box = list.getBoundingClientRect();
       if (event.clientY < box.top + EDGE) list.scrollBy({ top: -EDGE_STEP });
@@ -251,7 +271,9 @@ export function Sidebar({
       const finished = drag;
       press.current = null;
       setDrag(null);
-      if (finished?.over) void dropAgent(finished.id, finished.over);
+      if (!finished?.over) return;
+      if (finished.held.kind === "agent") void dropAgent(finished.held.id, finished.over);
+      else if (finished.over.kind === "group") void dropGroup(finished.held.id, finished.over.id);
     };
 
     const cancel = () => {
@@ -277,16 +299,34 @@ export function Sidebar({
     // handful of times per drag. The pointer's own position is deliberately not
     // in here, or this would be four listeners torn down and replaced on every
     // frame of every drag.
-  }, [drag, dropAgent, place]);
+  }, [drag, dropAgent, dropGroup, place]);
 
-  /** Marks what the pointer is over, while it is over it. */
-  const hover = useCallback((target: DropTarget | null) => {
+  /**
+   * A press, remembered and nothing else yet. A row and a circle are both
+   * buttons first, and only become handles once the pointer moves.
+   */
+  const grab = (held: Held, event: React.PointerEvent) => {
+    if (event.button !== 0 || event.pointerType === "touch") return;
+    press.current = { held, x: event.clientX, y: event.clientY };
+  };
+
+  /**
+   * Marks what the pointer is over, while it is over it.
+   *
+   * `circle` says the target is a crew's circle rather than a row or a section
+   * of the rail. A circle catches anything; the rail catches an agent and
+   * nothing else, so a crew carried across it is aimed at nothing and a release
+   * there moves nothing.
+   */
+  const aim = useCallback((target: DropTarget | null, circle: boolean) => {
     setDrag((current) => {
       if (!current) return current;
-      if (target === null) return { ...current, over: null };
+      if (current.held.kind === "group" && !circle) return current;
       return { ...current, over: target };
     });
   }, []);
+
+  const hover = (target: DropTarget | null) => aim(target, false);
 
   /** Whether a drop target is the one currently under the pointer. */
   const isOver = (target: DropTarget): boolean => {
@@ -294,6 +334,13 @@ export function Sidebar({
     if (!over || over.kind !== target.kind) return false;
     return over.id === target.id;
   };
+
+  /**
+   * Whether a crew's section of the rail is where a dragged agent would land.
+   * An agent only: a crew over a circle is aimed at the same target a section
+   * is, and the section lit under it said the crew was going into itself.
+   */
+  const sectionOver = (id: GroupId): boolean => dragging !== null && isOver({ kind: "group", id });
 
   /** Which way an agent should turn to face a peer. */
   const facing = (self: AgentId, other: AgentId | undefined): Look => {
@@ -333,12 +380,7 @@ export function Sidebar({
           event.preventDefault();
           onOpenMenu(agent, { x: event.clientX, y: event.clientY });
         }}
-        // The press is remembered and nothing else happens yet: a row is a
-        // button first, and it only becomes a handle once the pointer moves.
-        onPointerDown={(event) => {
-          if (event.button !== 0 || event.pointerType === "touch") return;
-          press.current = { id: agent.id, x: event.clientX, y: event.clientY };
-        }}
+        onPointerDown={(event) => grab({ kind: "agent", id: agent.id }, event)}
         onPointerEnter={() => hover(target)}
         onPointerLeave={() => hover(null)}
       >
@@ -399,7 +441,9 @@ export function Sidebar({
     </button>
   );
 
-  const held = drag ? agents.find((a) => a.id === drag.id) : undefined;
+  const inHand = drag?.held;
+  /** The agent the hand is holding, which the box at the pointer draws. */
+  const heldAgent = inHand?.kind === "agent" ? agents.find((a) => a.id === inHand.id) : undefined;
 
   const waiting = decisionCount + pending.length + stuck.length;
 
@@ -418,9 +462,12 @@ export function Sidebar({
         focused={railGroup}
         onFocus={(id) => void focusGroup(id)}
         isOver={isOver}
-        onDragOver={hover}
-        onDragOut={() => hover(null)}
+        onDragOver={(target) => aim(target, true)}
+        onDragOut={() => aim(null, true)}
         dragging={drag !== null}
+        held={inHand?.kind === "group" ? inHand.id : null}
+        onPress={(id, event) => grab({ kind: "group", id }, event)}
+        listRef={crewsRef}
       />
 
       {/* Over the rail rather than inside it: the card is fixed to the window
@@ -514,7 +561,7 @@ export function Sidebar({
               // what says which rows those are.
               <div
                 className="rail__group rail__group--open"
-                data-over={isOver({ kind: "group", id: focused.id }) ? "true" : undefined}
+                data-over={sectionOver(focused.id) ? "true" : undefined}
                 onPointerEnter={() => hover({ kind: "group", id: focused.id })}
                 onPointerLeave={() => hover(null)}
               >
@@ -563,7 +610,7 @@ export function Sidebar({
                     <div
                       key={group.id}
                       className="rail__group"
-                      data-over={isOver({ kind: "group", id: group.id }) ? "true" : undefined}
+                      data-over={sectionOver(group.id) ? "true" : undefined}
                       onPointerEnter={() => hover({ kind: "group", id: group.id })}
                       onPointerLeave={() => hover(null)}
                     >
@@ -638,17 +685,21 @@ export function Sidebar({
 
         {/* What the hand is holding. Drawn at the pointer and outside the list so
           nothing it passes over can clip it, and transparent to the pointer so
-          the row underneath is still the row being aimed at. */}
-        {drag && held && (
+          the row underneath is still the row being aimed at. An agent only: a
+          crew is carried along a column one circle wide, where the pointer is
+          always on the circle it is aimed at and that circle's tag is already
+          beside it. A second name there read as two labels for one circle, and
+          the circle in hand is still on screen, dimmed where it was. */}
+        {heldAgent && (
           <div className="rail__held" aria-hidden="true" ref={heldRef}>
             <AgentAvatar
-              avatar={held.avatar}
-              color={held.color}
+              avatar={heldAgent.avatar}
+              color={heldAgent.color}
               size="sm"
-              seed={held.id}
-              lifecycle={held.lifecycle}
+              seed={heldAgent.id}
+              lifecycle={heldAgent.lifecycle}
             />
-            <span className="rail__held-name">{held.name}</span>
+            <span className="rail__held-name">{heldAgent.name}</span>
           </div>
         )}
       </nav>

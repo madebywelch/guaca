@@ -9,6 +9,7 @@ import { Sidebar } from "./Sidebar";
 const moveAgent =
   vi.fn<(id: string, groupId: string, before: string | null) => Promise<AgentCard>>();
 const setAgentPinned = vi.fn<(id: string, pinned: boolean) => Promise<AgentCard>>();
+const moveGroup = vi.fn<(id: string, before: string | null) => Promise<Group[]>>();
 
 vi.mock("../lib/ipc", () => ({
   api: {
@@ -21,6 +22,7 @@ vi.mock("../lib/ipc", () => ({
     moveAgent: (id: string, groupId: string, before: string | null) =>
       moveAgent(id, groupId, before),
     setAgentPinned: (id: string, pinned: boolean) => setAgentPinned(id, pinned),
+    moveGroup: (id: string, before: string | null) => moveGroup(id, before),
   },
 }));
 
@@ -141,6 +143,8 @@ beforeEach(() => {
   moveAgent.mockResolvedValue(agent("Manager"));
   setAgentPinned.mockReset();
   setAgentPinned.mockResolvedValue(agent("Manager"));
+  moveGroup.mockReset();
+  moveGroup.mockImplementation(async () => useStore.getState().groups);
   useStore.setState({ groups: [], agents: [], railGroup: null });
 });
 
@@ -308,6 +312,143 @@ describe("arranging the rail", () => {
     // direction to read and it takes the place of what it was dropped on.
     expect(setAgentPinned).toHaveBeenCalledWith("Manager", false);
     expect(moveAgent).toHaveBeenCalledWith("Manager", DEFAULT_GROUP, "Scribe");
+  });
+});
+
+describe("arranging the crews", () => {
+  const RESEARCH = "00000000-0000-4000-8000-000000000002";
+  const KITCHEN = "00000000-0000-4000-8000-000000000003";
+
+  /** Three crews, the first with somebody in it so the rail has a row. */
+  function column() {
+    draw(
+      [group("everyone"), group("research", null, RESEARCH), group("kitchen", null, KITCHEN)],
+      [agent("Manager")],
+    );
+  }
+
+  /** A crew's circle, by its name. */
+  function circle(name: string): HTMLElement {
+    return screen.getByLabelText(new RegExp(`^${name}, `));
+  }
+
+  /** The circles, top to bottom, by the crew each one names. */
+  function circles(): string[] {
+    return [...document.querySelectorAll(".grail__list .orb")].map(
+      (node) => node.getAttribute("title") ?? "",
+    );
+  }
+
+  /** Picks a circle up and carries it onto another, without letting go. */
+  function carry(from: HTMLElement, onto: HTMLElement) {
+    fireEvent.pointerDown(from, { button: 0, clientX: 30, clientY: 200 });
+    fireEvent.pointerMove(window, { clientX: 30, clientY: 240 });
+    fireEvent.pointerEnter(onto, { clientX: 30, clientY: 260 });
+  }
+
+  it("moves nothing when a crew is let go over the rail", () => {
+    // The rail's rows and sections are places for an agent. A circle released
+    // over one would otherwise read as a crew dropped on a crew, and reorder
+    // the column by where the hand happened to stop.
+    column();
+
+    carry(circle("kitchen"), row("Manager"));
+    fireEvent.pointerEnter(document.querySelector(".rail__group")!, { clientX: 300, clientY: 260 });
+    fireEvent.pointerUp(window, { clientX: 300, clientY: 260 });
+
+    expect(moveGroup).not.toHaveBeenCalled();
+    expect(moveAgent).not.toHaveBeenCalled();
+    expect(row("Manager").dataset.over).toBeUndefined();
+  });
+
+  it("leaves the column alone when a press on a circle does not travel", () => {
+    // A circle is a button first: it opens the crew.
+    column();
+
+    fireEvent.pointerDown(circle("kitchen"), { button: 0, clientX: 30, clientY: 200 });
+    fireEvent.pointerEnter(circle("research"), { clientX: 30, clientY: 202 });
+    fireEvent.pointerUp(window, { clientX: 30, clientY: 202 });
+
+    expect(moveGroup).not.toHaveBeenCalled();
+  });
+
+  it("abandons a drag on escape without moving anything", () => {
+    column();
+
+    carry(circle("kitchen"), circle("everyone"));
+    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.pointerUp(window, { clientX: 30, clientY: 260 });
+
+    expect(moveGroup).not.toHaveBeenCalled();
+  });
+
+  it("asks for nothing when a crew is dropped back on itself", () => {
+    // The runtime lands a crew whose anchor it cannot find at the end, so a
+    // gesture that asked for nothing must not reach it.
+    column();
+
+    carry(circle("research"), circle("research"));
+    fireEvent.pointerUp(window, { clientX: 30, clientY: 260 });
+
+    expect(moveGroup).not.toHaveBeenCalled();
+  });
+
+  it("drops a crew in front of the one it stopped on coming up", async () => {
+    column();
+
+    carry(circle("kitchen"), circle("everyone"));
+    fireEvent.pointerUp(window, { clientX: 30, clientY: 260 });
+
+    await vi.waitFor(() => expect(moveGroup).toHaveBeenCalledWith(KITCHEN, DEFAULT_GROUP));
+  });
+
+  it("drops a crew after the one it passed going down", async () => {
+    column();
+
+    carry(circle("everyone"), circle("research"));
+    fireEvent.pointerUp(window, { clientX: 30, clientY: 260 });
+
+    await vi.waitFor(() => expect(moveGroup).toHaveBeenCalledWith(DEFAULT_GROUP, KITCHEN));
+  });
+
+  it("marks the circle in hand, and which side of the target it would land", () => {
+    // A line, not the fill an agent gets: a crew dropped here goes next to
+    // this one, and the fill says "into".
+    column();
+
+    carry(circle("kitchen"), circle("research"));
+    expect(circle("kitchen").dataset.held).toBe("true");
+    expect(circle("research").dataset.lands).toBe("before");
+    expect(circle("research").dataset.over).toBeUndefined();
+    // Nor the crew's section in the rail, which is aimed at by the same target
+    // a circle is: lit, it said the crew was going into itself.
+    expect(document.querySelector(".rail__group[data-over]")).toBeNull();
+    // And nothing follows the pointer. The target's tag is already beside it,
+    // and a second name there read as two labels for one circle.
+    expect(document.querySelector(".rail__held")).toBeNull();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    carry(circle("everyone"), circle("research"));
+    expect(circle("research").dataset.lands).toBe("after");
+  });
+
+  it("draws the order the runtime answers with, everywhere crews are listed", async () => {
+    column();
+    const answered = [
+      group("kitchen", null, KITCHEN),
+      group("everyone"),
+      group("research", null, RESEARCH),
+    ];
+    moveGroup.mockResolvedValue(answered);
+
+    carry(circle("kitchen"), circle("everyone"));
+    fireEvent.pointerUp(window, { clientX: 30, clientY: 260 });
+
+    await vi.waitFor(() => expect(circles()).toEqual(["kitchen", "everyone", "research"]));
+    // The rail's sections are the same list, not a second order to keep.
+    expect(
+      [...document.querySelectorAll(".rail__group-name")].map((node) => node.textContent),
+    ).toEqual(["kitchen", "everyone", "research"]);
   });
 });
 

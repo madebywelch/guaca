@@ -184,4 +184,13 @@ describe("where a dropped row lands", () => {
     expect(landsBefore(rows, "Cook", "Cook")).toBeUndefined();
     expect(landsBefore(rows, "Cook", "Gone")).toBeUndefined();
   });
+
+  it("reads a column of crews the way it reads a section of rows", () => {
+    // A circle is dragged up and down one list, so the direction it traveled is
+    // the whole answer there too.
+    const column = [{ id: "Everyone" }, { id: "Research" }, { id: "Kitchen" }];
+    expect(landsBefore(column, "Everyone", "Research")).toBe("Kitchen");
+    expect(landsBefore(column, "Everyone", "Kitchen")).toBeNull();
+    expect(landsBefore(column, "Kitchen", "Everyone")).toBe("Everyone");
+  });
 });

@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import type { CSSProperties, PointerEvent } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { cluster } from "../lib/orb";
@@ -17,6 +17,11 @@ interface Props {
   current: boolean;
   /** Whether a dragged row would land here if it were dropped now. */
   over: boolean;
+  /** Whether this is the circle in the operator's hand. */
+  held: boolean;
+  /** Which side of this circle a crew in hand would land on, if it would. */
+  lands: "before" | "after" | undefined;
+  onPress: (event: PointerEvent) => void;
   onOpen: () => void;
   onDragOver: () => void;
   onDragOut: () => void;
@@ -41,7 +46,8 @@ function percent(fraction: number): string {
  * Two jobs in one control, which is why it is a circle and not a row in a menu.
  * Clicking opens the group. Dropping an agent on it puts the agent in the group,
  * so the shortest gesture for moving somebody between crews is the one that also
- * says which crew, and it is on screen the whole time you are dragging.
+ * says which crew, and it is on screen the whole time you are dragging. And it
+ * is its own handle: dragged along the column, it is how the crews are arranged.
  */
 export function GroupOrb({
   group,
@@ -50,6 +56,9 @@ export function GroupOrb({
   stuck,
   current,
   over,
+  held,
+  lands,
+  onPress,
   onOpen,
   onDragOver,
   onDragOut,
@@ -71,6 +80,9 @@ export function GroupOrb({
       title={group.name}
       data-state={presence.working ? "working" : undefined}
       data-over={over ? "true" : undefined}
+      data-held={held ? "true" : undefined}
+      data-lands={lands}
+      onPointerDown={onPress}
       onClick={onOpen}
       onFocus={tag.open}
       onBlur={tag.close}
