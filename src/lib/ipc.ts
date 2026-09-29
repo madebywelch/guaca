@@ -243,11 +243,11 @@ export const api = {
     invoke<void>("set_coding_tuning", { id, harness, tuning }),
 
   /**
-   * The models a harness offers, asked of the program on the backend. For pi
-   * on Guaca's key, what that key can reach.
+   * The models a harness offers an agent, asked of the program on the backend.
+   * For pi on Guaca's key, what the key that agent would be lent can reach.
    */
-  codingModels: (harness: Harness, pays: Payer) =>
-    invoke<ModelOffer[]>("coding_models", { harness, pays }),
+  codingModels: (id: AgentId, harness: Harness, pays: Payer) =>
+    invoke<ModelOffer[]>("coding_models", { id, harness, pays }),
 
   /**
    * Which coding harnesses are on this machine, and how to get the ones that

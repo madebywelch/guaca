@@ -336,7 +336,7 @@ surface! {
     set_agent_coding(id: AgentId, harness: Harness, gate: Gate) -> (),
     set_coding_tuning(id: AgentId, harness: Harness, tuning: Tuning) -> (),
     coding_harnesses() -> Vec<HarnessOnMachine>,
-    coding_models(harness: Harness, pays: Payer) -> Vec<crate::coding::ModelOffer>,
+    coding_models(id: AgentId, harness: Harness, pays: Payer) -> Vec<crate::coding::ModelOffer>,
     message_coding_job(agent_id: AgentId, message: String) -> crate::runtime::Continued,
     stop_coding_job(agent_id: AgentId) -> (),
     plugin_catalog() -> Vec<PluginOffer>,

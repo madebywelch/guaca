@@ -833,6 +833,34 @@ async fn a_model_the_plan_cannot_run_is_named_in_the_refusal() {
     // The backend's own sentence is the most useful thing an operator can read,
     // so it is passed through rather than replaced with a generic upstream error.
     assert!(all.contains("gpt-5.6-luna"), "which model has to survive: {all}");
+    // The group chose this one, so the agent's settings are not where it is fixed.
+    assert!(!all.contains("own setting"), "{all}");
+}
+
+/// A model an agent names for itself is refused with where it was named.
+///
+/// The case that sent an operator the wrong way: pi's model chosen in the
+/// Terminal panel, an OpenRouter model on the agent itself, and a crew paying
+/// for turns with a ChatGPT sign-in whose refusal says "Codex". Nothing in that
+/// sentence points at the agent's own settings, which is the one place it is
+/// fixed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_model_an_agent_names_for_itself_is_refused_with_where_it_was_named() {
+    let app = signed_in(&refusing(400).await, &["Engineer"], "pro");
+    let card = app.runtime.store().get_agent(app.id("Engineer")).unwrap().unwrap();
+    let mut own = draft("Engineer", &["testing"]);
+    own.model = "xiaomi/mimo-v2.6-pro".into();
+    own.group_id = Some(card.group_id);
+    app.runtime.store().update_agent(card.id, &own).unwrap();
+
+    let run = app.ask("Engineer", "Go.");
+    app.settle(run).await;
+
+    let all = app.everything("Engineer");
+    assert!(all.contains("xiaomi/mimo-v2.6-pro"), "{all}");
+    assert!(all.contains("Engineer's own setting, not its group's"), "{all}");
+    assert!(all.contains("use the group default"), "the way on: {all}");
+    assert!(all.contains("Terminal panel"), "and which model it is not: {all}");
 }
 
 /// A backend that refuses everything, in the two shapes this one refuses in.

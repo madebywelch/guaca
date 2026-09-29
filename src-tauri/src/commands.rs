@@ -290,9 +290,9 @@ impl From<crate::runtime::RuntimeError> for CommandError {
             // one it would be passed to, so they are told directly.
             RuntimeError::NoKeyToLend => CommandError::new(
                 "badRequest",
-                "pi is set to be paid for with Guaca's API key, and there is no key in Settings > \
-                 Provider. Paste one there, or set pi back to its own sign-in in this terminal \
-                 panel",
+                "pi is set to be paid for with Guaca's API key, and there is no key in this \
+                 agent's group settings or in Settings > Provider. Paste one in either, or set pi \
+                 back to its own sign-in in this terminal panel",
             ),
             // A `shell` or file-tool failure is answered to the model inside
             // its turn and never to the webview: no command here runs one. The
@@ -815,14 +815,17 @@ pub struct HarnessTuning {
     pub tuning: Tuning,
 }
 
-/// Whether Guaca has a key to lend, and to where. Never the key.
+/// Whether Guaca has a key to lend this agent, and to where. Never the key.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GuacaKey {
     pub set: bool,
-    /// The endpoint in Settings > Provider, which the panel names so an
-    /// operator knows whose bill a job lands on.
+    /// The endpoint the key is spent at, which the panel names so an operator
+    /// knows whose bill a job lands on.
     pub endpoint: String,
+    /// The group whose own key it is, or none when it is the one in Settings >
+    /// Provider. Named because a crew's key and the app's can be two accounts.
+    pub group: Option<String>,
     /// Whether it is OpenRouter, whose models pi can list.
     pub openrouter: bool,
     /// The model a job runs when none was chosen: the key's own.
@@ -832,6 +835,7 @@ pub struct GuacaKey {
 /// Where an agent's terminal is, and the session it last ran. Made if it is
 /// not there, so the path shown is one that exists.
 pub async fn agent_terminal(state: &AppState, id: AgentId) -> Reply<TerminalView> {
+    let card = agent_card(state, id)?;
     let path = state.runtime.terminals().ensure(id).map_err(crate::runtime::RuntimeError::from)?;
     let session = state.runtime.store().coding_session(id)?;
     let resume = session.as_ref().map(|session| session.resume_line(&path));
@@ -847,24 +851,31 @@ pub async fn agent_terminal(state: &AppState, id: AgentId) -> Reply<TerminalView
         session,
         resume,
         tunings,
-        guaca_key: guaca_key(state),
+        guaca_key: guaca_key(state, &card)?,
     })
 }
 
-fn guaca_key(state: &AppState) -> GuacaKey {
-    let inference = state.runtime.config().inference;
+fn guaca_key(state: &AppState, card: &crate::domain::agent::AgentCard) -> Reply<GuacaKey> {
+    let inference = state.runtime.lent_endpoint(card);
+    let group = state
+        .runtime
+        .store()
+        .get_group(card.group_id)?
+        .filter(|group| group.api_key_set)
+        .map(|group| group.name);
     let upstream = crate::coding::relay::Upstream {
         base_url: inference.base_url.clone(),
         api_key: String::new(),
         referer: String::new(),
         title: String::new(),
     };
-    GuacaKey {
+    Ok(GuacaKey {
         set: !inference.api_key.trim().is_empty() && !inference.base_url.trim().is_empty(),
         endpoint: inference.base_url,
+        group,
         openrouter: upstream.is_openrouter(),
         default_model: inference.default_model,
-    }
+    })
 }
 
 /// Records what the operator chose inside one harness for one agent.
@@ -883,19 +894,21 @@ pub async fn set_coding_tuning(
     Ok(())
 }
 
-/// The models a harness offers, asked of the program on the backend.
+/// The models a harness offers one agent, asked of the program on the backend.
 ///
-/// `pays` is which account would pay: pi on Guaca's key lists what that
-/// key can reach, not what pi's own sign-ins can.
+/// `pays` is which account would pay: pi on Guaca's key lists what the key
+/// this agent would be lent can reach, not what pi's own sign-ins can. Per
+/// agent because two crews can hold keys for two endpoints.
 pub async fn coding_models(
     state: &AppState,
+    id: AgentId,
     harness: Harness,
     pays: Payer,
 ) -> Reply<Vec<crate::coding::ModelOffer>> {
     let lent = match pays {
         Payer::Own => None,
         Payer::GuacaKey => {
-            let key = guaca_key(state);
+            let key = guaca_key(state, &agent_card(state, id)?)?;
             Some(crate::coding::relay::Upstream {
                 base_url: key.endpoint,
                 api_key: String::new(),

@@ -389,16 +389,16 @@ function Tuner({ agent, harness, tuning, guacaKey, efforts, usable, onSaved }: T
   const pays = tuning.pays;
   // The listing a response belongs to. A pi listing for its own sign-in that
   // lands after the operator switched it to Guaca's key would offer models the
-  // job cannot reach.
-  const asking = useRef(`${harness}:${pays}`);
+  // job cannot reach, and so would one for another agent's crew and its key.
+  const asking = useRef(`${agent.id}:${harness}:${pays}`);
 
   useEffect(() => {
-    const asked = `${harness}:${pays}`;
+    const asked = `${agent.id}:${harness}:${pays}`;
     asking.current = asked;
     setOffers(null);
     setListing(null);
     if (!usable) return;
-    api.codingModels(harness, pays).then(
+    api.codingModels(agent.id, harness, pays).then(
       (found) => {
         if (asking.current === asked) setOffers(found);
       },
@@ -406,7 +406,7 @@ function Tuner({ agent, harness, tuning, guacaKey, efforts, usable, onSaved }: T
         if (asking.current === asked) setListing(errorMessage(caught));
       },
     );
-  }, [harness, pays, usable]);
+  }, [agent.id, harness, pays, usable]);
 
   const save = async (next: Tuning) => {
     setSaving(true);
@@ -472,14 +472,16 @@ function Tuner({ agent, harness, tuning, guacaKey, efforts, usable, onSaved }: T
           </div>
           {pays === "guacaKey" ? (
             <span className="field__hint">
-              The key in Settings &gt; Provider, at <code>{guacaKey.endpoint}</code>. pi gets a
-              token for the job, never the key.
-              {!guacaKey.set && " There is no key there now, so a job will be refused."}
+              {guacaKey.group ? `${guacaKey.group}'s API key` : "The key in Settings > Provider"},
+              at <code>{guacaKey.endpoint}</code>. pi gets a token for the job, never the key.
+              {!guacaKey.set &&
+                " There is no key in this group's settings or in Settings > Provider now, so a job will be refused."}
             </span>
           ) : (
             !guacaKey.set && (
               <span className="field__hint">
-                Guaca has no API key in Settings &gt; Provider to lend it.
+                Guaca has no API key in this group's settings or in Settings &gt; Provider to lend
+                it.
               </span>
             )
           )}

@@ -252,11 +252,38 @@ pub struct GroupInference {
 }
 
 impl GroupInference {
+    /// The endpoint, key and endpoint model this group holds, whoever pays for
+    /// its turns.
+    ///
+    /// What pi is lent when a job is set to Guaca's key. A group whose turns a
+    /// subscription pays for still holds its endpoint and key, kept rather than
+    /// blanked exactly so they are there to go back to, and that key is the
+    /// one the operator gave this crew. So the job gets it, and the endpoint's
+    /// own model with it: the subscription's is a name the endpoint refuses.
+    /// Resolved as if the endpoint paid, so `active_model` agrees.
+    pub fn endpoint(&self, base: &InferenceConfig) -> InferenceConfig {
+        let mut out = base.clone();
+        out.provider = Provider::Compatible;
+        if let Some(url) = &self.overrides.base_url {
+            out.base_url = url.clone();
+        }
+        if let Some(key) = &self.api_key {
+            out.api_key = key.clone();
+        }
+        if let Some(model) = &self.overrides.default_model {
+            out.default_model = model.clone();
+        }
+        out
+    }
+
     /// Layers this group over the app-wide settings. Anything the group does
     /// not set is inherited, so a group with no overrides behaves exactly as
     /// before groups had settings of their own.
     pub fn apply(&self, base: &InferenceConfig) -> InferenceConfig {
-        let mut out = base.clone();
+        // The endpoint layers the same way whoever pays, so it is layered in
+        // one place and the provider put back over it.
+        let mut out = self.endpoint(base);
+        out.provider = base.provider;
         let over = &self.overrides;
 
         // First, because the model that gets collapsed below depends on it.
@@ -272,15 +299,6 @@ impl GroupInference {
             out.provider = provider;
         }
 
-        if let Some(url) = &over.base_url {
-            out.base_url = url.clone();
-        }
-        if let Some(key) = &self.api_key {
-            out.api_key = key.clone();
-        }
-        if let Some(model) = &over.default_model {
-            out.default_model = model.clone();
-        }
         if let Some(model) = &over.subscription_model {
             out.subscription_model = model.clone();
         }
@@ -693,5 +711,43 @@ mod tests {
         // The behavior that existed before groups had settings, unchanged.
         let base = InferenceConfig::default();
         assert_eq!(GroupInference::default().apply(&base), base);
+    }
+
+    #[test]
+    fn a_group_on_the_subscription_still_lends_the_key_it_holds() {
+        // The crew that found this: turns on a ChatGPT sign-in, an OpenRouter
+        // key in the crew's own settings, none in the app's, and pi set to
+        // Guaca's key. Reading the app's alone refused a key the operator had
+        // given this crew.
+        let crew = GroupInference {
+            overrides: InferenceOverrides {
+                provider: Some(Provider::Chatgpt),
+                base_url: Some("https://openrouter.ai/api/v1".into()),
+                default_model: Some("deepseek/deepseek-v4.1-flash".into()),
+                subscription_model: Some("gpt-6-astra".into()),
+                ..Default::default()
+            },
+            api_key: Some("crew-key".into()),
+        };
+        let app = InferenceConfig { api_key: String::new(), ..on_subscription() };
+
+        let lent = crew.endpoint(&app);
+        assert_eq!(lent.base_url, "https://openrouter.ai/api/v1");
+        assert_eq!(lent.api_key, "crew-key");
+        // The endpoint's model, never the subscription's, which the endpoint
+        // would refuse by name.
+        assert_eq!(lent.default_model, "deepseek/deepseek-v4.1-flash");
+        assert_eq!(lent.active_model(), "deepseek/deepseek-v4.1-flash");
+        // And the crew's turns are still the subscription's.
+        assert_eq!(crew.apply(&app).provider, Provider::Chatgpt);
+        assert_eq!(crew.apply(&app).default_model, "gpt-6-astra");
+    }
+
+    #[test]
+    fn a_group_with_no_key_of_its_own_lends_the_apps() {
+        let lent = GroupInference::default().endpoint(&on_subscription());
+        assert_eq!(lent.api_key, "app-key");
+        assert_eq!(lent.base_url, on_subscription().base_url);
+        assert_eq!(lent.default_model, "anthropic/claude-sonnet-4.5");
     }
 }

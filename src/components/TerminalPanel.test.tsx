@@ -24,7 +24,7 @@ const giveAgentTerminal = vi.fn<(id: string) => Promise<void>>();
 const takeAgentTerminal = vi.fn<(id: string) => Promise<void>>();
 const setAgentCoding = vi.fn<(id: string, harness: Harness, gate: Gate) => Promise<void>>();
 const setCodingTuning = vi.fn<(id: string, harness: Harness, tuning: Tuning) => Promise<void>>();
-const codingModels = vi.fn<(harness: Harness, pays: Payer) => Promise<ModelOffer[]>>();
+const codingModels = vi.fn<(id: string, harness: Harness, pays: Payer) => Promise<ModelOffer[]>>();
 
 vi.mock("../lib/ipc", () => ({
   api: {
@@ -36,7 +36,7 @@ vi.mock("../lib/ipc", () => ({
     messageCodingJob: (id: string, message: string) => messageCodingJob(id, message),
     setCodingTuning: (id: string, harness: Harness, tuning: Tuning) =>
       setCodingTuning(id, harness, tuning),
-    codingModels: (harness: Harness, pays: Payer) => codingModels(harness, pays),
+    codingModels: (id: string, harness: Harness, pays: Payer) => codingModels(id, harness, pays),
   },
 }));
 
@@ -59,6 +59,7 @@ const PATH = "/var/lib/guaca/data/terminals/a1";
 const NO_KEY: GuacaKey = {
   set: false,
   endpoint: "https://openrouter.ai/api/v1",
+  group: null,
   openrouter: true,
   defaultModel: "qwen/qwen3-coder",
 };
@@ -366,7 +367,7 @@ describe("TerminalPanel", () => {
     render(<TerminalPanel agent={card(true, "claude")} />);
 
     const field = await screen.findByLabelText("Claude Code model");
-    await waitFor(() => expect(codingModels).toHaveBeenCalledWith("claude", "own"));
+    await waitFor(() => expect(codingModels).toHaveBeenCalledWith("a1", "claude", "own"));
     // What runs when nothing is chosen, in the program's own name for it.
     await waitFor(() => expect((field as HTMLInputElement).placeholder).toBe("Fable 5.1"));
     const suggested = document.getElementById(field.getAttribute("list") ?? "");
@@ -420,7 +421,28 @@ describe("TerminalPanel", () => {
     render(<TerminalPanel agent={card(true, "pi")} />);
     const lend = await screen.findByRole("button", { name: "Paid for by: Guaca's API key" });
     expect((lend as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText(/Guaca has no API key in Settings > Provider/)).toBeTruthy();
+    expect(
+      screen.getByText(/Guaca has no API key in this group's settings or in Settings > Provider/),
+    ).toBeTruthy();
+  });
+
+  it("names the group whose own key pi is lent, so the bill has an owner", async () => {
+    // A crew on a ChatGPT sign-in, holding an OpenRouter key of its own, with
+    // none in the app's settings: the key is the crew's, and so is the bill.
+    agentTerminal.mockResolvedValue(
+      view({
+        guacaKey: { ...NO_KEY, set: true, group: "SynopsisMD" },
+        tunings: [{ harness: "pi", model: "xiaomi/mimo-v2.6-pro", effort: null, pays: "guacaKey" }],
+      }),
+    );
+    render(<TerminalPanel agent={card(true, "pi")} />);
+    expect(await screen.findByText(/SynopsisMD's API key/)).toBeTruthy();
+    expect(screen.queryByText(/Settings > Provider/)).toBeNull();
+    const lend = screen.getByRole("button", { name: "Paid for by: Guaca's API key" });
+    expect(lend.getAttribute("aria-pressed")).toBe("true");
+    expect((screen.getByLabelText("pi model") as HTMLInputElement).value).toBe(
+      "xiaomi/mimo-v2.6-pro",
+    );
   });
 
   it("switches pi to Guaca's key without carrying over a model named for its own sign-in", async () => {
@@ -458,7 +480,7 @@ describe("TerminalPanel", () => {
     expect(screen.getByText("https://openrouter.ai/api/v1")).toBeTruthy();
     const field = screen.getByLabelText("pi model") as HTMLInputElement;
     expect(field.placeholder).toContain("qwen/qwen3-coder");
-    await waitFor(() => expect(codingModels).toHaveBeenCalledWith("pi", "guacaKey"));
+    await waitFor(() => expect(codingModels).toHaveBeenCalledWith("a1", "pi", "guacaKey"));
   });
 
   it("keeps the model field usable when the program could not list its models", async () => {
