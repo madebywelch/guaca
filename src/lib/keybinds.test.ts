@@ -141,6 +141,134 @@ describe("which binding a keystroke is", () => {
   });
 });
 
+/**
+ * The three global shortcuts, as a literal fixture rather than a read of the
+ * table. The key is what the operator reports, the id is what the handler in
+ * App.tsx has to switch on, and both are written here so a change to the table
+ * makes them fail instead of agreeing with it.
+ */
+const SHORTCUTS: { what: string; key: string; id: string }[] = [
+  { what: "search", key: "k", id: "search" },
+  { what: "settings", key: ",", id: "settings" },
+  { what: "shortcuts", key: "/", id: "shortcuts" },
+];
+
+/**
+ * Alt, and every modifier that might arrive alongside it, written out as whole
+ * keyboard events.
+ *
+ * On Windows and Linux AltGr is delivered as Control *and* Alt, so the bare
+ * AltGr signal is exactly Control+Alt. The handler calls `preventDefault` on
+ * whatever `bindingFor` hands back, so a shortcut that tolerated any of these
+ * would swallow the typed character and open a dialog in its place. `what`
+ * names the shape so a failure reads as the event that got through, not as an
+ * anonymous row of the matrix.
+ */
+const WITH_ALT: { what: string; held: Partial<KeyboardEventInit> }[] = [
+  { what: "Alt", held: { altKey: true } },
+  { what: "Shift+Alt", held: { altKey: true, shiftKey: true } },
+  { what: "Command+Alt", held: { altKey: true, metaKey: true } },
+  { what: "Command+Shift+Alt", held: { altKey: true, metaKey: true, shiftKey: true } },
+  { what: "Control+Alt (AltGr)", held: { altKey: true, ctrlKey: true } },
+  {
+    what: "Control+Shift+Alt (AltGr+Shift)",
+    held: { altKey: true, ctrlKey: true, shiftKey: true },
+  },
+  {
+    what: "Command+Control+Alt",
+    held: { altKey: true, ctrlKey: true, metaKey: true },
+  },
+  {
+    what: "Command+Control+Shift+Alt",
+    held: { altKey: true, ctrlKey: true, metaKey: true, shiftKey: true },
+  },
+];
+
+/** Neither Alt, nor a bare Shift, is a shortcut: Shift only ever pairs with mod. */
+const WITHOUT_A_MODIFIER: { what: string; held: Partial<KeyboardEventInit> }[] = [
+  { what: "Shift", held: { shiftKey: true } },
+];
+
+/**
+ * Command and Control combined with each other and with Shift. `mod` accepts
+ * either modifier and both, and Shift is ignored when the binding does not name
+ * it, so every one of these is the same shortcut as the bare Command press.
+ */
+const ACCEPTED: { what: string; held: Partial<KeyboardEventInit> }[] = [
+  { what: "Command+Control", held: { metaKey: true, ctrlKey: true } },
+  { what: "Command+Shift", held: { metaKey: true, shiftKey: true } },
+  { what: "Control+Shift", held: { ctrlKey: true, shiftKey: true } },
+  { what: "Command+Control+Shift", held: { metaKey: true, ctrlKey: true, shiftKey: true } },
+];
+
+describe("a global shortcut with the wrong modifiers", () => {
+  it("refuses every keystroke that arrives with Alt held", () => {
+    // AltGr on a Windows or Linux layout is Control+Alt, so these are the events
+    // that look most like a shortcut and must produce a character instead.
+    for (const { what, key } of SHORTCUTS) {
+      for (const { what: held, held: modifiers } of WITH_ALT) {
+        expect(bindingFor(press(key, modifiers)), `${held} + ${what}`).toBeUndefined();
+      }
+    }
+  });
+
+  it("refuses Shift on its own, which is how a capital is typed", () => {
+    // Shift belongs to mod, never on its own. If it triggered a shortcut, every
+    // capital at the start of a sentence would open a dialog.
+    for (const { what, key } of SHORTCUTS) {
+      for (const { held: modifiers } of WITHOUT_A_MODIFIER) {
+        expect(bindingFor(press(key, modifiers)), `Shift + ${what}`).toBeUndefined();
+      }
+    }
+  });
+
+  it("refuses an unknown key however it is modified", () => {
+    // A near-miss is the case that matters: `<` and `?` are what a shifted `,`
+    // and `/` report on a US layout, and `q` is a plain letter. None of them is
+    // in the table, so none may resolve to a shortcut the operator never pressed.
+    const unknown: { what: string; held: Partial<KeyboardEventInit> }[] = [
+      { what: "q", held: { key: "q" } },
+      { what: "F1", held: { key: "F1" } },
+      { what: "<", held: { key: "<", shiftKey: true } },
+      { what: "?", held: { key: "?", shiftKey: true } },
+    ];
+    const withModifier: Partial<KeyboardEventInit>[] = [
+      { metaKey: true },
+      { ctrlKey: true },
+      { metaKey: true, ctrlKey: true },
+    ];
+    for (const { what, held } of unknown) {
+      for (const modifier of withModifier) {
+        const event = new KeyboardEvent("keydown", { ...held, ...modifier });
+        expect(bindingFor(event), `${what} with ${JSON.stringify(modifier)}`).toBeUndefined();
+      }
+    }
+  });
+});
+
+describe("a global shortcut with the modifiers it wants", () => {
+  it("takes Command, Control, both, and each again with Shift", () => {
+    for (const { what, key, id } of SHORTCUTS) {
+      for (const { what: held, held: modifiers } of ACCEPTED) {
+        expect(bindingFor(press(key, modifiers))?.id, `${held} + ${what}`).toBe(id);
+      }
+    }
+  });
+
+  it("reads an uppercase letter as the letter it is, with either modifier", () => {
+    // Caps lock or a shifted layout reports "K". These are the dispatched
+    // variants the generic matcher tests do not reach, so a lost lowercasing
+    // here is a shortcut that works in lower case and silently not in caps.
+    expect(bindingFor(press("K", { ctrlKey: true }))?.id).toBe("search");
+    expect(bindingFor(press("K", { ctrlKey: true, shiftKey: true }))?.id).toBe("search");
+    expect(bindingFor(press("K", { metaKey: true, ctrlKey: true }))?.id).toBe("search");
+    expect(bindingFor(press("K", { metaKey: true, ctrlKey: true, shiftKey: true }))?.id).toBe(
+      "search",
+    );
+    expect(bindingFor(press("K", { shiftKey: true }))).toBeUndefined();
+  });
+});
+
 describe("the table", () => {
   it("lists every binding once, in a section the panel draws", () => {
     // The panel groups rows by SURFACES, so a `where` outside that list is a
