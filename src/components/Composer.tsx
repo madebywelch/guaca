@@ -169,6 +169,13 @@ export function Composer({
   };
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Not while an input method is composing. The Enter that ends a
+    // composition picks a candidate and Tab and the arrows move between them,
+    // and all of that has to reach the browser before the menu below claims it
+    // as a completion or the send above claims it as a message. Checked first,
+    // because a name being typed has the menu open and every one of those keys
+    // is also a mention control.
+    if (event.nativeEvent.isComposing) return;
     if (showing) {
       if (event.key === "ArrowDown") {
         event.preventDefault();
