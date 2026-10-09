@@ -371,6 +371,190 @@ describe("a mention in the box", () => {
   });
 });
 
+/**
+ * A keydown the box receives while an input method is mid-character.
+ *
+ * The composing bit lives on the browser's own event, not on React's wrapper,
+ * so it is set on the DOM event that is dispatched. The event is handed back so
+ * a test can see whether the box claimed it.
+ */
+function composing(key: string) {
+  const box = screen.getByRole("combobox") as HTMLTextAreaElement;
+  const event = new KeyboardEvent("keydown", {
+    key,
+    bubbles: true,
+    cancelable: true,
+    isComposing: true,
+  });
+  fireEvent(box, event);
+  return event;
+}
+
+/** The names the typeahead is offering right now, and which is highlighted. */
+const suggestions = () =>
+  [...document.querySelectorAll(".mentions__name")].map((item) => item.textContent);
+const highlighted = () =>
+  document.querySelector('[role="option"][data-active="true"] .mentions__name')?.textContent ??
+  null;
+
+describe("the keyboard while an input method is composing", () => {
+  async function draw(onSend = vi.fn(async () => {})) {
+    render(<Composer placeholder="Message Manager" group={CREW} onSend={onSend} />);
+    await waitFor(() => expect(dropped).not.toBeNull());
+    return onSend;
+  }
+
+  it("does not send when Enter commits a character", async () => {
+    // On a Mac the Enter that ends a composition picks a candidate; sending the
+    // half-written line instead is a message nobody meant to write.
+    const onSend = await draw();
+    await type("こんにち");
+
+    const event = composing("Enter");
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect((screen.getByRole("combobox") as HTMLTextAreaElement).value).toBe("こんにち");
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("does not complete a mention when Enter commits a character", async () => {
+    // The menu is open while a name is being typed, so Enter is the key the
+    // guard most needs to reach first: choosing here writes a name out of the
+    // composition's own characters.
+    roster = [anAgent("Critic")];
+    const onSend = await draw();
+    await type("ask @Crit");
+    expect(suggestions()).toEqual(["Critic"]);
+
+    const event = composing("Enter");
+
+    expect(suggestions()).toEqual(["Critic"]);
+    expect((screen.getByRole("combobox") as HTMLTextAreaElement).value).toBe("ask @Crit");
+    expect(onSend).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("leaves the suggestion highlight to the arrows", async () => {
+    roster = [anAgent("Critic"), anAgent("Head Chef")];
+    await draw();
+    await type("@");
+    expect(highlighted()).toBe("Critic");
+
+    const down = composing("ArrowDown");
+    expect(highlighted()).toBe("Critic");
+    expect(down.defaultPrevented).toBe(false);
+
+    const up = composing("ArrowUp");
+    expect(highlighted()).toBe("Critic");
+    expect(up.defaultPrevented).toBe(false);
+  });
+
+  it("does not take a mention on a Tab that ends a character", async () => {
+    roster = [anAgent("Critic")];
+    await draw();
+    await type("ask @Crit");
+
+    const event = composing("Tab");
+
+    expect(suggestions()).toEqual(["Critic"]);
+    expect((screen.getByRole("combobox") as HTMLTextAreaElement).value).toBe("ask @Crit");
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("does not dismiss the suggestions on an Escape that cancels a character", async () => {
+    roster = [anAgent("Critic")];
+    await draw();
+    await type("ask @Crit");
+
+    const event = composing("Escape");
+
+    expect(suggestions()).toEqual(["Critic"]);
+    expect(event.defaultPrevented).toBe(false);
+  });
+});
+
+describe("the keyboard outside a composition", () => {
+  async function draw(onSend = vi.fn(async () => {})) {
+    render(<Composer placeholder="Message Manager" group={CREW} onSend={onSend} />);
+    await waitFor(() => expect(dropped).not.toBeNull());
+    return onSend;
+  }
+
+  it("sends on a plain Enter", async () => {
+    const onSend = await draw();
+    await type("have a look");
+
+    const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    fireEvent(screen.getByRole("combobox"), event);
+
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("have a look", []));
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("leaves Shift+Enter to the box as a new line", async () => {
+    const onSend = await draw();
+    await type("one");
+
+    const event = new KeyboardEvent("keydown", {
+      key: "Enter",
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    fireEvent(screen.getByRole("combobox"), event);
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+    expect((screen.getByRole("combobox") as HTMLTextAreaElement).value).toBe("one");
+  });
+
+  it("moves the highlight with the arrows while the menu is open", async () => {
+    roster = [anAgent("Critic"), anAgent("Head Chef")];
+    await draw();
+    await type("@");
+    const box = screen.getByRole("combobox");
+
+    fireEvent.keyDown(box, { key: "ArrowDown" });
+    expect(highlighted()).toBe("Head Chef");
+    fireEvent.keyDown(box, { key: "ArrowUp" });
+    expect(highlighted()).toBe("Critic");
+  });
+
+  it("takes the highlighted name on Enter", async () => {
+    roster = [anAgent("Critic"), anAgent("Head Chef")];
+    await draw();
+    await type("@");
+    const box = screen.getByRole("combobox");
+
+    fireEvent.keyDown(box, { key: "ArrowDown" });
+    fireEvent.keyDown(box, { key: "Enter" });
+
+    expect((box as HTMLTextAreaElement).value).toBe("@Head Chef ");
+  });
+
+  it("takes the highlighted name on Tab", async () => {
+    roster = [anAgent("Critic"), anAgent("Head Chef")];
+    await draw();
+    await type("@");
+    const box = screen.getByRole("combobox");
+
+    fireEvent.keyDown(box, { key: "ArrowDown" });
+    fireEvent.keyDown(box, { key: "Tab" });
+
+    expect((box as HTMLTextAreaElement).value).toBe("@Head Chef ");
+  });
+
+  it("dismisses the suggestions on Escape", async () => {
+    roster = [anAgent("Critic")];
+    await draw();
+    await type("ask @Crit");
+
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+
+    expect(suggestions()).toEqual([]);
+  });
+});
+
 /** A drop arrives from the runtime, not from the DOM, so it is fired by hand.
  *  What the composer is handed is the store's answer, already under way. */
 async function drop(paths: string[]) {
