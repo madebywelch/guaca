@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentCard, SearchHits } from "../lib/types";
@@ -89,6 +89,35 @@ function open(agents: AgentCard[] = [agent("Manager"), agent("Chef")]) {
 function type(value: string) {
   fireEvent.change(screen.getByLabelText(/search the workspace/i), { target: { value } });
 }
+
+/**
+ * A key press from the search input, carrying the composition flag a browser
+ * puts on the native event.
+ *
+ * The window listener reads a DOM `KeyboardEvent`, so the flag has to be set
+ * on the event itself rather than on a React synthetic wrapper. jsdom has no
+ * input method, so this is the only way to reproduce what an IME delivers:
+ * a real `keydown` whose native `isComposing` is true.
+ */
+function press(key: string, options: { isComposing?: boolean; shiftKey?: boolean } = {}) {
+  const input = screen.getByLabelText(/search the workspace/i);
+  const event = createEvent.keyDown(input, {
+    key,
+    isComposing: options.isComposing ?? false,
+    shiftKey: options.shiftKey ?? false,
+    bubbles: true,
+    cancelable: true,
+  });
+  fireEvent(input, event);
+  return event;
+}
+
+/** The title of the row the cursor is on, read from the rendered list. */
+const selectedTitle = () =>
+  document.querySelector("[data-selected='true'] .palette__title")?.textContent;
+
+/** The label of the scope tab currently marked selected. */
+const activeScope = () => screen.getByRole("tab", { selected: true }).textContent;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -275,4 +304,164 @@ describe("Search", () => {
     type("nothing here by that name");
     expect(screen.getByText(/nothing matching/i)).toBeTruthy();
   });
+
+  describe("while an input method is composing", () => {
+    it("does not open a result or close the palette on Enter", async () => {
+      // An IME uses Enter to accept a candidate, not to submit. The palette
+      // must leave that keystroke alone or it would open something mid-word.
+      open();
+      type("chef");
+
+      const event = press("Enter", { isComposing: true });
+
+      expect(event.defaultPrevented).toBe(false);
+      expect(useStore.getState().selected).toBeNull();
+      expect(handlers.onClose).not.toHaveBeenCalled();
+    });
+
+    it("does not move the selection down with ArrowDown", async () => {
+      open();
+      const before = selectedTitle();
+
+      const event = press("ArrowDown", { isComposing: true });
+
+      expect(event.defaultPrevented).toBe(false);
+      expect(selectedTitle()).toBe(before);
+    });
+
+    it("does not move the selection up with ArrowUp", async () => {
+      // Move off the first row first: a composing ArrowUp that only failed to
+      // move because it was already at the top would prove nothing.
+      open();
+      press("ArrowDown");
+      const second = selectedTitle();
+      expect(second).not.toBe(selectedTitleAtStart());
+
+      const event = press("ArrowUp", { isComposing: true });
+
+      expect(event.defaultPrevented).toBe(false);
+      expect(selectedTitle()).toBe(second);
+    });
+
+    it("does not cycle the scope forward with Tab", async () => {
+      open();
+      press("ArrowDown");
+      const cursor = selectedTitle();
+
+      const event = press("Tab", { isComposing: true });
+
+      expect(event.defaultPrevented).toBe(false);
+      expect(activeScope()).toBe("All");
+      // The cursor is not reset either: a scope change clears it.
+      expect(selectedTitle()).toBe(cursor);
+    });
+
+    it("does not cycle the scope backward with Shift+Tab", async () => {
+      open();
+      press("ArrowDown");
+      const cursor = selectedTitle();
+
+      const event = press("Tab", { isComposing: true, shiftKey: true });
+
+      expect(event.defaultPrevented).toBe(false);
+      expect(activeScope()).toBe("All");
+      expect(selectedTitle()).toBe(cursor);
+    });
+
+    it("does not close on Escape", async () => {
+      open();
+      type("chef");
+
+      const event = press("Escape", { isComposing: true });
+
+      expect(event.defaultPrevented).toBe(false);
+      expect(handlers.onClose).not.toHaveBeenCalled();
+      expect(useStore.getState().selected).toBeNull();
+    });
+
+    it("recovers on the ordinary key that follows composition", async () => {
+      // The guard must be a pass-through, not a one-way latch: once the IME
+      // is done, the very next ordinary Enter has to work.
+      open();
+      type("chef");
+      press("Enter", { isComposing: true });
+      expect(handlers.onClose).not.toHaveBeenCalled();
+
+      press("Enter");
+
+      await waitFor(() => expect(useStore.getState().selected).toBe("id-Chef"));
+      expect(handlers.onClose).toHaveBeenCalled();
+    });
+  });
+
+  describe("ordinary keyboard input", () => {
+    it("still moves down and up one row and stops at the bounds", async () => {
+      open();
+      const rows = [...document.querySelectorAll(".palette__title")].map((n) => n.textContent);
+
+      const down = press("ArrowDown");
+      expect(down.defaultPrevented).toBe(true);
+      expect(selectedTitle()).toBe(rows[1]);
+
+      const up = press("ArrowUp");
+      expect(up.defaultPrevented).toBe(true);
+      expect(selectedTitle()).toBe(rows[0]);
+
+      press("ArrowUp");
+      expect(selectedTitle()).toBe(rows[0]);
+    });
+
+    it("cycles the scope forward, wrapping Actions back to All", () => {
+      open();
+      expect(activeScope()).toBe("All");
+      for (const label of [
+        "Messages",
+        "Agents",
+        "Groups",
+        "Files",
+        "Links",
+        "Routines",
+        "Artifacts",
+        "Actions",
+        "All",
+      ]) {
+        const event = press("Tab");
+        expect(event.defaultPrevented).toBe(true);
+        expect(activeScope()).toBe(label);
+      }
+    });
+
+    it("cycles the scope backward, wrapping Messages back to All", () => {
+      open();
+      const event = press("Tab", { shiftKey: true });
+      expect(event.defaultPrevented).toBe(true);
+      expect(activeScope()).toBe("Actions");
+      for (const label of [
+        "Artifacts",
+        "Routines",
+        "Links",
+        "Files",
+        "Groups",
+        "Agents",
+        "Messages",
+        "All",
+      ]) {
+        press("Tab", { shiftKey: true });
+        expect(activeScope()).toBe(label);
+      }
+    });
+
+    it("still filters on typed text after composing navigation", () => {
+      open();
+      press("ArrowDown", { isComposing: true });
+      type("chef");
+      expect(screen.queryByText("Manager")).toBeNull();
+      expect(screen.getByText("Chef")).toBeTruthy();
+    });
+  });
 });
+
+/** The title of the first row, read without touching the cursor. */
+function selectedTitleAtStart() {
+  return document.querySelector(".palette__title")?.textContent;
+}

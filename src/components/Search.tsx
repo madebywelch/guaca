@@ -172,6 +172,11 @@ export function Search({
   // which is exactly when somebody reaches for Escape.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      // An input method owns its keystrokes: Enter accepts a candidate, the
+      // arrows walk the candidate list, and Escape cancels the composition.
+      // Consuming any of them here would fire the palette at a person who is
+      // still typing.
+      if (event.isComposing) return;
       if (event.key === "Escape") {
         event.preventDefault();
         onClose();
