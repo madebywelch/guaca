@@ -283,7 +283,7 @@ function clearance(pts: [number, number][], eye: Drawn): number {
   let worst = Infinity;
   for (const { pts: ink, pad } of inkOf(eye)) {
     for (const [px, py] of ink) {
-      let near = Infinity;
+      let nearSquared = Infinity;
       for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
         const [xi, yi] = pts[i] as [number, number];
         const [xj, yj] = pts[j] as [number, number];
@@ -291,8 +291,11 @@ function clearance(pts: [number, number][], eye: Drawn): number {
         const ey = yj - yi;
         const len = ex * ex + ey * ey;
         const u = len === 0 ? 0 : Math.max(0, Math.min(1, ((px - xi) * ex + (py - yi) * ey) / len));
-        near = Math.min(near, Math.hypot(px - (xi + ex * u), py - (yi + ey * u)));
+        const dx = px - (xi + ex * u);
+        const dy = py - (yi + ey * u);
+        nearSquared = Math.min(nearSquared, dx * dx + dy * dy);
       }
+      const near = Math.sqrt(nearSquared);
       worst = Math.min(worst, (encloses(pts, px, py) ? near : -near) - pad);
     }
   }
