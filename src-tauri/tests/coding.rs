@@ -1484,11 +1484,19 @@ async fn a_finished_job_is_continued_in_the_session_it_ran_in() {
     stand_ins();
     for which in Which::ALL {
         let repo = a_repository(&format!("continued-{}", which.as_str()));
-        let stub = serve(|body| {
+        // A completed harness releases the slot before its completion message
+        // reaches the model, so a script that starts again on its way to that
+        // message is already running a real second job here. The scenario is
+        // one intended job: start it once, then wait for the completion
+        // message without asking for more work.
+        let kickoff = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let stub = serve(move |body| {
             if anyone_said(body, "has finished") {
                 Script::Say("reported".into())
-            } else {
+            } else if kickoff.swap(false, std::sync::atomic::Ordering::SeqCst) {
                 Script::Code("fix the flaky test".into())
+            } else {
+                Script::Say("I have started it.".into())
             }
         })
         .await;
@@ -1506,6 +1514,15 @@ async fn a_finished_job_is_continued_in_the_session_it_ran_in() {
         let session = h.runtime.store().coding_session(engineer.id).unwrap().expect("kept");
         assert_eq!(session.harness, which);
         assert_eq!(session.directory, ".");
+        // The slot frees before the completion message is delivered, so a
+        // stimulus that starts again on its way to that message is already
+        // running a second job here. One intended job, counted over every
+        // directory: Codex names a fixed thread, so its argv cannot show this.
+        let starts_before = h.sink.count_of(
+            |event| matches!(event, UiEvent::CodingJobStarted { agent_id, .. } if *agent_id == engineer.id),
+        );
+        assert_eq!(starts_before, 1, "one intended job before the operator continues it");
+        let started = session.clone();
 
         let continued = h.runtime.message_job(engineer.id, "now add a test for it").await.unwrap();
         assert!(
@@ -1519,6 +1536,17 @@ async fn a_finished_job_is_continued_in_the_session_it_ran_in() {
         })
         .await;
         assert!(brief_seen(which, &repo).contains("The operator says: now add a test for it"));
+        // The operator's own continuation is the second and only other start.
+        let total = h.sink.count_of(
+            |event| matches!(event, UiEvent::CodingJobStarted { agent_id, .. } if *agent_id == engineer.id),
+        );
+        assert_eq!(total, 2, "the initial job and the deliberate follow-up, and nothing else");
+        // Resuming keeps the session it ran in; a phantom second job would have
+        // recorded a new id (or a second Codex thread) under the same agent.
+        let kept = h.runtime.store().coding_session(engineer.id).unwrap().expect("kept");
+        assert_eq!(kept.id, started.id, "the operator resumed the session the job ran in");
+        assert_eq!(kept.harness, started.harness);
+        assert_eq!(kept.directory, started.directory);
 
         match which {
             Which::Claude => {
@@ -1537,6 +1565,14 @@ async fn a_finished_job_is_continued_in_the_session_it_ran_in() {
                 );
             }
             Which::Pi => {
+                let started_as = |argv: &[String]| {
+                    argv.iter().position(|arg| arg == "--session-id").map(|at| argv[at + 1].clone())
+                };
+                assert_eq!(
+                    started_as(&first),
+                    Some(session.id.clone()),
+                    "pi was started in the session that was kept"
+                );
                 let history = std::fs::read_to_string(repo.join(".pi_history")).unwrap();
                 let sessions: Vec<&str> =
                     history.lines().map(|line| line.split(' ').next().unwrap()).collect();
@@ -2676,11 +2712,19 @@ async fn the_real_harnesses_list_their_models() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_job_runs_in_the_directory_it_names_inside_the_agents_terminal() {
     stand_ins();
-    let stub = serve(|body| {
+    // A completed harness releases the slot before its completion message
+    // reaches the model, so a script that starts again on its way to that
+    // message is running a real second job by the time it is read. The
+    // scenario is one intended job: start it once, then wait for the
+    // completion message without asking for more work.
+    let kickoff = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let stub = serve(move |body| {
         if anyone_said(body, "has finished") {
             Script::Say("It is done.".into())
-        } else {
+        } else if kickoff.swap(false, std::sync::atomic::Ordering::SeqCst) {
             Script::CodeIn { task: "fix the flaky test".into(), directory: "guaca".into() }
+        } else {
+            Script::Say("I have started it.".into())
         }
     })
     .await;
@@ -2706,6 +2750,13 @@ async fn a_job_runs_in_the_directory_it_names_inside_the_agents_terminal() {
         .sink
         .count_of(|event| matches!(event, UiEvent::CodingJobStarted { directory, .. } if directory == "guaca"));
     assert_eq!(started, 1, "the panel is told where the job is working");
+    // The directory event alone cannot see a second job started somewhere else,
+    // which would leave this at one for `guaca` while a real job ran. Count
+    // every start this agent caused.
+    let total = h.sink.count_of(
+        |event| matches!(event, UiEvent::CodingJobStarted { agent_id, .. } if *agent_id == card.id),
+    );
+    assert_eq!(total, 1, "one intended job, and no phantom second one");
 }
 
 /// A directory that is not in the terminal is refused in the turn that asked,
