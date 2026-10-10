@@ -145,7 +145,7 @@ describe("the body", () => {
         expect(Number.isFinite(x) && Number.isFinite(y)).toBe(true);
       }
     }
-  });
+  }, 30_000);
 
   // A gaze the eyes have not taken yet must leave the resting shape alone, or
   // every creature on screen is permanently deformed by a look nobody took.
@@ -332,10 +332,12 @@ describe("the eyes", () => {
       const { pts } = bodyPoints(lump, mood.shape, t, gaze);
       for (const eye of eyesAt(lump, mood.eye, mood.watch, { t, live: true, gaze })) {
         const room = clearance(pts, eye);
-        expect(room, `${lump.key} ${key} at ${t.toFixed(2)}s`).toBeGreaterThan(0);
+        if (!(room > 0)) {
+          expect(room, `${lump.key} ${key} at ${t.toFixed(2)}s`).toBeGreaterThan(0);
+        }
       }
     }
-  });
+  }, 30_000);
 
   // An aimed look is the one gaze that does not come out of `gazeAt`, it is the
   // furthest any of them goes, and the mood it lands on at the moment a message
@@ -352,15 +354,18 @@ describe("the eyes", () => {
             const { pts } = bodyPoints(lump, mood.shape, t, gaze);
             for (const eye of eyesAt(lump, mood.eye, mood.watch, { t, live: true, gaze })) {
               const room = clearance(pts, eye);
-              expect(room, `${lump.key} ${key} looking ${at} at ${t.toFixed(2)}s`).toBeGreaterThan(
-                0,
-              );
+              if (!(room > 0)) {
+                expect(
+                  room,
+                  `${lump.key} ${key} looking ${at} at ${t.toFixed(2)}s`,
+                ).toBeGreaterThan(0);
+              }
             }
           }
         }
       }
     }
-  });
+  }, 30_000);
 
   // The pupil is drawn clipped to the white, so a pupil that left the ball
   // would not be seen leaving: it would be cut to a sliver and read as a

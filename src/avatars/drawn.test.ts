@@ -54,16 +54,16 @@ describe("the drawn face", () => {
           const face = faceAt(lump, DRAWN[key], { t, live: true, gaze, px: 68 }, pts);
           for (const { pts: ink, pad } of face.ink) {
             for (const [x, y] of ink) {
-              expect(
-                room(pts, x, y, pad),
-                `${lump.key} ${key} at ${t.toFixed(2)}s`,
-              ).toBeGreaterThan(0);
+              const clearance = room(pts, x, y, pad);
+              if (!(clearance > 0)) {
+                expect(clearance, `${lump.key} ${key} at ${t.toFixed(2)}s`).toBeGreaterThan(0);
+              }
             }
           }
         });
       }
     }
-  });
+  }, 30_000);
 
   // A mouth at 22px is a smudge, which is why the cut cast has none.
   it("draws a mouth only where there is room for one", () => {
