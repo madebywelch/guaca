@@ -34,15 +34,38 @@ describe("Memory", () => {
     useStore.setState({ memoryVersion: {} });
   });
 
+  it("reads without a textarea and Cancel restores the stored page", async () => {
+    agentMemory.mockResolvedValue("Original page");
+    render(<Memory agentId="a1" />);
+    expect(await screen.findByText("Original page")).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: "Memory" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    type("Changed page");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByText("Original page")).toBeTruthy();
+    expect(setAgentMemory).not.toHaveBeenCalled();
+  });
+
+  it("warns near the cap only while editing", async () => {
+    agentMemory.mockResolvedValue("a".repeat(CAP - 100));
+    render(<Memory agentId="a1" />);
+    await screen.findByText("a".repeat(CAP - 100));
+    expect(screen.queryByText("100 characters left.")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByText("100 characters left.")).toBeTruthy();
+  });
+
   it("draws what the agent remembers, as the characters it was given", async () => {
     agentMemory.mockResolvedValue("# Style\nTerse. No preamble.");
     render(<Memory agentId="a1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
 
     await waitFor(() => expect(box().value).toBe("# Style\nTerse. No preamble."));
   });
 
   it("says what the box is for only where there is nothing in it", async () => {
     render(<Memory agentId="a1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     expect(await screen.findByText(/writes here with/)).toBeTruthy();
 
     type("Smith handles verification.");
@@ -54,15 +77,16 @@ describe("Memory", () => {
   it("offers nothing to press until something has actually changed", async () => {
     agentMemory.mockResolvedValue("kept");
     render(<Memory agentId="a1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     await waitFor(() => expect(box().value).toBe("kept"));
-    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
 
     type("kept and more");
     expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
 
     // Typed back to what is on disk is not an edit.
     type("kept");
-    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("puts back what was stored rather than what was typed", async () => {
@@ -70,12 +94,14 @@ describe("Memory", () => {
     // show the operator a page their agent is never going to be given.
     setAgentMemory.mockResolvedValue("Smith handles verification.");
     render(<Memory agentId="a1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     await waitFor(() => expect(box().value).toBe(""));
 
     type("  Smith handles verification.\n\n");
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
-    await waitFor(() => expect(box().value).toBe("Smith handles verification."));
+    await waitFor(() => expect(screen.getByText("Smith handles verification.")).toBeTruthy());
+    expect(screen.queryByRole("textbox", { name: "Memory" })).toBeNull();
     expect(setAgentMemory).toHaveBeenCalledWith("a1", "  Smith handles verification.\n\n");
     // Trimming is not a cut, and reporting it as one would cry wolf on every
     // save that ended with a newline.
@@ -85,19 +111,21 @@ describe("Memory", () => {
   it("says so when the runtime kept less than was sent", async () => {
     setAgentMemory.mockResolvedValue("kept");
     render(<Memory agentId="a1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     await waitFor(() => expect(box().value).toBe(""));
 
     type("kept and a great deal more");
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     expect(await screen.findByText(/end was cut/)).toBeTruthy();
-    expect(box().value).toBe("kept");
+    expect(screen.getByText("kept")).toBeTruthy();
   });
 
   it("reads itself again when the agent rewrites its own memory", async () => {
     // The operator reading a memory is most likely to be doing it while the
     // agent is working, which is exactly when the agent rewrites the file.
     render(<Memory agentId="a1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     await waitFor(() => expect(box().value).toBe(""));
 
     agentMemory.mockResolvedValue("Smith verifies.");
@@ -110,6 +138,7 @@ describe("Memory", () => {
 
   it("ignores a rewrite belonging to another agent", async () => {
     render(<Memory agentId="a1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     await waitFor(() => expect(agentMemory).toHaveBeenCalledTimes(1));
 
     act(() => {
@@ -121,6 +150,7 @@ describe("Memory", () => {
 
   it("never takes a sentence away from the operator writing it", async () => {
     render(<Memory agentId="a1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     await waitFor(() => expect(box().value).toBe(""));
     type("Smith is the one who ver");
 
@@ -135,6 +165,7 @@ describe("Memory", () => {
 
   it("hands over the version it held back when the operator drops their own", async () => {
     render(<Memory agentId="a1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     await waitFor(() => expect(box().value).toBe(""));
     type("half a thought");
 
@@ -144,14 +175,15 @@ describe("Memory", () => {
     });
     await screen.findByText(/rewrote this while you were typing/);
 
-    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
-    expect(box().value).toBe("The agent's own version.");
+    expect(screen.getByText("The agent's own version.")).toBeTruthy();
     expect(screen.queryByText(/rewrote this while you were typing/)).toBeNull();
   });
 
   it("keeps the operator's own when they save over a rewrite", async () => {
     render(<Memory agentId="a1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     await waitFor(() => expect(box().value).toBe(""));
     type("mine");
 
@@ -164,7 +196,7 @@ describe("Memory", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(setAgentMemory).toHaveBeenCalledWith("a1", "mine"));
-    expect(box().value).toBe("mine");
+    expect(screen.getByText("mine")).toBeTruthy();
     expect(screen.queryByText(/rewrote this while you were typing/)).toBeNull();
   });
 
@@ -173,6 +205,7 @@ describe("Memory", () => {
     // different thing from not having been able to find out.
     agentMemory.mockRejectedValue(new Error("could not access the workspace"));
     render(<Memory agentId="a1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
 
     expect(await screen.findByText(/could not access the workspace/)).toBeTruthy();
   });

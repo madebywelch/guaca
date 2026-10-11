@@ -224,17 +224,16 @@ first in it, because it is the only section there that every agent has something
 in: a screen is usually an offer rather than a picture, and a new agent keeps no
 routines.
 
-It is one box, always editable, rather than a rendered page with an edit mode.
-What is stored is markdown, and an operator seeding a persona wants to see the
-characters the agent will actually be shown; a mode would buy formatting nobody
-asked for and cost a click on the thing the panel exists to make cheap.
+The stored page is shown as text, with Edit opening the textarea. The textarea
+shows the markdown characters the agent will actually be shown. Save and Cancel
+close it and return to the stored page.
 
 **A read never replaces what the operator is in the middle of typing.** The
 whole reason the panel refreshes is `MemoryChanged`, which is the agent
 rewriting the file mid-turn, and the operator is most likely to be editing it
 exactly then. So a version that lands under a draft is held to one side rather
 than applied, the panel says it happened, and the two ways out are already on
-screen: Save keeps what you wrote, Discard takes what the agent wrote. `arrived`
+screen: Save keeps what you wrote, Cancel takes what the agent wrote. `arrived`
 is where that decision is made and it is made against what is held at the moment
 the read lands, not what was held when it started. A draft typed back to what is
 on disk is not a draft, and holding it as one would leave the panel sitting on a

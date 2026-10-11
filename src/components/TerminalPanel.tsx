@@ -65,6 +65,7 @@ export function TerminalPanel({ agent }: Props) {
   const [machine, setMachine] = useState<HarnessOnMachine[] | null>(null);
   const [view, setView] = useState<TerminalView | null>(null);
   const [busy, setBusy] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [shell, setShell] = useState(false);
   // Where the keyboard goes back to when the shell is closed.
@@ -96,6 +97,7 @@ export function TerminalPanel({ agent }: Props) {
     setView(null);
     setMachine(null);
     setBusy(false);
+    setExpanded(false);
     setError(null);
     setShell(false);
   }, [agent.id]);
@@ -147,6 +149,8 @@ export function TerminalPanel({ agent }: Props) {
     <section className="place" data-given={given} aria-label={`${agent.name}'s terminal`}>
       <Grant
         name="Terminal"
+        expanded={expanded}
+        onExpand={() => setExpanded((open) => !open)}
         given={given}
         busy={busy}
         about={
@@ -161,7 +165,7 @@ export function TerminalPanel({ agent }: Props) {
         }
       />
 
-      {given && (
+      {given && expanded && (
         <>
           <div className="field terminal__where">
             <button

@@ -25,9 +25,27 @@ function note(agoMs: number, body: string): WorkingNote {
 describe("WorkingNotes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.removeItem("guac.workingNotes");
     agentWorkingNotes.mockResolvedValue([]);
     clearAgentWorkingNotes.mockResolvedValue(undefined);
     useStore.setState({ workingNotesVersion: {} });
+  });
+
+  it("starts collapsed and remembers an expanded section across agents", async () => {
+    agentWorkingNotes.mockResolvedValue([note(HOUR, "waiting on Robert")]);
+    const first = render(<WorkingNotes agentId="a1" />);
+    const disclosure = await screen.findByRole("button", {
+      name: /Working notes · 1 · newest 1h ago/,
+    });
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("waiting on Robert")).toBeNull();
+    fireEvent.click(disclosure);
+    expect(disclosure.getAttribute("aria-expanded")).toBe("true");
+    first.unmount();
+    render(<WorkingNotes agentId="a2" />);
+    expect(
+      screen.getByRole("button", { name: /Working notes/ }).getAttribute("aria-expanded"),
+    ).toBe("true");
   });
 
   it("draws each note beside how long ago it was written", async () => {
@@ -38,6 +56,7 @@ describe("WorkingNotes", () => {
       note(2 * HOUR, "handed the scope document over"),
     ]);
     render(<WorkingNotes agentId="a1" />);
+    fireEvent.click(screen.getByRole("button", { name: /Working notes/ }));
 
     expect(await screen.findByText("asked the paralegal for the regulatory read")).toBeTruthy();
     expect(screen.getByText("6d ago")).toBeTruthy();
@@ -46,6 +65,7 @@ describe("WorkingNotes", () => {
 
   it("says what the panel is for only where there is nothing in it", async () => {
     render(<WorkingNotes agentId="a1" />);
+    fireEvent.click(screen.getByRole("button", { name: /Working notes/ }));
     expect(await screen.findByText(/Nothing in flight/)).toBeTruthy();
 
     agentWorkingNotes.mockResolvedValue([note(0, "waiting on Robert")]);
@@ -60,6 +80,7 @@ describe("WorkingNotes", () => {
     // The operator reads this panel while the agent works, which is exactly
     // when it moves. Same argument the memory panel above it has.
     render(<WorkingNotes agentId="a1" />);
+    fireEvent.click(screen.getByRole("button", { name: /Working notes/ }));
     await waitFor(() => expect(agentWorkingNotes).toHaveBeenCalledTimes(1));
 
     agentWorkingNotes.mockResolvedValue([note(0, "handed the scope document over")]);
@@ -72,6 +93,7 @@ describe("WorkingNotes", () => {
 
   it("ignores a note belonging to another agent", async () => {
     render(<WorkingNotes agentId="a1" />);
+    fireEvent.click(screen.getByRole("button", { name: /Working notes/ }));
     await waitFor(() => expect(agentWorkingNotes).toHaveBeenCalledTimes(1));
 
     act(() => {
@@ -86,6 +108,7 @@ describe("WorkingNotes", () => {
     // memory, so a shared counter would have every note refetch a page that
     // has not changed.
     render(<WorkingNotes agentId="a1" />);
+    fireEvent.click(screen.getByRole("button", { name: /Working notes/ }));
     await waitFor(() => expect(agentWorkingNotes).toHaveBeenCalledTimes(1));
 
     act(() => {
@@ -110,6 +133,7 @@ describe("WorkingNotes", () => {
       note(HOUR, "waiting on Robert"),
     ]);
     render(<WorkingNotes agentId="a1" />);
+    fireEvent.click(screen.getByRole("button", { name: /Working notes/ }));
 
     expect(await screen.findByText("waiting on Robert")).toBeTruthy();
     expect(screen.getByText("handed the scope over")).toBeTruthy();
@@ -129,6 +153,7 @@ describe("WorkingNotes", () => {
   it("offers nothing to open on a list that already fits", async () => {
     agentWorkingNotes.mockResolvedValue([note(HOUR, "waiting on Robert")]);
     render(<WorkingNotes agentId="a1" />);
+    fireEvent.click(screen.getByRole("button", { name: /Working notes/ }));
     await screen.findByText("waiting on Robert");
 
     expect(screen.queryByRole("button", { name: /older/ })).toBeNull();
@@ -136,6 +161,7 @@ describe("WorkingNotes", () => {
 
   it("offers no way to clear a list that is already empty", async () => {
     render(<WorkingNotes agentId="a1" />);
+    fireEvent.click(screen.getByRole("button", { name: /Working notes/ }));
     await screen.findByText(/Nothing in flight/);
     expect(screen.queryByRole("button", { name: "Clear" })).toBeNull();
   });
@@ -143,6 +169,7 @@ describe("WorkingNotes", () => {
   it("clears every note when the operator says the work is done", async () => {
     agentWorkingNotes.mockResolvedValue([note(DAY, "waiting on Robert")]);
     render(<WorkingNotes agentId="a1" />);
+    fireEvent.click(screen.getByRole("button", { name: /Working notes/ }));
     await screen.findByText("waiting on Robert");
 
     fireEvent.click(screen.getByRole("button", { name: "Clear" }));
@@ -156,6 +183,7 @@ describe("WorkingNotes", () => {
     // a different thing from not having been able to find out.
     agentWorkingNotes.mockRejectedValue(new Error("database is locked"));
     render(<WorkingNotes agentId="a1" />);
+    fireEvent.click(screen.getByRole("button", { name: /Working notes/ }));
 
     expect(await screen.findByText(/database is locked/)).toBeTruthy();
   });

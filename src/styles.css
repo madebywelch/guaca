@@ -9252,3 +9252,28 @@ button.artifacts__version[aria-pressed="true"] {
   gap: var(--space-1);
   font-size: var(--type-fine);
 }
+
+/* Read mode keeps the memory's line breaks without putting an editable field
+   under every agent. The same box takes over when Edit is pressed. */
+.memory__read {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.grant__disclosure,
+.worknotes__toggle {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.grant__disclosure:focus-visible,
+.worknotes__toggle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}

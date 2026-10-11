@@ -34,6 +34,7 @@ export function BrowserScreen({ agent }: Props) {
   const [browser, setBrowser] = useState<Browser | null>(null);
   const [full, setFull] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [checked, setChecked] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -79,6 +80,7 @@ export function BrowserScreen({ agent }: Props) {
     setChecked(false);
     setFull(false);
     setBusy(false);
+    setExpanded(false);
     setError(null);
     setConfirming(false);
     if (configured && given) void look();
@@ -215,6 +217,8 @@ export function BrowserScreen({ agent }: Props) {
     <section className="place" data-given={given} aria-label={`${agent.name}'s browser`}>
       <Grant
         name="Browser"
+        expanded={expanded}
+        onExpand={() => setExpanded((open) => !open)}
         given={given}
         busy={busy}
         state={given ? browser?.state : undefined}
@@ -230,7 +234,7 @@ export function BrowserScreen({ agent }: Props) {
         }
       />
 
-      {given && checked && (
+      {given && checked && (live || expanded || full) && (
         // Two elements, one connection. The outer one stays in the panel and
         // holds the space the pane had; the inner one is what covers the
         // window. The frame inside that is the same element in both sizes,
@@ -347,7 +351,7 @@ export function BrowserScreen({ agent }: Props) {
           be reachable while the agent is working. Not in the full-screen bar:
           that is a toolbar for the browser in front of you, and this is a
           decision about the agent that outlives every browser it is given. */}
-      {!full && given && (
+      {!full && given && expanded && (
         <label className="field field--row">
           <input
             type="checkbox"

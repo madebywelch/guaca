@@ -41,6 +41,15 @@ export function ago(at: number, now: number): string {
  * question it is for, which is what this agent is in the middle of right now.
  */
 const SHOWN = 4;
+const REMEMBERED = "guac.workingNotes";
+
+function remembered(): boolean {
+  try {
+    return localStorage.getItem(REMEMBERED) === "open";
+  } catch {
+    return false;
+  }
+}
 
 interface Props {
   agentId: AgentId;
@@ -65,11 +74,17 @@ export function WorkingNotes({ agentId }: Props) {
   const [notes, setNotes] = useState<WorkingNote[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // Collapsed until asked. Not remembered across agents, because the inspector
-  // remounts this under each one and "opened for the agent I was reading" is
-  // not a preference about how the operator works, which is the bar the panel
-  // itself is remembered against.
+  // One choice across agents, like the inspector itself. The panel remounts
+  // on an agent switch, but the operator's preferred density does not.
   const [all, setAll] = useState(false);
+  const [expanded, setExpanded] = useState(remembered);
+  useEffect(() => {
+    try {
+      localStorage.setItem(REMEMBERED, expanded ? "open" : "closed");
+    } catch {
+      // A refused preference must not keep the notes from opening.
+    }
+  }, [expanded]);
   // The agent appended one. Its own counter, because notes move far more often
   // than memory does and sharing one would refetch a page that has not changed.
   const changed = useStore((state) => state.workingNotesVersion[agentId] ?? 0);
@@ -115,8 +130,18 @@ export function WorkingNotes({ agentId }: Props) {
   return (
     <section className="worknotes">
       <div className="worknotes__head">
-        <h3 className="worknotes__title">Working notes</h3>
-        {notes !== null && notes.length > 0 && (
+        <h3 className="worknotes__title">
+          <button
+            type="button"
+            className="worknotes__toggle"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((open) => !open)}
+          >
+            Working notes · {notes?.length ?? 0}
+            {notes?.length ? ` · newest ${ago(notes[notes.length - 1]!.at, now)}` : ""}
+          </button>
+        </h3>
+        {expanded && notes !== null && notes.length > 0 && (
           <button
             type="button"
             className="btn btn--small btn--ghost"
@@ -128,38 +153,39 @@ export function WorkingNotes({ agentId }: Props) {
         )}
       </div>
 
-      {notes === null ? (
-        <p className="worknotes__empty">Loading…</p>
-      ) : notes.length === 0 ? (
-        <p className="worknotes__empty">Nothing in flight.</p>
-      ) : (
-        <ol className="worknotes__list">
-          {held.length > SHOWN && (
-            // Above the list because that is where the notes it hides are: they
-            // are the older ones, and a control under the list would point the
-            // operator the wrong way down it.
-            <li className="worknotes__rest">
-              <button
-                type="button"
-                className="worknotes__more"
-                aria-expanded={all}
-                onClick={() => setAll((open) => !open)}
-              >
-                {all ? "Show fewer" : `Show ${hidden} older`}
-              </button>
-            </li>
-          )}
-          {drawn.map((note) => (
-            // Keyed on the stamp because it is unique: the runtime's clock is
-            // strictly increasing, so two notes cannot share one. An index key
-            // would redraw every row each time the oldest falls off the end.
-            <li className="worknotes__note" key={note.at}>
-              <span className="worknotes__body">{note.body}</span>
-              <span className="worknotes__age">{ago(note.at, now)}</span>
-            </li>
-          ))}
-        </ol>
-      )}
+      {expanded &&
+        (notes === null ? (
+          <p className="worknotes__empty">Loading…</p>
+        ) : notes.length === 0 ? (
+          <p className="worknotes__empty">Nothing in flight.</p>
+        ) : (
+          <ol className="worknotes__list">
+            {held.length > SHOWN && (
+              // Above the list because that is where the notes it hides are: they
+              // are the older ones, and a control under the list would point the
+              // operator the wrong way down it.
+              <li className="worknotes__rest">
+                <button
+                  type="button"
+                  className="worknotes__more"
+                  aria-expanded={all}
+                  onClick={() => setAll((open) => !open)}
+                >
+                  {all ? "Show fewer" : `Show ${hidden} older`}
+                </button>
+              </li>
+            )}
+            {drawn.map((note) => (
+              // Keyed on the stamp because it is unique: the runtime's clock is
+              // strictly increasing, so two notes cannot share one. An index key
+              // would redraw every row each time the oldest falls off the end.
+              <li className="worknotes__note" key={note.at}>
+                <span className="worknotes__body">{note.body}</span>
+                <span className="worknotes__age">{ago(note.at, now)}</span>
+              </li>
+            ))}
+          </ol>
+        ))}
 
       {error && (
         <div className="banner banner--error" style={{ margin: "0.5rem 0 0" }}>
