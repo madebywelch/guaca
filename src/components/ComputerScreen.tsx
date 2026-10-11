@@ -45,6 +45,7 @@ export function ComputerScreen({ agent }: Props) {
   const [computer, setComputer] = useState<Computer | null>(null);
   const [full, setFull] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [checked, setChecked] = useState(false);
   // Sleep sits beside Destroy and Destroy throws work away, so neither happens
@@ -111,6 +112,7 @@ export function ComputerScreen({ agent }: Props) {
     // Reset too. A call still in flight when the operator switched agents left
     // this true for the new panel, which disabled its only button permanently.
     setBusy(false);
+    setExpanded(false);
     setError(null);
     setConfirming(null);
     if (configured && given) void look();
@@ -227,6 +229,8 @@ export function ComputerScreen({ agent }: Props) {
     <section className="place" data-given={given} aria-label={`${agent.name}'s computer`}>
       <Grant
         name="Computer"
+        expanded={expanded}
+        onExpand={() => setExpanded((open) => !open)}
         given={given}
         busy={busy}
         state={given ? computer?.state : undefined}
@@ -242,7 +246,7 @@ export function ComputerScreen({ agent }: Props) {
         }
       />
 
-      {given && checked && (
+      {given && checked && (live || expanded || full) && (
         // Two elements, one connection. The outer one stays in the panel and
         // holds the space the screen had; the inner one is what covers the
         // window. The frame inside that is the same element in both sizes,

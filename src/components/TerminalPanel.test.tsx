@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, render as baseRender, fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../lib/store";
@@ -134,6 +134,13 @@ function row(harness: Harness, over: Partial<HarnessOnMachine> = {}): HarnessOnM
   };
 }
 
+function render(ui: React.ReactElement) {
+  const result = baseRender(ui);
+  const disclosure = screen.queryByRole("button", { name: "Terminal" });
+  if (disclosure?.getAttribute("aria-expanded") === "false") fireEvent.click(disclosure);
+  return result;
+}
+
 describe("TerminalPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -146,6 +153,15 @@ describe("TerminalPanel", () => {
     giveAgentTerminal.mockResolvedValue(undefined);
     takeAgentTerminal.mockResolvedValue(undefined);
     setAgentCoding.mockResolvedValue(undefined);
+  });
+
+  it("keeps an ungiven place to one expandable header", () => {
+    baseRender(<TerminalPanel agent={card(false)} />);
+    const disclosure = screen.getByRole("button", { name: "Terminal" });
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByRole("switch", { name: "Terminal" })).toBeTruthy();
+    fireEvent.click(disclosure);
+    expect(disclosure.getAttribute("aria-expanded")).toBe("true");
   });
 
   it("offers a terminal to an agent that has none, and asks the backend nothing", async () => {

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render as baseRender, fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../lib/store";
@@ -90,6 +90,13 @@ function configure(kernelKeySet: boolean) {
   });
 }
 
+function render(ui: React.ReactElement) {
+  const result = baseRender(ui);
+  const disclosure = screen.queryByRole("button", { name: "Browser" });
+  if (disclosure?.getAttribute("aria-expanded") === "false") fireEvent.click(disclosure);
+  return result;
+}
+
 describe("BrowserScreen", () => {
   beforeEach(() => {
     agentBrowser.mockReset();
@@ -101,6 +108,27 @@ describe("BrowserScreen", () => {
     setAgentBrowserConsent.mockReset();
     setAgentBrowserConsent.mockResolvedValue(undefined);
     configure(true);
+  });
+
+  it("keeps an ungiven place to one expandable header", () => {
+    baseRender(<BrowserScreen agent={card("a", "Cook", false)} />);
+    const disclosure = screen.getByRole("button", { name: "Browser" });
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByRole("switch", { name: "Browser" })).toBeTruthy();
+    fireEvent.click(disclosure);
+    expect(disclosure.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("shows a live picture while its controls are collapsed", async () => {
+    agentBrowser.mockResolvedValue(HAS_ONE);
+    baseRender(<BrowserScreen agent={card("a", "Cook")} />);
+    await waitFor(() => expect(screen.getByTitle("Cook's browser")).toBeTruthy());
+    expect(screen.getByRole("button", { name: "Browser" }).getAttribute("aria-expanded")).toBe(
+      "false",
+    );
+    expect(screen.queryByLabelText(/Ask me before it acts in my name/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Browser" }));
+    expect(screen.getByLabelText(/Ask me before it acts in my name/)).toBeTruthy();
   });
 
   it("says nothing at all when no browser provider is configured", async () => {
@@ -129,6 +157,10 @@ describe("BrowserScreen", () => {
     view.rerender(<BrowserScreen agent={card("has-none", "Scribe")} />);
     settle(HAS_ONE);
 
+    expect(screen.getByRole("button", { name: "Browser" }).getAttribute("aria-expanded")).toBe(
+      "false",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Browser" }));
     await waitFor(() => expect(screen.getByText(/Opens when it needs the web/)).toBeTruthy());
     expect(screen.getByRole("region", { name: "Scribe's browser" })).toBeTruthy();
     expect(screen.queryByTitle("Cook's browser")).toBeNull();

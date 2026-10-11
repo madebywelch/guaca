@@ -8,6 +8,8 @@ interface Props {
   /** What the thing itself is doing, when there is one to report. */
   state?: string;
   onChange: (given: boolean) => void;
+  expanded: boolean;
+  onExpand: () => void;
 }
 
 /**
@@ -20,14 +22,23 @@ interface Props {
  * as belonging to the schedule. A switch beside the name says what it is about
  * and which way it is set in one glance.
  *
- * Off, this line is the whole section. What giving it means is the switch's
- * title rather than a paragraph under it, because a paragraph under every place
- * an agent does not use was most of the panel for most agents.
+ * The disclosure opens an idle place's controls. A live picture remains in
+ * view even when those controls are closed; the grant switch stays on the row
+ * so an ungiven place occupies just that row.
  */
-export function Grant({ name, given, busy, about, state, onChange }: Props) {
+export function Grant({ name, given, busy, about, state, onChange, expanded, onExpand }: Props) {
   return (
     <div className="grant">
-      <h3 className="grant__name">{name}</h3>
+      <h3 className="grant__name">
+        <button
+          type="button"
+          className="grant__disclosure"
+          aria-expanded={expanded}
+          onClick={onExpand}
+        >
+          {name}
+        </button>
+      </h3>
       {state && (
         <span className="screen__state" data-state={state}>
           {state}

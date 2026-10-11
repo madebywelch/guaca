@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render as baseRender, fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../lib/store";
@@ -56,6 +56,13 @@ const HAS_ONE: Computer = {
   vncUrl: "http://127.0.0.1:9/vnc.html",
 };
 
+function render(ui: React.ReactElement) {
+  const result = baseRender(ui);
+  const disclosure = screen.queryByRole("button", { name: "Computer" });
+  if (disclosure?.getAttribute("aria-expanded") === "false") fireEvent.click(disclosure);
+  return result;
+}
+
 describe("ComputerScreen", () => {
   beforeEach(() => {
     agentComputer.mockReset();
@@ -93,6 +100,24 @@ describe("ComputerScreen", () => {
     });
   });
 
+  it("keeps an ungiven place to one expandable header", () => {
+    baseRender(<ComputerScreen agent={card("a", "Cook", false)} />);
+    const disclosure = screen.getByRole("button", { name: "Computer" });
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByRole("switch", { name: "Computer" })).toBeTruthy();
+    fireEvent.click(disclosure);
+    expect(disclosure.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("shows a live picture while its controls are collapsed", async () => {
+    agentComputer.mockResolvedValue(HAS_ONE);
+    baseRender(<ComputerScreen agent={card("a", "Cook")} />);
+    await waitFor(() => expect(screen.getByTitle("Cook's computer")).toBeTruthy());
+    expect(screen.getByRole("button", { name: "Computer" }).getAttribute("aria-expanded")).toBe(
+      "false",
+    );
+  });
+
   it("never shows one agent's machine in another agent's panel", async () => {
     // The lookup for the agent being left behind is deliberately the slower of
     // the two: it lands after the operator has already switched, which is the
@@ -110,6 +135,10 @@ describe("ComputerScreen", () => {
     view.rerender(<ComputerScreen agent={card("has-none", "Scribe")} />);
     settleWithMachine(HAS_ONE);
 
+    expect(screen.getByRole("button", { name: "Computer" }).getAttribute("aria-expanded")).toBe(
+      "false",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Computer" }));
     await waitFor(() => expect(screen.getByText(/Starts when it needs one/)).toBeTruthy());
     expect(screen.getByRole("region", { name: "Scribe's computer" })).toBeTruthy();
     expect(screen.queryByTitle(/'s computer$/)).toBeNull();
@@ -213,7 +242,7 @@ describe("ComputerScreen", () => {
     expect(grant.getAttribute("aria-checked")).toBe("false");
     expect(agentComputer).not.toHaveBeenCalled();
     // Off, the switch is the whole section.
-    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.getByRole("button", { name: "Computer" })).toBeTruthy();
 
     fireEvent.click(grant);
     await waitFor(() => expect(giveAgentComputer).toHaveBeenCalledWith("has-none"));

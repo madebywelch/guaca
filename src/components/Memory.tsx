@@ -74,7 +74,7 @@ export interface Held {
  * file in the middle of a turn, and the operator is most likely to be editing
  * it exactly then, so a read that applied itself would take a sentence away as
  * it was being typed. It is held to one side instead and the panel says so:
- * keeping what you wrote is Save, and taking what the agent wrote is Discard.
+ * keeping what you wrote is Save, and taking what the agent wrote is Cancel.
  *
  * A draft typed back to what is on disk is not an edit, and holding it as one
  * would leave the panel on a page the agent has since replaced.
@@ -99,14 +99,14 @@ interface Props {
  * rarely, which is the panel's half of the split the dialog holds the other
  * side of, and it is the only section here that every agent has something in.
  *
- * One box, always editable, rather than a rendered page with an edit mode.
- * What is stored is markdown, and an operator seeding a persona wants to see
- * the characters the agent will actually be shown. A mode would buy formatting
- * nobody asked for and cost a click on the one thing this panel makes cheap.
+ * The stored page is read first. Editing is a deliberate step, while the
+ * textarea still shows the markdown characters the agent will actually read.
+ * A rewrite arriving under that draft is held until Save or Cancel decides it.
  */
 export function Memory({ agentId }: Props) {
   const [held, setHeld] = useState<Held | null>(null);
   const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** Set when the runtime stored something other than what was sent. */
   const [cut, setCut] = useState(false);
@@ -145,7 +145,7 @@ export function Memory({ agentId }: Props) {
     if (!node) return;
     node.style.height = "auto";
     node.style.height = `${node.scrollHeight}px`;
-  }, [shown]);
+  }, [shown, editing]);
 
   const save = async () => {
     if (held?.draft == null) return;
@@ -159,6 +159,7 @@ export function Memory({ agentId }: Props) {
       const saved = await api.setAgentMemory(agentId, sent);
       setHeld({ stored: saved, draft: null, incoming: null });
       setCut(saved !== sent.trim());
+      setEditing(false);
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
@@ -170,34 +171,50 @@ export function Memory({ agentId }: Props) {
     <section className="memory">
       <div className="memory__head">
         <h3 className="memory__title">Memory</h3>
-        {room && (
+        {editing && room && (
           <span className="memory__room" data-over={room.over || undefined}>
             {room.text}
           </span>
         )}
+        {!editing && (
+          <button
+            type="button"
+            className="btn btn--small btn--ghost"
+            onClick={() => {
+              setCut(false);
+              setEditing(true);
+            }}
+          >
+            Edit
+          </button>
+        )}
       </div>
 
-      <textarea
-        ref={box}
-        className="memory__text"
-        aria-label="Memory"
-        rows={2}
-        disabled={loading}
-        value={shown}
-        placeholder="Nothing yet."
-        onChange={(event) => {
-          const next = event.target.value;
-          setCut(false);
-          setHeld((current) => current && { ...current, draft: next });
-        }}
-      />
+      {editing ? (
+        <textarea
+          ref={box}
+          className="memory__text"
+          aria-label="Memory"
+          rows={2}
+          disabled={loading}
+          value={shown}
+          placeholder="Nothing yet."
+          onChange={(event) => {
+            const next = event.target.value;
+            setCut(false);
+            setHeld((current) => current && { ...current, draft: next });
+          }}
+        />
+      ) : (
+        <p className="memory__text memory__read">{shown || "Nothing yet."}</p>
+      )}
 
-      {dirty && (
+      {editing && (
         <div className="memory__actions">
           <button
             type="button"
             className="btn btn--small btn--primary"
-            disabled={busy}
+            disabled={busy || !dirty}
             onClick={() => void save()}
           >
             Save
@@ -206,7 +223,9 @@ export function Memory({ agentId }: Props) {
             type="button"
             className="btn btn--small btn--ghost"
             disabled={busy}
-            onClick={() =>
+            onClick={() => {
+              setEditing(false);
+              setCut(false);
               setHeld(
                 (current) =>
                   current && {
@@ -214,10 +233,10 @@ export function Memory({ agentId }: Props) {
                     draft: null,
                     incoming: null,
                   },
-              )
-            }
+              );
+            }}
           >
-            Discard
+            Cancel
           </button>
         </div>
       )}
@@ -225,7 +244,7 @@ export function Memory({ agentId }: Props) {
       {overwritten && (
         <p className="memory__note">
           The agent rewrote this while you were typing. Save keeps yours and throws away what it
-          wrote; Discard takes what it wrote.
+          wrote; Cancel takes what it wrote.
         </p>
       )}
 

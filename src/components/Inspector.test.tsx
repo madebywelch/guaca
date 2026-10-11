@@ -125,7 +125,7 @@ describe("Inspector", () => {
     );
     expect(screen.getAllByRole("region", { name: /'s browser$/ })).toHaveLength(1);
     expect(screen.getAllByRole("heading", { name: "Routines" })).toHaveLength(1);
-    expect(screen.getAllByLabelText("Memory")).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Edit" })).toHaveLength(1);
     expect(screen.queryByRole("region", { name: "Cook's computer" })).toBeNull();
     expect(screen.queryByRole("region", { name: "Scribe's computer" })).toBeNull();
   });
@@ -149,7 +149,7 @@ describe("Inspector", () => {
       "Computer",
       "Terminal",
       "Routines",
-      "Working notes",
+      "Working notes · 0",
       "Memory",
       "Notebook",
     ]);
@@ -160,11 +160,11 @@ describe("Inspector", () => {
     // left behind is the worst of the three to leave: an operator editing what
     // they believe is one agent's memory would save it onto another's.
     const view = render(<Inspector agent={card("a1", "Cook")} onEditProfile={vi.fn()} />);
-    expect(await screen.findByDisplayValue("a1 remembers this")).toBeTruthy();
+    expect(await screen.findByText("a1 remembers this")).toBeTruthy();
 
     view.rerender(<Inspector agent={card("a2", "Scribe")} onEditProfile={vi.fn()} />);
 
-    expect(await screen.findByDisplayValue("a2 remembers this")).toBeTruthy();
-    expect(screen.queryByDisplayValue("a1 remembers this")).toBeNull();
+    expect(await screen.findByText("a2 remembers this")).toBeTruthy();
+    expect(screen.queryByText("a1 remembers this")).toBeNull();
   });
 });
