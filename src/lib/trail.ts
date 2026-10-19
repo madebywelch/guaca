@@ -248,25 +248,6 @@ function describe(tool: string, args: Args): Described {
     case "run_command":
       return { title: "Ran a command", target: text(args, "command") };
 
-    // Named apart from `run_command` rather than sharing its label, because
-    // the two run on different machines and the chip is where an operator
-    // finds out which. An agent that has both draws both in one turn.
-    case "shell":
-      return { title: "Ran a command in its terminal", target: text(args, "command") };
-
-    // A disk, not an attachment: `read_file` is the attachment and says so.
-    case "read":
-      return { title: "Read a file", target: text(args, "path") };
-
-    case "write":
-      return { title: "Wrote a file", target: text(args, "path") };
-
-    case "edit":
-      return { title: "Edited a file", target: text(args, "path") };
-
-    case "code":
-      return { title: "Started a coding agent", target: text(args, "task") };
-
     // The briefs are what the operator opens it for: the errands' own calls
     // are drawn beside this chip already, and what each came back with is
     // what the call answered.
@@ -491,16 +472,6 @@ export function callInFlight(name: string, raw: unknown): string {
   switch (name) {
     case "run_command":
       return "Running a command";
-    case "shell":
-      return "Running a command in its terminal";
-    case "read":
-      return "Reading a file";
-    case "write":
-      return "Writing a file";
-    case "edit":
-      return "Editing a file";
-    case "code":
-      return "Starting a coding agent";
     case "errand":
       return "Waiting on errands";
     case "browse": {
@@ -559,14 +530,6 @@ function manyLabel(group: TrailGroup): string {
   switch (group.steps[0]!.tool) {
     case "run_command":
       return `Ran ${count} commands`;
-    case "shell":
-      return `Ran ${count} commands in its terminal`;
-    case "read":
-      return `Read ${count} files`;
-    case "write":
-      return `Wrote ${count} files`;
-    case "edit":
-      return `Made ${count} edits`;
     case "errand":
       return `Sent errands ${count} times`;
     case "browse": {
@@ -798,8 +761,8 @@ export function stepDiff(step: Step): DiffLine[] | null {
  * What a call that went wrong said, where the reason is the whole of it.
  *
  * A refusal is written to be acted on and runs to a paragraph, and a paragraph
- * on a chip is a chip clipped at the pane: `U… a coding agent is already
- * working in whizzworks-site, started by…`. So it comes off the head line and
+ * on a chip is a chip clipped at the pane: `U… the operator did not allow
+ * it. Nothing ran…`. So it comes off the head line and
  * is drawn where a command is drawn — whole, wrapped, and scrolled if it runs
  * long — and the clipped copy on the chip becomes a summary of something the
  * operator can now open.

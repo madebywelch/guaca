@@ -265,7 +265,6 @@ describe("who pays for a group's turns", () => {
       capabilities: {
         loopbackEndpoints: false,
         claudeProvider: false,
-        claudeCodeHarness: false,
         localFiles: false,
       },
     });
@@ -282,7 +281,6 @@ describe("who pays for a group's turns", () => {
         capabilities: {
           loopbackEndpoints: true,
           claudeProvider: true,
-          claudeCodeHarness: true,
           localFiles: true,
         },
       });

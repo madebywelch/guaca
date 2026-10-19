@@ -54,8 +54,7 @@ impl Provider {
     ///
     /// A fixed-length array rather than a loose list, so a variant added
     /// without being added here is a compile error rather than a case the
-    /// round-trip suite below silently stops covering. The same reason
-    /// [`crate::domain::terminal::Harness::ALL`] is one.
+    /// round-trip suite below silently stops covering.
     pub const ALL: [Provider; 3] = [Provider::Compatible, Provider::Chatgpt, Provider::Claude];
 
     /// How a provider is spelled in SQLite, which is the same as on the wire.
@@ -196,8 +195,7 @@ impl InferenceConfig {
     ///
     /// `Claude` has no field to read and does not gain one. The model belongs to
     /// the program, which is signed in, configured and updated somewhere this
-    /// app does not reach, exactly as it does for the coding harness of the same
-    /// name. What comes back is a label rather than a model id, and the model
+    /// app does not reach. What comes back is a label rather than a model id, and the model
     /// the program actually ran is reported in its own stream.
     pub fn active_model(&self) -> &str {
         match self.provider {

@@ -21,12 +21,6 @@
 //! reports it interrupted exactly as a crash is reported: a turn still inside
 //! a tool call when the process ends is the case the rule exists for.
 //!
-//! Coding jobs are stopped the way the operator's own Stop stops them, through
-//! each program's protocol, which ends the program's turn and keeps its
-//! session. The next host continues the session. The program keeps its own
-//! record of every step, which is what makes that safe, and is told its last
-//! step may not have finished.
-
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -34,13 +28,12 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, Notify};
 
-use super::{Launch, Origin, Runtime, RuntimeError};
-use crate::db::{PutDownJob, Recovered};
-use crate::domain::agent::{AgentCard, Lifecycle};
+use super::Runtime;
+use crate::db::Recovered;
+use crate::domain::agent::AgentCard;
 use crate::domain::envelope::{Envelope, Intent, NoticeKind, Part, Participant, Trust};
 use crate::domain::ids::{AgentId, MessageId, RunId};
 use crate::domain::now_ms;
-use crate::domain::terminal::Harness;
 
 /// How often a drain looks to see whether everything is down.
 ///
@@ -49,26 +42,17 @@ use crate::domain::terminal::Harness;
 /// the whole window.
 const LOOK: Duration = Duration::from_millis(50);
 
-/// What a resumed coding job is told, in place of a brief.
-const RESUMED_JOB: &str = "The host you run on restarted for an update and stopped you partway \
-     through. Carry on with the same task from where you stopped. Your last step may not have \
-     finished: check the working tree, and anything you were in the middle of, before you go on. \
-     Do not repeat a push, a pull request or anything else outside this directory that already \
-     happened.";
-
 /// What a drain came to, for the host to log.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Drained {
     /// Agents still in the middle of something when the time ran out. The
     /// next host reports their conversations interrupted.
     pub working: Vec<String>,
-    /// Coding jobs that had not ended.
-    pub jobs: usize,
 }
 
 impl Drained {
     pub fn is_complete(&self) -> bool {
-        self.working.is_empty() && self.jobs == 0
+        self.working.is_empty()
     }
 }
 
@@ -76,7 +60,7 @@ impl Runtime {
     /// Brings every agent to a halt at its next boundary and puts its work down
     /// for the next host, waiting at most `within`.
     ///
-    /// Nothing starts after this is called: no turn, no routine, no coding job.
+    /// Nothing starts after this is called: no turn and no routine.
     /// Messages still arrive and are kept, put down for the next host rather
     /// than queued here.
     ///
@@ -91,10 +75,8 @@ impl Runtime {
             runs.draining = true;
             runs.outstanding.keys().copied().collect()
         };
-        let jobs = self.inner.coding.lock().len();
         tracing::info!(
             conversations = live.len(),
-            jobs,
             "the host is stopping: putting work down for the next one"
         );
 
@@ -114,13 +96,11 @@ impl Runtime {
 
         let deadline = began + within;
         loop {
-            self.stop_jobs();
             let left = self.inner.runs.lock().outstanding.len();
-            let jobs = self.inner.coding.lock().len();
-            if left == 0 && jobs == 0 {
+            if left == 0 {
                 tracing::info!(
                     took_ms = began.elapsed().as_millis() as u64,
-                    "every conversation and coding job is put down"
+                    "every conversation is put down"
                 );
                 return Drained::default();
             }
@@ -129,27 +109,12 @@ impl Runtime {
                 tracing::warn!(
                     ?working,
                     conversations = left,
-                    jobs,
                     "the host is stopping with work that did not reach a boundary; the next one \
                      reports it interrupted"
                 );
-                return Drained { working, jobs };
+                return Drained { working };
             }
             tokio::time::sleep(LOOK).await;
-        }
-    }
-
-    /// Asks every coding job nobody has stopped yet to stop, for the next host.
-    ///
-    /// Asked again on every look rather than once, so a job whose launch was
-    /// already past its own check when the drain began is still reached.
-    fn stop_jobs(&self) {
-        let mut coding = self.inner.coding.lock();
-        for job in coding.values_mut() {
-            if job.stopped_by.is_none() && !job.put_down {
-                job.put_down = true;
-                let _ = job.controls.try_send(crate::coding::Control::Stop);
-            }
         }
     }
 
@@ -203,7 +168,6 @@ impl Runtime {
                 *count = count.saturating_sub(1);
                 if *count == 0 {
                     runs.outstanding.remove(&envelope.run_id);
-                    runs.refused.remove(&envelope.run_id);
                 }
             }
         }
@@ -360,7 +324,7 @@ impl Runtime {
     /// fresh one: an update every few hours must not be a way for a cascade to
     /// outlive its limits.
     pub fn pick_up(&self, recovered: Recovered) {
-        let Recovered { resumed, steps, jobs, .. } = recovered;
+        let Recovered { resumed, steps, .. } = recovered;
         let conversations = steps.len();
         for (run, spent) in &steps {
             let card = resumed.iter().find(|put| put.envelope.run_id == *run).and_then(|put| {
@@ -382,84 +346,8 @@ impl Runtime {
             *self.inner.runs.lock().outstanding.entry(put.envelope.run_id).or_insert(0) += 1;
             self.queue(put.envelope);
         }
-        let carried = jobs.len();
-        for job in jobs {
-            self.resume_job(job);
-        }
-        if messages > 0 || carried > 0 {
-            tracing::info!(
-                messages,
-                conversations,
-                jobs = carried,
-                "picked up the work the last host put down"
-            );
-        }
-    }
-
-    /// Carries a coding job the last host stopped on in the same session, or
-    /// starts it over when it had no session yet.
-    fn resume_job(&self, job: PutDownJob) {
-        let card = match self.inner.store.get_agent(job.agent) {
-            Ok(Some(card)) if card.lifecycle != Lifecycle::Terminated => card,
-            _ => return,
-        };
-        let origin = if job.by_operator { Origin::Operator } else { Origin::Agent };
-        let fresh = job.session.is_empty();
-        let started = card
-            .has_terminal
-            .then_some(())
-            .ok_or_else(|| RuntimeError::NoTerminal(card.name.clone()))
-            .and_then(|()| {
-                self.inner
-                    .terminals
-                    .directory(card.id, Some(&job.directory))
-                    .map_err(RuntimeError::from)
-            })
-            .and_then(|(working, shown)| {
-                self.launch(
-                    &card,
-                    Launch {
-                        working,
-                        shown,
-                        brief: if fresh { job.task.clone() } else { RESUMED_JOB.to_string() },
-                        session: match (fresh, job.harness) {
-                            (false, _) => job.session.clone(),
-                            (true, Harness::Codex) => String::new(),
-                            (true, Harness::Pi | Harness::Claude) => {
-                                uuid::Uuid::new_v4().to_string()
-                            }
-                        },
-                        resume: !fresh,
-                        harness: job.harness,
-                        origin,
-                    },
-                )
-            });
-        let Err(err) = started else { return };
-        tracing::warn!(%err, agent = %card.name, "could not carry a coding job on after the restart");
-        let text = format!(
-            "The host restarted for an update while your coding agent was working in `{}`, and it \
-             could not be started again afterwards: {err}. Whatever it had already committed is \
-             still there. Say so, and carry the work on with `code` and action `continue` if it \
-             still needs doing.",
-            job.directory
-        );
-        let envelope = Envelope {
-            id: MessageId::new(),
-            run_id: RunId::new(),
-            channel_id: card.id,
-            from: Participant::System,
-            to: Participant::Agent { id: card.id },
-            parts: vec![Part::Text { text }],
-            trust: Trust::System,
-            hop: 0,
-            expects_reply: true,
-            intent: Intent::Work,
-            cause: None,
-            created_at: now_ms(),
-        };
-        if let Err(err) = self.deliver(envelope) {
-            tracing::error!(%err, agent = %card.name, "a coding job the restart ended reached nobody");
+        if messages > 0 {
+            tracing::info!(messages, conversations, "picked up the work the last host put down");
         }
     }
 }

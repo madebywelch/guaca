@@ -56,8 +56,7 @@ export function samePresence(a: Presence, b: Presence): boolean {
 }
 
 /** Whether an agent is doing something now, as opposed to having done it. */
-function busy(state: Activity | undefined, building: string | undefined): boolean {
-  if (building !== undefined) return true;
+function busy(state: Activity | undefined): boolean {
   return state?.state === "thinking" || state?.state === "queued";
 }
 
@@ -77,13 +76,12 @@ export function panelOrder(
   agents: AgentCard[],
   state: {
     activity: Record<AgentId, Activity>;
-    building: Record<AgentId, string>;
     lastActive: Record<AgentId, number>;
   },
 ): AgentCard[] {
   const rank = (agent: AgentCard) => {
     const now = state.activity[agent.id];
-    if (busy(now, state.building[agent.id]) || now?.state === "awaitingApproval") return 0;
+    if (busy(now) || now?.state === "awaitingApproval") return 0;
     return agent.lifecycle === "paused" || now?.state === "paused" ? 2 : 1;
   };
   return agents
@@ -111,12 +109,8 @@ export function headline(waiting: number, working: number): string {
 }
 
 /** How many agents the headline counts as working. */
-export function workingCount(
-  agents: AgentCard[],
-  activity: Record<AgentId, Activity>,
-  building: Record<AgentId, string>,
-): number {
-  return agents.filter((agent) => busy(activity[agent.id], building[agent.id])).length;
+export function workingCount(agents: AgentCard[], activity: Record<AgentId, Activity>): number {
+  return agents.filter((agent) => busy(activity[agent.id])).length;
 }
 
 /** The words of a message, whatever else it carried. Empty when it said nothing. */

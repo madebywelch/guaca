@@ -20,9 +20,8 @@ use rusqlite::{params, TransactionBehavior};
 use super::store::row_to_envelope;
 use super::{Store, StoreError};
 use crate::domain::envelope::{Envelope, Intent, NoticeKind, Part, Participant, Trust};
-use crate::domain::ids::{AgentId, MessageId, RunId};
+use crate::domain::ids::{MessageId, RunId};
 use crate::domain::now_ms;
-use crate::domain::terminal::Harness;
 
 const ENVELOPE: &str = "m.id,m.run_id,m.channel_id,m.from_kind,m.from_agent,m.to_kind,m.to_agent,\
      m.parts,m.trust,m.hop,m.expects_reply,m.intent,m.cause,m.created_at";
@@ -45,22 +44,6 @@ pub struct PutDown {
     pub records: Vec<MessageId>,
 }
 
-/// A coding job a stopping host interrupted.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PutDownJob {
-    pub agent: AgentId,
-    pub harness: Harness,
-    /// Empty when the program had not named its session yet, which only Codex
-    /// does late enough for a stop to land first.
-    pub session: String,
-    pub directory: String,
-    /// What it was asked, which is what a job without a session starts over on.
-    pub task: String,
-    /// Whether the operator asked for it rather than the agent, which decides
-    /// what the agent is told when it finishes.
-    pub by_operator: bool,
-}
-
 /// What a restart found.
 #[derive(Debug, Default)]
 pub struct Recovered {
@@ -69,7 +52,6 @@ pub struct Recovered {
     /// What each conversation being picked up had already spent, so its budget
     /// is the one it was measured against before the restart.
     pub steps: HashMap<RunId, u32>,
-    pub jobs: Vec<PutDownJob>,
     /// Conversations reported interrupted.
     pub interrupted: usize,
 }
@@ -141,26 +123,6 @@ impl Store {
         )?;
         tx.execute("DELETE FROM put_down_runs WHERE run_id=?1", [run.to_string()])?;
         tx.commit()?;
-        Ok(())
-    }
-
-    /// Keeps a coding job a stopping host interrupted, for the next one.
-    pub fn put_down_job(&self, job: &PutDownJob) -> Result<(), StoreError> {
-        self.conn()?.execute(
-            "INSERT INTO put_down_jobs (agent_id,harness,session_id,directory,task,origin)
-             VALUES (?1,?2,?3,?4,?5,?6)
-             ON CONFLICT(agent_id) DO UPDATE SET harness=excluded.harness,
-                 session_id=excluded.session_id, directory=excluded.directory,
-                 task=excluded.task, origin=excluded.origin",
-            params![
-                job.agent.to_string(),
-                job.harness.as_str(),
-                job.session,
-                job.directory,
-                job.task,
-                if job.by_operator { "operator" } else { "agent" },
-            ],
-        )?;
         Ok(())
     }
 
@@ -252,42 +214,10 @@ impl Store {
         tx.execute("DELETE FROM put_down", [])?;
         tx.execute("DELETE FROM put_down_runs", [])?;
 
-        let jobs: Vec<PutDownJob> = {
-            let mut stmt = tx.prepare(
-                "SELECT agent_id,harness,session_id,directory,task,origin FROM put_down_jobs",
-            )?;
-            let rows = stmt.query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
-                ))
-            })?;
-            let mut jobs = Vec::new();
-            for row in rows {
-                let (agent, harness, session, directory, task, origin) = row?;
-                jobs.push(PutDownJob {
-                    agent: agent
-                        .parse()
-                        .map_err(|err| StoreError::Corrupt(format!("bad agent id: {err}")))?,
-                    harness: Harness::parse(&harness),
-                    session,
-                    directory,
-                    task,
-                    by_operator: origin == "operator",
-                });
-            }
-            jobs
-        };
-        tx.execute("DELETE FROM put_down_jobs", [])?;
-
         tx.commit()?;
 
         let steps = whole.into_iter().filter(|(run, _)| picked.contains(run)).collect();
-        Ok(Recovered { resumed, steps, jobs, interrupted: anchors.len() })
+        Ok(Recovered { resumed, steps, interrupted: anchors.len() })
     }
 }
 
@@ -470,22 +400,5 @@ mod tests {
         let recovered = store.recover().unwrap();
         assert!(recovered.resumed.is_empty());
         assert_eq!(recovered.interrupted, 1);
-    }
-
-    #[test]
-    fn a_put_down_job_is_read_back_once() {
-        let (_dir, store, agent) = fixture();
-        let job = PutDownJob {
-            agent: agent.id,
-            harness: Harness::Claude,
-            session: "0b7c".into(),
-            directory: "site".into(),
-            task: "Fix the header".into(),
-            by_operator: true,
-        };
-        store.put_down_job(&job).unwrap();
-
-        assert_eq!(store.recover().unwrap().jobs, vec![job]);
-        assert!(store.recover().unwrap().jobs.is_empty());
     }
 }

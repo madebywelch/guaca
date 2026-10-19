@@ -56,7 +56,7 @@ What was left out is the half of Hermes's set that names a program, a platform
 or a tool an agent here does not have: iMessage and Find My, the coding CLIs,
 anything built on its scripts. What was kept was rewritten for this app's tool
 surface, and conditionally where it has to be, since most agents have no
-browser, no repository and no computer. A test fails if a starter names one of
+browser and no computer. A test fails if a starter names one of
 Hermes's tools, mentions a script or reads as another harness's.
 
 They are copied into the operator's scope rather than compiled in as Guaca's,
@@ -117,8 +117,8 @@ skill carries can point a read outside it.
 
 Nothing a skill carries is run. A script is a file an agent can read; running
 it would mean running someone else's code on the operator's machine because a
-document said to, and the door for running code is a repository's (`shell`,
-`code`), which the operator gives on purpose.
+document said to, and the door for running code is a computer's
+(`run_command`), which the operator gives on purpose.
 
 ## The manual is a skill, and a test keeps it true
 

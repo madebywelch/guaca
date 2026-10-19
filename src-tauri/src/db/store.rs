@@ -34,7 +34,6 @@ use crate::domain::search::{
     contains_fold, excerpt, like_pattern, links_in, FileHit, LinkHit, MessageHit, SearchHits,
 };
 use crate::domain::signin::{Signin, Surface};
-use crate::domain::terminal::{Gate, Harness};
 use crate::domain::usage::{Tokens, UsageEntry};
 use crate::domain::worknote::{Appended, WorkingNote, KEPT};
 
@@ -185,11 +184,6 @@ fn new_card(draft: &CleanDraft, rail_order: i32, fallback: GroupId) -> AgentCard
         has_browser: false,
         browser_consent: Consent::default(),
         runs_errands: false,
-        // Given from the agent's panel, never at creation, which is the same
-        // rule every other capability follows.
-        has_terminal: false,
-        harness: Harness::default(),
-        gate: Gate::default(),
         lifecycle: Lifecycle::Active,
         pinned: false,
         rail_order,
@@ -728,33 +722,6 @@ impl Store {
         self.set_flag(id, "runs_errands", given)
     }
 
-    /// And about the terminal.
-    pub fn set_has_terminal(&self, id: AgentId, given: bool) -> Result<(), StoreError> {
-        self.set_flag(id, "has_terminal", given)
-    }
-
-    /// How this agent's code is written and whether its pushes ask first.
-    ///
-    /// Beside `set_has_terminal` rather than folded into it, for the reason
-    /// consent is beside the browser: taking a terminal back and giving it
-    /// again must not quietly re-answer either question.
-    pub fn set_agent_coding(
-        &self,
-        id: AgentId,
-        harness: Harness,
-        gate: Gate,
-    ) -> Result<(), StoreError> {
-        let conn = self.conn()?;
-        let changed = conn.execute(
-            "UPDATE agents SET harness=?2, gate=?3 WHERE id=?1",
-            params![id.to_string(), harness.as_str(), gate.as_str()],
-        )?;
-        if changed == 0 {
-            return Err(StoreError::AgentNotFound(id));
-        }
-        Ok(())
-    }
-
     /// Whether that browser asks before it acts in the operator's name.
     ///
     /// Beside the two above and not folded into `set_has_browser`, because
@@ -1162,119 +1129,6 @@ impl Store {
 
     /// Drops every note an agent holds. The operator's way to say "that is all
     /// done", and what deleting an agent takes with it.
-    /// Records the coding session an agent is running, replacing the last.
-    pub fn set_coding_session(
-        &self,
-        agent: AgentId,
-        session: &crate::domain::terminal::Session,
-    ) -> Result<(), StoreError> {
-        let conn = self.conn()?;
-        conn.execute(
-            "INSERT INTO coding_sessions (agent_id,harness,session_id,directory,updated_at)
-             VALUES (?1,?2,?3,?4,?5)
-             ON CONFLICT(agent_id) DO UPDATE SET harness=excluded.harness,
-                 session_id=excluded.session_id, directory=excluded.directory,
-                 updated_at=excluded.updated_at",
-            params![
-                agent.to_string(),
-                session.harness.as_str(),
-                session.id,
-                session.directory,
-                session.updated_at
-            ],
-        )?;
-        Ok(())
-    }
-
-    /// The coding session an agent last ran, if it has run one.
-    pub fn coding_session(
-        &self,
-        agent: AgentId,
-    ) -> Result<Option<crate::domain::terminal::Session>, StoreError> {
-        let conn = self.conn()?;
-        let found = conn
-            .query_row(
-                "SELECT harness,session_id,directory,updated_at FROM coding_sessions
-                  WHERE agent_id=?1",
-                params![agent.to_string()],
-                |row| {
-                    Ok(crate::domain::terminal::Session {
-                        harness: Harness::parse(&row.get::<_, String>(0)?),
-                        id: row.get(1)?,
-                        directory: row.get(2)?,
-                        updated_at: row.get(3)?,
-                    })
-                },
-            )
-            .optional()?;
-        Ok(found)
-    }
-
-    /// Forgets its session and every harness's tuning, when the agent is gone
-    /// for good. The row is only marked terminated, so the cascade never fires.
-    pub fn clear_coding(&self, agent: AgentId) -> Result<(), StoreError> {
-        let conn = self.conn()?;
-        conn.execute("DELETE FROM coding_sessions WHERE agent_id=?1", params![agent.to_string()])?;
-        conn.execute("DELETE FROM coding_tuning WHERE agent_id=?1", params![agent.to_string()])?;
-        Ok(())
-    }
-
-    /// What the operator chose inside one harness for one agent. The program's
-    /// own setting, which is the default, when nothing was chosen.
-    pub fn coding_tuning(
-        &self,
-        agent: AgentId,
-        harness: Harness,
-    ) -> Result<crate::domain::terminal::Tuning, StoreError> {
-        let conn = self.conn()?;
-        let found = conn
-            .query_row(
-                "SELECT model,effort,pays FROM coding_tuning WHERE agent_id=?1 AND harness=?2",
-                params![agent.to_string(), harness.as_str()],
-                |row| {
-                    Ok(crate::domain::terminal::Tuning {
-                        model: row.get(0)?,
-                        effort: row.get(1)?,
-                        pays: crate::domain::terminal::Payer::parse(&row.get::<_, String>(2)?),
-                    })
-                },
-            )
-            .optional()?;
-        Ok(found.unwrap_or_default())
-    }
-
-    /// Records one, already checked against the harness it is for.
-    pub fn set_coding_tuning(
-        &self,
-        agent: AgentId,
-        harness: Harness,
-        tuning: &crate::domain::terminal::Tuning,
-    ) -> Result<(), StoreError> {
-        let conn = self.conn()?;
-        let exists: bool = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM agents WHERE id=?1 AND lifecycle <> 'terminated')",
-            params![agent.to_string()],
-            |row| row.get(0),
-        )?;
-        if !exists {
-            return Err(StoreError::AgentNotFound(agent));
-        }
-        conn.execute(
-            "INSERT INTO coding_tuning (agent_id,harness,model,effort,pays)
-             VALUES (?1,?2,?3,?4,?5)
-             ON CONFLICT(agent_id,harness) DO UPDATE SET model=excluded.model,
-                 effort=excluded.effort, pays=excluded.pays",
-            params![
-                agent.to_string(),
-                harness.as_str(),
-                tuning.model,
-                tuning.effort,
-                tuning.pays.as_str()
-            ],
-        )?;
-        Ok(())
-    }
-
     pub fn clear_working_notes(&self, agent: AgentId) -> Result<usize, StoreError> {
         let conn = self.conn()?;
         Ok(conn
@@ -4002,7 +3856,7 @@ pub(super) type RowResult<T> = Result<Result<T, StoreError>, rusqlite::Error>;
 /// one of the five queries that share this mapper and not the others is four
 /// reads that silently take the wrong field, which is what a card carrying
 /// somebody else's sandbox token looks like on the way out.
-const AGENT_COLUMNS: &str = "id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser,browser_consent,has_terminal,discarded_at,reasoning_effort,harness,gate,runs_errands,subscription_model";
+const AGENT_COLUMNS: &str = "id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser,browser_consent,discarded_at,reasoning_effort,runs_errands,subscription_model";
 
 fn read_effort(
     row: &Row<'_>,
@@ -4042,8 +3896,8 @@ fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
             avatar: row.get(2)?,
             color: row.get(3)?,
             model: row.get(4)?,
-            subscription_model: row.get(27)?,
-            reasoning_effort: read_effort(row, 23)?,
+            subscription_model: row.get(24)?,
+            reasoning_effort: read_effort(row, 22)?,
             system_prompt: row.get(5)?,
             skills,
             lifecycle,
@@ -4061,14 +3915,11 @@ fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
             has_computer: row.get::<_, i64>(18)? != 0,
             has_browser: row.get::<_, i64>(19)? != 0,
             browser_consent: Consent::parse(&row.get::<_, String>(20)?),
-            runs_errands: row.get::<_, i64>(26)? != 0,
-            has_terminal: row.get::<_, i64>(21)? != 0,
-            harness: Harness::parse(&row.get::<_, String>(24)?),
-            gate: Gate::parse(&row.get::<_, String>(25)?),
+            runs_errands: row.get::<_, i64>(23)? != 0,
             version: row.get(8)?,
             created_at: row.get(9)?,
             updated_at: row.get(10)?,
-            discarded_at: row.get(22)?,
+            discarded_at: row.get(21)?,
         })
     })())
 }
@@ -4990,9 +4841,10 @@ mod tests {
         // Everything the migrations after 51 made, so the database is the one a
         // version-51 install really has. Each new migration adds its undo here:
         // 58's puts back the repository column and table it rebuilds away,
-        // 59's and 62's drop the tables they add, and 64's drops the column it
-        // adds to groups, which no migration since 51 rebuilds.
-        conn.execute_batch("ALTER TABLE groups DROP COLUMN rail_order; DROP TABLE put_down_jobs; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE coding_tuning; DROP TABLE coding_sessions; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
+        // 59's and 62's drop the tables they add, 64's drops the column it
+        // adds to groups, which no migration since 51 rebuilds, and 65's needs
+        // none: what it drops, 54, 59 and 62 make again on the way back up.
+        conn.execute_batch("ALTER TABLE groups DROP COLUMN rail_order; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
         migrations::run(&mut conn).unwrap();
         drop(conn);
         assert_eq!(f.store.connector_env(mine.id).unwrap()["TOKEN"], "private-token");
@@ -9431,104 +9283,5 @@ mod tests {
         let one = Outstanding { peer: "SRE".into(), at: now, asked: "x".repeat(400) };
         assert!(one.line(now).chars().count() < 200, "the list is on every turn");
         assert!(one.line(now).ends_with('…'));
-    }
-
-    // ---- terminals -------------------------------------------------------
-
-    #[test]
-    fn a_new_agent_has_no_terminal_and_giving_one_keeps_how_it_codes() {
-        // Nothing is inherited: an agent hired today starts with no terminal,
-        // like every other capability in this app.
-        let f = fixture();
-        let group = f.store.create_group(&group_named("Crew")).unwrap();
-        let ada = f.store.create_agent(&draft_in("Ada", group.id)).unwrap();
-        assert!(!ada.has_terminal);
-        assert_eq!((ada.harness, ada.gate), (Harness::Pi, Gate::Open));
-
-        f.store.set_agent_coding(ada.id, Harness::Claude, Gate::AskBeforePushing).unwrap();
-        f.store.set_has_terminal(ada.id, true).unwrap();
-        let given = f.store.get_agent(ada.id).unwrap().unwrap();
-        assert!(given.has_terminal);
-        assert_eq!((given.harness, given.gate), (Harness::Claude, Gate::AskBeforePushing));
-
-        // Taking the terminal back is not a reason to forget the answers: an
-        // operator who gives it again means the agent they configured.
-        f.store.set_has_terminal(ada.id, false).unwrap();
-        let taken = f.store.get_agent(ada.id).unwrap().unwrap();
-        assert!(!taken.has_terminal);
-        assert_eq!((taken.harness, taken.gate), (Harness::Claude, Gate::AskBeforePushing));
-    }
-
-    #[test]
-    fn the_last_coding_session_is_kept_per_agent_and_replaced_by_the_next() {
-        use crate::domain::terminal::Session;
-        let f = fixture();
-        let group = f.store.create_group(&group_named("Crew")).unwrap();
-        let ada = f.store.create_agent(&draft_in("Ada", group.id)).unwrap();
-        assert_eq!(f.store.coding_session(ada.id).unwrap(), None);
-
-        let first = Session {
-            harness: Harness::Claude,
-            id: "s1".into(),
-            directory: "guaca".into(),
-            updated_at: 1,
-        };
-        f.store.set_coding_session(ada.id, &first).unwrap();
-        assert_eq!(f.store.coding_session(ada.id).unwrap(), Some(first));
-
-        // One per agent: the session before the last is one it moved on from.
-        let second = Session {
-            harness: Harness::Codex,
-            id: "thread-2".into(),
-            directory: "site".into(),
-            updated_at: 2,
-        };
-        f.store.set_coding_session(ada.id, &second).unwrap();
-        assert_eq!(f.store.coding_session(ada.id).unwrap(), Some(second));
-
-        f.store.clear_coding(ada.id).unwrap();
-        assert_eq!(f.store.coding_session(ada.id).unwrap(), None);
-    }
-
-    #[test]
-    fn each_harness_keeps_its_own_tuning_and_a_purge_forgets_all_of_them() {
-        use crate::domain::terminal::{Payer, Tuning};
-        let f = fixture();
-        let ada = f.store.create_agent(&draft("Ada")).unwrap();
-        assert_eq!(f.store.coding_tuning(ada.id, Harness::Claude).unwrap(), Tuning::default());
-
-        let claude =
-            Tuning { model: Some("opus".into()), effort: Some("max".into()), ..Tuning::default() };
-        let pi = Tuning {
-            model: Some("anthropic/claude-sonnet-4.5".into()),
-            pays: Payer::GuacaKey,
-            ..Tuning::default()
-        };
-        f.store.set_coding_tuning(ada.id, Harness::Claude, &claude).unwrap();
-        f.store.set_coding_tuning(ada.id, Harness::Pi, &pi).unwrap();
-        // A switch to Codex and back does not touch the Claude model.
-        assert_eq!(f.store.coding_tuning(ada.id, Harness::Codex).unwrap(), Tuning::default());
-        assert_eq!(f.store.coding_tuning(ada.id, Harness::Claude).unwrap(), claude);
-        assert_eq!(f.store.coding_tuning(ada.id, Harness::Pi).unwrap(), pi);
-
-        f.store.set_coding_tuning(ada.id, Harness::Claude, &Tuning::default()).unwrap();
-        assert_eq!(f.store.coding_tuning(ada.id, Harness::Claude).unwrap(), Tuning::default());
-
-        f.store.clear_coding(ada.id).unwrap();
-        assert_eq!(f.store.coding_tuning(ada.id, Harness::Pi).unwrap(), Tuning::default());
-        assert!(matches!(
-            f.store.set_coding_tuning(AgentId::new(), Harness::Pi, &pi),
-            Err(StoreError::AgentNotFound(_))
-        ));
-    }
-
-    #[test]
-    fn coding_settings_for_an_agent_that_is_not_there_say_so() {
-        let f = fixture();
-        let nobody = AgentId::new();
-        assert!(matches!(
-            f.store.set_agent_coding(nobody, Harness::Codex, Gate::Open),
-            Err(StoreError::AgentNotFound(id)) if id == nobody
-        ));
     }
 }

@@ -22,7 +22,6 @@ import {
   errorMessage,
   plainText,
 } from "../lib/types";
-import { CodingPanel } from "./CodingPanel";
 import { Composer } from "./Composer";
 import { Answering } from "./HtmlArtifact";
 import { MessageItem, StreamingMessage, WhenRow } from "./MessageItem";
@@ -262,11 +261,6 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
               copy of the newest message for anybody reading the transcript
               itself, which is the cost of announcing it to everybody else. */}
       <Arrivals channel={channel} messages={messages} lookups={lookups} />
-      {/* Above the line about the turn, because a coding job outlives the
-              turn that started it: the turn footer is empty and the agent is
-              idle while this is running. Keyed by agent so switching channels
-              does not carry one job's tail into another's panel. */}
-      {agent && <CodingPanel key={`coding-${agent.id}`} agent={agent.id} />}
       {/* Keyed by agent, so the disclosure below does not arrive already
               open on a channel the operator has just switched to. */}
       {agent && <TurnFooter key={agent.id} agent={agent} state={activity[agent.id]} />}

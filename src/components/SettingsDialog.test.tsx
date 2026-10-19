@@ -5,9 +5,9 @@ import type { Prefs } from "../lib/prefs";
 import type {
   AccountConnectors,
   AccountStatus,
+  ClaudeProgram,
   DeviceCode,
   GuardLimits,
-  HarnessOnMachine,
   Settings,
   SettingsPatch,
   SubscriptionStatus,
@@ -137,24 +137,11 @@ const signOutAccount = vi.fn<() => Promise<AccountStatus>>(async () => noAccount
 /** Installed by default: the provider list draws the same either way, and a
  *  suite that had to opt in to a present program would be asserting the
  *  refusal rather than the row. */
-const codingHarnesses = vi.fn<() => Promise<HarnessOnMachine[]>>(async () => [
-  {
-    harness: "claude",
-    installed: true,
-    version: "2.1.247 (Claude Code)",
-    bridged: true,
-    install: "npm install -g @anthropic-ai/claude-code",
-    efforts: ["low", "medium", "high", "xhigh", "max"],
-  },
-  {
-    harness: "pi",
-    installed: true,
-    version: "0.9.0",
-    bridged: false,
-    install: "npm install -g @mariozechner/pi",
-    efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
-  },
-]);
+const claudeProgram = vi.fn<() => Promise<ClaudeProgram>>(async () => ({
+  installed: true,
+  version: "2.1.247 (Claude Code)",
+  install: "npm install -g @anthropic-ai/claude-code",
+}));
 
 vi.mock("../lib/ipc", () => ({
   api: {
@@ -177,7 +164,7 @@ vi.mock("../lib/ipc", () => ({
     signInAccount: () => signInAccount(),
     accountConnectors: () => accountConnectors(),
     signOutAccount: () => signOutAccount(),
-    codingHarnesses: () => codingHarnesses(),
+    claudeProgram: () => claudeProgram(),
   },
   notifyOperator: (title: string, body: string) => notifyOperator(title, body),
   openExternal: (url: string) => openExternal(url),
@@ -845,7 +832,6 @@ describe("the provider presets", () => {
       capabilities: {
         loopbackEndpoints: false,
         claudeProvider: false,
-        claudeCodeHarness: false,
         localFiles: false,
       },
     });
@@ -866,7 +852,6 @@ describe("the provider presets", () => {
         capabilities: {
           loopbackEndpoints: true,
           claudeProvider: true,
-          claudeCodeHarness: true,
           localFiles: true,
         },
       });

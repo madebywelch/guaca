@@ -1868,6 +1868,22 @@ UPDATE groups SET rail_order = (
 );
 "#,
     ),
+    (
+        65,
+        r#"
+-- The coding subsystem is gone: an agent no longer has a terminal, a harness
+-- that writes its code, a gate on its pushes, a session to carry on or a
+-- tuning per program, and a stopping host has no job to put down. What agents
+-- cloned into their terminal directories stays on disk, untouched: it is
+-- their work, and nothing here is the place to throw it away.
+DROP TABLE coding_sessions;
+DROP TABLE coding_tuning;
+DROP TABLE put_down_jobs;
+ALTER TABLE agents DROP COLUMN has_terminal;
+ALTER TABLE agents DROP COLUMN harness;
+ALTER TABLE agents DROP COLUMN gate;
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -2046,13 +2062,13 @@ mod tests {
                 .next()
                 .unwrap()
                 .is_none());
-            // Whichever lineage it came up, the agent that was in a repository
-            // arrives with a terminal, and the repository row is gone.
+            // Whichever lineage it came up, the repository row is gone and the
+            // agent that was in it is still there.
             assert!(!has_table(&conn, "repositories").unwrap());
-            let given: bool = conn
-                .query_row("SELECT has_terminal FROM agents WHERE id='coder'", [], |r| r.get(0))
+            let kept: i64 = conn
+                .query_row("SELECT count(*) FROM agents WHERE id='coder'", [], |r| r.get(0))
                 .unwrap();
-            assert!(given, "version {version}, hosting {hosting}");
+            assert_eq!(kept, 1, "version {version}, hosting {hosting}");
             assert!(has_table(&conn, "occasions").unwrap());
             assert!(has_table(&conn, "pending_runs").unwrap());
             conn.prepare("SELECT browser_consent FROM agents").unwrap();
@@ -3126,12 +3142,12 @@ mod tests {
     }
 
     #[test]
-    fn an_agent_that_worked_in_a_repository_keeps_a_terminal_and_how_it_coded() {
+    fn an_agent_that_worked_in_a_repository_keeps_its_other_answers_through_the_rebuild() {
         // The upgrade path, which no test starting from a blank database can
-        // reach. An agent put in a repository was trusted with a shell there,
-        // and the operator had answered two questions about how its work
-        // happens. The repository goes; neither of those decisions should go
-        // with it, and nobody who was never given one should gain one.
+        // reach. 54 rebuilt the agents table to take the repository row away,
+        // and a rebuild done with enforcement on would have cascaded away or
+        // orphaned everything that pointed at an agent. What the operator had
+        // answered about the agent has to come through it untouched.
         let mut conn = memory();
         let tx = conn.transaction().unwrap();
         for (version, sql) in MIGRATIONS.iter().take_while(|(v, _)| *v < 58) {
@@ -3171,19 +3187,12 @@ mod tests {
 
         run(&mut conn).unwrap();
 
-        let read = |id: &str| -> (bool, String, String, String) {
-            conn.query_row(
-                "SELECT has_terminal, harness, gate, browser_consent FROM agents WHERE id=?1",
-                [id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-            )
-            .unwrap()
+        let consent = |id: &str| -> String {
+            conn.query_row("SELECT browser_consent FROM agents WHERE id=?1", [id], |r| r.get(0))
+                .unwrap()
         };
-        assert_eq!(
-            read("coder"),
-            (true, "codex".into(), "askBeforePushing".into(), "askBeforeActing".into())
-        );
-        assert_eq!(read("writer"), (false, "pi".into(), "open".into(), "askBeforeActing".into()));
+        assert_eq!(consent("coder"), "askBeforeActing");
+        assert_eq!(consent("writer"), "askBeforeActing");
         assert!(!has_table(&conn, "repositories").unwrap());
         let notes: i64 =
             conn.query_row("SELECT count(*) FROM working_notes", [], |r| r.get(0)).unwrap();

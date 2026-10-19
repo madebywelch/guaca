@@ -206,9 +206,9 @@ Do not repack the DMG after notarization; changing it requires a new submission.
 The app assessment should report `accepted` and `source=Notarized Developer ID`.
 Test the final disk image as a real download on a clean Mac or VM: open it in
 Finder, drag Guaca into Applications, and launch it with Gatekeeper enabled.
-Confirm first-run settings work without cloning the repo, Node, or Rust. Optional
-coding harnesses are included in the backend image; their sign-ins must be set
-up on the backend. Test **On this Mac** with Docker and **Remote host** against
+Confirm first-run settings work without cloning the repo, Node, or Rust. The
+`claude` program for the Claude provider is included in the backend image; its
+sign-in must be set up on the backend. Test **On this Mac** with Docker and **Remote host** against
 a matching host. A universal build still needs a launch check on both Intel
 and Apple Silicon.
 

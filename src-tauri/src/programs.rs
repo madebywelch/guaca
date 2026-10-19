@@ -1,15 +1,13 @@
 //! The `PATH` this app finds programs on, which is not the one the operator has.
 //!
-//! Four things here are a process rather than a call: `claude` for a turn paid
-//! for by a Claude plan, `claude` or `pi` again for a coding job, and `git` with
-//! `gh` beside it for a repository. Every one of them is found by name, for the
-//! reason `coding::binary` gives: a second place to say where a program
-//! lives is a second place for it to be wrong.
+//! One thing here is a process rather than a call: `claude`, for a turn paid
+//! for by a Claude plan. It is found by name, because a second place to say
+//! where a program lives is a second place for it to be wrong.
 //!
 //! What that assumes is that this process has the operator's `PATH`. A
 //! double-clicked app does not. macOS starts one from the Dock or Finder under
 //! `launchd`, which hands it `PATH=/usr/bin:/bin:/usr/sbin:/sbin` and nothing
-//! else: no `/opt/homebrew/bin`, where Homebrew puts `pi` and `gh`, and no
+//! else: no `/opt/homebrew/bin`, where Homebrew puts things, and no
 //! `~/.local/bin`, where Anthropic's own installer puts `claude`. The same
 //! binary started from a terminal inherits that terminal's `PATH` and finds all
 //! of them, which is why every test, every `pnpm app` and every `cargo run`
@@ -256,9 +254,8 @@ mod tests {
 
 /// The probe against a real process, driven by stand-in shells on disk.
 ///
-/// A stand-in rather than a mock for the reason `tests/coding.rs` uses them: the
-/// thing being tested is a process, and what it is handed and what it prints are
-/// only observable from outside it.
+/// A stand-in rather than a mock: the thing being tested is a process, and what
+/// it is handed and what it prints are only observable from outside it.
 #[cfg(all(test, unix))]
 mod shells {
     use std::io::Write;

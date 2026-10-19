@@ -46,12 +46,9 @@ The daemon, a browser as a client, and the boot both hosts share.
   the page on the strength of a stored token, and the app's own reads would
   fail forty times before the form appeared.
 - **Withheld rather than hidden, everywhere a capability is drawn.** The
-  Claude row, the loopback presets and the Claude Code harness all stay on
-  screen on a server and say why they cannot be chosen. A control that
-  vanishes is a pane that disagrees with the operator's laptop and explains
-  nothing. The harness reason comes from the box (`withheld` on
-  `coding_harnesses`), and the panel used to ignore that field and offer an
-  install command for a program the box would not run.
+  Claude row and the loopback presets both stay on screen on a server and say
+  why they cannot be chosen. A control that vanishes is a pane that disagrees
+  with the operator's laptop and explains nothing.
 - **A refusal's alternative has to exist.** `Absent::LocalDirectories` once
   said "link the repository by its remote instead" while nothing linked a
   repository by its remote. The build gate checks that a
@@ -120,23 +117,7 @@ The daemon, a browser as a client, and the boot both hosts share.
   A computer with no screen up has no address and is left alone; a desktop
   has no secret and is left alone. The relative address is the page's to
   resolve, because only the page knows which origin it reached.
-- **A clone's token lives beside the settings, and only the helper line
-  lives in the clone.** `.git/config` is inside a directory a job is pointed
-  at and an agent reads; the credential-store file is not. Moving the token
-  into the clone's config for convenience hands it to every job.
-- **The remote draft has no path, so `path` is `#[serde(default)]`.** Without
-  it a remote-only draft is refused as a build mismatch ("missing field
-  `path`"), which reads as a version skew rather than the missing attribute
-  it is.
-- **The clone-removal check canonicalizes the repos directory first.** The
-  stored path is canonical because git agreed to it; the configured directory
-  can be spelled through a symlink, which on macOS every temporary directory
-  is, and comparing the two as spelled leaves every unlinked clone on disk.
-- **`ANTHROPIC_API_KEY` is read where the daemon starts, not where the test
-  runs.** `Settings.claude_key` is passed rather than read from the
-  environment inside the server, so a machine that exports the key does not
-  quietly un-withhold the harness in a suite asserting it is withheld.
-- **`OnDisk::under` is the one place the three directories are arranged.**
+- **`OnDisk::under` is the one place the four directories are arranged.**
   `boot.rs` used to spell two of them itself and the third arrived on `main`
   as a separate argument; a host that built `Workspace` and `FileStore` by
   hand would be pointing part of the runtime at a directory nobody chose.

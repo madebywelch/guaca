@@ -220,9 +220,8 @@ defense: do not loosen them without a fresh capture.
 `CookieMark` has no field it could arrive in. The same holds one level up: a
 credential's secret has no field on `Connector`, so it cannot be serialized to
 the webview or rendered into a prompt. It goes from SQLite into the `envs` of an authorized command, and deliberately
-not into a dotfile on the sandbox, because that disk survives sleep. Secrets now
-have explicit agent grants and can also reach terminal shells and coding jobs.
-`docs/SECRETS.md` defines that boundary and the limits of output redaction.
+not into a dotfile on the sandbox, because that disk survives sleep. Secrets
+have explicit agent grants. `docs/SECRETS.md` defines that boundary and the limits of output redaction.
 
 ## What is not gated here
 

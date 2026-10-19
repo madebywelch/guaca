@@ -51,7 +51,6 @@ const state = {
   capabilities: {
     loopbackEndpoints: true,
     claudeProvider: true,
-    claudeCodeHarness: true,
     localFiles: true,
   },
 };
@@ -93,9 +92,6 @@ function anAgent(name: string, group = CREW): AgentCard {
     hasBrowser: false,
     runsErrands: false,
     browserConsent: "open",
-    hasTerminal: false,
-    harness: "pi",
-    gate: "open",
     version: 1,
   };
 }

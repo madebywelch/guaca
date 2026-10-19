@@ -112,27 +112,11 @@ pub enum Script {
     Escalate(String),
     /// Emit a `run_command` tool call: a model reaching for a computer, whether
     /// or not it was offered one.
-    ///
-    /// Named for the tool rather than for what it is, because there are two
-    /// shells now and they run on two machines: this one is the sandbox, and
-    /// [`Script::Shell`] is the agent's terminal.
     RunCommand(String),
-    /// Emit a `shell` tool call: one line in the agent's terminal, on the
-    /// machine Guaca runs on, answered in the turn that asked.
-    Shell(String),
-    /// Emit one of Guaca's own tools by name with these arguments: `read`,
-    /// `write` and `edit`, whose shapes a scenario is better off spelling out
-    /// than having a variant each.
-    Tool { name: String, arguments: serde_json::Value },
     /// Emit a `use_screen` tool call that looks at the screen. The same reach
     /// at the one place whose entire answer is a picture, which is what a model
     /// running on an endpoint that takes text only must not be served.
     Look,
-    /// Emit a `code` tool call: a brief handed to whichever coding harness the
-    /// agent is set to, in the top of its terminal.
-    Code(String),
-    /// The same, in one directory of the terminal.
-    CodeIn { task: String, directory: String },
     /// Emit a `browse` tool call that opens a url: the same reach, at the other
     /// place.
     Open(String),
@@ -342,38 +326,11 @@ pub fn render(script: &Script) -> String {
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
             ));
         }
-        Script::Shell(command) => {
-            let args = serde_json::json!({ "command": command }).to_string();
-            body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
-                {"index":0,"id":"call_shell","type":"function",
-                 "function":{"name":"shell","arguments": args}}
-            ]}}]})));
-            body.push_str(&frame(
-                serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
-            ));
-        }
         Script::Look => {
             let args = serde_json::json!({ "action": "look" }).to_string();
             body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"index":0,"id":"call_screen","type":"function",
                  "function":{"name":"use_screen","arguments": args}}
-            ]}}]})));
-            body.push_str(&frame(
-                serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
-            ));
-        }
-        Script::Code(_) | Script::CodeIn { .. } => {
-            let args = match script {
-                Script::CodeIn { task, directory } => {
-                    serde_json::json!({ "task": task, "directory": directory })
-                }
-                Script::Code(task) => serde_json::json!({ "task": task }),
-                _ => unreachable!(),
-            }
-            .to_string();
-            body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
-                {"index":0,"id":"call_code","type":"function",
-                 "function":{"name":"code","arguments": args}}
             ]}}]})));
             body.push_str(&frame(
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
@@ -459,7 +416,7 @@ pub fn render(script: &Script) -> String {
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
             ));
         }
-        Script::Plugin { name, arguments } | Script::Tool { name, arguments } => {
+        Script::Plugin { name, arguments } => {
             body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"index":0,"id":"call_plugin","type":"function",
                  "function":{"name":name,"arguments":arguments.to_string()}}

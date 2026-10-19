@@ -70,19 +70,11 @@ esac
 
 curl -fsS "${BASE}/" | grep -q '<div id="root">' || fail "the page is not served at /"
 
-# What an agent's terminal runs on. Asked inside the container, because an
-# image that lost one of these fails only when an agent first clones or pushes.
-docker exec "${NAME}" ssh -V >/dev/null 2>&1 || fail "SSH client is not in the image"
-docker exec "${NAME}" git --version >/dev/null || fail "git is not in the image"
-docker exec "${NAME}" gh --version >/dev/null || fail "gh is not in the image"
-docker exec "${NAME}" git config --system --get-all credential.https://github.com.helper \
-  | grep -q 'gh auth git-credential' || fail "git does not ask gh for GitHub credentials"
-docker exec "${NAME}" codex --version >/dev/null || fail "codex is not in the image"
+# The programs the host runs. Asked inside the container, because an image
+# that lost one of these fails only when a turn or a connector first needs it.
 [ "$(docker exec "${NAME}" printenv HOME)" = "/var/lib/guaca" ] || fail "CLI home is not persistent"
 docker exec "${NAME}" claude --version >/dev/null || fail "claude is not in the image"
-docker exec "${NAME}" pi --version >/dev/null || fail "pi is not in the image"
 docker exec "${NAME}" node --version >/dev/null || fail "node is not in the image"
-[ "$(docker exec "${NAME}" pnpm --version)" = "10.33.0" ] || fail "pnpm is not the pinned version"
 docker exec "${NAME}" python3 --version >/dev/null || fail "python3 is not in the image"
 docker exec "${NAME}" test -x /usr/local/bin/guaca-updater || fail "guaca-updater is not in the image"
 docker exec "${NAME}" docker --version >/dev/null || fail "the Docker CLI guaca-updater drives is not in the image"

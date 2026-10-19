@@ -5878,45 +5878,6 @@ async fn a_message_sent_while_the_host_is_stopping_is_answered_by_the_next_one()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_turn_still_inside_a_tool_call_when_the_host_stops_is_reported_and_not_repeated() {
-    // The rule the drain keeps. Nobody can say whether a call the process
-    // died inside of finished, so what it was part of is put in front of the
-    // operator to review, as every restart used to do, rather than picked up
-    // and done a second time.
-    let stub = serve(|body| {
-        if has_tool_result(body) {
-            Script::Say("Built.".into())
-        } else {
-            Script::Shell("sleep 30".into())
-        }
-    })
-    .await;
-    let h = harness(&stub, &["Builder"], GuardLimits::default());
-    let builder = h.id("Builder");
-    h.runtime.store().set_has_terminal(builder, true).unwrap();
-    let run = h.runtime.send_from_human(builder, "Build it.").unwrap();
-    h.wait_until("the command to be running", |h| {
-        h.sink.snapshot().iter().any(|event| matches!(event, UiEvent::ToolStarted { .. }))
-    })
-    .await;
-
-    let (h, drained) = h.restart(Duration::from_millis(500)).await;
-    assert_eq!(drained.working, ["Builder"]);
-    tokio::time::sleep(Duration::from_millis(300)).await;
-
-    assert_eq!(stub.calls.load(Ordering::SeqCst), 1, "nothing was picked up");
-    let asked = h.runtime.store().channel_messages(builder, 50).unwrap()[0].clone();
-    assert_eq!(asked.run_id, run);
-    let reported = h.runtime.store().channel_messages(builder, 50).unwrap().into_iter().any(|m| {
-        m.cause == Some(asked.id)
-            && m.parts
-                .iter()
-                .any(|p| matches!(p, Part::Notice { kind: NoticeKind::Interrupted, .. }))
-    });
-    assert!(reported, "on the message Try again sends again: {}", h.transcript());
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_conversation_the_operator_stopped_is_not_carried_on_by_the_next_host() {
     let stub = serve(|_| Script::Hang).await;
     let h = harness(&stub, &["Researcher"], GuardLimits::default());

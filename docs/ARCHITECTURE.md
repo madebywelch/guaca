@@ -129,9 +129,9 @@ asymmetry that terminates cascades is untouched, because it lives on the answer:
 a reply still expects nothing, whatever the message it answers declared, so a
 chain of instruction and report still costs its own declared work each round and
 still runs out of pair budget, hops and steps. `Assigned` remains for work with
-no peer behind it, which is a routine coming due, a coding job reporting in, or
-an operator line absorbed into a turn that was already running: there the note
-in the agent's own channel is exactly where the person who asked is reading.
+no peer behind it, which is a routine coming due or an operator line absorbed
+into a turn that was already running: there the note in the agent's own channel
+is exactly where the person who asked is reading.
 
 The mode follows the work rather than the sender, and the second incident is
 why. The first version matched on who the message came from, and a routine
@@ -191,29 +191,13 @@ Batching decides what a turn starts with. This decides what it can still learn
 once it has started, and until it existed the answer was nothing: a turn was
 built from its batch and went deaf for as long as it ran. On a turn of three
 rounds nobody notices. On a turn of forty, which is what a crew with a raised
-`max_tool_rounds` and a coding job actually produces, it is the difference
+`max_tool_rounds` actually produces, it is the difference
 between an agent that can be corrected and one that cannot.
-
-Two things go wrong without it, and the second is a deadlock rather than a
-delay.
 
 **An operator cannot steer work they are watching.** They type a correction into
 the channel, it is delivered, the rail shows the agent working, and the message
 is read when the turn ends. The correction arrives after the thing it was meant
 to correct was finished and published.
-
-**A turn cannot receive the result of the job it started.** `code` does not
-block, deliberately: a coding job is a different unit of work with its own
-budget and its own forty-five minute ceiling, and a turn that waited for one
-would spend its own timeout doing nothing. So the harness's answer comes back as
-a fresh envelope on a run of its own. An actor only ever examines the envelope it
-is holding, so that answer could not reach the turn that asked for it. The agent
-would then call `code` again, and `JobRunning` would tell it, correctly and
-uselessly, that it gets a message when the first one finishes: a message the
-turn being spoken to was itself the thing holding up.
-Measured on a real crew: forty-five minutes, forty-five model calls, twenty-two
-documents rewritten and thirty-one working notes, with three finished jobs and
-one operator correction stacked in an inbox nobody was free to read.
 
 `Runtime::take_in` runs at the top of every round, after the budget claims the
 step, and folds whatever has arrived into the conversation as one labeled user
@@ -328,9 +312,9 @@ instead of the trail.
 
 **It is not an agent.** No card, no channel, no memory, no place in the
 directory, nothing addressable once the turn has its answer. That is the
-difference from the three things it could be confused with. A peer has a role and
+difference from the two things it could be confused with. A peer has a role and
 answers later as a message. `create_agent` adds a colleague for a role the crew
-lacks. `code` hands work to a different program on a budget of its own.
+lacks.
 
 **It runs inside the sending turn's tool call, on that turn's run.** That one
 decision is why nothing else had to be built for it:
@@ -343,9 +327,8 @@ decision is why nothing else had to be built for it:
   calls are raced against the stop the same way. A stop is a control on the
   conversation, and an errand is part of the conversation.
 - The run cannot settle under it, because the turn is still holding its envelope.
-- The answer lands in the context that asked. `code` returns a message on a new
-  run because a job outlives its turn by forty minutes; an errand is bounded to a
-  few, and a turn woken again to read one would have forgotten why it asked.
+- The answer lands in the context that asked. An errand is bounded to a few
+  minutes, and a turn woken again to read one would have forgotten why it asked.
 
 **The limits are Guaca's, never the model's.** Three at once, and a fourth is
 refused rather than queued. Twelve rounds each, or the crew's `max_tool_rounds`
@@ -363,16 +346,15 @@ what the call parsed to, not the name it used, so an alias cannot walk round it
 that stop and ask the operator: the card on the desk names the agent, because the
 errand is the agent.
 
-**The agent's computer, browser and terminal are held by one errand at a
-time.** Each is one thing, and two errands working one page or one work tree at
-once each undo the other. An errand that touches any of the three holds all of
-them until it finishes; errands that touch none run alongside. One lock rather
-than three, because separate locks taken in the order each errand happens to need
+**The agent's computer and browser are held by one errand at a time.** Each is
+one thing, and two errands working one page or one screen at once each undo the
+other. An errand that touches either holds both until it finishes; errands that
+touch neither run alongside. One lock rather than two, because separate locks taken in the order each errand happens to need
 them deadlock.
 
 **What comes back is framed as the errand's account.** The sending turn did not
 see what it read, and an answer can carry text a page put there. The result says
-so, as a finished coding job's does, and says how each errand ended: finished,
+so, and says how each errand ended: finished,
 unfinished, out of rounds, out of budget, failed or stopped. A turn limit reached
 and a task done must not read alike; Gemini's subagents once reported success
 from a child that had run out of turns.
@@ -503,8 +485,7 @@ right about both shapes, which is what its tests are for.
 **The subscription model list comes from the signed-in account.** Opening the
 model selector calls `subscription_models`, which reads the Codex backend's
 `/models` catalog with Guaca's subscription credential. Picker-visible entries
-are ordered by the service's priority. The installed coding CLI is not involved;
-its image version cannot update a list compiled into Guaca. The catalog request
+are ordered by the service's priority. The catalog request
 retries one 401 through the same serialized token refresh used by model calls.
 The `client_version` it has to send is a floor the service filters models by,
 so it is set far above any release: a real release number pinned there hid the
@@ -1054,12 +1035,9 @@ an agent asks to send and does not have. Silence here is the worst available
 outcome, because both ends believe the document arrived.
 
 Files an agent attaches resolve a bare name against its saved attachments first.
-An explicit path reads current bytes instead of reusing a saved file with the
-same basename. Terminal files come from the same directory `shell` starts in.
-Relative paths start there; absolute paths and symlinks must resolve inside it.
-If the agent also has a computer, a path that cannot be read from the terminal
-is tried on that computer. No terminal or computer is needed to forward a saved
-attachment.
+An explicit path reads current bytes off the agent's computer instead of
+reusing a saved file with the same basename. No computer is needed to forward a
+saved attachment.
 
 **A send with a missing file delivers nothing.** All requested attachments must
 resolve before any recipient is queued or any message guard is spent. Otherwise

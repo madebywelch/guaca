@@ -7,7 +7,7 @@
 //! from, which is a [`Target`], and in nothing else: the backup before a
 //! replacement and the restore after a failed one are the same code for both.
 //! The restore is automatic because the person who pressed the button cannot
-//! be assumed to have a terminal, on either.
+//! be assumed to have a shell on the box, on either.
 //!
 //! Desktop container names are scoped to the bundle ID; volumes survive app
 //! upgrades.

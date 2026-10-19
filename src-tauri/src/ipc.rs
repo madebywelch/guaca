@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::commands::{
-    self, AppState, ArtifactAddress, CommandError, FileRef, GroupReset, HarnessOnMachine,
-    RoutineDraft, SettingsPatch, Staged, TerminalView,
+    self, AppState, ArtifactAddress, ClaudeProgram, CommandError, FileRef, GroupReset,
+    RoutineDraft, SettingsPatch, Staged,
 };
 use crate::config::RedactedConfig;
 use crate::domain::agent::{AgentCard, AgentDraft};
@@ -29,7 +29,6 @@ use crate::domain::plugin::{
 use crate::domain::routine::{Routine, RoutineRun};
 use crate::domain::search::SearchHits;
 use crate::domain::signin::Signin;
-use crate::domain::terminal::{Gate, Harness, Payer, Tuning};
 use crate::domain::usage::{GroupUsage, RunUsage};
 use crate::domain::worknote::WorkingNote;
 use crate::e2b::Computer;
@@ -330,15 +329,7 @@ surface! {
     create_connector(draft: ConnectorDraft) -> Connector,
     update_connector(id: ConnectorId, agents: Vec<AgentId>, secret: Option<String>) -> (),
     delete_connector(id: ConnectorId) -> (),
-    agent_terminal(id: AgentId) -> TerminalView,
-    give_agent_terminal(id: AgentId) -> (),
-    take_agent_terminal(id: AgentId) -> (),
-    set_agent_coding(id: AgentId, harness: Harness, gate: Gate) -> (),
-    set_coding_tuning(id: AgentId, harness: Harness, tuning: Tuning) -> (),
-    coding_harnesses() -> Vec<HarnessOnMachine>,
-    coding_models(id: AgentId, harness: Harness, pays: Payer) -> Vec<crate::coding::ModelOffer>,
-    message_coding_job(agent_id: AgentId, message: String) -> crate::runtime::Continued,
-    stop_coding_job(agent_id: AgentId) -> (),
+    claude_program() -> ClaudeProgram,
     plugin_catalog() -> Vec<PluginOffer>,
     group_plugins(group_id: GroupId) -> Vec<Plugin>,
     connect_plugin(group_id: GroupId, kind: PluginKind, connection: Option<String>) -> Plugin,

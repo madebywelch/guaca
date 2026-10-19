@@ -14,20 +14,12 @@ import { loadPrefs, type Prefs, savePrefs } from "./prefs";
 import { type DropTarget, landsBefore, railOrder } from "./rail";
 import { hosted, openExternal, PAGE_ID } from "./transport";
 
-/**
- * How much of a running coding job's work is kept on screen.
- *
- * Enough to see what it has been doing, not enough to be a transcript. The
- * transcript is the message the job delivers when it ends.
- */
-const CODING_TAIL = 40;
 let decisionRead = 0;
 
 /** A desktop's answer, which is every capability there is. */
 const EVERYTHING: Capabilities = {
   loopbackEndpoints: true,
   claudeProvider: true,
-  claudeCodeHarness: true,
   localFiles: true,
 };
 
@@ -42,7 +34,6 @@ import type {
   ApprovalState,
   ArtifactId,
   Capabilities,
-  CodingLine,
   Decision,
   Envelope,
   Escalation,
@@ -102,22 +93,6 @@ export interface Placement {
 export interface State {
   agents: AgentCard[];
   groups: Group[];
-  /**
-   * Agents with a coding job running, and the directory in its terminal each
-   * is working in. One job per agent, so the agent names it.
-   *
-   * In memory and event-driven, like the job itself. It does not survive a
-   * restart, which is correct: neither does the job.
-   */
-  building: Record<AgentId, string>;
-  /**
-   * What each running job is doing, newest last, by the agent that started it.
-   *
-   * Bounded and ephemeral: dropped when the job ends, because the record of
-   * what a job did is the message it delivers. Keyed by agent because that is
-   * whose channel draws it.
-   */
-  coding: Record<AgentId, CodingLine[]>;
   activity: Record<AgentId, Activity>;
   /** Newest message timestamp per agent. Drives the sidebar order. */
   lastActive: Record<AgentId, number>;
@@ -496,8 +471,6 @@ function keptChannel(state: State, group: GroupId | null): boolean {
 export const useStore = create<State>((set, get) => ({
   agents: [],
   groups: [],
-  building: {},
-  coding: {},
   activity: {},
   lastActive: {},
   settings: null,
@@ -878,8 +851,6 @@ export const useStore = create<State>((set, get) => ({
           activeRun: Object.fromEntries(
             Object.values(event.streams).map((s) => [s.agentId, s.runId]),
           ),
-          building: event.building,
-          coding: {},
           reasoning: {},
           trail: {},
           pulse: {},
@@ -1225,54 +1196,6 @@ export const useStore = create<State>((set, get) => ({
       case "escalationRaised":
       case "escalationCleared": {
         void get().refreshEscalations();
-        break;
-      }
-
-      // Onto the banner rather than into a channel. An expired credential on
-      // the operator's own machine is theirs to fix, and it stopped every
-      // coding job in the workspace while every agent reported that nothing
-      // needed doing.
-      case "codingJobStarted": {
-        set((state) => ({
-          building: { ...state.building, [event.agentId]: event.directory },
-        }));
-        break;
-      }
-
-      case "codingProgress": {
-        set((state) => {
-          // Bounded. A long job runs hundreds of tools, and an unbounded tail
-          // is a growing array re-rendered on every line of it.
-          const held = [
-            ...(state.coding[event.agentId] ?? []),
-            {
-              tool: event.tool,
-              detail: event.detail,
-            },
-          ].slice(-CODING_TAIL);
-          return { coding: { ...state.coding, [event.agentId]: held } };
-        });
-        break;
-      }
-
-      case "codingJobFinished": {
-        set((state) => {
-          const { [event.agentId]: _gone, ...rest } = state.building;
-          const { [event.agentId]: _done, ...others } = state.coding;
-          return { building: rest, coding: others };
-        });
-        break;
-      }
-
-      case "codingJobFailed": {
-        // The harness is named, because the way out of the commonest failure
-        // here is the other one: a spent plan is not something the operator can
-        // fix from inside this app, and a banner that does not say what was
-        // running leaves them guessing which sign-in to go and look at.
-        get().setBanner({
-          tone: "error",
-          text: `A coding job in ${event.directory} could not run on ${event.harness}: ${event.reason}`,
-        });
         break;
       }
 

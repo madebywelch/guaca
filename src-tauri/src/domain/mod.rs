@@ -19,7 +19,6 @@ pub mod routine;
 pub mod search;
 pub mod signin;
 pub mod skill;
-pub mod terminal;
 pub mod usage;
 pub mod view;
 pub mod widget;

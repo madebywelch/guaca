@@ -21,12 +21,9 @@ services:
       # Absent, the daemon generates one on first run and prints it.
       GUACA_TOKEN: ${GUACA_TOKEN:-}
       GUACA_UPDATE_CHECKS: ${GUACA_UPDATE_CHECKS:-on}
-      # Coding harness credentials, separate from the model key in Settings.
+      # Read by the `claude` program, separately from the model key in
+      # Settings. Set, it bills the API instead of the plan it is signed in to.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      CODEX_API_KEY: ${CODEX_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      GH_TOKEN: ${GH_TOKEN:-}
     # Docker Desktop supplies this name; host-gateway also supports Linux.
     extra_hosts:
       - "host.docker.internal:host-gateway"

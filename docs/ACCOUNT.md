@@ -8,10 +8,9 @@ compute spaces are added in the next phase.
 
 ## Self-hosting does not require an account
 
-Local Docker and independently hosted workspaces can run conversations,
-terminals, coding harnesses, and schedules without a Guaca account. The
-Google plugin does require the account: its tools use the grant held at
-guaca.bot. Model-provider sign-ins and git and GitHub sign-ins are separate
+Local Docker and independently hosted workspaces can run conversations and
+schedules without a Guaca account. The Google plugin does require the account:
+its tools use the grant held at guaca.bot. Model-provider sign-ins are separate
 from that account.
 
 A future managed compute space will require an account to establish ownership

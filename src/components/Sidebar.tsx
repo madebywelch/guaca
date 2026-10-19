@@ -87,7 +87,6 @@ export function Sidebar({
 }: Props) {
   const agents = useLiveAgents();
   const groups = useStore((s) => s.groups);
-  const building = useStore((s) => s.building);
   const activity = useStore((s) => s.activity);
   const stuck = useStore((s) => s.stuck);
   const decisions = useStore((s) => s.decisions);
@@ -354,7 +353,7 @@ export function Sidebar({
   /** One agent row. Shared by every section and both views. */
   const row = (agent: AgentCard) => {
     const role = roleOf(staged, agent.id);
-    const label = doing(agent.id, { activity, stuck, building, trail, lastActive }, now);
+    const label = doing(agent.id, { activity, stuck, trail, lastActive }, now);
     const target: DropTarget = { kind: "row", id: agent.id };
 
     return (

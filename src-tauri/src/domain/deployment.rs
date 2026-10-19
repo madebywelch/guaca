@@ -49,18 +49,12 @@ impl Deployment {
     /// What this deployment can do, which is the value every panel asks.
     pub const fn capabilities(self) -> Capabilities {
         match self {
-            Deployment::Desktop => Capabilities {
-                loopback_endpoints: true,
-                claude_provider: true,
-                claude_code_harness: true,
-                local_files: true,
-            },
-            Deployment::Server => Capabilities {
-                loopback_endpoints: true,
-                claude_provider: true,
-                claude_code_harness: true,
-                local_files: false,
-            },
+            Deployment::Desktop => {
+                Capabilities { loopback_endpoints: true, claude_provider: true, local_files: true }
+            }
+            Deployment::Server => {
+                Capabilities { loopback_endpoints: true, claude_provider: true, local_files: false }
+            }
         }
     }
 
@@ -84,8 +78,6 @@ pub struct Capabilities {
     /// Whether the backend may run the official Claude CLI for turns.
     /// Authentication belongs to that CLI, under the operator's backend user.
     pub claude_provider: bool,
-    /// Whether the backend may run Claude Code for an agent's coding jobs.
-    pub claude_code_harness: bool,
     /// Whether a file may be named by a path on the operator's disk, and a
     /// saved copy land in their downloads folder.
     ///
@@ -103,7 +95,6 @@ pub struct Capabilities {
 pub enum Absent {
     LoopbackEndpoints,
     ClaudeProvider,
-    ClaudeCodeHarness,
     LocalFiles,
 }
 
@@ -118,10 +109,6 @@ impl Absent {
             Absent::ClaudeProvider => {
                 "this backend does not offer the Claude CLI provider. Choose an API provider \
                  or a ChatGPT subscription, or use a backend with Claude Code configured"
-            }
-            Absent::ClaudeCodeHarness => {
-                "this backend does not offer the Claude Code harness. Configure the official \
-                 CLI on the backend, or choose another coding harness"
             }
             Absent::LocalFiles => {
                 "this workspace runs on a server, so it cannot read a path on your own machine. \
@@ -149,7 +136,6 @@ impl Capabilities {
         let have = match what {
             Absent::LoopbackEndpoints => self.loopback_endpoints,
             Absent::ClaudeProvider => self.claude_provider,
-            Absent::ClaudeCodeHarness => self.claude_code_harness,
             Absent::LocalFiles => self.local_files,
         };
         if have {
@@ -216,17 +202,10 @@ mod tests {
     fn server_resources_are_available_but_client_credentials_and_files_are_not() {
         let desktop = Deployment::Desktop.capabilities();
         let server = Deployment::Server.capabilities();
-        for what in [
-            Absent::LoopbackEndpoints,
-            Absent::ClaudeProvider,
-            Absent::ClaudeCodeHarness,
-            Absent::LocalFiles,
-        ] {
+        for what in [Absent::LoopbackEndpoints, Absent::ClaudeProvider, Absent::LocalFiles] {
             assert_eq!(desktop.require(what), Ok(()), "a desktop has {what:?}");
             let expected = match what {
-                Absent::LoopbackEndpoints | Absent::ClaudeCodeHarness | Absent::ClaudeProvider => {
-                    Ok(())
-                }
+                Absent::LoopbackEndpoints | Absent::ClaudeProvider => Ok(()),
                 _ => Err(what),
             };
             assert_eq!(server.require(what), expected);
@@ -239,12 +218,7 @@ mod tests {
         // gets reworded and retried by a model, and reported as a bug by a
         // person. Each of these has to carry a way forward, and the cheapest
         // check that it does is that it offers an alternative in words.
-        for what in [
-            Absent::LoopbackEndpoints,
-            Absent::ClaudeProvider,
-            Absent::ClaudeCodeHarness,
-            Absent::LocalFiles,
-        ] {
+        for what in [Absent::LoopbackEndpoints, Absent::ClaudeProvider, Absent::LocalFiles] {
             let said = what.sentence();
             assert!(said.len() > 60, "{what:?} is too short to have said anything: {said}");
             assert!(

@@ -1818,131 +1818,6 @@ input[type="file"]::file-selector-button {
   box-shadow: 0 0 0.375rem color-mix(in oklab, var(--focus) 55%, transparent);
 }
 
-/* What a coding agent is doing, in the channel of the agent that asked.
-
-   Above the composer and below the transcript, in the band the turn footer
-   uses, because it answers the same question that band answers: what is
-   happening right now that has not landed as a message yet. Bounded height and
-   its own scroll, so a job that runs three hundred tools does not push the
-   composer off the screen. */
-.coding {
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  margin: 0 var(--space-6) var(--space-3);
-  padding: var(--space-4) var(--space-5);
-  border-radius: var(--radius);
-  border: 1px solid color-mix(in oklab, var(--system) 28%, transparent);
-  background: color-mix(in oklab, var(--system) 7%, transparent);
-}
-
-/* The cap and the scroll are on the tail, not on the panel. The panel also
-   holds the box the operator types a correction into, and a long job whose
-   tail owned the scrolling pushed that box out of reach exactly when it was
-   worth reaching for. */
-.coding__tail {
-  max-height: 11rem;
-  overflow-y: auto;
-}
-
-.coding__say {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.coding__say .input {
-  flex: 1;
-  min-width: 0;
-}
-
-.coding__head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-/* Pushes the stop away from the title, so the one destructive control here is
-   not next to the words naming the repository it would stop. */
-.coding__head .btn:first-of-type {
-  margin-left: auto;
-}
-
-.coding__pulse {
-  width: var(--space-3);
-  height: var(--space-3);
-  border-radius: var(--radius-pill);
-  background: var(--system);
-  animation: building 2s var(--ease-loop) infinite;
-}
-
-.coding__title {
-  font-family: var(--font-ui);
-  font-size: var(--type-meta);
-  font-weight: 600;
-  color: color-mix(in oklab, var(--text) 62%, transparent);
-}
-
-.coding__waiting,
-.coding__lines {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  font-size: var(--type-small);
-  line-height: var(--lead-ui);
-  color: color-mix(in oklab, var(--text) 70%, transparent);
-}
-
-.coding__waiting {
-  font-style: italic;
-}
-
-.coding__line {
-  display: flex;
-  gap: var(--space-3);
-  align-items: baseline;
-  min-width: 0;
-}
-
-/* The tool is a fixed column so the details line up and the eye can run down
-   them. A ragged left edge here reads as noise rather than as a sequence. */
-.coding__tool {
-  flex: none;
-  width: var(--column-face);
-  font-family: var(--font-mono);
-  font-size: var(--type-fine);
-  color: var(--system);
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.coding__detail {
-  font-family: var(--font-mono);
-  font-size: var(--type-meta);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-/* What the coding agent says, as opposed to what it runs. Wrapped rather than
-   clipped: this is prose and it is the part worth reading. */
-.coding__said {
-  font-style: italic;
-  color: color-mix(in oklab, var(--text) 85%, transparent);
-}
-
-@keyframes building {
-  0%,
-  100% {
-    opacity: 0.55;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
 /* A whole crew as the target, which is what dropping anywhere but on a row
    means: this group, no particular place in it. */
 .rail__group[data-over="true"],
@@ -5779,8 +5654,7 @@ input[type="file"]:disabled {
 .menu__sub,
 .orb__tag,
 .spend,
-.statusbar__form,
-.console {
+.statusbar__form {
   animation: pop var(--tempo-enter) var(--ease) both;
   transform-origin: var(--pop-origin);
 }
@@ -6220,10 +6094,10 @@ input[type="file"]:disabled {
 
 /* --- a place an agent is given -------------------------------------------
 
-   The browser, the computer and the terminal: a name and a switch on one line,
+   The browser and the computer: a name and a switch on one line,
    and what the place holds under it only while it is given. Off, the line is
    the whole section, so the places an agent does not use read as a short list
-   rather than as three frames of explanation. Each section's own margin is the
+   rather than as two frames of explanation. Each section's own margin is the
    space after it, whatever its last child is. */
 
 .place {
@@ -6264,65 +6138,18 @@ input[type="file"]:disabled {
   display: block;
 }
 
-/* The shell and where it opens, as one line: the button is the thing to do,
-   and the path is what it does it in. */
-.terminal__where {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-}
-
-.terminal__where .btn {
-  flex: none;
-}
-
-/* A path or a command, each one unbroken token far wider than the column. Cut
-   at the edge, whole in its title, and taken whole by one click, which is how
-   it is copied. */
-.terminal__line {
-  display: block;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  user-select: all;
-  font-family: var(--font-mono);
-  font-size: var(--type-meta);
-  color: var(--faint);
-}
-
-/* Model and effort on one row. The model is a name that can run long and the
-   effort is one word, so the model takes the larger share. */
-.tuner {
-  display: grid;
-  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-  gap: var(--space-2) var(--space-4);
-  margin-bottom: var(--space-6);
-}
-
-.tuner > .field {
-  margin-bottom: 0;
-}
-
-.tuner__wide {
-  grid-column: 1 / -1;
-}
-
 /* --- the screen ----------------------------------------------------------
 
    One connection, two sizes. Going full screen promotes the stage inside this
    to fill the window rather than mounting a second one, so the desktop is never
    dropped and reconnected just because the operator wanted a better look. */
 
-.screen,
-.console {
+.screen {
   /* The one stage in this app that is ink whichever surface the operator
      picked, and the only thing left holding the values the rail used to. A
      full-window frame around somebody else's desktop is a light-tight box on
      purpose: a pale chrome around a picture is a chrome the eye keeps reading
-     instead of the picture. The operator's shell stands on it too, because it
-     is the other machine drawn over the window, and the colors programs print
-     are chosen for a dark ground. It cannot spend `--lift-*` either, because
+     instead of the picture. It cannot spend `--lift-*` either, because
      those resolve against the reading column and would put a paper-weight
      ring on a black surface. */
   --stage-ground: #0c0c0b;
@@ -6429,10 +6256,8 @@ input[type="file"]:disabled {
    benefit of keeping the conversation visible around the edge so a maximized
    screen reads as something being worked on rather than as a new window. The
    top inset matches the rail's own, which is how the rest of the app already
-   clears those controls. The operator's shell is the same stage, grown to the
-   same place. */
-.screen[data-full="true"] .screen__stage,
-.console {
+   clears those controls. */
+.screen[data-full="true"] .screen__stage {
   position: fixed;
   inset: 2.75rem 1rem 1rem;
   z-index: 40;
@@ -6483,48 +6308,6 @@ input[type="file"]:disabled {
 .screen__title {
   font-family: var(--font-ui);
   font-size: var(--type-ui);
-}
-
-/* --- the operator's shell ------------------------------------------------
-
-   An agent's terminal, opened by the operator over the window. The stage and
-   its bar are the screen's; what is its own is where the directory is named
-   and the box the terminal is drawn in. */
-
-/* The path is what gives way in a narrow window, so the name stays one line. */
-.console .screen__title {
-  white-space: nowrap;
-}
-
-/* Cut rather than wrapped, so the bar stays one line; the whole path is its
-   title. */
-.console__path {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--font-mono);
-  font-size: var(--type-fine);
-  color: var(--stage-muted);
-}
-
-/* The padding is here and not on the screen, because the fit reads the
-   screen's height as the room it has, and a padded box in `border-box` would
-   hand it the padding as rows it cannot draw in. */
-.console__body {
-  flex: 1;
-  min-height: 0;
-  padding: var(--space-3) var(--space-4);
-}
-
-/* What the terminal reads its face, size and two colors off. The stylesheet
-   decides them; the component only carries them to the renderer. */
-.console__screen {
-  height: 100%;
-  background: var(--stage-ground);
-  color: var(--stage-text);
-  font-family: var(--font-mono);
-  font-size: var(--type-small);
 }
 
 /* --- routines ------------------------------------------------------------

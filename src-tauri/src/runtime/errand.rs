@@ -109,10 +109,10 @@ impl Runtime {
             }
             Ok(ToolInvocation::Errand { briefs }) => {
                 let offered = tools::for_errands(from.offered.iter().cloned());
-                // Held by whichever errand first reaches for a computer, a
-                // browser or a terminal, for as long as that errand lasts.
-                // Each of the three is one thing, and two errands working one
-                // page or one work tree at once each undo what the other did.
+                // Held by whichever errand first reaches for a computer or a
+                // browser, for as long as that errand lasts. Each of the two
+                // is one thing, and two errands working one page at once each
+                // undo what the other did.
                 let places = Arc::new(tokio::sync::Mutex::new(()));
                 let ran = futures_util::future::join_all(briefs.iter().enumerate().map(
                     |(index, brief)| self.run_errand(from, &offered, &places, call, index, brief),

@@ -16,9 +16,6 @@
 //!   GUACA_ORIGIN   the address a browser reaches this box at, e.g. the
 //!                  tunnel's https URL. Only a sign-in needs it, for the
 //!                  redirect; absent, the origin of the last call is used.
-//!   ANTHROPIC_API_KEY  not Guaca's own setting, but read for one decision:
-//!                  with it set, Claude Code is offered as a coding harness
-//!                  and spends the key.
 //!   GUACA_UPDATER_SOCKET  where the updater beside this host listens, on a
 //!                  box `guaca-updater` made. Set by the updater, never by hand.
 //!   GUAC_LOG       the tracing filter, spelled as the desktop app spells it.

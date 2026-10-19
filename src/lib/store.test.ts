@@ -59,9 +59,6 @@ const AGENTS: AgentCard[] = [
     hasBrowser: false,
     runsErrands: false,
     browserConsent: "open",
-    hasTerminal: false,
-    harness: "pi",
-    gate: "open",
     name: "Manager",
     avatar: "avocado",
     color: "#c7d96b",
@@ -86,9 +83,6 @@ const AGENTS: AgentCard[] = [
     hasBrowser: false,
     runsErrands: false,
     browserConsent: "open",
-    hasTerminal: false,
-    harness: "pi",
-    gate: "open",
     name: "Chef",
     avatar: "chilli",
     color: "#e2674a",
@@ -698,114 +692,18 @@ describe("openMessage", () => {
   });
 });
 
-describe("a coding job that could not run", () => {
-  it("reaches the operator, not just the agent that asked", () => {
-    // The afternoon this cost. An expired credential on the operator's own
-    // machine stopped every coding job in the workspace, each agent was told in
-    // its own channel, and the operator saw nothing at all.
-    useStore.getState().applyEvent({
-      type: "codingJobFailed",
-      agentId: "a1",
-      directory: "vision-ios",
-      harness: "pi",
-      reason: "Provided authentication token is expired.",
-    });
-
-    const banner = useStore.getState().banner;
-    expect(banner?.tone).toBe("error");
-    expect(banner?.text).toContain("vision-ios");
-    expect(banner?.text).toContain("expired");
-  });
-
-  it("names which program stopped, because the way out is the other one", () => {
-    // A spent plan is not something the operator can fix from inside this app.
-    // What they can do is move the agent to the harness whose sign-in still
-    // pays, and a banner that does not say what was running leaves them
-    // guessing which one that is.
-    useStore.getState().applyEvent({
-      type: "codingJobFailed",
-      agentId: "a1",
-      directory: "vision-ios",
-      harness: "Claude Code",
-      reason: "You're out of extra usage.",
-    });
-    expect(useStore.getState().banner?.text).toContain("Claude Code");
-  });
-
-  it("holds what a running job is doing, and drops it when the job ends", () => {
-    // The same discipline a turn's thinking has. The record of what a job did
-    // is the message it delivers; this is what that looks like beforehand, so
-    // keeping it after the fact would be a second copy that could disagree.
-    useStore.getState().applyEvent({
-      type: "codingJobStarted",
-      agentId: "a1",
-      directory: "vision-ios",
-    });
-    useStore.getState().applyEvent({
-      type: "codingProgress",
-      agentId: "a1",
-      tool: "bash",
-      detail: "swift test",
-    });
-    expect(useStore.getState().building.a1).toBe("vision-ios");
-    expect(useStore.getState().coding.a1).toEqual([{ tool: "bash", detail: "swift test" }]);
-
-    useStore.getState().applyEvent({
-      type: "codingJobFinished",
-      agentId: "a1",
-    });
-    expect(useStore.getState().building.a1).toBeUndefined();
-    expect(useStore.getState().coding.a1).toBeUndefined();
-  });
-
-  it("bounds the tail, because a long job runs hundreds of tools", () => {
-    useStore.getState().applyEvent({
-      type: "codingJobStarted",
-      agentId: "a2",
-      directory: "vision-ios-api",
-    });
-    for (let n = 0; n < 200; n++) {
-      useStore.getState().applyEvent({
-        type: "codingProgress",
-        agentId: "a2",
-        tool: "bash",
-        detail: `step ${n}`,
-      });
-    }
-    const held = useStore.getState().coding.a2 ?? [];
-    expect(held.length).toBeLessThanOrEqual(40);
-    // The newest end is the one kept: what it is doing now beats what it did
-    // three hundred tools ago.
-    expect(held.at(-1)?.detail).toBe("step 199");
-  });
-
-  it("names the directory, because an operator has more than one agent coding", () => {
-    useStore.getState().applyEvent({
-      type: "codingJobFailed",
-      agentId: "a1",
-      directory: "vision-ios-api",
-      harness: "pi",
-      reason: "the pi coding harness is not installed",
-    });
-    expect(useStore.getState().banner?.text).toContain("vision-ios-api");
-  });
-});
-
 describe("reconnecting to a running workspace", () => {
-  it("replaces obsolete streams and jobs and restores the run that can be stopped", () => {
+  it("replaces obsolete streams and restores the run that can be stopped", () => {
     useStore.setState({
       streams: {
         old: { agentId: "chef", channelId: "chef", to: { kind: "human" }, text: "stale" },
       },
       activeRun: { chef: "finished" },
-      building: { chef: "old-repo" },
       reasoning: { chef: "old thought" },
-      coding: { chef: [{ tool: "shell", detail: "old" }] },
     });
     apply({
       type: "liveSnapshot",
       activity: { manager: { state: "thinking" } },
-      building: { manager: "repo" },
       streams: {
         current: {
           agentId: "manager",
@@ -818,14 +716,12 @@ describe("reconnecting to a running workspace", () => {
     });
     expect(useStore.getState().activeRun).toEqual({ manager: "running" });
     expect(useStore.getState().streams.old).toBeUndefined();
-    expect(useStore.getState().building).toEqual({ manager: "repo" });
     expect(useStore.getState().reasoning).toEqual({});
     apply({ type: "streamDelta", messageId: "current", channelId: "manager", text: " plus live" });
     expect(useStore.getState().streams.current?.text).toBe("Already written plus live");
     apply({
       type: "liveSnapshot",
       activity: { manager: { state: "idle" } },
-      building: {},
       streams: {},
     });
     expect(useStore.getState().activeRun).toEqual({});

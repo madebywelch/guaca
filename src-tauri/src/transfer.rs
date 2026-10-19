@@ -17,10 +17,10 @@ type Result<T> = std::result::Result<T, String>;
 pub const MAX_ARCHIVE: usize = 64 * 1024 * 1024;
 
 // Order is also insertion order. Nothing from plugin credential stores, and no grant:
-// a terminal, a computer and a browser are given again on the host a crew lands on.
+// a computer and a browser are given again on the host a crew lands on.
 const TABLES: &[(&str, &str, &str)] = &[
     ("groups", "id,name,created_at,base_url,default_model,provider,subscription_model,reasoning_effort,request_timeout_secs,max_hops,max_steps_per_run,max_fanout_per_call,max_sends_per_pair,max_tool_rounds", "id = ?1"),
-    ("agents", "id,group_id,name,avatar,color,model,subscription_model,reasoning_effort,system_prompt,skills,lifecycle,version,created_at,updated_at,pinned,rail_order,discarded_at,browser_consent,harness,gate", "group_id = ?1"),
+    ("agents", "id,group_id,name,avatar,color,model,subscription_model,reasoning_effort,system_prompt,skills,lifecycle,version,created_at,updated_at,pinned,rail_order,discarded_at,browser_consent", "group_id = ?1"),
     ("routines", "id,agent_id,name,what,fires,active,next_run_at,last_run_at,created_at,skip_if_working", "agent_id IN (SELECT id FROM agents WHERE group_id = ?1)"),
     ("messages", "id,run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,cause,created_at,intent", "channel_id IN (SELECT id FROM agents WHERE group_id = ?1)"),
     ("occasions", "id,group_id,agent_id,title,detail,place,starts_at,minutes,all_day,created_at,updated_at", "group_id = ?1"),
@@ -349,7 +349,13 @@ pub fn import(
             .split(',')
             .collect::<HashSet<_>>();
         for row in rows {
-            if row.keys().any(|k| !allowed.contains(k.as_str())) {
+            // A copy made while agents still had a coding harness and a push
+            // gate carries both. Neither means anything here, and a crew is
+            // not refused for having been exported last month.
+            let allowed = |key: &str| {
+                allowed.contains(key) || (table == "agents" && matches!(key, "harness" | "gate"))
+            };
+            if row.keys().any(|k| !allowed(k.as_str())) {
                 return Err("The group file contains an unexpected field.".into());
             }
             validate_row(table, row)?;
@@ -422,6 +428,10 @@ pub fn import(
     for (table, _, _) in TABLES {
         for original in archive.tables.get(*table).into_iter().flatten() {
             let mut row = original.clone();
+            if *table == "agents" {
+                row.remove("harness");
+                row.remove("gate");
+            }
             for (key, value) in &mut row {
                 if key == "parts" {
                     let mut parts: Value =
@@ -615,7 +625,6 @@ mod tests {
                 .unwrap();
             conn.execute("INSERT INTO routines (id,agent_id,what,fires,created_at,active) VALUES (?1,?2,'Check tests','once',1,1)", params![uuid::Uuid::new_v4().to_string(),agent.to_string()]).unwrap();
             conn.execute("INSERT INTO occasions (id,group_id,agent_id,title,starts_at,created_at,updated_at) VALUES (?1,?2,?3,'Review',1000,1,1)", params![uuid::Uuid::new_v4().to_string(),group.to_string(),agent.to_string()]).unwrap();
-            conn.execute("UPDATE agents SET has_terminal=1, harness='codex', gate='askBeforePushing' WHERE id=?1", [agent.to_string()]).unwrap();
             conn.execute("INSERT INTO connectors (id,group_id,service,account,env_var,secret,created_at,updated_at) VALUES (?1,?2,'Cloudflare','ops','CLOUDFLARE_API_TOKEN','connector-secret',1,1)", params![uuid::Uuid::new_v4().to_string(),group.to_string()]).unwrap();
             Self { _dir: dir, store, workspace, files, group, agent }
         }
@@ -642,11 +651,18 @@ mod tests {
         assert_eq!(archive.reconnect[0].kind, "credential");
         assert_eq!(archive.tables["groups"].len(), 1);
         assert_eq!(archive.tables["agents"].len(), 1);
-        // How the agent codes travels; that it may is given again on arrival.
-        let agent = &archive.tables["agents"][0];
-        assert_eq!(agent["harness"], "codex");
-        assert_eq!(agent["gate"], "askBeforePushing");
-        assert!(!agent.contains_key("has_terminal"), "{agent:?}");
+    }
+    #[test]
+    fn a_copy_from_when_agents_had_a_coding_harness_still_arrives() {
+        // Exported last month, imported today: the two fields that were on the
+        // agent then are dropped on the way in rather than refused.
+        let f = Fixture::new();
+        let mut archive = f.export();
+        let agent = &mut archive.tables.get_mut("agents").unwrap()[0];
+        agent.insert("harness".into(), "codex".into());
+        agent.insert("gate".into(), "askBeforePushing".into());
+        let imported = f.import(archive).unwrap();
+        assert_eq!(f.store.group_crew(imported).unwrap().len(), 1);
     }
     #[test]
     fn an_imported_crew_arrives_at_the_bottom_of_the_column() {

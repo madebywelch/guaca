@@ -12,22 +12,18 @@
 //! Anthropic restricts a consumer OAuth token to the program it was issued to,
 //! server-side. Guaca holding one and dialling the Messages API is refused; the
 //! `claude` program on the same machine and the same account runs the work off
-//! the plan. So the way to spend a subscription is to *be* the program, which is
-//! the same fact [`crate::domain::terminal::Harness`] is built on, one level
-//! up: there it decides who writes code, here it decides who answers a turn.
+//! the plan. So the way to spend a subscription is to *be* the program.
 //! `docs/PROTOCOL.md` has the dates and the sources.
 //!
 //! ## Guaca keeps its own loop
 //!
-//! This is the decision the rest of the file follows from, and it is the
-//! opposite of the one [`crate::coding`] makes.
+//! This is the decision the rest of the file follows from.
 //!
 //! `claude` is an agent harness: given tools it can reach, it runs its own
 //! rounds and hands back a conclusion. Letting it do that here would move
 //! `max_tool_rounds`, `reserve_step` and every stop check inside a program this
 //! app does not control, and the guard would be enforced by a process boundary
-//! instead of by `runtime/guard.rs`. A coding job can afford that because it is
-//! a different unit of work with its own budget. A turn cannot: it is the unit
+//! instead of by `runtime/guard.rs`. A turn cannot afford that: it is the unit
 //! the five limits are written in.
 //!
 //! So the program is given no tools at all (`--tools ""`, no MCP servers) and
@@ -91,8 +87,7 @@
 //! ## What it does not report
 //!
 //! Money that moved. `total_cost_usd` on a plan is the equivalent API price
-//! rather than a charge, which is the same claim [`crate::coding::Outcome`]
-//! makes and no more. It is dropped rather than recorded, so the usage table
+//! rather than a charge. It is dropped rather than recorded, so the usage table
 //! keeps meaning what it has always meant; the tokens are real and are counted.
 
 use std::path::PathBuf;
@@ -108,9 +103,8 @@ use crate::llm::openrouter::{
     UserContent, THOUGHT_BREAK,
 };
 
-/// The program, found on `PATH` rather than configured, for the reason
-/// [`crate::coding`] finds its own there: a second place to say where it lives
-/// is a second place for it to be wrong.
+/// The program, found on `PATH` rather than configured: a second place to say
+/// where it lives is a second place for it to be wrong.
 pub const PROGRAM: &str = "claude";
 
 /// What to do about it not being there. Named once so the refusal and the
@@ -418,8 +412,7 @@ impl ProgramUsage {
     /// The program reports `total_cost_usd` on a plan as the equivalent API
     /// price rather than a charge. Recording it would put money in the usage
     /// table that nobody spent, and the table is what an operator reads to
-    /// decide whether a crew is affordable. The same claim, and the same
-    /// refusal to make a larger one, is in [`crate::coding::Outcome::cost`].
+    /// decide whether a crew is affordable.
     fn tally(&self) -> Usage {
         Usage {
             prompt_tokens: self
@@ -594,6 +587,24 @@ fn scratch() -> Option<PathBuf> {
     Some(at)
 }
 
+/// Whether the program is on this machine, and what it says its version is.
+///
+/// Asked of the program itself rather than of a path, because the answer
+/// changes when the operator installs or upgrades it between two looks at the
+/// settings. A program that is there and will not answer is reported missing:
+/// to the row that asks, the two are the same thing, and the refusal a turn
+/// meets names the install command either way.
+pub async fn presence() -> Option<String> {
+    let asked = tokio::process::Command::new(PROGRAM)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let answered = tokio::time::timeout(Duration::from_secs(10), asked).await.ok()?.ok()?;
+    answered.status.success().then(|| String::from_utf8_lossy(&answered.stdout).trim().to_string())
+}
+
 /// Runs one model call and reads what the program says about it.
 ///
 /// The one place the third provider parts company from the other two, reached
@@ -622,8 +633,7 @@ where
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         // A call this app has given up on must not leave a process holding the
-        // operator's plan open. The same reason it is set in `coding/mod.rs`,
-        // and it is load-bearing rather than tidy here: this is the whole of
+        // operator's plan open. It is load-bearing rather than tidy: this is the whole of
         // what a stop does to a call in flight. `Runtime::until_stopped` drops
         // the future, the drop takes the child with it, and the plan stops being
         // spent on an answer nobody is going to read.

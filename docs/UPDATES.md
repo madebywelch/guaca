@@ -103,8 +103,8 @@ inequality check into a downgrade operation when an older desktop reconnects.
 **Review update** opens the current and target versions, affected workspace, and
 current work. Before **Back up and update**, state that running work pauses and
 carries on after the restart, and that a command still running when the host
-stops is left for review. Show active conversations and
-coding jobs from the backend, including other clients' work. Offer **Later**.
+stops is left for review. Show active conversations
+from the backend, including other clients' work. Offer **Later**.
 Do not promise "update when idle" in the first version: a correct idle update
 requires stopping admission of new runs and scheduled work atomically, not
 watching a client-side activity count fall to zero.
@@ -176,8 +176,8 @@ generic `compose pull` instructions would not update that checkout.
 Container image replacement requires stopping and recreating the container.
 [Docker Compose documents this behavior](https://docs.docker.com/reference/cli/docker/compose/up/).
 The backend cannot own an operation that removes its own process, and what can
-is the Docker socket, which is root on the box. guacad runs the shell commands
-agents ask for, so it never holds one.
+is the Docker socket, which is root on the box. guacad runs programs on agents'
+behalf, a connector run as a program among them, so it never holds one.
 
 `guaca-updater` (`src-tauri/src/updater.rs`) is the controller: a container
 from the same image, running nothing else, holding the socket. It makes the
@@ -192,7 +192,7 @@ relays it at `/v1/host` and `/v1/host/update`. The updater can be asked two
 things: how the host is, and to install the latest release, named by version.
 It cannot be handed an image, a command, or a restore. That short list is why
 the workspace token authorizes an update rather than a separate administrator
-credential: an agent shell inside the host can reach the socket, and the most
+credential: a program running inside the host can reach the socket, and the most
 it can make the updater do is install Guaca's own latest signed release, which
 interrupts work and loses none. A second key the operator has to keep would
 buy nothing against that and cost every non-technical operator a password.
@@ -224,7 +224,7 @@ what the replacement checks before removing it.
 
 Every update copies the whole stopped workspace before it replaces the host,
 and nothing used to remove those copies. A box following `main` updates
-several times a day, and k1 as first moved onto the updater, a 19 GB disk
+several times a day, and the first box moved onto the updater, a 19 GB disk
 holding a 3 GB workspace and its images, had room for about one backup: its
 second update would have failed at the backup step, and every one after it.
 

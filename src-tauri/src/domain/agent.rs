@@ -12,7 +12,6 @@ use crate::domain::effort::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 
 use super::ids::{AgentId, GroupId};
-use super::terminal::{Gate, Harness};
 
 /// Where an agent is in its lifecycle.
 ///
@@ -69,9 +68,8 @@ impl Lifecycle {
 /// A browser is given to one agent, and what is in it is the operator's
 /// accounts. Giving an agent the browser is the decision about those accounts:
 /// there is nothing an agent can do with a page it was handed that the operator
-/// did not hand it. So the answer belongs beside `has_browser`, on the agent,
-/// for the reason [`crate::domain::terminal::Gate`] belongs beside
-/// `has_terminal`. It is a fact about how this agent's work happens.
+/// did not hand it. So the answer belongs beside `has_browser`, on the agent.
+/// It is a fact about how this agent's work happens.
 ///
 /// ## Why it is not per site
 ///
@@ -201,20 +199,6 @@ pub struct AgentCard {
     /// model again, up to three at once, and a crew where only the coordinator
     /// should spend that way is the ordinary shape.
     pub runs_errands: bool,
-    /// Whether the operator has given this agent a terminal: a directory of
-    /// its own on the machine Guaca runs on, the shell that starts there, and
-    /// the coding harness it can hand a change to. See
-    /// [`crate::domain::terminal`].
-    ///
-    /// A decision rather than a directory, like `has_computer`: taking it away
-    /// keeps the files, and giving it back finds them where they were.
-    pub has_terminal: bool,
-    /// Which program writes the code when this agent calls `code`. Kept while
-    /// the terminal is taken away, so giving it back restores the choice.
-    pub harness: Harness,
-    /// Whether this agent's pushes stop on the operator's desk first, through
-    /// every door its terminal has.
-    pub gate: Gate,
     pub lifecycle: Lifecycle,
     /// Kept at the top of the rail. Where a row is drawn and nothing else: a
     /// pinned agent is addressed, paid for and messaged exactly as before, so
@@ -680,9 +664,6 @@ mod tests {
             has_browser: false,
             browser_consent: Consent::default(),
             runs_errands: false,
-            has_terminal: false,
-            harness: Harness::default(),
-            gate: Gate::default(),
             lifecycle: Lifecycle::Active,
             pinned: false,
             rail_order: 0,

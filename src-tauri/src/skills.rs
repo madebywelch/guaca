@@ -494,9 +494,13 @@ mod tests {
             );
             assert!(package.description.starts_with("Use "), "{name} says when to load it");
             let (_, _, body) = skill::parse(&package.text).unwrap();
-            // Written for another harness first. Each of these is a tool or a
-            // word from there that a model here would try to call or look for.
+            // Written for another harness first, or for a Guaca that had tools
+            // this one no longer has. Each of these is a tool or a word a model
+            // here would try to call or look for.
             for foreign in [
+                "`shell`",
+                "`code`",
+                "`edit`",
                 "web_search",
                 "web_extract",
                 "browser_navigate",
