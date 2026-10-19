@@ -38,7 +38,6 @@ use crate::domain::routine::{self, Routine, RoutineRun, Trigger};
 use crate::domain::search::SearchHits;
 use crate::domain::signin::Signin;
 use crate::domain::skill::{Scope as SkillScope, Skill};
-use crate::domain::terminal::{Gate, Harness, Payer, Tuning};
 use crate::domain::usage::{GroupUsage, RunUsage};
 use crate::domain::worknote::WorkingNote;
 use crate::e2b::{Computer, E2bClient, E2bError};
@@ -277,37 +276,6 @@ impl From<crate::runtime::RuntimeError> for CommandError {
             RuntimeError::UnknownAgent(_) => CommandError::new("notFound", err.to_string()),
             RuntimeError::AgentTerminated(_) => CommandError::new("terminated", err.to_string()),
             RuntimeError::NothingToRetry => CommandError::new("notFound", err.to_string()),
-            // A precondition the operator can fix from the agent's panel, so it
-            // says so rather than reading as something that broke.
-            RuntimeError::NoTerminal(_)
-            | RuntimeError::JobRunning { .. }
-            | RuntimeError::NothingToSay
-            | RuntimeError::NoCodingSession
-            | RuntimeError::SessionElsewhere { .. }
-            | RuntimeError::SessionGone(_)
-            | RuntimeError::Tuning(_) => CommandError::new("badRequest", err.to_string()),
-            // The agent's wording asks it to pass this on; the operator is the
-            // one it would be passed to, so they are told directly.
-            RuntimeError::NoKeyToLend => CommandError::new(
-                "badRequest",
-                "pi is set to be paid for with Guaca's API key, and there is no key in this \
-                 agent's group settings or in Settings > Provider. Paste one in either, or set pi \
-                 back to its own sign-in in this terminal panel",
-            ),
-            // A `shell` or file-tool failure is answered to the model inside
-            // its turn and never to the webview: no command here runs one. The
-            // arms exist because the enum is one enum.
-            RuntimeError::Shell(_) | RuntimeError::Terminal(_) => {
-                CommandError::new("badRequest", err.to_string())
-            }
-            // A job that ended between the panel drawing a button and the
-            // operator pressing it, and two facts about a job that is running.
-            // None of them is a failure: each says what the operator can do
-            // instead, which for the first is nothing at all.
-            RuntimeError::NoJobRunning
-            | RuntimeError::JobStillStarting
-            | RuntimeError::JobUnreachable(_)
-            | RuntimeError::Stopping => CommandError::new("badRequest", err.to_string()),
             // All three are this side answering a request with the wrong shape
             // of answer, which is a defect here rather than something the
             // operator did. Reported as an ordinary failure so it lands in the
@@ -744,283 +712,29 @@ pub async fn delete_connector(state: &AppState, id: ConnectorId) -> Reply<()> {
     Ok(())
 }
 
-// ---- terminals -----------------------------------------------------------
+// ---- the claude program --------------------------------------------------
 
-/// Gives an agent a terminal: a directory of its own on the machine Guaca runs
-/// on, the shell that starts there, and a coding harness.
-///
-/// The decision and nothing else, like a computer. The directory is made the
-/// first time a tool needs it, and an agent that never runs a command never
-/// costs a byte.
-pub async fn give_agent_terminal(state: &AppState, id: AgentId) -> Reply<()> {
-    state.runtime.store().set_has_terminal(id, true)?;
-    state.runtime.emit(UiEvent::AgentsChanged);
-    Ok(())
-}
-
-/// Takes it back, and stops a job it has running.
-///
-/// The directory stays. Being allowed a terminal is a decision, and the clones
-/// and files in it are the agent's work, which a change of mind about access
-/// has no business deleting. Giving it back finds them where they were; the
-/// directory goes when the agent is purged.
-pub async fn take_agent_terminal(state: &AppState, id: AgentId) -> Reply<()> {
-    state.runtime.store().set_has_terminal(id, false)?;
-    let _ = state.runtime.stop_job(id, crate::runtime::Origin::Operator);
-    state.runtime.emit(UiEvent::AgentsChanged);
-    Ok(())
-}
-
-/// Which program writes this agent's code, and whether its pushes ask first.
-///
-/// One call for both, because they are one panel's two answers about how this
-/// agent's work happens, and a job reads both when it starts. A job already
-/// running keeps what it started with.
-pub async fn set_agent_coding(
-    state: &AppState,
-    id: AgentId,
-    harness: Harness,
-    gate: Gate,
-) -> Reply<()> {
-    state.runtime.store().set_agent_coding(id, harness, gate)?;
-    state.runtime.emit(UiEvent::AgentsChanged);
-    Ok(())
-}
-
-/// An agent's terminal, as its panel shows it.
-#[derive(Debug, Clone, serde::Serialize)]
+/// Whether the `claude` program is on this machine, for the provider row.
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TerminalView {
-    /// Where the directory is, on the machine Guaca runs on. What an operator
-    /// types after `cd` in their own shell to look at the agent's work.
-    pub path: String,
-    /// The coding session it last ran, which a follow-up carries on.
-    pub session: Option<crate::domain::terminal::Session>,
-    /// The command that opens that session in a shell on the host, from the
-    /// terminal's own directory. Built here rather than in the webview, so the
-    /// flag each program takes is spelled once.
-    pub resume: Option<String>,
-    /// What was chosen inside each harness for this agent, all three, so a
-    /// switch draws the one it switched to without asking again.
-    pub tunings: Vec<HarnessTuning>,
-    /// What Guaca's own key would pay through, if pi were set to it.
-    pub guaca_key: GuacaKey,
-}
-
-/// One harness's tuning, named.
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HarnessTuning {
-    pub harness: Harness,
-    #[serde(flatten)]
-    pub tuning: Tuning,
-}
-
-/// Whether Guaca has a key to lend this agent, and to where. Never the key.
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GuacaKey {
-    pub set: bool,
-    /// The endpoint the key is spent at, which the panel names so an operator
-    /// knows whose bill a job lands on.
-    pub endpoint: String,
-    /// The group whose own key it is, or none when it is the one in Settings >
-    /// Provider. Named because a crew's key and the app's can be two accounts.
-    pub group: Option<String>,
-    /// Whether it is OpenRouter, whose models pi can list.
-    pub openrouter: bool,
-    /// The model a job runs when none was chosen: the key's own.
-    pub default_model: String,
-}
-
-/// Where an agent's terminal is, and the session it last ran. Made if it is
-/// not there, so the path shown is one that exists.
-pub async fn agent_terminal(state: &AppState, id: AgentId) -> Reply<TerminalView> {
-    let card = agent_card(state, id)?;
-    let path = state.runtime.terminals().ensure(id).map_err(crate::runtime::RuntimeError::from)?;
-    let session = state.runtime.store().coding_session(id)?;
-    let resume = session.as_ref().map(|session| session.resume_line(&path));
-    let mut tunings = Vec::new();
-    for harness in Harness::ALL {
-        tunings.push(HarnessTuning {
-            harness,
-            tuning: state.runtime.store().coding_tuning(id, harness)?,
-        });
-    }
-    Ok(TerminalView {
-        path: path.to_string_lossy().into_owned(),
-        session,
-        resume,
-        tunings,
-        guaca_key: guaca_key(state, &card)?,
-    })
-}
-
-fn guaca_key(state: &AppState, card: &crate::domain::agent::AgentCard) -> Reply<GuacaKey> {
-    let inference = state.runtime.lent_endpoint(card);
-    let group = state
-        .runtime
-        .store()
-        .get_group(card.group_id)?
-        .filter(|group| group.api_key_set)
-        .map(|group| group.name);
-    let upstream = crate::coding::relay::Upstream {
-        base_url: inference.base_url.clone(),
-        api_key: String::new(),
-        referer: String::new(),
-        title: String::new(),
-    };
-    Ok(GuacaKey {
-        set: !inference.api_key.trim().is_empty() && !inference.base_url.trim().is_empty(),
-        endpoint: inference.base_url,
-        group,
-        openrouter: upstream.is_openrouter(),
-        default_model: inference.default_model,
-    })
-}
-
-/// Records what the operator chose inside one harness for one agent.
-///
-/// Checked against the program it is for before it is kept, so a job never
-/// starts on a word its program would refuse.
-pub async fn set_coding_tuning(
-    state: &AppState,
-    id: AgentId,
-    harness: Harness,
-    tuning: Tuning,
-) -> Reply<()> {
-    let clean = tuning.clean(harness).map_err(crate::runtime::RuntimeError::from)?;
-    state.runtime.store().set_coding_tuning(id, harness, &clean)?;
-    state.runtime.emit(UiEvent::AgentsChanged);
-    Ok(())
-}
-
-/// The models a harness offers one agent, asked of the program on the backend.
-///
-/// `pays` is which account would pay: pi on Guaca's key lists what the key
-/// this agent would be lent can reach, not what pi's own sign-ins can. Per
-/// agent because two crews can hold keys for two endpoints.
-pub async fn coding_models(
-    state: &AppState,
-    id: AgentId,
-    harness: Harness,
-    pays: Payer,
-) -> Reply<Vec<crate::coding::ModelOffer>> {
-    let lent = match pays {
-        Payer::Own => None,
-        Payer::GuacaKey => {
-            let key = guaca_key(state, &agent_card(state, id)?)?;
-            Some(crate::coding::relay::Upstream {
-                base_url: key.endpoint,
-                api_key: String::new(),
-                referer: String::new(),
-                title: String::new(),
-            })
-        }
-    };
-    crate::coding::models(harness, lent.as_ref())
-        .await
-        .map_err(|err| CommandError::new("unavailable", err.to_string()))
-}
-
-/// One coding harness, as the panel that offers the choice needs it.
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HarnessOnMachine {
-    pub harness: Harness,
-    /// Whether the program is on this app's `PATH`.
+pub struct ClaudeProgram {
     pub installed: bool,
     /// What it says its version is, or empty when it is not there.
-    ///
-    /// The program's own answer rather than a parse of it, so an operator
-    /// comparing this panel with their terminal sees the same string.
     pub version: String,
-    /// Whether a job on it can be reached while it runs.
-    ///
-    /// False for a version older than the one its steering contract was
-    /// measured against. `coding::presence` defines each version floor.
-    pub bridged: bool,
-    /// How to get it if it is not. Sent from here rather than spelled in the
-    /// webview, because it is the same string a refused job quotes at an agent,
-    /// and two copies of an install command drift the day a vendor renames a
-    /// package.
-    pub install: &'static str,
-    /// Why this host will not run it, when it will not.
-    ///
-    /// A row rather than an absence, for the reason every other capability here
-    /// is drawn rather than hidden: a harness that silently vanishes from the
-    /// list on a server is a panel that disagrees with the documentation and
-    /// with the operator's own laptop, and nothing on screen explains it.
-    /// `None` is the ordinary case and draws exactly what it always drew.
-    pub withheld: Option<String>,
-    pub signed_in: Option<bool>,
-    pub sign_in: &'static str,
-    /// Every effort word the program takes. A model may take fewer, and the
-    /// panel offers the model's own list when the program gives one.
-    pub efforts: &'static [&'static str],
+    /// How to get it, spelled once in Rust so the row and a refused turn agree.
+    pub install: String,
 }
 
-/// Which coding harnesses are on this machine, and how to get the ones that are
-/// not.
-///
-/// Asked by the panel that offers the choice, so picking one the operator does
-/// not have is answered at the moment they pick. Everything else about a job is
-/// discovered when it runs; this one cannot be, because a job runs minutes after
-/// the tool call that started it and its refusal reaches an agent rather than
-/// the person who chose the harness.
-///
-/// Every harness comes back, installed or not, and they are asked concurrently:
-/// each is a process spawn, and asked in series a panel waits once per harness.
-pub async fn coding_harnesses(state: &AppState) -> Reply<Vec<HarnessOnMachine>> {
-    let _ = state;
-    let asked = Harness::ALL.map(|harness| async move {
-        let (installed, version, bridged) = match crate::coding::presence(harness).await {
-            crate::coding::Presence::Missing => (false, String::new(), false),
-            crate::coding::Presence::Installed { version, bridged } => (true, version, bridged),
-        };
-        let signed_in = if installed { crate::coding::signed_in(harness).await } else { None };
-        HarnessOnMachine {
-            harness,
-            installed,
-            version,
-            bridged,
-            install: crate::coding::install(harness),
-            withheld: None,
-            signed_in,
-            sign_in: crate::coding::sign_in(harness),
-            efforts: harness.efforts(),
-        }
-    });
-    Ok(futures_util::future::join_all(asked).await.into_iter().collect())
-}
-
-/// Sends a correction into a coding job that is already running.
-///
-/// The one thing an operator watching a job go the wrong way could not do. It
-/// is staged for Claude's next hook boundary. Codex uses native `turn/steer`
-/// and this call waits for its acknowledgment before reporting success.
-///
-/// Refused rather than swallowed when nothing takes it. A job that has just
-/// ended, and a harness with no way in while it works, are two different
-/// sentences and both are things the operator can act on: the second is why
-/// the panel says which harness an agent runs.
-pub async fn message_coding_job(
-    state: &AppState,
-    agent_id: AgentId,
-    message: String,
-) -> Reply<crate::runtime::Continued> {
-    state.runtime.message_job(agent_id, &message).await.map_err(Into::into)
-}
-
-/// Stops a coding job that is running, leaving whatever it has committed.
-///
-/// The process is killed. Nothing is reverted and nothing is cleaned up,
-/// because the commits a job was told to make as it went are the operator's
-/// checkpoints and throwing them away is not this button's decision to take.
-/// The agent that started the job is told, on the same path it is told about
-/// one that finished: an agent never told is an agent waiting forever.
-pub async fn stop_coding_job(state: &AppState, agent_id: AgentId) -> Reply<()> {
-    state.runtime.stop_job(agent_id, crate::runtime::Origin::Operator).map_err(Into::into)
+/// Asked of the program rather than assumed, because a provider that is set and
+/// not installed fails on the first turn, minutes after the person who chose it
+/// has closed the settings.
+pub async fn claude_program(_state: &AppState) -> Reply<ClaudeProgram> {
+    let version = crate::llm::claude::presence().await;
+    Ok(ClaudeProgram {
+        installed: version.is_some(),
+        version: version.unwrap_or_default(),
+        install: crate::llm::claude::INSTALL.to_string(),
+    })
 }
 
 // ---- plugins -------------------------------------------------------------

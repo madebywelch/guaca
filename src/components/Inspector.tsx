@@ -8,7 +8,6 @@ import { Memory } from "./Memory";
 import { Notebook } from "./Notebook";
 import { RoutineDetail } from "./RoutineDetail";
 import { RoutineList } from "./RoutineList";
-import { TerminalPanel } from "./TerminalPanel";
 import { WorkingNotes } from "./WorkingNotes";
 
 interface Props {
@@ -229,7 +228,6 @@ export function Inspector({
         <div className="inspector__level" hidden={routine !== null} key={agent.id}>
           <BrowserScreen agent={agent} />
           <ComputerScreen agent={agent} />
-          <TerminalPanel agent={agent} />
           <RoutineList agentId={agent.id} onOpen={setRoutine} />
           <WorkingNotes agentId={agent.id} />
           <Memory agentId={agent.id} />

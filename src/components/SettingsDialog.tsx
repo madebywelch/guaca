@@ -279,11 +279,9 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
   // the account holds, and it is read rather than kept because it changes when
   // the operator authorizes something in a browser rather than when this app
   // does anything.
-  // Whether the `claude` program is on this machine. Read rather than assumed,
-  // and read from the command the terminal panel already asks the same
-  // question with: it is the same binary, and a second way to ask would be a
-  // second answer to keep true. Null while it is still being asked, which is
-  // not the same as "not installed" and must not draw as it.
+  // Whether the `claude` program is on this machine. Read rather than assumed.
+  // Null while it is still being asked, which is not the same as "not
+  // installed" and must not draw as it.
   const [claudeInstalled, setClaudeInstalled] = useState<boolean | null>(null);
   const [account, setAccount] = useState<AccountStatus | null>(null);
   const [connectors, setConnectors] = useState<AccountConnectors | null>(null);
@@ -311,11 +309,9 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
   useEffect(() => {
     let live = true;
     void api
-      .codingHarnesses()
-      .then((harnesses) => {
-        if (live) {
-          setClaudeInstalled(harnesses.find((h) => h.harness === "claude")?.installed ?? false);
-        }
+      .claudeProgram()
+      .then((program) => {
+        if (live) setClaudeInstalled(program.installed);
       })
       .catch(() => {
         // Asked again next time Settings opens. A row that cannot say whether

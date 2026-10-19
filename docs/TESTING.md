@@ -81,8 +81,7 @@ library: a workspace opened under a temporary directory, bound to a free port,
 and spoken to over HTTP and the event socket with `reqwest`, entirely offline.
 It asks the questions only that host can fail: that the same commands answer
 over a POST as over Tauri's bridge, that a server refuses what it cannot do and
-says what to do instead, that a harness a box will not run is withheld with its
-reason rather than dropped from the list, that nothing but `/health` answers
+says what to do instead, that nothing but `/health` answers
 without the token, that an event reaches a client that is not a webview, and
 that a stored file is reachable by its digest. It is compiled only under the
 daemon step in `ci.sh`, because that is the only build without Tauri in it, and
@@ -105,47 +104,13 @@ build expects, which is the failure no offline test can see. It reaches the inte
 ./scripts/plugins.sh
 ```
 
-`tests/coding.rs` does the same job for the coding harnesses, and its offline
-half puts real stand-in executables on `PATH` rather than mocking: the thing
-being tested is a process, and each stand-in records the argument vector it was
-handed. That is what makes "an agent set to Claude Code starts `claude`" an
-assertion rather than a code read; drop the column read in `Runtime::start_job`
-and every other suite in this repo still passes. Its `#[ignore]`d half asks the
-real programs whether they still accept those vectors and still answer in the
-shape this build reads, and it spends the host user's own plan.
-
-The stand-ins are also what makes *where* a job ran an assertion. Each one
-records into whatever directory it was started in, so a job told to work in
-`guaca` inside an agent's terminal is checked by there being a recording in
-`guaca` and none at the top of the terminal, and two agents coding at once are
-checked by there being one in each terminal. Nothing else in the build can see
-that: the directory a harness is handed is one argument, and a wrong one is a
-job that works perfectly in the wrong tree.
-
-All three programs hold a conversation on stdin, so their stand-ins
-(`tests/fixtures/claude.py`, `codex.py` and `pi.py`) speak each protocol's
-real shapes and answer what they are sent: a steer, an interrupt or an abort,
-a resumed thread, a gate's confirm, a model listing. Each writes what it
-received into its directory (`.claude_prompt`, `.steered`, `.interrupted`,
-`.aborted`, `.resumed`, `.verdict`, `.pi_history`, `.relayed`), which is what
-lets the suite assert that a correction, a stop, a follow-up and a lent key
-reached the program through its own interface, for every harness, rather than
-that Guaca meant to send one. The Claude stand-in also waits for stdin to close
-after `result`, as the real program does, so a driver that forgets to close it
-hangs the test rather than passing it.
-
-```sh
-cargo test --manifest-path src-tauri/Cargo.toml --test coding
-cargo test --manifest-path src-tauri/Cargo.toml --test coding -- --ignored
-```
-
 `tests/errands.rs` drives errands against the same scripted server the cascade
 suite uses, which answers an errand as "on an errand for" its agent because that
 is how its prompt opens. It holds what is not wording: an errand is offered only
 where the operator switched it on, a fourth is refused, the three withheld tools
-are refused under any name, the last two steps stay with the sending turn, a
-stop reaches an errand mid-call, and two errands that need the terminal take
-turns with it. Remove the lock or the kept steps and the matching test fails.
+are refused under any name, the last two steps stay with the sending turn,
+and a stop reaches an errand mid-call. Remove the kept steps and the matching
+test fails.
 
 ```sh
 cargo test --manifest-path src-tauri/Cargo.toml --test errands

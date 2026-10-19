@@ -51,7 +51,6 @@ const RECENT = 3;
 export function MenubarPanel({ ready }: { ready: boolean }) {
   const agents = useLiveAgents();
   const activity = useStore((s) => s.activity);
-  const building = useStore((s) => s.building);
   const lastActive = useStore((s) => s.lastActive);
   const pending = useStore((s) => s.pending);
   const stuck = useStore((s) => s.stuck);
@@ -109,7 +108,7 @@ export function MenubarPanel({ ready }: { ready: boolean }) {
       <header className="menubar__head">
         <Brand waiting={waiting > 0} />
         <p className="menubar__headline" data-waiting={waiting > 0 ? "" : undefined}>
-          {headline(waiting, workingCount(agents, activity, building))}
+          {headline(waiting, workingCount(agents, activity))}
         </p>
       </header>
 
@@ -140,10 +139,7 @@ export function MenubarPanel({ ready }: { ready: boolean }) {
               onBack={() => setOpen(null)}
             />
           ) : (
-            <Overview
-              agents={panelOrder(agents, { activity, building, lastActive })}
-              onOpen={setOpen}
-            />
+            <Overview agents={panelOrder(agents, { activity, lastActive })} onOpen={setOpen} />
           )}
         </div>
       </div>
@@ -191,7 +187,6 @@ function Overview({ agents, onOpen }: { agents: AgentCard[]; onOpen: (id: AgentI
   const groups = useStore((s) => s.groups);
   const activity = useStore((s) => s.activity);
   const stuck = useStore((s) => s.stuck);
-  const building = useStore((s) => s.building);
   const trail = useStore((s) => s.trail);
   const lastActive = useStore((s) => s.lastActive);
   const finishedAt = useStore((s) => s.finishedAt);
@@ -223,7 +218,7 @@ function Overview({ agents, onOpen }: { agents: AgentCard[]; onOpen: (id: AgentI
       ) : (
         <nav className="menubar__agents" aria-label="Agents">
           {agents.map((agent) => {
-            const label = doing(agent.id, { activity, stuck, building, trail, lastActive }, now);
+            const label = doing(agent.id, { activity, stuck, trail, lastActive }, now);
             const crew = crewOf(agent);
             return (
               <button
@@ -280,7 +275,6 @@ function Conversation({
   const run = useStore((s) => s.activeRun[agent.id]);
   const activity = useStore((s) => s.activity);
   const stuck = useStore((s) => s.stuck);
-  const building = useStore((s) => s.building);
   const trail = useStore((s) => s.trail);
   const lastActive = useStore((s) => s.lastActive);
   const finishedAt = useStore((s) => s.finishedAt);
@@ -312,7 +306,7 @@ function Conversation({
 
   const recent = exchange(messages, agent.id, RECENT);
   const live = liveReply(streams, agent.id);
-  const label = doing(agent.id, { activity, stuck, building, trail, lastActive }, now);
+  const label = doing(agent.id, { activity, stuck, trail, lastActive }, now);
 
   // The newest line in view, by the transcript's own rule: followed for
   // whoever is at the end, and left alone for whoever scrolled up to read.

@@ -73,32 +73,20 @@ LABEL org.opencontainers.image.version=$GUACA_VERSION \
       org.opencontainers.image.revision=$GUACA_COMMIT \
       bot.guaca.release=$GUACA_RELEASE
 # `curl` is the health check. TLS roots are for the model endpoints, the
-# sandboxes and the plugins the daemon calls out to. `git` and `gh` are what an
-# agent's terminal clones, fetches and pushes with. Authentication is the
-# backend user's, configured once on the volume, or a secret granted to agents.
+# sandboxes and the plugins the daemon calls out to. `python3` and `node` are
+# what a connector run as a program on the host is usually written in.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl git openssh-client python3 build-essential ripgrep \
- && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-      -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
- && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-      > /etc/apt/sources.list.d/github-cli.list \
- && apt-get update \
- && apt-get install -y --no-install-recommends gh \
+ && apt-get install -y --no-install-recommends ca-certificates curl python3 \
  && rm -rf /var/lib/apt/lists/* \
  && groupmod --new-name guaca node \
  && usermod --login guaca --home /var/lib/guaca node \
  && mkdir -p /var/lib/guaca \
- && chown guaca:guaca /var/lib/guaca \
- && git config --system credential.https://github.com.helper '' \
- && git config --system --add credential.https://github.com.helper '!gh auth git-credential'
-# Pin harness releases. Jobs use their own credentials, configured explicitly
-# in the container, and never inherit a desktop's subscription files.
-ARG CODEX_VERSION=0.153.3
-ARG PI_VERSION=0.84.4
+ && chown guaca:guaca /var/lib/guaca
+# Pin the `claude` program, which a turn paid for by a Claude plan runs. It
+# uses its own sign-in, configured once on the volume, and never inherits a
+# desktop's subscription files.
 ARG CLAUDE_CODE_VERSION=2.1.260
-RUN npm install --global --ignore-scripts pnpm@10.33.0 "@openai/codex@${CODEX_VERSION}" "@earendil-works/pi-coding-agent@${PI_VERSION}" \
- && npm cache clean --force \
- && curl -fsSL https://claude.ai/install.sh -o /tmp/install-claude.sh \
+RUN curl -fsSL https://claude.ai/install.sh -o /tmp/install-claude.sh \
  && bash /tmp/install-claude.sh "${CLAUDE_CODE_VERSION}" \
  && install -m 755 /root/.local/bin/claude /usr/local/bin/claude \
  && rm -rf /root/.local /tmp/install-claude.sh

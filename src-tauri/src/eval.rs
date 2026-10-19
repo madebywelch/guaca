@@ -12,7 +12,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::domain::envelope::{Envelope, Part, Participant};
+use crate::domain::envelope::{Envelope, Participant};
 use crate::domain::ids::AgentId;
 use crate::domain::promise;
 
@@ -238,15 +238,6 @@ pub fn faults(messages: &[Envelope], name_of: &dyn Fn(AgentId) -> String) -> Vec
     let mut promised: HashSet<AgentId> = HashSet::new();
     for envelope in messages {
         let Participant::Agent { id } = envelope.from else { continue };
-        // A `code` call outlives the turn that made it, and the prompt tells an
-        // agent to start one, say so, and stop. That sentence is backed by a
-        // job that is genuinely running, which is the one case where something
-        // of this agent's does carry on after the message.
-        if envelope.parts.iter().any(
-            |part| matches!(part, Part::ToolCall { name, .. } if name == crate::llm::tools::CODE),
-        ) {
-            continue;
-        }
         if let Some(said) = promise::promises_work(&envelope.plain_text()) {
             if promised.insert(id) {
                 faults.push(Fault::PromisedAndStopped { agent: name_of(id), said: brief(said) });
@@ -383,6 +374,7 @@ fn overlap(a: &HashSet<String>, b: &HashSet<String>) -> f32 {
 mod tests {
     use super::*;
     use crate::domain::envelope::Intent;
+    use crate::domain::envelope::Part;
     use crate::domain::ids::{MessageId, RunId};
 
     fn agents() -> (AgentId, AgentId) {
@@ -596,31 +588,6 @@ mod tests {
                 0,
                 false,
             ),
-        ];
-        assert!(faults(&run, &named(a, b)).is_empty());
-    }
-
-    #[test]
-    fn a_started_coding_job_is_the_one_thing_that_outlives_the_message() {
-        // The prompt tells an agent to start a `code` job, say so, and end its
-        // turn, and that is right: the job comes back on a run of its own. So
-        // the sentence is backed, and a rule that could not tell the two apart
-        // would fire on the one announcement the app asks for.
-        let (a, b) = agents();
-        let started = Envelope {
-            parts: vec![
-                Part::text("Started the coding agent on it. Checking back on it shortly."),
-                Part::tool_call(
-                    crate::llm::tools::CODE,
-                    serde_json::Value::Null,
-                    crate::domain::envelope::ToolOutcome::Ok { summary: "started".into() },
-                ),
-            ],
-            ..msg(Participant::Agent { id: a }, Participant::Human, "", 0, false)
-        };
-        let run = [
-            msg(Participant::Human, Participant::Agent { id: a }, "fix the test", 0, true),
-            started,
         ];
         assert!(faults(&run, &named(a, b)).is_empty());
     }

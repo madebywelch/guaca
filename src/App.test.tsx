@@ -75,7 +75,6 @@ vi.mock("./lib/ipc", () => ({
     capabilities: async () => ({
       loopbackEndpoints: true,
       claudeProvider: true,
-      claudeCodeHarness: true,
       localFiles: true,
     }),
     channelMessages: async () => [],
@@ -113,9 +112,6 @@ function agent(name: string, railOrder = 0): AgentCard {
     hasBrowser: false,
     runsErrands: false,
     browserConsent: "open",
-    hasTerminal: false,
-    harness: "pi",
-    gate: "open",
     name,
     avatar: "avocado",
     color: "#c7d96b",

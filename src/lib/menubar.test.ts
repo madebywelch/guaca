@@ -30,9 +30,6 @@ function agent(name: string, over: Partial<AgentCard> = {}): AgentCard {
     hasBrowser: false,
     runsErrands: false,
     browserConsent: "open",
-    hasTerminal: false,
-    harness: "pi",
-    gate: "open",
     name,
     avatar: "avocado",
     color: "#c7d96b",
@@ -126,7 +123,7 @@ const CHEF: Participant = { kind: "agent", id: "id-Chef" };
 const SCOUT: Participant = { kind: "agent", id: "id-Scout" };
 
 describe("the panel's list", () => {
-  const quiet = { activity: {}, building: {}, lastActive: {} };
+  const quiet = { activity: {}, lastActive: {} };
 
   it("never lists an agent that has been let go", () => {
     const order = panelOrder([agent("Chef"), agent("Gone", { lifecycle: "terminated" })], quiet);
@@ -142,17 +139,6 @@ describe("the panel's list", () => {
     expect(order.map((a) => a.name)).toEqual(["Cy", "Bea", "Ada"]);
   });
 
-  // A coding job outlives the turn that started it, so the agent is idle to
-  // the activity map for the twenty minutes it is writing code.
-  it("counts an agent whose coding job is running as working", () => {
-    const order = panelOrder([agent("Ada"), agent("Bea")], {
-      ...quiet,
-      building: { "id-Bea": "repo-1" },
-    });
-    expect(order.map((a) => a.name)).toEqual(["Bea", "Ada"]);
-    expect(workingCount([agent("Ada"), agent("Bea")], {}, { "id-Bea": "repo-1" })).toBe(1);
-  });
-
   it("keeps a turn parked on the operator with the working, and out of the count", () => {
     const parked = { "id-Bea": { state: "awaitingApproval" as const } };
     const order = panelOrder([agent("Ada"), agent("Bea")], {
@@ -162,7 +148,7 @@ describe("the panel's list", () => {
     });
     expect(order.map((a) => a.name)).toEqual(["Bea", "Ada"]);
     // It is waiting on a person, which the headline counts separately.
-    expect(workingCount([agent("Ada"), agent("Bea")], parked, {})).toBe(0);
+    expect(workingCount([agent("Ada"), agent("Bea")], parked)).toBe(0);
   });
 
   it("puts the paused last, and holds two that never spoke still", () => {

@@ -36,7 +36,7 @@ rather than knew:
 - Findings you send a crewmate, who may pass the claim on without its source.
 
 Skip inline citations when the lookup is incidental to another task (a version
-check in the middle of a coding job), in casual conversation, and in creative
+check in the middle of something else), in casual conversation, and in creative
 writing. Mention a URL only if the operator would plausibly want the link.
 
 ## Where sources come from
@@ -48,11 +48,11 @@ what you were given:
   Cite it by file name and page or section.
 - **A browser.** If you have `browse`, `open` the page and `read` it. Cite the
   page you read, not the search results that led you there.
-- **A computer.** If you have one, `run_command` with `curl` fetches a page.
+- **A computer.** If you have one, `run_command` with `curl` fetches a page,
+  and reads the files and history of a repository cloned there; cite those by
+  path and commit.
 - **Connectors.** A connector's tools return records from the operator's
   accounts; cite each by its link or identifier.
-- **A repository.** If you have one, `shell` reads its files and history; cite
-  by path and commit.
 - **Crewmates.** A crewmate's message is not a source. Ask for the URL and the
   exact sentence they read, and cite that.
 

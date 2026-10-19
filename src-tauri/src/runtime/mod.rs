@@ -444,7 +444,6 @@ enum Permission {
     /// Nobody was asked, because the request could not be recorded.
     Failed(String),
 }
-use crate::coding::bridge::Reach;
 use crate::db::{Store, StoreError};
 use crate::domain::agent::{
     copy_name, AgentCard, CleanDraft, Consent, DirectoryEntry, Lifecycle, COMPOST_MS,
@@ -465,14 +464,12 @@ use crate::domain::plugin::PluginKind;
 use crate::domain::promise;
 use crate::domain::routine::{EventTrigger, Routine, RunKind};
 use crate::domain::signin::{self, BrowserState, Signin, Surface};
-use crate::domain::terminal::Harness;
 use crate::domain::worknote;
 use crate::files::FileStore;
 use crate::llm::modality::{self, Modalities};
 use crate::llm::openrouter::{ChatMessage, ChatRequest, LlmClient, LlmError, Token, ToolCall};
 use crate::llm::tools::{self, Delivery, ToolInvocation};
 use crate::plugins;
-use crate::shell::{self, Ran};
 use crate::workspace::Workspace;
 use events::{Activity, EventSink, UiEvent};
 use guard::{GuardLimits, GuardRegistry, Refusal, SendRequest, Verdict};
@@ -513,8 +510,7 @@ const PLACE_CHUNK: usize = 192 * 1024;
 
 /// Failed sends must not leave a colleague expecting a file. Failed attaches
 /// must not leave an answer claiming one. Advice names only a filesystem the
-/// agent can actually reach: terminal failures carry shell guidance at the
-/// call site, while these cover computers and agents with neither surface.
+/// agent can actually reach: a computer, or nothing.
 const UNSENT_FILE: &str = "The recipient did not get it, so do not tell them it is on the way.";
 const UNSENT_FILE_NO_COMPUTER: &str =
     "The recipient did not get it, so do not tell them it is on the way, and there is nothing \
@@ -583,74 +579,6 @@ const SIGNIN_SCAN_EVERY: Duration = Duration::from_secs(120);
 /// forever, because a turn that never ends is a run that never settles.
 const APPROVAL_WINDOW: Duration = Duration::from_secs(10 * 60);
 
-/// What a job is told when the directory it starts in is not a repository.
-///
-/// Said rather than left for it to find. The standing prompt tells every job
-/// that commits are its only undo, and a job that believed that while standing
-/// somewhere git cannot see would edit for forty minutes with no checkpoint at
-/// all. Which of the two ways out is right depends on the work, and the job is
-/// the one holding the brief.
-const NOT_A_REPOSITORY: &str = "This directory is not a git repository, so nothing you change \
-here can be undone. If the work belongs in a repository that already exists, clone it into a \
-directory of its own here and work there. If it is new work, run `git init` before your first \
-edit.\n\n";
-
-/// A coding job, while it is running.
-///
-/// Everything about a job that outlives the turn that started it and that
-/// something outside the job needs to reach: where it is working, how to reach
-/// it, and who asked for it to stop. Who owns it is the key it is filed under.
-struct Running {
-    /// Where it is working, relative to the agent's terminal.
-    directory: String,
-    /// Steering and stopping, answered by whichever harness is running.
-    ///
-    /// Made before the task that runs the job, so the entry is complete the
-    /// moment it exists: a stop pressed in the moment between the spawn and the
-    /// process coming up waits in the channel and is the first thing the driver
-    /// reads.
-    controls: tokio::sync::mpsc::Sender<crate::coding::Control>,
-    /// Who asked it to stop, once somebody has. What the agent is told when it
-    /// ends depends on it: an agent that stopped its own job needs no message
-    /// about it, and one whose job the operator stopped needs to hear why.
-    stopped_by: Option<Origin>,
-    /// The host asked it to stop, so the next one can carry it on in the same
-    /// session. Nobody is told anything: the job is not over.
-    put_down: bool,
-}
-
-/// A job about to be spawned: where, what, and which session it is.
-struct Launch {
-    working: std::path::PathBuf,
-    shown: String,
-    brief: String,
-    session: String,
-    resume: bool,
-    harness: Harness,
-    origin: Origin,
-}
-
-/// Who asked for a piece of coding work, or for it to stop.
-///
-/// The agent, through `code`, or the operator, from the panels. Both reach the
-/// same session through the same calls; what differs is what the agent is told
-/// afterwards, because a follow-up the operator typed straight into the coding
-/// agent is one the agent never saw.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Origin {
-    Agent,
-    Operator,
-}
-
-/// What `continue` came to: a message into a job that is running, or a new
-/// turn in the session the last one left.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "camelCase", tag = "kind")]
-pub enum Continued {
-    Steered,
-    Resumed { directory: String },
-}
-
 /// How often the schedule is swept for routines that have come due.
 ///
 /// A poll rather than a timer per routine: the next due time is what is
@@ -667,113 +595,10 @@ const SCHEDULE_TICK: Duration = Duration::from_secs(20);
 /// rather than by what it costs.
 const COMPOST_TICK: Duration = Duration::from_secs(60 * 60);
 
-/// What one `shell` call came to.
-///
-/// A refusal is not an error and must not be one. The operator answering no is
-/// the gate doing its job, and the agent has to be told so in words it can act
-/// on rather than handed something that reads like a broken terminal.
-enum Line {
-    Ran(Ran),
-    /// The operator was asked about an outward-facing command and did not
-    /// allow it. Nothing ran.
-    Refused,
-}
-
-/// Who wants to push, which is the only thing that differs between the two
-/// askers.
-///
-/// Both are the same protected action and the same card on the same desk. What
-/// changes is the sentence: an operator deciding needs to know whether they are
-/// looking at a coding job that has been running for ten minutes or at the
-/// agent they are talking to, because those are answered differently.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Asker {
-    /// A coding job's harness, stopped by the `PreToolUse` hook.
-    Job,
-    /// The agent itself, in `shell`, with its turn held open.
-    Agent,
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
-    /// Asked for a terminal tool with no terminal.
-    ///
-    /// Reachable even though the tools are not offered without one: a terminal
-    /// can be taken away between the moment a turn was built and the moment it
-    /// called this, and a model names tools it was never offered.
-    #[error(
-        "{0} has not been given a terminal, so there is nowhere to run commands or write code. \
-         The operator gives an agent one from its panel"
-    )]
-    NoTerminal(String),
-    /// This agent already has a coding job running.
-    ///
-    /// Not a race to retry through: the sentence has to make an agent wait for
-    /// the message it is already going to get, because the alternative it will
-    /// otherwise reach for is starting the job again.
-    #[error(
-        "you already have a coding agent working in {directory}. Two harnesses at once overwrite \
-         each other's work. Do not start another: you get a message when it finishes, and that \
-         is when the next piece of work can begin. Say that it is already in progress"
-    )]
-    JobRunning { directory: String },
-    /// The host is being stopped, and nothing started now would get to finish.
-    #[error(
-        "the host is restarting for an update, so no coding job can start until it is back. \
-         Work already under way is put down and picked up where it stopped: start this again \
-         once the host has restarted"
-    )]
-    Stopping,
-    #[error(transparent)]
-    Terminal(#[from] crate::terminal::TerminalError),
-    /// pi is set to be paid for with Guaca's key, and neither the agent's group
-    /// nor the app holds one.
-    #[error(
-        "your coding agent is set to be paid for with Guaca's API key, and there is no key in \
-         your group's settings or in Settings > Provider, so nothing was started. Tell the \
-         operator: they can paste a key in either, or set pi back to its own sign-in in your \
-         terminal panel"
-    )]
-    NoKeyToLend,
-    #[error(transparent)]
-    Tuning(#[from] crate::domain::terminal::TuningError),
-    #[error("a follow-up needs something in it: say what the coding agent should do next")]
-    NothingToSay,
-    #[error(
-        "there is no coding session to continue yet. Start one with `code` and action `start`, \
-         naming the directory and the whole brief"
-    )]
-    NoCodingSession,
-    #[error(
-        "the last coding session ran on {was}, and this agent is now set to {now}, which cannot \
-         open it. Start a new session with `code` and action `start`, or ask the operator to \
-         switch the harness back"
-    )]
-    SessionElsewhere { was: &'static str, now: &'static str },
-    #[error(
-        "the last coding session worked in `{0}`, which is not in the terminal any more. Start a \
-         new session with `code` and action `start`"
-    )]
-    SessionGone(String),
-    /// Asked to reach a job where none is running.
-    ///
-    /// Reachable in the ordinary course of things rather than only from a
-    /// confused caller: a job ends between the panel drawing a button and the
-    /// operator pressing it, which for a job that has been running for forty
-    /// minutes is exactly when they are most likely to press one.
-    #[error("no coding job is running for that agent. It has already finished")]
-    NoJobRunning,
-    #[error(
-        "that job has only just started and is not reachable yet. Try again in a moment, or \
-         stop it if it is already going the wrong way"
-    )]
-    JobStillStarting,
-    #[error("that job cannot be reached while it works: {0}")]
-    JobUnreachable(String),
     #[error(transparent)]
     Store(#[from] StoreError),
-    #[error(transparent)]
-    Shell(#[from] crate::shell::ShellError),
     #[error("no agent with id {0}")]
     UnknownAgent(AgentId),
     #[error("{0} has been deleted")]
@@ -823,30 +648,6 @@ struct Runs {
     /// this is the size of what is live rather than of everything this process
     /// has ever stopped.
     stopped: HashSet<RunId>,
-    /// What each run has already been told no about, so one refusal is not put
-    /// to the operator again and again inside it.
-    ///
-    /// A model that has just been refused a push tries the push. That is
-    /// ordinary rather than confused — the refusal it reads says the operator
-    /// did not allow it, not that the operator will never allow it — and it is
-    /// the operator who pays for it, in a second card, and a third, for a
-    /// question they have already answered while they are sitting there
-    /// answering it.
-    ///
-    /// Keyed by the outward action the card named rather than by the line,
-    /// because that is the question that was actually put. Somebody who
-    /// refused `git push` refused it whether the next attempt spells it with a
-    /// different flag or reaches it through a script, and a key that told those
-    /// apart would remember nothing a retry could not walk around.
-    ///
-    /// Per run, which is the whole of how it is forgotten: the operator's next
-    /// message is a new run, so a no holds for the work it was said about and
-    /// for nothing after it. Nothing is stored, for the reason a job's lock is
-    /// not: a refusal that outlived the process would be an agent quietly
-    /// refusing pushes nobody could find the decision behind.
-    ///
-    /// Held exactly as long as the run is, on the same path `stopped` is.
-    refused: HashMap<RunId, HashSet<(AgentId, String)>>,
     /// Set once, when the host is asked to stop, and never cleared: the
     /// process ends. Here rather than in an atomic of its own because
     /// `deliver` reads it in the same critical section it books a run in, and
@@ -898,31 +699,6 @@ struct Inner {
     /// When each machine was last asked what it is signed in to, so browsing
     /// does not pay for that question on every call.
     last_signin_scan: Mutex<HashMap<AgentId, Instant>>,
-    /// Which agents have a coding job running, one each.
-    ///
-    /// One per agent because an agent's terminal is its own, so the agent is
-    /// the thing that can only take one harness at a time: two `pi` processes
-    /// in one directory interleave their edits and run git against each other,
-    /// and nothing downstream would say which of them wrote what. Two changes
-    /// at once are two agents, talking in the crew they share.
-    ///
-    /// In memory rather than on the row: a process does not survive a
-    /// restart, and a stored flag would come back true forever after a crash
-    /// and lock an agent out of its own terminal. A job a stopping host puts
-    /// down is a different record, `put_down_jobs`, which the next host reads
-    /// once and starts again from.
-    coding: Mutex<HashMap<AgentId, Running>>,
-    /// Each agent's own directory. See `terminal.rs`.
-    terminals: crate::terminal::Terminals,
-    /// The loopback end of every running coding job.
-    ///
-    /// One for the app rather than one per job: it is a socket, and a workspace
-    /// whose agents all run `pi` never binds it at all. `coding/bridge.rs` is
-    /// the whole of it.
-    bridge: crate::coding::Bridge,
-    /// Where a `pi` job set to Guaca's key is paid for, without the key.
-    /// Listening from the first job that needs it. `coding/relay.rs`.
-    relay: crate::coding::relay::Relay,
     /// Loopback port of the computer viewer. Zero until it is listening.
     viewer_port: AtomicU16,
     /// Loopback port of the event receiver. Zero until it is listening, which
@@ -1015,19 +791,16 @@ pub struct OnDisk {
     pub notebooks: crate::notebook::Notebooks,
     /// Attachments, addressed by the SHA-256 of their contents.
     pub files: FileStore,
-    /// Each agent's terminal, one directory each.
-    pub terminals: crate::terminal::Terminals,
 }
 
 impl OnDisk {
-    /// The three of them under one root, which is how they are always arranged.
+    /// The four of them under one root, which is how they are always arranged.
     pub fn under(root: &std::path::Path) -> Self {
         Self {
             workspace: Workspace::new(root.join("workspace")),
             skills: crate::skills::Skills::new(root.join("skills")),
             notebooks: crate::notebook::Notebooks::new(root.join("notebooks")),
             files: FileStore::new(root.join("files")),
-            terminals: crate::terminal::Terminals::new(root.join("terminals")),
         }
     }
 }
@@ -1052,7 +825,7 @@ impl Runtime {
         disk: OnDisk,
         events: Arc<dyn EventSink>,
     ) -> Self {
-        let OnDisk { workspace, skills, notebooks, files, terminals } = disk;
+        let OnDisk { workspace, skills, notebooks, files } = disk;
         Self {
             inner: Arc::new(Inner {
                 workspace_lease: Mutex::new(None),
@@ -1073,10 +846,6 @@ impl Runtime {
                 notebooks,
                 files,
                 last_signin_scan: Mutex::new(HashMap::new()),
-                coding: Mutex::new(HashMap::new()),
-                terminals,
-                bridge: crate::coding::Bridge::new(),
-                relay: crate::coding::relay::Relay::new(),
                 viewer_port: AtomicU16::new(0),
                 webhook_port: AtomicU16::new(0),
                 on_machine: Mutex::new(HashMap::new()),
@@ -1249,10 +1018,6 @@ impl Runtime {
         &self.inner.notebooks
     }
 
-    pub fn terminals(&self) -> &crate::terminal::Terminals {
-        &self.inner.terminals
-    }
-
     pub fn config(&self) -> AppConfig {
         self.inner.config.read().clone()
     }
@@ -1376,10 +1141,6 @@ impl Runtime {
         let id = card.id;
         self.inner.store.discard_agent(id, now_ms())?;
         self.stop_agent(id);
-        // A coding job is the agent's hands, and an agent in the compost is not
-        // working. Left running it would push under the operator's name for an
-        // agent they have just thrown out, and report back to nobody.
-        let _ = self.stop_job(id, Origin::Operator);
 
         // The one thing it holds that is not its own. Everything else waits
         // out the thirty days untouched because it belongs to this agent and
@@ -1505,14 +1266,6 @@ impl Runtime {
         // its own and goes with it.
         self.inner.workspace.remove(id);
         self.inner.notebooks.remove_all(id);
-        // And its terminal, whatever it cloned there. What it pushed is on the
-        // remote; what it did not push was only ever this agent's, and a name
-        // is free to reuse the moment an agent is deleted, so whoever takes it
-        // next must not inherit a directory of somebody else's work.
-        self.inner.terminals.remove_all(id);
-        // And the coding session that directory held, which nothing can
-        // continue once the directory is gone, with what was chosen for it.
-        let _ = self.inner.store.clear_coding(id);
         // Its schedule goes too, or it would keep coming due for an agent that
         // can no longer act on it.
         let _ = self.inner.store.delete_agent_routines(id);
@@ -1968,8 +1721,8 @@ impl Runtime {
     /// Turns the names an agent asked to send into files that can travel.
     ///
     /// A bare name first looks for a saved attachment, which needs no machine
-    /// to forward. A path reads current bytes from the agent's terminal or its
-    /// computer, never a saved attachment with the same basename.
+    /// to forward. A path reads current bytes from the agent's computer, never
+    /// a saved attachment with the same basename.
     ///
     /// Returns what traveled and, for everything that did not, a line worded
     /// for the model: an agent that believes it attached a document will go on
@@ -2019,7 +1772,7 @@ impl Runtime {
                 }
             }
             // Not something it was sent, so it is something it made.
-            match self.source_file(card, name).await {
+            match self.pull_file(card, name).await {
                 Ok(file) => found.push(file),
                 Err(why) => missing.push(format!("{name} was not attached: {why}. {consequence}")),
             }
@@ -2093,32 +1846,6 @@ impl Runtime {
         Ok((format!("The saved attachment {:?} ({}) is on your computer at {path}. \
             Open it there with a tool that understands this format; its contents have not been shown here.",
             file.name, file.mime), None))
-    }
-
-    /// Terminal paths refer to the same directory `shell` starts in. Only the
-    /// sandbox fallback can read a path outside it.
-    async fn source_file(&self, card: &AgentCard, path: &str) -> Result<Attachment, String> {
-        if self.surfaces_for(card).terminal {
-            let directory = self.inner.terminals.ensure(card.id).map_err(|err| err.to_string())?;
-            let files = self.inner.files.clone();
-            let source = path.to_string();
-            let result = tokio::task::spawn_blocking(move || {
-                files.take_from(std::path::Path::new(&directory), std::path::Path::new(&source))
-            })
-            .await
-            .map_err(|err| err.to_string())?;
-            match result {
-                Ok(file) => return Ok(file),
-                Err(why) if !self.surfaces_for(card).computer => return Err(why),
-                Err(why) => {
-                    return self
-                        .pull_file(card, path)
-                        .await
-                        .map_err(|sandbox| format!("Terminal: {why}. Computer: {sandbox}"));
-                }
-            }
-        }
-        self.pull_file(card, path).await
     }
 
     /// Reads a file off an agent's machine and into the store.
@@ -2450,643 +2177,6 @@ impl Runtime {
         }
     }
 
-    /// The agent's terminal, made if it is not there yet, or why it has none.
-    fn terminal(&self, card: &AgentCard) -> Result<std::path::PathBuf, RuntimeError> {
-        if !card.has_terminal {
-            return Err(RuntimeError::NoTerminal(card.name.clone()));
-        }
-        Ok(self.inner.terminals.ensure(card.id)?)
-    }
-
-    /// One shell line in this agent's terminal, run and answered here.
-    ///
-    /// The opposite of [`Runtime::start_job`] in the one way that matters to a
-    /// turn: this waits. That is the point of it. An agent asking what branch a
-    /// clone is on, or merging a pull request it has already been told to
-    /// merge, needs the answer in the sentence it is writing, and handing that
-    /// to a coding harness costs minutes and a model's whole budget to find out
-    /// something `git status` knows. It is also the door that stays open when
-    /// the other one will not: a spent plan, a harness not installed and a job
-    /// already running all stop `code` and none of them stop this.
-    ///
-    /// ## No lock, deliberately
-    ///
-    /// `start_job` allows one job per agent because two harnesses in one
-    /// directory interleave their edits over minutes and nothing downstream
-    /// could say which of them wrote what. One line is not that. It is the same
-    /// thing as somebody typing in a terminal while a job runs, and refusing it
-    /// would take away the read an agent most wants while a job is running,
-    /// which is what the job is doing.
-    ///
-    /// ## The gate is asked from the same function every harness asks
-    ///
-    /// An agent set to [`crate::domain::terminal::Gate::AskBeforePushing`] stops
-    /// a job before a push, a merge or a release. It has to stop this too, from
-    /// [`crate::coding::bridge::outward`] rather than from a second reading of
-    /// the same idea: two doors that disagreed about what counts as
-    /// outward-facing would be a gate an agent walks around by picking the
-    /// other tool. It is a judgment about the ordinary case and not a boundary,
-    /// exactly as it is there, and for exactly the same reason: the line runs
-    /// as the operator either way.
-    async fn run_in_terminal(
-        &self,
-        card: &AgentCard,
-        run_id: RunId,
-        command: &str,
-    ) -> Result<Line, RuntimeError> {
-        let directory = self.terminal(card)?;
-
-        if card.gate.asks() {
-            if let Some(reach) = crate::coding::bridge::outward(command, &directory).await {
-                if !self.ask_about_push(card.id, run_id, command, &reach, Asker::Agent).await {
-                    return Ok(Line::Refused);
-                }
-            }
-        }
-
-        let env = self.secret_environment(card.id)?;
-        let directory = directory.to_string_lossy();
-        Ok(Line::Ran(shell::run_with_env(&directory, command, shell::PATIENCE, &env).await?))
-    }
-
-    fn secret_environment(
-        &self,
-        agent: AgentId,
-    ) -> Result<crate::secrets::Environment, RuntimeError> {
-        Ok(crate::secrets::Environment {
-            names: self.inner.store.connector_names()?,
-            values: self.inner.store.connector_env(agent)?,
-        })
-    }
-
-    /// Starts a new coding session and returns the directory it is working
-    /// in, relative to the agent's terminal.
-    ///
-    /// Returns as soon as the job is spawned. The result comes back later as a
-    /// message, on the same path a routine firing takes: a fresh run with a
-    /// fresh budget, delivered to the agent that asked for it.
-    ///
-    /// That shape is the whole point and it is worth the paragraph. A coding
-    /// task is a few hundred tool calls over many minutes. Awaited inside the
-    /// tool call, the agent would read as `Thinking` for the length of it, its
-    /// inbox would back up behind it, every routine that came due would be
-    /// skipped, and the transcript would show one open chip and nothing else.
-    /// Started and reported, the turn ends in seconds and the agent stays
-    /// reachable while the work happens.
-    fn start_job(
-        &self,
-        card: &AgentCard,
-        task: &str,
-        directory: Option<&str>,
-    ) -> Result<String, RuntimeError> {
-        if !card.has_terminal {
-            return Err(RuntimeError::NoTerminal(card.name.clone()));
-        }
-        // Resolved before anything is spawned, so a directory that is not there
-        // is a refusal the agent reads in this turn rather than a job that fails
-        // a minute later.
-        let (working, shown) = self.inner.terminals.directory(card.id, directory)?;
-        // Chosen rather than read back, for the two harnesses that take one:
-        // one value is then what a follow-up resumes and what the operator hands
-        // to the program's own `--resume`. Codex names its thread itself.
-        let session = match card.harness {
-            Harness::Codex => String::new(),
-            Harness::Pi | Harness::Claude => uuid::Uuid::new_v4().to_string(),
-        };
-        self.launch(
-            card,
-            Launch {
-                working,
-                shown: shown.clone(),
-                brief: task.to_string(),
-                session,
-                resume: false,
-                harness: card.harness,
-                origin: Origin::Agent,
-            },
-        )?;
-        Ok(shown)
-    }
-
-    /// Carries an agent's coding work on: a message into the job that is
-    /// running, or a new turn in the session the last one left.
-    ///
-    /// One call for both, from the agent's `code` and from the operator's
-    /// panels alike, because it is one thing a person does in each program's
-    /// own window: type the next message. Whether the program is mid-turn
-    /// decides only when it is read.
-    pub async fn continue_job(
-        &self,
-        card: &AgentCard,
-        message: &str,
-        origin: Origin,
-    ) -> Result<Continued, RuntimeError> {
-        let message: String = message.trim().chars().take(4_000).collect();
-        if message.is_empty() {
-            return Err(RuntimeError::NothingToSay);
-        }
-        let running = self.inner.coding.lock().get(&card.id).map(|job| job.controls.clone());
-        if let Some(controls) = running {
-            let (reply, answer) = tokio::sync::oneshot::channel();
-            controls.try_send(crate::coding::Control::Steer { message, reply }).map_err(|err| {
-                match err {
-                    tokio::sync::mpsc::error::TrySendError::Closed(_) => RuntimeError::NoJobRunning,
-                    tokio::sync::mpsc::error::TrySendError::Full(_) => RuntimeError::JobUnreachable(
-                        "the coding agent has not taken the last few corrections yet. Wait for it \
-                         to reach its next step"
-                            .into(),
-                    ),
-                }
-            })?;
-            answer
-                .await
-                .map_err(|_| RuntimeError::NoJobRunning)?
-                .map_err(RuntimeError::JobUnreachable)?;
-            return Ok(Continued::Steered);
-        }
-
-        if !card.has_terminal {
-            return Err(RuntimeError::NoTerminal(card.name.clone()));
-        }
-        let session =
-            self.inner.store.coding_session(card.id)?.ok_or(RuntimeError::NoCodingSession)?;
-        // A session is only ever continued by the program that wrote it: the
-        // ids mean nothing to the other two.
-        if session.harness != card.harness {
-            return Err(RuntimeError::SessionElsewhere {
-                was: session.harness.label(),
-                now: card.harness.label(),
-            });
-        }
-        let (working, shown) = self
-            .inner
-            .terminals
-            .directory(card.id, Some(&session.directory))
-            .map_err(|_| RuntimeError::SessionGone(session.directory.clone()))?;
-        self.launch(
-            card,
-            Launch {
-                working,
-                shown: shown.clone(),
-                brief: match origin {
-                    Origin::Agent => message,
-                    Origin::Operator => format!("The operator says: {message}"),
-                },
-                session: session.id,
-                resume: true,
-                harness: session.harness,
-                origin,
-            },
-        )?;
-        Ok(Continued::Resumed { directory: shown })
-    }
-
-    /// Spawns a job and returns once it is on its way.
-    fn launch(&self, card: &AgentCard, launch: Launch) -> Result<(), RuntimeError> {
-        let Launch { working, shown, brief: task, session, resume, harness, origin } = launch;
-        // One harness per agent. Taken before anything is spawned and held for
-        // the life of the job: two `pi` processes in one directory interleave
-        // their edits and run git against each other, and nothing downstream
-        // could say which of them wrote what.
-        //
-        // Reachable in the ordinary course of things, not just from a confused
-        // model: a job takes minutes, the agent that started it goes idle
-        // because its turn ended, and the next message it reads can ask it for
-        // the next piece of work.
-        let (controls, controlled) = tokio::sync::mpsc::channel(8);
-        // The run this job's own permission requests are filed against. Minted
-        // rather than borrowed from the turn that called `code`: that run
-        // settled minutes ago, and filing against it would report work on a
-        // conversation already reported finished. A run of its own is also what
-        // makes `release_parked` the way a job ending closes whatever it was
-        // waiting on, rather than a second sweep written for this.
-        let job_run = RunId::new();
-        let gate = card.gate;
-        // What the operator chose inside this harness, read now so a job that
-        // cannot be paid for is refused in the turn that asked rather than
-        // minutes later as a failed job.
-        let mut tuning = self.inner.store.coding_tuning(card.id, harness)?;
-        let lend = match tuning.pays {
-            crate::domain::terminal::Payer::Own => None,
-            crate::domain::terminal::Payer::GuacaKey => {
-                let inference = self.lent_endpoint(card);
-                if inference.api_key.trim().is_empty() || inference.base_url.trim().is_empty() {
-                    return Err(RuntimeError::NoKeyToLend);
-                }
-                // The key's own model when none was chosen, which is the one
-                // model this key is known to be good for.
-                tuning.model.get_or_insert_with(|| inference.default_model.clone());
-                Some(crate::coding::relay::Upstream {
-                    base_url: inference.base_url,
-                    api_key: inference.api_key,
-                    referer: inference.referer,
-                    title: inference.title,
-                })
-            }
-        };
-        {
-            let mut coding = self.inner.coding.lock();
-            // Read under the job lock, so a drain that has not seen this job
-            // yet is one this launch sees: it either refuses here or is in the
-            // map before the drain looks.
-            if self.draining() {
-                return Err(RuntimeError::Stopping);
-            }
-            if let Some(busy) = coding.get(&card.id) {
-                return Err(RuntimeError::JobRunning { directory: busy.directory.clone() });
-            }
-            coding.insert(
-                card.id,
-                Running { directory: shown.clone(), controls, stopped_by: None, put_down: false },
-            );
-        }
-        // Recorded before anything runs, so a job that dies at once still
-        // leaves a session a follow-up can find and the operator can open.
-        // Codex names its thread itself, and is recorded when it does.
-        if !session.is_empty() {
-            self.record_session(card.id, harness, &session, &shown);
-        }
-
-        let runtime = self.clone();
-        let agent = card.id;
-        let group = card.group_id;
-        self.emit(UiEvent::CodingJobStarted { agent_id: card.id, directory: shown.clone() });
-
-        tokio::spawn(async move {
-            let working = working.to_string_lossy().to_string();
-
-            // Where it is standing, then the work. The footing is read before
-            // the first edit or it is not read at all: a harness handed a brief
-            // starts working where it is standing, and where it is standing is
-            // wherever the last job left it. `repo::footing` is the argument.
-            let asked = task.clone();
-            let mut brief = String::new();
-            match crate::repo::footing(&working).await {
-                Some(footing) => {
-                    brief.push_str(&footing.brief());
-                    brief.push_str("\n\n");
-                }
-                None => brief.push_str(NOT_A_REPOSITORY),
-            }
-            brief.push_str(&task);
-
-            // Asked of the program itself, because the answer changes when the
-            // operator upgrades between two jobs. Claude Code below the floor
-            // runs without a bridge, which is every job before the bridge
-            // existed; pi below the floor speaks an RPC nothing here has
-            // checked, so it is refused with the command that updates it.
-            let presence = crate::coding::presence(harness).await;
-            let too_old = matches!(
-                (&presence, harness),
-                (crate::coding::Presence::Installed { bridged: false, .. }, Harness::Pi)
-            );
-            let (signals, mut heard) = tokio::sync::mpsc::channel(32);
-            let bridge = match (harness, &presence) {
-                (Harness::Claude, crate::coding::Presence::Installed { bridged: true, .. }) => {
-                    runtime
-                        .inner
-                        .bridge
-                        .open(signals.clone(), gate, working.clone().into(), session.clone())
-                        .await
-                }
-                _ => None,
-            };
-
-            let env = match runtime.secret_environment(agent) {
-                Ok(env) => Some(env),
-                Err(error) => {
-                    tracing::warn!(%error, "could not load a coding job's secrets");
-                    None
-                }
-            };
-            // Held for the life of the job and dropped with it, which is what
-            // makes the token worthless once the job is over.
-            let lease = match lend {
-                None => Ok(None),
-                Some(upstream) => {
-                    let meter = runtime.meter(agent, group, job_run);
-                    runtime.inner.relay.lend(upstream, Some(meter)).await.map(Some)
-                }
-            };
-            let outcome = match (too_old, env, lease) {
-                (true, _, _) => Err(crate::coding::too_old(harness)),
-                (false, None, _) => Err(crate::coding::CodingError::Start(
-                    "Guaca could not load the secrets granted to this agent".into(),
-                )),
-                (false, _, Err(err)) => Err(crate::coding::CodingError::Start(format!(
-                    "Guaca could not open the relay that lends its key: {err}"
-                ))),
-                (false, Some(env), Ok(lease)) => {
-                    let watcher = runtime.clone();
-                    let running = crate::coding::run(
-                        crate::coding::Job {
-                            harness,
-                            directory: &working,
-                            brief: &brief,
-                            session: &session,
-                            resume,
-                            gate,
-                            env: &env,
-                            bridge: bridge.as_ref(),
-                            tuning: &tuning,
-                            lent: lease.as_ref(),
-                        },
-                        controlled,
-                        signals,
-                        move |progress| {
-                            let (tool, detail) = match progress {
-                                crate::coding::Progress::Using { tool, detail } => (tool, detail),
-                                crate::coding::Progress::Said(said) => (String::new(), said),
-                            };
-                            watcher.emit(UiEvent::CodingProgress { agent_id: agent, tool, detail });
-                        },
-                    );
-                    runtime
-                        .watch_job(agent, job_run, harness, &shown, &env, running, &mut heard)
-                        .await
-                }
-            };
-
-            // Stopped for the next host to carry on. Written before the entry
-            // below is removed, because a drain waits for that entry and the
-            // process ends soon after it goes.
-            let put_down = matches!(&outcome, Ok(done) if done.stopped)
-                && runtime
-                    .inner
-                    .coding
-                    .lock()
-                    .get(&agent)
-                    .is_some_and(|job| job.put_down && job.stopped_by.is_none());
-            if put_down {
-                let named = match &outcome {
-                    Ok(done) if !done.session_id.is_empty() => done.session_id.clone(),
-                    _ => session.clone(),
-                };
-                let job = crate::db::PutDownJob {
-                    agent,
-                    harness,
-                    session: named,
-                    directory: shown.clone(),
-                    task: asked,
-                    by_operator: origin == Origin::Operator,
-                };
-                if let Err(err) = runtime.inner.store.put_down_job(&job) {
-                    tracing::error!(%err, "could not keep a stopped coding job for the next host");
-                }
-            }
-
-            // Whatever the job was waiting on is over, however it ended. The
-            // window would close it in ten minutes anyway; this is what keeps a
-            // card for a job that is already gone off the operator's desk.
-            runtime.release_parked(job_run);
-            runtime.forget_refusals(job_run);
-
-            // Released before the result is delivered, so the turn that reads
-            // "it finished" can start or continue the next job. The other order
-            // is an agent that has to wait a turn to carry on.
-            let stopped_by =
-                runtime.inner.coding.lock().remove(&agent).and_then(|job| job.stopped_by);
-            runtime.emit(UiEvent::CodingJobFinished { agent_id: agent });
-
-            // Dropped before the message goes out, so the mailbox and the
-            // scratch directory are gone by the time the agent is told.
-            drop(bridge);
-
-            match outcome {
-                Ok(done) if done.stopped => match stopped_by {
-                    // It asked, and was told in the turn that asked. A second
-                    // message would be a turn spent saying so again.
-                    Some(Origin::Agent) => {}
-                    // Nobody stopped it: the host did, and the next one
-                    // carries it on. The job is not over, so nothing is said.
-                    None if put_down => {}
-                    _ => runtime.job_stopped(agent, &shown),
-                },
-                outcome => runtime.job_finished(agent, &shown, harness, outcome, origin),
-            }
-        });
-
-        Ok(())
-    }
-
-    /// Drives a job to its end, answering what it says about itself on the
-    /// way: a progress note, a pull request, a push it wants to make, the
-    /// session it is.
-    ///
-    /// Drained beside the process rather than after it: a progress note is
-    /// worth nothing once the job has finished, and a permission request has a
-    /// harness holding a call open waiting for the answer.
-    #[allow(clippy::too_many_arguments)]
-    async fn watch_job(
-        &self,
-        agent: AgentId,
-        job_run: RunId,
-        harness: Harness,
-        shown: &str,
-        env: &crate::secrets::Environment,
-        running: impl std::future::Future<
-            Output = Result<crate::coding::Outcome, crate::coding::CodingError>,
-        >,
-        heard: &mut tokio::sync::mpsc::Receiver<crate::coding::Signal>,
-    ) -> Result<crate::coding::Outcome, crate::coding::CodingError> {
-        let mut reported: Option<crate::coding::PullRequest> = None;
-        tokio::pin!(running);
-        let outcome = loop {
-            tokio::select! {
-                done = &mut running => break done,
-                Some(signal) = heard.recv() => match signal {
-                    crate::coding::Signal::Note(note) => self.emit(UiEvent::CodingProgress {
-                        agent_id: agent,
-                        tool: String::new(),
-                        detail: crate::secrets::redact(&note, &env.values),
-                    }),
-                    crate::coding::Signal::PullRequest { url, branch } => {
-                        let url = crate::secrets::redact(&url, &env.values);
-                        let branch = crate::secrets::redact(&branch, &env.values);
-                        self.emit(UiEvent::CodingProgress {
-                            agent_id: agent,
-                            tool: "pull request".to_string(),
-                            detail: url.clone(),
-                        });
-                        reported = Some(crate::coding::PullRequest { url, branch });
-                    }
-                    crate::coding::Signal::Session(id) => self.record_session(agent, harness, &id, shown),
-                    // Spawned rather than awaited here, so the loop keeps
-                    // draining and a stop still lands while the operator is
-                    // deciding. The reply is sent on every path out of the
-                    // task, because a dropped sender is a deny and a job denied
-                    // by Guaca's own plumbing is the one refusal that would be
-                    // a lie.
-                    crate::coding::Signal::Permission { line, reach, reply } => {
-                        let line = crate::secrets::redact(&line, &env.values);
-                        let reach = Reach {
-                            what: crate::secrets::redact(&reach.what, &env.values),
-                            through: reach.through.map(|text| crate::secrets::redact(&text, &env.values)),
-                        };
-                        let asking = self.clone();
-                        tokio::spawn(async move {
-                            let allowed = asking
-                                .ask_about_push(agent, job_run, &line, &reach, Asker::Job)
-                                .await;
-                            let _ = reply.send(allowed);
-                        });
-                    }
-                },
-            }
-        };
-        outcome.map(|mut done| {
-            // Filled in here because it never came from the harness's stdout:
-            // it is the job calling a tool.
-            done.pull_request = reported;
-            done
-        })
-    }
-
-    /// Keeps the session an agent's job is, for a follow-up to find.
-    fn record_session(&self, agent: AgentId, harness: Harness, id: &str, directory: &str) {
-        let session = crate::domain::terminal::Session {
-            harness,
-            id: id.to_string(),
-            directory: directory.to_string(),
-            updated_at: now_ms(),
-        };
-        if let Err(err) = self.inner.store.set_coding_session(agent, &session) {
-            tracing::warn!(%err, "could not record a coding session; a follow-up will start over");
-        }
-    }
-
-    /// Hands a finished job back to the agent that started it.
-    ///
-    /// A message rather than a return value, and a new run rather than the one
-    /// that started it. The run that called `code` settled minutes ago; filing
-    /// against it would report spend on a conversation already reported
-    /// finished, which is exactly what the trajectory suite calls broken.
-    ///
-    /// A failure is delivered too. An agent that is never told is an agent
-    /// waiting forever for a message that is not coming, and an operator asking
-    /// it later gets "I started that and have not heard back", which is true
-    /// and useless.
-    fn job_finished(
-        &self,
-        agent: AgentId,
-        directory: &str,
-        harness: Harness,
-        outcome: Result<crate::coding::Outcome, crate::coding::CodingError>,
-        origin: Origin,
-    ) {
-        // What the operator is told, separately from what the agent is told.
-        // Set only where the harness itself failed: a job that ran and did the
-        // wrong thing is the agent's to report.
-        let mut operator_should_know = None;
-
-        let text = match outcome {
-            // Reported before the empty case below, and that ordering is the
-            // whole of it. `pi` ends a failed turn inside its own stream and
-            // exits zero, so an expired credential arrives looking exactly like
-            // a job with nothing to do. It cost an afternoon: every coding job
-            // in the workspace became a silent no-op and the agents dutifully
-            // reported that nothing needed doing.
-            Ok(done) if done.failed.is_some() => {
-                let why = done.failed.unwrap_or_default();
-                operator_should_know = Some(why.clone());
-                format!(
-                    "The coding agent in `{directory}` could not finish: {why}. Partial changes may \
-                     remain there. Say plainly what you asked for and what failed; \
-                     do not claim the work finished or that nothing changed."
-                )
-            }
-            Ok(done) if done.tool_calls == 0 && done.said.trim().is_empty() => format!(
-                "The coding agent in `{directory}` finished without doing anything or saying \
-                 why. Nothing changed. Say so rather than reporting the work as done."
-            ),
-            Ok(done) => {
-                let mut text = format!(
-                    "The coding agent working in `{directory}` has finished. In its own words:\n\n\
-                     {}\n\nIt ran {} tool call{}",
-                    done.said.trim(),
-                    done.tool_calls,
-                    if done.tool_calls == 1 { "" } else { "s" },
-                );
-                if let Some(cost) = done.cost {
-                    text.push_str(&format!(" and cost ${cost:.2}"));
-                }
-                text.push_str(
-                    ". You have not seen the code and did not write it: report what it says it \
-                     did, say it was done by the coding agent, and do not claim to have checked \
-                     anything you have not. To give it a follow-up in the same session, with \
-                     everything it already read, call `code` with action `continue`.",
-                );
-                // A link the job reported through its own tool rather than a
-                // link parsed out of the paragraph above. The difference is
-                // that this one is either right or absent: guessing a URL out
-                // of prose is how an agent reports a pull request that does not
-                // exist.
-                if let Some(pull_request) = &done.pull_request {
-                    text.push_str(&format!(
-                        "\n\nIt opened a pull request from `{}`: {}. That link is the job's own \
-                         report of it, so it is safe to pass on as it stands.",
-                        pull_request.branch, pull_request.url,
-                    ));
-                }
-                text
-            }
-            Err(err) => {
-                operator_should_know = Some(err.to_string());
-                format!(
-                    "The coding agent in `{directory}` could not finish: {err}. Nothing was \
-                     necessarily left in a working state, so say what you asked for and what \
-                     happened rather than reporting it as done."
-                )
-            }
-        };
-
-        // Use the job's captured choice: the agent's harness may have been
-        // switched while it ran, and a login error alone does not name its
-        // provider.
-        let text = format!("Coding harness: {}.\n\n{text}", harness.label());
-        // A follow-up the operator typed straight into the coding agent is one
-        // this agent never saw, and it is about to be asked what came of it.
-        let text = match origin {
-            Origin::Agent => text,
-            Origin::Operator => format!(
-                "The operator sent the coding agent a follow-up directly, in the session it \
-                 was already working in.\n\n{text}"
-            ),
-        };
-
-        if let Some(reason) = operator_should_know {
-            self.emit(UiEvent::CodingJobFailed {
-                agent_id: agent,
-                directory: directory.to_string(),
-                harness: harness.label().to_string(),
-                reason,
-            });
-        }
-
-        let run_id = RunId::new();
-        let envelope = Envelope {
-            id: MessageId::new(),
-            run_id,
-            channel_id: agent,
-            from: Participant::System,
-            to: Participant::Agent { id: agent },
-            parts: vec![Part::Text { text }],
-            // Guaca speaking about what it did, not a model's words: the
-            // harness's own sentence is quoted inside, and the trust boundary
-            // is the same one a guard notice carries.
-            trust: Trust::System,
-            hop: 0,
-            expects_reply: true,
-            intent: Intent::Work,
-            cause: None,
-            created_at: now_ms(),
-        };
-
-        if let Err(err) = self.deliver(envelope) {
-            tracing::error!(%err, agent = %agent.short(), "a finished coding job reached nobody");
-        }
-    }
-
     /// Operator sends a message to one agent. Returns the run it starts.
     pub fn send_from_human(&self, to: AgentId, text: &str) -> Result<RunId, RuntimeError> {
         self.send_from_human_with(to, text, Vec::new())
@@ -3204,7 +2294,6 @@ impl Runtime {
             if *entry == 0 {
                 runs.outstanding.remove(&run);
                 runs.stopped.remove(&run);
-                runs.refused.remove(&run);
                 // Part of it is put down, so the last of it ending here is the
                 // conversation handed on whole, not finished: the next host
                 // picks it up, and a run it picks up has not settled.
@@ -3566,231 +2655,6 @@ impl Runtime {
         }
     }
 
-    /// Asks the operator whether an agent may push, merge or release.
-    ///
-    /// Two kinds of caller, one question. A coding job's harness is one and
-    /// [`Runtime::run_in_terminal`] is the other, and both arrive here having
-    /// asked `coding::bridge::outward` the same thing about the same shape of
-    /// shell line. One row, one desk, one wording: the gate an operator
-    /// switched on is a fact about the agent, so it cannot mean one thing
-    /// through `code` and another through `shell`. [`Asker`] is the whole of
-    /// what differs.
-    ///
-    /// The gate decides *that* the question is worth asking and names what is
-    /// being asked about. This decides what happens next, and it is a
-    /// [`ProtectedAction::ActOnBehalf`] rather than a new variant because it is
-    /// exactly what that one already means: something outside the workspace, in
-    /// the operator's name, that cannot be taken back. A push to their remote
-    /// is that.
-    ///
-    /// Reusing it also means the standing grant means what it says. An operator
-    /// who has already told this agent it may act on their behalf is not asked
-    /// again per push, which is the difference between a gate and a nuisance.
-    ///
-    /// The wording is Guaca's, built from what the runtime validated, and the
-    /// command appears as a quoted detail field. That is the rule every
-    /// permission in this app follows and it matters more here than anywhere:
-    /// the string came out of a model that has been reading the web all
-    /// afternoon, whichever of the two it was.
-    ///
-    /// Anything other than a yes is a no. Unanswered, expired, a job whose
-    /// agent has been deleted, a store that could not be read: none of them is
-    /// the operator saying go ahead, and the only safe reading of all of them
-    /// is the one that leaves the push unmade.
-    async fn ask_about_push(
-        &self,
-        agent: AgentId,
-        run_id: RunId,
-        line: &str,
-        reach: &Reach,
-        asker: Asker,
-    ) -> bool {
-        let Ok(Some(card)) = self.inner.store.get_agent(agent) else {
-            return false;
-        };
-
-        // Asked once per run, however many times the model reaches for it. See
-        // `Runs::refused`.
-        //
-        // The standing grant is consulted here and nowhere earlier, so that an
-        // operator who denied a push and then told this agent it may act on
-        // their behalf gets the second answer rather than the first. It is the
-        // broader and the newer of the two, and a memory that outranked it
-        // would be Guaca holding a decision the operator has since changed.
-        if self.already_refused(run_id, agent, &reach.what)
-            && !matches!(
-                self.inner.store.has_standing_grant(agent, ProtectedAction::ActOnBehalf),
-                Ok(true)
-            )
-        {
-            return false;
-        }
-
-        // The push leads, and the script is how it got there. That order is
-        // the emphasis the card needs: what the operator is authorizing is the
-        // thing that cannot be taken back, not the name the agent typed for it.
-        let by_way = match &reach.through {
-            None => String::new(),
-            Some(script) => format!(", by way of {script}"),
-        };
-        let summary = match asker {
-            Asker::Job => format!(
-                "{}'s coding agent wants to run `{}`{by_way}. That reaches outside this machine \
-                 under your name.",
-                card.name, reach.what
-            ),
-            Asker::Agent => format!(
-                "{} wants to run `{}` in its terminal{by_way}. That reaches outside this machine \
-                 under your name.",
-                card.name, reach.what
-            ),
-        };
-        // The line the model wrote, not what this made of it. The label says
-        // Command and the field carried the summary instead, so an operator
-        // reading it was told `git push` about a `git push --force`, which is
-        // the one detail on the card that changes the answer.
-        let detail = vec![DetailField::new("Command", shown(line))];
-
-        let settled = self
-            .park_with(
-                &card,
-                run_id,
-                Request::Permission { action: ProtectedAction::ActOnBehalf },
-                summary,
-                detail,
-                // A job is not a turn and its agent may be idle or answering
-                // somebody else, so the dot beside its name is not the job's to
-                // move. `shell` is the opposite: the turn that called it is
-                // genuinely stopped here, waiting, and has to say so.
-                asker == Asker::Agent,
-            )
-            .await;
-
-        // A standing grant is read after the row rather than before it, which
-        // is the opposite order to `ask_permission` and deliberate: there the
-        // shortcut saves a turn from stopping, and here the job is already
-        // stopped by the time anything can be checked. Checked at all because
-        // an operator who said "always" meant it.
-        if matches!(
-            self.inner.store.has_standing_grant(card.id, ProtectedAction::ActOnBehalf),
-            Ok(true)
-        ) {
-            return true;
-        }
-
-        // A no is remembered and nothing else is. An expiry is the operator
-        // being somewhere else rather than the operator answering, and holding
-        // it against them would mean a request they never saw refusing the one
-        // they would have seen two minutes later.
-        if matches!(settled, Ok(Some(Approval { state: ApprovalState::Deny, .. }))) {
-            self.remember_refusal(run_id, agent, &reach.what);
-            return false;
-        }
-
-        matches!(
-            settled,
-            Ok(Some(Approval { state: ApprovalState::Allow | ApprovalState::AlwaysAllow, .. }))
-        )
-    }
-
-    /// Whether this run has already put this question to the operator and been
-    /// told no.
-    fn already_refused(&self, run: RunId, agent: AgentId, what: &str) -> bool {
-        self.inner
-            .runs
-            .lock()
-            .refused
-            .get(&run)
-            .is_some_and(|refused| refused.contains(&(agent, what.to_string())))
-    }
-
-    fn remember_refusal(&self, run: RunId, agent: AgentId, what: &str) {
-        self.inner.runs.lock().refused.entry(run).or_default().insert((agent, what.to_string()));
-    }
-
-    /// Drops what a run was refused, once that run is over.
-    ///
-    /// The one caller is a coding job ending. An ordinary run is dropped by
-    /// `track_inflight` when it settles, which a job's run never does: nothing
-    /// is ever booked against it.
-    fn forget_refusals(&self, run: RunId) {
-        self.inner.runs.lock().refused.remove(&run);
-    }
-
-    /// Tells the agent that started a job that the operator ended it.
-    ///
-    /// A message rather than silence, on the same path a finished job takes and
-    /// for the same reason: an agent never told is an agent waiting forever for
-    /// something that is not coming, and an operator asking it later gets "I
-    /// started that and have not heard back", which is true and useless.
-    ///
-    /// What it says about the tree is the important half. A stopped job was
-    /// killed wherever it happened to be, so the commits it made are real and
-    /// whatever it was in the middle of is not. An agent told only that the job
-    /// stopped reports the work as not done, and the operator is left to find
-    /// out for themselves that half of it is on a branch.
-    fn job_stopped(&self, agent: AgentId, directory: &str) {
-        let text = format!(
-            "The operator stopped the coding agent working in `{directory}` before it \
-             finished. Whatever it had already committed is still there and whatever it was in \
-             the middle of is not, so the work is partly done and nobody has checked which \
-             part. The session is kept: if the operator wants the work carried on, `code` with \
-             action `continue` picks it up where it stopped. Do not continue or restart it \
-             unless they ask: they stopped it on purpose. Say plainly that it was stopped."
-        );
-
-        let envelope = Envelope {
-            id: MessageId::new(),
-            run_id: RunId::new(),
-            channel_id: agent,
-            from: Participant::System,
-            to: Participant::Agent { id: agent },
-            parts: vec![Part::Text { text }],
-            trust: Trust::System,
-            hop: 0,
-            expects_reply: true,
-            intent: Intent::Work,
-            cause: None,
-            created_at: now_ms(),
-        };
-
-        if let Err(err) = self.deliver(envelope) {
-            tracing::error!(%err, agent = %agent.short(), "a stopped coding job reached nobody");
-        }
-    }
-
-    /// The operator's next message to an agent's coding agent: into the job if
-    /// one is running, or a new turn in the last session if not.
-    pub async fn message_job(
-        &self,
-        agent: AgentId,
-        message: &str,
-    ) -> Result<Continued, RuntimeError> {
-        let card = self.inner.store.get_agent(agent)?.ok_or(RuntimeError::UnknownAgent(agent))?;
-        self.continue_job(&card, message, Origin::Operator).await
-    }
-
-    /// Stops a coding job, leaving whatever it has committed and keeping its
-    /// session.
-    ///
-    /// A request rather than a kill: each harness ends its turn its own way
-    /// (an abort, an interrupt, a signal) within a few seconds, and the job's
-    /// own task removes the entry once the process has actually gone.
-    /// Removing it here would let a second job start while a harness was
-    /// still writing.
-    pub fn stop_job(&self, agent: AgentId, origin: Origin) -> Result<(), RuntimeError> {
-        let controls = {
-            let mut coding = self.inner.coding.lock();
-            let job = coding.get_mut(&agent).ok_or(RuntimeError::NoJobRunning)?;
-            job.stopped_by.get_or_insert(origin);
-            job.controls.clone()
-        };
-        // A full channel is a stop already on its way, and pressing twice is
-        // not an error: the job it was asked about is ending either way.
-        let _ = controls.try_send(crate::coding::Control::Stop);
-        Ok(())
-    }
-
     /// Asks the operator a question, and holds the turn until they answer it.
     ///
     /// Nothing here grants anything, which is what makes it a different call
@@ -3831,34 +2695,6 @@ impl Runtime {
         request: Request,
         summary: String,
         detail: Vec<DetailField>,
-    ) -> Result<Option<Approval>, String> {
-        self.park_with(card, run_id, request, summary, detail, true).await
-    }
-
-    /// The same, for a request whose asker is not a turn.
-    ///
-    /// `holds_turn` is the whole difference and it is one thing: whether the
-    /// agent's own activity is this request's to move. A parked turn is an
-    /// agent that is genuinely stopped mid-inference and the dot beside its
-    /// name has to say so. A coding job is not a turn at all: it outlived the
-    /// one that started it by many minutes, and the agent that owns it may be
-    /// idle, may be answering somebody else, and is in either case not waiting
-    /// on this. Marking it `AwaitingApproval` would put a false state on a
-    /// working agent, and putting it back to `Thinking` afterward would be
-    /// worse.
-    ///
-    /// Everything else is shared on purpose. A second copy of the row, the
-    /// waker, the window and the expiry is a second place for a request to be
-    /// left waiting on nobody, which is the failure this whole mechanism exists
-    /// to make impossible.
-    async fn park_with(
-        &self,
-        card: &AgentCard,
-        run_id: RunId,
-        request: Request,
-        summary: String,
-        detail: Vec<DetailField>,
-        holds_turn: bool,
     ) -> Result<Option<Approval>, String> {
         let approval = match self.inner.store.create_approval(
             card.id,
@@ -3916,18 +2752,14 @@ impl Runtime {
         // Parked before the request is announced, so anything that reacts to
         // the announcement sees an agent that is already waiting rather than
         // one that still looks like it is thinking.
-        if holds_turn {
-            self.set_activity(card.id, Activity::AwaitingApproval);
-        }
+        self.set_activity(card.id, Activity::AwaitingApproval);
         self.inner
             .events
             .emit(UiEvent::ApprovalRequested { approval_id: approval.id, agent_id: card.id });
 
         let woken = tokio::time::timeout(APPROVAL_WINDOW, wait).await.is_ok();
         self.inner.waiting.lock().remove(&approval.id);
-        if holds_turn {
-            self.set_activity(card.id, Activity::Thinking);
-        }
+        self.set_activity(card.id, Activity::Thinking);
 
         if !woken {
             // Expiring can lose to an answer landing in this instant, and when
@@ -4185,23 +3017,7 @@ impl Runtime {
         // two disagreeing is the failure this replaced, where every agent was
         // told it had a machine whether or not a provider was configured and
         // whether or not the operator had given it one.
-        let mut surfaces = self.surfaces_for(&card);
-        // Made once for the turn, from the same card `surfaces` was decided
-        // from, so the section describing the terminal and the tools that reach
-        // it can never disagree about whether there is one. A directory that
-        // could not be made takes the tools with it rather than offering them
-        // into a refusal on every call.
-        let terminal = match surfaces.terminal {
-            false => None,
-            true => match self.inner.terminals.ensure(card.id) {
-                Ok(path) => Some(path.to_string_lossy().into_owned()),
-                Err(err) => {
-                    tracing::warn!(%err, "could not make this agent's terminal for its turn");
-                    surfaces.terminal = false;
-                    None
-                }
-            },
-        };
+        let surfaces = self.surfaces_for(&card);
         // Read from the messages every turn rather than kept anywhere. A
         // coordinator was holding this by hand in its own memory, which drifted
         // three assignments stale and reported work as outstanding that had
@@ -4259,7 +3075,6 @@ impl Runtime {
             mode,
             &waiting_on,
             escalation.as_ref(),
-            terminal.as_deref(),
             surfaces,
             modalities,
         );
@@ -4376,8 +3191,8 @@ impl Runtime {
                 // Work taken in mid-turn carries the same obligation work in the
                 // batch does. `NoteOnly` tells an agent nothing is being asked
                 // of it and silence is usually right, which is true of what this
-                // turn woke up to and not of a finished coding job that landed
-                // while it ran. `Assigned` is the mode that says a note it never
+                // turn woke up to and not of work that landed while it ran.
+                // `Assigned` is the mode that says a note it never
                 // writes is a failure, and both write to the same place, so this
                 // moves nothing the UI has already drawn.
                 if mode == ReplyMode::NoteOnly && arrived.iter().any(|e| e.intent.is_work()) {
@@ -4447,14 +3262,7 @@ impl Runtime {
                 // for had made two calls already and still closed on a promise
                 // about two more, because what backs a sentence is a call made
                 // before it rather than anywhere in the turn.
-                //
-                // One exception, and it is the one the prompt asks for: a `code`
-                // job outlives the turn that started it, so "started it, will
-                // report back" is a report of a call that has already been made.
-                let started_a_job = tool_parts
-                    .iter()
-                    .any(|part| matches!(part, Part::ToolCall { name, .. } if name == tools::CODE));
-                let unbacked = (!nudged && !started_a_job && round + 1 < max_rounds)
+                let unbacked = (!nudged && round + 1 < max_rounds)
                     .then(|| promise::promises_work(&completion.content))
                     .flatten();
                 if let Some(said) = unbacked {
@@ -4662,16 +3470,14 @@ impl Runtime {
             tracing::warn!(agent = %card.name, error = %err, "inference failed");
             let mut said = format!("{} could not reply: {}", card.name, err);
             // The vendor's sentence names the model and not where the name came
-            // from, and ChatGPT's says "Codex", which reads as the coding
-            // harness. An operator who chose pi's model in the Terminal panel
-            // and found a model on the agent itself read it exactly that way.
+            // from. An operator who found a model on the agent itself read it
+            // as the group's.
             if matches!(err, LlmError::ModelRejected { .. })
                 && card.own_model(inference.provider).is_some()
             {
                 said.push_str(&format!(
                     "\n\nThat model is {name}'s own setting, not its group's. Choose one its \
-                     group's provider runs in {name}'s settings, or use the group default. A \
-                     coding agent's model is set in the Terminal panel and is not this one.",
+                     group's provider runs in {name}'s settings, or use the group default.",
                     name = card.name
                 ));
             }
@@ -4862,14 +3668,14 @@ impl Runtime {
 
     /// Takes in whatever arrived while this turn was working, as context.
     ///
-    /// Called at the top of every round, so the model sees a correction or a
-    /// finished job on its next call rather than on its next turn. Without it a
-    /// long turn is deaf: an operator watching an agent work can type at it and
-    /// be read forty minutes later, and a `code` job's result can never reach
-    /// the turn that started it, because `code` does not block and its answer
-    /// comes back as an envelope the running actor is not free to look at. That
-    /// second one deadlocks: `JobRunning` tells the agent to wait for a
-    /// message, and the turn doing the waiting is the thing holding it up.
+    /// Called at the top of every round, so the model sees a correction or an
+    /// answer on its next call rather than on its next turn. Without it a long
+    /// turn is deaf: an operator watching an agent work can type at it and be
+    /// read forty minutes later, and anything whose result comes back as an
+    /// envelope can never reach the turn that started it, because the running
+    /// actor is not free to look at its inbox. That second one deadlocks: the
+    /// agent is told to wait for a message, and the turn doing the waiting is
+    /// the thing holding it up.
     ///
     /// ## Context, and never a change of address
     ///
@@ -5805,11 +4611,8 @@ impl Runtime {
 
             ToolInvocation::SendMessage { to, text, intent, files } => {
                 let surfaces = self.surfaces_for(card);
-                let consequence = if surfaces.terminal || surfaces.computer {
-                    UNSENT_FILE
-                } else {
-                    UNSENT_FILE_NO_COMPUTER
-                };
+                let consequence =
+                    if surfaces.computer { UNSENT_FILE } else { UNSENT_FILE_NO_COMPUTER };
                 let made = attached.clone();
                 let (carried, missing) = self.resolve_files(card, &files, &made, consequence).await;
                 if !missing.is_empty() {
@@ -5879,161 +4682,6 @@ impl Runtime {
                 (rendered, Part::tool_call(tools::SEND_MESSAGE, arguments, outcome))
             }
 
-            ToolInvocation::Code(action) => {
-                let done = match action {
-                    tools::CodeAction::Start { task, directory } => {
-                        self.start_job(card, &task, directory.as_deref()).map(|directory| {
-                            (
-                                format!(
-                                    "Started. A coding agent is working in `{directory}` now. It \
-                                     will send you a message when it is done, which may be \
-                                     several minutes. End your turn and say you have started it: \
-                                     there is nothing to wait for and nothing to check.",
-                                ),
-                                format!("started work in {directory}"),
-                            )
-                        })
-                    }
-                    tools::CodeAction::Continue { message } => self
-                        .continue_job(card, &message, Origin::Agent)
-                        .await
-                        .map(|continued| match continued {
-                            Continued::Steered => (
-                                "Sent to the coding agent. It reads it at its next step, and \
-                                     you still get one message when the job finishes. End your \
-                                     turn: there is nothing to wait for."
-                                    .to_string(),
-                                "sent to the running job".to_string(),
-                            ),
-                            Continued::Resumed { directory } => (
-                                format!(
-                                    "Continued. The coding agent is carrying its last session \
-                                         on in `{directory}`, with everything it had already \
-                                         read. You get a message back when it is done. End your \
-                                         turn and say you have passed it on."
-                                ),
-                                format!("continued the session in {directory}"),
-                            ),
-                        }),
-                    tools::CodeAction::Stop => self.stop_job(card.id, Origin::Agent).map(|()| {
-                        (
-                            "Stopping it. It ends its turn within a few seconds; what it \
-                             committed stays, and the session is kept for `continue`. Say that \
-                             you stopped it, and why."
-                                .to_string(),
-                            "stopped the job".to_string(),
-                        )
-                    }),
-                };
-                let (rendered, outcome) = match done {
-                    Ok((rendered, summary)) => (rendered, ToolOutcome::Ok { summary }),
-                    Err(err) => {
-                        (format!("Error: {err}"), ToolOutcome::Failed { error: err.to_string() })
-                    }
-                };
-                (rendered, Part::tool_call(tools::CODE, arguments, outcome))
-            }
-
-            ToolInvocation::Shell { command } => {
-                let (rendered, outcome) = match self.run_in_terminal(card, run_id, &command).await {
-                    Ok(Line::Ran(ran)) => {
-                        let summary = match ran.exit_code {
-                            None => format!("killed after {}s", shell::PATIENCE.as_secs()),
-                            Some(code) => format!(
-                                "exit {code}, {} bytes out",
-                                ran.stdout.len() + ran.stderr.len()
-                            ),
-                        };
-                        (ran.rendered(), ToolOutcome::Ok { summary })
-                    }
-                    // A no from the desk, said as the thing to do next. The
-                    // wording is the hook's, because it is the same answer
-                    // to the same question and an agent that met it through
-                    // `code` should not learn a different lesson here.
-                    Ok(Line::Refused) => (
-                        "Refused: that command reaches outside this machine under the \
-                             operator's name, and they did not allow it. Nothing ran. Do not try \
-                             it again or work around it: finish everything else you can, and say \
-                             in your reply that this step is waiting on them."
-                            .to_string(),
-                        ToolOutcome::Refused {
-                            reason: "the operator did not allow it".to_string(),
-                        },
-                    ),
-                    Err(err) => {
-                        (format!("Error: {err}"), ToolOutcome::Failed { error: err.to_string() })
-                    }
-                };
-                (rendered, Part::tool_call(tools::SHELL, arguments, outcome))
-            }
-
-            ToolInvocation::Read { path, offset, limit } => {
-                let terminals = self.inner.terminals.clone();
-                let agent = card.id;
-                let read = match self.terminal(card) {
-                    Err(err) => Err(err.to_string()),
-                    Ok(_) => tokio::task::spawn_blocking(move || {
-                        terminals.read(agent, &path, offset, limit)
-                    })
-                    .await
-                    .map_err(|err| err.to_string())
-                    .and_then(|read| read.map_err(|err| err.to_string())),
-                };
-                let (rendered, outcome) = match read {
-                    Ok(page) => {
-                        let summary =
-                            format!("lines {}-{} of {}", page.first, page.last, page.total);
-                        (page.render(), ToolOutcome::Ok { summary })
-                    }
-                    Err(err) => (format!("Error: {err}"), ToolOutcome::Failed { error: err }),
-                };
-                (rendered, Part::tool_call(tools::READ, arguments, outcome))
-            }
-
-            ToolInvocation::Write { path, content } => {
-                let terminals = self.inner.terminals.clone();
-                let agent = card.id;
-                let written = match self.terminal(card) {
-                    Err(err) => Err(err.to_string()),
-                    Ok(_) => {
-                        tokio::task::spawn_blocking(move || terminals.write(agent, &path, &content))
-                            .await
-                            .map_err(|err| err.to_string())
-                            .and_then(|done| done.map_err(|err| err.to_string()))
-                    }
-                };
-                let (rendered, outcome) = match written {
-                    Ok(said) => (said.clone(), ToolOutcome::Ok { summary: said }),
-                    Err(err) => (format!("Error: {err}"), ToolOutcome::Failed { error: err }),
-                };
-                (rendered, Part::tool_call(tools::WRITE, arguments, outcome))
-            }
-
-            ToolInvocation::Edit { path, edits } => {
-                let terminals = self.inner.terminals.clone();
-                let agent = card.id;
-                let edited = match self.terminal(card) {
-                    Err(err) => Err(err.to_string()),
-                    Ok(_) => {
-                        tokio::task::spawn_blocking(move || terminals.edit(agent, &path, &edits))
-                            .await
-                            .map_err(|err| err.to_string())
-                            .and_then(|done| done.map_err(|err| err.to_string()))
-                    }
-                };
-                let (rendered, outcome) = match edited {
-                    Ok(said) => (said.clone(), ToolOutcome::Ok { summary: said }),
-                    // Nothing was written, and the model has to hear that
-                    // before anything else: an edit it believes landed is the
-                    // next edit's wrong `old_text`.
-                    Err(err) => (
-                        format!("Error: {err}. The file was not changed."),
-                        ToolOutcome::Failed { error: err },
-                    ),
-                };
-                (rendered, Part::tool_call(tools::EDIT, arguments, outcome))
-            }
-
             ToolInvocation::WriteDocument { name, content } => {
                 let (rendered, outcome) = match self.inner.files.put(&name, content.as_bytes()) {
                     Ok(file) => {
@@ -6072,14 +4720,8 @@ impl Runtime {
 
             ToolInvocation::AttachFile { files } => {
                 let surfaces = self.surfaces_for(card);
-                let consequence = if surfaces.terminal {
-                    "It is not on your answer, so do not tell them it is attached. Check the \
-                     path in your terminal with `shell` and attach it again."
-                } else if surfaces.computer {
-                    UNATTACHED_FILE
-                } else {
-                    UNATTACHED_FILE_NO_COMPUTER
-                };
+                let consequence =
+                    if surfaces.computer { UNATTACHED_FILE } else { UNATTACHED_FILE_NO_COMPUTER };
                 let made = attached.clone();
                 let (found, missing) = self.resolve_files(card, &files, &made, consequence).await;
 
@@ -6390,16 +5032,11 @@ impl Runtime {
         arguments: serde_json::Value,
     ) -> (String, Part) {
         let surfaces = self.surfaces_for(card);
-        // A terminal counts: `code` and `shell` both push under the
-        // operator's own name, which is the definition this refusal is written
-        // against. An agent that has one and is told nothing it can call
-        // reaches outside the workspace is told something false about the tool
-        // it is holding.
-        if !surfaces.computer && !surfaces.browser && !surfaces.terminal {
+        if !surfaces.computer && !surfaces.browser {
             let reason = "nothing this agent can do reaches outside the workspace".to_string();
             return (
-                "Refused, and the operator was not asked: you have no computer, no browser and no \
-                 terminal, so nothing you can call reaches outside this workspace and there is \
+                "Refused, and the operator was not asked: you have no computer and no browser, \
+                 so nothing you can call reaches outside this workspace and there is \
                  no action here for them to authorize. What you are missing is access, not \
                  permission, and no answer of theirs would give you any. Say in your reply what \
                  you could not reach and that they can give you a computer or a browser from your \
@@ -7195,20 +5832,8 @@ impl Runtime {
             browser: !config.kernel.api_key.trim().is_empty(),
             // Always. A computer and a browser need a provider the operator has
             // to go and sign up for, and a workspace without one can hand out
-            // neither. A terminal is a directory on the machine Guaca already
-            // runs on, so there is no workspace-level precondition to fail: the
-            // only question is whether this agent was given one, which is on
-            // the card.
-            //
-            // Whether the harness is installed is deliberately not asked here.
-            // That is a broken installation rather than an absent setting, and
-            // it is reported as a failure naming the install command, which an
-            // agent can put in its reply and an operator can act on. Asked
-            // here it would be a process spawn on the way into every turn.
-            terminal: true,
-            // Always, for the reason a terminal is: an errand needs nothing
-            // the workspace has to be set up with, only the operator's word
-            // on the card.
+            // neither. An errand needs nothing the workspace has to be set up
+            // with, only the operator's word on the card.
             errands: true,
         }
     }
@@ -7353,39 +5978,6 @@ impl Runtime {
             completion: usage.completion_tokens,
             cost: usage.cost,
         });
-    }
-
-    /// Where a job paid for with Guaca's key records what each call cost.
-    ///
-    /// The same row and the same event a turn's own call produces, against the
-    /// job's run rather than the turn that started it, which settled minutes
-    /// ago. The key is Guaca's, so its spend is in the same account as
-    /// everything else the key paid for.
-    fn meter(&self, agent: AgentId, group: GroupId, run_id: RunId) -> crate::coding::relay::Meter {
-        let store = self.inner.store.clone();
-        let events = self.inner.events.clone();
-        Arc::new(move |spent: crate::coding::relay::Spent| {
-            let entry = crate::domain::usage::UsageEntry {
-                agent_id: agent,
-                group_id: group,
-                run_id,
-                model: spent.model,
-                prompt: spent.prompt,
-                completion: spent.completion,
-                cost: spent.cost,
-            };
-            if let Err(err) = store.record_usage(&entry) {
-                tracing::warn!(%err, "could not record what a relayed call cost");
-            }
-            events.emit(UiEvent::TokensUsed {
-                agent_id: agent,
-                group_id: group,
-                run_id,
-                prompt: spent.prompt,
-                completion: spent.completion,
-                cost: spent.cost,
-            });
-        })
     }
 
     /// Kills every sandbox this app made that no agent still refers to.
@@ -8997,12 +7589,11 @@ impl Runtime {
 /// A turn is started with a batch and, until this existed, could not see
 /// anything that arrived after it. That is right for a peer cascade and wrong
 /// for the two things a person does while watching an agent work: send it a
-/// correction, and start something whose result comes back as a message. A
-/// coding job is the second one, and it deadlocked on exactly this. `code` does
-/// not block, its result is delivered as a fresh envelope, and an actor only
-/// examines the envelope it is holding — so the turn that started the job could
-/// never receive it, and `JobRunning` told the agent to wait for a message
-/// its own turn was the thing blocking.
+/// correction, and start something whose result comes back as a message. The
+/// second one deadlocked on exactly this: a result delivered as a fresh
+/// envelope, and an actor that only examines the envelope it is holding, so the
+/// turn that started the work could never receive it and told the agent to
+/// wait for a message its own turn was the thing blocking.
 ///
 /// Claude Code has the same problem and solves it a level down: a prompt typed
 /// while a turn is busy is recorded as a queued command and read at the next
@@ -9353,23 +7944,6 @@ impl Pen {
     }
 }
 
-/// One shell line, as much of it as a card can carry.
-///
-/// The whole line where it fits, because the flags are the part of a push that
-/// decides the answer. Cut rather than summarized where it does not: a summary
-/// is what the field held before, and is what made it worth nothing.
-fn shown(line: &str) -> String {
-    /// A long line on a card is a line nobody reads to the end of. Generous
-    /// enough that an ordinary push, however it is spelled, arrives whole.
-    const WIDTH: usize = 400;
-
-    let line = line.split_whitespace().collect::<Vec<_>>().join(" ");
-    if line.chars().count() <= WIDTH {
-        return line;
-    }
-    format!("{}…", line.chars().take(WIDTH).collect::<String>())
-}
-
 /// A message body and the files it carries, as parts.
 ///
 /// The text part is dropped when there is nothing to say, because dropping the
@@ -9449,9 +8023,6 @@ mod tests {
             has_browser: false,
             browser_consent: Consent::default(),
             runs_errands: false,
-            has_terminal: false,
-            harness: Harness::default(),
-            gate: crate::domain::terminal::Gate::default(),
             browser_id: None,
             lifecycle,
             pinned: false,

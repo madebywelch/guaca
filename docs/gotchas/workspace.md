@@ -47,7 +47,7 @@ of `Runtime::discard_agent` and `Runtime::purge_agent`.
 - **A crew's spend is a card over the rail, and nothing may put it back on the
   heading.** A readout is a fixed width and a crew's name is not, so the name is
   the only item on that line with anything to give and flex takes it:
-  "StopTheScam" was drawn as "StopTh…" as the heading of its own column. Two
+  "Operations" was drawn as "Operat…" as the heading of its own column. Two
   things about the card are load-bearing and neither is visible in a DOM
   assertion, because jsdom lays nothing out and the node is there whatever the
   rule says. It is `position: fixed`, so hovering a heading cannot reflow the

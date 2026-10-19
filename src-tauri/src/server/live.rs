@@ -17,8 +17,6 @@ pub(super) struct Snapshot {
     kind: &'static str,
     activity: HashMap<AgentId, Activity>,
     streams: HashMap<MessageId, Stream>,
-    /// Which agents have a coding job running, and where.
-    building: HashMap<AgentId, String>,
 }
 
 #[derive(Serialize)]
@@ -35,12 +33,7 @@ struct Stream {
 
 impl Default for Snapshot {
     fn default() -> Self {
-        Self {
-            kind: "liveSnapshot",
-            activity: HashMap::new(),
-            streams: HashMap::new(),
-            building: HashMap::new(),
-        }
+        Self { kind: "liveSnapshot", activity: HashMap::new(), streams: HashMap::new() }
     }
 }
 
@@ -76,12 +69,6 @@ impl Snapshot {
             }
             UiEvent::StreamEnded { message_id, .. } => {
                 self.streams.remove(message_id);
-            }
-            UiEvent::CodingJobStarted { agent_id, directory } => {
-                self.building.insert(*agent_id, directory.clone());
-            }
-            UiEvent::CodingJobFinished { agent_id } => {
-                self.building.remove(agent_id);
             }
             _ => {}
         }

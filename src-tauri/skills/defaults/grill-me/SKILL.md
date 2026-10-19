@@ -18,7 +18,7 @@ branch is resolved and nothing is silently assumed.
 - Before complex work: auth flows, schema changes, migrations, payments, a
   launch, anything expensive to undo.
 - A plan has unresolved decisions or reads as vague.
-- Before a plan is split into pieces for crewmates or handed to a coding job.
+- Before a plan is split into pieces for crewmates.
 
 Not for reviewing work that already exists, and not for simple one-off tasks.
 
@@ -61,15 +61,14 @@ When a frontier question needs a fact, find it yourself. Never ask the operator
 for something you could look up:
 
 - Attachments: `read_file`.
-- A repository, if you have one: `shell` for a quick look (`git log`,
-  `git grep`, reading a file), or `code` for an exploration that means reading a
-  lot of the code.
+- A repository, if you have a computer: clone it there and `run_command` for
+  a look (`git log`, `git grep`, reading a file).
 - The web, if you have `browse`.
 - Your `notebook`, your memory, and the crew's `calendar`.
 - A crewmate whose skills cover it: `directory`, then `send_message`.
 
-Do not block on an exploration. `code` and `send_message` answer later, as new
-messages, so hold back only the questions downstream of what you asked and put
+Do not block on an exploration. `send_message` answers later, as a new
+message, so hold back only the questions downstream of what you asked and put
 the rest of the frontier to the operator now.
 
 ## What the tree should cover
@@ -95,9 +94,8 @@ the rest of the frontier to the operator now.
 3. Ask: "Aligned? Should I start, or adjust anything?"
 
 Do not act on the plan until the operator confirms. Once they do, the synthesis
-is the start of the brief: a `code` job, or a crewmate handed a piece of the
-work, cannot see this conversation, so everything settled here has to travel
-with the task. If it is long, hand it over as a document with `write_document`.
+is the start of the brief: a crewmate handed a piece of the work cannot see
+this conversation, so everything settled here has to travel with the task. If it is long, hand it over as a document with `write_document`.
 
 ## Pitfalls
 
@@ -107,8 +105,8 @@ with the task. If it is long, hand it over as a document with `write_document`.
    your notes first.
 3. **Accepting "I don't know" as final.** Offer options, explain the
    trade-offs, make a recommendation.
-4. **Doing the work during the interview.** Alignment only: no `code` job, no
-   edits and no work handed to crewmates until the explicit go-ahead.
+4. **Doing the work during the interview.** Alignment only: no edits and no
+   work handed to crewmates until the explicit go-ahead.
 5. **Being too agreeable.** Your job is to find problems. If everything looks
    fine, look harder.
 6. **Ignoring the operator's language.** Interview in whatever language they

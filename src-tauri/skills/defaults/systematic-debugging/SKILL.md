@@ -34,14 +34,9 @@ exists to prevent.
 
 ## Where you do the work
 
-- **With a repository:** `shell` runs one command there and hands back its
-  output: `git log`, `git diff`, `git grep`, one failing test. It is stopped
-  after two minutes, so a full test suite, a build or any edit goes to `code`.
-  A `code` job cannot see this conversation and answers later, so its brief
-  carries the symptom, the loop command, and whether to report the root cause
-  without fixing it or to fix it with a regression test.
-- **With a computer:** `run_command` runs on your own Linux machine, which is
-  not where a repository is.
+- **With a computer:** `run_command` runs on your own Linux machine. Clone the
+  repository there and work in it: `git log`, `git diff`, `git grep`, one
+  failing test, the edit, the suite. The filesystem persists between turns.
 - **With neither:** you can still debug by directing. Get the exact error, the
   logs and the steps from the operator or from a crewmate who has the system
   (`read_file` for anything they attach), and hold to the same phases: no fix is
@@ -196,7 +191,7 @@ Do not go on to Phase 2 until you understand why it is happening.
 2. **Make one fix.** Address the root cause. One change at a time, no "while
    I'm here" improvements, no bundled refactoring.
 3. **Verify the fix.** Run the regression test, then the whole suite for
-   regressions (through `code` if the suite outlasts `shell`).
+   regressions.
 4. **If the fix does not work, stop and count.** Fewer than three attempts: go
    back to Phase 1 with what you learned. Three or more: stop and question the
    architecture. Do not attempt a fourth fix without that discussion.

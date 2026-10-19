@@ -1,5 +1,5 @@
 interface Props {
-  /** The place, as the section is headed: Browser, Computer, Terminal. */
+  /** The place, as the section is headed: Browser, Computer. */
   name: string;
   given: boolean;
   busy: boolean;
@@ -18,8 +18,8 @@ interface Props {
  *
  * A switch rather than a button each way. The pair it replaced said "Give one"
  * and "Take it back" without saying what, sat at opposite ends of the section,
- * and the terminal's took-it-back floated above the next heading, where it read
- * as belonging to the schedule. A switch beside the name says what it is about
+ * and one took-it-back floated above the next heading, where it read as
+ * belonging to the schedule. A switch beside the name says what it is about
  * and which way it is set in one glance.
  *
  * The disclosure opens an idle place's controls. A live picture remains in

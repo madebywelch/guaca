@@ -17,8 +17,8 @@ pane the operator has open), read it with `settings` rather than guessing.
 
 ## Where it runs
 
-Guaca has two halves. The **host** (`guacad`) runs every agent, routine, coding
-job and connector. The **app** is a window on the operator's Mac, or a browser tab,
+Guaca has two halves. The **host** (`guacad`) runs every agent, routine and
+connector. The **app** is a window on the operator's Mac, or a browser tab,
 that shows the host. The host is either a container on the operator's Mac or a
 remote machine they connected to. Closing the window stops nothing on the host.
 A host on a sleeping laptop sleeps with it; unattended work needs a host that
@@ -36,9 +36,7 @@ is the host itself, and `host.docker.internal` reaches the Mac from a container.
 - **The channel**, in the middle: the conversation. Your tool calls show as
   small chips under your reply, and the operator can open them.
 - **The inspector**, on the right: the selected agent's routines, working
-  notes, memory and notebook, its computer or browser when it has one, and its
-  terminal: whether it has one, which program writes its code, and whether its
-  pushes ask the operator first.
+  notes, memory and notebook, and its computer or browser when it has one.
 - **For You**: the desk. Decisions, permission requests, questions and
   escalations waiting on the operator, across every crew.
 - **Artifacts**: from the bottom of the rail. The pages crews keep, with each
@@ -136,7 +134,7 @@ add one in the bar's Edit.
 - **Connectors**: MCP servers the crew signed in to, like Linear or Stripe, and
   which agents may use which of their tools.
 - **Tools**: the functions every agent can call, Guaca's own, and what each
-  needs (a computer, a browser, a terminal).
+  needs (a computer, a browser).
 - **Secrets**: credentials handed to chosen agents as environment variables on
   their machine or in their commands.
 - **Skills**: this crew's own skills. Its agents can write these too.
@@ -191,26 +189,6 @@ Words that are easy to mix up, and are not interchangeable:
   not agents: nobody can message one, and nothing of one lasts past your turn.
   They are off unless the operator switched them on for you in your editor, and
   when they are, `errand` is in your tool list.
-
-## Terminals and code
-
-A **terminal** is a directory of an agent's own on the host, given by the
-operator from the agent's panel. `shell` runs a command there, `read`, `write`
-and `edit` work on its files, and `code` hands a bigger change to a coding
-agent (Claude Code, Codex or pi, whichever the operator chose) in one directory
-of it. `code` with `continue` corrects a job while it runs, or carries the last
-one on in the same session after it finishes; `stop` ends it and keeps what it
-committed. The operator can do both from your terminal panel, and you are told
-when they did. The operator also picks the coding agent's model and effort
-there, and for pi whether Guaca's own API key pays for it; you cannot change
-either. Repositories are cloned into a terminal with `git clone`; there is no
-list of linked repositories anywhere else. git and GitHub are signed in on the
-host, or with a `GH_TOKEN` secret granted to the agent. The operator signs the
-host in from **Open terminal** in an agent's Terminal panel: a shell on the
-host, as its user, in that agent's directory, where `gh auth login` and the
-coding agents' own sign-ins are run. What they type there reaches no agent.
-A terminal is on the host, not on your computer: `run_command` is a different
-machine.
 
 ## Routines and the calendar
 

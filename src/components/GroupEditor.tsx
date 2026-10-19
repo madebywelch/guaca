@@ -719,7 +719,7 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                 <h3 className="settings__title">Secrets</h3>
                 <p className="settings__lede">
                   Save a service token and choose the agents that can use it. Selected agents get
-                  the variable in their terminal, their coding jobs, and computer commands.
+                  the variable in their computer commands.
                 </p>
                 <CredentialList groupId={group.id} crew={members} />
               </>

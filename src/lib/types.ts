@@ -476,147 +476,6 @@ export interface ConnectorDraft {
   agents?: AgentId[];
 }
 
-/**
- * Which program writes the code when an agent calls `code`.
- *
- * Three, because a subscription is spent by the program it was issued to: a
- * Claude plan pays for work done by `claude`, a ChatGPT plan for work done by
- * `codex`, and `pi` spends whatever it is signed in to, which is how an
- * OpenRouter key writes code. An operator whose one plan is spent needs another
- * program, not a different setting on the same one.
- */
-export type Harness = "pi" | "claude" | "codex";
-
-/** What an operator is shown for each, and what the panel offers in order. */
-export const HARNESSES: { readonly id: Harness; readonly label: string }[] = [
-  { id: "codex", label: "Codex" },
-  { id: "claude", label: "Claude Code" },
-  { id: "pi", label: "pi" },
-];
-
-/**
- * Whether an agent's pushes stop on the operator's desk first.
- *
- * A push, a pull request, a merge or a release is the operator's own name going
- * somewhere git cannot take it back from. Everything else is what the terminal
- * and git's undo already cover, and is never gated. It holds for every door the
- * agent has: its own shell and its coding job alike.
- *
- * `open` is the default because the prompt every job is given says nobody will
- * answer a question: an operator turning this on is an operator saying they
- * will be there.
- */
-export type Gate = "open" | "askBeforePushing";
-
-/**
- * The coding session an agent last ran, which a follow-up carries on.
- *
- * Only ever continued by the program that wrote it: the id is the harness's
- * own, and means nothing to the other two.
- */
-export interface CodingSession {
-  harness: Harness;
-  id: string;
-  /** Where it ran, relative to the agent's terminal. `.` is the terminal itself. */
-  directory: string;
-  updatedAt: number;
-}
-
-/** Where an agent's terminal is, on the machine Guaca runs on, and what it last ran there. */
-export interface TerminalView {
-  path: string;
-  session: CodingSession | null;
-  /** The shell line that opens that session on the host. Spelled in Rust, once. */
-  resume: string | null;
-  /** What was chosen inside each of the three harnesses. */
-  tunings: HarnessTuning[];
-  guacaKey: GuacaKey;
-}
-
-/**
- * What a message to a coding job came to: a correction into the one running,
- * or a new turn in the session the last one left.
- */
-export type Continued = { kind: "steered" } | { kind: "resumed"; directory: string };
-
-/**
- * One harness, as the machine reports it.
- *
- * The install command comes from Rust rather than being spelled here, because
- * it is the same string a refused job quotes at an agent, and two copies of an
- * operational fact drift the day a vendor renames a package.
- */
-export interface HarnessOnMachine {
-  harness: Harness;
-  installed: boolean;
-  /** What it says its version is, or empty when it is not there. */
-  version: string;
-  /**
-   * Whether a job on it can be reached while it runs.
-   *
-   * False for a program older than the one the behavior was measured against.
-   * An old Claude Code still runs a job, which can be stopped but not steered.
-   * An old `pi` is refused with the update command, because its protocol is
-   * how it is driven at all.
-   */
-  bridged: boolean;
-  install: string;
-  /**
-   * Why this workspace will not run it, when it will not. Drawn as the row's
-   * reason rather than by dropping the row, because a harness that silently
-   * vanishes is a panel that explains nothing.
-   */
-  withheld?: string | null;
-  signedIn?: boolean | null;
-  signIn?: string;
-  /** Every effort word the program takes. A model may take fewer. */
-  efforts: string[];
-}
-
-/**
- * Which account pays for a harness's model calls. `guacaKey` is only pi's:
- * Guaca's own key, lent through a loopback relay that keeps it.
- */
-export type Payer = "own" | "guacaKey";
-
-/**
- * What the operator chose inside one harness for one agent. Null is the
- * program's own setting.
- */
-export interface Tuning {
-  model: string | null;
-  effort: string | null;
-  pays: Payer;
-}
-
-export interface HarnessTuning extends Tuning {
-  harness: Harness;
-}
-
-/** Whether Guaca has a key to lend this agent's pi, and where it is spent. Never the key. */
-export interface GuacaKey {
-  set: boolean;
-  endpoint: string;
-  /** The group whose own key it is, or null when it is the one in Settings > Provider. */
-  group: string | null;
-  /** OpenRouter's models are the ones pi can list for it. */
-  openrouter: boolean;
-  /** What a job runs when no model was chosen: the key's own. */
-  defaultModel: string;
-}
-
-/** One model a harness offers, as its own picker shows it. */
-export interface ModelOffer {
-  /** What `--model` takes. */
-  id: string;
-  label: string;
-  detail: string;
-  /** Whether it runs when nothing is chosen. */
-  default: boolean;
-  /** The effort words this model takes. Empty when it takes none. */
-  efforts: string[];
-}
-
 export type PluginId = string;
 
 /**
@@ -889,17 +748,6 @@ export interface AgentCard {
    * brief and its tools, up to three at once. Off unless the operator says so.
    */
   runsErrands: boolean;
-  /**
-   * Whether the operator has given this agent a terminal: a directory of its
-   * own on the machine Guaca runs on, the shell that starts there, and a
-   * coding harness. A decision, like `hasComputer`: taking it away keeps the
-   * directory and the two answers below.
-   */
-  hasTerminal: boolean;
-  /** Which program writes this agent's code. */
-  harness: Harness;
-  /** Whether this agent's pushes ask the operator first. */
-  gate: Gate;
   name: string;
   avatar: string;
   color: string;
@@ -1017,13 +865,20 @@ export interface RankedModel {
  * with, and the refusal is what turns that into a sentence instead of a
  * failure.
  */
+/** Whether the `claude` program is on this machine, for the provider row. */
+export interface ClaudeProgram {
+  installed: boolean;
+  /** What it says its version is, or empty when it is not there. */
+  version: string;
+  /** How to get it. */
+  install: string;
+}
+
 export interface Capabilities {
   /** Whether inference may point at a model server on loopback. */
   loopbackEndpoints: boolean;
   /** Whether a turn may be paid for by a Claude plan. */
   claudeProvider: boolean;
-  /** Whether Claude Code may be the harness that writes the code. */
-  claudeCodeHarness: boolean;
   /** Whether a file may be named by a path on the operator's own disk. */
   localFiles: boolean;
 }
@@ -1213,8 +1068,6 @@ export type UiEvent =
         MessageId,
         { channelId: AgentId; agentId: AgentId; runId: RunId; to: Participant; text: string }
       >;
-      /** Which agents have a coding job running, and the directory each is in. */
-      building: Record<AgentId, string>;
     }
   | { type: "agentsChanged" }
   /** `client` is the page whose command asked; absent from an older host. */
@@ -1306,20 +1159,6 @@ export type UiEvent =
   /** A skill was written or deleted, by the operator or by an agent. */
   | { type: "skillsChanged"; scope: SkillScope }
   /**
-   * A coding job could not run, for a reason only the operator can fix.
-   *
-   * The agent that asked is told in its own channel, and that is not enough: a
-   * sentence inside one transcript is a sentence nobody reads. This is the same
-   * thing said where somebody setting up is looking.
-   */
-  | {
-      type: "codingJobFailed";
-      agentId: AgentId;
-      directory: string;
-      harness: string;
-      reason: string;
-    }
-  /**
    * Something moved on one crew's calendar.
    *
    * The crew rather than the agent, because the calendar is the crew's and the
@@ -1330,38 +1169,7 @@ export type UiEvent =
    * One of a crew's artifacts was made, changed or changed hands, by an agent
    * or by the operator. The crew, for the reason the calendar's is.
    */
-  | { type: "artifactsChanged"; groupId: GroupId }
-  /**
-   * A coding job started or ended in an agent's terminal.
-   *
-   * The rail draws this because nothing else would: `code` returns as soon as
-   * the harness is up and the turn ends, so an agent sits idle while a coding
-   * agent works for it for twenty minutes, and the crew reads as stopped at
-   * exactly the moment it is building.
-   */
-  | { type: "codingJobStarted"; agentId: AgentId; directory: string }
-  | { type: "codingJobFinished"; agentId: AgentId }
-  /**
-   * One line of what a running coding job is doing.
-   *
-   * Ephemeral, exactly as a turn's thinking is: held while the job runs and
-   * dropped when it ends. The record of what a job did is the message it
-   * delivers at the end; this is what that looks like before it exists.
-   */
-  | {
-      type: "codingProgress";
-      agentId: AgentId;
-      /** A tool name, or empty when the coding agent is talking. */
-      tool: string;
-      /** The command, the path, or the sentence. */
-      detail: string;
-    };
-
-/** One line of a running coding job, as the panel draws it. */
-export interface CodingLine {
-  tool: string;
-  detail: string;
-}
+  | { type: "artifactsChanged"; groupId: GroupId };
 
 /** Tokens spent, as the provider counted them. Never estimated. */
 export interface Tokens {

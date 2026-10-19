@@ -151,10 +151,9 @@ pub fn brief(text: &str) -> String {
 
 /// What the sending turn reads back, as the result of its call.
 ///
-/// Framed as the errand's account rather than as fact, the way a finished
-/// coding job is: the turn that sent it did not see what it read. Claude Code
-/// added the same framing after reports carried instructions that the parent
-/// then followed.
+/// Framed as the errand's account rather than as fact: the turn that sent it
+/// did not see what it read. Claude Code added the same framing after reports
+/// carried instructions that the parent then followed.
 pub fn for_caller(errands: &[Errand]) -> String {
     let total = errands.len();
     let mut out = format!(

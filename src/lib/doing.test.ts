@@ -10,7 +10,7 @@ import type { Escalation } from "./types";
  */
 
 const NOW = 10 * 24 * 3_600_000;
-const quiet: DoingInputs = { activity: {}, stuck: [], building: {}, trail: {}, lastActive: {} };
+const quiet: DoingInputs = { activity: {}, stuck: [], trail: {}, lastActive: {} };
 
 function stuckOn(agentId: string, days: number): Escalation {
   return {
@@ -43,13 +43,6 @@ describe("what a row says an agent is doing", () => {
       NOW,
     );
     expect(said).toEqual({ text: "needs you", kind: "asking" });
-  });
-
-  it("says a coding job is running after the turn that started it has ended", () => {
-    expect(doing("a", { ...quiet, building: { a: "repo-1" } }, NOW)).toEqual({
-      text: "writing code",
-      kind: "thinking",
-    });
   });
 
   it("falls back to when it last spoke, and to nothing for one that never has", () => {

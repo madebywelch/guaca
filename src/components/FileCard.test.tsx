@@ -26,7 +26,6 @@ const state = {
   capabilities: {
     loopbackEndpoints: true,
     claudeProvider: true,
-    claudeCodeHarness: true,
     localFiles: false,
   },
 };

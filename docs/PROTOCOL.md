@@ -270,21 +270,16 @@ Settings, no token in the config file, and nothing in `llm/claude.rs` that could
 carry one. The operator signs in to Claude the way they already did, in their own
 terminal, and this app spends nothing it was not given.
 
-This is the same fact the coding harness is built on, one level up. There it
-decides which program writes an agent's code, because `pi` holding an
-Anthropic credential is refused while `claude` on the same account is not:
-`docs/CODING.md`. Here it decides which program answers a turn. Both follow from
-one sentence — a consumer token is spent by the program it was issued to — and in
-both places the answer is to *be* that program rather than to hold its
-credential.
+All of it follows from one sentence, that a consumer token is spent by the
+program it was issued to, and the answer is to *be* that program rather than to
+hold its credential.
 
 What that costs is written down where the cost lands. Guaca keeps its own round
 loop, so the program is given no tools and asked for one structured answer per
 call through `--json-schema`; the five limits stay in `runtime/guard.rs` where
 they are written rather than moving inside a process this app does not control.
 The sign-in is the program's and is never passed from here, and so is the model
-a turn runs on; a coding job's model is the one thing chosen from here, per
-agent, and only as the program's own flag. And a reply lands whole rather than a token at a
+a turn runs on. And a reply lands whole rather than a token at a
 time, because the answer is a JSON document and half a decoded escape drawn into
 a channel is worse than a message that arrives at once. `llm/claude.rs` is the
 whole of it.

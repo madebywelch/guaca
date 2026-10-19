@@ -6,7 +6,7 @@ gates. No mobile binary or live Tailnet connection has been tested for this stud
 
 Guaca mobile should connect to the same persistent workspace as desktop. Start
 with self-hosted VPS access over Tailscale. Add managed workspace discovery at
-the connection boundary later. Agents, schedules, coding jobs, plugin credentials
+the connection boundary later. Agents, schedules, plugin credentials
 and approvals remain on `guacad`.
 
 Use the existing React UI and a small Tauri mobile client as the first technical
@@ -46,7 +46,7 @@ geometry and restrained animation. Add named spacing and target-size tokens
 through the existing CSS contract when implementation starts.
 
 First scope: conversations, crew activity, questions, approvals, escalations,
-stop, and attachments. Full repository setup, plugin administration and computer
+stop, and attachments. Plugin administration and computer
 viewers can follow. The API remains available; each omitted mobile surface needs
 a clear route to desktop or the hosted web UI. A phone must still be able to read
 the evidence required for an approval, including a diff or document.

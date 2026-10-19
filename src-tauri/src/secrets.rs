@@ -1,29 +1,6 @@
 //! Process credentials. Values are never serialized; grants are resolved by the store.
 use std::collections::BTreeMap;
 
-#[derive(Default)]
-pub struct Environment {
-    pub names: Vec<String>,
-    pub values: BTreeMap<String, String>,
-}
-
-impl Environment {
-    pub fn apply(&self, command: &mut tokio::process::Command) {
-        for name in &self.names {
-            command.env_remove(name);
-        }
-        command.envs(&self.values);
-    }
-
-    pub fn description(&self) -> String {
-        if self.values.is_empty() {
-            return String::new();
-        }
-        format!("\nGuaca provides these secret environment variables: {}. Use them by name; never print their values, copy them into files, or include them in messages.\n",
-            self.values.keys().map(|name| format!("${name}")).collect::<Vec<_>>().join(", "))
-    }
-}
-
 /// Exact values and their common serialized forms. This limits accidental disclosure;
 /// an authorized program can still transform or transmit credentials it holds.
 pub fn redact(text: &str, values: &BTreeMap<String, String>) -> String {
@@ -111,6 +88,5 @@ mod tests {
             redact("abc+/123 abc%2B%2F123 YWJjKy8xMjM=", &values),
             "[REDACTED] [REDACTED] [REDACTED]"
         );
-        assert!(!Environment { names: vec![], values }.description().contains("abc"));
     }
 }

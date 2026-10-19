@@ -19,9 +19,6 @@ function anAgent(id: string, over: Partial<AgentCard> = {}): AgentCard {
     hasBrowser: false,
     runsErrands: false,
     browserConsent: "open",
-    hasTerminal: false,
-    harness: "pi",
-    gate: "open",
     createdAt: 0,
     ...over,
   } as AgentCard;

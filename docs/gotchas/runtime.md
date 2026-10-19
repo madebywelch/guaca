@@ -52,14 +52,9 @@ code.
   The rule itself is `domain::promise`, in one place because a copy in the
   runtime and a copy in the eval drift into a prompt fix that measures clean
   while the runtime goes on nudging.
-- **The nudge is not gated on an empty tool trail, and is gated on `code`.** The
-  turn this was written for had already made two calls and still closed on a
-  promise about two more: what backs a sentence is a call made *before* it, not
-  anywhere in the turn. The one exemption is a started `code` job, which
-  genuinely outlives the message announcing it, and which `## Your terminal`
-  explicitly tells an agent to announce. Without that exemption the nudge fires
-  on the one announcement the app asks for and every coding job buys a wasted
-  model call.
+- **The nudge is not gated on an empty tool trail.** The turn this was written
+  for had already made two calls and still closed on a promise about two more:
+  what backs a sentence is a call made *before* it, not anywhere in the turn.
 - **A turn reads its inbox between rounds, and reads nothing that would change
   where its answer goes.** Those are one decision, not a rule with an exception
   bolted on. The mode, the reply target, the placeholder's channel and `cause`
@@ -92,15 +87,6 @@ code.
   in the inbox at the same time. It is consumed, released and answered by this
   turn either way; without the set it is also written into the prompt twice, and
   an instruction a model reads twice is one it was told twice.
-- **`code` not blocking is what made a running turn need to read its inbox at
-  all.** The job's answer comes back as a fresh envelope on a run of its own, an
-  actor only examines the envelope it is holding, and the turn that asked was
-  therefore the one thing that could not receive it. `JobRunning` then told
-  that agent to wait for the message its own turn was holding up, which is an
-  instruction nothing can follow: measured on a real crew, forty-five minutes
-  and forty-five model calls of a turn filling time, with three finished jobs
-  and an operator correction stacked behind it. Neither half was wrong on its
-  own, which is why it survived review twice.
 - **An envelope booked against a run is released by whatever consumes it.** A
   path that takes one without turning it into a turn leaves the run outstanding
   for the life of the process.
@@ -142,7 +128,7 @@ code.
   part). Recording only the errand call would make the trail shrink the moment
   the turn ended. Their call ids are prefixed with the errand's call id and its
   number, because every errand's model numbers its calls from one.
-- **One lock covers the computer, the browser and the repository.** Separate
+- **One lock covers the computer and the browser.** Separate
   locks, taken in whatever order an errand reaches for them, are two errands each
   holding one and waiting on the other.
 - **A drain is a stop that ends differently, so `stopped()` answers for both.**

@@ -41,12 +41,7 @@ pub const ESCALATE: &str = "escalate";
 pub const ATTACH_FILE: &str = "attach_file";
 pub const WRITE_DOCUMENT: &str = "write_document";
 pub const READ_FILE: &str = "read_file";
-pub const CODE: &str = "code";
-pub const SHELL: &str = "shell";
 pub const ERRAND: &str = "errand";
-pub const READ: &str = "read";
-pub const WRITE: &str = "write";
-pub const EDIT: &str = "edit";
 
 /// Which of the two places an agent has been given, which decides which tools
 /// it is offered.
@@ -60,20 +55,9 @@ pub const EDIT: &str = "edit";
 pub struct Surfaces {
     pub computer: bool,
     pub browser: bool,
-    /// Whether this agent has been given a terminal.
-    ///
-    /// Beside the other two rather than folded into `computer`, because it is
-    /// not one of them: a computer is a sandbox somewhere else, and this is a
-    /// directory on the machine Guaca itself runs on, with that machine's
-    /// programs and credentials. An agent can have a terminal and no computer,
-    /// which is the ordinary case.
-    ///
-    /// Not a [`crate::domain::signin::Surface`] and deliberately absent from
-    /// [`Surfaces::has`]: nothing is ever signed in to a directory.
-    pub terminal: bool,
     /// Whether this agent may send errands.
     ///
-    /// Not a place at all, and here anyway, for the reason `terminal` is:
+    /// Not a place at all, and here anyway, because
     /// this struct is the one decision a turn's tool list and its prompt are
     /// both read from, and a grant decided anywhere else is a tool offered by
     /// one of them and not the other.
@@ -99,11 +83,11 @@ pub fn surface_of(name: &str) -> Option<crate::domain::signin::Surface> {
 
 impl Surfaces {
     pub fn both() -> Self {
-        Surfaces { computer: true, browser: true, terminal: true, errands: true }
+        Surfaces { computer: true, browser: true, errands: true }
     }
 
     pub fn none() -> Self {
-        Surfaces { computer: false, browser: false, terminal: false, errands: false }
+        Surfaces { computer: false, browser: false, errands: false }
     }
 
     /// What one agent has, out of what the workspace could hand out.
@@ -119,7 +103,6 @@ impl Surfaces {
         Surfaces {
             computer: self.computer && card.has_computer,
             browser: self.browser && card.has_browser,
-            terminal: self.terminal && card.has_terminal,
             errands: self.errands && card.runs_errands,
         }
     }
@@ -243,8 +226,7 @@ fn offered(name: &str, surfaces: Surfaces, modalities: Modalities) -> bool {
         USE_SCREEN => surfaces.computer && modalities.image,
         RUN_COMMAND | OPEN_ON_DESKTOP => surfaces.computer,
         BROWSE => surfaces.browser,
-        CODE | SHELL | READ | WRITE | EDIT => surfaces.terminal,
-        REQUEST_PERMISSION => surfaces.computer || surfaces.browser || surfaces.terminal,
+        REQUEST_PERMISSION => surfaces.computer || surfaces.browser,
         ERRAND => surfaces.errands,
         _ => true,
     }
@@ -257,8 +239,7 @@ fn needs(name: &str) -> Option<&'static str> {
         USE_SCREEN => Some("a computer, and a model that can see"),
         RUN_COMMAND | OPEN_ON_DESKTOP => Some("a computer"),
         BROWSE => Some("a browser"),
-        CODE | SHELL | READ | WRITE | EDIT => Some("a terminal"),
-        REQUEST_PERMISSION => Some("a computer, a browser or a terminal"),
+        REQUEST_PERMISSION => Some("a computer or a browser"),
         ERRAND => Some("errands switched on"),
         _ => None,
     }
@@ -291,29 +272,14 @@ pub fn catalog() -> Vec<ToolSummary> {
 }
 
 fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
-    let file_sources = match (surfaces.terminal, surfaces.computer) {
-        (true, true) => {
-            "Use a saved attachment's bare file name, a path in your terminal \
-            (relative to its directory or absolute within it), or a path on your own \
-            computer such as /home/user/brief.md. Terminal paths are tried before computer \
-            paths. An explicit path reads current bytes rather than a saved file of the same name."
-        }
-        (true, false) => {
-            "Use a saved attachment's bare file name or a path in your terminal, \
-            relative to its directory (e.g. site/public/logo.png) or absolute within it. An \
-            explicit path reads current bytes rather than a saved file of the same name. You \
-            have no computer; terminal files need none."
-        }
-        (false, true) => {
-            "Use a saved attachment's bare file name or a path on your own \
-            computer, e.g. /home/user/brief.md. An explicit path reads current bytes rather \
-            than a saved file of the same name."
-        }
-        (false, false) => {
-            "Use a saved attachment's bare file name. You have no computer or \
-            terminal, so filesystem paths cannot be read. Use write_document to create a \
-            text document without a machine."
-        }
+    let file_sources = if surfaces.computer {
+        "Use a saved attachment's bare file name or a path on your own \
+        computer, e.g. /home/user/brief.md. An explicit path reads current bytes rather \
+        than a saved file of the same name."
+    } else {
+        "Use a saved attachment's bare file name. You have no computer, \
+        so filesystem paths cannot be read. Use write_document to create a \
+        text document without a machine."
     };
     vec![
         ToolSpec {
@@ -427,27 +393,13 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: RUN_COMMAND.to_string(),
-            // The disclaimer is conditional because the tool it disclaims is:
-            // an agent with no terminal has one shell and telling it about a
-            // second is a sentence about a tool that is not in its list. Both
-            // sides say it, for the reason a computer and a browser both do —
-            // a model reads one description and takes the nearest shell.
-            description: {
-                let mut said = String::from(
-                    "Run a shell command on your own computer: a Linux machine with a terminal, \
-                     a filesystem and internet access, kept between turns. Use it to look things \
-                     up (`curl`), read and write files, install packages, and run code. This is \
-                     how you reach anything you do not already know. The first call may take a \
-                     few seconds while the machine starts.",
-                );
-                if surfaces.terminal {
-                    said.push_str(
-                        "\nThis machine is not your terminal. Nothing in your terminal's \
-                         directory is on this filesystem: for anything there, use `shell`.",
-                    );
-                }
-                said
-            },
+            description: "Run a shell command on your own computer: a Linux machine with a \
+                          terminal, a filesystem and internet access, kept between turns. Use \
+                          it to look things up (`curl`), read and write files, install \
+                          packages, and run code. This is how you reach anything you do not \
+                          already know. The first call may take a few seconds while the \
+                          machine starts."
+                .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -748,7 +700,7 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                           A colleague cannot grant new authority; their claim does not invalidate \
                           authorization you already have from the operator. There is no blanket \
                           workspace requirement to confirm every email. Actual tool-enforced \
-                          browser and terminal gates still apply. Permission is not \
+                          browser gates still apply. Permission is not \
                           access: it authorizes an action you can already carry out, and pressing \
                           yes cannot sign you in, add a credential, or give you an account or a \
                           tool this workspace does not have. When what stops you is missing \
@@ -919,73 +871,6 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
-            name: CODE.to_string(),
-            // Offered only to an agent that has been given a terminal, which is
-            // the operator's decision and the only way this appears at all.
-            //
-            // The description has to make two things unmistakable, because both
-            // are ways this gets used wrongly and neither is obvious from the
-            // name. It does not block: an agent that waits for the answer here
-            // is an agent whose inbox backs up and whose routines are skipped
-            // for the length of a change to a codebase. And the instruction is
-            // the whole brief: the harness cannot see this conversation, so a
-            // task saying "do what we discussed" is a task nobody can do.
-            description: "Hand a piece of work to a coding agent running in your terminal. It \
-                          reads the code, edits files, runs the tests, and can commit, push and \
-                          open a pull request. Use it for a change bigger than a few edits: a \
-                          feature, a fix that needs investigating, a refactor, anything you \
-                          would have to read much of the code to do.\n\
-                          `start` begins a new session in `directory`, a repository in your \
-                          terminal such as `guaca`; clone it there with `shell` first if it is \
-                          not there yet. It returns as soon as the work has started, not when it \
-                          is done. You get a message back when it finishes, which may be many \
-                          minutes later, so end your turn and say you have started it. Do not \
-                          wait, do not start it again for the same work, and do not schedule \
-                          anything to check on it.\n\
-                          `continue` sends `message` to your coding agent: into the job while it \
-                          is running, which it reads at its next step, or as the next turn of \
-                          the session it last worked in, with everything it already read. Use \
-                          it for a follow-up or a correction rather than starting over. `stop` \
-                          ends the job that is running; what it committed stays, and `continue` \
-                          can pick the session up later.\n\
-                          The coding agent cannot see this conversation and cannot ask you \
-                          anything. Everything a new session needs is in `task`: what to change, \
-                          how you will know it worked, and whether to commit, push or open a \
-                          pull request. Write it as you would write a ticket for somebody \
-                          competent who has never spoken to you."
-                .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "action": {
-                        "type": "string",
-                        "enum": ["start", "continue", "stop"],
-                        "description": "`start` a new session, `continue` the current or last \
-                                        one, or `stop` the one that is running."
-                    },
-                    "task": {
-                        "type": "string",
-                        "description": "On `start`: the whole brief, in full. What to change, \
-                                        how to check it worked, and what to do with the result: \
-                                        leave it on a branch, push it, or open a pull request."
-                    },
-                    "directory": {
-                        "type": "string",
-                        "description": "On `start`: where to work, relative to your terminal, \
-                                        e.g. `guaca`. Omit it only for work in the terminal \
-                                        itself."
-                    },
-                    "message": {
-                        "type": "string",
-                        "description": "On `continue`: what the coding agent should do next, \
-                                        or what it should change about what it is doing."
-                    }
-                },
-                "required": ["action"],
-                "additionalProperties": false
-            }),
-        },
-        ToolSpec {
             name: ERRAND.to_string(),
             // Offered only to an agent the operator switched errands on for.
             // The description carries the whole of when to reach for one,
@@ -1008,7 +893,7 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                  alone: what to find or do, where to look, what to hand back and in what \
                  shape, and where to stop.\n\
                  An errand cannot message anyone, rewrite your memory or send errands of its \
-                 own. Your computer, browser and terminal are used by one errand at a time, \
+                 own. Your computer and browser are used by one errand at a time, \
                  so errands that need them take turns while the others run. What comes back is \
                  each errand's own account: you did not see what it read, so report what it \
                  found as found, not as checked.",
@@ -1029,166 +914,6 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                     }
                 },
                 "required": ["briefs"],
-                "additionalProperties": false
-            }),
-        },
-        ToolSpec {
-            name: SHELL.to_string(),
-            // The small door into the same terminal `code` is the big door
-            // into, offered on the same condition. Two ways in, because the
-            // work genuinely comes in two sizes and a design with only the
-            // large one made an agent spend a coding job on `gh pr merge` —
-            // and, when the harness would not start, report to the operator
-            // that it had no shell at all.
-            //
-            // Three things have to be unmistakable and each is a way this gets
-            // used wrongly. It waits, which is what makes it the wrong tool for
-            // a build. It is bounded, so a model that would otherwise reach for
-            // it to run a test suite is told where the line is before it spends
-            // two minutes finding out. And on an agent that also has a computer
-            // there are two shells in the tool list pointed at two different
-            // machines, which is the `browse`/`use_screen` hazard again: each
-            // has to name the other or a model takes the nearest one and
-            // reports that its files are gone.
-            description: {
-                let mut said = String::from(
-                    "Run one shell command in your terminal and get its output back. It starts \
-                     in your own directory, on the machine Guaca runs on, with that machine's \
-                     programs and its git and GitHub sign-ins. This is how you clone a \
-                     repository and do the small things to one: `git clone`, `git status`, \
-                     `git log`, `gh pr view`, `gh pr merge`, one test, a quick script.\n\
-                     It waits for the command and hands you what it printed, so use it whenever \
-                     you need the answer in this turn. It is for commands that answer in \
-                     seconds: anything still going after two minutes is killed. For work that \
-                     takes longer than that, or that means reading the code and changing much of \
-                     it, use `code` instead. To look at or change a file, `read`, `write` and \
-                     `edit` are more reliable than `cat`, `sed` or a heredoc.\n\
-                     You are running as the operator, with their credentials. Ordinary commands \
-                     are yours to run. A command that pushes, merges, opens a pull request or \
-                     cuts a release leaves this machine under their name and cannot be undone by \
-                     git, so say what you did afterward, and ask them first if you are not sure \
-                     they want it.",
-                );
-                if surfaces.computer {
-                    said.push_str(
-                        "\nThis is not `run_command`. That one runs on your own Linux computer \
-                         somewhere else, which is a different filesystem with none of your \
-                         terminal on it. Anything in your terminal is this tool.",
-                    );
-                }
-                said
-            },
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "command": {
-                        "type": "string",
-                        "minLength": 1,
-                        "description": "One bash command line, e.g. `git -C guaca log --oneline \
-                                        -10`. Every call starts in your terminal's directory, so \
-                                        `cd` into a repository in the same line when you need to \
-                                        be inside it. Long output is cut in the middle, so \
-                                        narrow it yourself when you can."
-                    }
-                },
-                "required": ["command"],
-                "additionalProperties": false
-            }),
-        },
-        ToolSpec {
-            name: READ.to_string(),
-            // Beside `read_file`, which reopens an attachment by name and is a
-            // different thing: that one reads what somebody sent, this reads a
-            // disk. Each says which it is in its first sentence, because the
-            // two names are one word apart.
-            description: "Read a text file in your terminal, or anywhere on this machine by \
-                          absolute path. Returns up to 2000 lines at a time, with where they \
-                          are in the file; `offset` and `limit` page through a long one. Use \
-                          this rather than `cat` or `sed -n` to look at code. An attachment \
-                          somebody sent you is `read_file`, not this."
-                .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "minLength": 1,
-                        "description": "Relative to your terminal's directory, e.g. \
-                                        `guaca/src/main.rs`, or absolute."
-                    },
-                    "offset": {"type": "integer", "minimum": 1,
-                        "description": "The first line to return, counting from 1."},
-                    "limit": {"type": "integer", "minimum": 1,
-                        "description": "How many lines to return. At most 2000."}
-                },
-                "required": ["path"],
-                "additionalProperties": false
-            }),
-        },
-        ToolSpec {
-            name: WRITE.to_string(),
-            description: "Create a file in your terminal, or replace one completely, with \
-                          exactly the content you give. Folders are made as needed. For a \
-                          change to part of a file that already exists, use `edit`, which \
-                          cannot lose the rest of it. A document to hand to somebody is \
-                          `write_document`, not this."
-                .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "minLength": 1,
-                        "description": "Relative to your terminal's directory, e.g. \
-                                        `notes/plan.md`. It must stay inside it."
-                    },
-                    "content": {"type": "string",
-                        "description": "The whole file, exactly as it should be."}
-                },
-                "required": ["path", "content"],
-                "additionalProperties": false
-            }),
-        },
-        ToolSpec {
-            name: EDIT.to_string(),
-            // Exact replacement, the edit every coding harness ships, for the
-            // reason they all do: a model editing through `sed` or a heredoc
-            // breaks on the first quote in the text, and one naming the text it
-            // wants gone either matches it or changes nothing.
-            description: "Change a file in your terminal by replacing exact text. Each \
-                          `old_text` must appear in the file exactly once, spaces and \
-                          indentation included, so `read` the file first and copy the text from \
-                          it. Several edits to one file go in one call and are matched against \
-                          the file as it was before any of them. If any edit does not match, \
-                          nothing is changed."
-                .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "minLength": 1,
-                        "description": "Relative to your terminal's directory. It must stay \
-                                        inside it."
-                    },
-                    "edits": {
-                        "type": "array",
-                        "minItems": 1,
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "old_text": {"type": "string", "minLength": 1,
-                                    "description": "The exact text to replace. As little as \
-                                                    matches exactly one place."},
-                                "new_text": {"type": "string",
-                                    "description": "What replaces it."}
-                            },
-                            "required": ["old_text", "new_text"],
-                            "additionalProperties": false
-                        }
-                    }
-                },
-                "required": ["path", "edits"],
                 "additionalProperties": false
             }),
         },
@@ -1686,39 +1411,6 @@ pub enum ToolInvocation {
         name: String,
         offset: usize,
     },
-    /// Start, continue or stop this agent's coding agent.
-    ///
-    /// The one tool that starts something and does not wait for it. The result
-    /// arrives later as a message, on the path a routine firing already uses.
-    Code(CodeAction),
-    /// Run one line in this agent's terminal and wait for it.
-    ///
-    /// The other half of [`ToolInvocation::Code`] and its opposite in the one
-    /// way that matters to a turn: this blocks and answers, that one starts
-    /// something and returns. Kept as its own variant rather than a shape of
-    /// [`ToolInvocation::RunCommand`] because the two run on different
-    /// machines, and a single variant would leave the runtime deciding which
-    /// from the agent's surfaces at dispatch time, which is a machine chosen by
-    /// inference rather than by the model.
-    Shell {
-        command: String,
-    },
-    /// A page of a text file, from the terminal or an absolute path.
-    Read {
-        path: String,
-        offset: Option<usize>,
-        limit: Option<usize>,
-    },
-    /// A whole file, created or replaced, inside the terminal.
-    Write {
-        path: String,
-        content: String,
-    },
-    /// Exact replacements in one file inside the terminal.
-    Edit {
-        path: String,
-        edits: Vec<crate::terminal::Replacement>,
-    },
     /// Write a document out of the turn's own words and hand it over.
     ///
     /// The one way to produce a file that needs no machine, which is why it is
@@ -2014,18 +1706,6 @@ pub enum ScreenAction {
     Wait { ms: u32 },
 }
 
-/// What a `code` call asks for.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CodeAction {
-    /// A new session, in a directory of the terminal. `None` is the terminal
-    /// itself.
-    Start { task: String, directory: Option<String> },
-    /// A message into the running job, or the next turn of the last session.
-    Continue { message: String },
-    /// End the job that is running, keeping its session.
-    Stop,
-}
-
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ToolParseError {
     #[error(
@@ -2042,12 +1722,6 @@ pub enum ToolParseError {
     MissingText,
     #[error("attach_file needs a non-empty `files` list")]
     MissingFiles,
-    #[error("code needs a non-empty `task`")]
-    MissingTask,
-    #[error("code with `continue` needs a non-empty `message`")]
-    MissingFollowUp,
-    #[error("code needs a known `action`")]
-    UnknownCodeAction,
     #[error("errand needs at least one non-empty brief in `briefs`")]
     MissingBriefs,
     #[error("write_document needs a `name`")]
@@ -2062,14 +1736,6 @@ pub enum ToolParseError {
     MissingNote,
     #[error("run_command needs a non-empty `command` string")]
     MissingCommand,
-    #[error("shell needs a non-empty `command` string")]
-    MissingShellCommand,
-    #[error("{tool} needs a `path`")]
-    MissingPath { tool: &'static str },
-    #[error("write needs a `content` string")]
-    MissingWriteContent,
-    #[error("edit needs `edits`: a list of `old_text` and `new_text` pairs")]
-    MissingEdits,
     #[error("open_on_desktop needs a non-empty `command` string")]
     MissingDesktopCommand,
     #[error("use_screen needs a known `action`")]
@@ -2214,27 +1880,6 @@ impl ToolParseError {
                  {\"command\": \"curl -s wttr.in/Charleston?format=3\"}."
                     .to_string()
             }
-            ToolParseError::MissingShellCommand => {
-                "Error: `command` must be a non-empty string: one bash command line to run in \
-                 your terminal, for example {\"command\": \"git -C guaca status --short\"}."
-                    .to_string()
-            }
-            ToolParseError::MissingPath { tool } => format!(
-                "Error: `{tool}` needs a `path`, relative to your terminal's directory, for \
-                 example {{\"path\": \"guaca/README.md\"}}."
-            ),
-            ToolParseError::MissingWriteContent => {
-                "Error: `content` must be the whole file as a string, for example \
-                 {\"path\": \"notes/plan.md\", \"content\": \"# Plan\\n\"}. To change part of a \
-                 file, use `edit`."
-                    .to_string()
-            }
-            ToolParseError::MissingEdits => {
-                "Error: `edits` must be a list of replacements, for example {\"path\": \
-                 \"guaca/src/main.rs\", \"edits\": [{\"old_text\": \"let a = 1;\", \
-                 \"new_text\": \"let a = 2;\"}]}."
-                    .to_string()
-            }
             ToolParseError::MissingRecipients => {
                 "Error: `to` must be a non-empty array of exact agent names. Call `directory` to \
                  see them."
@@ -2247,23 +1892,6 @@ impl ToolParseError {
                 "Error: `files` must name at least one file, by its path on your computer or by \
                  the name of one already in your channel, for example \
                  {\"files\": [\"/home/user/brief.md\"]}."
-                    .to_string()
-            }
-            ToolParseError::MissingTask => {
-                "Error: `task` must be the whole brief for the coding agent, which cannot see \
-                 this conversation. Say what to change, how to tell it worked, and whether to \
-                 commit, push or open a pull request."
-                    .to_string()
-            }
-            ToolParseError::MissingFollowUp => {
-                "Error: `message` must say what the coding agent should do next, for example \
-                 {\"action\": \"continue\", \"message\": \"Also add a test for the empty \
-                 case.\"}."
-                    .to_string()
-            }
-            ToolParseError::UnknownCodeAction => {
-                "Error: `action` must be `start` (with `task` and `directory`), `continue` (with \
-                 `message`) or `stop`."
                     .to_string()
             }
             ToolParseError::MissingBriefs => {
@@ -2377,10 +2005,10 @@ pub fn for_errands(offered: impl IntoIterator<Item = ToolSpec>) -> Vec<ToolSpec>
         .collect()
 }
 
-/// Whether a call reaches one of the agent's three places, which an errand
-/// holds for the rest of its life once it has touched any of them.
+/// Whether a call reaches one of the agent's two places, which an errand
+/// holds for the rest of its life once it has touched either of them.
 ///
-/// All three behind one lock rather than one each. Separate locks taken in the
+/// Both behind one lock rather than one each. Separate locks taken in the
 /// order an errand happens to need them are two errands each holding one and
 /// waiting on the other's, forever.
 pub fn reaches_a_place(invocation: &ToolInvocation) -> bool {
@@ -2390,11 +2018,6 @@ pub fn reaches_a_place(invocation: &ToolInvocation) -> bool {
             | ToolInvocation::OpenOnDesktop { .. }
             | ToolInvocation::UseScreen { .. }
             | ToolInvocation::Browse { .. }
-            | ToolInvocation::Shell { .. }
-            | ToolInvocation::Code { .. }
-            | ToolInvocation::Read { .. }
-            | ToolInvocation::Write { .. }
-            | ToolInvocation::Edit { .. }
     )
 }
 
@@ -3296,24 +2919,6 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
             }
             Ok(ToolInvocation::AttachFile { files })
         }
-        // `bash` and `terminal` are what a model calls this when it has been
-        // told it has a shell, and `run_shell_command` is what it reaches for
-        // having seen `run_command` in the same list. None of them is ambiguous
-        // with anything else here, and the alternative to matching them is a
-        // turn spent on the spelling of a tool the agent does have.
-        SHELL | "bash" | "sh" | "terminal" | "run_shell" | "run_shell_command"
-        | "shell_command" => {
-            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
-                name: SHELL.to_string(),
-                detail: e.to_string(),
-            })?;
-            match first_string(&value, &["command", "cmd", "line", "script", "shell"]) {
-                Some(command) if !command.trim().is_empty() => {
-                    Ok(ToolInvocation::Shell { command })
-                }
-                _ => Err(ToolParseError::MissingShellCommand),
-            }
-        }
         // The aliases are what other harnesses call the same thing, and a model
         // trained on their transcripts reaches for them by name.
         ERRAND | "errands" | "run_errand" | "send_errand" | "delegate_task" | "subagent" => {
@@ -3326,92 +2931,6 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                 return Err(ToolParseError::MissingBriefs);
             }
             Ok(ToolInvocation::Errand { briefs })
-        }
-        CODE | "write_code" | "run_coding_agent" | "delegate_code" => {
-            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
-                name: CODE.to_string(),
-                detail: e.to_string(),
-            })?;
-            let task = first_string(&value, &["task", "instruction", "prompt", "brief", "text"])
-                .filter(|task| !task.trim().is_empty());
-            let message = first_string(&value, &["message", "correction", "follow_up", "text"])
-                .filter(|message| !message.trim().is_empty());
-            // No action is a start when there is a brief and a follow-up when
-            // there is only a message, which is how a model that never read the
-            // enum spells each.
-            let action = match value.get("action").and_then(|v| v.as_str()) {
-                Some(action) => action.trim().to_ascii_lowercase(),
-                None if task.is_none() && message.is_some() => "continue".into(),
-                None => "start".into(),
-            };
-            match action.as_str() {
-                "start" | "new" | "begin" => {
-                    let task = task.ok_or(ToolParseError::MissingTask)?;
-                    let directory =
-                        first_string(&value, &["directory", "dir", "repository", "path"])
-                            .filter(|directory| !directory.trim().is_empty());
-                    Ok(ToolInvocation::Code(CodeAction::Start { task, directory }))
-                }
-                "continue" | "steer" | "follow_up" | "message" | "resume" => {
-                    let message = message.or(task).ok_or(ToolParseError::MissingFollowUp)?;
-                    Ok(ToolInvocation::Code(CodeAction::Continue { message }))
-                }
-                "stop" | "cancel" | "abort" | "interrupt" => {
-                    Ok(ToolInvocation::Code(CodeAction::Stop))
-                }
-                _ => Err(ToolParseError::UnknownCodeAction),
-            }
-        }
-        READ | "Read" | "read_text" | "view_file" => {
-            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
-                name: READ.to_string(),
-                detail: e.to_string(),
-            })?;
-            let path = first_string(&value, &["path", "file_path", "file", "filename"])
-                .filter(|path| !path.trim().is_empty())
-                .ok_or(ToolParseError::MissingPath { tool: READ })?;
-            let line = |key: &str| value.get(key).and_then(|v| v.as_u64()).map(|n| n as usize);
-            Ok(ToolInvocation::Read { path, offset: line("offset"), limit: line("limit") })
-        }
-        WRITE | "Write" => {
-            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
-                name: WRITE.to_string(),
-                detail: e.to_string(),
-            })?;
-            let path = first_string(&value, &["path", "file_path", "file", "filename"])
-                .filter(|path| !path.trim().is_empty())
-                .ok_or(ToolParseError::MissingPath { tool: WRITE })?;
-            // Empty is a file, and a legitimate one: `__init__.py`, `.gitkeep`.
-            // Absent is a call that forgot the one thing it was for.
-            let content = first_string(&value, &["content", "text", "contents", "body"])
-                .ok_or(ToolParseError::MissingWriteContent)?;
-            Ok(ToolInvocation::Write { path, content })
-        }
-        // Claude Code's spelling is `old_string` and `new_string`, one pair at
-        // a time, and pi's is `oldText` and `newText` in a list. A model trained
-        // on either writes it here, and every one of them means the same edit.
-        EDIT | "Edit" | "edit_file" | "str_replace" | "apply_edit" => {
-            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
-                name: EDIT.to_string(),
-                detail: e.to_string(),
-            })?;
-            let path = first_string(&value, &["path", "file_path", "file", "filename"])
-                .filter(|path| !path.trim().is_empty())
-                .ok_or(ToolParseError::MissingPath { tool: EDIT })?;
-            let pair = |edit: &serde_json::Value| {
-                Some(crate::terminal::Replacement {
-                    old_text: first_string(edit, &["old_text", "oldText", "old_string", "old"])?,
-                    new_text: first_string(edit, &["new_text", "newText", "new_string", "new"])?,
-                })
-            };
-            let edits: Vec<_> = match value.get("edits").and_then(|v| v.as_array()) {
-                Some(listed) => listed.iter().map(pair).collect::<Option<_>>().unwrap_or_default(),
-                None => pair(&value).into_iter().collect(),
-            };
-            if edits.is_empty() {
-                return Err(ToolParseError::MissingEdits);
-            }
-            Ok(ToolInvocation::Edit { path, edits })
         }
         // The aliases are the words a model reaches for when it has been asked
         // for a document and has one written. `create_file` and `write_file`
@@ -3598,10 +3117,7 @@ mod tests {
             assert_eq!(surface_of(name), Some(Surface::Computer), "{name}");
         }
         assert_eq!(surface_of(BROWSE), Some(Surface::Browser));
-        // The terminal is the machine Guaca runs on, and a coding job is a
-        // process rather than a place the operator can watch.
-        for name in [SHELL, CODE, READ, WRITE, EDIT, SEND_MESSAGE, SCHEDULE, "linear__create_issue"]
-        {
+        for name in [SEND_MESSAGE, SCHEDULE, "linear__create_issue"] {
             assert_eq!(surface_of(name), None, "{name}");
         }
     }
@@ -4189,33 +3705,6 @@ mod tests {
             "nothing it could do needs authorizing: {neither:?}"
         );
 
-        // A terminal is the third thing an agent is given, and five tools
-        // reach one: `code` for work that takes minutes, `shell` for the
-        // answer it needs in this turn, and the three file tools. An agent with
-        // no terminal must be offered none of them: each costs a model call and
-        // a turn to discover, and the agent reports the capability as broken
-        // rather than as absent.
-        let coder = names(Surfaces { terminal: true, ..Surfaces::none() });
-        for reaches in [CODE, SHELL, READ, WRITE, EDIT] {
-            assert!(
-                coder.contains(&reaches.to_string()),
-                "a terminal needs no computer: {coder:?}"
-            );
-            assert!(!neither.contains(&reaches.to_string()), "no terminal: {neither:?}");
-            assert!(
-                !computer_only.contains(&reaches.to_string()),
-                "a sandbox is not a terminal: {reaches}"
-            );
-        }
-        // And a terminal is a way out of the workspace, so asking to act in
-        // the operator's name means something there. It is the same push either
-        // tool makes, and an agent holding one told nothing it can call reaches
-        // outside the workspace has been told something false.
-        assert!(
-            coder.contains(&REQUEST_PERMISSION.to_string()),
-            "a push is in the operator's name: {coder:?}"
-        );
-
         assert_eq!(names(Surfaces::both()).len(), all_specs(Surfaces::both()).len());
     }
 
@@ -4242,250 +3731,6 @@ mod tests {
         assert!(blind.contains(&BROWSE.to_string()), "the browser answers in text: {blind:?}");
     }
 
-    /// The `browse`/`use_screen` hazard, one level over: an agent with both a
-    /// computer and a terminal is holding two shells pointed at two
-    /// filesystems, and a model reads one description and takes the nearest
-    /// one. Each has to name the other, and only when the other is there.
-    #[test]
-    fn two_shells_on_one_agent_each_say_which_machine_they_are_not() {
-        let described = |surfaces: Surfaces, name: &str| -> String {
-            specs(surfaces, Modalities::seeing())
-                .into_iter()
-                .find(|spec| spec.name == name)
-                .unwrap_or_else(|| panic!("{name} was not offered"))
-                .description
-        };
-
-        let both = Surfaces { computer: true, terminal: true, ..Surfaces::none() };
-        assert!(described(both, SHELL).contains("not `run_command`"), "shell says nothing of it");
-        assert!(described(both, RUN_COMMAND).contains("`shell`"), "run_command says nothing of it");
-
-        // And neither disclaims a tool the agent does not have, which would be
-        // a sentence about something absent from its list.
-        let terminal_only = Surfaces { terminal: true, ..Surfaces::none() };
-        assert!(!described(terminal_only, SHELL).contains("run_command"), "there is no other");
-        let computer_only = Surfaces { computer: true, ..Surfaces::none() };
-        assert!(!described(computer_only, RUN_COMMAND).contains("`shell`"), "there is no other");
-    }
-
-    /// The two things a model gets wrong about it, and both are the opposite of
-    /// what `code` gets wrong: this one waits, and it has a ceiling low enough
-    /// that a build does not belong in it.
-    #[test]
-    fn the_shell_tool_says_it_waits_and_where_the_line_is() {
-        let spec = specs(Surfaces::both(), Modalities::seeing())
-            .into_iter()
-            .find(|spec| spec.name == SHELL)
-            .expect("offered with a terminal");
-
-        assert!(spec.description.contains("waits"), "{}", spec.description);
-        assert!(spec.description.contains("two minutes"), "{}", spec.description);
-        assert!(spec.description.contains("`code`"), "the other door: {}", spec.description);
-        // And that what it does is in the operator's name, which is the whole
-        // of why the gate exists.
-        assert!(spec.description.contains("operator"), "{}", spec.description);
-    }
-
-    /// A model that has been told it has a shell calls it `bash`. Refusing that
-    /// is a turn spent on the spelling of a tool the agent does have.
-    #[test]
-    fn a_shell_call_parses_from_the_names_a_model_reaches_for() {
-        for name in ["shell", "bash", "sh", "terminal", "run_shell", "run_shell_command"] {
-            let call = ToolCall {
-                id: "1".into(),
-                name: name.into(),
-                arguments: r#"{"command": "git status --short"}"#.into(),
-            };
-            assert_eq!(
-                parse(&call).unwrap(),
-                ToolInvocation::Shell { command: "git status --short".to_string() },
-                "{name} did not parse"
-            );
-        }
-
-        // The field, and the two near misses beside it.
-        for field in ["command", "cmd", "line"] {
-            let call = ToolCall {
-                id: "1".into(),
-                name: SHELL.into(),
-                arguments: format!(r#"{{"{field}": "git log -1"}}"#),
-            };
-            assert_eq!(
-                parse(&call).unwrap(),
-                ToolInvocation::Shell { command: "git log -1".to_string() },
-                "{field} did not parse"
-            );
-        }
-    }
-
-    #[test]
-    fn a_shell_call_with_nothing_in_it_says_what_a_correct_one_looks_like() {
-        let call = ToolCall {
-            id: "1".into(),
-            name: SHELL.into(),
-            arguments: r#"{"command": "   "}"#.into(),
-        };
-        let err = parse(&call).unwrap_err();
-        assert_eq!(err, ToolParseError::MissingShellCommand);
-        assert!(err.guidance().contains("git -C guaca status"), "{}", err.guidance());
-    }
-
-    #[test]
-    fn the_code_tool_says_it_does_not_block_and_that_the_brief_is_everything() {
-        // Two ways this gets used wrongly, and neither is obvious from the
-        // name. An agent that waits for the answer is an agent whose inbox
-        // backs up and whose routines are skipped for the length of a change to
-        // a codebase. And the harness cannot see the conversation, so a task
-        // saying "do what we discussed" is a task nobody can do.
-        let spec = specs(Surfaces { terminal: true, ..Surfaces::none() }, Modalities::seeing())
-            .into_iter()
-            .find(|spec| spec.name == CODE)
-            .unwrap();
-        let text = spec.description.to_lowercase();
-
-        assert!(text.contains("not when it is done"), "{text}");
-        assert!(text.contains("do not wait"), "{text}");
-        assert!(text.contains("end your turn"), "{text}");
-        assert!(text.contains("cannot see this conversation"), "{text}");
-        // And what it is actually for, in the words an operator would use.
-        assert!(text.contains("pull request"), "{text}");
-    }
-
-    #[test]
-    fn a_coding_task_with_nothing_in_it_is_refused_with_what_is_missing() {
-        let err = parse(&call(CODE, r#"{"task": "  "}"#)).unwrap_err();
-        assert!(matches!(err, ToolParseError::MissingTask));
-        let said = err.guidance();
-        assert!(said.contains("cannot see"), "{said}");
-        assert!(said.contains("pull request"), "{said}");
-    }
-
-    #[test]
-    fn a_coding_task_arrives_in_whatever_word_the_model_used() {
-        // Each of these names this and nothing else, so refusing one buys a
-        // retry and a turn spent on vocabulary.
-        for key in ["task", "instruction", "prompt", "brief"] {
-            let parsed = parse(&call(CODE, &format!(r#"{{"{key}": "fix the test"}}"#))).unwrap();
-            let expected = ToolInvocation::Code(CodeAction::Start {
-                task: "fix the test".into(),
-                directory: None,
-            });
-            assert_eq!(parsed, expected, "{key}");
-        }
-        let aliased = parse(&call("write_code", r#"{"task": "fix the test"}"#)).unwrap();
-        assert_eq!(
-            aliased,
-            ToolInvocation::Code(CodeAction::Start {
-                task: "fix the test".into(),
-                directory: None
-            })
-        );
-        let placed =
-            parse(&call(CODE, r#"{"task": "fix the test", "directory": "guaca"}"#)).unwrap();
-        assert_eq!(
-            placed,
-            ToolInvocation::Code(CodeAction::Start {
-                task: "fix the test".into(),
-                directory: Some("guaca".into())
-            })
-        );
-    }
-
-    #[test]
-    fn a_follow_up_and_a_stop_are_the_same_tool_as_a_start() {
-        // One tool with three verbs, because they are one thing an operator
-        // does in each program's own window: start it, type the next message,
-        // press stop. Three tools would be three names for a model to pick
-        // between and one more place for the brief to be written twice.
-        assert_eq!(
-            parse(&call(CODE, r#"{"action": "continue", "message": "add a test"}"#)).unwrap(),
-            ToolInvocation::Code(CodeAction::Continue { message: "add a test".into() })
-        );
-        assert_eq!(
-            parse(&call(CODE, r#"{"action": "stop"}"#)).unwrap(),
-            ToolInvocation::Code(CodeAction::Stop)
-        );
-        // A model that never read the enum: a message with no brief is a
-        // follow-up, not a start with nothing to do.
-        assert_eq!(
-            parse(&call(CODE, r#"{"message": "use the staging bucket"}"#)).unwrap(),
-            ToolInvocation::Code(CodeAction::Continue { message: "use the staging bucket".into() })
-        );
-        let empty = parse(&call(CODE, r#"{"action": "continue"}"#)).unwrap_err();
-        assert_eq!(empty, ToolParseError::MissingFollowUp);
-        assert!(empty.guidance().contains("\"action\": \"continue\""), "{}", empty.guidance());
-        let unknown = parse(&call(CODE, r#"{"action": "pause"}"#)).unwrap_err();
-        assert!(unknown.guidance().contains("`stop`"), "{}", unknown.guidance());
-    }
-
-    #[test]
-    fn an_edit_arrives_in_either_harness_spelling_and_means_the_same_thing() {
-        let one = |old: &str, new: &str| crate::terminal::Replacement {
-            old_text: old.into(),
-            new_text: new.into(),
-        };
-        let listed = parse(&call(
-            EDIT,
-            r#"{"path": "a.rs", "edits": [{"old_text": "x", "new_text": "y"}]}"#,
-        ))
-        .unwrap();
-        let pi =
-            parse(&call(EDIT, r#"{"path": "a.rs", "edits": [{"oldText": "x", "newText": "y"}]}"#))
-                .unwrap();
-        let claude =
-            parse(&call("Edit", r#"{"file_path": "a.rs", "old_string": "x", "new_string": "y"}"#))
-                .unwrap();
-        let expected = ToolInvocation::Edit { path: "a.rs".into(), edits: vec![one("x", "y")] };
-        assert_eq!(listed, expected);
-        assert_eq!(pi, expected);
-        assert_eq!(claude, expected);
-
-        // An edit list with one pair missing its replacement is not a smaller
-        // edit: it is a call that did not say what it meant.
-        let half = parse(&call(
-            EDIT,
-            r#"{"path": "a.rs", "edits": [{"old_text": "x", "new_text": "y"}, {"old_text": "z"}]}"#,
-        ));
-        assert_eq!(half, Err(ToolParseError::MissingEdits));
-        assert!(ToolParseError::MissingEdits.guidance().contains("old_text"));
-    }
-
-    #[test]
-    fn a_file_tool_without_a_path_says_what_one_looks_like() {
-        for name in [READ, WRITE, EDIT] {
-            let err = parse(&call(name, r#"{"content": "x"}"#)).unwrap_err();
-            assert_eq!(err, ToolParseError::MissingPath { tool: name }, "{name}");
-            assert!(err.guidance().contains("relative to your terminal"), "{}", err.guidance());
-        }
-        // An empty file is a file. A write with no content at all is a call
-        // that forgot what it was for.
-        assert_eq!(
-            parse(&call(WRITE, r#"{"path": "pkg/__init__.py", "content": ""}"#)).unwrap(),
-            ToolInvocation::Write { path: "pkg/__init__.py".into(), content: String::new() }
-        );
-        assert_eq!(
-            parse(&call(WRITE, r#"{"path": "a.md"}"#)),
-            Err(ToolParseError::MissingWriteContent)
-        );
-        assert_eq!(
-            parse(&call(READ, r#"{"path": "a.md", "offset": 20, "limit": 5}"#)).unwrap(),
-            ToolInvocation::Read { path: "a.md".into(), offset: Some(20), limit: Some(5) }
-        );
-    }
-
-    #[test]
-    fn the_two_read_tools_each_say_which_one_they_are() {
-        // One word apart, and they read two different things: what somebody
-        // sent, and a disk. A model that takes the wrong one reports a file as
-        // missing that is sitting in its terminal.
-        let read = description(READ);
-        assert!(read.contains("`read_file`"), "{read}");
-        assert!(read.contains("absolute path"), "{read}");
-        let edit = description(EDIT);
-        assert!(edit.contains("exactly once"), "{edit}");
-        assert!(edit.contains("nothing is changed"), "{edit}");
-    }
-
     #[test]
     fn attaching_is_offered_with_no_computer_and_stops_describing_one() {
         // The tool stays, because a file already in the channel is attachable
@@ -4510,22 +3755,6 @@ mod tests {
         // With one, the path half is the whole point and stays.
         let with = description(ATTACH_FILE);
         assert!(with.contains("/home/user/brief.md"), "{with}");
-    }
-
-    #[test]
-    fn terminal_attachments_are_described_without_inventing_a_computer() {
-        let mut surfaces = Surfaces::none();
-        surfaces.terminal = true;
-        for spec in specs(surfaces, Modalities::seeing())
-            .into_iter()
-            .filter(|spec| [SEND_MESSAGE, ATTACH_FILE].contains(&spec.name.as_str()))
-        {
-            let words = format!("{} {}", spec.description, spec.parameters);
-            assert!(words.contains("a path in your terminal"), "{words}");
-            assert!(words.contains("site/public/logo.png"), "{words}");
-            assert!(!words.contains("/home/user"), "{words}");
-            assert!(!words.contains("no filesystem"), "{words}");
-        }
     }
 
     #[test]
@@ -5091,7 +4320,7 @@ mod tests {
                 tool.name
             );
         }
-        for name in [SKILL, NOTEBOOK, SETTINGS, SCHEDULE, CODE] {
+        for name in [SKILL, NOTEBOOK, SETTINGS, SCHEDULE] {
             assert!(listed.iter().any(|tool| tool.name == name), "{name} is missing");
         }
     }
@@ -5101,11 +4330,11 @@ mod tests {
         let specs = specs(Surfaces::both(), Modalities::seeing());
         assert_eq!(
             specs.len(),
-            28,
-            "directory, run_command, open_on_desktop, use_screen, browse, code, errand, shell, \
-             read, write, edit, schedule, calendar, artifact, skill, notebook, settings, \
-             create_agent, request_permission, ask_operator, decision, escalate, send_message, \
-             read_file, write_document, attach_file, update_memory, note_progress"
+            23,
+            "directory, run_command, open_on_desktop, use_screen, browse, errand, schedule, \
+             calendar, artifact, skill, notebook, settings, create_agent, request_permission, \
+             ask_operator, decision, escalate, send_message, read_file, write_document, \
+             attach_file, update_memory, note_progress"
         );
         for spec in &specs {
             assert_eq!(
@@ -5154,16 +4383,7 @@ mod tests {
         }
         let browse = parse(&call(BROWSE, r#"{"action":"open","url":"https://a.test"}"#)).unwrap();
         assert!(withheld_from_errands(&browse).is_none());
-        assert!(reaches_a_place(&browse), "the browser is one of the three places");
-        // And the terminal is one place through every one of its doors: two
-        // errands writing one file undo each other as surely as two shells.
-        for (name, arguments) in [
-            (READ, r#"{"path":"a.md"}"#),
-            (WRITE, r#"{"path":"a.md","content":""}"#),
-            (EDIT, r#"{"path":"a.md","edits":[{"oldText":"x","newText":"y"}]}"#),
-        ] {
-            assert!(reaches_a_place(&parse(&call(name, arguments)).unwrap()), "{name}");
-        }
+        assert!(reaches_a_place(&browse), "the browser is one of the two places");
     }
 
     #[test]

@@ -11,8 +11,8 @@
 # address. Running this again reconfigures the box and keeps its workspace.
 #
 #   GUACA_ENV     settings handed to the host, one NAME=value per line
-#                 (GUACA_TOKEN, GUACA_ORIGIN, ANTHROPIC_API_KEY, GH_TOKEN; the
-#                 full list is HOST_ENV in src-tauri/src/updater.rs).
+#                 (GUACA_TOKEN, GUACA_ORIGIN, ANTHROPIC_API_KEY; the full
+#                 list is HOST_ENV in src-tauri/src/updater.rs).
 #                 Default /etc/guaca/guaca.env, if it exists. Keep it 0600.
 #   GUACA_CHANNEL release, the default, or main. A box on main is offered
 #                 every build of main a few minutes after it is pushed, and

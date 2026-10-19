@@ -1,7 +1,7 @@
 # Hosting
 
 Guaca is a native desktop client connected to a `guacad` host. The host runs
-agents, schedules, coding jobs and plugins. It can run in Docker on the same
+agents, schedules and plugins. It can run in Docker on the same
 Mac or on an always-on remote machine. Closing the app stops no backend work.
 A container on a sleeping laptop still sleeps; unattended work needs a host
 that stays awake.
@@ -64,10 +64,8 @@ interrupted and never replayed.
 
 ## Resources belong to the backend
 
-A hosted workspace resolves terminal paths and model addresses on the
-backend. An agent's terminal is a directory in the backend's data, and what it
-clones comes from whatever the backend's network reaches. `localhost` means the
-backend; for a model on a Docker
+A hosted workspace resolves model addresses on the backend. `localhost` means
+the backend; for a model on a Docker
 host, use `host.docker.internal` (the compose file supplies the Linux mapping).
 A model running on a sleeping laptop will still stop answering, even when
 Guaca itself runs on a VPS.
@@ -77,12 +75,12 @@ container on a Docker host: its command is typed as it would be in a terminal
 there. The image has `node`, so `npx` servers run as they are; a `uvx` server
 needs `uv` installed in it first.
 
-The backend may run the official Codex and Claude CLIs under its own user.
-Guaca does not import the laptop's credentials or provide a Claude.ai login
-flow. Configure the CLI on the backend, as described under **Coding inside
-the container** below. This applies to an operator-controlled workspace;
-offering consumer subscription routing as a managed service is a separate
-product and policy question.
+The backend may run the official Claude CLI under its own user, for turns paid
+for by a Claude plan. Guaca does not import the laptop's credentials or provide
+a Claude.ai login flow. Configure the CLI on the backend, as described under
+**Programs inside the container** below. This applies to an operator-controlled
+workspace; offering consumer subscription routing as a managed service is a
+separate product and policy question.
 
 This client-local capability remains unavailable:
 
@@ -96,18 +94,18 @@ gets reworded and retried by a model and reported as a bug by a person:
 `every_refusal_says_what_to_do_instead` in `deployment.rs` fails the build on
 one that does not.
 
-`Capabilities` is read by the command boundary and by the frontend. Terminal
-paths and local model endpoints are available in both hosts, interpreted on
-the backend. File paths and credentials on the client do not transfer to the server.
-`coding_harnesses` checks installed programs and their own sign-in status.
-Claude Code can use its backend CLI sign-in or a configured API credential.
+`Capabilities` is read by the command boundary and by the frontend. Local
+model endpoints are available in both hosts, interpreted on the backend. File
+paths and credentials on the client do not transfer to the server.
+`claude_program` reports whether the backend has the `claude` program
+installed, for the provider row.
 
 ## A browser is admitted by a token, and the token arrives by fragment
 
 A hosted workspace holds inference keys, plugin refresh tokens and every
 transcript a crew has written, and it runs commands on the box: a connector
-run as a program, and a shell in any agent's terminal through **Open
-terminal**. So there is no anonymous mode and no read-only mode, and the token
+run as a program, and the `claude` program for a turn on a Claude plan. So
+there is no anonymous mode and no read-only mode, and the token
 is a password to the backend's user: a caller is the operator or it is
 nobody. One bearer token per
 workspace, compared in constant time on every route but `/health`, generated
@@ -233,38 +231,6 @@ The webview policy admits HTTPS/WSS and loopback HTTP/WS for Docker. Scripts
 remain restricted to the bundled application. Host setup and Docker errors
 appear before any workspace-dependent screen mounts.
 
-## An agent's terminal is on the box, and so is its git sign-in
-
-An agent given a terminal gets a directory under the workspace's own data, on
-the persistent volume, and everything it does with code happens there: it
-clones what it works on, a coding job runs in one of those clones, and the
-shell starts at the top. Nothing about it names the client's disk, which is
-why the same panel works on a desktop's container and on a box. `docs/CODING.md`
-has the model.
-
-git and `gh` are signed in once, as the backend's user, and every terminal uses
-that. The image configures git system-wide to ask `gh` for GitHub credentials,
-so either of these is enough. The place to run them is **Open terminal** in any
-agent's Terminal panel: a shell on the backend, as its user, in that agent's
-directory, in a desktop window and a browser alike. From the box itself the
-same user is `docker compose exec guacad`:
-
-```sh
-docker compose exec guacad gh auth login
-docker compose exec guacad git config --global user.name "Your Name"
-docker compose exec guacad git config --global user.email you@example.com
-```
-
-or a `GH_TOKEN` secret, granted to the agents that should push, which `gh` and
-git both read from that agent's environment. A token scoped to chosen
-repositories on GitHub is how one agent pushes where another cannot. SSH remotes
-use keys configured under the backend user. Nothing in Guaca stores a git
-credential of its own.
-
-An agent can be set to Codex, Claude Code or pi on either host. Availability is
-reported by the installed program, not inferred from an API key. The image
-ships all three plus `git` and `gh`.
-
 ## Two loopback origins reach a browser through the daemon
 
 The desktop serves two things from loopback ports of their own: a page an
@@ -347,7 +313,7 @@ What it does not have yet:
 - **Account sign-in at an unregistered remote hostname.** Settings → Account
   cannot complete sign-in when guaca.bot rejects the host's callback, typically
   with `invalid_redirect`. This also prevents connecting account-backed Google
-  tools there; conversations, coding, and device-code sign-ins remain usable.
+  tools there; conversations and device-code sign-ins remain usable.
   The exact HTTPS callback must be accepted by the account service. Local
   Docker callbacks use
   `http://127.0.0.1:<port>/v1/oauth/callback`; guaca-bot migration 0005 registers
@@ -387,7 +353,7 @@ crosses only loopback interfaces; SSH encrypts the network connection. The
 backend runs on the VPS even though the client uses a loopback address.
 
 Closing the tunnel disconnects the interface and prevents browser callbacks
-from arriving. It does not stop the VPS, its schedules or coding jobs. Reopen
+from arriving. It does not stop the VPS, its schedules or its conversations. Reopen
 the tunnel at the same local port and the app reconnects. This is an operator
 setup for testing or private access; the desktop does not manage SSH tunnels.
 A normal HTTPS deployment uses a TLS reverse proxy on the server and the
@@ -396,9 +362,8 @@ using the optional Guaca-account sign-in. WebSocket proxying must remain
 enabled, and proxy logs must omit query strings because the event socket
 carries an access token there.
 
-Provider CLI sign-ins and git and GitHub sign-ins belong to the backend user on
-this server, independently of sign-ins on the Mac. See **Coding inside the
-container** below.
+Provider CLI sign-ins belong to the backend user on this server, independently
+of sign-ins on the Mac. See **Programs inside the container** below.
 
 ## Browser isolation and desktop access
 
@@ -430,8 +395,8 @@ the desktop origins as ancestors, while retaining their opaque sandbox.
 
 ## Reconnecting is a snapshot followed by events
 
-Each socket begins with the current activity, unfinished reply text and coding
-jobs. Capturing that snapshot and subscribing to subsequent events share a
+Each socket begins with the current activity and unfinished reply text.
+Capturing that snapshot and subscribing to subsequent events share a
 lock with emission, so a delta cannot be omitted or applied twice. A slow
 client whose feed overflows reconnects for another snapshot. Heartbeats retire
 connections that disappeared without a close frame.
@@ -460,18 +425,17 @@ the completed message remains authoritative for larger replies.
 
 ## A stopping host puts its work down, and the next one picks it up
 
-Closing or disconnecting a client never stops the daemon's actors, schedules,
-or coding jobs. Stopping the daemon does, and an update stops it every time:
+Closing or disconnecting a client never stops the daemon's actors or
+schedules. Stopping the daemon does, and an update stops it every time:
 on a box that follows `main`, several times a day.
 
 So the daemon drains before it exits. On the stop signal it starts nothing
-more (no turn, no routine firing, no coding job) and keeps serving while every
+more (no turn, no routine firing) and keeps serving while every
 turn in flight reaches its next boundary, the same boundaries the operator's
 stop uses. A model call in the air is dropped rather than waited out, because
 it has no effect outside the process. A tool call already running is let
 finish. Each turn then writes down what it did in its own channel and puts its
-messages down with that record (`put_down`). Coding jobs are stopped through
-each program's own interface, which keeps the session (`put_down_jobs`). A
+messages down with that record (`put_down`). A
 message that arrives meanwhile is put down as it arrives. `Runtime::drain`,
 bounded by `DRAIN_WINDOW` in `server/mod.rs`, inside the thirty seconds every
 way the daemon is run allows before a kill.
@@ -480,8 +444,7 @@ The next host picks all of it up before its scheduler starts. Each message is
 delivered again on its own conversation, against the budget that conversation
 had already spent. A turn that had made calls is told each one and how it came
 out, because its history cannot tell it: a message projects to its text, and a
-call is a part the projection skips (`prompt::resumed`). A coding job is
-continued in its own session and told its last step may not have finished.
+call is a part the projection skips (`prompt::resumed`).
 
 What a drain cannot vouch for is reported exactly as a restart always was.
 Every accepted conversation records its first delivery in `pending_runs`, in
@@ -498,8 +461,7 @@ ever repeated automatically. It is why the drain waits for a boundary instead
 of checkpointing anything. Pending approvals expire because their waiting
 turns no longer exist; a turn put down while it waited asks again when it is
 picked up. A conversation the operator stopped is never picked up. Completed
-messages, attachments, memories, working notes and agents' terminals remain on
-the volume. Back up the volume before deploying; SQLite migrations are
+messages, attachments, memories and working notes remain on the volume. Back up the volume before deploying; SQLite migrations are
 forward-only.
 
 A workspace also holds a process lock for its runtime's lifetime. A second
@@ -507,80 +469,56 @@ host pointed at the same data directory refuses to start, rather than running
 a second scheduler or treating the first process's work as interrupted.
 
 
-## Coding inside the container
+## Programs inside the container
 
-The image includes pinned releases of Codex, `pi` and Claude Code, plus Git,
-GitHub CLI, Node 22, pnpm, Python 3, a C/C++ build toolchain and ripgrep.
-`docker-compose.yml` explicitly forwards the optional `ANTHROPIC_API_KEY`,
-`CODEX_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY` and `GH_TOKEN` environment variables.
-These configure the coding tools; the inference key entered in Guaca Settings
-is separate and is never silently reused by a harness.
+The image includes a pinned release of the `claude` program, which a turn paid
+for by a Claude plan runs, plus Node 22 and Python 3 for connectors run as
+programs on the host. `docker-compose.yml` explicitly forwards the optional
+`ANTHROPIC_API_KEY` environment variable, which that program reads; the
+inference key entered in Guaca Settings is separate and is never silently
+reused by it.
 
 For a personally operated backend, sign in as the container's `guaca` user
-(the default), after starting it. **Open terminal** in an agent's Terminal
-panel is that user; from the box, the same commands follow
-`docker compose exec guacad`:
+(the default), after starting it:
 
 ```sh
-docker compose exec guacad codex login --device-auth
-docker compose exec guacad codex login status
 docker compose exec guacad claude auth login
 docker compose exec guacad claude auth status
 ```
 
-Codex prints the verification link and device code. Claude's CLI can print a
-login URL and accept the code when its callback cannot reach the container.
-These operations belong to the official programs. Their home is
-`/var/lib/guaca`, on the persistent volume; never sign in as root and expect the
-daemon user to find that session. The **Terminal** section of an agent's panel
-shows each CLI's status. Codex coding authentication is separate from Guaca's ChatGPT
-provider sign-in. The model settings for coding also belong to each CLI.
+Claude's CLI can print a login URL and accept the code when its callback cannot
+reach the container. These operations belong to the official program. Its home
+is `/var/lib/guaca`, on the persistent volume; never sign in as root and expect
+the daemon user to find that session. The provider row in Settings reports
+whether the program is installed.
 
 Claude's noninteractive CLI prioritizes `ANTHROPIC_API_KEY` over subscription
 OAuth. Leave that variable unset when intending to use a CLI-owned subscription;
-otherwise jobs can incur API charges. `claude setup-token` also supports the
+otherwise turns can incur API charges. `claude setup-token` also supports the
 CLI's `CLAUDE_CODE_OAUTH_TOKEN` environment variable for personally operated
 headless scripts; it is not a Guaca OAuth client or a token field in Settings.
 The compose file does not import a laptop's OAuth credentials automatically.
-See [Codex authentication](https://developers.openai.com/codex/auth),
-[Claude authentication](https://code.claude.com/docs/en/authentication) and
+See [Claude authentication](https://code.claude.com/docs/en/authentication) and
 [Claude's usage terms](https://code.claude.com/docs/en/legal-and-compliance).
 A managed service must use a permitted API/provider authentication arrangement;
 CLI availability alone is not authorization to route users' consumer plans.
 
-git and GitHub access is the backend user's too, and independent of either CLI
-sign-in: `gh auth login` in the container, or a `GH_TOKEN` secret granted to the
-agents that push. See **An agent's terminal is on the box, and so is its git
-sign-in** above.
-
-Codex jobs support streamed progress, completion, cancellation, acknowledged
-corrections and Guaca push approvals through the official app-server interface
-(Codex 0.153 or newer). Changing an agent's harness keeps its terminal and its
-gate setting. Corrections guide the
-next model decision; they do not reverse commands already executed. See
-[the coding contract](CODING.md#codex-runs-through-its-official-cli) for approval
-policy and command-rule behavior.
-
 A container does not inherit the host's installed dependencies, login sessions,
-or unmounted files. Agents clone what they work on into their terminals, which
-live in Guaca's persistent volume. A working tree mounted into the container is
-reachable from a terminal's shell by its path there, but it is not the agent's
-directory and `code` will not start in it. Do not mount the Docker socket.
-For projects requiring other toolchains (for example Rust, Go or Java), derive
-an image from `guacad` and install the versions the project needs. Keep those
+or unmounted files. Do not mount the Docker socket. A connector run as a
+program that needs another toolchain (for example Rust, Go or Java) needs an
+image derived from `guacad` with the versions it needs installed. Keep those
 versions in the derived Dockerfile so the environment can be rebuilt.
 
 The compose service runs with an init process to reap child processes and uses
-a named volume for settings, credentials, SQLite, attachments, memories and
-agents' terminals. A container on your laptop still sleeps with that laptop. Use
-this same image on an always-on host to keep agents working while it is shut.
+a named volume for settings, credentials, SQLite, attachments and memories. A
+container on your laptop still sleeps with that laptop. Use this same image on
+an always-on host to keep agents working while it is shut.
 
 ## Verifying the host boundary
 
 Run `./scripts/ci.sh` for desktop and daemon lint, builds and offline suites.
-`./scripts/image.sh` builds a container, checks both harnesses and the pinned
-package manager, then verifies settings and the token survive a restart on
-its temporary volume. The script removes its container and volume afterward.
+`./scripts/image.sh` builds a container, checks the programs it bundles, then
+verifies settings and the token survive a restart on its temporary volume. The script removes its container and volume afterward.
 Rust 1.89 or newer is required; the container builds with 1.95.
 
 For a real browser check, build the frontend and daemon, then run:
@@ -604,7 +542,7 @@ Use **Import / export** in a group’s settings to export that group. Import is
 also available under **Settings → Workspace**. The desktop can list and export
 groups left by the previous native version without starting those agents or
 migrating the old database. Quit the old app before exporting so memory files
-and terminals stop changing while the snapshot is taken.
+stop changing while the snapshot is taken.
 
 The versioned `.guaca.json` format includes the group’s nonsecret model and
 limit settings, agents, instructions, memory, transcripts, attachments, working
@@ -612,12 +550,10 @@ notes, usage history, calendar entries, routines and firing history. Database
 reads use one transaction. Files are checked by their SHA-256 content address.
 The current limits are 64 MB per archive and 32 MB of attachment bytes.
 
-Imports create a new group and new IDs. Routines arrive paused. Running jobs,
-pending approvals, remote computers, browser sessions, terminals and what is in
-them, API keys and stored sign-in credentials are not copied. Each agent's
-harness and push gate come along; the terminal itself is given again on the new
-host. Service names remain in a reconnection checklist under the imported
-group’s Import / export pane. Give terminals, connect plugins and configure
+Imports create a new group and new IDs. Routines arrive paused. Pending
+approvals, remote computers, browser sessions, API keys and stored sign-in
+credentials are not copied. Service names remain in a reconnection checklist
+under the imported group’s Import / export pane. Connect plugins and configure
 providers before resuming work. Never resume the
 same schedule in both copies unless duplicate execution is intended.
 
@@ -645,7 +581,7 @@ retry actions. Guaca creates
 an unprivileged container, binds a free loopback port, generates an access key
 and connects without exposing the key. The named volume survives app and
 container restarts. Existing containers are reused rather than silently
-replaced while jobs are running. Preview bundle IDs use separate containers
+replaced while work is running. Preview bundle IDs use separate containers
 and volumes. A remote Docker context is refused for On this Mac.
 
 For downloadable releases, `GUACA_BACKEND_IMAGE` must name the published image
@@ -821,8 +757,6 @@ GUACA_VOLUME=<project>_guaca sh deploy/box/install.sh
 ```
 
 The workspace, its token and the tunnel in front of port 8787 are unchanged.
-The GitHub App broker overlay is a Compose service and is not carried over;
-a box uses `GH_TOKEN` or per-repository token access instead.
 
 `./scripts/box.sh` is the gate, beside `image.sh`: it installs a box from a
 local image on this machine's Docker and checks what a fake Docker cannot. The

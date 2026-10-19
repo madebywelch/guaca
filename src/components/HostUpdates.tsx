@@ -434,7 +434,6 @@ export function HostUpdatePanel() {
   /** An update a box accepted from this panel, until it reports it finished. */
   const [accepted, setAccepted] = useState<Accepted | null>(null);
   const activity = useStore((s) => s.activity);
-  const building = useStore((s) => s.building);
   const checkProgress = state?.refresh;
   const boxBusy = !!accepted || !!state?.manager?.updating;
   const updating = busy || !!state?.docker?.updating || boxBusy;
@@ -664,10 +663,10 @@ export function HostUpdatePanel() {
                   }.`}
             </p>
             <p className="field__hint">
-              {working} agents and {Object.keys(building).length} coding jobs are working. They
-              pause before the host stops and carry on once it restarts; a command still running at
-              that moment is left for you to review instead. Guaca saves a complete backup before
-              replacing the host, and puts the previous version back if the update does not finish.
+              {working} agents are working. They pause before the host stops and carry on once it
+              restarts; a command still running at that moment is left for you to review instead.
+              Guaca saves a complete backup before replacing the host, and puts the previous version
+              back if the update does not finish.
             </p>
             <button
               className="btn btn--primary"

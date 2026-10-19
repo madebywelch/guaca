@@ -44,12 +44,12 @@ import type {
   BrowserConsent,
   Capabilities,
   CatalogKind,
+  ClaudeProgram,
   Computer,
   CondensedView,
   Connector,
   ConnectorDraft,
   ConnectorId,
-  Continued,
   Decision,
   DeviceCode,
   DirectoryBoard,
@@ -59,23 +59,18 @@ import type {
   Envelope,
   Escalation,
   EscalationId,
-  Gate,
   Group,
   GroupDraft,
   GroupId,
   GroupReset,
   GroupUsage,
-  Harness,
-  HarnessOnMachine,
   HeaderPair,
   MessageId,
-  ModelOffer,
   NotebookEntry,
   Occasion,
   OccasionDraft,
   OccasionId,
   OperatorView,
-  Payer,
   Plugin,
   PluginAccess,
   PluginId,
@@ -101,9 +96,7 @@ import type {
   SkillScope,
   Staged,
   SubscriptionStatus,
-  TerminalView,
   ToolSummary,
-  Tuning,
   UiEvent,
   WebhookAddress,
   WidgetWidth,
@@ -217,66 +210,11 @@ export const api = {
   addDirectorySkill: (scope: SkillScope, id: string, hash: string) =>
     invoke<Skill>("add_directory_skill", { scope, id, hash }),
 
-  /** Where an agent's terminal is. Made if it is not there, so the path exists. */
-  agentTerminal: (id: AgentId) => invoke<TerminalView>("agent_terminal", { id }),
-
   /**
-   * Gives an agent a terminal: a directory of its own on the machine Guaca
-   * runs on, a shell there, and a coding harness. The decision and nothing
-   * else, like a computer.
+   * Whether the `claude` program is on this machine. Asked of the program
+   * rather than assumed, so the provider row says so before a turn finds out.
    */
-  giveAgentTerminal: (id: AgentId) => invoke<void>("give_agent_terminal", { id }),
-
-  /** Takes it back, stopping any job it has running. The directory stays. */
-  takeAgentTerminal: (id: AgentId) => invoke<void>("take_agent_terminal", { id }),
-
-  /** Which program writes this agent's code, and whether its pushes ask first. */
-  setAgentCoding: (id: AgentId, harness: Harness, gate: Gate) =>
-    invoke<void>("set_agent_coding", { id, harness, gate }),
-
-  /**
-   * What the operator chose inside one harness for one agent: the model, the
-   * effort, and for pi which account pays. Kept per harness, so a switch and
-   * back finds the model it left. Refused with the words the program takes.
-   */
-  setCodingTuning: (id: AgentId, harness: Harness, tuning: Tuning) =>
-    invoke<void>("set_coding_tuning", { id, harness, tuning }),
-
-  /**
-   * The models a harness offers an agent, asked of the program on the backend.
-   * For pi on Guaca's key, what the key that agent would be lent can reach.
-   */
-  codingModels: (id: AgentId, harness: Harness, pays: Payer) =>
-    invoke<ModelOffer[]>("coding_models", { id, harness, pays }),
-
-  /**
-   * Which coding harnesses are on this machine, and how to get the ones that
-   * are not. Everything else about a job is discovered when it runs; this
-   * cannot be, because the refusal would reach an agent minutes later rather
-   * than the person choosing.
-   */
-  codingHarnesses: () => invoke<HarnessOnMachine[]>("coding_harnesses"),
-
-  /**
-   * Says something to an agent's coding agent, the way its own program would.
-   *
-   * Into the job that is running, as a correction it reads at its next step;
-   * or, when none is, as a new turn in the session the last one left, with
-   * everything it already read. Refused when there is neither, or when the
-   * harness has been switched since and the session belongs to the other one.
-   */
-  messageCodingJob: (agentId: AgentId, message: string) =>
-    invoke<Continued>("message_coding_job", { agentId, message }),
-
-  /**
-   * Stops one, leaving whatever it has committed.
-   *
-   * Nothing is reverted. The commits a job was told to make as it went are the
-   * operator's checkpoints, and throwing them away is not this button's
-   * decision to take. The session is kept, so it can be carried on. The agent
-   * that started it is told it was stopped.
-   */
-  stopCodingJob: (agentId: AgentId) => invoke<void>("stop_coding_job", { agentId }),
+  claudeProgram: () => invoke<ClaudeProgram>("claude_program"),
 
   pluginCatalog: () => invoke<PluginOffer[]>("plugin_catalog"),
 

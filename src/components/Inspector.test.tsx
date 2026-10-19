@@ -38,9 +38,6 @@ function card(id: string, name: string): AgentCard {
     hasBrowser: false,
     runsErrands: false,
     browserConsent: "open",
-    hasTerminal: false,
-    harness: "pi",
-    gate: "open",
     name,
     avatar: "plain",
     color: "#c7d96b",
@@ -130,7 +127,7 @@ describe("Inspector", () => {
     expect(screen.queryByRole("region", { name: "Scribe's computer" })).toBeNull();
   });
 
-  it("draws the terminal with the places, the schedule above the stores, and the notebook last", async () => {
+  it("draws the places, the schedule above the stores, and the notebook last", async () => {
     // The order is the whole content of this panel's design and nothing else
     // in the tree asserts it: every section renders either way, and a swap
     // that reads as deliberate in a diff is invisible in every other test.
@@ -141,13 +138,12 @@ describe("Inspector", () => {
       .getAllByRole("heading", { level: 3 })
       .map((heading) => heading.textContent);
 
-    // The three places the agent works lead, each a name and a switch. The
+    // The two places the agent works lead, each a name and a switch. The
     // notebook is last: it is what the agent reads when it needs it, and the
     // two above it are what it carries on every turn.
     expect(order).toEqual([
       "Browser",
       "Computer",
-      "Terminal",
       "Routines",
       "Working notes · 0",
       "Memory",

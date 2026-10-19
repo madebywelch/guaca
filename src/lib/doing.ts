@@ -21,7 +21,6 @@ export interface Doing {
 export interface DoingInputs {
   activity: Record<AgentId, Activity>;
   stuck: Escalation[];
-  building: Record<AgentId, string>;
   trail: Record<AgentId, LiveCall[] | undefined>;
   lastActive: Record<AgentId, number>;
 }
@@ -43,15 +42,6 @@ export function doing(id: AgentId, inputs: DoingInputs, now: number): Doing {
     if (open) {
       return { text: `stuck ${relativeTime(open.raisedAt, now)}`, kind: "asking" };
     }
-  }
-
-  // Before the turn states, because a coding job outlives the turn that
-  // started it: the agent goes idle the moment `code` returns and stays that
-  // way while a coding agent works for it for twenty minutes. Read off
-  // `building` rather than off `Activity` for the same reason: `Activity` is
-  // cleared when a turn ends, and this is not a turn.
-  if (inputs.building[id] !== undefined) {
-    return { text: "writing code", kind: "thinking" };
   }
 
   switch (state?.state) {

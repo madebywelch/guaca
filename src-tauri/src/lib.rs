@@ -5,7 +5,6 @@ pub mod app;
 pub mod artifact;
 pub mod boot;
 pub mod cdp;
-pub mod coding;
 pub mod commands;
 pub mod config;
 pub mod db;
@@ -16,7 +15,6 @@ pub mod files;
 pub mod host;
 pub mod ipc;
 pub mod kernel;
-pub mod leftovers;
 pub mod llm;
 pub mod mcp;
 pub mod menubar;
@@ -28,17 +26,14 @@ pub mod proxy;
 /// A source build rebuilding itself. Only a window has an app to replace.
 #[cfg(feature = "desktop")]
 pub mod rebuild;
-pub mod repo;
 pub mod runtime;
 pub mod secrets;
 /// The server host: the same runtime, reached over HTTP and a socket.
 #[cfg(feature = "server")]
 pub mod server;
-pub mod shell;
 pub mod skills;
 pub mod skills_sh;
 pub mod subscription;
-pub mod terminal;
 pub mod trajectory;
 pub mod transfer;
 /// The other one.

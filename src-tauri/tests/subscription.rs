@@ -884,7 +884,6 @@ async fn a_model_an_agent_names_for_itself_is_refused_with_where_it_was_named() 
     assert!(all.contains("gpt-5.6-luna"), "{all}");
     assert!(all.contains("Engineer's own setting, not its group's"), "{all}");
     assert!(all.contains("use the group default"), "the way on: {all}");
-    assert!(all.contains("Terminal panel"), "and which model it is not: {all}");
 }
 
 /// A backend that refuses everything, in the two shapes this one refuses in.

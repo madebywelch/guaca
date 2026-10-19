@@ -67,16 +67,14 @@ the code is `llm/codex.rs`, `llm/claude.rs` and `subscription.rs`.
 - **A model named on a group running on Claude is kept and never used.** There
   is no third model field and there will not be one: which model answers a turn
   is the program's own setting, and this app passes no `--model` for a turn.
-  (A coding job is different: its model is chosen per agent in the terminal
-  panel, from the program's own list.) Kept, because an operator who tries Claude for an
+  Kept, because an operator who tries Claude for an
   hour and goes back has to find their model where they left it. Both panels say
   so on the row, because a model field that is quietly ignored is the one thing
   nothing else on screen would explain.
 - **An agent keeps a model per provider, like the group and the app, and a turn
   reads only the paying provider's.** It had one field, sent to whoever paid. A
-  crew on a ChatGPT sign-in with pi on OpenRouter ended up with an OpenRouter
-  slug on the agent itself, and ChatGPT refused every turn by name before the
-  agent could start a job; switching any crew between providers did the same to
+  crew on a ChatGPT sign-in ended up with an OpenRouter slug on the agent
+  itself, and ChatGPT refused every turn by name; switching any crew between providers did the same to
   every agent in it that named a model. `AgentCard::own_model` is the one read.
   Migration 63 sorted what was stored by the crew's provider now, and a slash
   is an endpoint's whatever the crew says, because no ChatGPT name has one.

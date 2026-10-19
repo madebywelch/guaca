@@ -2,7 +2,7 @@
 
 **A desktop app for AI agents that work together.**
 
-![Guaca with a group of agents working across repositories](docs/img/guaca.png)
+![Guaca with a group of agents at work](docs/img/guaca.png)
 
 Run Guaca locally on your computer or connect it to a VPS. The backend workspace
 runs in a container; you choose where it lives. The desktop is your window into
@@ -19,17 +19,6 @@ You control which agents can use each plugin and its tools.
 Agents communicate with you and each other, delegate work, and keep their own
 memory and working notes. They can also have a browser through **Kernel** or a
 computer through **E2B**, configured with the respective vendor's API key.
-
-## Give them a repository
-
-Link a repository inside a group, then **drag an agent onto it** to give that
-agent access. Use an existing Git directory available to the backend or clone
-a remote repository into the workspace.
-
-Choose **Claude Code, Codex, or pi** as the coding harness. Guaca coordinates the
-work and brings progress and results back into the conversation. You can steer
-a running job and configure approval before pushes and pull requests. Connect
-Git credentials so agents can pull and push to your remote repositories.
 
 ## Get started
 

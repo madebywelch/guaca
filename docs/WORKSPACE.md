@@ -152,9 +152,9 @@ above, applied to the last place it had not reached.
 line and only one of them yields, which is not the rule flex applies by
 default: it shrinks in proportion to what each item asked for, so a refused
 call whose reason ran to a paragraph asked for twenty times what its label did
-and took the row on the way to being clipped itself. The chip drew `U… a coding
-agent is already working in whizzworks-site, started by…`, which is one
-character about which call went wrong. A weighting is the near-miss worth
+and took the row on the way to being clipped itself. The chip drew `U… the
+operator did not allow it. Nothing ran…`, which is one character about which
+call went wrong. A weighting is the near-miss worth
 naming and not the fix: at a hundred to one the label still gave up its last
 letter, because proportional is proportional however lopsided. So the label
 does not shrink at all, the answer takes whatever is left on the default every
@@ -970,7 +970,7 @@ The mark on the row is what says which rows are pinned.
 heading used to carry three things: the name, a readout of tokens and price, and
 the way into the crew's settings. Two of them are fixed widths, so the name was
 the only item on the line able to give any room up, and it did. A crew called
-"StopTheScam" was drawn as "StopTh…" at the top of its own column, at the one
+"Operations" was drawn as "Operat…" at the top of its own column, at the one
 size in the rail where a name is meant to be read rather than scanned. Nothing
 about the numbers earned that: what a crew is costing is a question asked a few
 times a day, and the name is read every time the eye passes the rail.
@@ -1288,11 +1288,6 @@ delete button a page apart. The state lives in the shell, so changing section
 cannot discard a half-typed endpoint. Connectors and Secrets are disabled
 until the group exists, because a sign-in and a credential both have to belong
 to something.
-
-There is no Repositories section. Code lives in an agent's own terminal, given
-from the agent's panel beside its computer and browser, and a crew-level list
-of linked directories would be a second answer to where an agent works.
-`docs/CODING.md`.
 
 The plugins section holds two decisions, not one. Connecting is the crew's
 sign-in; under each connected row is who in the crew may use it, which is every
