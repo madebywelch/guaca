@@ -435,12 +435,16 @@ describe("App", () => {
   });
 });
 
+// A component that throws on its first render. At module level because a
+// component made inside the test is a new type on every render, which is the
+// one thing React cannot keep state across.
+const Boom = (): never => {
+  throw new Error("render exploded");
+};
+
 describe("failure surfacing", () => {
   it("shows the error instead of a blank window when a child throws", async () => {
     const { ErrorBoundary } = await import("./components/ErrorBoundary");
-    const Boom = (): never => {
-      throw new Error("render exploded");
-    };
     // React logs the caught error; silence it so the run stays readable.
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     render(
