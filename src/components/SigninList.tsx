@@ -76,6 +76,11 @@ export function SigninList({ agent }: Props) {
   };
 
   if (signins === null) return <p className="field__hint">Loading sessions…</p>;
+  // Nothing to show and nothing to press: an agent with neither place cannot
+  // be signed in to anything, and a disabled Check beside a sentence saying so
+  // was a row the operator read on every new agent and could do nothing with.
+  // The row appears the moment a place is given, which is the answer.
+  if (!somewhere) return null;
 
   return (
     <div className="access">
@@ -84,20 +89,14 @@ export function SigninList({ agent }: Props) {
         <button
           type="button"
           className="btn btn--ghost btn--small"
-          disabled={busy || !somewhere}
+          disabled={busy}
           onClick={() => void rescan()}
         >
           {busy ? "Checking…" : "Check now"}
         </button>
       </div>
 
-      {!somewhere && (
-        <p className="field__hint">
-          {agent.name} has no computer and no browser yet, so there is nothing holding a session.
-        </p>
-      )}
-
-      {somewhere && signins.length === 0 && (
+      {signins.length === 0 && (
         <p className="field__hint">
           Nothing. Open this agent's browser or its computer's screen, sign in to a site there, and
           it will show up here and on every other agent's roster. You do not have to tell{" "}

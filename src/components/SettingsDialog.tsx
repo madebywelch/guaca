@@ -1,5 +1,5 @@
 /**
- * Settings, as nine places rather than one scroll.
+ * Settings, as a nav and a pane rather than one scroll.
  *
  * Every piece of state lives here, in the shell, and the panes are given values
  * and setters. That is not tidiness: the shell is unmounted when the dialog

@@ -103,9 +103,13 @@ describe("SigninList", () => {
     expect(await screen.findByText("looks signed in")).toBeTruthy();
   });
 
-  it("says there is nothing to be signed in to when the agent has neither place", async () => {
-    render(<SigninList agent={card({ sandboxId: null, browserId: null })} />);
-    expect(await screen.findByText(/no computer and no browser yet/)).toBeTruthy();
+  it("draws nothing for an agent with neither place, and asks no machine", async () => {
+    // A row that said "nothing holding a session" over a disabled Check was
+    // read on every new agent and could not be acted on. It appears when a
+    // place is given.
+    const { container } = render(<SigninList agent={card({ sandboxId: null, browserId: null })} />);
+    await waitFor(() => expect(container.querySelector(".field__hint")).toBeNull());
+    expect(container.textContent).toBe("");
     expect(scanAgentSignins).not.toHaveBeenCalled();
   });
 

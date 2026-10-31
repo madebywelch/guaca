@@ -37,6 +37,17 @@ of `Runtime::discard_agent` and `Runtime::purge_agent`.
   scoped in SQL, because the board is the newest four hundred messages and a
   busy crew filling that window would hand a quiet one an empty board.
   `docs/WORKSPACE.md`.
+- **The profile's name is a paragraph, not a heading, and the aside is
+  named after the agent.** The channel's `h1` is already that name. A second
+  heading with it made every lookup of the agent by heading name ambiguous and
+  announced the agent twice; `App.test.tsx` finds the channel by heading and
+  the panel by its `complementary` label, so each has exactly one.
+  `docs/WORKSPACE.md`.
+- **A count beside a section title is its own span, and an accessible name
+  joins inline children without the spaces between them.** "Working notes" and
+  " · 1" are two nodes, and the button's name comes out as `Working notes· 1`.
+  A test that matches the heading with the spaces spelled out passes in the
+  browser and fails in jsdom; match the parts.
 - **A new place is a cell in the footer's row, not a row under it.** The
   footer was a stack of links and reached four, a fifth of the column's height
   taken from the agents, one reasonable addition at a time. A row is free to

@@ -211,6 +211,47 @@ back the flicker the sentence rule in `lib/reasoning.ts` takes out. What the
 line is for is the wait an operator notices, so a call has to become one before
 it earns the line.
 
+## The panel is the agent's, and opens on its profile
+
+The side panel opened on "Routines", under a gear and two typed arrows, and
+nothing in it said whose routines. Every section in it is something one agent
+carries, so the agent heads it: its face, its name, the crew it is in and what
+answers for it, and one Edit that opens the profile dialog the gear used to.
+The gear said nothing about what it opened and sat beside the arrow that closes
+the panel; two glyphs a few pixels apart, one of which loses your place.
+
+The line under the name is `runsOn` in `lib/profile.ts`, which resolves the
+model the way a turn does, agent over crew over app, and draws an inherited one
+a shade lighter. That shade is the point: down a rail of agents, which ones
+answered for themselves is otherwise a dialog each. It reads the subscription
+field under a ChatGPT crew and the key's under an endpoint, never the other,
+because the two providers share no model names and a slug kept for one drawn
+under the other is a lie about what is running. A Claude subscription chooses
+nothing and is named rather than given a model.
+
+The name in the profile is not a heading. The channel beside it already heads
+the page with the same name and the aside is labeled with it, so a second
+heading was the same agent announced twice to a screen reader and found twice
+by anything that looks a heading up by name. On a phone the profile is the head
+of the Details pane, and carries the Actions menu the channel's header cannot
+show there.
+
+Every section under it is one shape, `.detail`: a title, at most one control
+beside it, and one line when it is empty. Four sections had framed themselves
+and no two agreed on the gap under a title. What a store is for is on its
+heading's tooltip rather than in a paragraph under every empty one: memory's
+three sentences about `update_memory` were read on every new agent and never
+again needed, and the rule is that controls name what they act on and
+explanation is read when somebody wonders. Read mode draws the memory as text;
+a bordered monospace box with nothing in it read as a disabled field.
+
+The marks in the panel's controls, and the channel header's, are drawn by
+`Icon` in the stroke the footer set. `«`, `»`, `‹`, `⚙` and `⋯` were typed
+characters at whatever weight and baseline the font gave each, so no two
+controls sat the same in their buttons. The three dots are filled rather than
+stroked, because at the stroke's width a dot is a speck and the one glyph that
+stands for everything else has to be found before it can be pressed.
+
 ## An agent's memory is in the panel, and never quietly overwritten
 
 The transcript above says what an agent changed about itself. What it currently
@@ -1741,7 +1782,7 @@ back to the message being opened, bounded at a thousand; past that the operator
 lands in the right channel at its newest end. Anything that jumps to a message
 goes through `openMessage` rather than `select`.
 
-## Settings is nine places, because it stopped being one subject
+## Settings is a nav and a pane, because it stopped being one subject
 
 An endpoint, a set of limits, a machine's credentials, how large the window
 draws and what is allowed to interrupt you are five different questions, and one
@@ -1749,7 +1790,14 @@ scroll made the operator read all five to change one. So it is a nav and a pane,
 on the Cafeteria's shape: a panel that owns its own height, a head and a foot
 pinned to it, one scrolling half.
 
-Two of those nine are defaults rather than orders. Whatever Provider and Limits
+It has grown to a dozen panes since, one per subsystem that arrived with
+something the operator sets: the workspace a window shows, the skills on this
+machine, the compost. Each is a subject of its own, and the nav is what makes a
+twelfth free to add; the cost is paid when one is not a subject, which is why a
+new pane has to argue it is one rather than a field that belongs in an existing
+one.
+
+Two of those panes are defaults rather than orders. Whatever Provider and Limits
 say is what a group falls back to, and a group that answers for itself is not
 affected by either. What stays app-wide is what is genuinely one of: the
 operator's name, the machine and browser accounts, and everything about how the
