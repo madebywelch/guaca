@@ -442,8 +442,8 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                     <span className="field__label">Agents</span>
                     <span className="field__hint">
                       {group.agentCount === 0
-                        ? "Nobody yet. Agents are hired into a group, and cannot see out of it."
-                        : `${group.agentCount} agent${group.agentCount === 1 ? "" : "s"}, none of whom can see or message anybody outside this group.`}
+                        ? "Nobody yet."
+                        : `${group.agentCount} agent${group.agentCount === 1 ? "" : "s"}.`}
                     </span>
                   </div>
                 )}
@@ -525,7 +525,7 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                     models={settings?.subscriptionModels ?? []}
                     onChange={setSubscriptionModel}
                     inherit={`Inherit · ${settings?.subscriptionModel ?? ""}`}
-                    hint="The default for this group. To choose a different ChatGPT model for one agent, open its profile and change Model. All agents using this subscription share its quota."
+                    title="The default for this crew. An agent chooses its own in its profile. Every agent on this subscription shares its quota."
                   />
                 )}
 
@@ -592,11 +592,9 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                     className="input input--mono"
                     value={baseUrl}
                     placeholder={settings?.baseUrl || "inherit"}
+                    title="Used when a key is paying. Blank follows the app."
                     onChange={(event) => setBaseUrl(event.target.value)}
                   />
-                  <span className="field__hint">
-                    Used when a key is paying. Blank follows the app.
-                  </span>
                 </label>
 
                 <label className="field">
@@ -607,12 +605,9 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                     value={apiKey ?? ""}
                     placeholder={group?.apiKeySet ? `set · ${group.apiKeyHint}` : "inherit"}
                     autoComplete="off"
+                    title="Only when this crew's endpoint takes a different key. Blank keeps the stored one; clear it to go back to the app's."
                     onChange={(event) => setApiKey(event.target.value)}
                   />
-                  <span className="field__hint">
-                    Only needed when this group's endpoint uses a different key. Leave blank to keep
-                    the stored one; clear it to go back to the app's.
-                  </span>
                 </label>
 
                 <label className="field">
@@ -621,12 +616,9 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                     className="input input--mono"
                     value={model}
                     placeholder={settings?.defaultModel || "inherit"}
+                    title="Every agent in this crew that does not name its own, when a key is paying."
                     onChange={(event) => setModel(event.target.value)}
                   />
-                  <span className="field__hint">
-                    Used by every agent in this group that does not name its own, when a key is
-                    paying.
-                  </span>
                 </label>
 
                 <label className="field">
@@ -636,12 +628,9 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                     inputMode="numeric"
                     value={timeout}
                     placeholder={`${settings?.requestTimeoutSecs ?? 120} seconds`}
+                    title="Seconds to wait for a model call. A crew on a slow local model wants more than one on a hosted endpoint."
                     onChange={(event) => setTimeoutSecs(event.target.value.replace(/[^0-9]/g, ""))}
                   />
-                  <span className="field__hint">
-                    Seconds to wait for a model call. A crew on a slow local model wants more than
-                    one on a hosted endpoint.
-                  </span>
                 </label>
 
                 <div className="settings__probe">
@@ -664,7 +653,9 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
 
                 {LIMITS.map((field) => (
                   <label className="field" key={field.key}>
-                    <span className="field__label">{field.label}</span>
+                    <span className="field__label" title={field.hint}>
+                      {field.label}
+                    </span>
                     <input
                       className="input input--mono input--number"
                       type="number"
@@ -679,7 +670,6 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                         }))
                       }
                     />
-                    <span className="field__hint">{field.hint}</span>
                   </label>
                 ))}
               </>
