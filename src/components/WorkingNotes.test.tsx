@@ -35,7 +35,9 @@ describe("WorkingNotes", () => {
     agentWorkingNotes.mockResolvedValue([note(HOUR, "waiting on Robert")]);
     const first = render(<WorkingNotes agentId="a1" />);
     const disclosure = await screen.findByRole("button", {
-      name: /Working notes · 1 · newest 1h ago/,
+      // The count and the age are their own spans, and an accessible name
+      // joins inline children without the spaces between them.
+      name: /Working notes.*1.*newest 1h ago/,
     });
     expect(disclosure.getAttribute("aria-expanded")).toBe("false");
     expect(screen.queryByText("waiting on Robert")).toBeNull();

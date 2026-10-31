@@ -422,7 +422,7 @@ describe("App", () => {
 
     expect(await screen.findByText("Boss commitment nudge")).toBeTruthy();
     expect(screen.getByText(/Weekdays at 9:28/)).toBeTruthy();
-    expect(screen.getByRole("complementary", { name: /screen and routines/i })).toBeTruthy();
+    expect(screen.getByRole("complementary", { name: /Manager: details/i })).toBeTruthy();
   });
 
   it("still renders the rail when startup fails", async () => {

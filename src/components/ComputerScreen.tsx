@@ -226,7 +226,7 @@ export function ComputerScreen({ agent }: Props) {
     : {};
 
   return (
-    <section className="place" data-given={given} aria-label={`${agent.name}'s computer`}>
+    <section className="detail place" data-given={given} aria-label={`${agent.name}'s computer`}>
       <Grant
         name="Computer"
         expanded={expanded}

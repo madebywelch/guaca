@@ -24,6 +24,7 @@ import {
 } from "../lib/types";
 import { Composer } from "./Composer";
 import { Answering } from "./HtmlArtifact";
+import { Icon } from "./Icon";
 import { MessageItem, StreamingMessage, WhenRow } from "./MessageItem";
 import { PairThread } from "./PairThread";
 import { TrailRow } from "./Trail";
@@ -143,7 +144,7 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
             aria-label="Back to chats"
             onClick={onBack}
           >
-            ‹
+            <Icon name="chevron-left" />
           </button>
         )}
         {agent ? (
@@ -185,7 +186,7 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
                 onOpenMenu(agent, { x: box.left, y: box.bottom + 4 });
               }}
             >
-              ⋯
+              <Icon name="more" />
             </button>
           </>
         ) : (

@@ -61,14 +61,19 @@ export function Notebook({ agentId }: Props) {
 
   const now = Date.now();
   return (
-    <section className="worknotes">
-      <div className="worknotes__head">
-        <h3 className="worknotes__title">Notebook</h3>
+    <section className="detail worknotes">
+      <div className="detail__head">
+        <h3
+          className="detail__title"
+          title="Files the agent keeps beyond its memory and reads when it needs them."
+        >
+          Notebook
+        </h3>
       </div>
       {entries === null ? (
-        <p className="worknotes__empty">Loading…</p>
+        <p className="detail__empty">Loading…</p>
       ) : entries.length === 0 ? (
-        <p className="worknotes__empty">Empty.</p>
+        <p className="detail__empty">Empty.</p>
       ) : (
         <ol className="worknotes__list">
           {entries.map((entry) => (

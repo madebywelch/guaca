@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
 
+import { AgentAvatar } from "../avatars/AgentAvatar";
+import { runsOn } from "../lib/profile";
 import { useStore } from "../lib/store";
 import type { AgentCard, RoutineId } from "../lib/types";
 import { BrowserScreen } from "./BrowserScreen";
 import { ComputerScreen } from "./ComputerScreen";
+import { Icon } from "./Icon";
 import { Memory } from "./Memory";
 import { Notebook } from "./Notebook";
 import { RoutineDetail } from "./RoutineDetail";
@@ -39,6 +42,89 @@ function remembered(): boolean {
 }
 
 /**
+ * Who the panel belongs to, at the top of it.
+ *
+ * The panel used to open on "Routines", under a gear and two arrows, and
+ * nothing in it said whose routines. The sections below are all things one
+ * agent carries, so the agent is the heading: its face, its name, the crew it
+ * is in and what answers for it, which is the one fact about its setup that
+ * is read constantly and was two clicks away in a dialog. Edit is here rather
+ * than a gear in the corner because the gear said nothing about what it
+ * opened, and sat beside the arrow that closes the panel.
+ *
+ * The model is drawn lighter when it is inherited: a crew default is a fact
+ * about the crew, and an operator reading the profile should be able to tell
+ * which agents chose for themselves without opening each one.
+ */
+function Profile({
+  agent,
+  onEdit,
+  onOpenActions,
+}: {
+  agent: AgentCard;
+  onEdit: () => void;
+  onOpenActions?: Props["onOpenActions"];
+}) {
+  const group = useStore((state) => state.groups.find((entry) => entry.id === agent.groupId));
+  const settings = useStore((state) => state.settings);
+  const activity = useStore((state) => state.activity[agent.id]);
+  const runs = runsOn(agent, group, settings);
+  return (
+    <div className="profile">
+      <AgentAvatar
+        avatar={agent.avatar}
+        color={agent.color}
+        activity={activity}
+        lifecycle={agent.lifecycle}
+        seed={agent.id}
+        size="md"
+      />
+      <div className="profile__body">
+        {/* Not a heading: the channel beside this already heads the page with
+            the same name, and the aside is labeled with it. */}
+        <p className="profile__name" title={agent.name}>
+          {agent.name}
+        </p>
+        <p className="profile__line" title={`${runs.crew} · ${runs.model}`}>
+          {runs.crew}
+          <span aria-hidden="true"> · </span>
+          <span className="profile__model" data-inherited={runs.inherited || undefined}>
+            {runs.model}
+          </span>
+        </p>
+        {agent.skills.length > 0 && (
+          <p className="profile__skills" title={agent.skills.join(", ")}>
+            {agent.skills.join(", ")}
+          </p>
+        )}
+      </div>
+      <div className="profile__actions">
+        <button
+          type="button"
+          className="btn btn--small btn--ghost"
+          aria-label={`Edit ${agent.name}'s profile`}
+          onClick={onEdit}
+        >
+          Edit
+        </button>
+        {onOpenActions && (
+          <button
+            type="button"
+            className="mobile-only btn btn--small btn--ghost"
+            onClick={(event) => {
+              const box = event.currentTarget.getBoundingClientRect();
+              onOpenActions(agent, { x: box.left, y: box.bottom });
+            }}
+          >
+            Actions
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
  * What an agent has, beside what it says.
  *
  * The transcript answers "what happened"; this answers "what is this agent set
@@ -51,9 +137,10 @@ function remembered(): boolean {
  * replaces it rather than growing it, because a routine's instruction is
  * several sentences long and a list that showed it was one routine tall.
  *
- * The agent's name, look and instructions are deliberately not here. Those are
- * edited rarely and all at once, which is what a dialog is for; these are
- * glanced at constantly.
+ * The agent's name, look and instructions are deliberately not editable here.
+ * Those are edited rarely and all at once, which is what a dialog is for;
+ * what is here is glanced at constantly. The profile at the top is the
+ * summary of that dialog, and its one button opens it.
  *
  * The order is what is worth glancing at, most first. A screen is a picture of
  * something happening right now, so the two of them lead; then the schedule it
@@ -130,19 +217,19 @@ export function Inspector({
           type="button"
           className="inspector__tab"
           onClick={() => setOpen(true)}
-          title={`Show ${agent.name}'s screen and routines`}
-          aria-label={`Show ${agent.name}'s screen and routines`}
+          title={`Show ${agent.name}'s details`}
+          aria-label={`Show ${agent.name}'s details`}
           aria-expanded={false}
         >
-          «
+          <Icon name="chevron-left" />
         </button>
       </aside>
     );
   }
 
   return (
-    <aside className="inspector" aria-label={`${agent.name}: screen and routines`}>
-      <div className="inspector__head">
+    <aside className="inspector" aria-label={`${agent.name}: details`}>
+      <div className="inspector__head" data-level={routine !== null ? "routine" : "agent"}>
         {onHide && (
           <button
             type="button"
@@ -150,7 +237,7 @@ export function Inspector({
             aria-label="Back to conversation"
             onClick={onHide}
           >
-            ‹
+            <Icon name="chevron-left" />
           </button>
         )}
         {routine !== null ? (
@@ -162,36 +249,16 @@ export function Inspector({
               title="Back to the agent"
               aria-label="Back to the agent"
             >
-              ‹
+              <Icon name="chevron-left" />
             </button>
             <h2 className="inspector__title">Routine</h2>
           </>
         ) : (
-          <>
-            <span className="inspector__agent-name mobile-only">{agent.name}</span>
-            {onOpenActions && (
-              <button
-                type="button"
-                className="mobile-only btn btn--ghost"
-                onClick={(event) => {
-                  const box = event.currentTarget.getBoundingClientRect();
-                  onOpenActions(agent, { x: box.left, y: box.bottom });
-                }}
-              >
-                Actions
-              </button>
-            )}
-            <span style={{ flex: 1 }} />
-            <button
-              type="button"
-              className="inspector__gear"
-              onClick={() => onEditProfile(agent)}
-              title={`Edit ${agent.name}'s profile`}
-              aria-label={`Edit ${agent.name}'s profile`}
-            >
-              ⚙
-            </button>
-          </>
+          <Profile
+            agent={agent}
+            onEdit={() => onEditProfile(agent)}
+            onOpenActions={onOpenActions}
+          />
         )}
         <button
           type="button"
@@ -204,7 +271,7 @@ export function Inspector({
           aria-label="Hide this panel"
           aria-expanded={true}
         >
-          »
+          <Icon name="chevron-right" />
         </button>
       </div>
 
