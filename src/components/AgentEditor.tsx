@@ -149,7 +149,9 @@ export function AgentEditor({ agent, onClose }: Props) {
         </div>
 
         <label className="field">
-          <span className="field__label">Name</span>
+          <span className="field__label" title="Agents address each other by this name.">
+            Name
+          </span>
           <input
             className="input input--mono"
             ref={nameRef}
@@ -158,9 +160,6 @@ export function AgentEditor({ agent, onClose }: Props) {
             placeholder="Manager"
             onChange={(event) => patch({ name: event.target.value })}
           />
-          <span className="field__hint">
-            Agents address each other by this name, so make it short and unambiguous.
-          </span>
         </label>
 
         <div className="field">
@@ -206,7 +205,12 @@ export function AgentEditor({ agent, onClose }: Props) {
             operator has not drawn yet. */}
         {groups.length > 1 && (
           <label className="field">
-            <span className="field__label">Group</span>
+            <span
+              className="field__label"
+              title="Agents can only see and message others in the same group."
+            >
+              Group
+            </span>
             <select
               className="input input--mono"
               value={draft.groupId ?? groups[0]?.id ?? ""}
@@ -218,17 +222,12 @@ export function AgentEditor({ agent, onClose }: Props) {
                 </option>
               ))}
             </select>
-            <span className="field__hint">
-              Agents can only see and message others in the same group.
-            </span>
           </label>
         )}
 
         <div className="field">
           <span className="field__label">Provider · {providerName}</span>
-          <span className="field__hint">
-            Inherited from {crew?.name ?? "the group"}. Change the provider in group settings.
-          </span>
+          <span className="field__hint">Set in {crew?.name ?? "the group"}'s settings.</span>
         </div>
 
         {provider === "chatgpt" ? (
@@ -242,14 +241,16 @@ export function AgentEditor({ agent, onClose }: Props) {
             models={settings?.subscriptionModels ?? []}
             inherit={inherit}
             onChange={(subscriptionModel) => patch({ subscriptionModel })}
-            hint="Choose a ChatGPT model for this agent, or use the group default. Choices come from your signed-in account."
+            hint="From your signed-in account."
           />
         ) : provider === "claude" ? (
           <div className="field">
             <span className="field__label">Model</span>
-            <span className="field__hint">
-              Claude controls which model runs. Per-agent model overrides are not used with this
-              provider. Any saved override is kept for when you switch back.
+            <span
+              className="field__hint"
+              title="A per-agent model is not used with this provider. A saved one is kept for when you switch back."
+            >
+              Claude controls which model runs.
             </span>
           </div>
         ) : (
@@ -260,12 +261,9 @@ export function AgentEditor({ agent, onClose }: Props) {
                 className="input input--mono"
                 value={draft.model}
                 placeholder={inherit}
+                title={`A model ID ${providerName} accepts. Blank uses the group default.`}
                 onChange={(event) => patch({ model: event.target.value })}
               />
-              <span className="field__hint">
-                Enter a model ID accepted by {providerName}, or leave blank to use the group
-                default. This override applies only to this agent.
-              </span>
             </label>
             {draft.model && (
               <div className="field">
@@ -291,16 +289,18 @@ export function AgentEditor({ agent, onClose }: Props) {
         />
 
         <label className="field">
-          <span className="field__label">Skills</span>
+          <span
+            className="field__label"
+            title="What other agents read when deciding who to ask. Comma separated."
+          >
+            Skills
+          </span>
           <input
             className="input"
             value={skillText}
             placeholder="scheduling, delegation"
             onChange={(event) => setSkillText(event.target.value)}
           />
-          <span className="field__hint">
-            Comma separated. This is what other agents read when deciding who to ask.
-          </span>
         </label>
 
         {agent && <SigninList agent={agent} />}
@@ -408,7 +408,10 @@ function ErrandSwitch({ agent }: { agent: AgentCard }) {
   };
 
   return (
-    <label className="field field--row">
+    <label
+      className="field field--row"
+      title={`${agent.name} hands a piece of work to its own model, called again with one brief and its tools, up to three at once, and reads back what each found. An errand cannot message anyone, rewrite ${agent.name}'s memory or send errands of its own. Every errand spends model calls from the same conversation's budget.`}
+    >
       <input
         type="checkbox"
         checked={on}
@@ -418,11 +421,7 @@ function ErrandSwitch({ agent }: { agent: AgentCard }) {
       <span>
         <span className="field__label">Errands</span>
         <span className="field__hint">
-          {agent.name} can hand a piece of work to its own model, called again with one brief and
-          its tools, up to three at once, and read back what each found. An errand cannot message
-          anyone, rewrite {agent.name}'s memory or send errands of its own. Off by default: every
-          errand spends model calls from the same conversation's budget, so one turn can cost
-          several times what it did.
+          Up to three side tasks per turn, on {agent.name}'s own model, at extra cost.
         </span>
         {error && <span className="field__hint">{error}</span>}
       </span>

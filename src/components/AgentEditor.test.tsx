@@ -161,7 +161,7 @@ it("keeps inheritance and the saved override usable when discovery fails", async
 it("uses the group's ChatGPT provider and saves an account model for just this agent", async () => {
   open(card());
   expect(screen.getByText("Provider · ChatGPT subscription")).toBeTruthy();
-  expect(screen.getByText(/Inherited from Research/)).toBeTruthy();
+  expect(screen.getByText(/Set in Research.s settings/)).toBeTruthy();
   expect(modelSelect().value).toBe("");
   expect(screen.getByRole("option", { name: "Use group default · crew-default" })).toBeTruthy();
   await screen.findByRole("option", { name: "chat-specialist" });
