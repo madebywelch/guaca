@@ -154,30 +154,36 @@ const CAST_SAMPLE = [
   color: ACCENTS.find((accent) => accent.name === one.color)?.value ?? DEFAULT_ACCENT,
 }));
 
-const NOTIFY_COPY: Record<NotifyKind, { label: string; hint: string }> = {
+/** The label is the row; the title is read on hover by whoever wonders. */
+const NOTIFY_COPY: Record<NotifyKind, { label: string; title: string }> = {
   decision: {
     label: "Decisions and follow-through",
-    hint: "Batched reminders at 9 AM and 4 PM in the workspace timezone, and earlier for approaching deadlines. Decisions remain in For you until answered or withdrawn.",
+    title:
+      "Batched reminders at 9 AM and 4 PM in the workspace timezone, and earlier for approaching deadlines. Decisions remain in For you until answered or withdrawn.",
   },
   approval: {
     label: "An agent needs permission",
-    hint: "The only one that blocks: the turn that asked is parked until you answer, and gives up after ten minutes. Reaches you even while Guaca is open, if the request is in a channel you are not looking at.",
+    title:
+      "The only one that blocks: the turn that asked is parked until you answer, and gives up after ten minutes. Reaches you even while Guaca is open, if the request is in a channel you are not looking at.",
   },
   stuck: {
     label: "An agent is stuck on you",
-    hint: "It could not go on without you and said so on its way out of a turn. Nothing is parked and nothing expires, so it stays in For you until you clear it. Same channel rule as above.",
+    title:
+      "It could not go on without you and said so on its way out of a turn. Nothing is parked and nothing expires, so it stays in For you until you clear it. Only for a channel you are not looking at.",
   },
   routine: {
     label: "A routine fired",
-    hint: "Work that starts on a schedule rather than because you asked. It lands in whichever channel it was pointed at, which is usually not the one on screen.",
+    title:
+      "Work that starts on a schedule rather than because you asked. It lands in whichever channel it was pointed at, which is usually not the one on screen.",
   },
   settled: {
     label: "A conversation finished",
-    hint: "Every agent it reached has gone quiet. Only for the channel you were last looking at, so a busy runtime does not announce work you never opened.",
+    title:
+      "Every agent it reached has gone quiet. Only for the channel you were last looking at, so a busy runtime does not announce work you never opened.",
   },
   failed: {
     label: "A turn could not finish",
-    hint: "The model call failed after its retries. Same channel rule as above.",
+    title: "The model call failed after its retries. Only for a channel you are not looking at.",
   },
 };
 
@@ -698,18 +704,18 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                 <p className="settings__lede">Who the agents think they are talking to.</p>
 
                 <label className="field">
-                  <span className="field__label">Your name</span>
+                  <span
+                    className="field__label"
+                    title="What every agent calls you, told on every turn. Left blank, they say the operator."
+                  >
+                    Your name
+                  </span>
                   <input
                     className="input"
                     value={operatorName}
                     placeholder="Unnamed"
                     onChange={(event) => setOperatorName(event.target.value)}
                   />
-                  <span className="field__hint">
-                    What every agent calls you. They are told this on every turn, so you never have
-                    to introduce yourself or ask one to remember it. Leave blank and they say "the
-                    operator".
-                  </span>
                 </label>
               </>
             )}
@@ -851,7 +857,8 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                     onEffortChange={(effort) => setReasoningEffort(effort ?? "auto")}
                     models={settings?.subscriptionModels ?? []}
                     onChange={setSubscriptionModel}
-                    hint="The default model for any group that does not name one, and any agent that does not name one. A subscription has an hourly quota rather than a per-token bill, so a crew that talks a lot reaches the ceiling faster than one person would."
+                    title="The default for any group or agent that does not name one. A subscription has an hourly quota rather than a per-token bill, so a crew that talks a lot reaches the ceiling faster than one person would."
+                    hint="From your signed-in account."
                   />
                 )}
 
@@ -877,19 +884,22 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                         className="input input--mono"
                         value={baseUrl}
                         placeholder="https://openrouter.ai/api/v1"
+                        title="Any OpenAI-compatible base URL. A local server runs without a network."
                         onChange={(event) => {
                           setBaseUrl(event.target.value);
                           setEditingApiKey(true);
                         }}
                       />
-                      <span className="field__hint">
-                        Any OpenAI-compatible base URL. Point it at a local server to run without a
-                        network.
-                      </span>
                     </label>
 
+                    {/* The one line under the box is about the key that is
+                        stored, so it is drawn only while a stored key is
+                        being replaced: a blank editor keeping it is the fact
+                        an operator who was just sent here by an endpoint
+                        change needs. */}
                     <ApiKeyField
                       label="API key"
+                      title="Stored on the host and never read back into this form. A local server usually wants none. Test connection checks the endpoint and the key."
                       stored={settings?.apiKeySet ?? false}
                       hint={settings?.apiKeyHint ?? ""}
                       value={apiKey}
@@ -899,9 +909,9 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                       busy={busy}
                       placeholder="sk-or-v1-…"
                     >
-                      Stored on the host and never read back into this form. Leave blank to keep the
-                      saved key, including when changing endpoints. A local server usually wants
-                      none. Use Test connection to check the endpoint and key.
+                      {settings?.apiKeySet && editingApiKey
+                        ? "Blank keeps the saved key, including when changing endpoints."
+                        : undefined}
                     </ApiKeyField>
 
                     <label className="field">
@@ -910,12 +920,9 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                         className="input input--mono"
                         value={model}
                         placeholder="anthropic/claude-sonnet-4.5"
+                        title="The default for any group or agent that does not name one."
                         onChange={(event) => setModel(event.target.value)}
                       />
-                      <span className="field__hint">
-                        The default model for any group that does not name one, and any agent that
-                        does not name one.
-                      </span>
                     </label>
                   </>
                 ) : (
@@ -945,12 +952,9 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                     inputMode="numeric"
                     value={timeout}
                     placeholder={`${settings?.requestTimeoutSecs ?? 120} seconds`}
+                    title="Seconds to wait for a model call. A slow local model wants more than a hosted one; a run that hangs wants less. Blank keeps what is stored."
                     onChange={(event) => setTimeoutSecs(event.target.value.replace(/[^0-9]/g, ""))}
                   />
-                  <span className="field__hint">
-                    Seconds to wait for a model call. A slow local model wants more than a hosted
-                    one; a run that hangs wants less. Blank keeps what is stored.
-                  </span>
                 </label>
 
                 <div className="settings__probe">
@@ -973,7 +977,9 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
 
                 {LIMITS.map((field) => (
                   <label className="field" key={field.key}>
-                    <span className="field__label">{field.label}</span>
+                    <span className="field__label" title={field.hint}>
+                      {field.label}
+                    </span>
                     <input
                       className="input input--mono input--number"
                       type="number"
@@ -987,7 +993,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                         }))
                       }
                     />
-                    <span className="field__hint">{field.hint}</span>
                   </label>
                 ))}
               </>
@@ -1000,8 +1005,11 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   A sandbox each: a desktop and a terminal an agent can actually work in.
                 </p>
 
+                {/* The line under each key is the state a missing one leaves
+                    the crew in, and nothing once a key is stored. */}
                 <ApiKeyField
                   label="E2B API key"
+                  title="Gives every agent its own computer: a desktop and a terminal in a sandbox, shown in the corner of its channel."
                   stored={settings?.e2bKeySet ?? false}
                   hint={settings?.e2bKeyHint ?? ""}
                   value={e2bKey}
@@ -1011,8 +1019,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   busy={busy}
                   placeholder="e2b_… (optional)"
                 >
-                  Gives every agent its own computer: a desktop and a terminal in a sandbox, shown
-                  in the corner of its channel. Without a key that pane stays closed.
+                  {settings?.e2bKeySet ? undefined : "Without a key, no agent has a computer."}
                 </ApiKeyField>
 
                 <label className="field">
@@ -1022,16 +1029,14 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                     inputMode="numeric"
                     value={idleMinutes}
                     placeholder={`${settings?.computerIdleMinutes ?? 15} minutes`}
+                    title="Idle minutes before a machine sleeps. Sleeping keeps its disk, so a browser stays signed in and wakes where it left off. Only the running time is billed."
                     onChange={(event) => setIdleMinutes(event.target.value.replace(/[^0-9]/g, ""))}
                   />
-                  <span className="field__hint">
-                    Idle minutes before a machine sleeps. Sleeping keeps its disk, so a browser
-                    stays signed in and wakes where it left off. Only the running time is billed.
-                  </span>
                 </label>
 
                 <ApiKeyField
                   label="Kernel API key"
+                  title="Gives every agent its own browser: a Chrome in the cloud, separate from its computer. It is what agents use for the web, because it tells them where everything on a page is instead of making them aim at pixels."
                   stored={settings?.kernelKeySet ?? false}
                   hint={settings?.kernelKeyHint ?? ""}
                   value={kernelKey}
@@ -1041,10 +1046,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   busy={busy}
                   placeholder="sk_… (optional)"
                 >
-                  Gives every agent its own browser: a Chrome in the cloud, separate from its
-                  computer. This is what agents use for the web, because it tells them where
-                  everything on a page is instead of making them aim at pixels. Without a key that
-                  pane stays closed and agents have no `browse`.
+                  {settings?.kernelKeySet ? undefined : "Without a key, no agent has a browser."}
                 </ApiKeyField>
 
                 <label className="field">
@@ -1054,19 +1056,17 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                     inputMode="numeric"
                     value={browserIdleMinutes}
                     placeholder={`${settings?.browserIdleMinutes ?? 60} minutes`}
+                    title="Idle minutes before a browser is thrown away. It stops billing within seconds of going quiet either way, and what it was signed in to is kept, so the next one opens signed in to the same accounts. Longer only saves the seconds a fresh one takes to start."
                     onChange={(event) =>
                       setBrowserIdleMinutes(event.target.value.replace(/[^0-9]/g, ""))
                     }
                   />
-                  <span className="field__hint">
-                    Idle minutes before a browser is thrown away. It stops billing within seconds of
-                    going quiet either way, and what it was signed in to is kept, so the next one
-                    opens signed in to the same accounts. Longer only saves the seconds a fresh one
-                    takes to start.
-                  </span>
                 </label>
 
-                <label className="field field--row">
+                <label
+                  className="field field--row"
+                  title="For sites that block automation: Kernel disguises the browser and solves captchas. Needs a plan that includes it. Leave it off until a site turns an agent away."
+                >
                   <input
                     type="checkbox"
                     checked={stealth}
@@ -1074,11 +1074,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   />
                   <span>
                     <span className="field__label">Hide that browsers are automated</span>
-                    <span className="field__hint">
-                      For sites that block automation. Kernel disguises the browser and solves
-                      captchas. Costs more per browser and needs a plan that includes it, so leave
-                      it off until a site turns an agent away.
-                    </span>
+                    <span className="field__hint">Costs more per browser.</span>
                   </span>
                 </label>
               </>
@@ -1096,7 +1092,13 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   read.
                 </p>
 
-                <div className="preset preset--plain" aria-current={account?.signedIn === true}>
+                {/* What leaves the machine is said on the row that decides
+                    it, read by whoever hovers before pressing Sign in. */}
+                <div
+                  className="preset preset--plain"
+                  aria-current={account?.signedIn === true}
+                  title="What leaves this machine, and only once you have signed in: a request for an access token when an agent uses a connector you authorized. Your conversations, your agents and your keys are not sent anywhere, with or without an account."
+                >
                   <span className="preset__text">
                     <span className="preset__name">Guaca account</span>
                     <span className="preset__url">
@@ -1119,6 +1121,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                         type="button"
                         className="btn btn--small"
                         disabled={linking}
+                        title="Forgets the sign-in on this machine immediately."
                         onClick={() => void unlinkAccount()}
                       >
                         Sign out
@@ -1186,18 +1189,11 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   </>
                 )}
 
-                <p className="field__hint" style={{ marginTop: "1.4rem" }}>
-                  What leaves this machine, and only once you have signed in: a request for an
-                  access token when an agent uses a connector you authorized. Your conversations,
-                  your agents and your keys are not sent anywhere, with or without an account.
-                  Signing out here forgets the sign-in on this machine immediately.
-                </p>
-
                 {account && account.origin !== "https://guaca.bot" && account.origin !== "" && (
                   /* Development, or a self-hosted service. Worth saying out loud
                      rather than leaving an operator to assume guaca.bot: the two
                      hold different accounts and only one of them is the real one. */
-                  <p className="field__hint">
+                  <p className="field__hint" style={{ marginTop: "1.4rem" }}>
                     This build signs in to <code>{account.origin}</code>, not guaca.bot.
                   </p>
                 )}
@@ -1213,12 +1209,12 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   known to an agent.
                 </p>
 
-                <div className="switch-row">
+                <div
+                  className="switch-row"
+                  title="The model's published thinking and each tool call, in chat while it works."
+                >
                   <span className="switch-row__text">
                     <span className="switch-row__label">Show reasoning and tool calls</span>
-                    <span className="switch-row__hint">
-                      Show the model's published thinking and each tool call in chat while it works.
-                    </span>
                   </span>
                   <button
                     type="button"
@@ -1233,7 +1229,12 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                 </div>
 
                 <div className="field">
-                  <span className="field__label">Reading surface</span>
+                  <span
+                    className="field__label"
+                    title="The whole window follows it: the page, both columns and everything drawn on them."
+                  >
+                    Reading surface
+                  </span>
                   <div className="choices">
                     {(Object.keys(SURFACE_LABELS) as SurfaceMode[]).map((mode) => (
                       <button
@@ -1249,14 +1250,17 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                     ))}
                   </div>
                   <span className="field__hint">
-                    The whole window follows it: the page, both columns and everything drawn on
-                    them. Currently drawing{" "}
-                    {resolveSurface(prefs.surface) === "dark" ? "ink" : "paper"}.
+                    Currently drawing {resolveSurface(prefs.surface) === "dark" ? "ink" : "paper"}.
                   </span>
                 </div>
 
                 <div className="field">
-                  <span className="field__label">Grays</span>
+                  <span
+                    className="field__label"
+                    title="The tint in the columns and the rules around the page. Warm is how Guaca looked before any of this could be chosen."
+                  >
+                    Grays
+                  </span>
                   <div className="choices">
                     {(Object.keys(GRAYS) as GrayKey[]).map((grays) => (
                       <button
@@ -1283,14 +1287,15 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                       </button>
                     ))}
                   </div>
-                  <span className="field__hint">
-                    The tint in the columns and the rules around the page. Warm is how Guaca looked
-                    before any of this could be chosen.
-                  </span>
                 </div>
 
                 <div className="field">
-                  <span className="field__label">Attention</span>
+                  <span
+                    className="field__label"
+                    title="The one color that means an agent is waiting on you. Nothing else is drawn in it, so it never has to compete to be seen."
+                  >
+                    Attention
+                  </span>
                   <div className="choices">
                     {(Object.keys(ATTENTIONS) as AttentionKey[]).map((attention) => (
                       <button
@@ -1317,14 +1322,15 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                       </button>
                     ))}
                   </div>
-                  <span className="field__hint">
-                    The one color that means an agent is waiting on you. Nothing else is drawn in
-                    it, so it never has to compete to be seen.
-                  </span>
                 </div>
 
                 <div className="field">
-                  <span className="field__label">Contrast</span>
+                  <span
+                    className="field__label"
+                    title="More darkens text, hints and borders to the strictest accessibility level, over whichever grays and color you chose."
+                  >
+                    Contrast
+                  </span>
                   <div className="choices">
                     {CONTRASTS.map((contrast) => (
                       <button
@@ -1339,14 +1345,15 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                       </button>
                     ))}
                   </div>
-                  <span className="field__hint">
-                    More darkens text, hints and borders to the strictest accessibility level, over
-                    whichever grays and color you chose.
-                  </span>
                 </div>
 
                 <div className="field">
-                  <span className="field__label">Typeface</span>
+                  <span
+                    className="field__label"
+                    title="System is whatever your computer draws its own windows in. Atkinson Hyperlegible is drawn so that no two letters are easy to mistake for each other."
+                  >
+                    Typeface
+                  </span>
                   <div className="choices">
                     {TYPEFACES.map((typeface) => (
                       <button
@@ -1361,14 +1368,15 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                       </button>
                     ))}
                   </div>
-                  <span className="field__hint">
-                    System is whatever your computer draws its own windows in. Atkinson Hyperlegible
-                    is drawn so that no two letters are easy to mistake for each other.
-                  </span>
                 </div>
 
                 <div className="field">
-                  <span className="field__label">Reading face</span>
+                  <span
+                    className="field__label"
+                    title="What agents wrote, and what you type to them. Literata is a serif made for reading at length on a screen."
+                  >
+                    Reading face
+                  </span>
                   <div className="choices">
                     {READINGS.map((reading) => (
                       <button
@@ -1383,14 +1391,15 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                       </button>
                     ))}
                   </div>
-                  <span className="field__hint">
-                    What agents wrote, and what you type to them. Literata is a serif made for
-                    reading at length on a screen.
-                  </span>
                 </div>
 
                 <div className="field">
-                  <span className="field__label">Reading size</span>
+                  <span
+                    className="field__label"
+                    title="The same text, larger or smaller. The rest of the window keeps its size; interface scale is the one that moves everything."
+                  >
+                    Reading size
+                  </span>
                   <div className="choices">
                     {READING_SIZES.map((readingSize) => (
                       <button
@@ -1405,14 +1414,15 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                       </button>
                     ))}
                   </div>
-                  <span className="field__hint">
-                    The same text, larger or smaller. The rest of the window keeps its size;
-                    interface scale is the one that moves everything.
-                  </span>
                 </div>
 
                 <div className="field">
-                  <span className="field__label">Characters</span>
+                  <span
+                    className="field__label"
+                    title="How every agent is drawn. Cut is paper, with eyes that have a pupil and lids. Drawn is a brush line at twelve drawings a second, with brows, and a mouth where there is room for one. Which character each agent is stays the same."
+                  >
+                    Characters
+                  </span>
                   <div className="choices">
                     {CASTS.map((cast) => (
                       <button
@@ -1440,15 +1450,15 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                       </button>
                     ))}
                   </div>
-                  <span className="field__hint">
-                    How every agent is drawn. Cut is paper, with eyes that have a pupil and lids.
-                    Drawn is a brush line at twelve drawings a second, with brows, and a mouth where
-                    there is room for one. Which character each agent is stays the same.
-                  </span>
                 </div>
 
                 <div className="field">
-                  <span className="field__label">Interface scale</span>
+                  <span
+                    className="field__label"
+                    title="Everything, not just the type: the rail, the rows and the spacing scale with it. The rail and the inspector stop growing before they would crowd out the reading column in a small window."
+                  >
+                    Interface scale
+                  </span>
                   <div className="choices">
                     {UI_SCALES.map((scale) => (
                       <button
@@ -1463,11 +1473,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                       </button>
                     ))}
                   </div>
-                  <span className="field__hint">
-                    Everything, not just the type: the rail, the rows and the spacing scale with it.
-                    The rail and the inspector stop growing before they would crowd out the reading
-                    column in a small window.
-                  </span>
                 </div>
               </>
             )}
@@ -1480,13 +1485,12 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   fire. Nothing interrupts you for something already on screen in front of you.
                 </p>
 
-                <div className="switch-row">
+                <div
+                  className="switch-row"
+                  title="Off means none of the below, whatever they say. The first notification asks the operating system for permission."
+                >
                   <span className="switch-row__text">
                     <span className="switch-row__label">Notify me at all</span>
-                    <span className="switch-row__hint">
-                      Off means none of the below, whatever they say. The first notification asks
-                      the operating system for permission.
-                    </span>
                   </span>
                   <button
                     type="button"
@@ -1505,10 +1509,10 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                     className="switch-row"
                     key={kind}
                     data-off={prefs.notify.on ? undefined : "true"}
+                    title={NOTIFY_COPY[kind].title}
                   >
                     <span className="switch-row__text">
                       <span className="switch-row__label">{NOTIFY_COPY[kind].label}</span>
-                      <span className="switch-row__hint">{NOTIFY_COPY[kind].hint}</span>
                     </span>
                     <button
                       type="button"
@@ -1714,9 +1718,16 @@ function WorkspacePane() {
   );
 }
 
-/** The runtime reports storage, not a live connection check. */
+/**
+ * The runtime reports storage, not a live connection check.
+ *
+ * What the key is for is the legend's title. The children are the one line
+ * drawn under the box, which is a fact about the key's current state or
+ * nothing, so the box only claims a description when there is one.
+ */
 function ApiKeyField({
   label,
+  title,
   stored,
   hint,
   value,
@@ -1728,6 +1739,7 @@ function ApiKeyField({
   children,
 }: {
   label: string;
+  title: string;
   stored: boolean;
   hint: string;
   value: string;
@@ -1736,7 +1748,7 @@ function ApiKeyField({
   onEdit: (editing: boolean) => void;
   busy: boolean;
   placeholder: string;
-  children: ReactNode;
+  children?: ReactNode;
 }) {
   const id = useId();
   const input = useRef<HTMLInputElement>(null);
@@ -1746,7 +1758,9 @@ function ApiKeyField({
   }, [editing]);
   return (
     <fieldset className="field api-key">
-      <legend className="field__label">{label}</legend>
+      <legend className="field__label" title={title}>
+        {label}
+      </legend>
       {stored && (
         <div className="api-key__saved">
           <span className="api-key__status" role="status">
@@ -1774,7 +1788,7 @@ function ApiKeyField({
             className="input input--mono"
             type="password"
             aria-label={label}
-            aria-describedby={id}
+            aria-describedby={children ? id : undefined}
             value={value}
             placeholder={stored ? "Enter replacement key" : placeholder}
             autoComplete="off"
@@ -1798,9 +1812,11 @@ function ApiKeyField({
           )}
         </div>
       )}
-      <p className="field__hint" id={id}>
-        {children}
-      </p>
+      {children && (
+        <p className="field__hint" id={id}>
+          {children}
+        </p>
+      )}
     </fieldset>
   );
 }

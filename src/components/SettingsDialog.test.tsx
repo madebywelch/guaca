@@ -192,9 +192,9 @@ function pane(label: string): void {
 /**
  * One field's input, by the words above it.
  *
- * Anchored patterns rather than exact names: every hint on this surface lives
- * inside its own label, so the accessible name of a box is its label followed
- * by a sentence of explanation.
+ * Anchored patterns rather than exact names: a label is a prefix of another
+ * ("API key" of "E2B API key"), and a field that reports its state keeps that
+ * line inside the label, so the accessible name of a box can run past it.
  */
 function field(label: RegExp): HTMLInputElement {
   return screen.getByLabelText(label) as HTMLInputElement;
@@ -1777,6 +1777,9 @@ describe("the provider key when an endpoint changes", () => {
   it.each(["preset", "typed"])("opens the key editor for a %s endpoint change", async (kind) => {
     open(stored(), DEFAULT_PREFS, "provider");
     expect(screen.queryByLabelText(/^API key/)).toBeNull();
+    // The line about a blank editor is about the editor, so it is not drawn
+    // under a stored key that nobody is replacing.
+    expect(screen.queryByText(/Blank keeps the saved key/)).toBeNull();
     if (kind === "preset") {
       fireEvent.click(screen.getByRole("button", { name: /Groq/ }));
     } else {

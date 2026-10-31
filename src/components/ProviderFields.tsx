@@ -104,8 +104,10 @@ interface ModelProps {
   onChange: (model: string) => void;
   /** Offered as the first row when blank means inherit from the app or group. */
   inherit?: string;
-  /** What this model is used for in the app, group or agent profile. */
-  hint: ReactNode;
+  /** What this model is used for in the app, group or agent profile. Read on hover. */
+  title?: string;
+  /** The one line under the list, about where the choices come from. */
+  hint?: ReactNode;
   effort: ReasoningEffort | null;
   onEffortChange: (effort: ReasoningEffort | null) => void;
   inheritedModel?: string;
@@ -125,6 +127,7 @@ export function SubscriptionModel({
   models,
   onChange,
   inherit,
+  title,
   hint,
   effort,
   onEffortChange,
@@ -164,7 +167,9 @@ export function SubscriptionModel({
   return (
     <>
       <label className="field" style={{ marginTop: "1.1rem" }}>
-        <span className="field__label">Model</span>
+        <span className="field__label" title={title}>
+          Model
+        </span>
         <select
           className="input input--mono"
           value={value}
@@ -177,7 +182,7 @@ export function SubscriptionModel({
             </option>
           ))}
         </select>
-        <span className="field__hint">{hint}</span>
+        {hint && <span className="field__hint">{hint}</span>}
         {catalog && value && !catalog.some((model) => model.slug === value) && (
           <span className="field__hint" role="status" style={{ display: "block" }}>
             {value} is not in your account's current ChatGPT model list. Choose a listed model
