@@ -63,15 +63,21 @@ describe("Memory", () => {
     await waitFor(() => expect(box().value).toBe("# Style\nTerse. No preamble."));
   });
 
-  it("says what the box is for only where there is nothing in it", async () => {
+  it("says there is nothing in one line, and explains itself in the title", async () => {
+    // What the store is for used to be three sentences under every empty
+    // memory, which is a paragraph the operator reads on every new agent and
+    // never again needs. The section says what it holds; the explanation is on
+    // the heading, read when somebody wonders rather than every time they look.
     render(<Memory agentId="a1" />);
-    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-    expect(await screen.findByText(/writes here with/)).toBeTruthy();
+    expect(await screen.findByText("Nothing yet.")).toBeTruthy();
+    expect(screen.queryByText(/update_memory/)).toBeNull();
+    expect(screen.getByRole("heading", { name: "Memory" }).getAttribute("title")).toMatch(
+      /across conversations/,
+    );
 
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     type("Smith handles verification.");
-    // On an agent that has written something, the same three sentences are a
-    // paragraph under every glance.
-    expect(screen.queryByText(/writes here with/)).toBeNull();
+    expect(screen.queryByText("Nothing yet.")).toBeNull();
   });
 
   it("offers nothing to press until something has actually changed", async () => {

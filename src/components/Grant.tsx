@@ -29,7 +29,7 @@ interface Props {
 export function Grant({ name, given, busy, about, state, onChange, expanded, onExpand }: Props) {
   return (
     <div className="grant">
-      <h3 className="grant__name">
+      <h3 className="detail__title">
         <button
           type="button"
           className="grant__disclosure"

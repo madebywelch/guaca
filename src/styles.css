@@ -2480,12 +2480,14 @@ input[type="file"]::file-selector-button {
 .pane__more {
   margin-left: auto;
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 0;
   background: none;
   color: var(--faint);
-  font-size: var(--type-lede);
   line-height: var(--lead-flush);
-  padding: var(--space-2) var(--space-4);
+  padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-sm);
   transition: color var(--tempo-tap) var(--ease), background var(--tempo-tap) var(--ease);
 }
@@ -5841,15 +5843,24 @@ input[type="file"]:disabled {
   width: 2.1rem;
 }
 
+/* The agent's profile is the head of its own panel, with the one control
+   that closes the panel in the corner. The close sits at the top of the row
+   rather than centered on it because the profile is three lines tall and a
+   control that floated beside the middle one read as belonging to it. */
 .inspector__head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--space-2);
-  padding: var(--space-4) var(--space-4) var(--space-3);
+  padding: var(--space-5) var(--space-3) var(--space-4) var(--space-5);
 }
 
-/* Centered between the two controls rather than after the back arrow, so it
-   stays put as the arrow appears and disappears. */
+/* A routine open in the panel: a back arrow, a title and the close. The
+   title is centered between the two controls rather than after the arrow,
+   so it stays put as the arrow appears and disappears. */
+.inspector__head[data-level="routine"] {
+  align-items: center;
+}
+
 .inspector__title {
   flex: 1;
   margin: 0;
@@ -5861,28 +5872,173 @@ input[type="file"]:disabled {
 }
 
 .inspector--closed .inspector__tab {
-  margin: var(--space-4) auto 0;
+  margin: var(--space-5) auto 0;
 }
 
-.inspector__tab,
-.inspector__gear {
+.inspector__tab {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 0;
   background: none;
   cursor: pointer;
   color: var(--faint);
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-2);
   border-radius: var(--radius-sm);
-  font-size: var(--type-ui);
   line-height: var(--lead-flush);
   transition: color var(--tempo-tap) var(--ease), background var(--tempo-tap) var(--ease);
 }
 
 .inspector__tab:hover,
-.inspector__gear:hover,
-.inspector__tab:focus-visible,
-.inspector__gear:focus-visible {
+.inspector__tab:focus-visible {
   color: var(--text);
   background: var(--sunken);
+}
+
+.profile {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+}
+
+.profile__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  /* The name's cap height against the top of the face, rather than the box. */
+  padding-top: var(--space-2);
+}
+
+.profile__name {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: var(--type-ui);
+  font-weight: 600;
+  line-height: var(--lead-tight);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* One line each, cut rather than wrapped: a model slug is long and reads
+   the same at either end, and the whole of it is in the title and the editor.
+   Wrapped, the three lines became five and the crew name moved every time
+   the model changed. */
+.profile__line,
+.profile__skills {
+  margin: 0;
+  font-size: var(--type-small);
+  line-height: var(--lead-ui);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile__skills {
+  color: var(--faint);
+}
+
+/* A model the crew or the app chose, not this agent: a shade lighter, so the
+   agents that answered for themselves can be told apart down a rail of
+   profiles without opening any of them. */
+.profile__model[data-inherited] {
+  color: var(--faint);
+}
+
+.profile__actions {
+  flex: none;
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* --- a drawn mark in a control ------------------------------------------
+
+   One stroke, the footer's, for every mark the interface draws rather than
+   types. Sized to the control's text so it sits on the same line as a label
+   would, and never shrunk by the flex row it is in. */
+.icon {
+  width: 1.125rem;
+  height: 1.125rem;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.icon__dot {
+  fill: currentColor;
+  stroke: none;
+}
+
+/* --- a section of the panel ----------------------------------------------
+
+   Every section is the same shape: a title at the head, at most one control
+   beside it, and one line that says so when there is nothing in it. The
+   sections differ in what they hold, not in how they are framed; four of
+   them framed themselves and no two agreed on the gap under the title. */
+.detail {
+  margin-bottom: var(--space-6);
+}
+
+.detail__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
+}
+
+.detail__title {
+  margin: 0;
+  min-width: 0;
+  font-family: var(--font-ui);
+  font-size: var(--type-ui);
+  font-weight: 500;
+  color: var(--muted);
+}
+
+/* A count or an age beside a title: there to be glanced past, not read. */
+.detail__count {
+  font-weight: 400;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.detail__tool {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  color: var(--faint);
+  padding: var(--space-1);
+  border-radius: var(--radius-sm);
+  line-height: var(--lead-flush);
+  transition: color var(--tempo-tap) var(--ease), background var(--tempo-tap) var(--ease);
+}
+
+.detail__tool:hover:not(:disabled),
+.detail__tool:focus-visible {
+  color: var(--text);
+  background: var(--sunken);
+}
+
+.detail__empty {
+  margin: 0;
+  font-size: var(--type-small);
+  line-height: var(--lead-ui);
+  color: var(--faint);
 }
 
 /* Scrolls down and never across, for the reason `.pane__scroll` states its
@@ -5907,26 +6063,6 @@ input[type="file"]:disabled {
    most, in the same monospace the operator would edit it in, capped in height
    so a full memory cannot push a live desktop off the bottom of the panel.
    */
-
-.memory {
-  margin-bottom: var(--space-6);
-}
-
-.memory__head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-4);
-  margin-bottom: var(--space-3);
-}
-
-.memory__title {
-  margin: 0;
-  font-family: var(--font-ui);
-  font-size: var(--type-ui);
-  font-weight: 500;
-  color: var(--muted);
-}
 
 /* Drawn only near the cap. Room running out is a fact and reads as one; room
    gone means the end of what is on screen will not be stored, which is a loss
@@ -6006,35 +6142,10 @@ input[type="file"]:disabled {
   color: var(--faint);
 }
 
-.memory__note code {
-  font-family: var(--font-mono);
-  font-size: 0.95em;
-}
-
 /* --- working notes -------------------------------------------------------
    Under the memory and deliberately lighter than it. Memory is a box you type
    into; this is a list you read, and giving it the same weight would say the
    two are the same kind of thing when the whole point is that they are not. */
-
-.worknotes {
-  margin-bottom: var(--space-6);
-}
-
-.worknotes__head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-4);
-  margin-bottom: var(--space-3);
-}
-
-.worknotes__title {
-  margin: 0;
-  font-family: var(--font-ui);
-  font-size: var(--type-ui);
-  font-weight: 500;
-  color: var(--muted);
-}
 
 .worknotes__list {
   list-style: none;
@@ -6085,13 +6196,6 @@ input[type="file"]:disabled {
   font-variant-numeric: tabular-nums;
 }
 
-.worknotes__empty {
-  margin: 0;
-  font-size: var(--type-small);
-  line-height: var(--lead-ui);
-  color: var(--faint);
-}
-
 /* --- a place an agent is given -------------------------------------------
 
    The browser and the computer: a name and a switch on one line,
@@ -6099,10 +6203,6 @@ input[type="file"]:disabled {
    the whole section, so the places an agent does not use read as a short list
    rather than as two frames of explanation. Each section's own margin is the
    space after it, whatever its last child is. */
-
-.place {
-  margin-bottom: var(--space-6);
-}
 
 .place[data-given="false"] {
   margin-bottom: var(--space-4);
@@ -6117,14 +6217,6 @@ input[type="file"]:disabled {
   align-items: center;
   gap: var(--space-3);
   margin-bottom: var(--space-4);
-}
-
-.grant__name {
-  margin: 0;
-  font-family: var(--font-ui);
-  font-size: var(--type-ui);
-  font-weight: 500;
-  color: var(--muted);
 }
 
 .grant__switch {
@@ -6317,10 +6409,6 @@ input[type="file"]:disabled {
    row, because that is what you come back to change rather than what you check.
    */
 
-.routines {
-  margin: 0 0 var(--space-6);
-}
-
 .routines__head {
   display: flex;
   align-items: center;
@@ -6335,29 +6423,6 @@ input[type="file"]:disabled {
   font-size: var(--type-ui);
   font-weight: 500;
   color: var(--muted);
-}
-
-.routines__add {
-  border: 0;
-  background: none;
-  cursor: pointer;
-  color: var(--faint);
-  font-size: var(--type-lede);
-  line-height: var(--lead-flush);
-  padding: var(--space-1) var(--space-3);
-  border-radius: var(--radius-sm);
-  transition: color var(--tempo-tap) var(--ease), background var(--tempo-tap) var(--ease);
-}
-
-.routines__add:hover:not(:disabled),
-.routines__add:focus-visible {
-  color: var(--text);
-  background: var(--sunken);
-}
-
-.routines__add:disabled {
-  opacity: 0.35;
-  cursor: default;
 }
 
 .routines__note {
@@ -8718,21 +8783,6 @@ button.artifacts__version[aria-pressed="true"] {
     flex: none;
   }
 
-  .inspector__agent-name {
-    font-weight: 600;
-    flex: 1;
-    min-width: 0;
-    display: block;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-  }
-
-  .inspector__head > span:empty,
-  .inspector__head > .inspector__gear {
-    display: none;
-  }
-
   .palette__query .btn {
     flex: none;
   }
@@ -8784,7 +8834,6 @@ button.artifacts__version[aria-pressed="true"] {
   .rail__gear,
   .pane__more,
   .inspector__tab,
-  .inspector__gear,
   .composer__send,
   .composer__attach {
     min-width: var(--control-touch);
@@ -9040,6 +9089,9 @@ button.artifacts__version[aria-pressed="true"] {
    under every agent. The same box takes over when Edit is pressed. */
 .memory__read {
   margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }

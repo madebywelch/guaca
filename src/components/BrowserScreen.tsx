@@ -214,7 +214,7 @@ export function BrowserScreen({ agent }: Props) {
     : {};
 
   return (
-    <section className="place" data-given={given} aria-label={`${agent.name}'s browser`}>
+    <section className="detail place" data-given={given} aria-label={`${agent.name}'s browser`}>
       <Grant
         name="Browser"
         expanded={expanded}

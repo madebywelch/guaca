@@ -69,6 +69,10 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
                       and the one that expires.
     TokenEntry.tsx    The one screen a browser sees before the workspace, and
                       only a browser.
+    Inspector.tsx     The side panel: the open agent's profile, then what it
+                      carries. `lib/profile.ts` writes the line under the name.
+    Icon.tsx          The marks a control draws rather than types, in the
+                      footer's one stroke.
     MenubarPanel.tsx  Guaca under the menu bar icon: what is waiting, who is
                       doing what, and a line to any of them. A second client
                       of the host, on `menubar.html`, not a view the window
@@ -262,6 +266,7 @@ repo: the frontend renders state and forwards intent.
 | A turn's tool calls in a channel: what folds, what a chip says, what opens | *A turn's own work is chips* in `docs/WORKSPACE.md`, then `src/lib/trail.ts` |
 | What an agent changed about its own memory, and where the version before it came from | *A memory rewrite opens as a diff* in `docs/WORKSPACE.md`, then `Workspace::write` and `src/lib/diff.ts` |
 | What an agent currently remembers, and editing it by hand | *An agent's memory is in the panel* in `docs/WORKSPACE.md`, then `src/components/Memory.tsx` and `src-tauri/src/workspace.rs` |
+| The side panel: its head, what a section is framed in, a mark drawn in a control | *The panel is the agent's, and opens on its profile* in `docs/WORKSPACE.md`, then `src/components/Inspector.tsx`, `src/lib/profile.ts` and `src/components/Icon.tsx` |
 | Skills: what one is, which crew can read or write it, the `skill` tool, the index in the prompt | `docs/SKILLS.md`, then `domain/skill.rs` and `skills.rs` |
 | The six skills a workspace starts with, and why a deleted one stays deleted | *A workspace starts with six, and is given them once* in `docs/SKILLS.md`, then `skills::STARTERS` and `Skills::offer` |
 | Browsing and adding from skills.sh, what an added skill carries, what an agent may read of it | *skills.sh is where the rest come from, and only the operator adds* and *A skill carries files* in `docs/SKILLS.md`, then `skills_sh.rs` and `src/components/SkillDirectory.tsx`, and run the live half of `tests/skills_sh.rs` |
@@ -282,7 +287,7 @@ repo: the frontend renders state and forwards intent.
 | Deleting an agent, putting one back, what the thirty days hold | *Deleting an agent is a thirty-day hold* in `docs/WORKSPACE.md`, then `Runtime::discard_agent` and `Runtime::purge_agent`, which are the two halves of what used to be one act |
 | Deleting a group, and why a disband does not use the compost | *Deleting a group deletes the crew, and the machines they were renting* in `docs/WORKSPACE.md`, then `disband_group` in `src-tauri/src/commands.rs` |
 | Preset agents, hiring a crew | *The cafeteria is a copy machine* in `docs/WORKSPACE.md`, then `src/lib/cafeteria.ts` |
-| Settings, the surface, the scale, the theme, what may interrupt the operator | *Settings is nine places*, *The page is the only white thing, and both edges are the same off-white*, *A theme is three choices, and every color in it is solved* and *An interruption has to earn it* in `docs/WORKSPACE.md` |
+| Settings, the surface, the scale, the theme, what may interrupt the operator | *Settings is a nav and a pane*, *The page is the only white thing, and both edges are the same off-white*, *A theme is three choices, and every color in it is solved* and *An interruption has to earn it* in `docs/WORKSPACE.md` |
 | What About says this build is, and where that string comes from | *About says which commit it is* in `docs/WORKSPACE.md`, then `src/lib/build.ts` and the `define` in `vite.config.ts` |
 | The group editor: what a crew overrides and what it inherits | *A group's settings are the app's, with the crew's answer on top* in `docs/WORKSPACE.md`, then `src/components/GroupEditor.tsx` |
 | What model an agent is offered, and how its job is guessed at | *The model field suggests three, and is still a text box* in `docs/WORKSPACE.md`, then `src/lib/roles.ts` and `llm/catalog.rs`, whose twelve use cases have to agree |

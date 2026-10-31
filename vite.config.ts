@@ -3,8 +3,8 @@ import { fileURLToPath } from "node:url";
 
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
-import { builtOn } from "./build-stamp";
+import { defineConfig } from "vitest/config";
+import { builtOn } from "./build-stamp.ts";
 
 // Tauri drives the dev server on a fixed port and expects a hard failure
 // rather than a silent port bump, otherwise the webview loads nothing.

@@ -128,17 +128,25 @@ export function WorkingNotes({ agentId }: Props) {
   const drawn = hidden > 0 ? held.slice(hidden) : held;
 
   return (
-    <section className="worknotes">
-      <div className="worknotes__head">
-        <h3 className="worknotes__title">
+    <section className="detail worknotes">
+      <div className="detail__head">
+        <h3
+          className="detail__title"
+          title="Where its work stands, one line per note, written by the agent as it goes. The oldest fall off on their own."
+        >
           <button
             type="button"
             className="worknotes__toggle"
             aria-expanded={expanded}
             onClick={() => setExpanded((open) => !open)}
           >
-            Working notes · {notes?.length ?? 0}
-            {notes?.length ? ` · newest ${ago(notes[notes.length - 1]!.at, now)}` : ""}
+            Working notes
+            <span className="detail__count">{` · ${notes?.length ?? 0}`}</span>
+            {notes?.length ? (
+              <span className="detail__count">
+                {` · newest ${ago(notes[notes.length - 1]!.at, now)}`}
+              </span>
+            ) : null}
           </button>
         </h3>
         {expanded && notes !== null && notes.length > 0 && (
@@ -155,9 +163,9 @@ export function WorkingNotes({ agentId }: Props) {
 
       {expanded &&
         (notes === null ? (
-          <p className="worknotes__empty">Loading…</p>
+          <p className="detail__empty">Loading…</p>
         ) : notes.length === 0 ? (
-          <p className="worknotes__empty">Nothing in flight.</p>
+          <p className="detail__empty">Nothing in flight.</p>
         ) : (
           <ol className="worknotes__list">
             {held.length > SHOWN && (

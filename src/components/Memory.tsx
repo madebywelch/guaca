@@ -168,9 +168,14 @@ export function Memory({ agentId }: Props) {
   };
 
   return (
-    <section className="memory">
-      <div className="memory__head">
-        <h3 className="memory__title">Memory</h3>
+    <section className="detail memory">
+      <div className="detail__head">
+        <h3
+          className="detail__title"
+          title="What the agent keeps across conversations and is shown at the start of every turn. It rewrites this itself; you can edit it too."
+        >
+          Memory
+        </h3>
         {editing && room && (
           <span className="memory__room" data-over={room.over || undefined}>
             {room.text}
@@ -205,8 +210,10 @@ export function Memory({ agentId }: Props) {
             setHeld((current) => current && { ...current, draft: next });
           }}
         />
+      ) : shown ? (
+        <p className="memory__text memory__read">{shown}</p>
       ) : (
-        <p className="memory__text memory__read">{shown || "Nothing yet."}</p>
+        <p className="detail__empty">Nothing yet.</p>
       )}
 
       {editing && (
@@ -251,17 +258,6 @@ export function Memory({ agentId }: Props) {
       {cut && (
         <p className="memory__note">
           Saved, but it was too long and the end was cut. What is above is what the agent has.
-        </p>
-      )}
-
-      {/* Only where there is nothing to read, which is the one time the box
-          cannot explain itself. On an agent that has written something, the
-          same three sentences are a paragraph under every glance. */}
-      {!loading && value === "" && (
-        <p className="memory__note">
-          The agent writes here with <code>update_memory</code> when it learns something durable,
-          and is shown it at the start of every turn. Where its work stands goes in the working
-          notes above instead. Seed a persona if you like.
         </p>
       )}
 

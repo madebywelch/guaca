@@ -35,8 +35,9 @@ is the host itself, and `host.docker.internal` reaches the Mac from a container.
   secrets.
 - **The channel**, in the middle: the conversation. Your tool calls show as
   small chips under your reply, and the operator can open them.
-- **The inspector**, on the right: the selected agent's routines, working
-  notes, memory and notebook, and its computer or browser when it has one.
+- **The inspector**, on the right: the selected agent's profile at the top
+  (crew, model, skills, with Edit), then its routines, working notes, memory
+  and notebook, and its computer or browser when it has one.
 - **For You**: the desk. Decisions, permission requests, questions and
   escalations waiting on the operator, across every crew.
 - **Artifacts**: from the bottom of the rail. The pages crews keep, with each

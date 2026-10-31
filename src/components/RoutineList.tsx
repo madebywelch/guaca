@@ -5,6 +5,7 @@ import { describeTrigger, parseTrigger, routineTitle } from "../lib/routine";
 import { useStore } from "../lib/store";
 import { relativeTime, useNow } from "../lib/time";
 import { type AgentId, errorMessage, type Routine, type RoutineId } from "../lib/types";
+import { Icon } from "./Icon";
 
 /**
  * The end of the second line: where this routine stands, right now.
@@ -73,24 +74,29 @@ export function RoutineList({ agentId, onOpen }: Props) {
   }, [load, changed]);
 
   return (
-    <section className="routines">
-      <div className="routines__head">
-        <h3 className="routines__title">Routines</h3>
+    <section className="detail routines">
+      <div className="detail__head">
+        <h3
+          className="detail__title"
+          title="What this agent does on a schedule or when an event arrives."
+        >
+          Routines
+        </h3>
         <button
           type="button"
-          className="routines__add"
+          className="detail__tool"
           title="Add a routine"
           aria-label="Add a routine"
           onClick={() => onOpen("new")}
         >
-          +
+          <Icon name="plus" />
         </button>
       </div>
 
       {routines === null ? (
-        <p className="routines__note">Loading…</p>
+        <p className="detail__empty">Loading…</p>
       ) : routines.length === 0 ? (
-        <p className="routines__note">Nothing standing.</p>
+        <p className="detail__empty">Nothing standing.</p>
       ) : (
         routines.map((routine) => (
           <button
