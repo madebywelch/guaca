@@ -43,6 +43,7 @@ export default function App() {
   const agents = useLiveAgents();
   const allAgents = useStore((s) => s.agents);
   const [onboardingActive, setOnboardingActive] = useState(() => !!readFirstTask().agentId);
+  const [checkingFirstTask, setCheckingFirstTask] = useState(false);
   const selected = useStore((s) => s.selected);
   const settings = useStore((s) => s.settings);
   const banner = useStore((s) => s.banner);
@@ -364,19 +365,25 @@ export default function App() {
           </div>
         )}
 
+        {firstRun && (
+          <Onboarding
+            group={groups[0]!}
+            onStarting={() => setOnboardingActive(true)}
+            onDone={() => {
+              setOnboardingActive(false);
+              setCheckingFirstTask(false);
+            }}
+            onInspect={setCheckingFirstTask}
+            onBrowse={() => setShowCafeteria(true)}
+            onCreate={() => setEditing("new")}
+          />
+        )}
+
         {!ready ? (
           <div className="empty" style={{ margin: "auto" }}>
             <p className="empty__body">Starting up…</p>
           </div>
-        ) : firstRun ? (
-          <Onboarding
-            group={groups[0]!}
-            onStarting={() => setOnboardingActive(true)}
-            onDone={() => setOnboardingActive(false)}
-            onBrowse={() => setShowCafeteria(true)}
-            onCreate={() => setEditing("new")}
-          />
-        ) : agents.length === 0 ? (
+        ) : firstRun && !checkingFirstTask ? null : agents.length === 0 ? (
           <div className="empty" style={{ margin: "auto" }}>
             <span style={{ display: "inline-flex" }}>
               <AgentAvatar avatar="orb" color="#5a7d99" size="lg" seed="empty-state" />

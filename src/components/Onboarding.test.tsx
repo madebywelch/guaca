@@ -1,8 +1,9 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HIREABLE, toDraft } from "../lib/cafeteria";
 import { readFirstTask, saveFirstTask } from "../lib/onboarding";
 import { useStore } from "../lib/store";
+import { BEFORE_RELOAD } from "../lib/transport";
 import type { AgentCard } from "../lib/types";
 import { aGroup } from "../test-fixtures";
 import { Onboarding } from "./Onboarding";
@@ -53,6 +54,7 @@ const refresh = vi.fn(async () => {});
 const select = vi.fn(async () => {});
 const done = vi.fn();
 const starting = vi.fn();
+const inspecting = vi.fn();
 
 function mount() {
   return render(
@@ -60,10 +62,21 @@ function mount() {
       group={aGroup()}
       onStarting={starting}
       onDone={done}
+      onInspect={inspecting}
       onBrowse={() => {}}
       onCreate={() => {}}
     />,
   );
+}
+
+function storage() {
+  const value = {
+    getItem: localStorage.getItem.bind(localStorage),
+    setItem: vi.fn(localStorage.setItem.bind(localStorage)),
+    removeItem: vi.fn(localStorage.removeItem.bind(localStorage)),
+  };
+  vi.stubGlobal("localStorage", value);
+  return value;
 }
 
 function toReview() {
@@ -83,6 +96,11 @@ beforeEach(() => {
   refresh.mockResolvedValue();
   select.mockResolvedValue();
   useStore.setState({ agents: [], refreshAgents: refresh, select });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("guided first task", () => {
@@ -139,6 +157,9 @@ describe("guided first task", () => {
     expect(await screen.findByRole("alert")).toHaveProperty("textContent", "Connection lost");
     expect(readFirstTask().agentId).toBe(agent.id);
     expect(done).not.toHaveBeenCalled();
+    const brief = screen.getByRole("textbox", { name: "Your first brief" }) as HTMLTextAreaElement;
+    expect(brief.readOnly).toBe(true);
+    expect(brief.disabled).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "Send brief again" }));
     await waitFor(() => expect(done).toHaveBeenCalledOnce());
     expect(hire).toHaveBeenCalledOnce();
@@ -164,7 +185,93 @@ describe("guided first task", () => {
     expect(screen.getByRole("button", { name: "Check conversation" })).toBeTruthy();
     expect(send).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Check conversation" }));
-    await waitFor(() => expect(done).toHaveBeenCalledOnce());
+    await screen.findByRole("button", { name: "Return to first task" });
+    expect(inspecting).toHaveBeenLastCalledWith(true);
+    expect(done).not.toHaveBeenCalled();
     expect(readFirstTask().brief).toBe("Saved brief");
+    fireEvent.click(screen.getByRole("button", { name: "Return to first task" }));
+    expect(inspecting).toHaveBeenLastCalledWith(false);
+    expect(screen.getByRole("button", { name: "Send brief again" })).toBeTruthy();
+    expect(
+      (screen.getByRole("textbox", { name: "Your first brief" }) as HTMLTextAreaElement).value,
+    ).toBe("Saved brief");
+    fireEvent.click(screen.getByRole("button", { name: "Check conversation" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Task was delivered" }));
+    expect(done).toHaveBeenCalledOnce();
+    expect(readFirstTask().agentId).toBeNull();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("keeps an unsaved brief in memory and blocks reload until persistence recovers", () => {
+    storage().setItem.mockImplementation(() => {
+      throw new Error("Quota exceeded");
+    });
+    mount();
+    fireEvent.change(screen.getByRole("textbox", { name: "Your first brief" }), {
+      target: { value: "Do not lose this brief" },
+    });
+    expect(screen.getByRole("alert").textContent).toContain("Keep this window open");
+    const reload = new Event(BEFORE_RELOAD, { cancelable: true });
+    window.dispatchEvent(reload);
+    expect(reload.defaultPrevented).toBe(true);
+    const unload = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(unload);
+    expect(unload.defaultPrevented).toBe(true);
+    vi.unstubAllGlobals();
+    fireEvent.click(screen.getByRole("button", { name: "Retry saving" }));
+    expect(readFirstTask().brief).toBe("Do not lose this brief");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(window.dispatchEvent(new Event(BEFORE_RELOAD, { cancelable: true }))).toBe(true);
+  });
+
+  it("does not create an agent when the initial recovery checkpoint cannot be saved", () => {
+    mount();
+    toReview();
+    storage().setItem.mockImplementation(() => {
+      throw new Error("Storage denied");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    expect(screen.getByRole("alert")).toBeTruthy();
+    expect(hire).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("keeps a confirmed send in memory if saving its marker fails", async () => {
+    mount();
+    toReview();
+    const save = storage().setItem;
+    send.mockImplementationOnce(async () => {
+      save.mockImplementation(() => {
+        throw new Error("Storage denied");
+      });
+      return "run-1";
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    await screen.findByRole("alert");
+    expect(done).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Open conversation" })).toBeTruthy();
+    vi.unstubAllGlobals();
+    fireEvent.click(screen.getByRole("button", { name: "Retry saving" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open conversation" }));
+    await waitFor(() => expect(done).toHaveBeenCalledOnce());
+    expect(send).toHaveBeenCalledOnce();
+  });
+
+  it("does not dismiss recovery when the stale draft cannot be cleared", async () => {
+    saveFirstTask({ task: "plan", brief: "Saved brief", agentId: agent.id, sent: false });
+    useStore.setState({ agents: [agent] });
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "Check conversation" }));
+    await screen.findByRole("button", { name: "Task was delivered" });
+    storage().removeItem.mockImplementation(() => {
+      throw new Error("Storage denied");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Task was delivered" }));
+    expect(screen.getByRole("alert")).toBeTruthy();
+    expect(done).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+    fireEvent.click(screen.getByRole("button", { name: "Task was delivered" }));
+    expect(done).toHaveBeenCalledOnce();
+    expect(readFirstTask().agentId).toBeNull();
   });
 });

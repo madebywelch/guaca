@@ -1557,7 +1557,11 @@ provider does not create an agent or send a message: only Start task does both.
 Once created, the agent's id stays with the draft so a failed send does not hire
 another one. A confirmed send is remembered before the channel is opened, so a
 failed channel read cannot resend it. After an uncertain send, the operator can
-check the conversation before explicitly trying again. The runtime still owns
+check the conversation before explicitly trying again. Recovery stays mounted
+above that conversation, with a way back to the saved brief and an explicit
+confirmation that it was delivered. A failed local save keeps the latest state
+in memory, warns the operator, and guards reload until saving works again.
+The runtime still owns
 every agent and turn; the first-run page only forwards the operator's intent.
 
 `Onboarding.test.tsx` covers that handoff and recovery, `OnboardingProvider.test.tsx`

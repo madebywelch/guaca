@@ -4,6 +4,7 @@ import { HIREABLE, toDraft } from "../lib/cafeteria";
 import { api } from "../lib/ipc";
 import { FIRST_TASKS, type FirstTask, readFirstTask, saveFirstTask } from "../lib/onboarding";
 import { useStore } from "../lib/store";
+import { BEFORE_RELOAD } from "../lib/transport";
 import { errorMessage, type Group } from "../lib/types";
 import { OnboardingProvider } from "./OnboardingProvider";
 
@@ -11,15 +12,18 @@ interface Props {
   group: Group;
   onStarting: () => void;
   onDone: () => void;
+  onInspect: (checking: boolean) => void;
   onBrowse: () => void;
   onCreate: () => void;
 }
 
-export function Onboarding({ group, onStarting, onDone, onBrowse, onCreate }: Props) {
+export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onCreate }: Props) {
   const [draft, setDraft] = useState(readFirstTask);
   const [step, setStep] = useState<"task" | "provider" | "start">(draft.agentId ? "start" : "task");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [storageError, setStorageError] = useState(false);
+  const [checking, setChecking] = useState(false);
   const sending = useRef(false);
   const heading = useRef<HTMLHeadingElement>(null);
   const briefHint = useId();
@@ -36,22 +40,58 @@ export function Onboarding({ group, onStarting, onDone, onBrowse, onCreate }: Pr
 
   useEffect(() => {
     heading.current?.focus();
-  }, [step]);
+  }, [step, checking]);
+
+  useEffect(() => {
+    if (!storageError && !busy) return;
+    const preserve = (event: Event) => {
+      event.preventDefault();
+      if (event.type === "beforeunload") (event as BeforeUnloadEvent).returnValue = "";
+    };
+    window.addEventListener("beforeunload", preserve);
+    window.addEventListener(BEFORE_RELOAD, preserve);
+    return () => {
+      window.removeEventListener("beforeunload", preserve);
+      window.removeEventListener(BEFORE_RELOAD, preserve);
+    };
+  }, [storageError, busy]);
 
   const keep = (next: FirstTask) => {
-    saveFirstTask(next);
     setDraft(next);
+    try {
+      saveFirstTask(next);
+      setStorageError(false);
+      return true;
+    } catch {
+      setStorageError(true);
+      return false;
+    }
+  };
+
+  const finish = () => {
+    setDraft((current) => ({ ...current, sent: true }));
+    try {
+      saveFirstTask(null);
+      setStorageError(false);
+      onDone();
+    } catch {
+      setStorageError(true);
+    }
   };
 
   const open = async (agentId: string, sent = false) => {
     await refreshAgents();
     await select(agentId);
-    if (sent) saveFirstTask(null);
-    onDone();
+    if (sent) finish();
+    else {
+      setChecking(true);
+      onInspect(true);
+    }
   };
 
   const start = async () => {
     if (sending.current || !draft.brief.trim()) return;
+    if (!keep(draft)) return;
     sending.current = true;
     setBusy(true);
     setError("");
@@ -66,15 +106,16 @@ export function Onboarding({ group, onStarting, onDone, onBrowse, onCreate }: Pr
         const created = await api.hireAgents(group.id, [toDraft(preset)]);
         if (!created[0]) throw new Error("The host did not return an agent. Try again.");
         next = { ...next, agentId: created[0].id };
-        keep(next);
+        const saved = keep(next);
         useStore.setState((state) => ({
           agents: [...state.agents.filter((agent) => agent.id !== created[0]!.id), created[0]!],
         }));
+        if (!saved) return;
       }
       if (!next.sent) {
         await api.sendMessage(next.agentId!, next.brief.trim());
         next = { ...next, sent: true };
-        keep(next);
+        if (!keep(next)) return;
       }
       await open(next.agentId!, true);
     } catch (cause) {
@@ -85,9 +126,50 @@ export function Onboarding({ group, onStarting, onDone, onBrowse, onCreate }: Pr
     }
   };
 
+  const warning = storageError && (
+    <div className="banner banner--error" role="alert">
+      <span>
+        Your first-task progress could not be saved on this device. Keep this window open and copy
+        your brief before leaving. Allow storage for this app or free space, then retry saving.
+      </span>
+      <button type="button" className="btn" disabled={busy} onClick={() => keep(draft)}>
+        Retry saving
+      </button>
+    </div>
+  );
+
+  if (checking)
+    return (
+      <>
+        {warning}
+        <div className="banner onboarding-recovery" role="status">
+          <span>
+            Your first brief is still kept. Check whether it arrived below, then return to retry or
+            confirm delivery.
+          </span>
+          <div className="onboarding-recovery__actions">
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                setChecking(false);
+                onInspect(false);
+              }}
+            >
+              Return to first task
+            </button>
+            <button type="button" className="btn" onClick={finish}>
+              Task was delivered
+            </button>
+          </div>
+        </div>
+      </>
+    );
+
   return (
     <section className="onboarding" aria-label="Get started with Guaca" aria-busy={busy}>
       <div className="onboarding-content">
+        {warning}
         <ol className="onboarding-steps" aria-label="Getting started">
           {(
             [
@@ -218,7 +300,7 @@ export function Onboarding({ group, onStarting, onDone, onBrowse, onCreate }: Pr
                 rows={5}
                 aria-label="Your first brief"
                 value={draft.brief}
-                disabled={busy || !!draft.agentId}
+                readOnly={busy || !!draft.agentId}
                 onChange={(event) => keep({ ...draft, brief: event.target.value })}
               />
             </label>

@@ -65,9 +65,7 @@ export function readFirstTask(): FirstTask {
 }
 
 export function saveFirstTask(value: FirstTask | null): void {
-  try {
-    const key = `guaca.firstTask.${workspaceOrigin()}`;
-    if (value) localStorage.setItem(key, JSON.stringify(value));
-    else localStorage.removeItem(key);
-  } catch {}
+  const key = `guaca.firstTask.${workspaceOrigin()}`;
+  if (value) localStorage.setItem(key, JSON.stringify(value));
+  else localStorage.removeItem(key);
 }

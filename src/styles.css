@@ -5936,6 +5936,16 @@ input[type="file"]:disabled {
   margin: 0 0 var(--space-4);
 }
 
+.onboarding-recovery {
+  flex-wrap: wrap;
+}
+
+.onboarding-recovery__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+
 .onboarding-provider > p {
   color: var(--muted);
   font-size: var(--type-aside);
