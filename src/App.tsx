@@ -12,6 +12,7 @@ import { GroupEditor } from "./components/GroupEditor";
 import { HostUpdateNotice } from "./components/HostUpdates";
 import { Inspector } from "./components/Inspector";
 import { MobileNavigation } from "./components/MobileNavigation";
+import { Onboarding } from "./components/Onboarding";
 import { Search } from "./components/Search";
 import { asSection, type Section, SettingsDialog } from "./components/SettingsDialog";
 import { Sidebar } from "./components/Sidebar";
@@ -22,6 +23,7 @@ import { api, notifyOperator, onRevealRequest } from "./lib/ipc";
 import { bindingFor } from "./lib/keybinds";
 import { FEED_COALESCE_MS, presenceOf, samePresence } from "./lib/menubar";
 import { away, burst, markQuiet, quiet, shouldNotify } from "./lib/notify";
+import { readFirstTask } from "./lib/onboarding";
 import { useRuntime } from "./lib/runtime";
 import { useLiveAgents, useStore } from "./lib/store";
 import { attached } from "./lib/transport";
@@ -39,6 +41,8 @@ import { followViewport } from "./lib/viewport";
 export default function App() {
   useEffect(followViewport, []);
   const agents = useLiveAgents();
+  const allAgents = useStore((s) => s.agents);
+  const [onboardingActive, setOnboardingActive] = useState(() => !!readFirstTask().agentId);
   const selected = useStore((s) => s.selected);
   const settings = useStore((s) => s.settings);
   const banner = useStore((s) => s.banner);
@@ -289,9 +293,20 @@ export default function App() {
     (currentGroup?.inference.provider ?? settings.provider) === "compatible" &&
     !currentGroup?.apiKeySet &&
     !settings.apiKeySet;
+  const firstRun =
+    ready &&
+    settings !== null &&
+    groups.length === 1 &&
+    (onboardingActive ||
+      (allAgents.length === 0 &&
+        !groups[0]!.apiKeySet &&
+        Object.values(groups[0]!.inference).every((value) => value === null)));
 
   return (
-    <div className="app" data-mobile-pane={openAgent ? mobilePane : "agents"}>
+    <div
+      className="app"
+      data-mobile-pane={firstRun ? "conversation" : openAgent ? mobilePane : "agents"}
+    >
       <MobileNavigation
         onChats={() => setMobilePane("agents")}
         onSearch={() => setSearching(true)}
@@ -312,7 +327,7 @@ export default function App() {
       />
 
       <main>
-        {needsKey && (
+        {needsKey && !firstRun && (
           <div className="banner">
             <span>Add an API key before your agents can reply.</span>
             {/* Onto the pane that holds the key, rather than onto the first one
@@ -353,6 +368,14 @@ export default function App() {
           <div className="empty" style={{ margin: "auto" }}>
             <p className="empty__body">Starting up…</p>
           </div>
+        ) : firstRun ? (
+          <Onboarding
+            group={groups[0]!}
+            onStarting={() => setOnboardingActive(true)}
+            onDone={() => setOnboardingActive(false)}
+            onBrowse={() => setShowCafeteria(true)}
+            onCreate={() => setEditing("new")}
+          />
         ) : agents.length === 0 ? (
           <div className="empty" style={{ margin: "auto" }}>
             <span style={{ display: "inline-flex" }}>
@@ -397,7 +420,7 @@ export default function App() {
         {ready && <StatusBar onOpen={openPlace} onMessage={sendFromBar} />}
       </main>
 
-      {ready && agents.length > 0 && (
+      {ready && agents.length > 0 && !firstRun && (
         <Inspector
           agent={openAgent}
           onEditProfile={(agent) => setEditing(agent)}
