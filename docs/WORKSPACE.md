@@ -1543,6 +1543,32 @@ rather than the position, because a crew's own settings are a gear at the top of
 the same column. A phone hides it, since the phone has a Settings tab of its
 own, and the other two split the row between them.
 
+## A first task comes before a first crew
+
+A new workspace starts with a brief, a provider connection, and a review of one
+recommended agent. The host must already be connected: credentials belong to
+that host, not to a welcome page. The task choices copy existing cafeteria
+presets without changing their prompts, and the operator can still open the
+cafeteria or create an agent by hand.
+
+The brief stays on this device, scoped to the host, while the operator connects
+AI or reloads the window. No credential is part of that draft. Connecting a
+provider does not create an agent or send a message: only Start task does both.
+Once created, the agent's id stays with the draft so a failed send does not hire
+another one. A confirmed send is remembered before the channel is opened, so a
+failed channel read cannot resend it. After an uncertain send, the operator can
+check the conversation before explicitly trying again. Recovery stays mounted
+above that conversation, with a way back to the saved brief and an explicit
+confirmation that it was delivered. A failed local save keeps the latest state
+in memory, warns the operator, and guards reload until saving works again.
+The runtime still owns
+every agent and turn; the first-run page only forwards the operator's intent.
+
+`Onboarding.test.tsx` covers that handoff and recovery, `OnboardingProvider.test.tsx`
+covers connection failures, and `lib/onboarding.test.ts` holds the host boundary
+around the saved brief. Existing workspaces and emptied crews keep their normal
+workspace view.
+
 ## The cafeteria is a copy machine, not a registry
 
 Twenty-one agents written out once, well, so that a new workspace is a few
