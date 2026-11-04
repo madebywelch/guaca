@@ -2,7 +2,7 @@
 
 **A desktop app for AI agents that work together.**
 
-![Guaca with a group of agents at work](docs/img/guaca.png)
+![Two Guaca agents mid-conversation, with the rest of the crew at work in the rail](docs/img/guaca.png)
 
 Run Guaca locally on your computer or connect it to a VPS. The backend workspace
 runs in a container; you choose where it lives. The desktop is your window into
