@@ -86,7 +86,9 @@ src-tauri/src/
     skill.rs          A document of instructions for one kind of task, the
                       three places one lives, and who may write each.
     view.rs           What the operator is looking at, as a sentence an agent
-                      can read. Reported by the focused window, kept in memory.
+                      can read, and what Settings calls each pane, since the
+                      sentence names one. Reported by the focused window, kept
+                      in memory.
     quick.rs          The operator's own button on the status bar: a closed
                       set of things it can do, and why only they add one.
     widget.rs         A kept page pinned to the status bar: where, how wide,

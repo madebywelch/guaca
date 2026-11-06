@@ -10,6 +10,10 @@
 //! Several windows can be open on one host. The last one to report is the one
 //! described, because the page only reports while it has focus: whichever the
 //! operator touched last is the one they are looking at.
+//!
+//! A pane arrives as the one-word id a page sends, and a sentence about the
+//! screen names it the way Settings draws it: an agent that describes "workspace"
+//! while the pane says Host is naming a place nobody can find.
 
 use serde::{Deserialize, Serialize};
 
@@ -46,6 +50,32 @@ impl Overlay {
 
 /// The longest pane name kept. Pane names are single words in the app.
 const MAX_SECTION: usize = 32;
+
+/// What Settings calls one of its panes, from the id a page sends.
+///
+/// The id is one lowercase word, which is all the wire can carry; the name is
+/// what the pane is drawn with, and what a person and an agent read. A sentence
+/// that said the id would send somebody looking for a pane whose name is on no
+/// screen, which is the whole of what renaming one is for. The frontend's
+/// `SECTION_LABELS` is the other half, and `src/lib/manual.test.ts` holds this
+/// table to it.
+pub fn pane(section: &str) -> Option<&'static str> {
+    Some(match section {
+        "general" => "General",
+        "workspace" => "Host",
+        "provider" => "Provider",
+        "limits" => "Limits",
+        "machines" => "Machines",
+        "account" => "Account",
+        "appearance" => "Appearance",
+        "notifications" => "Notifications",
+        "shortcuts" => "Shortcuts",
+        "skills" => "Skills",
+        "compost" => "Compost",
+        "about" => "About",
+        _ => return None,
+    })
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -87,7 +117,10 @@ impl OperatorView {
                 }
             }
             match &self.section {
-                Some(section) => parts.push(format!("with {open} open on {section}")),
+                Some(section) => {
+                    let pane = pane(section).unwrap_or(section.as_str());
+                    parts.push(format!("with {open} open on {pane}"));
+                }
                 None => parts.push(format!("with {open} open")),
             }
         }
@@ -111,6 +144,15 @@ mod tests {
     }
 
     #[test]
+    fn a_pane_is_named_the_way_settings_draws_it() {
+        // `workspace` is the id a page sends; Host is the name on the pane, and
+        // the only one the operator can point at when an agent says it.
+        assert_eq!(pane("workspace"), Some("Host"));
+        assert_eq!(pane("limits"), Some("Limits"));
+        assert_eq!(pane("a-pane-this-build-does-not-draw"), None);
+    }
+
+    #[test]
     fn it_reads_as_a_sentence_about_the_screen() {
         let view = OperatorView {
             agent_id: Some(AgentId::new()),
@@ -121,7 +163,7 @@ mod tests {
         assert_eq!(
             view.describe(Some("Pip"), Some("Ops")),
             "The operator is looking at the channel with Pip, with the settings of the group Ops \
-             open on limits."
+             open on Limits."
         );
         assert_eq!(
             OperatorView::default().describe(None, None),

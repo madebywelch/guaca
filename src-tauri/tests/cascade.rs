@@ -1983,7 +1983,7 @@ async fn an_agent_reads_the_settings_and_what_the_operator_is_looking_at_and_nev
     let results = tool_results(&stub).join("\n");
     assert!(
         results.contains(
-            "The operator is looking at the channel with Helper, with Settings open on limits"
+            "The operator is looking at the channel with Helper, with Settings open on Limits"
         ),
         "{results}"
     );

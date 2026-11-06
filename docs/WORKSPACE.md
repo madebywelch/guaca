@@ -2130,6 +2130,14 @@ Shortcuts. The palette's own row opens the surface rather than a section: it
 lists what is in there, so the row is found by searching for "notifications" or
 "appearance", and the nav is the first thing under the cursor once it is open.
 
+**A pane is named once, and it is not the id.** `workspace` is what a page sends
+and Host is what the pane is drawn with, so `src/lib/sections.ts` holds the id,
+the label and the nav together, and the two sentences that name a place name it
+from there: the tooltip under a quick action's button, and the sentence an agent
+reads about the screen (`domain/view.rs`, whose table `manual.test.ts` holds to
+the labels). An agent that said the id would describe a pane whose name is on no
+screen, which is exactly what renaming one is for.
+
 The provider list is presets, not a registry. Guaca speaks one protocol and the
 field is a text box, so the failure it exists to prevent is an endpoint that is
 off by a path segment and fails on every turn of every agent with an error from

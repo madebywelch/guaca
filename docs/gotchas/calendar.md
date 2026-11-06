@@ -31,7 +31,7 @@ then `domain/occasion.rs` and `Runtime::keep_calendar`.
   looks like an error. Told back the local wall clock that was stored, the model
   catches it in the same turn. This is also why a stated timezone is honored
   rather than refused.
-- **`## Your crew's calendar` is the only place the prompt says what day it
+- **`## Your group's calendar` is the only place the prompt says what day it
   is.** A model has no clock, and an agent asked to put "next Thursday" on a
   calendar guesses without one. Do not take the date out of that section without
   putting it somewhere the calendar can still reach.

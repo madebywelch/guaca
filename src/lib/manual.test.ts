@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { LIMITS } from "./limits";
+import { SECTION_LABELS, SECTIONS } from "./sections";
 
 /**
  * The `guaca` skill is the app described to its own agents, and it is only
@@ -22,13 +23,27 @@ function labels(source: string): string[] {
 
 describe("the guaca skill", () => {
   it.each([
-    ["Settings", "src/components/SettingsDialog.tsx"],
-    ["a crew's settings", "src/components/GroupEditor.tsx"],
+    ["Settings", "src/lib/sections.ts"],
+    ["a group's settings", "src/components/GroupEditor.tsx"],
   ])("names every pane in %s", (_where, path) => {
     const found = labels(read(path));
     expect(found.length).toBeGreaterThan(5);
     const missing = found.filter((label) => !manual.includes(`**${label}**`));
     expect(missing, "panes the manual does not describe").toEqual([]);
+  });
+});
+
+describe("the name an agent gives a pane", () => {
+  it("is the one Settings draws", () => {
+    // The sentence about the screen and the sentence under a quick action both
+    // name a pane, and an agent that names one the operator cannot find sends
+    // them hunting. The id crosses the wire; the name is what is read.
+    const rust = read("src-tauri/src/domain/view.rs");
+    for (const [id, label] of Object.entries(SECTION_LABELS)) {
+      expect(rust, `${id} is named differently`).toContain(`"${id}" => "${label}"`);
+    }
+    const named = [...rust.matchAll(/"[a-z-]+" => "[^"]+",/g)].length;
+    expect(named, "the table names a pane the app does not draw").toBe(SECTIONS.length);
   });
 });
 

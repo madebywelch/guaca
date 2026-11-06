@@ -18,6 +18,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::ids::{AgentId, GroupId};
+use super::view;
 
 /// How many fit on the bar. Past this it is a menu, and a menu is not quick.
 pub const MAX_ACTIONS: usize = 8;
@@ -141,7 +142,10 @@ impl QuickAction {
                     Place::Channel { agent_id } => format!("the channel with {}", agent(*agent_id)),
                     Place::Calendar => "the calendar".to_string(),
                     Place::ForYou => "For You".to_string(),
-                    Place::Settings { section: Some(section) } => format!("Settings on {section}"),
+                    Place::Settings { section: Some(section) } => {
+                        let pane = view::pane(section).unwrap_or(section.as_str());
+                        format!("Settings on {pane}")
+                    }
                     Place::Settings { section: None } => "Settings".to_string(),
                     Place::CrewSettings { .. } => "a group's settings".to_string(),
                 };
@@ -197,6 +201,22 @@ mod tests {
         let place = Place::Settings { section: Some("limits; drop".into()) };
         let made = QuickAction::new("Limits", Does::Open { place }, "you").unwrap();
         assert_eq!(made.does, Does::Open { place: Place::Settings { section: None } });
+    }
+
+    #[test]
+    fn what_an_agent_is_told_about_a_pane_names_it() {
+        // The sentence an agent reads and the one under a quick action's button
+        // are the same sentence, so both name the pane rather than the id.
+        let made = QuickAction::new(
+            "Host",
+            Does::Open { place: Place::Settings { section: Some("workspace".into()) } },
+            "you",
+        )
+        .unwrap();
+        assert_eq!(
+            made.describe(|_| "Scout".into()),
+            "\u{201c}Host\u{201d} opens Settings on Host"
+        );
     }
 
     #[test]

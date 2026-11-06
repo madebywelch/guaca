@@ -14,7 +14,7 @@ import { Inspector } from "./components/Inspector";
 import { MobileNavigation } from "./components/MobileNavigation";
 import { Onboarding } from "./components/Onboarding";
 import { Search } from "./components/Search";
-import { asSection, type Section, SettingsDialog } from "./components/SettingsDialog";
+import { SettingsDialog } from "./components/SettingsDialog";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { announcementFor } from "./lib/announce";
@@ -26,6 +26,7 @@ import { FEED_COALESCE_MS, presenceOf, samePresence } from "./lib/menubar";
 import { away, burst, markQuiet, quiet, shouldNotify } from "./lib/notify";
 import { readFirstTask } from "./lib/onboarding";
 import { useRuntime } from "./lib/runtime";
+import { asSection, type Section } from "./lib/sections";
 import { type Banner, useLiveAgents, useStore } from "./lib/store";
 import { attached, desktop } from "./lib/transport";
 import {
