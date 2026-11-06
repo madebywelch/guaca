@@ -22,6 +22,7 @@ vi.mock("../lib/transport", () => ({
   },
   workspaceOrigin: () => "https://host.example",
   token: () => "secret",
+  bearer: () => ({ authorization: "Bearer secret" }),
   RECONNECTED: "guaca:reconnected",
   UNAUTHORIZED_EVENT: "guaca:unauthorized",
   restart: reload,

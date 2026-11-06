@@ -67,6 +67,28 @@ use crate::runtime::events::{EventSink, UiEvent};
 /// connection into a crew that stops thinking.
 const BACKLOG: usize = 2048;
 
+/// How long a browser's session lasts before the token has to be presented
+/// again. Long enough that a workspace is not a daily chore to open, short
+/// enough that a cookie copied off a disk is not a key that never expires.
+const SESSION_SECONDS: u64 = 30 * 24 * 60 * 60;
+
+/// The cookie a browser keeps its session in. The name is completed with the
+/// host's port by `cookie_name`, because a cookie is not scoped by one.
+const SESSION_COOKIE: &str = "guaca_session";
+
+/// The origins the desktop webview is served from. None of them is ever this
+/// daemon's own: the app has exactly one cross-origin client, a window showing
+/// a box, and it presents its token in a header or a query string. Nothing
+/// else is admitted, and an opaque origin (the computer viewer has one on
+/// purpose) never is.
+const APP_ORIGINS: [&str; 5] = [
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "http://localhost:1420",
+    "http://127.0.0.1:1420",
+];
+
 /// Where a daemon serves one workspace from.
 pub struct Settings {
     /// The one directory everything durable lives under.
@@ -221,6 +243,8 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
         .route("/v1/host/update", post(host_update))
         .route("/v1/call", post(call))
         .route("/v1/events", get(events_socket))
+        .route("/v1/auth/session", post(auth_session))
+        .route("/v1/auth/logout", post(auth_logout))
         .route(
             "/events/:service/:topic",
             post(routine_event).layer(DefaultBodyLimit::max(crate::webhook::MOST_BODY_BYTES)),
@@ -270,16 +294,14 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
     }
 
     // The desktop webview is cross-origin to every daemon. Never admit opaque
-    // origins here: the computer viewer deliberately has one.
+    // origins here: the computer viewer deliberately has one. Cookies are not
+    // allowed on a cross-origin answer, because the only client that carries
+    // one is the browser, and that client is served by this daemon and is
+    // therefore same-origin. A window showing a box presents its token in a
+    // header instead, and a header needs no credential flag.
     app = app.layer(
         CorsLayer::new()
-            .allow_origin([
-                HeaderValue::from_static("tauri://localhost"),
-                HeaderValue::from_static("http://tauri.localhost"),
-                HeaderValue::from_static("https://tauri.localhost"),
-                HeaderValue::from_static("http://localhost:1420"),
-                HeaderValue::from_static("http://127.0.0.1:1420"),
-            ])
+            .allow_origin(APP_ORIGINS.map(HeaderValue::from_static))
             .allow_methods([Method::GET, Method::POST])
             .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE, header::RANGE])
             .expose_headers([header::CONTENT_RANGE, header::CONTENT_DISPOSITION]),
@@ -376,7 +398,7 @@ async fn update_status(
     headers: HeaderMap,
     Query(query): Query<UpdateQuery>,
 ) -> Response {
-    if let Err(response) = authorized(&serving, &headers, None) {
+    if let Err(response) = authorized(&serving, &headers, None, &Method::GET) {
         return *response;
     }
     // What is news is what the updater would install, so the channel is the
@@ -411,7 +433,7 @@ async fn followed(socket: &std::path::Path) -> Option<crate::updates::Channel> {
 /// version and commit are only a check that it is the one the operator was
 /// shown.
 async fn host_status(State(serving): State<Serving>, headers: HeaderMap) -> Response {
-    if let Err(response) = authorized(&serving, &headers, None) {
+    if let Err(response) = authorized(&serving, &headers, None, &Method::GET) {
         return *response;
     }
     let Some(socket) = serving.updater.clone() else {
@@ -432,7 +454,7 @@ async fn host_update(
     headers: HeaderMap,
     Json(body): Json<HostUpdate>,
 ) -> Response {
-    if let Err(response) = authorized(&serving, &headers, None) {
+    if let Err(response) = authorized(&serving, &headers, None, &Method::POST) {
         return *response;
     }
     let Some(socket) = serving.updater.clone() else {
@@ -512,7 +534,7 @@ async fn call(
     headers: HeaderMap,
     Json(body): Json<Call>,
 ) -> Response {
-    if let Err(refused) = authorized(&serving, &headers, None) {
+    if let Err(refused) = authorized(&serving, &headers, None, &Method::POST) {
         return *refused;
     }
     // Where this call came in, remembered for the redirect a sign-in will
@@ -583,7 +605,7 @@ async fn upload(
     Query(Upload { name }): Query<Upload>,
     body: axum::body::Bytes,
 ) -> Response {
-    if let Err(refused) = authorized(&serving, &headers, None) {
+    if let Err(refused) = authorized(&serving, &headers, None, &Method::POST) {
         return *refused;
     }
     match serving.state.runtime.files().put(&name, &body) {
@@ -861,7 +883,29 @@ async fn events_socket(
     Query(ticket): Query<Ticket>,
     upgrade: WebSocketUpgrade,
 ) -> Response {
-    if let Err(refused) = authorized(&serving, &headers, ticket.token.as_deref()) {
+    // A WebSocket upgrade carries an Origin header from a browser, and the
+    // handshake is not subject to CORS, so this is the one place a cross-origin
+    // page could take the event channel with a cookie the browser sent on its
+    // own. A client that sends no Origin is not a page and is admitted on its
+    // credentials, as it always was.
+    //
+    // The app's own origins are the one exception to the origin proof, and
+    // they get no exception to the credential: a window of the app is a shell,
+    // and a shell proves itself with the token. It has to. A cookie is sent to
+    // any page on the same site, ports do not count toward a site, and the dev
+    // port below is Tauri's and Vite's default, so it is not this app's alone —
+    // a page from anything else listening there would otherwise read the live
+    // stream with the operator's cookie.
+    let shell = app_origin(&headers);
+    if !shell && !proves_same_origin(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let proof = if shell {
+        authorized_by_token(&serving, &headers, ticket.token.as_deref())
+    } else {
+        authorized(&serving, &headers, ticket.token.as_deref(), &Method::GET)
+    };
+    if let Err(refused) = proof {
         return *refused;
     }
     // Subscribed before the upgrade completes. Between accepting and
@@ -938,7 +982,7 @@ async fn file(
     Query(ticket): Query<FileRequest>,
     Path((digest, name)): Path<(String, String)>,
 ) -> Response {
-    if let Err(refused) = authorized(&serving, &headers, ticket.token.as_deref()) {
+    if let Err(refused) = authorized(&serving, &headers, ticket.token.as_deref(), &Method::GET) {
         return *refused;
     }
     // Range, because a browser asks for one when it draws a PDF or seeks in a
@@ -1025,7 +1069,262 @@ async fn routine_event(
     }
 }
 
+/// The host an address names, and its port when it spells one.
+///
+/// The port is kept apart from the host because the two are compared
+/// differently: a host has to match, and a port only when both addresses name
+/// one. A browser leaves the port out of an `Origin` when it is the scheme's
+/// default, so an absent port means "the default", not "port zero". An IPv6
+/// literal is bracketed, which is the only reliable place its colons end.
+fn authority(url: &str) -> Option<(&str, Option<u16>)> {
+    // An `Origin` carries its scheme and a `Host` header does not, so both
+    // spellings are read here. A scheme other than http or https is not an
+    // origin this app serves and is refused rather than compared.
+    let rest = match url.split_once("://") {
+        Some((scheme, rest)) => match scheme.to_ascii_lowercase().as_str() {
+            "http" | "https" => rest,
+            _ => return None,
+        },
+        None => url,
+    };
+    let host_port = rest.split('/').next()?.rsplit('@').next()?;
+    if host_port.is_empty() {
+        return None;
+    }
+    if let Some(inner) = host_port.strip_prefix('[') {
+        let end = inner.find(']')?;
+        let port = inner[end + 1..].strip_prefix(':').and_then(|p| p.parse().ok());
+        return Some((&inner[..end], port));
+    }
+    match host_port.rsplit_once(':') {
+        // A port that is spelled but unreadable is not an address this app
+        // serves. Refusing it is safer than treating it as no port, which
+        // would then match any port on that host.
+        Some((host, port)) => port.parse::<u16>().ok().map(|port| (host, Some(port))),
+        None => Some((host_port, None)),
+    }
+}
+
+/// Whether an address arrived over https, however it was proxied to here.
+///
+/// `X-Forwarded-Proto` is what a proxy in front says, and the `Origin` header
+/// is what the page itself came from. Either naming https means the session
+/// cookie is issued `Secure`; a browser talking to the daemon directly over
+/// http has neither, and a `Secure` cookie would not come back.
+fn over_https(headers: &HeaderMap) -> bool {
+    if let Some(proto) = headers.get("x-forwarded-proto").and_then(|h| h.to_str().ok()) {
+        if proto.split(',').next().is_some_and(|proto| proto.trim().eq_ignore_ascii_case("https")) {
+            return true;
+        }
+    }
+    headers.get(header::ORIGIN).and_then(|h| h.to_str().ok()).is_some_and(|origin| {
+        origin.split_once("://").is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("https"))
+    })
+}
+
+/// The name of this host's session cookie, which carries its port.
+///
+/// A cookie is not scoped by port, so a daemon and a container beside it on
+/// one machine would otherwise share a name: signing in to one would replace
+/// the other's session and each would refuse the other's cookie. The port is
+/// already what separates two hosts in `same_origin`, and it is the one part
+/// of an authority a cookie cannot express.
+fn cookie_name(headers: &HeaderMap) -> String {
+    headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .and_then(authority)
+        .and_then(|(_, port)| port)
+        .map_or_else(|| SESSION_COOKIE.to_string(), |port| format!("{SESSION_COOKIE}_{port}"))
+}
+
+/// The `Set-Cookie` that issues this host's session, or clears it when the
+/// age is zero. One function for both, so a deletion cannot disagree with the
+/// cookie it has to match about its name or its attributes.
+fn session_cookie(headers: &HeaderMap, value: &str, max_age: u64) -> HeaderValue {
+    let secure = if over_https(headers) { "; Secure" } else { "" };
+    HeaderValue::from_str(&format!(
+        "{}={value}; HttpOnly; SameSite=Strict; Path=/; Max-Age={max_age}{secure}",
+        cookie_name(headers)
+    ))
+    .expect("a session cookie is a header value")
+}
+
+/// Whether a request proves it came from a page on this origin.
+///
+/// A request authenticated by a cookie is forgeable from any page the browser
+/// sends that cookie to, so a state-changing one has to prove where it came
+/// from. The comparison is the whole authority and not the hostname alone:
+/// another app on the same machine at another port is another origin, and its
+/// page must not be able to drive this one. A browser omits the port from an
+/// `Origin` only when it is the default, and always spells one when it is not,
+/// so the case that matters — a page at `localhost:8080` posting to a daemon at
+/// `localhost:3000` — is two explicit ports and is refused.
+///
+/// `Sec-Fetch-Site` is the browser's own answer to the same question, and a
+/// page cannot set it. It is read first, because it is also the answer that
+/// survives a proxy which rewrites `Host`: `same-origin` is this app's own
+/// client, and `none` is a navigation the operator started. A request with
+/// neither header did not come from a page — a script, a test, or the desktop
+/// app — and each of those presents its own credential, which a cross-site
+/// request forger cannot make a browser send. Behind a proxy that rewrites
+/// `Host` without forwarding it, an older browser's `Origin` comparison is
+/// what the operator has to configure for.
+fn proves_same_origin(headers: &HeaderMap) -> bool {
+    match headers.get("sec-fetch-site").and_then(|h| h.to_str().ok()) {
+        Some(site) => site.eq_ignore_ascii_case("same-origin") || site.eq_ignore_ascii_case("none"),
+        None => same_origin(headers),
+    }
+}
+
+/// Whether a socket upgrade came from one of the app's own windows.
+///
+/// A WebSocket handshake is not subject to CORS, so this is the one place a
+/// cross-origin page could otherwise take over the event channel with a cookie
+/// the browser sent on its own. The desktop webview is the exception the app
+/// has: it is served from `tauri://` and connects to a box with the token in
+/// the query string, and no page anywhere else can be served from those
+/// origins.
+fn app_origin(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ORIGIN)
+        .and_then(|h| h.to_str().ok())
+        .is_some_and(|origin| APP_ORIGINS.iter().any(|known| origin.eq_ignore_ascii_case(known)))
+}
+
+/// Whether a request proves it came from this same origin.
+///
+/// The fallback for a browser that does not send `Sec-Fetch-Site`: the
+/// `Origin` header's authority against this host's, with the forwarded host
+/// when a proxy in front passes the one the browser used.
+fn same_origin(headers: &HeaderMap) -> bool {
+    let Some(origin) = headers.get(header::ORIGIN).and_then(|h| h.to_str().ok()) else {
+        return true;
+    };
+    let Some((origin_host, origin_port)) = authority(origin) else {
+        return false;
+    };
+    let candidates = headers
+        .get("x-forwarded-host")
+        .and_then(|h| h.to_str().ok())
+        .into_iter()
+        .chain(headers.get(header::HOST).and_then(|h| h.to_str().ok()));
+    candidates.filter_map(authority).any(|(host, port)| {
+        host.eq_ignore_ascii_case(origin_host)
+            && match (origin_port, port) {
+                (Some(presented), Some(arrived)) => presented == arrived,
+                _ => true,
+            }
+    })
+}
+
+/// Exchanges a Bearer token for an HttpOnly, SameSite=Strict session cookie.
+///
+/// The browser client uses this once at sign-in, after the invitation fragment
+/// or the token form. The Authorization header keeps working for scripts,
+/// tests and the desktop app pointed at a box. The cookie is Secure when the
+/// request arrived over https, and it is scoped by name to this host's port so
+/// two hosts on one machine keep separate sessions.
+async fn auth_session(State(serving): State<Serving>, headers: HeaderMap) -> Response {
+    let presented = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::trim);
+
+    match presented {
+        Some(token) if same(token, &serving.token) => {
+            let mut response = Json(json!({ "ok": "signed in" })).into_response();
+            response.headers_mut().insert(
+                header::SET_COOKIE,
+                session_cookie(&headers, &serving.token, SESSION_SECONDS),
+            );
+            response
+        }
+        _ => (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "err": {
+                "kind": "unauthorized",
+                "message": "this workspace needs the token it printed when it started. Copy it \
+                            from the box's logs, or from the token file beside its settings",
+            }})),
+        )
+            .into_response(),
+    }
+}
+
+/// Clears the session cookie.
+///
+/// Held to the same proof as any other state-changing request, because signing
+/// an operator out is a state change: a page elsewhere must not be able to do
+/// it with a form post. It asks for no token, because the only thing it does
+/// is clear a cookie the browser already presented.
+async fn auth_logout(headers: HeaderMap) -> Response {
+    if !proves_same_origin(&headers) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "err": {
+                "kind": "forbidden",
+                "message": "this request was refused because it did not come from the same \
+                            origin",
+            }})),
+        )
+            .into_response();
+    }
+    let mut response = Json(json!({ "ok": "signed out" })).into_response();
+    response.headers_mut().insert(header::SET_COOKIE, session_cookie(&headers, "", 0));
+    response
+}
+
 fn authorized(
+    serving: &Serving,
+    headers: &HeaderMap,
+    ticket: Option<&str>,
+    method: &Method,
+) -> Result<(), Box<Response>> {
+    // A valid session cookie authenticates the request. A cookie makes a
+    // state-changing request forgeable from another origin, so one that cannot
+    // prove it came from here is refused: the cookie rode along without the
+    // browser having meant to send it.
+    if let Some(cookie_header) = headers.get(header::COOKIE).and_then(|h| h.to_str().ok()) {
+        let wanted = cookie_name(headers);
+        for cookie in cookie_header.split(';') {
+            let Some((name, value)) = cookie.trim().split_once('=') else { continue };
+            if name.trim() != wanted {
+                continue;
+            }
+            if same(value.trim(), &serving.token) {
+                let state_changing =
+                    *method == Method::POST || *method == Method::PUT || *method == Method::DELETE;
+                if state_changing && !proves_same_origin(headers) {
+                    return Err(Box::new(
+                        (
+                            StatusCode::FORBIDDEN,
+                            Json(json!({ "err": {
+                                "kind": "forbidden",
+                                "message": "this request was refused because it did not come \
+                                            from the same origin. A state-changing request \
+                                            authenticated by cookie must prove same-origin",
+                            }})),
+                        )
+                            .into_response(),
+                    ));
+                }
+                return Ok(());
+            }
+        }
+    }
+
+    authorized_by_token(serving, headers, ticket)
+}
+
+/// Whether a request presents the token itself, in a header or the query.
+///
+/// The session cookie is deliberately not read here. That is what a caller
+/// uses when the credential has to be something only the app could present —
+/// a shell's socket upgrade — rather than something a browser sends to every
+/// page on the same site.
+fn authorized_by_token(
     serving: &Serving,
     headers: &HeaderMap,
     ticket: Option<&str>,

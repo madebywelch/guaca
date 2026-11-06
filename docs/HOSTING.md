@@ -119,24 +119,60 @@ change could drop. The same argument `subscription.rs` makes.
 How a browser gets it is the seam most operators never see. The daemon prints
 an invitation on every start, `http://addr:port/#token=…`, and `TokenEntry`
 takes the token out of the fragment before the first render decides anything,
-stores it, and puts the address back without it. A fragment because it is the
-one part of a URL a browser never sends: not to the daemon, not to a proxy in
-front of it, and not to whatever logs either keeps. The socket takes the token
-in a query string because a WebSocket handshake cannot carry a header, and
-that is a real cost (a query string reaches proxy logs), which is why the token
-is per-workspace and rotatable rather than derived from anything longer-lived.
+exchanges it for a session cookie, and puts the address back without it. A
+fragment because it is the one part of a URL a browser never sends: not to the
+daemon, not to a proxy in front of it, and not to whatever logs either keeps.
 
-The form is for the other cases: a token rotated on the box, a browser whose
-storage was cleared, an address typed by hand. It checks a pasted token with
-`capabilities()`, the cheapest call there is and the one the app reads first
-anyway, so a wrong token is refused on that screen rather than forty times by
-the reads the app would make. A token the box stops accepting mid-session is
-one event on the window, raised by the transport the moment any call comes
-back `unauthorized`; `TokenEntry` unmounts the app and asks again, because
-every read the app would make is the same refusal.
+The exchange is a request to `/v1/auth/session`, and the daemon answers with
+`Set-Cookie: guaca_session_<port>=…; HttpOnly; SameSite=Strict; Max-Age=…;
+Secure` when the origin is https, which is to say when `X-Forwarded-Proto` or
+the page's `Origin` says so. The name carries the daemon's port because a
+cookie is not scoped by one: a daemon and a container beside it on the same
+machine keep two sessions instead of replacing each other. The browser client
+never keeps the token in script-readable storage again: a script on the
+daemon's origin cannot read the cookie, and a token an older build left in
+localStorage is exchanged once and deleted so nobody already signed in gets
+locked out.
 
-On a desktop `TokenEntry` renders its children and nothing else. The runtime
-is inside the process asking, and there is no token to have.
+The socket authenticates by the same cookie. A WebSocket handshake is not
+subject to CORS, so it is held to the same proof as a state-changing request.
+The app's own origins are the only exception to that proof, and none to the
+credential: a desktop window showing a box connects from `tauri://localhost`
+with the token in the query string, and an upgrade from one of those origins is
+never admitted by the cookie. It must not be: ports do not count toward a site,
+so a page served on the dev port — 1420, which Tauri and Vite share with
+anything else on the machine that wants it — is handed this host's cookie, and
+would otherwise be handed the live stream with it. The Authorization header
+keeps working for non-browser clients: the desktop app pointed at a box,
+scripts, and tests.
+
+A state-changing request authenticated by cookie alone must prove it came from
+here, or the daemon answers `403`. `Sec-Fetch-Site` is read first, because a
+page cannot set it and it is the answer that survives a proxy rewriting `Host`:
+`same-origin` is this app's own client, and `none` is a navigation the operator
+started. A browser too old to send it falls back to the `Origin` header, whose
+authority has to match the request's `Host` or `X-Forwarded-Host`. That is why
+a proxy in front of a box should pass the browser's `Host` through, or set
+`X-Forwarded-Host`: otherwise an older browser cannot prove where it came from.
+A request carrying an Authorization header or a query token is not subject to
+that check, because the token itself is the proof. Signing out is a request to
+`/v1/auth/logout`, which clears the cookie on the daemon's side and is held to
+the same proof so a page elsewhere cannot sign the operator out.
+
+A reload has no script-readable credential to look at, so the screen asks the
+daemon before it draws anything: the form is what a refusal draws, never a
+first guess at one. The form is for the other cases: a token rotated on the
+box, a browser whose storage was cleared, an address typed by hand. It checks
+a pasted token with `capabilities()`, the cheapest call there is and the one
+the app reads first anyway, so a wrong token is refused on that screen rather
+than forty times by the reads the app would make. A token the box stops
+accepting mid-session is one event on the window, raised by the transport the
+moment any call comes back `unauthorized`; `TokenEntry` unmounts the app and
+asks again, because every read the app would make is the same refusal.
+
+On a desktop `TokenEntry` renders its children and nothing else. The window
+keeps the token for the host it was pointed at, and the runtime underneath
+reads with it.
 
 ## One bundle, and the host is read at runtime
 

@@ -152,24 +152,51 @@ export function isUnreachable(value: unknown): boolean {
 }
 
 /**
- * The token this browser presents, or empty when it has none yet.
+ * The token this client presents in a header or a query, or empty when it has
+ * none.
  *
- * Read on every call rather than captured once: a workspace whose token is
- * rotated has to be reachable again by pasting the new one, without a reload.
+ * A browser has none by design: its credential is the HttpOnly session cookie
+ * the daemon issued, which no script can read. A window showing a box keeps
+ * the token beside the box's address, and that is the only script-readable
+ * copy left. Read on every call rather than captured once, so a token rotated
+ * and pasted in this window takes effect without a reload.
  */
 export function token(): string {
   if (!hosted) return "";
   if (ATTACHED) return ATTACHED.token;
-  try {
-    return window.localStorage.getItem(TOKEN_KEY) ?? "";
-  } catch {
-    // Private browsing, or storage disabled. The app is unusable hosted, and
-    // saying so beats throwing out of an unrelated call.
-    return "";
-  }
+  // A browser client authenticates by the HttpOnly session cookie the daemon
+  // issues at sign-in. The token is not kept in script-readable storage after
+  // the exchange: a script on this origin cannot read the cookie, and there is
+  // nothing in localStorage for it to find. A desktop window keeps the token
+  // for the box it was pointed at, which is a host the operator chose rather
+  // than the origin that served the page.
+  return "";
 }
 
-export function setToken(value: string): void {
+/**
+ * The Authorization header this host's calls carry, or none.
+ *
+ * A browser client authenticates by the HttpOnly session cookie the daemon
+ * issued at sign-in, so it holds no script-readable token and sends no header:
+ * the cookie rides along because every call asks for credentials. A desktop
+ * window pointed at a box, and every non-browser client, still presents the
+ * token it holds. An empty `Bearer ` would be a header the daemon has to parse
+ * and turn away, so the header is left off rather than sent empty.
+ */
+export function bearer(): Record<string, string> {
+  const held = token();
+  return held ? { authorization: `Bearer ${held}` } : {};
+}
+
+/**
+ * Exchanges a bearer token for the HttpOnly session cookie.
+ *
+ * The daemon sets the cookie on the response and the browser sends it from
+ * then on. The token itself is not stored: a browser client never holds it in
+ * script-readable storage. A token rotated on the box, or a browser whose
+ * storage was cleared, goes through this same exchange after pasting.
+ */
+export async function setToken(value: string): Promise<void> {
   if (ATTACHED) {
     // A rotated token on a box the window is showing is kept with the box's
     // address, and in memory for the rest of this load.
@@ -177,11 +204,96 @@ export function setToken(value: string): void {
     setRemote(value ? ATTACHED : null);
     return;
   }
+  if (!hosted) return;
+  if (!value) {
+    await signOut();
+    return;
+  }
+  await exchangeToken(value);
+}
+
+/**
+ * Exchanges a token for the session cookie without keeping the token.
+ *
+ * Called by `setToken` and by the migration path that reads a token an older
+ * build left in localStorage. Either way the token crosses once, the cookie is
+ * set, and the script-readable copy is deleted.
+ */
+export async function exchangeToken(value: string): Promise<void> {
+  if (!hosted) return;
+  if (ATTACHED) {
+    ATTACHED.token = value;
+    setRemote(value ? ATTACHED : null);
+    return;
+  }
+  const base = origin();
+  let response: Response;
   try {
-    if (value) window.localStorage.setItem(TOKEN_KEY, value);
-    else window.localStorage.removeItem(TOKEN_KEY);
+    response = await fetch(`${base}/v1/auth/session`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${value}`,
+      },
+      body: JSON.stringify({}),
+      // The cookie is set for this origin and only this one: a browser client
+      // is served by the daemon it talks to, and a window showing a box
+      // exchanges nothing, because it keeps its token instead.
+      credentials: "same-origin",
+    });
   } catch {
-    /* see above */
+    throw {
+      kind: "unreachable",
+      message: `could not reach this host at ${base}. It may be starting up, or the connection to it is down. Its agents keep working either way`,
+    } satisfies Refusal;
+  }
+  const body = await response.json().catch(() => null);
+  if (body && typeof body === "object" && "err" in body) {
+    const refused = (body as { err: Refusal }).err;
+    if (refused.kind === "unauthorized") window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    throw refused;
+  }
+  if (!response.ok) {
+    throw {
+      kind: "storage",
+      message: `${base} answered ${response.status} and nothing this app could read`,
+    } satisfies Refusal;
+  }
+  // The cookie is set. Clear a token an older build left behind so a script on
+  // this origin cannot read it again.
+  try {
+    window.localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* storage disabled; nothing to clear */
+  }
+}
+
+/**
+ * Clears the session cookie on the daemon's side and forgets the token.
+ *
+ * The cookie is HttpOnly, so the daemon is the only one who can clear it. A
+ * request to the logout route does that even when the page has already lost
+ * its connection; the local copy goes either way.
+ */
+export async function signOut(): Promise<void> {
+  if (!hosted) return;
+  if (ATTACHED) {
+    ATTACHED.token = "";
+    setRemote(null);
+    return;
+  }
+  try {
+    await fetch(`${origin()}/v1/auth/logout`, {
+      method: "POST",
+      credentials: "same-origin",
+    });
+  } catch {
+    /* the cookie is HttpOnly and the daemon clears it when reachable */
+  }
+  try {
+    window.localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* storage disabled; nothing to clear */
   }
 }
 
@@ -199,9 +311,50 @@ export function adoptInvitation(): boolean {
   const hash = window.location.hash.replace(/^#/, "");
   const found = new URLSearchParams(hash).get(FRAGMENT_KEY)?.trim();
   if (!found) return false;
-  setToken(found);
+  PENDING_INVITATION = found;
   window.history.replaceState(null, "", window.location.pathname + window.location.search);
   return true;
+}
+
+/**
+ * The invitation token taken out of the address bar, waiting for its exchange.
+ *
+ * Held here rather than in storage so a page reloaded or a tab duplicated
+ * cannot replay it. `settleInvitation` is the one caller, and it clears this
+ * whatever the exchange answers.
+ */
+let PENDING_INVITATION: string | null = null;
+
+/**
+ * Turns an invitation or a legacy localStorage token into a session cookie.
+ *
+ * Returns whether a session now exists. An invitation token is exchanged and
+ * forgotten. A token an older build left in localStorage is exchanged and
+ * deleted, so nobody already signed in gets locked out by the change.
+ */
+export async function settleInvitation(): Promise<boolean> {
+  if (!hosted) return false;
+  const pending = PENDING_INVITATION;
+  PENDING_INVITATION = null;
+  if (pending) {
+    try {
+      await exchangeToken(pending);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  try {
+    const stored = window.localStorage.getItem(TOKEN_KEY);
+    if (stored) {
+      await exchangeToken(stored);
+      return true;
+    }
+  } catch {
+    /* storage disabled, or the exchange was refused: either way the token is
+       left where it is, so a host that comes back can still be migrated */
+  }
+  return false;
 }
 
 /** Where the daemon is: the box this window was pointed at, else wherever
@@ -318,8 +471,12 @@ export async function upload<T>(file: File): Promise<T> {
   try {
     response = await fetch(`${origin()}/v1/upload?name=${encodeURIComponent(file.name)}`, {
       method: "POST",
-      headers: { authorization: `Bearer ${token()}` },
+      headers: bearer(),
       body: file,
+      // Same-origin asks for the session cookie; a window showing a box sends
+      // its token in `bearer()` instead and asks for no credentials, which is
+      // also what keeps a cross-origin answer readable without CORS credentials.
+      credentials: "same-origin",
     });
   } catch {
     // Said about the file rather than about the string a browser's `fetch`
@@ -357,8 +514,9 @@ export async function invoke<T>(name: string, args?: Record<string, unknown>): P
   try {
     response = await fetch(`${origin()}/v1/call`, {
       method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token()}` },
+      headers: { "content-type": "application/json", ...bearer() },
       body: JSON.stringify({ name, args: args ?? {}, client: CLIENT }),
+      credentials: "same-origin",
     });
   } catch {
     // The box is off, asleep, or the tunnel is down. Its own kind, because it
@@ -442,7 +600,11 @@ function openSocket(handler: (payload: UiEvent) => void, onReconnect?: () => voi
 
   const connect = () => {
     if (closed) return;
-    const url = `${origin().replace(/^http/, "ws")}/v1/events?token=${encodeURIComponent(token())}`;
+    const socketToken = token();
+    const base = origin().replace(/^http/, "ws");
+    const url = socketToken
+      ? `${base}/v1/events?token=${encodeURIComponent(socketToken)}`
+      : `${base}/v1/events`;
     socket = new WebSocket(url);
 
     socket.onopen = () => {
