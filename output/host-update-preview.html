@@ -134,7 +134,7 @@
   el('state').addEventListener('change', () => {step = 0; render();});
   el('review').addEventListener('click', () => {el('details').hidden = false; el('action').focus();});
   el('dismiss').addEventListener('click', () => {el('notice').hidden = true;});
-  el('secondary').addEventListener('click', () => {el('feedback').textContent = el('state').value === 'updating' ? 'Panel closed. Progress remains available in Workspace settings.' : el('state').value === 'failed' ? 'Diagnostics would show the operation, failed stage and backup location.' : 'Reminder dismissed for this host and release. Status remains in Workspace settings.';});
+  el('secondary').addEventListener('click', () => {el('feedback').textContent = el('state').value === 'updating' ? 'Panel closed. Progress remains available in Host settings.' : el('state').value === 'failed' ? 'Diagnostics would show the operation, failed stage and backup location.' : 'Reminder dismissed for this host and release. Status remains in Host settings.';});
   el('action').addEventListener('click', () => {
     const state = el('state').value;
     if (state === 'updating') {

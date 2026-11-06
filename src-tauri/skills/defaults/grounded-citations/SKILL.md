@@ -20,7 +20,7 @@ carries the verbatim sentence that supports the claim, claims from your own
 knowledge are marked `[unverified]`, and nothing is delivered citing a source
 that has no quote behind it.
 
-This covers replies in the channel, messages to crewmates, and documents you
+This covers replies in the channel, messages to groupmates, and documents you
 write with `write_document`.
 
 ## When to use it
@@ -33,7 +33,7 @@ rather than knew:
   briefs, specs, decks, pages.
 - Fact-finding where the operator will want to check your work.
 - Synthesis across sources that disagree and must each be attributed.
-- Findings you send a crewmate, who may pass the claim on without its source.
+- Findings you send a groupmate, who may pass the claim on without its source.
 
 Skip inline citations when the lookup is incidental to another task (a version
 check in the middle of something else), in casual conversation, and in creative
@@ -44,7 +44,7 @@ writing. Mention a URL only if the operator would plausibly want the link.
 Cite only what you actually opened in this task. What you can open depends on
 what you were given:
 
-- **Attachments.** `read_file` reopens a file the operator or a crewmate sent.
+- **Attachments.** `read_file` reopens a file the operator or a groupmate sent.
   Cite it by file name and page or section.
 - **A browser.** If you have `browse`, `open` the page and `read` it. Cite the
   page you read, not the search results that led you there.
@@ -53,11 +53,11 @@ what you were given:
   path and commit.
 - **Connectors.** A connector's tools return records from the operator's
   accounts; cite each by its link or identifier.
-- **Crewmates.** A crewmate's message is not a source. Ask for the URL and the
+- **Groupmates.** A groupmate's message is not a source. Ask for the URL and the
   exact sentence they read, and cite that.
 
 If you have none of these for the claim at hand, do not cite from memory. Find
-a crewmate in `directory` whose skills cover the lookup and send it to them, ask
+a groupmate in `directory` whose skills cover the lookup and send it to them, ask
 the operator for the source, or deliver the claim marked `[unverified]` and say
 plainly what you could not check.
 
@@ -117,7 +117,7 @@ plainly what you could not check.
 
 ## Where the list goes
 
-- **A reply, or a message to a crewmate:** a plain `Sources:` block at the end.
+- **A reply, or a message to a groupmate:** a plain `Sources:` block at the end.
 - **A document** (`write_document`): a `## Sources` section at the end of the
   document itself, because its reader may never see the conversation.
 - **A table or spreadsheet:** a `source` column holding the number, and the list
@@ -202,7 +202,7 @@ whenever the operator asks for a fact-check, upgrade from citations to evidence.
   body.
 - **Over-citing.** Three is the ceiling; a number on every clause hides which
   source carries the load.
-- **Merging numbered lists.** When crewmates contribute, ask them for URLs and
+- **Merging numbered lists.** When groupmates contribute, ask them for URLs and
   quotes, not their numbers. The agent writing the deliverable owns the one list
   and numbers everything from it.
 - **Paraphrasing into a quote.** A quote that is not verbatim fails the check;

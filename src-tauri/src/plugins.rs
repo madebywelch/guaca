@@ -56,7 +56,7 @@ pub enum PluginError {
     #[error("{says}")]
     Unreachable { says: String, detail: String },
     #[error(
-        "{label} is not connected for this group. Ask the operator to connect it in the crew's \
+        "{label} is not connected for this group. Ask the operator to connect it in the group's \
          Connectors settings; nothing you can do from here will connect it."
     )]
     NotConnected { label: String },
@@ -77,14 +77,14 @@ pub enum PluginError {
     #[error(
         "{label} is connected for this group, but not for you: the operator chose which agents \
          may use it. Ask a peer who has it to do that part, or ask the operator to add you in \
-         the crew's Connectors settings. Nothing you can do from here will add you."
+         the group's Connectors settings. Nothing you can do from here will add you."
     )]
     NotChosen { label: String },
     #[error(
         "{label}'s `{tool}` is switched off for this group: the operator decides which of a \
-         connector's tools the crew may call, and this one is off for everybody. Do not ask a peer, \
+         connector's tools the group may call, and this one is off for everybody. Do not ask a peer, \
          because no peer has it. Use another of {label}'s tools if one will do, or tell the \
-         operator which tool you need and that it is switched off in the crew's Connectors \
+         operator which tool you need and that it is switched off in the group's Connectors \
          settings."
     )]
     ToolDenied { label: String, tool: String },
@@ -92,12 +92,12 @@ pub enum PluginError {
         "{label} is yours, but its `{tool}` is not: the operator chose which agents may call that \
          one. A peer has it — your roster says who — so hand that part over. Use another of \
          {label}'s tools if one will do, or ask the operator to add you to `{tool}` in the \
-         crew's Connectors settings. Nothing you can do from here will add you."
+         group's Connectors settings. Nothing you can do from here will add you."
     )]
     ToolNotChosen { label: String, tool: String },
     #[error(
         "{label}'s sign-in is no longer accepted, and renewing it did not work. Ask the operator \
-         to connect it again in the crew's Connectors settings."
+         to connect it again in the group's Connectors settings."
     )]
     SigninExpired { label: String },
 }

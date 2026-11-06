@@ -691,7 +691,7 @@ input[type="file"]::file-selector-button {
 
 /* A host and this app on different builds is the one fact on the status bar
    worth a color: it is the one that breaks commands. The two rows in
-   Workspace settings that name those builds are the same fact, so they get
+   Host settings that name those builds are the same fact, so they get
    the same mark. */
 .statusbar__host[data-drift],
 .host-update-facts dd[data-drift] {

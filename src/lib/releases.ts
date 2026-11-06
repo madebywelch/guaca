@@ -194,7 +194,7 @@ export function shortBuild(build: string): string {
 export function parseHealth(value: unknown): Health {
   if (!value || typeof value !== "object" || !("service" in value) || value.service !== "guacad")
     throw new Error(
-      "This address did not answer as a Guaca host. Check the connection in Workspace settings.",
+      "This address did not answer as a Guaca host. Check the connection in Host settings.",
     );
   const data = value as Record<string, unknown>;
   return {

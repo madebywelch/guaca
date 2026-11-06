@@ -131,7 +131,7 @@ pub fn instructions(agent: &str) -> String {
          second call to {agent}'s own model, working one brief with {agent}'s tools while \
          {agent} waits for your answer, and anything you do is done in {agent}'s name.\n\n\
          The brief is everything you know. You have not seen {agent}'s conversation, its memory \
-         or the crew it works with, and nobody reads anything you write until you are finished, \
+         or the group it works with, and nobody reads anything you write until you are finished, \
          so there is nobody to ask. Do the work the brief asks for, as far as your tools reach, \
          then answer.\n\n\
          Your answer is the last thing you write without calling a tool, and it goes back to \

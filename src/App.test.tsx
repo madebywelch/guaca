@@ -203,7 +203,7 @@ describe("when the host goes away", () => {
     fireEvent.click(screen.getByRole("button", { name: "Check the host" }));
     // The pane that holds On this Mac and Remote host, open rather than the
     // dialog's first section.
-    const pane = await screen.findByRole("tab", { name: "Workspace" });
+    const pane = await screen.findByRole("tab", { name: "Host" });
     expect(pane.getAttribute("aria-selected")).toBe("true");
   });
 

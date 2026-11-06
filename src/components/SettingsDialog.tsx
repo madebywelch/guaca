@@ -107,7 +107,7 @@ export function asSection(name: string | null | undefined): Section | undefined 
 
 const SECTION_LABELS: Record<Section, string> = {
   general: "General",
-  workspace: "Workspace",
+  workspace: "Host",
   provider: "Provider",
   limits: "Limits",
   machines: "Machines",

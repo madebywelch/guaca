@@ -171,7 +171,7 @@ describe("StatusBar", () => {
     expect(other.textContent).toBe("This Mac · other build");
     expect(other.hasAttribute("data-drift")).toBe(true);
     expect(other.title).toBe(
-      "This Mac runs Guaca 0.1.0, a different build from this app. Open Workspace settings to see which.",
+      "This Mac runs Guaca 0.1.0, a different build from this app. Open Host settings to see which.",
     );
   });
 

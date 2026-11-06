@@ -915,13 +915,13 @@ describe("the provider presets", () => {
 });
 
 /**
- * The Workspace pane: pointing this window at a box.
+ * The Host pane: pointing this window at a box.
  *
  * Runs as the desktop showing its own workspace, which is the only state the
  * pane offers a choice in. What matters is the order: nothing is stored until
  * the box has answered to the token, and the page reloads only after it is.
  */
-describe("the Workspace pane", () => {
+describe("the Host pane", () => {
   beforeEach(() => {
     window.localStorage.removeItem("guaca.workspace.remote");
     vi.restoreAllMocks();
@@ -933,7 +933,7 @@ describe("the Workspace pane", () => {
       .mockResolvedValue({ build: "abc1234", capabilities: {} });
     const restarted = vi.spyOn(transport, "restart").mockImplementation(() => {});
     open();
-    pane("Workspace");
+    pane("Host");
 
     fireEvent.click(screen.getByRole("button", { name: "Remote host" }));
     const button = screen.getByRole("button", { name: "Connect to host" }) as HTMLButtonElement;
@@ -959,7 +959,7 @@ describe("the Workspace pane", () => {
     });
     const restarted = vi.spyOn(transport, "restart").mockImplementation(() => {});
     open();
-    pane("Workspace");
+    pane("Host");
     fireEvent.click(screen.getByRole("button", { name: "Remote host" }));
     fireEvent.change(field(/^Host address/), { target: { value: "https://box.example" } });
     fireEvent.change(field(/^Access key/), { target: { value: "wrong" } });

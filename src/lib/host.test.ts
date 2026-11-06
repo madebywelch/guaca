@@ -113,7 +113,7 @@ describe("which host the bar names, and whether its build agrees", () => {
     expect(other.text).toBe("This Mac · other build");
     expect(other.drift).toBe(true);
     expect(other.title).toBe(
-      "This Mac runs Guaca 0.2.0, a different build from this app. Open Workspace settings to see which.",
+      "This Mac runs Guaca 0.2.0, a different build from this app. Open Host settings to see which.",
     );
     expect(
       hostLabel({
@@ -151,7 +151,7 @@ describe("which host the bar names, and whether its build agrees", () => {
     expect(gone.text).not.toContain("build");
   });
 
-  it("leaves the version to Workspace settings, and keeps it in the hover", async () => {
+  it("leaves the version to Host settings, and keeps it in the hover", async () => {
     const { hostLabel } = await import("./host");
     const same = hostLabel({ place: "thisMac", drift: "same", host: health("0.2.0") });
     expect(same.text).toBe("This Mac");
@@ -165,9 +165,7 @@ describe("which host the bar names, and whether its build agrees", () => {
       host: { service: "guacad", build: "b" },
     });
     expect(old.text).toBe("This Mac");
-    expect(old.title).toBe(
-      "Which host this window shows. Open Workspace settings for its updates.",
-    );
+    expect(old.title).toBe("Which host this window shows. Open Host settings for its updates.");
   });
 });
 

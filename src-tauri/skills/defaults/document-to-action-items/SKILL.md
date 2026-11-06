@@ -32,7 +32,7 @@ in appendices. A picture is shown to you if your model can see. Other formats,
 such as a PDF or a Word file, are placed on your computer if you have one, and
 you open them there with a program that reads the format (`run_command`).
 Without a computer, say which file you could not read and ask for a text copy,
-or send it to a crewmate who can open it. A document at a URL needs `browse`;
+or send it to a groupmate who can open it. A document at a URL needs `browse`;
 without it, ask the operator to attach the document. Never describe a document
 you did not read.
 
@@ -111,10 +111,10 @@ Done when the approved fields and actions are unambiguous.
 
 Write only what was approved, only where it was approved:
 
-- **A connector** the crew is signed in to, such as a tracker or a documents
+- **A connector** the group is signed in to, such as a tracker or a documents
   tool. Its tools act on the operator's real account.
-- **The crew's `calendar`**, for deadlines and dates. It records them for the
-  crew and books nothing. A date with no time stays a whole-day date.
+- **The group's `calendar`**, for deadlines and dates. It records them for the
+  group and books nothing. A date with no time stays a whole-day date.
 - **`schedule`**, for a routine that wakes you ahead of a deadline. The calendar
   wakes nobody, so if the work needs preparing for, write both.
 - **`write_document`**, for a table or a report the operator keeps.

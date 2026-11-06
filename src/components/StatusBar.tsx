@@ -65,8 +65,8 @@ export function StatusBar({ onOpen, onMessage }: Props) {
     : "unknown";
   // Which host, whether its build and this window's are one build, and — when
   // nothing is arriving — when it was last heard from. The version itself is a
-  // click away in Workspace settings, where it can be acted on; see `hostLabel`
-  // for why it left the bar.
+  // click away in Host settings, where it can be acted on; see `hostLabel` for
+  // why it left the bar.
   const label = hostLabel({
     place: hostPlace(),
     drift,

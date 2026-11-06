@@ -350,7 +350,7 @@ pub fn system_prompt(
         // has Neon behave differently when asked "can we check the database".
         if !plugins.is_empty() {
             out.push_str(
-                "Your crew has these connectors: MCP servers it signed in to. The sign-in behind \
+                "Your group has these connectors: MCP servers it signed in to. The sign-in behind \
                  each one is the \
                  operator's, held by Guaca: there is nothing for you to authenticate, no key to \
                  find, and no command to run. These tools do not depend on a browser being \
@@ -409,7 +409,7 @@ pub fn system_prompt(
                 if !set.withheld.is_empty() {
                     out.push_str(&format!(
                         "  Switched off by the operator, and not yours to turn back on: {}. Say \
-                         so if one is what the task needs; nobody in the crew has it either.\n",
+                         so if one is what the task needs; nobody in the group has it either.\n",
                         set.withheld.join(", "),
                     ));
                 }
@@ -536,9 +536,9 @@ pub fn system_prompt(
     // meeting next Thursday" on a calendar it has to know what today is, and
     // guessing produces a date nobody catches. It is stated in the one section
     // that needs it, beside the dates it is used to compute.
-    out.push_str("\n## Your crew's calendar\n");
+    out.push_str("\n## Your group's calendar\n");
     out.push_str(&format!(
-        "Today is {}. `calendar` is your crew's, not yours: everyone in it reads this same list, \
+        "Today is {}. `calendar` is your group's, not yours: everyone in it reads this same list, \
          so it is where something the rest of them need to know about goes. Meetings, deadlines, \
          filings, renewals, launches — anything with a date on it that somebody needs in \
          advance. Keep it current as you learn things: when a date moves, `update` that occasion \
@@ -565,7 +565,7 @@ pub fn system_prompt(
         }
         out.push_str(
             "\nThe id is how you reach one. This is the fortnight in front of you and not the \
-             whole calendar: `list` gives you everything your crew has, further out and with the \
+             whole calendar: `list` gives you everything your group has, further out and with the \
              notes on each.\n",
         );
     }
@@ -749,7 +749,7 @@ pub fn system_prompt(
          outside its competence, which is worse than not answering. One fitting agent means one \
          message.\n\
          - Send to everyone only when the content is genuinely for everyone, such as an \
-         announcement. If nobody fits, handle it yourself or tell the operator the crew has no \
+         announcement. If nobody fits, handle it yourself or tell the operator the group has no \
          one for it; the nearest available name is not a fit.\n\
          - `send_message` delivers to one or more agents. It is asynchronous and non-blocking: it \
          returns once the message is queued. Any reply arrives later as a separate message. Never \
@@ -768,7 +768,7 @@ pub fn system_prompt(
     // one with this tool available still replied that it could not create
     // agents from this interface.
     out.push_str(
-        "\n## Growing the crew\n\
+        "\n## Growing the group\n\
          `create_agent` adds a colleague: its own instructions, its own computer, its own memory, \
          reachable by name the moment it exists. Reach for it when the workspace is missing a \
          role, not when you are missing an afternoon's work: a task belongs to you or to an agent \
@@ -777,7 +777,7 @@ pub fn system_prompt(
          it. If they decline, say what you would have created and carry on without it.\n\
          - A new agent is idle and stays idle until something reaches it. Creating one is not \
          delegating to it; send it the first piece of work yourself.\n\
-         - You are never unable to create an agent. If the crew has nobody for a role the \
+         - You are never unable to create an agent. If the group has nobody for a role the \
          operator needs, propose it or create it rather than reporting that the workspace will \
          not let you.\n",
     );
@@ -938,7 +938,7 @@ pub fn system_prompt(
              Saying nothing is allowed here, and it is usually right. Reply with nothing at all \
              unless something has changed that the operator does not already know. An \
              acknowledgment does not need acknowledging, and thanking someone for thanking you \
-             is how a crew spends an afternoon talking to itself.\n\n\
+             is how a group spends an afternoon talking to itself.\n\n\
              Nothing means nothing. Do not write a line to report that no reply was needed, or \
              that an acknowledgment was received and required nothing further. That is a note \
              about nothing, and it costs the operator a line in the only channel they read.\n\n\
@@ -1294,8 +1294,8 @@ pub fn artifacts_section(
         return String::new();
     }
     let mut out = String::from(
-        "\n## Your crew's artifacts\n\
-         Pages your crew keeps, most recently changed first. Not their contents: `artifact` \
+        "\n## Your group's artifacts\n\
+         Pages your group keeps, most recently changed first. Not their contents: `artifact` \
          with `view` opens one. When you are asked for something one of these already covers, \
          `update` it rather than making another. Any of you can edit any of them; the ones \
          marked yours are yours to keep current.\n",
@@ -1430,7 +1430,7 @@ mod tests {
             skill("deploy", Scope::Crew { group_id: crate::domain::ids::GroupId::new() }),
         ]);
         assert!(section.contains("- guaca (Guaca): when guaca"), "{section}");
-        assert!(section.contains("- deploy (your crew): when deploy"), "{section}");
+        assert!(section.contains("- deploy (your group): when deploy"), "{section}");
         assert!(section.contains("`guaca` is for"), "{section}");
         assert!(!section.contains("THE BODY"), "a body is read on demand: {section}");
 
@@ -1909,7 +1909,7 @@ mod tests {
         assert!(prompt.contains("create_refund"), "{prompt}");
         // And it does not send the agent to a peer: a switched-off tool is off
         // for the whole crew, so asking around is a wasted turn.
-        assert!(prompt.contains("nobody in the crew has it either"), "{prompt}");
+        assert!(prompt.contains("nobody in the group has it either"), "{prompt}");
     }
 
     #[test]
@@ -1947,7 +1947,7 @@ mod tests {
         assert!(prompt.contains("send"), "{prompt}");
         // The one that decides which way the agent goes: a peer for one, the
         // operator for the other, and never the same sentence for both.
-        assert!(prompt.contains("nobody in the crew has it either"), "{prompt}");
+        assert!(prompt.contains("nobody in the group has it either"), "{prompt}");
         assert!(prompt.contains("Hand that part to the peer"), "{prompt}");
     }
 
@@ -2266,7 +2266,7 @@ mod tests {
         // the decision is a calendar that was not consulted.
         let one = coming("Board call", crate::domain::now_ms() + 2 * 86_400_000, false, Some(60));
         let prompt = prompt_facing(&card("Manager"), std::slice::from_ref(&one));
-        let calendar = section(&prompt, "## Your crew's calendar");
+        let calendar = section(&prompt, "## Your group's calendar");
 
         assert!(calendar.contains("Board call"), "{calendar}");
         assert!(
@@ -2287,7 +2287,7 @@ mod tests {
         // nobody catches. Stated in the section that needs it, beside the dates
         // it is used to compute.
         let prompt = prompt_facing(&card("Manager"), &[]);
-        let calendar = section(&prompt, "## Your crew's calendar");
+        let calendar = section(&prompt, "## Your group's calendar");
         let today = crate::domain::local(crate::domain::now_ms()).unwrap();
 
         assert!(calendar.contains(&today.format("%a %-d %b %Y").to_string()), "{calendar}");
@@ -2298,7 +2298,7 @@ mod tests {
         // Silence reads as "no calendar section applies to me", and empty is
         // the ordinary case.
         let prompt = prompt_facing(&card("Manager"), &[]);
-        let calendar = section(&prompt, "## Your crew's calendar");
+        let calendar = section(&prompt, "## Your group's calendar");
         assert!(calendar.contains("Nothing is on it"), "{calendar}");
     }
 
@@ -2309,7 +2309,7 @@ mod tests {
         // `schedule` wakes an agent at 3am and a sweep written onto the
         // calendar never runs at all.
         let prompt = prompt_facing(&card("Manager"), &[]);
-        let calendar = section(&prompt, "## Your crew's calendar");
+        let calendar = section(&prompt, "## Your group's calendar");
 
         assert!(calendar.contains("wakes nobody"), "{calendar}");
         assert!(calendar.contains("schedule"), "{calendar}");
@@ -2326,7 +2326,7 @@ mod tests {
         // as a deadline.
         let midnight = crate::domain::occasion::day_of(crate::domain::now_ms() + 3 * 86_400_000);
         let prompt = prompt_facing(&card("Manager"), &[coming("Q3 filing", midnight, true, None)]);
-        let calendar = section(&prompt, "## Your crew's calendar");
+        let calendar = section(&prompt, "## Your group's calendar");
 
         assert!(calendar.contains("all day"), "{calendar}");
         assert!(!calendar.contains("12:00 AM"), "{calendar}");
@@ -3560,7 +3560,7 @@ mod tests {
         let rae = AgentId::new();
         let milo = AgentId::new();
         let section = artifacts_section(&[kept("Pipeline", Some((rae, "Rae")), milo)], &[], rae, 0);
-        assert!(section.contains("## Your crew's artifacts"), "{section}");
+        assert!(section.contains("## Your group's artifacts"), "{section}");
         assert!(section.contains("\"Pipeline\" v3, yours, updated just now by Milo"), "{section}");
         assert!(section.contains("`update` it rather than making another"), "{section}");
 

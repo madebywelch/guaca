@@ -2200,7 +2200,7 @@ window draws the same bar and a change reaches them through `settingsChanged`.
 **The host's name is the status, and its version is a click away.** The item
 read `Host 0.2.0`, which is the least useful half of what it knows: a version
 is what an operator quotes in a bug report and never what they act on, and the
-item is a button into Workspace settings, where it can be acted on. `lib/host.ts`
+item is a button into Host settings, where it can be acted on. `lib/host.ts`
 names the place instead — `This Mac` for the window's own workspace and for a
 host on this Mac, `Remote host` for a box, `This host` for a browser, which
 cannot tell a box from a container — and adds the drift in words beside it:
@@ -2308,7 +2308,7 @@ fails says the host did not answer; the event socket says nothing is arriving,
 which is the same fact earlier and without anybody asking. `transport.ts` hands
 the close up as the same `unreachable` refusal a call uses, so it is
 `Store::linkDown` that turns it into the banner a failed call would have raised —
-the address, `Retry`, and the way to Workspace settings — and `linkUp` that takes
+the address, `Retry`, and the way to Host settings — and `linkUp` that takes
 it back when a redial answers. The status bar names the host, so it is where a
 person reads *since when*: `Remote host · last heard 14:32`, in the quiet ink a
 note is set in. The page is also drawn as an earlier one: `data-link="down"` on

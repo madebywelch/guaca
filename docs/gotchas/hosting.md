@@ -60,7 +60,7 @@ The daemon, a browser as a client, and the boot both hosts share.
 - **A host that is gone is the one failure with a control, and it is the store
   that decides.** `unreachable` is the kind the transport raises for nothing
   answered, and `Store::showFailure` is the only place that turns it into a
-  banner with `fix: "host"`: retry, and the way to Settings → Workspace. A call
+  banner with `fix: "host"`: retry, and the way to Settings → Host. A call
   site that drew its own banner would draw one without them, which is what the
   screenshot in the polish audit was. Retry is `resynchronize` rather than a
   reload, because a reload throws away the draft in the composer for news the

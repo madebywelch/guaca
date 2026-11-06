@@ -1004,7 +1004,7 @@ describe("native settings controls show that they are interactive", () => {
 
 describe("a host and this app on different builds", () => {
   /**
-   * The two rows in Workspace settings carry the status bar's mark.
+   * The two rows in Host settings carry the status bar's mark.
    *
    * Both rows read "0.2.0" for a week-old host and a new app, and nothing
    * about them said they disagreed. The component sets the attribute; this is

@@ -1826,12 +1826,12 @@ async fn a_skill_one_agent_writes_is_offered_to_its_crew_on_the_next_turn() {
     let prompts = prompts_by_agent(&stub);
     let reader = prompts.get("Reader").expect("the reader was prompted");
     assert!(
-        reader.contains("- release-notes (your crew): When writing release notes"),
+        reader.contains("- release-notes (your group): When writing release notes"),
         "the crewmate is not offered the skill: {reader}"
     );
     assert!(reader.contains("- guaca (Guaca):"), "Guaca's own is always offered: {reader}");
     let results = tool_results(&stub).join("\n");
-    assert!(results.contains("Wrote `release-notes` for your crew"), "{results}");
+    assert!(results.contains("Wrote `release-notes` for your group"), "{results}");
     assert!(results.contains("Lead with what changed for the reader."), "{results}");
 }
 

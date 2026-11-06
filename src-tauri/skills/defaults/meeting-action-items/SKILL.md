@@ -63,7 +63,7 @@ Done when every action has supported fields or visibly unresolved ones.
 ### 4. Reconcile with existing records
 
 Before proposing anything new, search where the work already lives: the
-tracker behind a connector, the crew's `calendar`, your `notebook`, your open
+tracker behind a connector, the group's `calendar`, your `notebook`, your open
 decisions. Recurring meetings breed duplicate tickets. When an existing record
 disagrees on owner, date or status, keep both values for the operator to settle
 rather than overwriting one.
@@ -91,9 +91,9 @@ Done when the operator can approve each effect individually.
 ### 6. Apply the approved changes and check them
 
 Create or update only approved records, each carrying a reference back to the
-meeting. An action owned by an agent in your crew goes to that agent with
+meeting. An action owned by an agent in your group goes to that agent with
 `send_message` (intent `work`) and the item in full, since it cannot read the
-transcript. A date on the crew's `calendar` records it and books nothing; if
+transcript. A date on the group's `calendar` records it and books nothing; if
 you need to act ahead of it, add a `schedule` routine too.
 
 Read back owners, dates, status and links from where each record landed. If a

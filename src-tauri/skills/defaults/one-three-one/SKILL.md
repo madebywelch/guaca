@@ -48,7 +48,7 @@ operator has already chosen an approach.
 5. **Implementation plan.**
    - Concrete steps to carry out the recommended option, with the specific
      commands, tools or actions where they apply.
-   - Say who does each step: you, a named crewmate, or the operator.
+   - Say who does each step: you, a named groupmate, or the operator.
 
 If the operator picks a different option, rewrite the recommendation, the
 definition of done and the plan to match it.

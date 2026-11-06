@@ -18,7 +18,7 @@ branch is resolved and nothing is silently assumed.
 - Before complex work: auth flows, schema changes, migrations, payments, a
   launch, anything expensive to undo.
 - A plan has unresolved decisions or reads as vague.
-- Before a plan is split into pieces for crewmates.
+- Before a plan is split into pieces for groupmates.
 
 Not for reviewing work that already exists, and not for simple one-off tasks.
 
@@ -47,7 +47,7 @@ Recommendation: <your answer, and why>
 
 Ask the rounds in your reply, not with `ask_operator`: that tool takes one
 question at a time and is for a single fork in the work, not an interview. If
-the plan is a crewmate's rather than the operator's, grill them the same way
+the plan is a groupmate's rather than the operator's, grill them the same way
 with `send_message` (intent `work`), and keep the rounds few and full, since
 every exchange counts toward the limit on messages between two agents.
 
@@ -64,8 +64,8 @@ for something you could look up:
 - A repository, if you have a computer: clone it there and `run_command` for
   a look (`git log`, `git grep`, reading a file).
 - The web, if you have `browse`.
-- Your `notebook`, your memory, and the crew's `calendar`.
-- A crewmate whose skills cover it: `directory`, then `send_message`.
+- Your `notebook`, your memory, and the group's `calendar`.
+- A groupmate whose skills cover it: `directory`, then `send_message`.
 
 Do not block on an exploration. `send_message` answers later, as a new
 message, so hold back only the questions downstream of what you asked and put
@@ -80,7 +80,7 @@ the rest of the frontier to the operator now.
 **Each technical decision.**
 - Why this approach and not the obvious alternative? What happens if it fails?
 - What is the worst case, and how would it be rolled back?
-- If the codebase or the crew already has a pattern for this, name it.
+- If the codebase or the group already has a pattern for this, name it.
 
 **Edge cases.**
 - What happens if a user does the unexpected thing? If a dependency goes down?
@@ -94,7 +94,7 @@ the rest of the frontier to the operator now.
 3. Ask: "Aligned? Should I start, or adjust anything?"
 
 Do not act on the plan until the operator confirms. Once they do, the synthesis
-is the start of the brief: a crewmate handed a piece of the work cannot see
+is the start of the brief: a groupmate handed a piece of the work cannot see
 this conversation, so everything settled here has to travel with the task. If it is long, hand it over as a document with `write_document`.
 
 ## Pitfalls
@@ -106,7 +106,7 @@ this conversation, so everything settled here has to travel with the task. If it
 3. **Accepting "I don't know" as final.** Offer options, explain the
    trade-offs, make a recommendation.
 4. **Doing the work during the interview.** Alignment only: no edits and no
-   work handed to crewmates until the explicit go-ahead.
+   work handed to groupmates until the explicit go-ahead.
 5. **Being too agreeable.** Your job is to find problems. If everything looks
    fine, look harder.
 6. **Ignoring the operator's language.** Interview in whatever language they

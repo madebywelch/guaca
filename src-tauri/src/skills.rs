@@ -80,7 +80,7 @@ pub enum SkillsError {
     #[error("`{name}` has no file `{path}`. `view` the skill to see the files it carries")]
     NoFile { name: String, path: String },
     #[error(
-        "`{name}` belongs to {owner}, not your crew, so it cannot be deleted from here. Leave \
+        "`{name}` belongs to {owner}, not your group, so it cannot be deleted from here. Leave \
          it, or ask the operator"
     )]
     NotYours { name: String, owner: &'static str },

@@ -103,7 +103,7 @@ impl Absent {
         match self {
             Absent::LoopbackEndpoints => {
                 "this workspace runs on a server, so it cannot reach a model running on your own \
-                 machine. Point it at an endpoint the server can reach, or run this crew in a \
+                 machine. Point it at an endpoint the server can reach, or run this group in a \
                  local workspace"
             }
             Absent::ClaudeProvider => {

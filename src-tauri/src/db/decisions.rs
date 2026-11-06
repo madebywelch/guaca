@@ -76,7 +76,7 @@ impl Store {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let live: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM agents WHERE id=?1 AND group_id=?2 AND lifecycle<>'terminated')", params![agent.to_string(), group.to_string()], |r| r.get(0))?;
         if !live {
-            return Err(invalid("This agent is no longer available in this crew."));
+            return Err(invalid("This agent is no longer available in this group."));
         }
         let existing: Option<String> = tx
             .query_row(
