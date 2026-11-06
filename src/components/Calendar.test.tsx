@@ -141,7 +141,7 @@ describe("the crews", () => {
     expect(screen.queryByText("Board call")).toBeNull();
     expect(screen.getByText("Deposition")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: /^all crews/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^all groups/i }));
     expect(screen.getByText("Board call")).toBeTruthy();
   });
 
@@ -154,7 +154,7 @@ describe("the crews", () => {
     const legal = screen.getByRole("button", { name: /^legal/i });
     expect(legal).toBeTruthy();
     fireEvent.click(legal);
-    expect(screen.getByText(/nothing on this calendar for this crew/i)).toBeTruthy();
+    expect(screen.getByText(/nothing on this calendar for this group/i)).toBeTruthy();
   });
 
   it("says which crew every row belongs to, filtered or not", async () => {
@@ -237,7 +237,7 @@ describe("writing one", () => {
     await waitFor(() => expect(screen.getByText("Board call")).toBeTruthy());
 
     fireEvent.click(screen.getByRole("button", { name: /board call/i }));
-    expect((screen.getByLabelText("Crew") as HTMLSelectElement).disabled).toBe(true);
+    expect((screen.getByLabelText("Group") as HTMLSelectElement).disabled).toBe(true);
   });
 
   it("keeps the editor open when a date could not be read", async () => {

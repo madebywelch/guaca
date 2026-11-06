@@ -228,7 +228,7 @@ export function Search({
             placeholder="Search"
             value={query}
             spellCheck={false}
-            aria-label="Search the workspace"
+            aria-label="Search Guaca"
             onChange={(event) => {
               setQuery(event.target.value);
               setCursor(0);

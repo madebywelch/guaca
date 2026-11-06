@@ -212,7 +212,7 @@ export function reportLine(report: ServerReport): string {
   // different question, and it is one nobody has.
   const offers =
     report.tools.length === 0
-      ? "It published no tools, so a crew connecting it would be offered nothing"
+      ? "It published no tools, so a group connecting it would be offered nothing"
       : `${report.tools.length} tool${report.tools.length === 1 ? "" : "s"}: ${report.tools.join(", ")}`;
   const paid = report.signin === "accepted" ? " It accepted what you gave it." : "";
   return `${who} answered in ${took} over ${how}.${paid} ${offers}.`;

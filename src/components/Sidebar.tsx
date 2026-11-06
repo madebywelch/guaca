@@ -482,13 +482,13 @@ export function Sidebar({
         </div>
 
         <label className="mobile-crews field">
-          <span className="field__label">Crew</span>
+          <span className="field__label">Group</span>
           <select
             className="input"
             value={railGroup ?? ""}
             onChange={(event) => void focusGroup(event.target.value || null)}
           >
-            <option value="">All crews</option>
+            <option value="">All groups</option>
             {groups.map((group) => (
               <option key={group.id} value={group.id}>
                 {group.name}

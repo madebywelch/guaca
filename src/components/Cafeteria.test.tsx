@@ -181,7 +181,7 @@ describe("picking", () => {
 describe("the starter crew", () => {
   it("picks a crew for an empty group", () => {
     open();
-    fireEvent.click(screen.getByRole("button", { name: /starter crew/i }));
+    fireEvent.click(screen.getByRole("button", { name: /starter group/i }));
     expect(
       screen.getByRole("button", { name: new RegExp(`hire ${STARTER_CREW.length} into`, "i") }),
     ).toBeTruthy();
@@ -191,7 +191,7 @@ describe("the starter crew", () => {
     // A crew of four is a suggestion for an empty room. It says nothing to an
     // operator who already built one.
     open([group(KITCHEN, "Kitchen")], [agent("Chief of Staff")]);
-    expect(screen.queryByRole("button", { name: /starter crew/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /starter group/i })).toBeNull();
   });
 });
 
@@ -218,7 +218,7 @@ describe("who is already here", () => {
       [{ ...agent("Executive Assistant"), lifecycle: "terminated", discardedAt: 1_000 }],
     );
     expect(tile("Executive Assistant").textContent).not.toContain("on staff");
-    expect(screen.getByRole("button", { name: /starter crew/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /starter group/i })).toBeTruthy();
   });
 
   it("still lets a second one be hired", async () => {
@@ -258,7 +258,7 @@ describe("where a hire lands", () => {
     // Everything on screen has to be about the Garden, not about whichever
     // group happens to be first: the badge, the starter crew, and the hire.
     expect(tile("Executive Assistant").textContent).not.toContain("on staff");
-    expect(screen.getByRole("button", { name: /starter crew/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /starter group/i })).toBeTruthy();
 
     fireEvent.click(tile("Executive Assistant"));
     fireEvent.click(screen.getByRole("button", { name: /hire 1 into garden/i }));

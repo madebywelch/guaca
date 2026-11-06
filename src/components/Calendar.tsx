@@ -323,14 +323,14 @@ export function Calendar({ onClose }: Props) {
               and a visible "Which crew" above them would be a heading nobody
               needs. */}
           <fieldset className="calendar__crews">
-            <legend className="offscreen">Which crew</legend>
+            <legend className="offscreen">Which group</legend>
             <button
               type="button"
               className="calendar__crew"
               aria-pressed={crew === null}
               onClick={() => setCrew(null)}
             >
-              All crews
+              All groups
               <span className="calendar__count">{occasions?.length ?? 0}</span>
             </button>
             {crews.map((one) => (
@@ -353,7 +353,7 @@ export function Calendar({ onClose }: Props) {
             <p className="routines__note">Loading…</p>
           ) : days.length === 0 ? (
             <p className="routines__note">
-              Nothing on this calendar {crew === null ? "" : "for this crew "}in{" "}
+              Nothing on this calendar {crew === null ? "" : "for this group "}in{" "}
               {monthLabel(window)}. This is Guaca's own calendar, not your Google one: agents put
               what they learn about here, and so can you.
             </p>
@@ -412,10 +412,10 @@ export function Calendar({ onClose }: Props) {
 
             <div className="calendar__pair">
               <label className="field">
-                <span className="field__label">Crew</span>
+                <span className="field__label">Group</span>
                 <select
                   className="input input--slim"
-                  aria-label="Crew"
+                  aria-label="Group"
                   value={editing.groupId}
                   // Only on a new one. Moving an occasion between crews would
                   // move it out from under the agents that keep it, and there

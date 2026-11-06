@@ -20,7 +20,7 @@ export function MobileNavigation({ onChats, onSearch, onSettings }: Props) {
       (item) => item.status === "pending" || (item.status === "answered" && item.interrupted),
     ).length;
   return (
-    <nav className="mobile-nav" aria-label="Workspace navigation">
+    <nav className="mobile-nav" aria-label="Guaca navigation">
       <button type="button" aria-current={!forYou ? "page" : undefined} onClick={onChats}>
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-6 4V6a2 2 0 0 1 2-2Z" />

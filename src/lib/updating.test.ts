@@ -109,8 +109,8 @@ describe("a host update", () => {
       now: starting - stopping + 1,
       label: "Waiting for the host to answer",
     });
-    expect(hostProgress(journal("Backing up workspace"), target, true)).toMatchObject({
-      done: HOST_STEPS.indexOf("Backing up workspace"),
+    expect(hostProgress(journal("Backing up data"), target, true)).toMatchObject({
+      done: HOST_STEPS.indexOf("Backing up data"),
       now: 2,
     });
     // Silent again after the new host answered once: it is past starting.

@@ -140,7 +140,7 @@ describe("probing a box", () => {
       .mockResolvedValueOnce(new Response("<html>hello</html>"))
       .mockResolvedValueOnce(new Response("<html>hello</html>"));
     await expect(probe({ origin: "http://box.example", token: "t" })).rejects.toMatchObject({
-      message: expect.stringContaining("not a Guaca workspace"),
+      message: expect.stringContaining("not a Guaca host"),
     });
   });
 

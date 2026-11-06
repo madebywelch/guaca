@@ -171,7 +171,7 @@ export async function localCopy(file: Attachment): Promise<string> {
  * the one nobody could diagnose.
  */
 export function whyNot(status: number): string {
-  if (status === 404) return "its contents are not in this workspace's file store";
+  if (status === 404) return "its contents are not in this host's file store";
   if (status === 503) return "the file store was still opening";
   return `the file store answered ${status}`;
 }

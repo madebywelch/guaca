@@ -95,7 +95,7 @@ arrival order.
 On top of the asymmetry, one rule: when nothing an agent woke to asked it for
 anything, and the peer it wants to write to has already had its say, a courtesy
 is refused. Both sides are finished, and a thank-you here is the beginning of a
-crew talking to itself.
+group talking to itself.
 
 **Which it is, the sender declares.** `send_message` carries an `intent` of
 `work` or `courtesy`, and only the courtesy is turned away. Deciding it from the
@@ -155,7 +155,7 @@ is not the fallback.** Models answer their correspondent by calling
 `send_message` at them rather than by replying in plain text, and then keep
 typing. The trailing text is not a second answer: sending it on as well put two
 near-identical messages in the peer's channel. It went to the operator instead,
-on the reasoning that it was still readable there, and that was worse. A crew
+on the reasoning that it was still readable there, and that was worse. A group
 being introduced produced it seven times over: the operator had messaged one
 agent, and four wrote back, three of them agents they had never spoken to,
 each reporting that it had replied to somebody else. Being the one participant
@@ -190,7 +190,7 @@ coming.
 Batching decides what a turn starts with. This decides what it can still learn
 once it has started, and until it existed the answer was nothing: a turn was
 built from its batch and went deaf for as long as it ran. On a turn of three
-rounds nobody notices. On a turn of forty, which is what a crew with a raised
+rounds nobody notices. On a turn of forty, which is what a group with a raised
 `max_tool_rounds` actually produces, it is the difference
 between an agent that can be corrected and one that cannot.
 
@@ -262,9 +262,9 @@ be built here. This is it.
 The guard is the backstop, not the mechanism. Each limit catches a different
 shape of runaway, so weakening one is not a local change. All are adjustable in
 Settings, and any group can override any of them: a pair drafting a document
-needs a handful of model calls, and a crew working a browser through a long form
+needs a handful of model calls, and a group working a browser through a long form
 needs an order of magnitude more, so one number for both is either an open wallet
-or a crew that stops halfway and reports nothing.
+or a group that stops halfway and reports nothing.
 
 | Limit | Default | Stops |
 |---|---|---|
@@ -313,7 +313,7 @@ instead of the trail.
 **It is not an agent.** No card, no channel, no memory, no place in the
 directory, nothing addressable once the turn has its answer. That is the
 difference from the two things it could be confused with. A peer has a role and
-answers later as a message. `create_agent` adds a colleague for a role the crew
+answers later as a message. `create_agent` adds a colleague for a role the group
 lacks.
 
 **It runs inside the sending turn's tool call, on that turn's run.** That one
@@ -331,7 +331,7 @@ decision is why nothing else had to be built for it:
   minutes, and a turn woken again to read one would have forgotten why it asked.
 
 **The limits are Guaca's, never the model's.** Three at once, and a fourth is
-refused rather than queued. Twelve rounds each, or the crew's `max_tool_rounds`
+refused rather than queued. Twelve rounds each, or the group's `max_tool_rounds`
 if that is lower. And an errand never takes the last two steps of a run
 (`RunState::reserve_step_leaving`): without that, three errands spend the budget
 between them and the turn that sent them ends holding findings it has no call
@@ -590,7 +590,7 @@ provider's model, so every case lands on a model its own provider can run.
 An agent is the third layer and keeps the same two fields, `model` and
 `subscription_model`; `AgentCard::own_model` hands a turn the one belonging to
 whoever pays, and Claude neither. With one field, a model chosen while a key
-paid went to ChatGPT after the crew moved, and was refused by name on every
+paid went to ChatGPT after the group moved, and was refused by name on every
 turn.
 
 **Nothing about who pays is inferred.** A group that named an endpoint used to be
@@ -639,7 +639,7 @@ to, on the same `/models` any OpenAI-compatible endpoint answers, so the
 question is asked of whatever endpoint the turn is being paid through. Read once
 per endpoint and kept for six hours, for the reason a plugin's tool list is: it
 changes when a vendor ships, not when an agent thinks, and a round trip in front
-of every model call is one every agent in the crew pays. Both subscription
+of every model call is one every agent in the group pays. Both subscription
 providers are answered without asking anybody: their models are the vendor's
 rather than the operator's, and every model either of them hands a turn to takes
 pictures.
@@ -1000,7 +1000,7 @@ decisions carry that:
 
 **The bytes are never in the envelope.** A message carries a `Part::File`: the
 name, the type, the size, and the SHA-256 that addresses the contents. The bytes
-live once, content-addressed, under the app's data directory. A transcript is
+live once, content-addressed, under the app's data folder. A transcript is
 read forty messages at a time into every prompt and hundreds at a time into the
 activity view, so a proposal inlined into a message would be dragged through
 both, every time. Content addressing also makes the common case free: the same
@@ -1270,7 +1270,7 @@ rather than judged.
 
 For a long time every fault it knew about pointed the same way. Answered too
 often, said the same thing twice, thanked a thank-you, nagged a peer: all of
-them are a crew talking too much, which is the failure this app was built
+them are a group talking too much, which is the failure this app was built
 against and the one it is therefore most likely to overcorrect into. The
 opposite failure had exactly one check, `Silent`, and it only fires when the
 operator was told nothing by anybody for the whole run. Both times this app
@@ -1321,7 +1321,7 @@ offline is a stub agreeing with what this app believes the protocol is; the live
 one is the only thing that notices when that belief goes stale, which it will,
 because the protocol belongs to somebody else.
 
-## A crew is watched rather than asserted
+## A group is watched rather than asserted
 
 All three suites above decide something. The fourth question cannot be decided,
 and pretending otherwise is how a suite ends up asserting the model's taste: put
@@ -1336,7 +1336,7 @@ suite, because each individual message was correct.
 directive several times and write down what happened. Eight roles an operator
 would recognize, one of them carrying the standing instruction and the other
 seven described by their skills alone; a directive with four asks, three of the
-crew with no part in it, and two pairs whose skills overlap so that choosing is
+group with no part in it, and two pairs whose skills overlap so that choosing is
 a judgment rather than a lookup. Each run leaves its whole event stream,
 timestamped as it arrived, its envelopes, a transcript a person can read, and
 its numbers. Beside them is the comparison, which is the actual product: for
@@ -1346,7 +1346,7 @@ reading.
 
 It asserts three things and no more, because only three of them are not a
 matter of taste: every run settled, no run left the machinery in a state
-`trajectory.rs` calls broken, and somebody answered the operator. A crew that
+`trajectory.rs` calls broken, and somebody answered the operator. A group that
 chose oddly is a finding to read; a placeholder left open is a defect. Anything
 promoted from a finding to a rule belongs in `eval.rs`, where it is decidable
 and every suite gets it.

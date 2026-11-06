@@ -1,20 +1,20 @@
 # The calendar
 
-A crew's own dates, and the wall between crews' calendars. `docs/CALENDAR.md`,
+A group's own dates, and the wall between groups' calendars. `docs/CALENDAR.md`,
 then `domain/occasion.rs` and `Runtime::keep_calendar`.
 
 - **The group comes from the agent's card, never from the tool call.** Every
   store call in `keep_calendar` is scoped to `card.group_id`, and an id that
-  belongs to another crew comes back as `None`. An id is a thing a model can
+  belongs to another group comes back as `None`. An id is a thing a model can
   invent, and it invents them under exactly the pressure that makes an invented
-  one plausible. A read that trusted an id would let one crew move another's
+  one plausible. A read that trusted an id would let one group move another's
   board call.
 - **A refusal is "no occasion with that id", never "not yours".** The second
   sentence confirms the row exists and hints at whose it is, which is the leak
   the wall exists to stop. Same rule as `no agent named Chef`.
 - **The operator's reads and writes have no group on them, and that is not the
-  same bug.** `commands::calendar` with no `groupId` crosses every crew. The
-  wall stands between crews, not between the operator and their own workspace.
+  same bug.** `commands::calendar` with no `groupId` crosses every group. The
+  wall stands between groups, not between the operator and their own workspace.
 - **An all-day occasion is local midnight plus a flag, and `minutes` is always
   NULL on one.** Midnight alone cannot carry it: it is a real time somebody
   might have chosen, and a filing drawn as `12:00 AM` is a filing nobody reads
@@ -47,8 +47,8 @@ then `domain/occasion.rs` and `Runtime::keep_calendar`.
   something.** Observed: a model wrote an occasion and told the operator the
   call was booked. *Books nothing, invites nobody* is in the tool description,
   the prompt section and the panel's footer, and all three are load-bearing.
-- **An occasion's crew never changes.** There is no call that moves one and the
-  editor's crew field is disabled on anything that exists. Moving one would move
+- **An occasion's group never changes.** There is no call that moves one and the
+  editor's group field is disabled on anything that exists. Moving one would move
   it out from under the agents that keep it with nothing on screen saying so.
 - **`Store::delete_group` deletes occasions explicitly.** The foreign key is a
   plain `REFERENCES groups(id)` like every other group-scoped table here, and
@@ -57,7 +57,7 @@ then `domain/occasion.rs` and `Runtime::keep_calendar`.
 - **A deleted agent's occasions stay.** Its memory, schedule and working notes
   go with it because those are the agent's own. A board call does not stop
   happening because the agent that heard about it was let go, and the calendar
-  it is on belongs to the crew. `Runtime::purge_agent` names every store it
+  it is on belongs to the group. `Runtime::purge_agent` names every store it
   clears and deliberately does not name this one.
 - **`daysIn` walks a `Date`, and `monthOf` sets the day before the month.**
   Stepping by 86,400,000 loses the 23-hour day and doubles the 25-hour one, so

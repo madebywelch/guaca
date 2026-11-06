@@ -107,7 +107,7 @@ export const HIREABLE: Hireable[] = [
     id: "chief-of-staff",
     name: "Chief of Staff",
     station: "Front office",
-    tagline: "Runs the crew. Decides who does what, and chases it.",
+    tagline: "Runs the group. Decides who does what, and chases it.",
     avatar: "orb",
     color: "#5a7d99",
     skills: ["delegation", "planning", "following up"],

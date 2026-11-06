@@ -161,12 +161,12 @@ describe("which artifacts it lists", () => {
     expect(await screen.findByText("Pipeline by stage")).toBeTruthy();
     expect(artifacts).toHaveBeenCalledWith(null);
     expect(screen.getByText(/^Sales · Owner Rae · v2 · /)).toBeTruthy();
-    expect(screen.getByText("Every crew")).toBeTruthy();
+    expect(screen.getByText("All groups")).toBeTruthy();
   });
 
   it("says an owner who left is still the owner, and that they left", async () => {
     open(DEFAULT_GROUP, [kept({ owner: { id: "rae", name: "Rae", gone: true } })]);
-    expect(await screen.findByText(/Owner Rae, left the crew/)).toBeTruthy();
+    expect(await screen.findByText(/Owner Rae, left the group/)).toBeTruthy();
   });
 });
 

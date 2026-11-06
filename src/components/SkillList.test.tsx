@@ -47,7 +47,7 @@ describe("SkillList", () => {
     listSkills.mockClear();
 
     render(<SkillList scope={CREW} />);
-    await screen.findByText("This crew has no skills yet.");
+    await screen.findByText("This group has no skills yet.");
     expect(screen.queryByText("guaca")).toBeNull();
     expect(listSkills.mock.calls.map(([scope]) => scope.kind)).toEqual(["crew"]);
   });
@@ -89,7 +89,7 @@ describe("SkillList", () => {
 
   it("redraws when an agent writes one mid-turn", async () => {
     render(<SkillList scope={CREW} />);
-    await screen.findByText("This crew has no skills yet.");
+    await screen.findByText("This group has no skills yet.");
     listSkills.mockImplementation(async (scope) =>
       scope.kind === "crew" ? [skill("release-notes", CREW)] : [],
     );

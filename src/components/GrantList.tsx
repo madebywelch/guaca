@@ -9,14 +9,14 @@ interface Props {
 
 /** What each standing grant lets the agent do, in the operator's words. */
 const PHRASE: Record<ProtectedAction, string> = {
-  createAgent: "Adds agents to this workspace without asking.",
+  createAgent: "Adds agents to this group without asking.",
   // Not offered on the request itself, since a standing yes would cover every
   // future send and purchase rather than the one being asked about. Listed
   // anyway: a grant that exists and cannot be seen is worse than one that can.
-  actOnBehalf: "Acts outside this workspace in your name without asking.",
+  actOnBehalf: "Acts outside Guaca in your name without asking.",
   // Never granted: a settings change is asked about every time. Named so an
   // older build's row, if there is one, still reads as something.
-  changeSettings: "Changes the workspace's settings without asking.",
+  changeSettings: "Changes the app's settings without asking.",
 };
 
 /**

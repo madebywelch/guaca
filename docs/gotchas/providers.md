@@ -23,7 +23,7 @@ the code is `llm/codex.rs`, `llm/claude.rs` and `subscription.rs`.
   all. Setting it to a real release number, or tying it to `CODEX_VERSION` in
   the `Dockerfile`, turns it back into a compiled model list.
 - **A refresh is serialized, and one the service refuses forgets the sign-in.**
-  The refresh token rotates, so a crew that all hit the dead token at once would
+  The refresh token rotates, so a group that all hit the dead token at once would
   race to retire each other's and the losers would hold one the service already
   threw away. And a 4xx from the token endpoint is the sign-in genuinely being
   over: the file goes, so Settings offers signing in rather than signing out. A
@@ -34,7 +34,7 @@ the code is `llm/codex.rs`, `llm/claude.rs` and `subscription.rs`.
   inherits all of it: measured at 2.1.247, one trivial reply cost 104,371 input
   tokens and named 200-odd tools, against 783 tokens and none with `--tools ""`,
   `--strict-mcp-config` over an empty `--mcp-config`, and `--setting-sources ""`.
-  That is not tidiness. It is the difference between a crew and a crew that can
+  That is not tidiness. It is the difference between a group and a group that can
   send mail from the operator's own inbox because they connected Gmail in a
   terminal last week.
 - **A reply on that provider lands whole, and the thinking is what moves.** The
@@ -73,8 +73,8 @@ the code is `llm/codex.rs`, `llm/claude.rs` and `subscription.rs`.
   nothing else on screen would explain.
 - **An agent keeps a model per provider, like the group and the app, and a turn
   reads only the paying provider's.** It had one field, sent to whoever paid. A
-  crew on a ChatGPT sign-in ended up with an OpenRouter slug on the agent
-  itself, and ChatGPT refused every turn by name; switching any crew between providers did the same to
+  group on a ChatGPT sign-in ended up with an OpenRouter slug on the agent
+  itself, and ChatGPT refused every turn by name; switching any group between providers did the same to
   every agent in it that named a model. `AgentCard::own_model` is the one read.
-  Migration 63 sorted what was stored by the crew's provider now, and a slash
-  is an endpoint's whatever the crew says, because no ChatGPT name has one.
+  Migration 63 sorted what was stored by the group's provider now, and a slash
+  is an endpoint's whatever the group says, because no ChatGPT name has one.

@@ -134,7 +134,7 @@ an icon on the desktop, and an agent told to send mail opened it. That is not
 something an agent can be asked to remember, and it is not a brand preference:
 only one profile on that machine is read when Guaca asks what it is signed in
 to, so a sign-in in any other window is one nothing can see. The operator signs
-in on the screen, the roster keeps saying the agent has no account, and the crew
+in on the screen, the roster keeps saying the agent has no account, and the group
 routes work to a machine that will hit a login wall.
 
 So every route is shimmed onto `google-chrome` and `/home/user/.guac/chrome`: a
@@ -194,7 +194,7 @@ An account on a place an agent no longer has is named to nobody. The rows stay:
 the disk and the browser profile are kept when a computer or a browser is taken
 back, so the account is there again if it is given back. What stops is the
 claim, in the agent's own prompt and on the roster its peers read, because a
-capability that overclaims is how a crew routes work to an agent that will hit a
+capability that overclaims is how a group routes work to an agent that will hit a
 login wall. `Runtime::reach_of` and `roster_excluding` both filter by
 `Surfaces::has`.
 

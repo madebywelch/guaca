@@ -1032,7 +1032,7 @@ pub async fn readdress_plugin(
         .group_plugins(group_id)?
         .into_iter()
         .find(|held| held.id == id)
-        .ok_or_else(|| CommandError::new("validation", "that connector is not in this crew"))?;
+        .ok_or_else(|| CommandError::new("validation", "that connector is not in this group"))?;
     if !held.custom {
         return Err(CommandError::new(
             "validation",
@@ -1563,7 +1563,7 @@ pub async fn hand_artifact(state: &AppState, id: ArtifactId, agent_id: AgentId) 
     let handed = state.runtime.store().hand_artifact(id, agent_id).map_err(|err| match err {
         crate::db::StoreError::AgentNotInGroup(_) => CommandError::new(
             "validation",
-            "That agent is not in this artifact's crew. Pick one of the crew's own agents.",
+            "That agent is not in this artifact's group. Pick one of the group's own agents.",
         ),
         other => other.into(),
     })?;
@@ -1777,7 +1777,7 @@ fn quick_targets_exist(
         Does::Open { .. } => false,
     };
     if missing {
-        return Err(CommandError::new("notFound", "that agent or crew no longer exists"));
+        return Err(CommandError::new("notFound", "that agent or group no longer exists"));
     }
     Ok(())
 }
@@ -1814,7 +1814,7 @@ fn skill_scope(state: &AppState, scope: SkillScope) -> Result<SkillScope, Comman
             .runtime
             .store()
             .get_group(group_id)?
-            .ok_or_else(|| CommandError::new("notFound", "that crew no longer exists"))?;
+            .ok_or_else(|| CommandError::new("notFound", "that group no longer exists"))?;
     }
     Ok(scope)
 }

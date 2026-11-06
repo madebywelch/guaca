@@ -224,7 +224,7 @@ export function Cafeteria({ onClose }: Props) {
               className="btn btn--ghost"
               onClick={() => setPicked(new Set(STARTER_CREW))}
             >
-              Pick a starter crew
+              Pick a starter group
             </button>
           )}
           <button

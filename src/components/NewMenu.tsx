@@ -133,8 +133,8 @@ export function NewMenu({ onNewAgent, onNewGroup, onOpenCafeteria }: Props) {
             aria-label="Make something new"
             style={{ left: at.x, top: at.y, "--pop-origin": at.origin } as CSSProperties}
           >
-            {item("New agent", "Somebody new in this workspace", onNewAgent)}
-            {item("New group", "A crew that cannot see the others", onNewGroup)}
+            {item("New agent", "Somebody new in this group", onNewAgent)}
+            {item("New group", "A group that cannot see the others", onNewGroup)}
             {item("Hire from the cafeteria", "Agents who are already set up", onOpenCafeteria)}
           </div>
         </>

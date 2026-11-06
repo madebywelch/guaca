@@ -63,9 +63,7 @@ function Panel() {
   }, []);
 
   if (refused) {
-    return (
-      <Nowhere text="This workspace stopped accepting Guaca's token. Open Guaca to reconnect." />
-    );
+    return <Nowhere text="This host stopped accepting Guaca's token. Open Guaca to reconnect." />;
   }
   return (
     <Roster.Provider value={roster}>
@@ -101,7 +99,7 @@ api
   .menubarHost()
   .then((host) => {
     if (!host) {
-      draw(<Nowhere text="Guaca is not connected to a workspace yet. Open it to choose one." />);
+      draw(<Nowhere text="Guaca is not connected to a host yet. Open it to choose one." />);
       return;
     }
     adoptRemote(host);

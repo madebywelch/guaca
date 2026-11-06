@@ -159,7 +159,7 @@ operator signs in at the real site, on the agent's screen, and Guaca records
 only that it happened.
 
 **A third kind arrived, and it is the one MCP was actually for.** A plugin is a
-server the crew signs in to, which then publishes what it can do. It settles the
+server the group signs in to, which then publishes what it can do. It settles the
 declared-versus-observed argument above by making the question moot: `tools/list`
 is a declaration, but it is the vendor's rather than the operator's, it is
 current because it was fetched at the moment of connecting, and it arrives as
@@ -317,7 +317,7 @@ own intervention study adds a high-level objective check to one framework for
 systematic version of the same question, across three verification paradigms,
 two granularities, five verifiers and six frameworks, and finds that
 process-level verification does not consistently improve performance and
-frequently has high variance. A verifier that is unreliable in a crew this small
+frequently has high variance. A verifier that is unreliable in a group this small
 would spend a model call per step to produce a second opinion nobody can trust,
 and every call it spends is on the operator's bill. The eval and trajectory
 suites verify at test time instead, where being slow and thorough is free.

@@ -1,6 +1,6 @@
 # Connectors (plugins), MCP and OAuth
 
-Signing a crew in to a server, who may spend that sign-in, which tools they may
+Signing a group in to a server, who may spend that sign-in, which tools they may
 call, and the two protocol eras underneath all of it. `docs/PLUGINS.md`, then
 `mcp.rs`, `oauth.rs`, `plugins.rs` and `domain/plugin.rs`. The first entry is
 the guaca.bot account, which signs in through the same file: `docs/ACCOUNT.md`
@@ -31,7 +31,7 @@ and `account.rs`.
   is choosing between. `oauth::requested_scope`, then `docs/PLUGINS.md`.
 - **Cloudflare is `mcp.cloudflare.com`, not one of the fifteen
   `*.mcp.cloudflare.com`.** Each subdomain is a single product area, so one of
-  them is a crew that can make a Worker and cannot read a DNS record, and
+  them is a group that can make a Worker and cannot read a DNS record, and
   several of them is a hundred tool definitions on every turn. The apex host is
   the whole API behind `search` and `execute`: the model writes JavaScript
   against the OpenAPI document and Cloudflare runs it, so 2,500 endpoints cost
@@ -40,7 +40,7 @@ and `account.rs`.
   `PluginAccess` is `Everyone` or a named list, and the empty list is why it is
   not one list with a sentinel: everyone covers agents nobody has hired yet, and
   a list that meant everyone when it was empty would hand a plugin back to the
-  crew at the moment the operator unticked the last name. Filtering the tool
+  group at the moment the operator unticked the last name. Filtering the tool
   definitions is not the enforcement either. A model names tools it was never
   offered, so `Store::plugin_reach` asks the same question again on the call
   path, from the same SQL fragment, and its two refusals are different
@@ -48,10 +48,10 @@ and `account.rs`.
   not for you" is a peer's to do.
 - **A tool takes the same answer a plugin does, and the two compose.** Who may
   spend the sign-in is about the account; who may call `gmail_send` is about the
-  capability, and an agent has to pass both. That is what lets one crew put the
+  capability, and an agent has to pass both. That is what lets one group put the
   agent that triages an inbox beside the agent that answers it, on one sign-in,
   with different halves of it each. A single answer per plugin cannot say that,
-  and neither could the crew-wide tool switch this replaced.
+  and neither could the group-wide tool switch this replaced.
 - **A tool nobody has narrowed is on, and inside a narrowed one only the named
   agents are.** The two defaults point opposite ways on purpose. An unseen
   *tool* is one the vendor shipped after the operator last looked, and an
@@ -59,7 +59,7 @@ and `account.rs`.
   decision had been taken. An unseen *agent* is one hired next week, and it must
   not inherit the capability the operator went out of their way to fence off.
   `PLUGIN_TOOL_REACHED_BY_AGENT` is both rules at once.
-- **A tool switched off for the crew is `Chosen` with an empty list.** Not a
+- **A tool switched off for the group is `Chosen` with an empty list.** Not a
   third state and not a second table: it is the same empty list `PluginAccess`
   already argues for at the plugin level, and one click still gets there.
   Migration 31 rewrites every `plugin_denied_tools` row as exactly that.
@@ -85,7 +85,7 @@ and `account.rs`.
   transcript, no log, nothing on the desk. Only the transport branch had a line.
   Both branches have one now, and neither is the caller's to write.
 - **Two callers renewing at once is one of them holding a revoked token.** The
-  account's refresh token rotates and the presented one is revoked, so a crew
+  account's refresh token rotates and the presented one is revoked, so a group
   that all reach for Google in the same second race to retire each other's, and
   the loser gets an `invalid_grant` that reads like an account nobody signed in
   to. `Subscription` has had the gate for this since the ChatGPT sign-in
@@ -119,7 +119,7 @@ and `account.rs`.
   commit.
 - **A plugin's tool list is read once and kept.** `tools/list` on every turn is
   a network round trip in front of every model call, paid by every agent in the
-  crew, to re-learn something that changes when a vendor ships rather than when
+  group, to re-learn something that changes when a vendor ships rather than when
   an agent thinks. The stored list is what the turn is built from; connecting
   again is what refreshes it.
 - **A plugin tool a provider would refuse is dropped, not renamed.** Providers
@@ -143,11 +143,11 @@ and `account.rs`.
   `split_plugin_tool` splits on.
 - **Its address is on the row, and a catalog kind's is not.** Where a vendor's
   server lives is a decision the build makes and re-makes every release, so a
-  stored copy would keep a crew dialling the old host after the vendor moved:
+  stored copy would keep a group dialling the old host after the vendor moved:
   that is what migration 26 exists to clean up after. A row with neither a
   catalog slug nor an address is one nothing can dial, which is a newer build's
   plugin after a downgrade, and is skipped. `PluginKind::from_row`.
-- **A vendor added to the catalog takes its name away from any crew that added
+- **A vendor added to the catalog takes its name away from any group that added
   it by hand.** `from_row` reads a catalog slug and ignores the address beside
   it, so a `firecrawl` row with a pasted key or a program behind it would start
   dialling the catalog's address with a credential issued for something else.
@@ -216,7 +216,7 @@ and `account.rs`.
   error variant rather than a sentence inside `Malformed`.
 - **A message endpoint on another origin is refused rather than followed.** It
   is a redirect invented by the far end after the connection was made, and
-  following it puts a crew's credential and every tool argument on a host the
+  following it puts a group's credential and every tool argument on a host the
   operator never named.
 - **Testing reports a server that wants a sign-in; it does not run one.** That
   is the single step `probe_server` stops short of `add_plugin` at. The question
@@ -226,11 +226,11 @@ and `account.rs`.
   "something presented and refused" are two states: one status code, opposite
   problems, and told apart wrongly an operator re-pastes a key at a server that
   never wanted one.
-- **A name only resolves against a crew that has it, and a catalog name always
+- **A name only resolves against a group that has it, and a catalog name always
   resolves.** `neon__run_sql` parses whether or not Neon is connected, which is
   what makes "Neon is not connected, ask the operator" reachable instead of
   "unknown tool". A name this build has never heard of cannot do that, because
-  the crew's rows are the only place it or its address could come from — which
+  the group's rows are the only place it or its address could come from — which
   is also what keeps a model composing `use_screen__click` from being reported
   as a plugin nobody has.
 - **This client speaks two protocol eras, and the probe is what decides.**

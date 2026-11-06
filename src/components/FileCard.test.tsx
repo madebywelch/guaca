@@ -121,9 +121,7 @@ describe("FileCard", () => {
     // The reason, not just the fact: a preview that fails while the store is
     // still opening wants trying again, and one whose bytes are missing does
     // not, and "could not be read" said neither.
-    await waitFor(() =>
-      expect(screen.getByText(/not in this workspace's file store/)).toBeTruthy(),
-    );
+    await waitFor(() => expect(screen.getByText(/not in this host's file store/)).toBeTruthy());
     expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
   });
 

@@ -575,7 +575,7 @@ describe("phone navigation", () => {
     listAgents.mockResolvedValue([agent("Ada"), { ...agent("Lin"), groupId: other.id }]);
     const { container } = render(<App />);
     await screen.findByText("Ada");
-    fireEvent.change(screen.getByRole("combobox", { name: "Crew" }), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Group" }), {
       target: { value: other.id },
     });
     await waitFor(() => expect(useStore.getState().railGroup).toBe(other.id));

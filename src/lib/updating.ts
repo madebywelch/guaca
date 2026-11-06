@@ -28,7 +28,7 @@ export interface Progress {
 export const HOST_STEPS = [
   "Downloading update",
   "Stopping host",
-  "Backing up workspace",
+  "Backing up data",
   "Starting updated host",
   "Verifying host",
 ] as const;

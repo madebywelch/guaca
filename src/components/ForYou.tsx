@@ -256,7 +256,7 @@ function DecisionCard({
     <article className="for-you__item">
       <div className="for-you__meta">
         <span>
-          {agent?.name ?? "Deleted agent"} · {group?.name ?? "Crew"}
+          {agent?.name ?? "Deleted agent"} · {group?.name ?? "Group"}
         </span>
         <span>{decisionTime(item.createdAt)}</span>
       </div>

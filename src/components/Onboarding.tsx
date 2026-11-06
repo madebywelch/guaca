@@ -192,7 +192,7 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
               <h1 ref={heading} tabIndex={-1}>
                 What would you like help with?
               </h1>
-              <p>Start with one task and one agent. You can build a crew as you go.</p>
+              <p>Start with one task and one agent. You can build a group as you go.</p>
             </div>
             <fieldset className="onboarding-options" aria-label="First task">
               {FIRST_TASKS.map((entry) => (

@@ -99,7 +99,7 @@ pub enum PluginKind {
 pub enum CustomError {
     #[error(
         "a server needs a name. One word, letters and digits, which is what its tools will be \
-         called by: `linear__create_issue` is what the crew sees."
+         called by."
     )]
     NoName,
     #[error(
@@ -136,7 +136,7 @@ pub enum CustomError {
     )]
     BadUrl(String),
     #[error(
-        "{0} is not https. A crew's sign-in and everything its agents send would cross the \
+        "{0} is not https. A group's sign-in and everything its agents send would cross the \
          network in the open. Use https, or a loopback address if the server is on this machine."
     )]
     Insecure(String),
@@ -726,7 +726,7 @@ impl PluginKind {
                 "Your Gmail, Calendar and Drive, through the Guaca account you signed in to."
             }
             PluginKind::Custom { .. } => {
-                "A server you added. Whatever it publishes, this crew has."
+                "A server you added. Whatever it publishes, this group has."
             }
         }
     }

@@ -178,7 +178,7 @@ export function SkillDirectory({ scope, taken, onAdded }: Props) {
             disabled={busy || here || clash}
             onClick={() => void add(skill)}
           >
-            {here ? "Added" : scope.kind === "crew" ? "Add to this crew" : "Add to workspace"}
+            {here ? "Added" : scope.kind === "crew" ? "Add to this group" : "Add to all groups"}
           </button>
           <button
             type="button"

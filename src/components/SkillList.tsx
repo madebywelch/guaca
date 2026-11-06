@@ -151,12 +151,12 @@ export function SkillList({ scope }: Props) {
     <div className="access">
       <p className="field__hint">
         {crew
-          ? "Instructions this crew's agents load when a task fits. Its agents can write these too. They also read your workspace skills and Guaca's own."
-          : "Instructions every crew's agents load when a task fits. An agent sees each skill's name and when to use it, and reads the rest when it needs to."}
+          ? "Instructions this group's agents load when a task fits. Its agents can write these too. They also read your own skills and Guaca's own."
+          : "Instructions every group's agents load when a task fits. An agent sees each skill's name and when to use it, and reads the rest when it needs to."}
       </p>
       {skills === null && !error && <p className="field__hint">Loading skills…</p>}
       {skills?.length === 0 && !draft && (
-        <p className="field__hint">{crew ? "This crew has no skills yet." : "No skills yet."}</p>
+        <p className="field__hint">{crew ? "This group has no skills yet." : "No skills yet."}</p>
       )}
       {[...(skills ?? []), ...bundled].map((skill) => {
         const readOnly = skill.scope.kind === "bundled";

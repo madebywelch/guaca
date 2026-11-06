@@ -103,7 +103,7 @@ installed, for the provider row.
 ## A browser is admitted by a token, and the token arrives by fragment
 
 A hosted workspace holds inference keys, plugin refresh tokens and every
-transcript a crew has written, and it runs commands on the box: a connector
+transcript a group has written, and it runs commands on the box: a connector
 run as a program, and the `claude` program for a turn on a Claude plan. So
 there is no anonymous mode and no read-only mode, and the token
 is a password to the backend's user: a caller is the operator or it is
@@ -465,7 +465,7 @@ messages, attachments, memories and working notes remain on the volume. Back up 
 forward-only.
 
 A workspace also holds a process lock for its runtime's lifetime. A second
-host pointed at the same data directory refuses to start, rather than running
+host pointed at the same data folder refuses to start, rather than running
 a second scheduler or treating the first process's work as interrupted.
 
 

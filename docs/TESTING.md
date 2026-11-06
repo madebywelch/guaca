@@ -21,7 +21,7 @@ messages, a readable transcript and its numbers to `runs/<timestamp>/`, and the
 comparison beside them says what was different between runs that were given
 identical instructions. It asserts only what is not a matter of taste: every run
 settled, no run left the machinery in a state `trajectory.rs` calls broken, and
-somebody answered the operator. Run it after anything that changes how a crew
+somebody answered the operator. Run it after anything that changes how a group
 divides work, and read the transcripts rather than the exit code.
 
 ```sh
@@ -157,4 +157,4 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib \
   "does this appear anywhere in the request", and the request opens with two
   thousand words of instructions: adding the working-notes section, which says
   "when something you noted stops being true", made every stub keyed on `noted`
-  fire on the first call and read as a crew that would not stop repeating itself.
+  fire on the first call and read as a group that would not stop repeating itself.

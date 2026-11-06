@@ -21,7 +21,7 @@ frontend. Comparing their commits cannot tell it that an update exists.
 ## What the operator sees
 
 Use **host** in the interface, as the existing Workspace settings do. An update
-belongs to the whole workspace, not a crew or agent, and does not enter For You.
+belongs to the whole workspace, not a group or agent, and does not enter For You.
 
 On connection, check compatibility before mounting the workspace. Once connected,
 show a quiet, dismissible notice above the conversation when a newer compatible
@@ -279,7 +279,7 @@ version. It exists for the operator who builds the desktop app from source with
 `scripts/install.sh`: that app is always some commit of `main`, and a host that
 could only move between releases was always a week behind it, missing whatever
 the app now asked it for. A connector that was on `main` was absent from every
-crew because the box that served the catalog was on the last release, and both
+group because the box that served the catalog was on the last release, and both
 sides said 0.2.0.
 
 **The build happens in CI, not on the operator's machine.**

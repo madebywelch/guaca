@@ -161,7 +161,7 @@ const NOTIFY_COPY: Record<NotifyKind, { label: string; title: string }> = {
   decision: {
     label: "Decisions and follow-through",
     title:
-      "Batched reminders at 9 AM and 4 PM in the workspace timezone, and earlier for approaching deadlines. Decisions remain in For you until answered or withdrawn.",
+      "Batched reminders at 9 AM and 4 PM in this host's timezone, and earlier for approaching deadlines. Decisions remain in For you until answered or withdrawn.",
   },
   approval: {
     label: "An agent needs permission",
@@ -859,7 +859,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                     onEffortChange={(effort) => setReasoningEffort(effort ?? "auto")}
                     models={settings?.subscriptionModels ?? []}
                     onChange={setSubscriptionModel}
-                    title="The default for any group or agent that does not name one. A subscription has an hourly quota rather than a per-token bill, so a crew that talks a lot reaches the ceiling faster than one person would."
+                    title="The default for any group or agent that does not name one. A subscription has an hourly quota rather than a per-token bill, so a group that talks a lot reaches the ceiling faster than one person would."
                     hint="From your signed-in account."
                   />
                 )}
@@ -1651,7 +1651,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
               <>
                 <h3 className="settings__title">Skills</h3>
                 <p className="settings__lede">
-                  Your instructions for kinds of work, read by every crew. A crew's own skills are
+                  Your instructions for kinds of work, read by every group. A group's own skills are
                   in its settings.
                 </p>
                 <SkillList scope={{ kind: "workspace" }} />
@@ -1682,7 +1682,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   <div className="field">
                     <span className="field__label">Where it keeps things</span>
                     <span className="field__hint">
-                      On that host, in its data directory: <code>guac.db</code> for the transcripts,{" "}
+                      On that host, in its data folder: <code>guac.db</code> for the transcripts,{" "}
                       <code>config.json</code> for the settings and your keys, written so only that
                       host's user account can read it, <code>workspace/</code> for what each agent
                       remembers, and <code>files/</code> for anything attached. This app keeps the

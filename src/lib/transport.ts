@@ -234,7 +234,7 @@ export async function probe(candidate: Remote): Promise<{ build: string; capabil
   if (said?.service !== "guacad") {
     throw {
       kind: "unreachable",
-      message: `${base} answered, but it is not a Guaca workspace`,
+      message: `${base} answered, but it is not a Guaca host`,
     } satisfies Refusal;
   }
   const match = compatibility(parseHealth(said));
@@ -327,7 +327,7 @@ export async function upload<T>(file: File): Promise<T> {
     // answer is no.
     throw {
       kind: "unreachable",
-      message: `could not reach this workspace to send ${file.name}. Try attaching it again once the host is back`,
+      message: `could not reach this host to send ${file.name}. Try attaching it again once the host is back`,
     } satisfies Refusal;
   }
   const body = await response.json().catch(() => null);
@@ -339,7 +339,7 @@ export async function upload<T>(file: File): Promise<T> {
   if (!response.ok) {
     throw {
       kind: "file",
-      message: `${file.name} was not taken: this workspace answered ${response.status}`,
+      message: `${file.name} was not taken: this host answered ${response.status}`,
     } satisfies Refusal;
   }
   return (body as { ok: T }).ok;
@@ -373,7 +373,7 @@ export async function invoke<T>(name: string, args?: Record<string, unknown>): P
     // that knows whether this host is this Mac's or a box's.
     throw {
       kind: "unreachable",
-      message: `could not reach this workspace at ${origin()}. It may be starting up, or the connection to it is down. Its agents keep working either way`,
+      message: `could not reach this host at ${origin()}. It may be starting up, or the connection to it is down. Its agents keep working either way`,
     } satisfies Refusal;
   }
 
@@ -389,7 +389,7 @@ export async function invoke<T>(name: string, args?: Record<string, unknown>): P
   if (!response.ok) {
     throw {
       kind: "storage",
-      message: `this workspace answered ${response.status} and nothing this app could read`,
+      message: `this host answered ${response.status} and nothing this app could read`,
     } satisfies Refusal;
   }
   return (body as { ok: T }).ok;

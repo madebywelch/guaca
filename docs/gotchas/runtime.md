@@ -8,7 +8,7 @@ code.
 - **A group's settings are two blocks, and each is all-or-nothing.** A draft
   that mentions `inference` or `limits` replaces every override in that block,
   and one that leaves it out changes none of them. Per-field "absent means leave
-  alone" would let a caller half-write a crew's settings, and would make a UI
+  alone" would let a caller half-write a group's settings, and would make a UI
   that renders what it read back clear a field by forgetting to mention it. The
   API key is the one exception and has the opposite rule (absent keeps the
   stored key), because it is the one setting that cannot be read back.
@@ -75,7 +75,7 @@ code.
   one. Its first turn is `ToOperator` and every turn after it is woken by a
   peer, so `ToPeer` is the only mode it is ever in again, `send_message`
   resolves agent names only, and a file attached afterward routes to the peer
-  too. Measured on a real crew of four: twenty-seven minutes, 499 model calls,
+  too. Measured on a real group of four: twenty-seven minutes, 499 model calls,
   ten reports written and addressed to the operator by name, none delivered, and
   the operator's own message in the middle of it asking why nobody was working.
   The rule is per run in both directions, so a manager is not owed a report on a

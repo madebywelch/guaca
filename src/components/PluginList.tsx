@@ -604,7 +604,7 @@ export function PluginList({ groupId, crew }: Props) {
                     ))}
                   </select>
                   <span className="field__hint">
-                    Which {row.name} account this crew acts as
+                    Which {row.name} account this group acts as
                     {accountEmail ? `, from your Guaca account ${accountEmail}` : ""}.{" "}
                     {held
                       ? "Its tools are re-read when you change it, because two accounts do not always authorize the same things."
@@ -1061,9 +1061,8 @@ export function PluginList({ groupId, crew }: Props) {
               <span className="field__hint">
                 {/* Not one of the eight above, which would read as an instruction
                     to name it after a server that is already on the list. */}
-                Your agents call this server's tools by this name: a server named
-                <code> vault </code> offers <code>vault__read_secret</code>. Spaces and punctuation
-                become underscores.
+                Your agents call this server's tools by this name. Spaces and punctuation become
+                underscores.
               </span>
             </label>
             {/* Two shapes of the same thing. Most servers people run for

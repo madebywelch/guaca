@@ -136,7 +136,7 @@ export function Artifacts({ onClose }: Props) {
             <Escape onEscape={onClose} />
             <div className="artifacts__head">
               <h2 className="dialog__title">Artifacts</h2>
-              <p className="artifacts__details">{crew ? crew.name : "Every crew"}</p>
+              <p className="artifacts__details">{crew ? crew.name : "All groups"}</p>
             </div>
 
             <div className="artifacts__body">
@@ -146,7 +146,7 @@ export function Artifacts({ onClose }: Props) {
                 <p className="routines__note">
                   {crew
                     ? `${crew.name} keeps no artifacts yet.`
-                    : "No crew keeps any artifacts yet."}{" "}
+                    : "No group keeps any artifacts yet."}{" "}
                   Ask an agent for a page you will want to come back to, a board or a plan, and it
                   keeps one here.
                 </p>
@@ -334,7 +334,7 @@ function ArtifactView({
     }
     if (!owner || owner.gone) {
       setSaid(
-        "Nobody in the crew owns this page, so a click has nobody to reach. Hand it to an agent from History.",
+        "Nobody in the group owns this page, so a click has nobody to reach. Hand it to an agent from History.",
       );
       return;
     }

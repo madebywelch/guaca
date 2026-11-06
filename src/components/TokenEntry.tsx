@@ -39,7 +39,7 @@ export function TokenEntry({ children }: { children: ReactNode }) {
     if (!hosted) return;
     const turnedAway = () => {
       setAdmitted(false);
-      setRefused("This workspace stopped accepting the token this browser had.");
+      setRefused("This host stopped accepting the token this browser had.");
     };
     window.addEventListener(UNAUTHORIZED_EVENT, turnedAway);
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, turnedAway);
@@ -77,13 +77,13 @@ export function TokenEntry({ children }: { children: ReactNode }) {
           void submit();
         }}
       >
-        <h1 className="empty__title">This workspace needs its token</h1>
+        <h1 className="empty__title">This host needs its token</h1>
         <p className="empty__body">
           The box printed one when it started. It is in its logs, and in the <code>token</code> file
           beside its settings. Paste it here, or open the invitation link it printed.
         </p>
         <label className="field">
-          <span className="field__label">Workspace token</span>
+          <span className="field__label">Host token</span>
           <input
             className="input input--mono"
             type="password"
@@ -100,7 +100,7 @@ export function TokenEntry({ children }: { children: ReactNode }) {
           </div>
         )}
         <button type="submit" className="btn btn--primary" disabled={checking || !value.trim()}>
-          {checking ? "Checking…" : "Open workspace"}
+          {checking ? "Checking…" : "Open Guaca"}
         </button>
       </form>
     </main>
