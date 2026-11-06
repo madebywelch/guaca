@@ -10,7 +10,6 @@ import { useLiveAgents, useStore } from "../lib/store";
 import { useNow } from "../lib/time";
 import { desktop } from "../lib/transport";
 import type { AgentCard, AgentId, Group, GroupId } from "../lib/types";
-import { ArtifactMark } from "./Artifacts";
 import { Brand } from "./Brand";
 import { GroupRail } from "./GroupRail";
 import { NewMenu } from "./NewMenu";
@@ -392,6 +391,7 @@ export function Sidebar({
           escalated={stuck.some((one) => one.agentId === agent.id)}
           finishedAt={finishedAt[agent.id]}
           seed={agent.id}
+          size="xs"
           gesture={role.gesture}
           look={facing(agent.id, role.facing ?? undefined)}
           says={role.says}
@@ -516,13 +516,6 @@ export function Sidebar({
           <kbd className="rail__key">{FIND_KEY}</kbd>
         </button>
 
-        <button type="button" className="rail__for-you" onClick={() => showForYou(true)}>
-          <span>For you</span>
-          {/* Amber only while something is waiting: a zero in the one color that
-            means "answer me" is the app asking about nothing. */}
-          <span data-waiting={waiting > 0 ? "true" : undefined}>{waiting}</span>
-        </button>
-
         {/* The wire lives on this wrapper rather than on the scroll container, so
           it runs the full height of the rail down to the footer instead of
           stopping wherever the list happens to end. It is only drawn while a
@@ -621,6 +614,7 @@ export function Sidebar({
                         <span className="rail__group-name" title={group.name}>
                           {group.name}
                         </span>
+                        <span className="rail__group-count">{here.length}</span>
                         {gear(group)}
                       </div>
                       {here.map(row)}
@@ -654,24 +648,28 @@ export function Sidebar({
             one. Settings stays last: a phone hides it, because it has a tab of
             its own there. */}
         <div className="rail__foot">
+          <button
+            type="button"
+            className="rail__place"
+            aria-label={waiting > 0 ? `For you, ${waiting} waiting` : "For you"}
+            onClick={() => showForYou(true)}
+          >
+            <span>For you</span>
+            {/* Amber only while something is waiting: a zero in the one color
+                that means "answer me" is the app asking about nothing. */}
+            <b data-waiting={waiting > 0 ? "true" : undefined}>{waiting}</b>
+          </button>
           <button type="button" className="rail__place" onClick={onOpenCalendar}>
-            {/* Today's date, which is the one thing a calendar can say before
-                it is opened, and what makes the mark read as one. */}
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <rect x="4" y="5" width="16" height="15.5" rx="2" />
-              <path d="M4 9.5h16M8.5 3v4M15.5 3v4" />
-              <text x="12" y="17.8" textAnchor="middle" fontSize="8" fontWeight="600">
-                {new Date(now).getDate()}
-              </text>
-            </svg>
-            Calendar
+            <span>Calendar</span>
+            {/* What a calendar can say before it is opened. The date that used
+                to be drawn inside the mark itself, said in a word. */}
+            <b>{new Date(now).toLocaleDateString([], { weekday: "short" })}</b>
           </button>
           <button type="button" className="rail__place" onClick={onOpenArtifacts}>
-            <ArtifactMark />
-            Artifacts
+            <span>Artifacts</span>
           </button>
           {/* Named in full for anything that reads the label rather than the
-              position: inside a crew, the crew's own settings are one click
+              position: inside a group, the group's own settings are one click
               away at the top of the column. */}
           <button
             type="button"
@@ -680,10 +678,7 @@ export function Sidebar({
             aria-label="App settings"
             title="App settings"
           >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M4 6h16M4 12h16M4 18h16M8 3v6M16 9v6M10 15v6" />
-            </svg>
-            Settings
+            <span>Settings</span>
           </button>
         </div>
 

@@ -513,20 +513,21 @@ describe("what the rail offers", () => {
     expect(screen.queryByRole("button", { name: /activity/i })).toBeNull();
   });
 
-  it("keeps three places in its footer, and hires from the plus", () => {
-    // The cafeteria was a fourth row down there, and every place that shipped
-    // after it added another. Nothing is ever left in the cafeteria: an operator
-    // goes in to come out with agents, so it is behind the plus with the other
-    // ways of making them.
+  it("keeps four places in its footer, and hires from the plus", () => {
+    // The cafeteria was a row down here, and every place that shipped after it
+    // added another. Nothing is ever left in the cafeteria: an operator goes in
+    // to come out with agents, so it is behind the plus with the other ways of
+    // making them. What is left is the four a page keeps at the back: the
+    // request inbox, the calendar, the pages a group keeps, and settings.
     const { container, onOpenCafeteria } = draw([group("everyone")], [agent("Manager")]);
     const foot = container.querySelector<HTMLElement>(".rail__foot");
     if (!foot) throw new Error("no footer");
 
     const places = within(foot).getAllByRole("button");
-    expect(places).toHaveLength(3);
+    expect(places).toHaveLength(4);
     expect(places).toEqual(
-      ["Calendar", "Artifacts", "App settings"].map((name) =>
-        within(foot).getByRole("button", { name }),
+      ["For you", "Calendar", "Artifacts", "App settings"].map((name) =>
+        within(foot).getByRole("button", { name: new RegExp(`^${name}`) }),
       ),
     );
     expect(within(foot).queryByRole("button", { name: /cafeteria/i })).toBeNull();
@@ -536,11 +537,17 @@ describe("what the rail offers", () => {
     expect(onOpenCafeteria).toHaveBeenCalledOnce();
   });
 
-  it("marks the calendar with today's date", () => {
+  it("marks the calendar with the day it is", () => {
+    // It used to be the date drawn inside the mark's own glyphs; a footline
+    // says it in a word, which is the form the other three places answer in.
     vi.useFakeTimers({ toFake: ["Date"], now: new Date(2026, 8, 3, 12) });
     try {
       const { container } = draw([group("everyone")], [agent("Manager")]);
-      expect(container.querySelector(".rail__foot text")?.textContent).toBe("3");
+      const calendar = within(container.querySelector(".rail__foot") as HTMLElement).getByRole(
+        "button",
+        { name: /Calendar/ },
+      );
+      expect(calendar.querySelector("b")?.textContent).toBe("Thu");
     } finally {
       vi.useRealTimers();
     }

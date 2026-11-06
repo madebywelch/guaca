@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { runsOn } from "../lib/profile";
 import { useStore } from "../lib/store";
-import type { AgentCard, RoutineId } from "../lib/types";
+import type { Activity, AgentCard, RoutineId } from "../lib/types";
 import { BrowserScreen } from "./BrowserScreen";
 import { ComputerScreen } from "./ComputerScreen";
 import { Icon } from "./Icon";
@@ -23,6 +23,14 @@ interface Props {
 }
 
 const REMEMBERED = "guac.inspector";
+
+/** What an agent's activity is, said in the panel's own words. */
+const activityWords: Record<Exclude<Activity["state"], "idle">, string> = {
+  thinking: "working",
+  queued: "waiting its turn",
+  awaitingApproval: "waiting on you",
+  paused: "paused",
+};
 
 /**
  * Whether the panel was open last time.
@@ -52,8 +60,8 @@ function remembered(): boolean {
  * than a gear in the corner because the gear said nothing about what it
  * opened, and sat beside the arrow that closes the panel.
  *
- * The model is drawn lighter when it is inherited: a crew default is a fact
- * about the crew, and an operator reading the profile should be able to tell
+ * The model is drawn lighter when it is inherited: a group's default is a fact
+ * about the group, and an operator reading the profile should be able to tell
  * which agents chose for themselves without opening each one.
  */
 function Profile({
@@ -71,33 +79,55 @@ function Profile({
   const runs = runsOn(agent, group, settings);
   return (
     <div className="profile">
-      <AgentAvatar
-        avatar={agent.avatar}
-        color={agent.color}
-        activity={activity}
-        lifecycle={agent.lifecycle}
-        seed={agent.id}
-        size="md"
-      />
-      <div className="profile__body">
-        {/* Not a heading: the channel beside this already heads the page with
-            the same name, and the aside is labeled with it. */}
-        <p className="profile__name" title={agent.name}>
-          {agent.name}
-        </p>
-        <p className="profile__line" title={`${runs.crew} · ${runs.model}`}>
-          {runs.crew}
-          <span aria-hidden="true"> · </span>
-          <span className="profile__model" data-inherited={runs.inherited || undefined}>
-            {runs.model}
-          </span>
-        </p>
-        {agent.skills.length > 0 && (
-          <p className="profile__skills" title={agent.skills.join(", ")}>
-            {agent.skills.join(", ")}
-          </p>
-        )}
+      {/* The panel opens on a page about one agent, so it opens the way the
+          transcript does: what this is, then whose, then what it is set on. */}
+      <p className="profile__kicker">The agent</p>
+      <p className="profile__name" title={agent.name}>
+        {agent.name}
+      </p>
+      <p className="profile__line" title={runs.crew}>
+        {runs.crew}
+      </p>
+      <div className="profile__plate">
+        <AgentAvatar
+          avatar={agent.avatar}
+          color={agent.color}
+          activity={activity}
+          lifecycle={agent.lifecycle}
+          seed={agent.id}
+          size="lg"
+        />
       </div>
+      {activity && activity.state !== "idle" && (
+        <p className="profile__state" data-state={activity.state}>
+          <span className="profile__dot" aria-hidden="true" />
+          {activityWords[activity.state]}
+        </p>
+      )}
+      {/* What it is set on, as a page's front matter is set: a table of the
+          facts that are read constantly and were two clicks away.
+
+          It used to hold the browser and the computer as well, and those were
+          the same two things the places below say — twice, one above the other,
+          because a fact and a control about one place are one row and not two.
+          A place is granted, watched and taken back, so it lives where its
+          switch is; what is left here is what has no control at all. */}
+      <dl className="facts">
+        <div className="fact">
+          <dt>Model</dt>
+          {/* Lighter when inherited: a group's default is a fact about the
+              group, and an operator reading the profile should be able to tell
+              which agents chose for themselves without opening each one. */}
+          <dd title={runs.model} data-inherited={runs.inherited || undefined}>
+            {runs.model}
+          </dd>
+        </div>
+      </dl>
+      {agent.skills.length > 0 && (
+        <p className="profile__skills" title={agent.skills.join(", ")}>
+          {agent.skills.join(", ")}
+        </p>
+      )}
       <div className="profile__actions">
         <button
           type="button"
