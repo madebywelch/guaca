@@ -1480,7 +1480,7 @@ fn same_origin(endpoint: &str, named: &str) -> Result<String, McpError> {
         if theirs != origin {
             return Err(refuse(format!(
                 "its event stream named {named} for messages, which is a different server; a \
-                 crew's credential is not sent to an address the operator did not name"
+                 group's credential is not sent to an address the operator did not name"
             )));
         }
         named.to_string()

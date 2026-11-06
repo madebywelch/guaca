@@ -326,7 +326,7 @@ pub enum Invalid {
     #[error("two sources are called {0:?}; each needs a name of its own, because it is the key the page reads")]
     DuplicateSource(String),
     #[error(
-        "{0:?} is not a connector tool. A source is one of your crew's connector tools, named \
+        "{0:?} is not a connector tool. A source is one of your group's connector tools, named \
          the way you call it: `linear__list_issues`"
     )]
     NotAConnectorTool(String),
@@ -473,7 +473,7 @@ impl Artifact {
             None => "owned by nobody".to_string(),
             Some(owner) if owner.id == reader => "yours".to_string(),
             Some(owner) if owner.gone => {
-                format!("owned by {}, who is no longer in this crew", owner.name)
+                format!("owned by {}, who is no longer in this group", owner.name)
             }
             Some(owner) => format!("owned by {}", owner.name),
         }
@@ -722,6 +722,9 @@ mod tests {
             sources_allowed: false,
             condensed: false,
         };
-        assert_eq!(gone.owner_words(AgentId::new()), "owned by Rae, who is no longer in this crew");
+        assert_eq!(
+            gone.owner_words(AgentId::new()),
+            "owned by Rae, who is no longer in this group"
+        );
     }
 }

@@ -61,7 +61,7 @@ The script checks those before it compiles anything, and says how to fix
 whichever is missing. For a local host, have Docker installed and running
 before installing: the script builds the matching backend image. Choose **On
 this Mac** when Guaca opens, or **Remote host** to connect to a backend on your
-VPS. You can change that choice later in **Settings → Workspace**. A remote
+VPS. You can change that choice later in **Settings → Host**. A remote
 connection does not require Docker on your Mac.
 
 Managed Guaca compute spaces are planned for a later release. Local and remote

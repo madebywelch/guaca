@@ -310,7 +310,7 @@ fn kept_part(
 /// What an agent is told about an artifact id its crew does not have.
 fn no_such_artifact(id: &str) -> Kept {
     Kept::Refused(format!(
-        "your crew has no artifact with the id {id}. `list` shows every one it does have, with \
+        "your group has no artifact with the id {id}. `list` shows every one it does have, with \
          its id; `create` is how a new one starts."
     ))
 }
@@ -6367,7 +6367,7 @@ impl Runtime {
             "operatorView": self.describe_view(),
         });
         format!(
-            "The settings every agent runs on, unless its crew sets its own; a crew's null means \
+            "The settings every agent runs on, unless its group sets its own; a group's null means \
              it uses the setting above. Change one with `update`, and the operator approves it. \
              Anything under operatorOnly is theirs to change in Settings. quickActions are the \
              buttons on their status bar.\n{}",
@@ -6484,7 +6484,7 @@ impl Runtime {
                 self.emit(UiEvent::SkillsChanged { scope: own });
                 tracing::info!(agent = %card.name, skill = %written.name, "an agent wrote a skill");
                 Ok(format!(
-                    "{} `{}` for your crew. Every agent in it is offered it from its next turn.",
+                    "{} `{}` for your group. Every agent in it is offered it from its next turn.",
                     if existed { "Replaced" } else { "Wrote" },
                     written.name
                 ))
@@ -6492,7 +6492,7 @@ impl Runtime {
             tools::SkillAction::Delete { name } => {
                 if self.inner.skills.delete(own, name)? {
                     self.emit(UiEvent::SkillsChanged { scope: own });
-                    return Ok(format!("Deleted `{name}` from your crew's skills."));
+                    return Ok(format!("Deleted `{name}` from your group's skills."));
                 }
                 // Said precisely, because "not found" about a skill the agent
                 // can read reads as a bug and gets retried.
@@ -6555,10 +6555,10 @@ impl Runtime {
                     self.inner.store.crew_calendar(card.group_id, from, LISTED_OCCASIONS)?;
                 if ahead.is_empty() {
                     return Ok(
-                        "Your crew's calendar is empty. `add` puts something on it.".to_string()
+                        "Your group's calendar is empty. `add` puts something on it.".to_string()
                     );
                 }
-                let mut out = String::from("Your crew's calendar:\n");
+                let mut out = String::from("Your group's calendar:\n");
                 for one in &ahead {
                     out.push_str(&format!("  {} — {}\n", one.id, one.describe(now)));
                 }
@@ -6616,7 +6616,7 @@ impl Runtime {
                     .collect();
                 if !clashes.is_empty() {
                     answer.push_str(&format!(
-                        " Note: your crew already has {} at that time. If this is the same thing \
+                        " Note: your group already has {} at that time. If this is the same thing \
                          moved, `cancel` this one and `update` that one instead.",
                         clashes.join(", ")
                     ));
@@ -6627,7 +6627,7 @@ impl Runtime {
             tools::CalendarAction::Update { id, title, detail, place, starts_at, minutes } => {
                 let Some(existing) = mine(id)? else {
                     return Ok(format!(
-                        "Your crew has no occasion with the id {id}. `list` shows every one it \
+                        "Your group has no occasion with the id {id}. `list` shows every one it \
                          does have, with its id; `add` is how a new one starts."
                     ));
                 };
@@ -6666,7 +6666,7 @@ impl Runtime {
                     self.inner.store.update_occasion(existing.id, card.group_id, &clean)?
                 else {
                     return Ok(format!(
-                        "Your crew has no occasion with the id {id} any more; somebody may have \
+                        "Your group has no occasion with the id {id} any more; somebody may have \
                          canceled it. `list` shows what it does have."
                     ));
                 };
@@ -6677,7 +6677,7 @@ impl Runtime {
             tools::CalendarAction::Cancel { id } => {
                 let Some(existing) = mine(id)? else {
                     return Ok(format!(
-                        "Your crew has no occasion with the id {id}. `list` shows every one it \
+                        "Your group has no occasion with the id {id}. `list` shows every one it \
                          does have."
                     ));
                 };
@@ -6686,7 +6686,7 @@ impl Runtime {
                 }
                 self.emit(UiEvent::CalendarChanged { group_id: card.group_id });
                 Ok(format!(
-                    "Canceled {}: {}. It is off your crew's calendar; nobody outside this \
+                    "Canceled {}: {}. It is off your group's calendar; nobody outside this \
                      workspace was told, so if the thing itself needs calling off, do that too.",
                     existing.id, existing.title
                 ))
@@ -6725,10 +6725,11 @@ impl Runtime {
                 let all = self.inner.store.artifacts(Some(card.group_id), LISTED_ARTIFACTS)?;
                 if all.is_empty() {
                     return Ok(Kept::Said(
-                        "Your crew keeps no artifacts yet. `create` makes one.".to_string(),
+                        "Your group keeps no artifacts yet. `create` makes one.".to_string(),
                     ));
                 }
-                let mut out = String::from("Your crew's artifacts, most recently changed first:\n");
+                let mut out =
+                    String::from("Your group's artifacts, most recently changed first:\n");
                 for one in &all {
                     out.push_str(&one.index_line(card.id, now, pinned.contains(&one.id)));
                     out.push('\n');
@@ -6842,7 +6843,7 @@ impl Runtime {
                 )?;
                 changed();
                 let mut said = format!(
-                    "Created \"{}\", version 1, id {}. You own it. It is in your crew's \
+                    "Created \"{}\", version 1, id {}. You own it. It is in your group's \
                      Artifacts, and a card for it is on this turn where the operator reads it, so \
                      say what it is for rather than describing the page.",
                     made.title, made.id
@@ -6902,7 +6903,7 @@ impl Runtime {
                     Some(declared) => {
                         let Some(owner) = found.owner.as_ref().filter(|owner| !owner.gone) else {
                             return Ok(Kept::Refused(format!(
-                                "nobody in your crew owns {}, and a page's reads run as its owner. \
+                                "nobody in your group owns {}, and a page's reads run as its owner. \
                                  `take` it first, then change its sources.",
                                 found.id
                             )));
@@ -6941,12 +6942,12 @@ impl Runtime {
                 match &written.owner {
                     Some(owner) if owner.id == card.id => {}
                     Some(owner) if owner.gone => said.push_str(&format!(
-                        " Its owner, {}, is no longer in this crew. If keeping it current is \
+                        " Its owner, {}, is no longer in this group. If keeping it current is \
                          yours now, `take` it.",
                         owner.name
                     )),
                     Some(owner) => said.push_str(&format!(
-                        " {} owns it and will see your edit in its own list of your crew's \
+                        " {} owns it and will see your edit in its own list of your group's \
                          artifacts, so there is no need to message it about this.",
                         owner.name
                     )),
@@ -7205,7 +7206,7 @@ impl Runtime {
         for source in &sources {
             let Some((kind, tool)) = tools::split_plugin_tool(&source.tool, &crew) else {
                 return Ok(Err(format!(
-                    "your crew has no connector for `{}`. A source is one of your crew's \
+                    "your group has no connector for `{}`. A source is one of your group's \
                      connector tools, named the way you call it.",
                     source.tool
                 )));
@@ -7256,8 +7257,8 @@ impl Runtime {
         }
         let Some(owner) = artifact.owner.as_ref().filter(|owner| !owner.gone) else {
             return Ok(Some(refused(
-                "Nobody in the crew owns this page, so there is nobody to read as. Hand it to \
-                 one of the crew's agents from its History.",
+                "Nobody in the group owns this page, so there is nobody to read as. Hand it to \
+                 one of the group's agents from its History.",
             )));
         };
         let crew: Vec<_> = self
@@ -7273,7 +7274,7 @@ impl Runtime {
                 let Some((kind, tool)) = tools::split_plugin_tool(&source.tool, crew) else {
                     return Read::refused(
                         &source.name,
-                        &format!("The crew no longer has the connector `{}` needs.", source.tool),
+                        &format!("The group no longer has the connector `{}` needs.", source.tool),
                     );
                 };
                 match self

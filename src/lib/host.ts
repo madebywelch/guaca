@@ -159,7 +159,7 @@ export interface HostLabel {
  *
  * It read `Host 0.2.0`, which is the least useful half of what the bar knows.
  * A version is what an operator quotes in a bug report, not something they act
- * on, and it is one click away in Workspace settings. What the bar is for is
+ * on, and it is one click away in Host settings. What the bar is for is
  * which machine is doing the work, and whether the two halves are one build,
  * because a skew between them is the fact on that bar that breaks commands.
  *
@@ -211,17 +211,17 @@ export function hostLabel(facts: {
           : "";
   let title: string;
   if (!version) {
-    title = "Which host this window shows. Open Workspace settings for its updates.";
+    title = "Which host this window shows. Open Host settings for its updates.";
   } else if (drift === "same") {
     title = `${where} runs Guaca ${version}, the same build as this app.`;
   } else if (drift === "otherBuild") {
-    title = `${where} runs Guaca ${version}, a different build from this app. Open Workspace settings to see which.`;
+    title = `${where} runs Guaca ${version}, a different build from this app. Open Host settings to see which.`;
   } else if (drift === "clientBehind") {
     title = `${where} runs Guaca ${version} and this app is ${app}. Update this app.`;
   } else if (drift === "hostBehind") {
-    title = `${where} runs Guaca ${version} and this app is ${app}. Open Workspace settings to update the host.`;
+    title = `${where} runs Guaca ${version} and this app is ${app}. Open Host settings to update the host.`;
   } else {
-    title = `${where} runs Guaca ${version}. Open Workspace settings for its updates.`;
+    title = `${where} runs Guaca ${version}. Open Host settings for its updates.`;
   }
   return { text: `${where}${said}`, title, drift: said !== "" };
 }

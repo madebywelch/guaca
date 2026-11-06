@@ -76,7 +76,7 @@ impl Scope {
         match self {
             Scope::Bundled => "Guaca",
             Scope::Workspace => "operator",
-            Scope::Crew { .. } => "your crew",
+            Scope::Crew { .. } => "your group",
         }
     }
 
@@ -85,7 +85,7 @@ impl Scope {
         match self {
             Scope::Bundled => "Guaca",
             Scope::Workspace => "the operator",
-            Scope::Crew { .. } => "your crew",
+            Scope::Crew { .. } => "your group",
         }
     }
 

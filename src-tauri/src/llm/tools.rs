@@ -664,7 +664,7 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                     "skills": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Short capability lines. This is what the rest of the crew \
+                        "description": "Short capability lines. This is what the rest of the group \
                                         reads when deciding whether a task is this agent's, so \
                                         write what it does, not what it is."
                     },
@@ -861,7 +861,7 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                                         acknowledgment, a closing note. A courtesy to an agent \
                                         that has already answered you in this conversation is not \
                                         delivered, because two agents being polite at each other \
-                                        is how a crew spends an afternoon saying nothing. Label a \
+                                        is how a group spends an afternoon saying nothing. Label a \
                                         message by what it is: calling a courtesy `work` gets it \
                                         through and wastes a colleague's turn on nothing."
                     }
@@ -889,7 +889,7 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                  two with the same brief: every errand spends model calls from this \
                  conversation's budget, and the last {} are kept for your own answer.\n\
                  An errand knows nothing but its brief. It has not seen this conversation, \
-                 your memory or your crew, and it cannot ask. So each brief has to stand \
+                 your memory or your group, and it cannot ask. So each brief has to stand \
                  alone: what to find or do, where to look, what to hand back and in what \
                  shape, and where to stop.\n\
                  An errand cannot message anyone, rewrite your memory or send errands of its \
@@ -932,15 +932,15 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
             // and it is told that here rather than left to work it out from two
             // tool names that sound alike.
             description: format!(
-                "Your crew's calendar: what is coming that you and the operator are answerable \
+                "Your group's calendar: what is coming that you and the operator are answerable \
                  for. Meetings, deadlines, filings, renewals, launches, anything with a date on \
                  it that somebody needs to see in advance. Keep it current as you learn things: \
                  when a customer moves a call, `update` the occasion rather than adding a second \
                  one, and `cancel` what is no longer happening. Everything on it belongs to your \
-                 crew and every agent in it reads the same list, so what you put here is how the \
+                 group and every agent in it reads the same list, so what you put here is how the \
                  rest of them find out.\n\n\
                  This is a record, not an arrangement. Writing here books nothing, invites \
-                 nobody and sends no mail: it is a note to your crew and to the operator. If the \
+                 nobody and sends no mail: it is a note to your group and to the operator. If the \
                  thing itself needs arranging, arrange it, and then write down what you \
                  arranged.\n\n\
                  It also wakes nobody, which is what makes it different from `schedule`. A \
@@ -981,7 +981,7 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                     },
                     "id": {
                         "type": "string",
-                        "description": "The occasion to `update` or `cancel`. `list` shows every                                         one your crew has with its id."
+                        "description": "The occasion to `update` or `cancel`. `list` shows every                                         one your group has with its id."
                     }
                 },
                 "required": ["action"],
@@ -1001,27 +1001,27 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
             // edits back, and wakes the editor. It reads the edit from its own
             // list instead, and this says so before the agent thinks of it.
             description: format!(
-                "Your crew's kept pages. An artifact is an HTML page like an ```html fence, \
-                 except that it is kept: it lives in your crew's Artifacts, where the operator \
-                 opens it whenever they want, every agent in your crew can read and edit it, and \
+                "Your group's kept pages. An artifact is an HTML page like an ```html fence, \
+                 except that it is kept: it lives in your group's Artifacts, where the operator \
+                 opens it whenever they want, every agent in your group can read and edit it, and \
                  every change is a version with a note saying what changed. Make one when the \
                  operator will come back to the page: a board, a tracker, a plan, a comparison \
                  they will want again next week. A page for this one reply, such as a picker or \
                  a diagram that answers the question in front of you, stays a fence.\n\n\
-                 Your system prompt lists what your crew already has. When one of those already \
+                 Your system prompt lists what your group already has. When one of those already \
                  covers what you were asked for, `update` it rather than creating a second. \
                  `update` takes the whole new `page`, or leave `page` out to change only the \
                  `title`, and always a `note`: one line on what changed, like a commit message. \
                  `view` shows an artifact's current page and its history; `list` shows all of \
-                 your crew's.\n\n\
+                 your group's.\n\n\
                  Each artifact has one owner, who answers for keeping it current. You own what \
-                 you create. Anyone in your crew may edit any of them, and the owner reads your \
+                 you create. Anyone in your group may edit any of them, and the owner reads your \
                  edit in its own list, so do not message it to say you made one. `take` makes you \
                  the owner, with a `note` saying why. Do it deliberately: when the owner has \
-                 left the crew, or the work it tracks has become yours.\n\n\
+                 left the group, or the work it tracks has become yours.\n\n\
                  The page runs on an origin of its own and reaches nothing: no network, no \
                  remote script, image or font. For live data it declares `sources`: each is one \
-                 of your crew's connector tools, named the way you call it, with the exact \
+                 of your group's connector tools, named the way you call it, with the exact \
                  arguments to call it with, under a `name`. Call the tool yourself once first so \
                  you know the shape it returns. The operator allows a page's sources once; after \
                  that Guaca makes those calls each time the page is opened, as the page's owner, \
@@ -1046,7 +1046,10 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                  color. `pin` asks the operator to put a page that has a condensed view on their \
                  status bar, with a `width` and `every_minutes` between its reads. They see the \
                  page's reads with the request, and a yes allows those too. Pin what the \
-                 operator will want to see without asking for it; the bar holds {} in all.\n\n\
+                 operator will want to see without asking for it; the bar holds {} in all. A \
+                 page with no `condensed` cannot go on the status bar at all, and the operator \
+                 sees that on the page in Artifacts as a refused width; a page they will want \
+                 to glance at is one that should carry one.\n\n\
                  A page over {} KB is refused. Titles are cut past {} characters.",
                 crate::domain::artifact::MAX_CONDENSED / 1024,
                 crate::domain::widget::MAX_WIDGETS,
@@ -1143,21 +1146,21 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
             // a model shown `write` first treats the tool as a notebook.
             description: format!(
                 "Skills are documents of instructions for one kind of task, kept by Guaca, the \
-                 operator and your crew. Your system prompt names the ones you can read and \
+                 operator and your group. Your system prompt names the ones you can read and \
                  says when each applies; only those lines are there, not the instructions.\n\n\
                  `view` reads one by name. Read it before starting a task it fits, and follow \
                  it. Some skills carry files beside their instructions (references, templates, \
                  examples) and `view` lists them: `view` with `file` reads one when the \
                  instructions send you to it. Nothing in a skill is run for you. `list` shows \
                  every skill you can read. `write` creates or replaces one of \
-                 your crew's own skills: do it when you have worked out how a recurring task is \
+                 your group's own skills: do it when you have worked out how a recurring task is \
                  done and the next agent should not have to work it out again. `delete` \
-                 removes one of your crew's own. Guaca's skills and the operator's are \
+                 removes one of your group's own. Guaca's skills and the operator's are \
                  read-only.\n\n\
                  A skill has a `name` (lowercase words joined by dashes), a `description` (the \
                  one line that says when to load it, at most {} characters) and `content` \
-                 (markdown instructions, at most {} characters). Every agent in your crew \
-                 reads what you write, and no other crew can.",
+                 (markdown instructions, at most {} characters). Every agent in your group \
+                 reads what you write, and no other group can.",
                 crate::domain::skill::MAX_DESCRIPTION,
                 crate::domain::skill::MAX_BODY
             ),
@@ -1204,7 +1207,7 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                  Shape it as you like, with folders up to four deep: `write` creates or replaces \
                  a file, `append` adds to the end of one (a log never needs reading first), \
                  `move` renames, `delete` removes. Files are markdown by default (.md, .txt, \
-                 .json or .csv), up to {} characters each, {} at most. Nobody else in your crew \
+                 .json or .csv), up to {} characters each, {} at most. Nobody else in your group \
                  reads it; the operator can. Delete what you no longer need: a stale file steers \
                  the next turn wrong.",
                 crate::notebook::MAX_FILE,
@@ -1238,7 +1241,7 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
             // endpoint and the keys are named as untouchable so a model asked
             // to "switch us to Groq" says so rather than trying three spellings.
             description: "The workspace's settings, and what the operator is looking at right \
-                          now. `read` shows the settings every agent runs on, your crew's own \
+                          now. `read` shows the settings every agent runs on, your group's own \
                           overrides, this host's version and the operator's current screen: \
                           read it before answering a question about the app or a pane they \
                           have open.\n\n\
@@ -1806,25 +1809,25 @@ impl ToolParseError {
             ),
             ToolParseError::UnknownCalendarAction => {
                 "Error: `action` must be list, add, update or cancel. Use \
-                 {\"action\": \"list\"} to see what your crew already has on its calendar."
+                 {\"action\": \"list\"} to see what your group already has on its calendar."
                     .to_string()
             }
             ToolParseError::IncompleteCalendar { needs } => format!(
                 "Error: that `calendar` call needs {needs}. To add one: \
                  {{\"action\": \"add\", \"title\": \"Board call\", \"starts_at\": \
                  \"2026-09-14 15:00\", \"minutes\": 60}}. A date on its own is a whole day. \
-                 To move one your crew already has: {{\"action\": \"update\", \"id\": \
+                 To move one your group already has: {{\"action\": \"update\", \"id\": \
                  \"...\", \"starts_at\": \"2026-09-15 10:00\"}}."
             ),
             ToolParseError::UnknownArtifactAction => {
                 "Error: `action` must be list, view, create, update, take or pin. Use \
-                 {\"action\": \"list\"} to see what your crew already keeps."
+                 {\"action\": \"list\"} to see what your group already keeps."
                     .to_string()
             }
             ToolParseError::IncompleteArtifact { needs } => format!(
                 "Error: that `artifact` call needs {needs}. To make one: {{\"action\": \
                  \"create\", \"title\": \"Pipeline by stage\", \"page\": \"<!doctype html>...\"}}. \
-                 To change one your crew has: {{\"action\": \"update\", \"id\": \"...\", \
+                 To change one your group has: {{\"action\": \"update\", \"id\": \"...\", \
                  \"page\": \"<!doctype html>...\", \"note\": \"Added a Q4 column\"}}."
             ),
             ToolParseError::UnknownNotebookAction => {
@@ -1852,7 +1855,7 @@ impl ToolParseError {
             }
             ToolParseError::IncompleteSkill { needs } => format!(
                 "Error: that `skill` call needs {needs}. To read one: {{\"action\": \"view\", \
-                 \"name\": \"guaca\"}}. To write one for your crew: {{\"action\": \"write\", \
+                 \"name\": \"guaca\"}}. To write one for your group: {{\"action\": \"write\", \
                  \"name\": \"deploy-site\", \"description\": \"When deploying the marketing \
                  site\", \"content\": \"# Deploy\\n1. ...\"}}."
             ),
@@ -2597,7 +2600,7 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                     let Some(id) = words("id") else {
                         return Err(ToolParseError::IncompleteCalendar {
                             needs: "the `id` of the occasion to change, which `list` shows \
-                                    against every one your crew has"
+                                    against every one your group has"
                                 .to_string(),
                         });
                     };

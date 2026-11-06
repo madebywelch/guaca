@@ -33,9 +33,9 @@ impl Overlay {
     fn phrase(self) -> &'static str {
         match self {
             Overlay::Settings => "Settings",
-            Overlay::CrewSettings => "a crew's settings",
+            Overlay::CrewSettings => "a group's settings",
             Overlay::Calendar => "the calendar",
-            Overlay::Artifacts => "the artifacts, the pages its crews keep",
+            Overlay::Artifacts => "the artifacts, the pages its groups keep",
             Overlay::ForYou => "For You, the desk of what is waiting on them",
             Overlay::Search => "search",
             Overlay::Cafeteria => "the cafeteria of preset agents",
@@ -83,7 +83,7 @@ impl OperatorView {
             let mut open = overlay.phrase().to_string();
             if overlay == Overlay::CrewSettings {
                 if let Some(crew) = crew {
-                    open = format!("the settings of the crew {crew}");
+                    open = format!("the settings of the group {crew}");
                 }
             }
             match &self.section {
@@ -120,7 +120,7 @@ mod tests {
         };
         assert_eq!(
             view.describe(Some("Pip"), Some("Ops")),
-            "The operator is looking at the channel with Pip, with the settings of the crew Ops \
+            "The operator is looking at the channel with Pip, with the settings of the group Ops \
              open on limits."
         );
         assert_eq!(

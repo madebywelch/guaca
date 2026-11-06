@@ -20,14 +20,14 @@ frontend. Comparing their commits cannot tell it that an update exists.
 
 ## What the operator sees
 
-Use **host** in the interface, as the existing Workspace settings do. An update
+Use **host** in the interface, as **Settings → Host** does. An update
 belongs to the whole workspace, not a group or agent, and does not enter For You.
 
 On connection, check compatibility before mounting the workspace. Once connected,
 show a quiet, dismissible notice above the conversation when a newer compatible
 release is available: **Host update available** with **Review update**. Dismissal
 is scoped to that host and target release; it does not hide later releases.
-Keep the status available in Settings > Workspace. Do not move the transcript,
+Keep the status available in Settings > Host. Do not move the transcript,
 discard composer text, or send an operating-system notification for this.
 
 The review panel names the host, shows installed and available release versions,
@@ -274,7 +274,7 @@ signed with it, because an updater only knows the keys it was built with.
 ## The main channel
 
 A box can follow `main` instead of releases, so a change pushed to `main` is a
-button in Settings > Workspace minutes later, without anybody cutting a
+button in Settings > Host minutes later, without anybody cutting a
 version. It exists for the operator who builds the desktop app from source with
 `scripts/install.sh`: that app is always some commit of `main`, and a host that
 could only move between releases was always a week behind it, missing whatever

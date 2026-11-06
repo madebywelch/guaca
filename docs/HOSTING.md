@@ -181,7 +181,7 @@ runs before the workspace mounts. A saved local connection starts the managed
 Docker container and retrieves its token automatically; a saved remote
 connection is probed before the UI opens. Failure returns to host setup.
 
-`Settings → Workspace` exposes the same On this Mac / Remote host choices.
+`Settings → Host` exposes the same On this Mac / Remote host choices.
 Changing hosts probes the new connection, saves it and reloads the UI. Groups
 stay on their own host; switching is not migration. Remote addresses require
 HTTPS, except loopback connections. Credentials are never sent to a nonlocal
@@ -381,7 +381,7 @@ ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 \
   -L 127.0.0.1:18787:127.0.0.1:8787 root@your-host
 ```
 
-In **Settings → Workspace → Remote host**, enter `http://127.0.0.1:18787`.
+In **Settings → Host → Remote host**, enter `http://127.0.0.1:18787`.
 Retrieve the access key on the server with
 `docker compose exec -T guacad cat /var/lib/guaca/config/token`, then paste it
 into the app's Access key field. Treat that value as a password. HTTP here
@@ -575,7 +575,7 @@ and a real E2B desktop remain separate integration checks requiring accounts.
 ## Moving an existing workspace
 
 Use **Import / export** in a group’s settings to export that group. Import is
-also available under **Settings → Workspace**. The desktop can list and export
+also available under **Settings → Host**. The desktop can list and export
 groups left by the previous native version without starting those agents or
 migrating the old database. Quit the old app before exporting so memory files
 stop changing while the snapshot is taken.
@@ -680,7 +680,7 @@ clean Mac and on the remote host before merging or publishing the release.
 
 ## Updating a self-hosted backend
 
-Settings > Workspace reports the installed release, compatibility, the latest
+Settings > Host reports the installed release, compatibility, the latest
 published stable release, and when the check last succeeded. `guacad` reads the
 public GitHub release manifest at most once per six hours after a successful
 automatic check. Explicit checks and failed checks have a one-minute minimum
@@ -765,7 +765,7 @@ the workspace; the host picks them up the next time it is made, which is the
 next update. `docker rm -f guacad` followed by `docker restart guaca-updater`
 applies them now.
 
-From then on Settings > Workspace offers **Back up and update host** whenever a
+From then on Settings > Host offers **Back up and update host** whenever a
 newer signed release is out, in the desktop app and in a browser alike. The
 host's workspace token authorizes it. Why the updater is a second container,
 what it can be asked and why that list is short are in

@@ -38,7 +38,7 @@ exists to prevent.
   repository there and work in it: `git log`, `git diff`, `git grep`, one
   failing test, the edit, the suite. The filesystem persists between turns.
 - **With neither:** you can still debug by directing. Get the exact error, the
-  logs and the steps from the operator or from a crewmate who has the system
+  logs and the steps from the operator or from a groupmate who has the system
   (`read_file` for anything they attach), and hold to the same phases: no fix is
   proposed before the root cause is known.
 
@@ -182,7 +182,7 @@ Do not go on to Phase 2 until you understand why it is happening.
 3. **Verify before continuing.** If it is confirmed, go to Phase 4. If not, form
    a new hypothesis. Do not stack more fixes on top.
 4. **When you do not know,** say "I don't understand X". Do not pretend. Ask the
-   operator or a crewmate who knows the system, or research more.
+   operator or a groupmate who knows the system, or research more.
 
 ### Phase 4: implementation
 
