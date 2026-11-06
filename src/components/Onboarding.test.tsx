@@ -10,6 +10,14 @@ import { Onboarding } from "./Onboarding";
 
 const { hire, send } = vi.hoisted(() => ({ hire: vi.fn(), send: vi.fn() }));
 vi.mock("../lib/ipc", () => ({ api: { hireAgents: hire, sendMessage: send } }));
+/** A desktop window has a menu bar icon; a browser has nowhere to put one. */
+const platform = vi.hoisted(() => ({ desktop: true }));
+vi.mock("../lib/transport", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/transport")>()),
+  get desktop() {
+    return platform.desktop;
+  },
+}));
 vi.mock("./OnboardingProvider", () => ({
   OnboardingProvider: ({
     onConnected,
@@ -90,6 +98,7 @@ function toReview() {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  platform.desktop = true;
   localStorage.clear();
   hire.mockResolvedValue([agent]);
   send.mockResolvedValue("run-1");
@@ -101,6 +110,21 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe("where Guaca goes when the window closes", () => {
+  it("says the menu bar panel exists, on a desktop", () => {
+    mount();
+    toReview();
+    expect(screen.getByText(/Guaca stays in the menu bar/)).toBeTruthy();
+  });
+
+  it("says nothing about a menu bar in a browser, which has none", () => {
+    platform.desktop = false;
+    mount();
+    toReview();
+    expect(screen.queryByText(/menu bar/)).toBeNull();
+  });
 });
 
 describe("guided first task", () => {

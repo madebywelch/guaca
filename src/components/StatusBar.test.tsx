@@ -137,36 +137,41 @@ describe("StatusBar", () => {
     expect(screen.getByRole("button", { name: "Calendar" }).title).toBe("Opens the calendar");
   });
 
-  it("names the host and flags a host on another release", () => {
+  it("names which host it is, and flags an app older than it", () => {
+    // It said "Host 0.1.0": a version, which is the least useful half of what
+    // the bar knows, and clickable, so it was a status somebody was meant to
+    // read. Which host, and whether the two builds agree, is the status.
     seed([]);
     const { rerender } = render(<StatusBar onOpen={onOpen} onMessage={onMessage} />);
-    const label = screen.getByRole("button", { name: "Host 0.1.0" });
+    const label = screen.getByRole("button", { name: "This Mac" });
     expect(label.hasAttribute("data-drift")).toBe(false);
+    expect(label.textContent).not.toContain("0.1.0");
+    expect(label.title).toBe("This Mac runs Guaca 0.1.0, the same build as this app.");
     fireEvent.click(label);
     expect(onOpen).toHaveBeenCalledWith({ kind: "settings", section: "workspace" });
     host.version = "0.2.0";
     rerender(<StatusBar onOpen={onOpen} onMessage={onMessage} />);
-    const behind = screen.getByRole("button", { name: "Host 0.2.0" });
+    const behind = screen.getByRole("button", { name: "This Mac · app older" });
     expect(behind.hasAttribute("data-drift")).toBe(true);
     expect(behind.title).toContain("Update this app");
   });
 
   it("says which build a host on the same version is, without a hover", () => {
-    // The label read "Host 0.1.0" for either build, and the only difference
-    // was a color and a title nobody hovers for.
+    // The label read "This Mac" for either build once the version left it, and
+    // the only difference would be a color and a title nobody hovers for.
     seed([]);
     host.build = "a".repeat(40);
     const { rerender } = render(<StatusBar onOpen={onOpen} onMessage={onMessage} />);
-    const same = screen.getByRole("button", { name: /^Host/ });
-    expect(same.textContent).toBe("Host 0.1.0");
+    const same = screen.getByRole("button", { name: /^This Mac/ });
+    expect(same.textContent).toBe("This Mac");
     expect(same.hasAttribute("data-drift")).toBe(false);
     host.build = "c15bd9a".padEnd(40, "0");
     rerender(<StatusBar onOpen={onOpen} onMessage={onMessage} />);
-    const other = screen.getByRole("button", { name: /^Host/ });
-    expect(other.textContent).toBe("Host 0.1.0 · c15bd9a");
+    const other = screen.getByRole("button", { name: /^This Mac/ });
+    expect(other.textContent).toBe("This Mac · other build");
     expect(other.hasAttribute("data-drift")).toBe(true);
     expect(other.title).toBe(
-      "This host and this app are different builds of Guaca 0.1.0. Open Workspace settings to see which.",
+      "This Mac runs Guaca 0.1.0, a different build from this app. Open Workspace settings to see which.",
     );
   });
 

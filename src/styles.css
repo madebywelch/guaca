@@ -8548,6 +8548,16 @@ input[type="file"]:disabled {
   margin-bottom: 0;
 }
 
+/* Why a width cannot be taken, beside the field that cannot take it. Faint and
+   small like the other explanations in a foot, and it gives way before the
+   controls beside it: the reason is only worth reading where there is room. */
+.artifacts__pin-why {
+  font-size: var(--type-small);
+  color: var(--faint);
+  line-height: var(--lead-ui);
+  max-width: 22rem;
+}
+
 /* A record, read line by line when something needs explaining. Small, and
    one line per change where it fits. */
 .artifacts__log {

@@ -2179,11 +2179,25 @@ turn for a fact most turns do not need.
 
 ## The status bar holds pages the groups keep, and a click on one is the bar's
 
-The last row of the reading column says which host this window shows, marked
-when this app and the host are on different releases, holds the pages pinned
-to it, and the operator's quick actions. Both are settings on the host, so
-every window draws the same bar and a change reaches them through
-`settingsChanged`.
+The last row of the reading column names the host this window shows, marks it
+when its build and this window's are not one build, holds the pages pinned to
+it, and the operator's quick actions. Both are settings on the host, so every
+window draws the same bar and a change reaches them through `settingsChanged`.
+
+**The host's name is the status, and its version is a click away.** The item
+read `Host 0.2.0`, which is the least useful half of what it knows: a version
+is what an operator quotes in a bug report and never what they act on, and the
+item is a button into Workspace settings, where it can be acted on. `lib/host.ts`
+names the place instead — `This Mac` for the window's own workspace and for a
+host on this Mac, `Remote host` for a box, `This host` for a browser, which
+cannot tell a box from a container — and adds the drift in words beside it:
+`· other build` for one version on two commits, `· app older` and `· host older`
+for the two directions a release can differ, and nothing when the two agree.
+The `data-drift` color is still drawn, because a skew is the one fact on that
+row that breaks commands; the words are there because a color alone is a
+difference only somebody who already knows the rule can read. A window that is
+a browser compares nothing: its page is the host's own bundle, so a stale one is
+`pageStale`'s sentence above the conversation rather than a skew on the bar.
 
 **A widget is a kept page, not a new kind of thing.** The bar was data from a
 closed set because the only alternative was Hermes's: an agent's JavaScript
@@ -2232,6 +2246,19 @@ Everything that would make a yes useless is refused before anybody is asked: a
 page with no condensed view, one already there, a full bar, another group's id.
 The operator's own pin, from the page in Artifacts, asks nobody and allows
 nothing; the reads are allowed above the page, where the list is drawn.
+
+**The row in a page's foot is drawn for every page, including the ones that
+cannot use it.** It used to render only for a page whose owner had already
+written a condensed view, so the feature was invisible to exactly the pages
+whose owners needed to learn it exists. Every page now shows the row; one with
+no condensed view shows both widths refused and says why beside them — no
+condensed view yet, and who can add one, named as the page's owner where it has
+one and as any agent in its group where it has none — described by the field
+that refuses them rather than left as an unconnected sentence. A page pinned while
+the version on screen has no condensed view, which a restore can bring back,
+says that instead and can still be taken off. A host older than the bar's pages
+sends no `widgets` at all, and that host draws no row, because a control it
+cannot honour is worse than no control.
 
 **Reads run on the pin's clock, and only where they are seen.** Minutes between
 reads are chosen with the pin, from one to a day. Each is a connector call as
@@ -2516,6 +2543,14 @@ host agree because both read the host, and an answer given in one reaches the
 other the same way any change does. What must not happen twice is what the
 window does for the whole app: notifications and the icon's report stay the
 window's alone, and the panel does neither.
+
+**Where a person is told it exists.** Settings → General and the last step of
+onboarding each carry one line saying what the panel is for: what is waiting on
+you, who is doing what, and a reply without bringing the window back. Neither
+says it in a browser, and the gate is `desktop` rather than a capability. What a
+deployment can do is a fact about the runtime (`domain/deployment.rs`), and a
+menu bar is a fact about the window: the desktop app showing a box still has
+one, and a browser showing anything does not.
 
 **What it shows is the window's, smaller.** The desk from For you, card for card,
 with "Open channel" bringing the window back at that channel. The rail's rows,
