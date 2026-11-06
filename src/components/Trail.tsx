@@ -118,9 +118,17 @@ function FootnoteGroup({
   // is the one part of a note somebody may have to act on, and a footnote that
   // hid the reason behind a click would be hiding the only thing worth reading.
   const failed = only ? stepReason(only) : null;
+  // The names a model calls this work by, on the words a person reads. A
+  // plugin's tool has no phrase this build can write — it is somebody else's
+  // function — so its wire name becomes words, and this is where the name
+  // itself survives: a note that said `Used mailbox__search_threads` last week
+  // says `Used Search threads on mailbox` and says the rest on hover.
+  const tools = [...new Set(group.steps.map((step) => step.tool))].join(", ");
   const face = (
     <>
-      <span className="footnote__label">{group.label}</span>
+      <span className="footnote__label" title={tools}>
+        {group.label}
+      </span>
       {target && <span className="footnote__target">{target}</span>}
       {failed && <span className="footnote__gist">{why(failed)}</span>}
       {group.steps.length > 1 && <span className="footnote__count">×{group.steps.length}</span>}
@@ -309,7 +317,13 @@ function StepRow({ step }: { step: Step }) {
   return (
     <li className="trail__step" data-failed={step.failed || undefined}>
       <div className="trail__step-head">
-        <span className="trail__step-title">{step.title}</span>
+        {/* The name a model calls this by, kept on the row that opens the note
+            rather than said on it. What a person reads is what the call was;
+            what a bug report or a schema needs is the wire name, and a pointer
+            over the phrase is where it lives now. */}
+        <span className="trail__step-title" title={step.tool}>
+          {step.title}
+        </span>
         {inline && <span className="trail__inline">{step.target}</span>}
         {/* In the place the runtime's own summary would have gone, and for a
             memory rewrite that summary is a character count printed directly

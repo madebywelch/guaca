@@ -68,6 +68,13 @@ step() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 note() { printf '    %s\n' "$1"; }
 fail() { printf '\033[1m%s\033[0m\n' "$1" >&2; exit 1; }
 
+# The version floors live in a file the gate can source on Linux. This script
+# builds a .app and stops on anything that is not a Mac, so the arithmetic that
+# decides whether somebody is told now or by a compiler four hundred crates in
+# could not be tested from here at all. `scripts/versions.test.sh` is that test.
+# shellcheck source=scripts/versions.sh
+. scripts/versions.sh
+
 # Everything that can be known before a five minute build is checked before it,
 # including whether the answer can be written where it is going: a permission
 # error after the compile is the same error, discovered at the worst moment.
@@ -86,23 +93,19 @@ xcrun --find clang >/dev/null 2>&1 \
 command -v node >/dev/null 2>&1 \
   || fail "node is not on PATH; install Node.js from nodejs.org and run this again."
 
-for tool in git pnpm cargo codesign ditto; do
+for tool in git cargo codesign ditto; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is not on PATH; install it and run this again."
 done
 
-# Is $1 at least $2, for dotted version numbers? Written out because `sort -V`
-# is GNU and macOS ships a BSD sort without it, and because the answer decides
-# whether somebody is told now or told by a wall of errors later.
-at_least() {
-  local a b i
-  IFS=. read -r -a a <<<"$1"
-  IFS=. read -r -a b <<<"$2"
-  for i in 0 1 2; do
-    [ "${a[i]:-0}" -gt "${b[i]:-0}" ] && return 0
-    [ "${a[i]:-0}" -lt "${b[i]:-0}" ] && return 1
-  done
-  return 0
-}
+# pnpm is checked for its version rather than only its presence, because
+# `package.json` pins one and corepack is what reads the pin: a pnpm from
+# another year passes a presence check and then fails on a lockfile it cannot
+# read, which is the failure this whole block exists to move forward.
+command -v pnpm >/dev/null 2>&1 \
+  || fail "pnpm is not on PATH; run \`corepack enable pnpm\` (corepack ships with Node), and run this again."
+PINNED="$(pnpm_pin)"
+VERDICT="$(pnpm_verdict "$(pnpm --version 2>/dev/null || true)" "$PINNED")"
+[ -z "$VERDICT" ] || fail "$VERDICT"
 
 # `rust-version` in the crate is the floor, and cargo reports it only once it is
 # already compiling. Without a check here the same fact arrives as a build

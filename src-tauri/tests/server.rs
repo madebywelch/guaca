@@ -1140,6 +1140,26 @@ async fn a_browser_exchanges_its_token_for_a_cookie() {
 }
 
 #[tokio::test]
+async fn a_wrong_token_is_turned_away_with_only_the_fact_that_is_new() {
+    let (addr, _dir) = workspace().await;
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/auth/session"))
+        .bearer_auth("not-the-token")
+        .json(&json!({}))
+        .send()
+        .await
+        .expect("the daemon answers");
+    assert_eq!(response.status(), 401);
+    let body: Value = response.json().await.expect("a refusal is JSON");
+    let said = body["err"]["message"].as_str().expect("a refusal says why");
+    // The token screen already says where the token comes from, above the
+    // field. The one thing it cannot know until this answers is that the one
+    // pasted was refused, and a second copy of the hint under the field is the
+    // sentence the operator already read, in a voice that is not the app's.
+    assert_eq!(said, "that token was not accepted");
+}
+
+#[tokio::test]
 async fn a_cookie_authenticates_a_call_without_a_bearer_token() {
     let (addr, _dir) = workspace().await;
     let cookie = session_cookie(addr).await;

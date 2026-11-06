@@ -135,6 +135,23 @@ several of a kind, and it names what it can even then: a browsing turn that
 stayed on one site says which site, for the reason a burst draws one chip per
 peer rather than "5 messages with 2 agents".
 
+**Every tool the runtime offers has a phrase, and the wire name is on the row.**
+`Used ask_operator` was the last kind of row that had none: a function name from
+a file the operator does not have, on the page they read most. So `describe` in
+`lib/trail.ts` names each one as the thing that happened — `Asked you`,
+`Left a decision for you`, `Read the settings` — and `trail.test.ts` reads the
+tool constants out of `llm/tools.rs` and fails when one is missing, which is
+what keeps the two lists in step. Nothing is hidden by the change: the name a
+model calls the tool by stays on `Step.tool`, and the row a note opens onto
+puts it in its `title`, where a bug report finds it.
+
+A plugin's tool has no phrase, because nothing here can know what somebody
+else's tool does. Its wire name becomes words instead — `gmail_search` draws as
+`Used Gmail search at Google` — and the server's own name stays in front of the
+call, which is the half the runtime prefixed on for exactly this. `at` rather
+than `on`, because a server is where the work went and `Turn on on
+home_assistant` is what `on` costs.
+
 **And a call that did not happen is not written in the past tense.** The title
 is the successful phrasing, which is right for a call that finished and is the
 opposite of what happened on one that failed: the chip read `Scheduled Morning

@@ -5,6 +5,7 @@
 #
 #   ./scripts/ci.sh          everything
 #   ./scripts/ci.sh assets   just the icons and tray glyphs against their scripts
+#   ./scripts/ci.sh scripts  just the version floors the installer checks
 #   ./scripts/ci.sh rust     just the Rust suite
 #   ./scripts/ci.sh web      just the frontend
 
@@ -29,6 +30,15 @@ run_assets() {
   # is also the only way to catch a mark edited without running its script.
   step "Icons and tray glyphs"
   python3 scripts/check-icons.py
+}
+
+run_scripts() {
+  # The version floors `install.sh` checks. That script builds a .app and stops
+  # on anything that is not a Mac, so the part of it that decides whether
+  # somebody is told now or by a compiler four hundred crates in is kept in
+  # `scripts/versions.sh` and held here, on Linux, where this gate runs too.
+  step "Shell checks"
+  bash scripts/versions.test.sh
 }
 
 run_web() {
@@ -70,15 +80,17 @@ run_rust() {
 
 case "${1:-all}" in
   assets) run_assets ;;
+  scripts) run_scripts ;;
   web) run_web ;;
   rust) run_rust ;;
   all)
     run_assets
+    run_scripts
     run_web
     run_rust
     ;;
   *)
-    echo "usage: $0 [all|assets|web|rust]" >&2
+    echo "usage: $0 [all|assets|scripts|web|rust]" >&2
     exit 2
     ;;
 esac

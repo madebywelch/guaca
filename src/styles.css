@@ -1760,6 +1760,12 @@ input[type="file"]::file-selector-button {
 .rail__place {
   flex: none;
   min-width: 0;
+  /* The back matter is a list of lines, and a line of 11px type is 21px. The
+     count, the day and the name are the whole of it, so the target is made
+     taller the way the footnote's is: glass, not ink. The gap between two
+     places is the two pixels this reaches into, so neighbours meet at their
+     edges rather than overlapping. */
+  position: relative;
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -1792,6 +1798,12 @@ input[type="file"]::file-selector-button {
 
 .rail__place b[data-waiting="true"] {
   color: var(--attention);
+}
+
+.rail__place::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--space-1) * -1) 0;
 }
 
 .rail__place:hover {
@@ -3044,6 +3056,25 @@ input[type="file"]::file-selector-button {
   border-bottom: 1px solid var(--rule-hard);
 }
 
+/* The note is one line of 11px type, so the control that opens everything a
+   turn did is 16px tall — the smallest target in the app, on the page a person
+   reads most. A hit area is not a drawing: this is a box of clear glass around
+   the line, so the note looks exactly as it did and a pointer that is a few
+   pixels off the words still lands on them. Four pixels either way is the
+   twenty-four the rest of the app's controls are, and it reaches into the
+   leading above and below rather than growing the line. */
+.footnote__call--open,
+.footnote__send:is(button) {
+  position: relative;
+}
+
+.footnote__call--open::after,
+.footnote__send:is(button)::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--space-2) * -1) 0;
+}
+
 .footnote__call--open:hover,
 .footnote__send:is(button):hover {
   color: var(--text);
@@ -4290,6 +4321,17 @@ input[type="file"]::file-selector-button {
   text-overflow: ellipsis;
   white-space: nowrap;
   opacity: 0.72;
+}
+
+/* Opened, the answer is the reason the operator clicked, so it wraps instead of
+   clipping. A chip has one line to say what came back; a step has the column,
+   and a calendar's answer carries the id it stored — one unbroken token that
+   `nowrap` pushed under the panel, where it was cut off mid-id. `anywhere`
+   rather than `break-word`, because a uuid has no break opportunity to find. */
+.trail__step .trail__said {
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: anywhere;
 }
 
 /* A credential this command spent, by name. The operator's audit trail for
@@ -6012,6 +6054,10 @@ input[type="file"]:disabled {
    what is already there rather than changing anything. */
 .toolset__more {
   align-self: flex-start;
+  /* Underlined text with no box of its own: 17px, which is a control a hand
+     can miss. The hit area is the same trick as the footnote's — clear glass
+     over the same words, so nothing about the row moves. */
+  position: relative;
   padding: 0;
   background: none;
   border: 0;
@@ -6019,6 +6065,12 @@ input[type="file"]:disabled {
   font-size: var(--type-fine);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+.toolset__more::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--space-2) * -1) 0;
 }
 
 .access__ok,
