@@ -5,11 +5,11 @@
 """
 Five wordmark prototypes for Guaca, and the page that compares them.
 
-The rail's wordmark is `GUACA` in Instrument Sans at 600 with the section
-heads' tracking, which is why it reads as one more label in the chrome rather
-than as the thing the chrome belongs to. Each prototype here makes one drawn
-move, and every move is taken from something the app already has rather than
-invented for the logo:
+The name in the rail's corner is `guaca`, lowercase in the display face, and
+the wordmark that ships is the drawn one below: `eye-contact.svg`, a word made
+of circles and one round stroke. Each prototype here makes one drawn move, and
+every move is taken from something the app already has rather than invented for
+the logo:
 
   conversation-g  the Paper scratchpad's icon, whose G is a reply bubble
   eye-contact     the shipped icon, two creatures looking at each other
@@ -20,6 +20,11 @@ invented for the logo:
 Everything is written out as outlines. A wordmark set as live text is a
 wordmark that changes with the font file, the renderer and the kerning table,
 and the point of drawing one is that it does not.
+
+The three typeset prototypes are cut from `--font-display`, Literata, which is
+the face `.brand__name` sets the rail's name in (`src/styles.css`), so the page
+compares the app's own type rather than a face the app once shipped. The two
+drawn ones are the cast's geometry and use no font at all.
 
 Run through ./design/wordmarks/make.sh, which samples the silhouettes first.
 """
@@ -40,7 +45,10 @@ from fontTools.varLib import instancer
 ROOT = Path(__file__).resolve().parents[2]
 HERE = ROOT / "design" / "wordmarks"
 FONTS = ROOT / "node_modules" / "@fontsource-variable"
-SANS = FONTS / "instrument-sans" / "files" / "instrument-sans-latin-standard-normal.woff2"
+# `--font-display` from the token block at the top of src/styles.css, and the
+# same file the app loads for it (`literata/opsz.css` in src/page.ts), so the
+# outlines here come from the cut the window draws.
+DISPLAY = FONTS / "literata" / "files" / "literata-latin-opsz-normal.woff2"
 SILHOUETTES = json.loads((ROOT / "node_modules" / ".cache" / "silhouettes.json").read_text())
 
 # The rail's two surfaces, from the token blocks at the top of src/styles.css.
@@ -54,8 +62,15 @@ def num(v: float) -> str:
     return f"{v:.1f}".rstrip("0").rstrip(".")
 
 
-def bold(wdth: float = 100):
-    return instancer.instantiateVariableFont(TTFont(SANS), {"wght": 700, "wdth": wdth})
+def bold():
+    """Literata Bold, at the optical size the rail's name is read at.
+
+    14px is `--type-aside`, the size `.brand__name` is set in, so the outlines
+    come from the cut the operator actually sees. Both axes are named rather
+    than left to the file's defaults: an outline that followed a new default
+    would redraw every prototype without anybody asking for it.
+    """
+    return instancer.instantiateVariableFont(TTFont(DISPLAY), {"wght": 700, "opsz": 14})
 
 
 B700 = bold()
@@ -176,7 +191,7 @@ def crew(c=PAPER, gap=9, cap=44) -> str:
 
 # --- 4. Mashed ---------------------------------------------------------------
 #
-# Instrument Sans Bold, thickened by a round-joined stroke of its own color,
+# Literata Bold, thickened by a round-joined stroke of its own color,
 # which softens every corner toward the cast's geometry, then kerned until the
 # round letters touch. Two straights never touch: g against u would fuse into
 # one slab the height of the x-height, so that pair keeps a gap and every other
@@ -314,7 +329,7 @@ MARKS = [
         "key": "conversation-g", "name": "Conversation G", "rail": 20,
         "paper": conversation_g, "dark": lambda: conversation_g(DARK),
         "title": "The icon starts the word.",
-        "why": "Instrument Sans Bold's own C, with the icon's reply bubble as the crossbar. The mark "
+        "why": "The display face's own C, with the icon's reply bubble as the crossbar. The mark "
                "and the word stop being two things set side by side. In one color the bubble is just "
                "a crossbar, so it still reads as a G. The only one of the five that spends amber, and "
                "amber is the color that means the app wants something from you.",
@@ -341,7 +356,7 @@ MARKS = [
         "key": "mashed", "name": "Mashed", "rail": 25,
         "paper": mashed, "dark": lambda: mashed(DARK),
         "title": "One mass, not five letters.",
-        "why": "Instrument Sans Bold, softened by a round-joined stroke and kerned until the round "
+        "why": "Literata Bold, softened by a round-joined stroke and kerned until the round "
                "letters touch. Straights keep a gap; rounds kiss. The most conventional of the five, "
                "and the one that holds up best at 16 pixels and on a favicon.",
     },
@@ -367,9 +382,9 @@ def sized(markup: str, height: float) -> str:
     return f"{head}>{rest}"
 
 
-def font_face(family: str, path: Path) -> str:
+def font_face(family: str, path: Path, weights: str = "100 900") -> str:
     data = base64.b64encode(path.read_bytes()).decode()
-    return (f'@font-face{{font-family:"{family}";font-style:normal;font-weight:100 900;'
+    return (f'@font-face{{font-family:"{family}";font-style:normal;font-weight:{weights};'
             f'src:url(data:font/woff2;base64,{data}) format("woff2");}}')
 
 
@@ -380,7 +395,10 @@ def rail(markup: str, surface: dict, label: str) -> str:
             '<div class="row">Research crew</div><div class="row muted">Scout</div></div>')
 
 
-CURRENT = '<span class="current">GUACA</span>'
+# The rail's own name, at the size and tracking `.brand__name` gives it, so the
+# lineup compares the five against what ships rather than against a treatment
+# the app no longer has.
+CURRENT = '<span class="current">guaca</span>'
 
 
 def page(marks) -> str:
@@ -402,7 +420,7 @@ def page(marks) -> str:
     lineup = "".join(f"<figure><figcaption>{name}</figcaption>{rail(markup, PAPER, name)}</figure>"
                      for name, markup in cast)
     fonts = "\n".join([
-        font_face("Instrument Sans", FONTS / "instrument-sans" / "files" / "instrument-sans-latin-wght-normal.woff2"),
+        font_face("Literata", DISPLAY, "200 900"),
         font_face("Inter", FONTS / "inter" / "files" / "inter-latin-wght-normal.woff2"),
     ])
     return f"""<!doctype html>
@@ -422,7 +440,7 @@ header span:first-child {{ letter-spacing: .12em; }}
 .hero {{ height: 440px; background: #F5F3EE; display: flex; align-items: center; padding: 64px 96px; }}
 .foot {{ display: flex; justify-content: space-between; gap: 64px; padding-top: 8px; }}
 .why {{ width: 560px; }}
-h2 {{ margin: 0 0 14px; font: 600 28px/34px "Instrument Sans"; }}
+h2 {{ margin: 0 0 14px; font: 600 28px/34px "Literata"; }}
 p {{ margin: 0; font-size: 18px; line-height: 28px; color: #54524D; }}
 h3 {{ margin: 0 0 14px; font-weight: 400; font-size: 14px; line-height: 20px; letter-spacing: .08em; color: #54524D; }}
 .rails, .lineup .rails {{ display: flex; gap: 16px; }}
@@ -433,7 +451,7 @@ h3 {{ margin: 0 0 14px; font-weight: 400; font-size: 14px; line-height: 20px; le
   border: 1px solid var(--e); background: var(--r); border-radius: 3px; font-size: 17px; }}
 .row {{ padding: 6px 16px; font-size: 15px; line-height: 20px; }}
 .row.muted {{ color: var(--m); }}
-.current {{ font: 600 22px/26px "Instrument Sans"; letter-spacing: .18em; }}
+.current {{ font: 400 14px/20px "Literata"; letter-spacing: -0.02em; }}
 .lineup .rails {{ flex-wrap: wrap; gap: 40px 48px; }}
 figure {{ margin: 0; }}
 figcaption {{ margin-bottom: 12px; font-size: 14px; line-height: 20px; color: #54524D; }}

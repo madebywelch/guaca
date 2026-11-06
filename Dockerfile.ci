@@ -24,9 +24,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
-# Node from nodesource; the distro package lags too far behind.
+# Node from nodesource; the distro package lags too far behind. python3 is for
+# the icon scripts: the app icon and the tray glyphs are drawn by Python and
+# compared against the committed ones by the gate's `assets` step.
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
- && apt-get install -y --no-install-recommends nodejs \
+ && apt-get install -y --no-install-recommends nodejs python3 \
  && rm -rf /var/lib/apt/lists/* \
  && corepack enable
 

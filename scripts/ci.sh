@@ -4,6 +4,7 @@
 # so "it passed locally" and "it passed in CI" mean the same thing.
 #
 #   ./scripts/ci.sh          everything
+#   ./scripts/ci.sh assets   just the icons and tray glyphs against their scripts
 #   ./scripts/ci.sh rust     just the Rust suite
 #   ./scripts/ci.sh web      just the frontend
 
@@ -20,6 +21,14 @@ ensure_dist() {
     step "Building frontend (required before the Rust crate compiles)"
     pnpm build
   fi
+}
+
+run_assets() {
+  # The icons are compiled in, so a stale one is invisible until the app is
+  # opened on a Mac. The check is a regeneration into a temp directory, which
+  # is also the only way to catch a mark edited without running its script.
+  step "Icons and tray glyphs"
+  python3 scripts/check-icons.py
 }
 
 run_web() {
@@ -60,14 +69,16 @@ run_rust() {
 }
 
 case "${1:-all}" in
+  assets) run_assets ;;
   web) run_web ;;
   rust) run_rust ;;
   all)
+    run_assets
     run_web
     run_rust
     ;;
   *)
-    echo "usage: $0 [all|web|rust]" >&2
+    echo "usage: $0 [all|assets|web|rust]" >&2
     exit 2
     ;;
 esac

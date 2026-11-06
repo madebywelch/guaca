@@ -32,8 +32,11 @@ Template tinting is macOS-only. When there is a Windows build, `idle` and
 on a dark taskbar is an icon nobody can see, and there is nothing to tint it.
 `attention` already carries its own color and needs nothing.
 
-  ./scripts/make-tray.py            writes the three glyphs
-  ./scripts/make-tray.py --preview  also writes 8x copies to eyeball
+  ./scripts/make-tray.py             writes the three glyphs into src-tauri/icons
+  ./scripts/make-tray.py /tmp/icons  writes them somewhere else, which is how
+                                     scripts/check-icons.py compares without
+                                     touching the committed ones
+  ./scripts/make-tray.py --preview   also writes 8x copies to eyeball
 """
 
 from __future__ import annotations
@@ -181,7 +184,8 @@ def write(path: Path, sample, size: int) -> None:
 
 def main() -> int:
     here = Path(__file__).resolve().parent.parent
-    out = here / "src-tauri" / "icons"
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    out = Path(args[0]) if args else here / "src-tauri" / "icons"
     glyphs = {"tray-idle": idle, "tray-working": working, "tray-attention": attention}
 
     for name, sample in glyphs.items():
