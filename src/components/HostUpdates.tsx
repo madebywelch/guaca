@@ -315,7 +315,7 @@ function outcome(manager: Manager, asked: Accepted): { result: string } | { fail
     };
   if (op.stage === "Previous version restored")
     return {
-      failure: `${op.error ?? "The update did not finish."} Guaca put the previous version back, with the workspace as it was when the update began.`,
+      failure: `${op.error ?? "The update did not finish."} Guaca put the previous version back, with its data as it was when the update began.`,
     };
   return { failure: op.error ?? manager.error ?? "The update did not finish. Try again." };
 }
@@ -571,7 +571,7 @@ export function HostUpdatePanel() {
               ? "Checking host…"
               : "Could not reach the host."
             : match === "hostOld"
-              ? "Update the host before opening this workspace."
+              ? "Update the host before continuing."
               : match === "clientOld"
                 ? "This frontend cannot use the host API. Update Guaca to reconnect."
                 : drift === "hostBehind"

@@ -210,7 +210,7 @@ work.
 ## How an agent actually reaches it
 
 As a plugin. `guaca.bot` serves an MCP server at `/mcp`, authenticated by the
-same account token, and Google appears in a crew's Connectors list like any other.
+same account token, and Google appears in a group's Connectors list like any other.
 `docs/PLUGINS.md`, *Google is a plugin whose sign-in is the account's*, has the
 argument; the short version is that it makes per-agent reach, the trust boundary
 and the tool plumbing all work without a line of new machinery.
@@ -231,7 +231,7 @@ two Google accounts are two subjects.
 
 The first version of this got that wrong by one word. It said "one grant per
 provider" and read the first row matching one, so a second account could be
-authorized and never seen again, and a crew had no way to name one. Two things
+authorized and never seen again, and a group had no way to name one. Two things
 were needed to fix it and only one of them was in the app:
 
 - `prompt=select_account` on Google's consent. `consent` alone forces the screen
@@ -239,7 +239,7 @@ were needed to fix it and only one of them was in the app:
   operator could not create the second grant in the first place.
 - A connection id on the plugin row, so a group can say which it means.
 
-`docs/PLUGINS.md`, *A crew chooses which identity it uses*, has the app half.
+`docs/PLUGINS.md`, *A group chooses which identity it uses*, has the app half.
 
 ## Managed compute is the next phase
 

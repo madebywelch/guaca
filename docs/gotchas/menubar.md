@@ -10,7 +10,7 @@ window shut* in `docs/WORKSPACE.md`, then `menubar.rs`, `tray.rs`, `app.rs` and
   the window reports, and serde turns a missing field into a refused call, not
   a missing number. `onMachine` outlived the only code that wrote it, every
   report after that was turned away, the frontend swallowed the refusal, and
-  the icon sat at "nothing running" whatever the crew was doing.
+  the icon sat at "nothing running" whatever the group was doing.
   `ipc.contract.test.ts` compares the fields of `Presence` on both sides, and
   a refusal is logged to the window's console.
 - **The panel is a second client, and must not be fed.** It has its own store

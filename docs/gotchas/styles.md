@@ -36,7 +36,7 @@ and *Every length is named* in `AGENTS.md` is the rule they all sit under.
   other and the heavier of them carried the least reading. They do the same job,
   so they are the same off-white, the page is the only paper on screen,
   and the only saturation left is an agent's color and the one amber. The
-  columns used to pin `--attention` and `--attention-wash`, and the crews' column
+  columns used to pin `--attention` and `--attention-wash`, and the groups' column
   `--danger` too, because they were ink under a reading column that could go dark. Nothing
   is pinned now, and what replaced the pins is the same trap read the other way:
   a `--rail-*` or `--grail-*` color declared for paper and forgotten in the ink
@@ -54,8 +54,8 @@ and *Every length is named* in `AGENTS.md` is the rule they all sit under.
   chosen for warmth is a page no ratio was measured against, and it fails in the
   one way a gate would have caught: the text on it is a shade under target.
 - **A `-wash` name is a ground, and drawing ink with one is invisible on both
-  surfaces.** The bar marking which crew the rail is inside was the attention
-  wash for as long as the crews' column has existed: 1.06 to 1 against the
+  surfaces.** The bar marking which group the rail is inside was the attention
+  wash for as long as the groups' column has existed: 1.06 to 1 against the
   column on paper, 1.31 to 1 in a dark room. It is the trap two bullets down
   read a third way: not a column color declared for paper and forgotten in the
   ink block, but ink spelled from a name that was never ink, which both blocks

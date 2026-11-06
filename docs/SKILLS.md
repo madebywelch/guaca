@@ -9,11 +9,11 @@ one Guaca ships.
 ## A name in every prompt, a body on demand
 
 Memory is in every prompt because it is what one agent knows and cannot look
-up. A procedure is the opposite: most turns do not need it, and a crew with
+up. A procedure is the opposite: most turns do not need it, and a group with
 forty would pay for forty on every call. So the prompt carries an index, capped
 at `LISTED` lines, and the body is a tool call away. The index is appended to
 the system message after assembly (`prompt::add_skills`), read from disk on
-every turn, so a skill a crewmate wrote a moment ago is offered on the next
+every turn, so a skill another agent wrote a moment ago is offered on the next
 turn without a restart.
 
 The format is the `SKILL.md` other harnesses read: front matter with `name` and
@@ -30,18 +30,18 @@ first `: ` and a description is prose.
 |---|---|---|---|
 | Bundled | compiled in | every agent | nobody |
 | Workspace | `skills/workspace/<name>/SKILL.md` | every agent | the operator |
-| Crew | `skills/crews/<group>/<name>/SKILL.md` | that crew | the operator and that crew's agents |
+| Group | `skills/crews/<group>/<name>/SKILL.md` | that group | the operator and that group's agents |
 
 A skill is instructions another agent will follow, so where it lives is a trust
-decision. An agent writes only to its own crew: a skill one crew's agent could
-put in front of another crew's agents is a way to hand instructions across the
-wall every other crew-scoped thing keeps, and the likeliest author of one is an
-agent that has just read a hostile page. The crew is read off the calling
+decision. An agent writes only to its own group: a skill one group's agent could
+put in front of another group's agents is a way to hand instructions across the
+wall every other group-scoped thing keeps, and the likeliest author of one is an
+agent that has just read a hostile page. The group is read off the calling
 agent's card at dispatch, never from the call, the way the calendar's is.
 
-A crew's skill shadows the operator's of the same name, so a crew can keep its
+A group's skill shadows the operator's of the same name, so a group can keep its
 own variant of a house procedure. Guaca's names are reserved and shadow
-nothing. Disbanding a crew removes its directory.
+nothing. Disbanding a group removes its directory.
 
 ## A workspace starts with six, and is given them once
 
@@ -68,13 +68,13 @@ ships a seventh offers only the seventh. Each carries `LICENSE.txt`, so the
 notice travels wherever the skill is copied.
 
 They are copied from the binary, not downloaded. A workspace opened offline on
-a box gets the same six as one opened at a desk, and what reaches every crew
+a box gets the same six as one opened at a desk, and what reaches every group
 is a file that was reviewed in this repository.
 
 ## skills.sh is where the rest come from, and only the operator adds
 
 skills.sh is Vercel's directory: every skill its CLI installs, ranked by how
-many times, with a copy of each one's files. Settings and a crew's settings
+many times, with a copy of each one's files. Settings and a group's settings
 open it inside the skills section (`SkillDirectory.tsx`): the three rankings
 (most installed, trending, hot), a search, and a skill opened in place with its
 whole `SKILL.md`, the files it carries and what skills.sh's audit partners said
@@ -87,7 +87,7 @@ fails when any of them stops answering the way this build reads it.
 
 Nothing is added unread. The preview carries a SHA-256 over every path and its
 contents, the add sends it back, and the add fetches the skill again and
-refuses when the hash moved: a skill is instructions a crew will follow, and a
+refuses when the hash moved: a skill is instructions a group will follow, and a
 version the operator did not read should not arrive in place of the one they
 did. The hash is computed here rather than taken from skills.sh, whose own
 `hash` field covers something this build cannot check.
@@ -123,7 +123,7 @@ document said to, and the door for running code is a computer's
 ## The manual is a skill, and a test keeps it true
 
 `guaca` is the app described to the agents that run in it: where it runs, what
-the operator sees, every Settings pane and crew section, the limits, skills,
+the operator sees, every Settings pane and group section, the limits, skills,
 plugins, secrets, routines and updates. The prompt names it in the section's
 own sentence, because "where do I change the model" is a question an agent
 answers before it would think to look for a tool.
@@ -134,10 +134,10 @@ settings dialogs and fails when a pane is drawn that the manual does not name.
 An agent that sends the operator to a pane that was renamed is worse than one
 that says it does not know.
 
-## Connectors, tools and skills are three sections of a crew's settings
+## Connectors, tools and skills are three sections of a group's settings
 
-A crew's settings show the three things an agent can use side by side.
-**Connectors** are MCP servers the crew signed in to, each with its own tools
+A group's settings show the three things an agent can use side by side.
+**Connectors** are MCP servers the group signed in to, each with its own tools
 and per-agent answers. **Tools** is Guaca's own functions, read from the
 definitions agents are sent (`tools::catalog`), each with what an agent has to
 be given before it is offered one; `offered` decides that and `needs` says it,
@@ -150,8 +150,8 @@ skill is not a tool: it is instructions an agent reads with one.
 - **Sites that publish their own skills.** Listed from skills.sh, not added.
 - **Updating an added skill.** `.origin` says where it came from; nothing
   checks it for a newer version. Delete it and add it again.
-- **Per-agent enablement.** Every agent in a crew sees the crew's skills and the
+- **Per-agent enablement.** Every agent in a group sees the group's skills and the
   operator's. An operator who wants a skill for one agent writes it into that
   agent's instructions.
-- **Export with a crew.** Import / export moves a crew's agents and settings,
+- **Export with a group.** Import / export moves a group's agents and settings,
   not its skills directory.

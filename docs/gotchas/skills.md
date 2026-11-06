@@ -18,7 +18,7 @@ The `skill` tool, the three scopes, the starters, skills.sh, and the manual.
   text the evals tuned. File skills are "skills" and a `skill` tool. Renaming
   either side changes a tuned prompt.
 - **Guaca's manual is checked against the UI.** Add a pane to Settings or a
-  section to a crew's settings and `manual.test.ts` fails until
+  section to a group's settings and `manual.test.ts` fails until
   `src-tauri/skills/guaca/SKILL.md` names it in bold.
 - **A skill from elsewhere is not held to `MAX_DESCRIPTION`.** More than half
   of the forty most installed on skills.sh describe themselves in more than 300

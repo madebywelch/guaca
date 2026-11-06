@@ -285,7 +285,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
       {provider === "chatgpt" && (
         <div className="onboarding-notice">
           <p>
-            Turns use your ChatGPT plan's Codex quota, not API credits. A crew can reach that quota
+            Turns use your ChatGPT plan's Codex quota, not API credits. A group can reach that quota
             faster than one person.
           </p>
           {subscription?.signedIn && (

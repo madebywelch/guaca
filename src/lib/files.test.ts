@@ -122,7 +122,7 @@ describe("readFileText", () => {
     // only failure anybody has hit was also the one nobody could diagnose.
     fetched.mockResolvedValue({ ok: false, status: 404, text: async () => "" });
     await expect(readFileText(file("gone.txt", "text/plain"), 2048)).rejects.toThrow(
-      "not in this workspace's file store",
+      "not in this host's file store",
     );
 
     fetched.mockResolvedValue({ ok: false, status: 503, text: async () => "" });

@@ -23,9 +23,9 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/transcript.ts   What a channel shows, and what it collapses. Read first.
   lib/rail.ts         What order the rail draws agents in, and where a drop lands.
   lib/brand.ts        The corner: the wordmark awake, and when the name is out.
-  lib/presence.ts     A crew, in the two marks its circle can carry.
-  lib/orb.ts          How a crew stands inside its circle, and when it counts.
-  lib/reach.ts        How close the pointer comes before the crews slide out.
+  lib/presence.ts     A group, in the two marks its circle can carry.
+  lib/orb.ts          How a group stands inside its circle, and when it counts.
+  lib/reach.ts        How close the pointer comes before the groups slide out.
   lib/search.ts       One ranking over hits from SQLite and from the store.
   lib/trail.ts        A turn's own tool calls: what folds into one chip.
   lib/refusal.ts      A refusal written for a model, said to a person.
@@ -91,9 +91,9 @@ src-tauri/src/
                       set of things it can do, and why only they add one.
     widget.rs         A kept page pinned to the status bar: where, how wide,
                       how often its reads run, and why it may be code.
-    occasion.rs       A date the crew is answerable for. It fires nothing, which
+    occasion.rs       A date the group is answerable for. It fires nothing, which
                       is the whole of what separates it from a routine.
-    artifact.rs       A page a crew keeps: who owns it, who may edit it, and
+    artifact.rs       A page a group keeps: who owns it, who may edit it, and
                       the log of versions, in the words of the moment.
     promise.rs        A closing sentence that says the work is still coming,
                       in a turn that is over. One rule, two readers.
@@ -103,8 +103,8 @@ src-tauri/src/
                       many, how long, what it spends, and how it can end.
     escalation.rs     The third thing, which stops nothing: work an agent
                       cannot move and only the operator can.
-    group.rs          A crew's wall, and the settings its agents run on.
-    plugin.rs         The servers a crew can sign in to, what it got, and
+    group.rs          A group's wall, and the settings its agents run on.
+    plugin.rs         The servers a group can sign in to, what it got, and
                       which of its agents may spend it.
     deployment.rs     Desktop or server, and the four things that decides.
                       Nothing about who paid for the box.
@@ -126,7 +126,7 @@ src-tauri/src/
   subscription.rs     Signing in to that subscription. A credential, not a wire.
   account.rs          The optional Guaca account. Nothing else depends on it.
   mcp.rs              The client end of MCP, in both of its protocol eras.
-  oauth.rs            Signing a crew in to a plugin's server. PKCE, no client id.
+  oauth.rs            Signing a group in to a plugin's server. PKCE, no client id.
   plugins.rs          Where those two meet the store, and a turn spends a grant.
   db/                 SQLite. Plain SQL, numbered migrations.
   e2b.rs              Computers: the machines agents look at and point at.
@@ -140,7 +140,7 @@ src-tauri/src/
   cdp.rs              The DevTools protocol. Asks a page instead of looking.
   workspace.rs        Per-agent memory: one markdown file the agent rewrites.
                       Its counterpart is `domain/worknote.rs` plus one table.
-  skills.rs           Skills on disk: the operator's and each crew's. Guaca's
+  skills.rs           Skills on disk: the operator's and each group's. Guaca's
                       own are compiled in from `src-tauri/skills/`, and so are
                       the six starters every workspace is given once.
   skills_sh.rs        skills.sh: the directory the operator browses and adds
@@ -201,7 +201,7 @@ repo: the frontend renders state and forwards intent.
 | What a group decides for itself: provider, models, timeout, limits, and an agent's own model over it | *A group chooses its own provider*, *Nothing about who pays is inferred* and *A run is measured against the limits of the group it happens in*, then `domain/group.rs` and `AgentCard::own_model` |
 | Stopping a conversation: what a stop marks, wakes, and must never release | *A stop marks the run and releases nothing*, then `Runtime::stop_run` |
 | A host stopping or restarting: the drain, what is put down, what the next host picks up and what it reports interrupted | *A stopping host puts its work down, and the next one picks it up* in `docs/HOSTING.md`, then `runtime/drain.rs` and `db/put_down.rs`, and run the scenarios under *a host that stops* in `tests/cascade.rs` |
-| The status bar, a page pinned to it, its condensed view, quick actions | *The status bar holds pages the crews keep, and a click on one is the bar's* in `docs/WORKSPACE.md`, then `domain/widget.rs`, `src/lib/widget.ts` and `src/components/StatusBar.tsx`, and `widget.test.ts`, which holds the widths the `artifact` tool states |
+| The status bar, a page pinned to it, its condensed view, quick actions | *The status bar holds pages the groups keep, and a click on one is the bar's* in `docs/WORKSPACE.md`, then `domain/widget.rs`, `src/lib/widget.ts` and `src/components/StatusBar.tsx`, and `widget.test.ts`, which holds the widths the `artifact` tool states |
 | An agent reading the settings or asking to change them, the operator's current view | *An agent can read the settings, and what the operator is looking at* in `docs/WORKSPACE.md` and *A settings change is a permission with its own diff* in `docs/ATTENTION.md`, then `config::agent_patch` and `Runtime::use_settings` |
 | Permission prompts, parked turns, acting in the operator's name | *A protected action parks the turn that asked for it* |
 | A program that is installed and reported missing: `claude` | *A double-clicked app does not have the operator's `PATH`* below, then `src-tauri/src/programs.rs` |
@@ -210,19 +210,19 @@ repo: the frontend renders state and forwards intent.
 | The box you write in: the ruled line, the row under it, what it says will answer | *The box you write in is a line, and the row under it is permanent* in `docs/WORKSPACE.md`, then `src/components/Composer.tsx` and the composer's rules in `src/styles.css` |
 | The app icon, the menu bar glyphs, the drawn wordmark, the README's header | *The icon is a paper tile, and the wordmark is the icon, drawn* in `docs/WORKSPACE.md`, then `scripts/make-icon.py` and `scripts/make-tray.py` |
 | The rail as an index: the mark, the name, the state, the group's count, the four places at the bottom | *The rail is an index, and its footer is the back matter* in `docs/WORKSPACE.md`, then `src/components/Sidebar.tsx` and the rail's rules in `src/styles.css` |
-| The crews' column, its badges, how a crew names itself, which crew the rail is inside | *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/presence.ts`, `src/components/GroupRail.tsx` and `src/components/OrbTag.tsx` |
-| When the crews' column comes out, how close is close enough, what holds it out | *The column does not stand open* in `docs/WORKSPACE.md`, then `src/lib/reach.ts` and the three boxes in `.grail` |
-| Who spoke to whom, what a run cost, where that board lives | *The flow board is analysis, so it is in a crew's settings* in `docs/WORKSPACE.md`, then `src/components/GroupActivity.tsx` and `Store::conversation_flow` |
+| The groups' column, its badges, how a group names itself, which group the rail is inside | *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/presence.ts`, `src/components/GroupRail.tsx` and `src/components/OrbTag.tsx` |
+| When the groups' column comes out, how close is close enough, what holds it out | *The column does not stand open* in `docs/WORKSPACE.md`, then `src/lib/reach.ts` and the three boxes in `.grail` |
+| Who spoke to whom, what a run cost, where that board lives | *The flow board is analysis, so it is in a group's settings* in `docs/WORKSPACE.md`, then `src/components/GroupActivity.tsx` and `Store::conversation_flow` |
 | What an agent may do with a page it has just read, and whether it is asked about it at all | *A page that was read this turn cannot quietly press a button*, then `Consent` in `domain/agent.rs` and `needs_consent` |
 | Screenshots, coordinates, what a screen action answers with | *A computer is looked at, never asked* in `docs/MACHINES.md` |
 | Attachments, previews, drops, handing a document to the operator | *Files are references, and what a model gets depends on what they are* |
 | SQLite, the pool, migrations | *Storage*, and the two comments in `Store::open` |
 | Schedules, triggers, what a firing looks like | `docs/ROUTINES.md` |
-| The crew's calendar, the `calendar` tool, what an occasion is for | `docs/CALENDAR.md`, then `domain/occasion.rs` and `Runtime::keep_calendar` |
-| Whether one crew can reach another crew's dates, and what a refusal may say | *A crew's calendar, and one crew cannot touch another's* in `docs/CALENDAR.md`, then the WHERE clauses in `Store::update_occasion` and `Store::delete_occasion` |
+| The group's calendar, the `calendar` tool, what an occasion is for | `docs/CALENDAR.md`, then `domain/occasion.rs` and `Runtime::keep_calendar` |
+| Whether one group can reach another group's dates, and what a refusal may say | *A group's calendar, and one group cannot touch another's* in `docs/CALENDAR.md`, then the WHERE clauses in `Store::update_occasion` and `Store::delete_occasion` |
 | A deadline with no time on it, a meeting with a length, one `starts_at` column | *One instant column, two kinds of date* in `docs/CALENDAR.md`, then `occasion::Clean::new`, which is the only place the invariant lives |
 | A date an agent wrote, what it is told back, what the prompt says the day is | *A model has no clock* and *Every write is answered with the date that was stored* in `docs/CALENDAR.md`, then `parse_when` and `Occasion::describe` |
-| What the calendar panel draws, the crew filter, the month it opens on | *What the operator sees is every crew, a month at a time* in `docs/CALENDAR.md`, then `src/lib/calendar.ts` and the suite beside it, which is the gate |
+| What the calendar panel draws, the group filter, the month it opens on | *What the operator sees is every group, a month at a time* in `docs/CALENDAR.md`, then `src/lib/calendar.ts` and the suite beside it, which is the gate |
 | Whether a firing lands on an agent that is already working | *A firing can be skipped, which is not the same as deferred* and *A skipped firing is in the history* in `docs/ROUTINES.md`, then `Activity::is_working` and `Runtime::sweep_schedule` |
 | An event that fires a routine: the receiver, the secret, what the body is to the model | *The receiver is loopback, and the secret is in a header because of that* in `docs/ROUTINES.md`, then `src-tauri/src/webhook.rs` and `Runtime::deliver_event`, and the four receiver tests in `tests/cascade.rs` |
 | What an agent knows about its own schedule, and how it changes one | *An agent reads its own schedule before it decides to write another one* and *Changing a routine is `update`* in `docs/ROUTINES.md` |
@@ -247,7 +247,7 @@ repo: the frontend renders state and forwards intent.
 | A page an agent wrote or a computer's screen, drawn in a browser or a window pointed at a box | *Two loopback origins reach a browser through the daemon* in `docs/HOSTING.md`, then the `artifact` and `screen` routes in `server/mod.rs`, `AppState::screened` and `screenUrl` in `src/lib/files.ts` |
 | The desktop app showing a box, the Workspace pane, and what the menu bar draws while it does | *The desktop app can show a box, and the menu bar follows* in `docs/HOSTING.md`, then `attached` in `src/lib/transport.ts`, `src/lib/menubar.ts` and `Tray::feed` |
 | Which transport a server is spoken to over, and who gets the older one | *It speaks the transport that was replaced* in `docs/PLUGINS.md`, then `mcp::probe` and `sse_exchange` |
-| Which agents in a crew get a plugin | *Signing in is one decision, and handing it out is another* in `docs/PLUGINS.md`, then `domain/plugin.rs` and `Store::plugin_tools`, which has to agree with `Store::plugin_reach` |
+| Which agents in a group get a plugin | *Signing in is one decision, and handing it out is another* in `docs/PLUGINS.md`, then `domain/plugin.rs` and `Store::plugin_tools`, which has to agree with `Store::plugin_reach` |
 | Which of a plugin's tools which agents may call | *And which of its tools, for which of them, which is a third decision* in `docs/PLUGINS.md`, then `Store::set_plugin_tool` and both readers of `plugin_tool_access` |
 | The guaca.bot account: signing in, what it is for, why it is optional | `docs/ACCOUNT.md`, then `account.rs` |
 | Channels, the rail, search: what the operator sees | `docs/WORKSPACE.md`, then `src/lib/transcript.ts` |
@@ -260,12 +260,12 @@ repo: the frontend renders state and forwards intent.
 | The drawn cast: the brush line, drawing on twos, a brow, a mouth, the mark on a head, the operator's choice of cast | *Two casts* in `docs/CHARACTERS.md`, then `src/avatars/drawn.ts` and the suite beside it, which holds every face inside every body, and `Cast` in `src/lib/prefs.ts` |
 | The shape a look pulls, or an idle body that moves | *A look pulls a pear, not a bulge* and *An idle body is still* in `docs/CHARACTERS.md`, then the pear block in `bodyPoints` |
 | An agent aimed at a peer: how far a look carries, what it does to the eye, why up and down are not the same size | *An aimed look* in `docs/CHARACTERS.md`, then `AIM` and the lids that ride the pupil in `eyesAt` in `src/avatars/eyes.ts`, and the containment suite in `form.test.ts`, which is the gate |
-| A crew that moves as one animal, a tempo, a phase, `--gait` | *No two of them keep time together* in `docs/CHARACTERS.md`, then `gaitOf` in `src/avatars/clock.ts` and the suite beside it |
+| A group that moves as one animal, a tempo, a phase, `--gait` | *No two of them keep time together* in `docs/CHARACTERS.md`, then `gaitOf` in `src/avatars/clock.ts` and the suite beside it |
 | Charts, tables, a page an agent wrote: what a reply can be drawn as | *A reply can be a figure* in `docs/WORKSPACE.md`, then `src/lib/figure.ts` and `src/lib/chart.ts` |
 | A box round the part of a reply that needs the operator, and which marker draws which one | *A reply can mark the one part that needs a person* in `docs/WORKSPACE.md`, then `src/lib/callout.ts` |
 | A chart's colors, or how many series one may carry | *A chart's colors are the output of a check* in `docs/WORKSPACE.md`, then `src/lib/palette.ts` and the test beside it, which is the gate |
 | Running a model's own HTML, or anything about that origin | *A page an agent wrote runs somewhere else* in `docs/WORKSPACE.md`, then `src-tauri/src/artifact.rs` |
-| A page a crew keeps: the `artifact` tool, owners, versions, the Artifacts dialog, the card in a transcript | *An artifact is a page a crew keeps* in `docs/WORKSPACE.md`, then `domain/artifact.rs`, `db/artifacts.rs` and `Runtime::keep_artifact` |
+| A page a group keeps: the `artifact` tool, owners, versions, the Artifacts dialog, the card in a transcript | *An artifact is a page a group keeps* in `docs/WORKSPACE.md`, then `domain/artifact.rs`, `db/artifacts.rs` and `Runtime::keep_artifact` |
 | A kept page's live data, what the operator allows, a click that reaches the owner | *Live data is declared, allowed once, and read with no model* and *A click on a kept page reaches its owner* in `docs/WORKSPACE.md`, then `Runtime::read_artifact`, `Runtime::call_connector`, and `onSend` in `src/components/HtmlArtifact.tsx` |
 | A page the operator can work, and what it may hand back | *A page can hand one value back* in `docs/WORKSPACE.md`, then `BRIDGE` in `src-tauri/src/artifact.rs` and `Answering` in `src/components/HtmlArtifact.tsx` |
 | A turn's tool calls in a channel: what folds, what a footnote says, what opens | *A turn's own work is a footnote* in `docs/WORKSPACE.md`, then `src/lib/trail.ts` |
@@ -274,7 +274,7 @@ repo: the frontend renders state and forwards intent.
 | What an agent changed about its own memory, and where the version before it came from | *A memory rewrite opens as a diff* in `docs/WORKSPACE.md`, then `Workspace::write` and `src/lib/diff.ts` |
 | What an agent currently remembers, and editing it by hand | *An agent's memory is in the panel* in `docs/WORKSPACE.md`, then `src/components/Memory.tsx` and `src-tauri/src/workspace.rs` |
 | The side panel: its head, what a section is framed in, a mark drawn in a control | *The panel is the agent's, and opens on its profile* in `docs/WORKSPACE.md`, then `src/components/Inspector.tsx`, `src/lib/profile.ts` and `src/components/Icon.tsx` |
-| Skills: what one is, which crew can read or write it, the `skill` tool, the index in the prompt | `docs/SKILLS.md`, then `domain/skill.rs` and `skills.rs` |
+| Skills: what one is, which group can read or write it, the `skill` tool, the index in the prompt | `docs/SKILLS.md`, then `domain/skill.rs` and `skills.rs` |
 | The six skills a workspace starts with, and why a deleted one stays deleted | *A workspace starts with six, and is given them once* in `docs/SKILLS.md`, then `skills::STARTERS` and `Skills::offer` |
 | Browsing and adding from skills.sh, what an added skill carries, what an agent may read of it | *skills.sh is where the rest come from, and only the operator adds* and *A skill carries files* in `docs/SKILLS.md`, then `skills_sh.rs` and `src/components/SkillDirectory.tsx`, and run the live half of `tests/skills_sh.rs` |
 | What agents are told about Guaca itself, and the manual they read | *The manual is a skill, and a test keeps it true* in `docs/SKILLS.md`, then `src-tauri/skills/guaca/SKILL.md` and `src/lib/manual.test.ts`, which is the gate |
@@ -289,18 +289,18 @@ repo: the frontend renders state and forwards intent.
 | Scrolling a transcript, following the newest line, when the view may move | *A transcript follows the end for whoever is at the end, and nobody else* in `docs/WORKSPACE.md`, then `src/lib/follow.ts` |
 | The menu bar: the glyph, the count, the panel under the icon, closing the window | *The menu bar is Guaca with the window shut* in `docs/WORKSPACE.md`, then `src-tauri/src/menubar.rs`, `src-tauri/src/tray.rs` and `src/components/MenubarPanel.tsx`, and the `Presence` check in `ipc.contract.test.ts`, which is the gate between the window and the icon |
 | The rail's corner: the icon's pair, the name that folds away, the one thing it reports | *The corner is the icon's pair* in `docs/WORKSPACE.md`, then `src/lib/brand.ts` and the suite beside it, which is the gate, and `gaze` in `AgentAvatar` |
-| The rail's order, dragging a row or a crew's circle, groups as places you go inside | *The rail is arranged by hand*, *A drop is one call* and *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/rail.ts`, `src/lib/orb.ts` and `Store::move_group` |
+| The rail's order, dragging a row or a group's circle, groups as places you go inside | *The rail is arranged by hand*, *A drop is one call* and *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/rail.ts`, `src/lib/orb.ts` and `Store::move_group` |
 | The rail's footer, what belongs in it and what goes behind the plus | *The footer is the places, in one row* and *Making something is one plus, at the top of the rail* in `docs/WORKSPACE.md`, then the footer in `src/components/Sidebar.tsx` and `src/components/NewMenu.tsx` |
 | Deleting an agent, putting one back, what the thirty days hold | *Deleting an agent is a thirty-day hold* in `docs/WORKSPACE.md`, then `Runtime::discard_agent` and `Runtime::purge_agent`, which are the two halves of what used to be one act |
-| Deleting a group, and why a disband does not use the compost | *Deleting a group deletes the crew, and the machines they were renting* in `docs/WORKSPACE.md`, then `disband_group` in `src-tauri/src/commands.rs` |
-| Preset agents, hiring a crew | *The cafeteria is a copy machine* in `docs/WORKSPACE.md`, then `src/lib/cafeteria.ts` |
+| Deleting a group, and why a disband does not use the compost | *Deleting a group deletes the agents in it, and the machines they were renting* in `docs/WORKSPACE.md`, then `disband_group` in `src-tauri/src/commands.rs` |
+| Preset agents, hiring a group | *The cafeteria is a copy machine* in `docs/WORKSPACE.md`, then `src/lib/cafeteria.ts` |
 | Settings, the surface, the scale, the theme, what may interrupt the operator | *Settings is a nav and a pane*, *The page is the only paper, and both edges are the same off-white*, *A theme is four choices, and every color in it is solved* and *An interruption has to earn it* in `docs/WORKSPACE.md` |
 | What About says this build is, and where that string comes from | *About says which commit it is* in `docs/WORKSPACE.md`, then `src/lib/build.ts` and the `define` in `vite.config.ts` |
-| The group editor: what a crew overrides and what it inherits | *A group's settings are the app's, with the crew's answer on top* in `docs/WORKSPACE.md`, then `src/components/GroupEditor.tsx` |
+| The group editor: what a group overrides and what it inherits | *A group's settings are the app's, with its own answer on top* in `docs/WORKSPACE.md`, then `src/components/GroupEditor.tsx` |
 | What model an agent is offered, and how its job is guessed at | *The model field suggests three, and is still a text box* in `docs/WORKSPACE.md`, then `src/lib/roles.ts` and `llm/catalog.rs`, whose twelve use cases have to agree |
 | Whether a model can be shown a picture: an attachment, a screen, what an agent is told it is | *What a model can be sent is asked of the endpoint, not assumed* in `docs/ARCHITECTURE.md`, then `llm/modality.rs` and the four places `Modalities` is spent from `Runtime::run_turn` |
-| A prompt, or anything that changes how much a crew talks | *Three test suites, asking different questions*, then run the live evals |
-| What a real crew of eight does with one directive, and what is different when you ask twice | *A crew is watched rather than asserted*, then `src-tauri/tests/crew.rs` |
+| A prompt, or anything that changes how much a group talks | *Three test suites, asking different questions*, then run the live evals |
+| What a real group of eight does with one directive, and what is different when you ask twice | *A group is watched rather than asserted*, then `src-tauri/tests/crew.rs` |
 
 Unqualified section names are headings in `docs/ARCHITECTURE.md`. Every row
 also has a shorter companion under `docs/gotchas/`, indexed below: the doc
@@ -367,7 +367,7 @@ of calls, the runtime dispatches them exactly as it does for the other two, and
 over: it is the unit the five limits are written in.
 
 **Connector, tool, skill, secret: four words, and the code's older name for
-two of them.** A connector is an MCP server a crew signs in to; the code calls
+two of them.** A connector is an MCP server a group signs in to; the code calls
 it a plugin (`domain/plugin.rs`, `mcp.rs`, the `*_plugin*` commands, the
 `plugins` table), because those names are the wire contract with a desktop on
 an older release. A tool is one function an agent calls, a connector's or
@@ -486,16 +486,16 @@ the gotchas file says what it already cost somebody to change it.
 | The daemon, the updater beside it on a box, a browser as a client, the boot both hosts share | `docs/gotchas/hosting.md` |
 | Computers, browsers, sandboxes, sign-ins found on them | `docs/gotchas/machines.md` |
 | Schedules, triggers, firings | `docs/gotchas/routines.md` |
-| A crew's calendar, an occasion, the wall between two crews' dates | `docs/gotchas/calendar.md` |
+| A group's calendar, an occasion, the wall between two groups' dates | `docs/gotchas/calendar.md` |
 | Approvals, questions, escalations, the desk | `docs/gotchas/attention.md` |
 | An agent's memory, its working notes, and the panels for both | `docs/gotchas/memory.md` |
 | Skills, the `skill` tool, the starters, skills.sh, the `guaca` manual | `docs/gotchas/skills.md` |
 | A turn drawn while it runs: the bubble, the trail, the thinking | `docs/gotchas/transcript.md` |
 | Charts, callouts, and a page an agent wrote | `docs/gotchas/figures.md` |
-| A page a crew keeps, its owner and its history | `docs/gotchas/artifacts.md` |
+| A page a group keeps, its owner and its history | `docs/gotchas/artifacts.md` |
 | Attachments, previews, a file in a reply | `docs/gotchas/files.md` |
 | Anything in `src/styles.css` | `docs/gotchas/styles.md` |
-| The rail, the crews' column, deleting an agent | `docs/gotchas/workspace.md` |
+| The rail, the groups' column, deleting an agent | `docs/gotchas/workspace.md` |
 | The menu bar, its panel, the tray, closing the window | `docs/gotchas/menubar.md` |
 | A test, a stub, or which suite would catch this | `docs/TESTING.md` |
 
@@ -579,6 +579,6 @@ cargo test --manifest-path src-tauri/Cargo.toml --test trajectory
 ```
 
 The other suites, one per subsystem with something live behind it, are in
-`docs/TESTING.md`: the crew recording, the subscription, the account, the
+`docs/TESTING.md`: the group recording, the subscription, the account, the
 plugins, the two machine providers, and the two reads off OpenRouter's catalog.
 Run the one you touched.

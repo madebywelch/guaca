@@ -776,7 +776,7 @@ mod tests {
         assert!(!bx.updater.report().await.updating);
         let journal = bx.dir.path().join("host-update.json");
         for (stage, updating) in [
-            ("Backing up workspace", true),
+            ("Backing up data", true),
             ("Restoring previous version", true),
             ("Host updated", false),
             ("Recovery needed", false),

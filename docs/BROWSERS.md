@@ -12,7 +12,7 @@ aiming a pointer. Both may be configured, either may be, or neither.
 ## A browser is given to one agent, and separately from the computer
 
 The same rule as the machine's, and the reason it is a second column rather
-than one switch over both: a crew where one agent reads the web and nobody else
+than one switch over both: a group where one agent reads the web and nobody else
 leaves the workspace is the ordinary shape, not a special case. A Kernel key
 says the workspace can hand a browser out; `agents.has_browser` says who was
 given one. `Surfaces::given_to` is where the two meet.

@@ -1,6 +1,6 @@
 # The calendar
 
-Dates a crew is answerable for. `domain/occasion.rs` holds the shape, the
+Dates a group is answerable for. `domain/occasion.rs` holds the shape, the
 `calendar` tool and `Runtime::keep_calendar` are how an agent writes it,
 `lib/calendar.ts` decides what the view shows, and `Calendar.tsx` draws it.
 
@@ -54,7 +54,7 @@ So they are two tables, two tools and two prompt sections, and each section says
 what the other is for. An agent that has to prepare for something on the
 calendar writes both: the occasion here, the routine there.
 
-## A crew's calendar, and one crew cannot touch another's
+## A group's calendar, and one group cannot touch another's
 
 The wall is the same one the message bus keeps and it is enforced the same way:
 in the store, in the WHERE clause, from the group on the calling agent's own
@@ -64,7 +64,7 @@ It has to be enforced there rather than trusted, and the reason is narrower than
 "defense in depth". An id is a thing a model can invent, and it invents them
 under exactly the pressure that makes an invented one plausible: asked to move a
 meeting it cannot find, it will try an id it half-remembers. An invented id that
-happened to land on another crew's board call would move it.
+happened to land on another group's board call would move it.
 
 **A refusal is "not found", never "not yours".** `Store::update_occasion` and
 `Store::delete_occasion` match on the group and come back empty, and
@@ -74,14 +74,14 @@ whose it is, which is the leak the wall is for. Same reasoning as
 `no agent named Chef` in the directory.
 
 The operator stands above that wall. `commands::calendar` with no `groupId` is
-the one read in the app that crosses every crew at once, and the three write
+the one read in the app that crosses every group at once, and the three write
 commands take an id with no group on it. This is not an inconsistency: the wall
-is between crews so that one crew's agents cannot reach another's, not between
+is between groups so that one group's agents cannot reach another's, not between
 the operator and a workspace they own.
 
-An occasion's crew never changes. There is no call that moves one, and the
-editor's crew field is disabled on anything that already exists: moving an
-occasion between crews would move it out from under the agents that keep it,
+An occasion's group never changes. There is no call that moves one, and the
+editor's group field is disabled on anything that already exists: moving an
+occasion between groups would move it out from under the agents that keep it,
 with nothing on screen saying so.
 
 ## One instant column, two kinds of date
@@ -140,19 +140,19 @@ and an explicit offset or `Z`. What it refuses is anything it would have to
 guess at, including an impossible date: `2026-09-31` is an error rather than the
 1st of October, because a silently moved date is one nobody checks.
 
-## What the operator sees is every crew, a month at a time
+## What the operator sees is every group, a month at a time
 
 One surface, reached from the rail's footer, drawn like the cafeteria and the
 compost because it is the same kind of thing: somewhere you go, look at the
-whole workspace, and come back from. A pane would have to live inside a crew,
+whole workspace, and come back from. A pane would have to live inside a group,
 which is the framing this exists to escape.
 
-**Every crew by default, filterable to one.** The crew chips are built from the
-groups rather than from the occasions, so a crew with an empty calendar is still
-something you can pick: a chip that appeared only once somebody wrote a date
-would be a filter you cannot use until you no longer need it. Each row says
-which crew it belongs to whether or not the list is filtered, because the crew
-is why one crew's agents cannot touch it.
+**Every group by default, filterable to one.** The group chips are built from the
+group list rather than from the occasions, so a group with an empty calendar is
+still something you can pick: a chip that appeared only once somebody wrote a
+date would be a filter you cannot use until you no longer need it. Each row says
+which group it belongs to whether or not the list is filtered, because the group
+is why one group's agents cannot touch it.
 
 **Days, not a list.** A flat list sorted by date is what the store hands back
 and reads as a feed: nothing in it says where Tuesday ends. `daysIn` groups into

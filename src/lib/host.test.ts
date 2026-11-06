@@ -27,7 +27,7 @@ describe("what to check when nothing answers", () => {
     vi.resetModules();
     const { unreachableHint } = await import("./host");
     expect(unreachableHint()).toBe(
-      "Check that Docker is running: this workspace is a container on this Mac.",
+      "Check that Docker is running: Guaca runs in a container on this Mac.",
     );
   });
 

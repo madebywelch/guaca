@@ -22,7 +22,7 @@ export function describeQuick(action: QuickAction, nameOf: (id: AgentId) => stri
     case "settings":
       return place.section ? `Opens Settings on ${place.section}` : "Opens Settings";
     case "crewSettings":
-      return "Opens a crew's settings";
+      return "Opens a group's settings";
   }
 }
 

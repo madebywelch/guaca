@@ -5,7 +5,7 @@ still call them plugins, and this document uses the code's word below. The
 command names are the wire contract with a desktop on an older release, and
 renaming them would cut that desktop off from a newer host for a word.
 
-A plugin is a server a crew signs in to once. After that, the agents that crew
+A plugin is a server a group signs in to once. After that, the agents that group
 chose are offered that server's tools on every turn, and none of them ever holds
 the sign-in.
 
@@ -14,7 +14,7 @@ Supermemory, Firecrawl and Google. Seven of them are the vendor's own server,
 and every count of "the seven" below means those; Google is the operator's own
 account, and *Google is a plugin whose sign-in is the account's* is why.
 
-A crew can also have a server nobody vouched for. *A server the operator added*
+A group can also have a server nobody vouched for. *A server the operator added*
 is the whole of that, and the short version is that it is not a second
 mechanism: the operator supplies the two things the catalog was supplying, and
 everything after those two strings is the code the eight go through.
@@ -36,7 +36,7 @@ Three conditions decide who is *shipped*, and all three are mechanical:
 
 1. **It publishes its own tools.** `tools/list` at the moment of connecting,
    not a note in this repo about what the vendor's API can do.
-2. **Those tools act on the operator's account.** A plugin is a thing a crew
+2. **Those tools act on the operator's account.** A plugin is a thing a group
    *has*, named in the prompt as something that reaches the real world.
 3. **Its authorization server lets an application register itself.** The next
    section is why this one is not negotiable.
@@ -101,7 +101,7 @@ and Supermemory is found by the tries after it.
 Firecrawl is also the one vendor whose server has an address that does *not*
 sign in. `/v2/mcp` answers an anonymous POST on a keyless tier with a daily
 limit, publishes no resource metadata, and would connect as a public server:
-a tile saying Connected over a crew spending nobody's account, which fails the
+a tile saying Connected over a group spending nobody's account, which fails the
 second condition as surely as Clerk did. `/v2/mcp-oauth` is the same tools
 behind a sign-in, and it is the one on the list.
 
@@ -193,7 +193,7 @@ Where neither document publishes a list, Guaca sends no `scope` parameter at
 all, and the server applies its own default. Cloudflare is that case, and its
 consent screen is a permission picker that opens on **read only**. The operator
 widens it there, on the screen that says what each scope is, or leaves it and
-has a crew that can look at the account without changing it.
+has a group that can look at the account without changing it.
 
 The way to reach more of a vendor's surface is therefore the consent screen or
 another entry on this list, never another parameter on the request.
@@ -206,10 +206,10 @@ a product area.
 The fifteen `*.mcp.cloudflare.com` hosts are one product each: Workers bindings,
 DNS, Radar, observability, and so on. Curated, typed, and a fifteenth of the
 account apiece. Picking one is deciding on the operator's behalf which fifteenth
-their crew gets, with nothing on the tile saying which, and an agent that can
+their group gets, with nothing on the tile saying which, and an agent that can
 create a Worker and cannot read a DNS record spends the turn discovering that.
 Offering several instead is a hundred tool definitions in front of a model that
-asked for "Cloudflare", paid for on every turn by every agent in the crew.
+asked for "Cloudflare", paid for on every turn by every agent in the group.
 
 `mcp.cloudflare.com` is the whole Cloudflare API — over 2,500 endpoints — behind
 `search` and `execute`, plus `docs`. The model writes JavaScript against the
@@ -222,7 +222,7 @@ entry rather than fifteen.
 Migration 26 deletes the rows from before the move. Nothing on one survives it:
 the tokens were issued by the old host's issuer and the new one refuses them,
 and the stored tool list names tools the new server does not have — which is
-what the crew is offered on every turn until something re-reads it. Left in
+what the group is offered on every turn until something re-reads it. Left in
 place, an agent calls `cloudflare__workers_list`, takes a 401 from a host it was
 never signed in to, and reports the operator's account as broken. Deleted, the
 tile says "Connect" and one consent screen fixes it.
@@ -246,7 +246,7 @@ arrive in, and no command that returns one.
 
 ## Google is a plugin whose sign-in is the account's
 
-Seven of the eight plugins are somebody else's server, and a crew signs in to each
+Seven of the eight plugins are somebody else's server, and a group signs in to each
 one separately because there is nothing else it could do. Google is not a
 server. It is the operator's own account at `guaca.bot`, which already holds the
 Google grant, already refreshes it, and already knows which capabilities were
@@ -259,8 +259,8 @@ per-account one for the same access, each expiring on its own clock, each
 renewable independently, and only one of them the truth.
 
 So the credential is the account's and the *decision to use it* stays the
-group's. Connecting Google in a crew is what puts its tools in front of that
-crew, and `PluginAccess` still decides which of its agents. Nothing else about a
+group's. Connecting Google in a group is what puts its tools in front of that
+group, and `PluginAccess` still decides which of its agents. Nothing else about a
 plugin changes:
 
 - The tool list is read once, on connect, the same way.
@@ -276,9 +276,9 @@ account rotates its own token, so a copy on the row would be a second thing to
 keep fresh, a second thing to be stale, and a renewal path racing the account's.
 `Runtime::account_token` reads a live one per call.
 
-**A crew chooses which identity it uses.** A person can authorize the same
+**A group chooses which identity it uses.** A person can authorize the same
 provider twice — a work Google and a personal one — and those are two grants at
-`guaca.bot` with two ids. `plugins.connection` holds the one this crew means,
+`guaca.bot` with two ids. `plugins.connection` holds the one this group means,
 and it is part of the address: `/mcp/<id>` rather than `/mcp`. Two groups can
 therefore hold two Google accounts at once, which is the case the single-grant
 model could not express at all.
@@ -286,7 +286,7 @@ model could not express at all.
 Empty means unnamed, and that is not a missing value. It is the account's
 default, it is what every plugin connected before this column existed keeps
 sending, and bare `/mcp` still answers with every connection's tools. An upgrade
-that invented an id would silently repoint a working crew at a different
+that invented an id would silently repoint a working group at a different
 mailbox.
 
 Changing it is `set_plugin_connection` rather than Disconnect and Connect,
@@ -297,7 +297,7 @@ not send it offers fewer.
 
 **What the tools are is decided at `guaca.bot`, not here.** The server offers a
 tool only when every scope it needs came back from Google, so a grant that can
-read mail and not send it offers `gmail_search` and not `gmail_send`. A crew
+read mail and not send it offers `gmail_search` and not `gmail_send`. A group
 that sees a tool it cannot use is a turn spent discovering a 403.
 
 **Why the tools live there rather than here.** Guaca could have asked for a
@@ -341,8 +341,8 @@ plugin that does not exist. The name is capped at 32 characters for the other
 half of the same reason — a provider refuses a function name past 64, and the
 tool needs the rest.
 
-`plugins_kind_unique` was one row per vendor per crew and is now also what stops
-two added servers in one crew sharing a name. Two tool lists behind one prefix
+`plugins_kind_unique` was one row per vendor per group and is now also what stops
+two added servers in one group sharing a name. Two tool lists behind one prefix
 would make which one a call landed on depend on row order.
 
 ### The address is stored on the row, and a vendor's is not
@@ -352,7 +352,7 @@ is deliberate in both directions.
 
 Where a vendor's server lives is a decision the *build* makes and re-makes on
 every release. A stored copy would freeze it, and the next time a vendor moved,
-every crew connected before the move would keep dialling the old host. That is
+every group connected before the move would keep dialling the old host. That is
 the failure migration 26 exists to clean up after, and it is not worth
 reintroducing for a string the build already has.
 
@@ -364,7 +364,7 @@ after a downgrade, and is skipped rather than raised, for the reason every
 unreadable plugin row is skipped.
 
 That rule has one cost, and it is paid when a vendor joins the catalog: the name
-it takes may already be a crew's own server. Firecrawl was addable by hand
+it takes may already be a group's own server. Firecrawl was addable by hand
 before it was shipped, and a `firecrawl` row with a pasted key, the keyless
 address or a program behind it would, the day the catalog claimed the slug,
 start dialling the catalog's address with a credential issued for something
@@ -382,7 +382,7 @@ scoped to. The trailing slash goes; a fragment is refused rather than trimmed,
 since a fragment is never sent to a server and a token issued for one is a token
 nothing will present.
 
-**HTTPS, or loopback.** Everything else carries a crew's grant, so plain HTTP is
+**HTTPS, or loopback.** Everything else carries a group's grant, so plain HTTP is
 refused here rather than in a packet capture. Loopback is the exception because
 a server on this machine is the commonest thing an operator wrote themselves and
 nothing on that connection leaves the machine. It is decided by parsing the host
@@ -412,7 +412,7 @@ Leaving the key out is not a lesser option: the server is then asked what it
 wants exactly as a vendor's is, and a server that publishes protected-resource
 metadata signs in through the full flow.
 
-### Its name only resolves against a crew that has it
+### Its name only resolves against a group that has it
 
 This is the one place a custom server differs from a catalog one, and it is at
 parse time rather than at call time.
@@ -421,7 +421,7 @@ parse time rather than at call time.
 makes "Neon is not connected. Ask the operator" reachable — a refusal that names
 the way forward, instead of "unknown tool", which names nothing. A name this
 build has never heard of cannot do that: there is nowhere for it to come from
-but the crew's own rows, which is also the only place its address exists.
+but the group's own rows, which is also the only place its address exists.
 
 So `split_plugin_tool` tries the catalog first and this agent's own connected
 plugins second. A prefix that is neither is not a plugin call at all, which is
@@ -464,7 +464,7 @@ that was working.
 
 **A session on that transport belongs to a stream, and the stream is per
 request.** `initialize` establishes a session that is scoped to the event stream
-it was sent on, so a session kept between turns is a socket per plugin per crew,
+it was sent on, so a session kept between turns is a socket per plugin per group,
 held open through sleep and reconnect, for a handshake that costs one round trip.
 Every exchange opens a stream, shakes hands on it, sends one request and drops
 it. That is the same "a session per call" rule this file argues for on the
@@ -472,7 +472,7 @@ current transport, arrived at from the other side.
 
 **The message endpoint has to be on the same origin the stream was.** It is a
 redirect invented by the far end after the connection was made, and following it
-puts a crew's credential and every argument of every tool call on a host the
+puts a group's credential and every argument of every tool call on a host the
 operator never named. Relative is the common form, absolute is legal, and an
 absolute one naming anywhere else is refused.
 
@@ -583,7 +583,7 @@ A key is refused for one, with the sentence that says to put it in a variable.
 its own command: a server at a new address is not the one that published the old
 tool list, so the list has to be re-read. What survives is what survives any
 reconnection — the row's id, who may spend it, which of its tools are whose —
-because the operator is fixing an address, not deciding what the crew may do. A
+because the operator is fixing an address, not deciding what the group may do. A
 local server changing port should not cost anybody their permissions.
 
 Headers go the other way from the key on this path, and the difference is what
@@ -600,7 +600,7 @@ server that stopped needing one would otherwise be unreachable from this panel.
 An address, a key and a set of headers are four ways to be wrong and one button.
 Before this, finding out which meant pressing Add: a failure replaced nothing
 but told the operator only whichever sentence the first failing layer produced,
-and a success on the wrong address connected a crew to it.
+and a success on the wrong address connected a group to it.
 
 `probe_server` runs the real path — the same probe, both transports, the
 handshake, `tools/list` — with whatever has been typed and not yet saved, and
@@ -641,10 +641,10 @@ own words. A tool call inside a turn still reads `McpError`, because what an
 agent should do about a server that is down — nothing, in this turn — is not
 what a person should do about it.
 
-`check_plugin` is the same question asked of a plugin the crew already has, and
+`check_plugin` is the same question asked of a plugin the group already has, and
 it is a separate command because the credential is separate: it spends the grant
 in the store, which is the only way to answer "is our sign-in still good". That
-is the failure a crew notices as an agent reporting a tool it cannot call, and
+is the failure a group notices as an agent reporting a tool it cannot call, and
 the only other way to ask it is to connect again, which replaces the tool list
 and opens a browser. A stale grant is renewed first, because the next real call
 would renew it too and a check that skipped it would report a working plugin as
@@ -666,9 +666,9 @@ install.
 ## Signing in is one decision, and handing it out is another
 
 A group holds the sign-in. Who may spend it is a second question, asked per
-plugin, and until it was asked the answer was always "everybody in the crew".
+plugin, and until it was asked the answer was always "everybody in the group".
 
-That answer only holds while a crew is uniform, and a crew is not. Agents run on
+That answer only holds while a group is uniform, and a group is not. Agents run on
 different models at different competencies and cost, and they have different
 jobs. The one that files issues has no business holding the account that issues
 refunds, and an agent on a cheap model with Stripe in its tool list is a bad
@@ -689,7 +689,7 @@ So each connected plugin carries one of two answers:
 Two states rather than a list with a sentinel, and the empty list is the reason.
 "Everyone" is a decision about people who have not been hired, which no list of
 today's ids can express, and a list that meant everyone when it was empty would
-hand a plugin back to the whole crew at the moment the operator unticked the
+hand a plugin back to the whole group at the moment the operator unticked the
 last agent. `PluginAccess` is the type; `plugins.access` and `plugin_agents` are
 the two columns it reads back out of.
 
@@ -712,7 +712,7 @@ you" names the way forward, which is the peer.
 
 The peer is named for it too. An agent's roster already lists what each peer's
 browser is signed in to, so that an agent asked for something it has no account
-for can name the one who does rather than reporting that the crew cannot do it.
+for can name the one who does rather than reporting that the group cannot do it.
 A plugin this agent does not have and a peer does is exactly that case, and it
 is listed under exactly the same rule: only when this agent does not have it
 itself, or the roster reads as a reason to delegate work it could do.
@@ -721,7 +721,7 @@ itself, or the roster reads as a reason to delegate work it could do.
 
 Reconnecting does not widen. `save_plugin` leaves `access` alone and keeps the
 row's id, so an operator fixing a grant that was revoked at the vendor does not
-silently hand Stripe back to the crew while they are fixing something else.
+silently hand Stripe back to the group while they are fixing something else.
 
 Retiring an agent takes its place with it, beside its approvals and its
 sign-ins, and disconnecting a plugin takes every place on it. A row naming an
@@ -731,7 +731,7 @@ attached to nothing.
 An access value this build does not recognize reads as a restriction, not as an
 opening. Only the literal `everyone` widens a plugin past its named agents, in
 the SQL and in `PluginAccess::from_row`. A permission that cannot be read has to
-fail closed: a crew losing a plugin is visible and one click to fix, and a crew
+fail closed: a group losing a plugin is visible and one click to fix, and a group
 silently gaining one is neither.
 
 ## And which of its tools, for which of them, which is a third decision
@@ -766,7 +766,7 @@ must not inherit the one capability the operator went out of their way to fence
 off. `PLUGIN_TOOL_REACHED_BY_AGENT` is both rules in one fragment.
 
 **Nobody is a chosen list with nothing in it.** That is the whole of the old
-two-way switch, kept: one click still switches a tool off for the crew, and the
+two-way switch, kept: one click still switches a tool off for the group, and the
 panel still says so out loud. It is the same argument `PluginAccess` makes at
 the plugin level, where the empty list is where an operator stands for the
 second between narrowing something and ticking the first name. Migration 31
@@ -774,7 +774,7 @@ rewrites every row of `plugin_denied_tools` as exactly that and drops the table.
 
 **Reconnecting does not widen one.** `save_plugin` replaces the tool list and
 touches neither table, for the reason it leaves `access` alone: fixing a grant
-that the vendor revoked is not a decision about what the crew may do, and one
+that the vendor revoked is not a decision about what the group may do, and one
 that quietly handed `drop_project` back would undo the decision at the moment
 the operator was fixing something else.
 
@@ -788,14 +788,14 @@ rows repeating "offered to every agent in this group" is the default said forty
 times and it buries the one row that is not. What an operator sees is the
 narrowings they made.
 
-The alternative is not a simpler control, it is a worse crew. One inbox, two
+The alternative is not a simpler control, it is a worse group. One inbox, two
 agents: the one that triages it reads and searches, the one that answers it
-sends. A crew-wide switch could give both agents everything or take sending away
+sends. A group-wide switch could give both agents everything or take sending away
 from both, and neither is the arrangement anybody wanted.
 
 **The wider answer is given before the narrower one.** More than one refusal is
 true at once, and the useful one covers the most ground. A tool narrowed to
-nobody is off for the whole crew, so it is said before "you are not on this
+nobody is off for the whole group, so it is said before "you are not on this
 plugin"; being off the plugin covers every tool on it, so it is said before
 "this tool is not yours". `plugin_reach` asks in that order, and the four
 refusals are four different sentences: `NotConnected` is the operator's to fix,
@@ -882,7 +882,7 @@ deployed server rather than of a grant, it cannot expire, and a remembered one
 that turns out to be wrong fails once and re-probes — which is what a server
 upgraded underneath a running Guaca looks like. Without it, every plugin call on
 a legacy server would pay for a probe whose answer is already known, which is an
-internet round trip in front of every tool call in the crew.
+internet round trip in front of every tool call in the group.
 
 **The negotiated version is what later requests declare, not the one that was
 asked for.** A legacy server that only knows `2025-06-18` answers `initialize`
@@ -945,7 +945,7 @@ That is not a duplicate, and it is the same argument as an agent's own standing
 routines. A tool list is read while deciding *how* to do something; the prompt
 section is read while deciding whether it can be done at all, and that happens
 first. An agent that skims twenty tool definitions and one that has been told its
-crew has Neon behave differently when asked "can we check the database".
+group has Neon behave differently when asked "can we check the database".
 
 The section also carries the one thing a tool description cannot: these act on
 the operator's real account. A database dropped through a plugin is dropped.
@@ -970,7 +970,7 @@ Every tool call opens a fresh session. On a legacy server that is `initialize`
 and then the call; on a modern one it is the call, because there is no session
 to open. Keeping a legacy session would save a round trip and is not done,
 because a cached session is a second thing that can go stale — the server can
-expire it, the token under it can be refreshed, the crew can disconnect the
+expire it, the token under it can be refreshed, the group can disconnect the
 plugin — and each of those surfaces as a tool call that fails for no reason a
 model can act on.
 
@@ -1007,7 +1007,7 @@ open question worth revisiting first. What this does remove is the worst case
 that gate was being asked to cover, which is the one destructive tool on an
 otherwise useful server, in the hands of the one agent that should not have it.
 
-**No per-agent sign-in.** An agent is chosen from the crew's one grant; it does
+**No per-agent sign-in.** An agent is chosen from the group's one grant; it does
 not get its own. Two sign-ins to the same vendor for one group would be two sets
 of tools under names a model cannot tell apart, and `plugins_kind_unique` says
 so at the schema. An operator who wants two accounts at one vendor wants two

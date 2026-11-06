@@ -319,7 +319,7 @@ function describe(tool: string, args: Args): Described {
         return { title: "Updated an artifact", target: text(args, "note") };
       if (["take", "take_over", "take_ownership", "claim", "own"].includes(action))
         return { title: "Took over an artifact", target: text(args, "note") };
-      if (action === "list") return { title: "Checked its crew's artifacts", target: null };
+      if (action === "list") return { title: "Checked its group's artifacts", target: null };
       return { title: "Opened an artifact", target: null };
     }
 
@@ -622,7 +622,7 @@ function manyLabel(group: TrailGroup): string {
     case "notebook":
       return `Used its notebook ${count} times`;
     case "artifact":
-      return `Used its crew's artifacts ${count} times`;
+      return `Used its group's artifacts ${count} times`;
     case "attach_file":
       return `Attached ${count} files`;
     case "update_memory":

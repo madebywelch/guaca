@@ -403,7 +403,7 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
             {section === "general" && (
               <>
                 <h3 className="settings__title">General</h3>
-                <p className="settings__lede">What this crew is called, and what it runs on.</p>
+                <p className="settings__lede">What this group is called, and what it runs on.</p>
 
                 <label className="field">
                   <span className="field__label">Name</span>
@@ -454,8 +454,8 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
               <>
                 <h3 className="settings__title">Provider</h3>
                 <p className="settings__lede">
-                  Who pays for this crew's turns, and which model answers them. One crew can run on
-                  a local server while another spends the subscription.
+                  Who pays for this group's turns, and which model answers them. One group can run
+                  on a local server while another spends the subscription.
                 </p>
 
                 <button
@@ -525,7 +525,7 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                     models={settings?.subscriptionModels ?? []}
                     onChange={setSubscriptionModel}
                     inherit={`Inherit · ${settings?.subscriptionModel ?? ""}`}
-                    title="The default for this crew. An agent chooses its own in its profile. Every agent on this subscription shares its quota."
+                    title="The default for this group. An agent chooses its own in its profile. Every agent on this subscription shares its quota."
                   />
                 )}
 
@@ -605,7 +605,7 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                     value={apiKey ?? ""}
                     placeholder={group?.apiKeySet ? `set · ${group.apiKeyHint}` : "inherit"}
                     autoComplete="off"
-                    title="Only when this crew's endpoint takes a different key. Blank keeps the stored one; clear it to go back to the app's."
+                    title="Only when this group's endpoint takes a different key. Blank keeps the stored one; clear it to go back to the app's."
                     onChange={(event) => setApiKey(event.target.value)}
                   />
                 </label>
@@ -616,7 +616,7 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                     className="input input--mono"
                     value={model}
                     placeholder={settings?.defaultModel || "inherit"}
-                    title="Every agent in this crew that does not name its own, when a key is paying."
+                    title="Every agent in this group that does not name its own, when a key is paying."
                     onChange={(event) => setModel(event.target.value)}
                   />
                 </label>
@@ -628,7 +628,7 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                     inputMode="numeric"
                     value={timeout}
                     placeholder={`${settings?.requestTimeoutSecs ?? 120} seconds`}
-                    title="Seconds to wait for a model call. A crew on a slow local model wants more than one on a hosted endpoint."
+                    title="Seconds to wait for a model call. A group on a slow local model wants more than one on a hosted endpoint."
                     onChange={(event) => setTimeoutSecs(event.target.value.replace(/[^0-9]/g, ""))}
                   />
                 </label>
@@ -683,10 +683,10 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
               <>
                 <h3 className="settings__title">Connectors</h3>
                 <p className="settings__lede">
-                  MCP servers this crew can reach. Sign in once, on behalf of the crew, then choose
-                  which agents get each one and which of its tools they may call. Every agent is the
-                  default; narrow the ones that reach money or production. None of them ever holds
-                  the sign-in.
+                  MCP servers this group can reach. Sign in once, on behalf of the group, then
+                  choose which agents get each one and which of its tools they may call. Every agent
+                  is the default; narrow the ones that reach money or production. None of them ever
+                  holds the sign-in.
                 </p>
                 <PluginList groupId={group.id} crew={members} />
               </>
@@ -719,8 +719,8 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
               <>
                 <h3 className="settings__title">Skills</h3>
                 <p className="settings__lede">
-                  Instructions for kinds of work this crew does. Its agents can write these as they
-                  work something out, and no other crew can read them.
+                  Instructions for kinds of work this group does. Its agents can write these as they
+                  work something out, and no other group can read them.
                 </p>
                 <SkillList scope={{ kind: "crew", groupId: group.id }} />
               </>
@@ -730,7 +730,7 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
               <>
                 <h3 className="settings__title">Activity</h3>
                 <p className="settings__lede">
-                  Who spoke to whom in this crew, in order, one board per run. Click any arrow to
+                  Who spoke to whom in this group, in order, one board per run. Click any arrow to
                   read the message. Read when this pane was opened; reopen it for anything since.
                 </p>
                 <GroupActivity group={group.id} />

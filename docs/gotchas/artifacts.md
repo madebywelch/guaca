@@ -1,20 +1,20 @@
 # Artifacts
 
-Pages a crew keeps. *An artifact is a page a crew keeps* in
+Pages a group keeps. *An artifact is a page a group keeps* in
 `docs/WORKSPACE.md`, then `src-tauri/src/domain/artifact.rs`,
 `src-tauri/src/db/artifacts.rs`, `Runtime::keep_artifact` and
 `src/components/Artifacts.tsx`.
 
-- **The crew comes from the agent's card, never from the call.** Every store
+- **The group comes from the agent's card, never from the call.** Every store
   call `keep_artifact` makes is scoped to `card.group_id`, and an id from
-  another crew comes back as `None`. The refusal says *no artifact with the
+  another group comes back as `None`. The refusal says *no artifact with the
   id*, never *not yours*, for the calendar's reason: the second sentence
   confirms the page exists and hints whose it is.
-- **An edit does not change the owner.** Anyone in the crew may edit; ownership
+- **An edit does not change the owner.** Anyone in the group may edit; ownership
   moves only by `take` or by the operator handing it over. Folding the two
   together makes whoever touched a page last answerable for it, which is the
   opposite of what the owner column is for.
-- **An owner who left is still the owner.** Deleted or moved to another crew,
+- **An owner who left is still the owner.** Deleted or moved to another group,
   it is named and marked `gone` until somebody decides to take the page.
   Clearing it automatically is a decision nobody made.
 - **Never message the owner about an edit.** The owner reads it from its own
@@ -29,14 +29,14 @@ Pages a crew keeps. *An artifact is a page a crew keeps* in
   store test that inserts every change both ways is what keeps them together.
 - **`version` and `updated_at` on the row are a copy.** The newest history row
   that made a version is the truth; the row holds a copy so the list, read on
-  every turn of every agent in the crew, is one indexed query. The two are
+  every turn of every agent in the group, is one indexed query. The two are
   written in one transaction in `db/artifacts.rs` and nowhere else.
 - **A restore is a new version.** Rewinding `version` would leave two rows
   claiming the same number and lose the page that was replaced.
 - **The frame server's cap is `MAX_PAGE`, by reference.** Two numbers that
   agree today are a kept version the frame server refuses tomorrow.
-- **A crew export carries artifacts, and a log row can name an agent that is
-  not in the file.** An editor who moved to another crew before the export is
+- **A group export carries artifacts, and a log row can name an agent that is
+  not in the file.** An editor who moved to another group before the export is
   given a fresh id that points at nothing, and keeps its name; an owner who
   moved is imported as nobody. The import's "refers to data outside its group"
   check skips `artifact_history.agent_id` for that reason and no other.
@@ -57,7 +57,7 @@ Pages a crew keeps. *An artifact is a page a crew keeps* in
   through without being seen.
 - **Reads run as the owner, and are checked against the owner when declared.**
   An editor who is not the owner cannot give a page reads the owner could not
-  make. A page nobody in the crew owns reads nothing, and says why.
+  make. A page nobody in the group owns reads nothing, and says why.
 - **A read never calls a model.** `Runtime::read_artifact` goes through
   `call_connector` and nothing else. A read that woke an agent would make
   opening a board a paid turn.
@@ -85,7 +85,7 @@ Pages a crew keeps. *An artifact is a page a crew keeps* in
 
 ## On the status bar
 
-*The status bar holds pages the crews keep, and a click on one is the bar's* in
+*The status bar holds pages the groups keep, and a click on one is the bar's* in
 `docs/WORKSPACE.md`, then `domain/widget.rs`, `src/lib/widget.ts` and
 `PinnedPage` in `src/components/StatusBar.tsx`.
 
@@ -109,7 +109,7 @@ Pages a crew keeps. *An artifact is a page a crew keeps* in
   be seen from outside anyway.
 - **An agent's pin allows the reads the card showed, and nothing else.**
   `allow_artifact_sources_seen` compares the list the card was built from with
-  the one the version declares when the operator answers. A crewmate who
+  the one the version declares when the operator answers. An agent who
   changed the reads while the card waited gets a pin whose reads still wait.
 - **The operator's pin allows nothing.** Reads are allowed above the page,
   where the list is drawn in full. A pin that allowed them too would be an

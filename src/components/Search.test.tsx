@@ -84,7 +84,7 @@ function open(agents: AgentCard[] = [agent("Manager"), agent("Chef")]) {
 }
 
 function type(value: string) {
-  fireEvent.change(screen.getByLabelText(/search the workspace/i), { target: { value } });
+  fireEvent.change(screen.getByLabelText(/search guaca/i), { target: { value } });
 }
 
 /**
@@ -97,7 +97,7 @@ function type(value: string) {
  * a real `keydown` whose native `isComposing` is true.
  */
 function press(key: string, options: { isComposing?: boolean; shiftKey?: boolean } = {}) {
-  const input = screen.getByLabelText(/search the workspace/i);
+  const input = screen.getByLabelText(/search guaca/i);
   const event = createEvent.keyDown(input, {
     key,
     isComposing: options.isComposing ?? false,

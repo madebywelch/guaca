@@ -111,5 +111,5 @@ export function unreachableHint(): string {
   if (attached())
     return "Check that the box is up, and that its address or tunnel still reaches it.";
   if (hostMode() === "existing") return "Check that the host is still running on this Mac.";
-  return "Check that Docker is running: this workspace is a container on this Mac.";
+  return "Check that Docker is running: Guaca runs in a container on this Mac.";
 }

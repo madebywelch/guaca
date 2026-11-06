@@ -213,7 +213,7 @@ function Overview({ agents, onOpen }: { agents: AgentCard[]; onOpen: (id: AgentI
       <Desk onOpenChannel={(id) => void api.openWindow({ kind: "agent", id })} />
 
       {agents.length === 0 ? (
-        <p className="menubar__note">No agents yet. Open Guaca to hire a crew.</p>
+        <p className="menubar__note">No agents yet. Open Guaca to hire an agent.</p>
       ) : (
         <nav className="menubar__agents" aria-label="Agents">
           {agents.map((agent) => {

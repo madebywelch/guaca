@@ -100,7 +100,7 @@ describe("SkillDirectory", () => {
     render(<SkillDirectory scope={WORKSPACE} taken={new Set(["pdf"])} onAdded={() => {}} />);
     fireEvent.click(await screen.findByRole("button", { name: "Read" }));
     await screen.findByText(/THE INSTRUCTIONS/);
-    expect(screen.getByRole("button", { name: "Add to workspace" }).hasAttribute("disabled")).toBe(
+    expect(screen.getByRole("button", { name: "Add to all groups" }).hasAttribute("disabled")).toBe(
       true,
     );
     expect(screen.getByText(/already here\. Delete or rename it first/)).toBeTruthy();
@@ -152,7 +152,7 @@ describe("SkillDirectory", () => {
     fireEvent.click(screen.getByRole("button", { name: "Read" }));
     expect((await screen.findByText(/Runs local scripts/)).className).toBe("access__warn");
     expect(screen.getByText(/reference\.md\. Agents can read them; Guaca never runs them/));
-    fireEvent.click(screen.getByRole("button", { name: "Add to this crew" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add to this group" }));
     await waitFor(() => expect(onAdded).toHaveBeenCalledWith(written));
     expect(addDirectorySkill).toHaveBeenCalledWith(crew, "anthropics/skills/pdf", "hash-of-pdf");
     expect(screen.getByRole("button", { name: "Added" }).hasAttribute("disabled")).toBe(true);

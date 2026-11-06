@@ -209,10 +209,10 @@ describe("host updates in either client", () => {
     expect(screen.queryByRole("button", { name: "Back up and update host" })).toBeNull();
 
     // Stopped for the backup, the host cannot answer. That is the update working.
-    docker.mockResolvedValue(status(true, journal("Backing up workspace")));
+    docker.mockResolvedValue(status(true, journal("Backing up data")));
     fetched.mockImplementation(() => Promise.reject(new TypeError("Load failed")));
     await poke();
-    await screen.findByText("Backing up workspace · step 3 of 5");
+    await screen.findByText("Backing up data · step 3 of 5");
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByText("Keep Guaca open until the update finishes.")).toBeTruthy();
 

@@ -59,7 +59,7 @@ describe("who owns it", () => {
   it("still names an owner who left, and says so", () => {
     // Ownership moves only by a decision. An owner that left is not replaced
     // quietly, so the list has to say that nobody has decided yet.
-    expect(ownerLabel({ id: "rae", name: "Rae", gone: true })).toBe("Rae, left the crew");
+    expect(ownerLabel({ id: "rae", name: "Rae", gone: true })).toBe("Rae, left the group");
     expect(ownerLabel({ id: "rae", name: "Rae", gone: false })).toBe("Rae");
     expect(ownerLabel(null)).toBe("Nobody");
   });

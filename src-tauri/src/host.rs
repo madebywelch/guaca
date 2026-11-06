@@ -112,7 +112,7 @@ impl Stage {
         match self {
             Stage::Downloading => "Downloading update",
             Stage::Stopping => "Stopping host",
-            Stage::BackingUp => "Backing up workspace",
+            Stage::BackingUp => "Backing up data",
             Stage::Starting => "Starting updated host",
             Stage::Verifying => "Verifying host",
             Stage::Updated => "Host updated",

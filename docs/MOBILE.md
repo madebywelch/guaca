@@ -22,30 +22,30 @@ Three destinations, with one workspace selected at a time:
 
 | Destination | First screen | Next action |
 |---|---|---|
-| Crews | Crew names, familiar characters, current activity and attention counts | Open a crew, then its wall or an agent's channel |
+| Groups | Group names, familiar characters, current activity and attention counts | Open a group, then its wall or an agent's channel |
 | Desk | Requests and escalations waiting on the operator | Read context, answer a question, allow or deny an action |
 | Workspace | Current host, connection state, saved workspaces and settings | Switch workspace or inspect a connection problem |
 
-Open on Crews, or restore the last conversation. A notification opens the
+Open on Groups, or restore the last conversation. A notification opens the
 specific request after refreshing it. Incoming requests never take over a
 conversation or steal the keyboard. A persistent Desk destination is a deliberate
 mobile adaptation of the transient desktop desk; its badge disappears at zero.
 An empty desk says that nobody is waiting. Completed work stays in the transcript.
 
-The conversation takes the whole reading surface. The header names the crew and
+The conversation takes the whole reading surface. The header names the group and
 agent, with a back control and an explicit details action. Tool activity remains
 collapsed into chips. Keep the composer above the keyboard, support OS dictation,
 and expose photos and files through the system picker. Preserve drafts per
 workspace and channel. An attachment belongs to the message being composed,
-never to whichever crew becomes selected while its upload finishes.
+never to whichever group becomes selected while its upload finishes.
 
 The agent inspector becomes a separate screen or sheet. Search is an explicit
-action. Crew switching requires a tap; the desktop's pointer-proximity column
+action. Group switching requires a tap; the desktop's pointer-proximity column
 does not translate to touch. Preserve Guaca's paper/ink surfaces, character
 geometry and restrained animation. Add named spacing and target-size tokens
 through the existing CSS contract when implementation starts.
 
-First scope: conversations, crew activity, questions, approvals, escalations,
+First scope: conversations, group activity, questions, approvals, escalations,
 stop, and attachments. Plugin administration and computer
 viewers can follow. The API remains available; each omitted mobile surface needs
 a clear route to desktop or the hosted web UI. A phone must still be able to read
@@ -181,7 +181,7 @@ callback exceptions is not that design. See [current account callbacks](ACCOUNT.
 ## Prove the first slice before committing to the shell
 
 1. **Phone layout in the hosted UI.** At 320, 390 and 430 CSS pixels, navigate
-   crews, read a conversation, type with the keyboard open and answer a request.
+   groups, read a conversation, type with the keyboard open and answer a request.
    Verify touch targets, text scaling, VoiceOver, scroll position and draft
    retention. Use fixtures, without production credentials or model spend.
 2. **Real VPS over Serve.** Open the same workspace from a phone and desktop.

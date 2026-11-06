@@ -34,7 +34,7 @@ export function actorLabel(actor: ArtifactActor): string {
  */
 export function ownerLabel(owner: Artifact["owner"]): string {
   if (owner === null) return "Nobody";
-  return owner.gone ? `${owner.name}, left the crew` : owner.name;
+  return owner.gone ? `${owner.name}, left the group` : owner.name;
 }
 
 /**

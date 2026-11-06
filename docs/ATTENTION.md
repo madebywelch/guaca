@@ -3,7 +3,7 @@
 Guaca runs unattended. A choice found during an email check must still be
 answerable when the operator returns, without keeping the agent's turn alive.
 `decision` records that choice in SQLite. **For you** is its permanent destination
-in the rail, shared by every crew.
+in the rail, shared by every group.
 
 ## Three tiers over one queue
 
@@ -23,7 +23,7 @@ blocker cards inside it. The bottom-right floating desk is gone. New arrivals
 update the count without taking keyboard focus. The dialog traps focus and
 returns it to the control that opened it.
 
-Crew circles still report their agents' activity and parked requests. The menu
+Group circles still report their agents' activity and parked requests. The menu
 bar adds the durable decision count and opens **For you** when the window is
 shut. Operating-system notifications are reminders to visit the destination;
 reading or dismissing one never settles a decision.

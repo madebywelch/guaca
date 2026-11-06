@@ -152,7 +152,7 @@ draws the call can say where the work went, and that name is a wire name: `Used
 google__gmail_search`, beside the runtime's own summary of it reading `Google ·
 gmail_search`, is one row saying one thing twice and once in a spelling nobody
 reads. The chip says `Used gmail_search on Google` and the summary is treated
-as the echo it is. What the tool *does* is still never guessed at: a crew's
+as the echo it is. What the tool *does* is still never guessed at: a group's
 plugins are connected after this build shipped, so the server's own name for it
 is the whole of what can be said about it. The eight are spelled the way their
 vendors spell them in `lib/plugins.ts`, beside their marks, because a
@@ -325,10 +325,10 @@ mockup's "Today" is the same shape of problem: the runtime counts a session, not
 a day, and a per-agent spend is not a number this app has.
 
 The line under the name is `runsOn` in `lib/profile.ts`, which resolves the
-model the way a turn does, agent over crew over app, and draws an inherited one
+model the way a turn does, agent over group over app, and draws an inherited one
 a shade lighter. That shade is the point: down a rail of agents, which ones
 answered for themselves is otherwise a dialog each. It reads the subscription
-field under a ChatGPT crew and the key's under an endpoint, never the other,
+field under a ChatGPT group and the key's under an endpoint, never the other,
 because the two providers share no model names and a slug kept for one drawn
 under the other is a lie about what is running. A Claude subscription chooses
 nothing and is named rather than given a model.
@@ -431,7 +431,7 @@ never need reading before it is added to.
 
 Four stores, each answering one question: memory is what an agent needs every
 turn, working notes are where its work stands, the notebook is anything longer
-it wants to come back to, and a skill is how its crew does something. Nothing
+it wants to come back to, and a skill is how its group does something. Nothing
 in a notebook expires, because unlike a working note it is something the agent
 chose to keep; the tool says what a stale file costs. The operator reads it in
 the inspector and may delete a file, and nothing else, for the reason working
@@ -538,12 +538,12 @@ settled in person. Editing a single line does not, because a list the operator
 half-rewrites is one neither of them can trust.
 
 **A reset takes both stores, and it has to take both.** *Start fresh* on a
-group deletes what the crew said, what it had scheduled and what it spent, and
+group deletes what its agents said, what it had scheduled and what it spent, and
 the memories with them, because an agent that opens tomorrow believing what it
 wrote about a conversation nobody can read has not started over. The working
 notes are the same argument one step closer in: they are what each agent
 thought it was in the middle of, and every one of them is about the
-conversation that just went. Left behind, a reset crew's first act is to chase
+conversation that just went. Left behind, a reset group's first act is to chase
 work whose record it no longer has. `clear_group` takes both, reports each
 separately, and the panels are sent back to read again on `ChannelsCleared`:
 neither refreshes on its own, so the inspector would otherwise draw a memory
@@ -797,7 +797,7 @@ behind a search hit, inside a pair's thread or in a document preview draws and
 runs exactly as before; a Send button in those places would be a control that
 cannot say who it sends to.
 
-## An artifact is a page a crew keeps
+## An artifact is a page a group keeps
 
 A fenced page is drawn once, inside the reply that carried it, and leaves the
 operator's view when the conversation moves on. That is right for a picker or a
@@ -808,28 +808,28 @@ will want again next week. So an artifact is the same page with an address.
 
 **What runs is exactly what a fenced page runs.** Same loopback origin, same
 content policy, reaching nothing, and `artifact.rs` holds both to one size cap
-by reference, so a version the crew kept is never one the frame server refuses.
+by reference, so a version the group kept is never one the frame server refuses.
 What a kept page adds is two channels through its host, both carried by the
 bridge `artifact.rs` prepends: data in, and a click out.
 
 **A tool call, not a fence, and that is the fence's own argument turned
 around.** A chart is a fence because the agent has the numbers in hand when it
 writes the sentence about them. A kept page is written to be read later, has
-an id the write assigns, and has to be checked against the crew before it is
+an id the write assigns, and has to be checked against the group before it is
 stored. `artifact` does all three, and the prompt's figure section points a
 page worth keeping at it.
 
-**Anyone in the crew edits; one agent owns.** Editing is open because a crew
+**Anyone in the group edits; one agent owns.** Editing is open because a group
 works on shared things. Ownership is who answers for the page: the name on the
 list, the one the others ask, the one whose prompt marks it *yours*. It moves
 only by a decision, an agent's `take` with a reason or the operator handing it
 from the dialog, never by an edit and never by the owner leaving. An owner that
-was deleted or moved out of the crew is still named, and said to be gone, until
+was deleted or moved out of the group is still named, and said to be gone, until
 somebody decides.
 
 **The owner reads an edit; nobody sends it one.** Every agent's prompt lists
-its crew's artifacts with the owner and whoever made the current version, so an
-owner learns a crewmate changed its page on its next turn without being woken
+its group's artifacts with the owner and whoever made the current version, so an
+owner learns another agent changed its page on its next turn without being woken
 for it. The tool says so to the editor before it thinks of writing to the
 owner, because that message is a paid turn, and an owner woken by every edit
 edits back and wakes the editor.
@@ -843,7 +843,7 @@ purged. Putting a version back is a new version, never a rewind, so the page it
 replaced is still there to put back in turn.
 
 **The page is the point, and everything else is quiet.** The operator opens
-an artifact for the page. Its crew, owner, version and when it last changed are
+an artifact for the page. Its group, owner, version and when it last changed are
 one faint line under the name, in the list and in the artifact alike, and the
 history is behind a button with the owner control beside it. It was first
 drawn as a column next to the page and as table columns in the list, and both
@@ -851,10 +851,10 @@ spent the room on what nobody opened the dialog to read. The history is for
 working out what happened, by the operator or by an agent asked about it; it
 has to be one click away, not on screen.
 
-**What the dialog lists is what the rail is showing.** Inside a crew, that
-crew's; with every crew in the rail, every crew's, with a column saying whose.
+**What the dialog lists is what the rail is showing.** Inside a group, that
+group's; with every group in the rail, every group's, with a column saying whose.
 There is no filter of its own, because the rail already is one. This is a
-deliberate difference from the calendar, which always opens on every crew.
+deliberate difference from the calendar, which always opens on every group.
 
 **The card is drawn from the tool call.** A turn that made or changed a page
 leaves a card in its record rather than a chip, because the page is a place to
@@ -877,7 +877,7 @@ and a read whose arguments the page chose would be one: a search whose query is
 the row it just read is a message to whoever runs the search. The approval is
 of an exact list, compared as stored: an edit that changes the list waits for
 the operator again, an edit that keeps it keeps the approval, and putting back
-a version with the allowed list needs nothing new. A crew export leaves
+a version with the allowed list needs nothing new. A group export leaves
 approvals behind, because they are this machine's decisions.
 
 Reads are checked when they are declared, against the owner, because the owner
@@ -896,7 +896,7 @@ changes, because that is every page view spending a turn and a page that loops
 with its owner. Work on a clock is what a routine is for. In a fenced page,
 `guaca.send` is an answer and waits in the strip like one.
 
-**Search finds a page by its title.** Every crew's, because search is the
+**Search finds a page by its title.** Every group's, because search is the
 operator's. Not by its markup: a search for "total" that matched every page
 with a variable called `total` would bury the one whose name was half
 remembered.
@@ -963,7 +963,7 @@ pointing the other way.
 
 The listener is bound by a ref callback rather than an effect, and that is
 load-bearing. A transcript is unmounted whenever the pane shows something else —
-a pair thread, or nothing at all once the operator has gone inside a crew the
+a pair thread, or nothing at all once the operator has gone inside a group the
 open channel was not in — and comes back as a new node with the same class. An
 effect can only re-bind on a dependency it was given, and the node it holds is
 not one: a channel reopened after one of those spent the session listening to a
@@ -983,13 +983,13 @@ a shell flag and half an email address, and a chip around one of those tells the
 operator this app knows something it does not. `splitMentions` in
 `lib/mentions.ts` is the one answer, and it opens on the same word-boundary rule
 the typeahead does, so what lights up is exactly what could have been completed.
-It takes the longest name that fits, or a crew holding both "Head" and
+It takes the longest name that fits, or a group holding both "Head" and
 "Head Chef" gets a chip on the first word and the rest of a name reading as
 prose. It stops at the end of the name rather than inside a longer word, which
 is why `@Critical` is nobody.
 
 Two rosters, and the difference is which question is being asked. The composer
-completes against the live crew, because a mention is about to become a
+completes against the live group, because a mention is about to become a
 delivery. A transcript resolves against everyone the store holds, retired agents
 included, because it is history: an agent that has since been let go was still
 an agent when somebody wrote to it, and dropping its name back into prose
@@ -1100,7 +1100,7 @@ place goes back the moment it stops. `awaitingApproval` outranks working, becaus
 it is the one state the operator is the fix for; `paused` scores nothing, because
 it is not work in progress but a row that will not move until somebody moves it,
 and lifting it would hold the top indefinitely. A pinned row is above all of
-this: it heads its crew and never lifts at all, because being findable in one
+this: it heads its group and never lifts at all, because being findable in one
 glance is what a pin is for, and a row that moves when its agent gets busy is the
 thing a pin exists to stop.
 
@@ -1120,7 +1120,7 @@ turn ended.
 ## A drop is one call, because a drag is one gesture
 
 `move_agent` takes the group and the row to land in front of, and `None` for the
-end of that group. One command rather than two: a drag can change the crew and
+end of that group. One command rather than two: a drag can change the group and
 the place at the same time, and two writes leave a state where the agent has
 joined the group but not landed in it. The runtime renumbers every live row
 densely inside one transaction, because a workspace holds tens of agents and a
@@ -1135,7 +1135,7 @@ asks for nothing and is refused in both halves, because the fallback for an
 anchor that is not there is the end of the group, and a null gesture that reached
 it would move the row to the bottom of the rail.
 
-A crew's circle is moved by `move_group` on the same terms, with the crew it
+A group's circle is moved by `move_group` on the same terms, with the group it
 lands in front of as its anchor: one list rather than one per group, so a gone
 anchor is the end of the column. *A group is a place you can be inside* has
 the gesture.
@@ -1153,12 +1153,12 @@ platforms. A rail that only rearranges on macOS is not a feature. A press
 becomes a drag after five pixels, because a row is a button first.
 
 The one thing a drag does that a hand on a trackpad should not have to aim for
-is crossing a crew boundary, so that is in the agent's menu, behind one row that
-opens the crews beside it. A row per crew was there first and is what the submenu
-replaced: the crews are the one part of that menu whose length nothing bounds, so
+is crossing a group boundary, so that is in the agent's menu, behind one row that
+opens the groups beside it. A row per group was there first and is what the submenu
+replaced: the groups are the one part of that menu whose length nothing bounds, so
 a workspace with eight of them pushed clearing a history and deleting an agent
 off the bottom of the window, under the two items nobody wants to hunt for.
-Ordering within a crew has no menu item at all. "Move up" and "move down" were
+Ordering within a group has no menu item at all. "Move up" and "move down" were
 two rows spent on the gesture the rail already answers, in a menu where every
 other row is something a drag cannot do.
 
@@ -1166,19 +1166,19 @@ other row is something a drag cannot do.
 
 Two views of one rail. In the overview every group has a heading and its members
 under it, which is what it always was. Clicking a group's circle takes the rail
-inside it: one crew, its name and controls given a line of their own, and the
-same list in the same order, because a crew's pins are at the head of it in
-either view. Neither view gives them a heading: everybody drawn under a crew is
-in that crew already, and a heading over one or two rows would divide nothing.
+inside it: one group, its name and controls given a line of their own, and the
+same list in the same order, because a group's pins are at the head of it in
+either view. Neither view gives them a heading: everybody drawn under a group is
+in that group already, and a heading over one or two rows would divide nothing.
 The mark on the row is what says which rows are pinned.
 
-**A heading is a crew's name, and what it costs is what hovering it says.** The
+**A heading is a group's name, and what it costs is what hovering it says.** The
 heading used to carry three things: the name, a readout of tokens and price, and
-the way into the crew's settings. Two of them are fixed widths, so the name was
-the only item on the line able to give any room up, and it did. A crew called
+the way into the group's settings. Two of them are fixed widths, so the name was
+the only item on the line able to give any room up, and it did. A group called
 "Operations" was drawn as "Operat…" at the top of its own column, at the one
 size in the rail where a name is meant to be read rather than scanned. Nothing
-about the numbers earned that: what a crew is costing is a question asked a few
+about the numbers earned that: what a group is costing is a question asked a few
 times a day, and the name is read every time the eye passes the rail.
 
 So the numbers came off the line and became a card, laid over the rows rather
@@ -1193,12 +1193,12 @@ It opens on a dwell rather than on contact, because a heading is a band across
 the top of its own rows and a pointer on its way to an agent crosses one every
 time. It is out of the accessibility tree and it is suppressed for the whole of
 a drag, when the rows it would cover are the targets being aimed at. Neither
-costs anybody the number: the same figures are in the crew's settings, behind
+costs anybody the number: the same figures are in the group's settings, behind
 the gear beside the name, where the flow board already reports what every run
 cost. A hover is a shortcut to a figure that has a home, not the only way to
 reach one.
 
-**How many are in a crew is not in either heading either.** It was a digit
+**How many are in a group is not in either heading either.** It was a digit
 taking width from the name, and it is the third place the app says the same
 number: the faces on a circle are seated by how many there are, one as a
 portrait and six on a ring, and the tag under the pointer says it in words. A
@@ -1209,15 +1209,15 @@ The circles live in a column of their own on the far left, and that column is
 the second change here. They were a strip inside the rail: a wrapping row of
 circles that fit four across, went to a second line at five and a third at nine.
 It did not overflow and it did not scroll. It ate the rail's own height, so a
-workspace with a dozen crews spent the top third of its agent list on the
+workspace with a dozen groups spent the top third of its agent list on the
 navigation for it, and four was a hard wall nobody had chosen. Upright, the axis
-is the one there is room on, and the crews that do not fit scroll instead of
+is the one there is room on, and the groups that do not fit scroll instead of
 folding.
 
-Two things follow from the column that the strip could not buy. The crews are
+Two things follow from the column that the strip could not buy. The groups are
 reachable wherever the operator is, including while the rail is inside one of
-them, which is what lets a circle carry a permanent statement about the crews
-nobody is looking at. And "which crew am I in" stops being something the rail has
+them, which is what lets a circle carry a permanent statement about the groups
+nobody is looking at. And "which group am I in" stops being something the rail has
 to answer, because the answer is a lit circle in a fixed place.
 
 **The column does not stand open, and that is the third change.** Standing open
@@ -1241,7 +1241,7 @@ scale like every other length in the app.
 
 The zone starts below the top of the window, and that is not fussiness. On macOS
 the window's own close, minimize and zoom float over the top left corner, which
-is this column: a zone that ran to the top would slide the crews out from under
+is this column: a zone that ran to the top would slide the groups out from under
 the pointer every time somebody went to close the app.
 
 Decided from the pointer rather than from `:hover` on a strip. A strip wide
@@ -1261,16 +1261,16 @@ between: one that slid away as the row was carried back across the app would tak
 the target with it half way through the gesture. It used to be held out for the
 whole of every drag, whatever the pointer was doing, and that reads as a bug from
 the other side of the window. The column comes out *over* the rail, so picking up
-a row anywhere put the crews across the left edge of every row behind it, and
+a row anywhere put the groups across the left edge of every row behind it, and
 most drags are a reorder inside the rail aimed at exactly those rows. Opening is
 proximity in both cases; only closing knows about the hand.
 
-The circles are faces, and the name is beside them. A crew is recognized by who
+The circles are faces, and the name is beside them. A group is recognized by who
 is in it long before its name is read, which is true and was never enough on its
 own. The cafeteria is a copy machine with a fixed avatar and a fixed color per
-preset, so two crews hired from the same counters draw the same faces in the
+preset, so two groups hired from the same counters draw the same faces in the
 same colors, differing only by the few degrees of lean `lib/orb.ts` takes off an
-agent id; and above six members every crew draws the same six and a count. The
+agent id; and above six members every group draws the same six and a count. The
 operator's way out was to click through the column reading names, which is the
 navigation the column exists to replace.
 
@@ -1285,7 +1285,7 @@ waits about a second, so sweeping a column of twelve shows nothing; it never
 appears on a keyboard focus, so the column was reachable by pointer only; and it
 is suppressed for the whole of a drag, which is the one moment the circle is most
 load-bearing, because dropping an agent onto an unnamed circle is how somebody
-ends up in the wrong crew. The tag opens on hover, on focus and during a drag.
+ends up in the wrong group. The tag opens on hover, on focus and during a drag.
 `title` is kept for the operator who has stopped and is waiting for it.
 
 The words under the name are `presenceNote`, which `presenceLabel` also composes
@@ -1293,17 +1293,17 @@ its sentence from. Two functions would be one circle described two ways, and a
 tag saying "3 agents" under a label saying "working" is the version where only
 one of them is right. The tag itself is out of the accessibility tree: the button
 already says the same words as its own label, and drawn into the tree twice a
-crew is announced twice, the second time as text nobody can reach.
+group is announced twice, the second time as text nobody can reach.
 
 Both rail headings carry the full name on a `title` too. They ellipse whatever
 does not fit, and after clicking a circle the heading is the only place the name
-is drawn at all, so a crew called "Customer research, EMEA" was two words and a
+is drawn at all, so a group called "Customer research, EMEA" was two words and a
 hyphen wherever the operator looked.
 
-How the faces stand is the size of the crew. One is a portrait, two stand side
-by side, and three to six stand on a ring, so a strip of crews is a strip of
+How the faces stand is the size of the group. One is a portrait, two stand side
+by side, and three to six stand on a ring, so a strip of groups is a strip of
 different badges and the number of people in each is legible before any single
-face is. Every crew of two or more used to draw the same square of four, which
+face is. Every group of two or more used to draw the same square of four, which
 made the circle read as the app's own mark rather than as these agents. The
 seating is `src/lib/orb.ts`, in fractions of the ring rather than in pixels, and
 it is sized against the ink instead of the box the ink is drawn in. Against two
@@ -1320,46 +1320,46 @@ that is not somebody's face.
 
 Each circle does two jobs, which is why it is a circle and not an item in a menu.
 Clicking it opens the group. Dropping an agent on it puts the agent in the group,
-so the shortest gesture for moving somebody between crews is the one that also
-says which crew, and it is on screen for the whole of the drag. A column makes
+so the shortest gesture for moving somebody between groups is the one that also
+says which group, and it is on screen for the whole of the drag. A column makes
 that gesture better rather than worse: the target never scrolls out from under
 the hand, and pointer events cross a column boundary for free where HTML5 drag
 and drop would not.
 
-**The crews are arranged by hand, and a circle is its own handle.** Creation
+**The groups are arranged by hand, and a circle is its own handle.** Creation
 order was the only order the column had, which is an order nobody chose and so
 one nobody can learn. A circle
 dragged along the column takes the place beside the circle it is let go over,
 on the side read off the direction it traveled, which is `landsBefore` and the
-same rule a row follows. `move_group` renumbers every crew in one transaction
+same rule a row follows. `move_group` renumbers every group in one transaction
 and answers with the order that now stands, which the window draws rather than
 guessing at. A press is still a click until it travels five pixels, and one that
-wobbles and lands back on its own circle asks for nothing and opens the crew.
+wobbles and lands back on its own circle asks for nothing and opens the group.
 
 What a circle means as a target is decided by what is in the hand, and it is
 drawn differently for that reason. An agent over a circle fills it, because the
-agent goes *into* that crew. A crew over one gets the line a row gets, on the
+agent goes *into* that group. A group over one gets the line a row gets, on the
 side it would land, because it goes *next to* it; the line is in the circle's
 own padding, since the list scrolls and so clips, and above the first circle is
-the place most often aimed at. A crew lands among the circles and nowhere else.
+the place most often aimed at. A group lands among the circles and nowhere else.
 The rail's rows and sections are places for an agent, so a circle carried over
-them is aimed at nothing and a release there moves nothing: a crew let go over
-a crew's section would otherwise reorder the column by wherever the hand
+them is aimed at nothing and a release there moves nothing: a group let go over
+a group's section would otherwise reorder the column by wherever the hand
 stopped. Near either end of the column the list scrolls under the hand, the way
-the rail does under a row, and that serves an agent aimed at a crew off the end
-as much as it serves a crew.
+the rail does under a row, and that serves an agent aimed at a group off the end
+as much as it serves a group.
 
-The order is `rail_order` on the group, and it is the only order crews have.
+The order is `rail_order` on the group, and it is the only order groups have.
 The column, the rail's sections in the overview, the phone's picker and every
-other list of crews read `list_groups`, so arranging the column arranges all of
+other list of groups read `list_groups`, so arranging the column arranges all of
 them. That includes the fallback. An agent nobody placed, and the transcripts of
-deleted agents whose crew is deleted, go to the first crew in the list, which
+deleted agents whose group is deleted, go to the first group in the list, which
 used to mean the oldest and now means the one the operator put first. A new
-crew lands at the bottom, and so does an imported one, whose file carries its
+group lands at the bottom, and so does an imported one, whose file carries its
 original's timestamp and no place: filed by that timestamp among circles
 somebody arranged, it would look like the arrangement had moved.
 
-**Clicking the crew the rail is already inside does nothing, and that is the
+**Clicking the group the rail is already inside does nothing, and that is the
 whole of it.** It used to take the rail back out to the overview, which made
 each circle a toggle: the natural way to open something is to click it twice
 when the first click seems not to have landed, and that gesture went in and
@@ -1368,8 +1368,8 @@ had ended in. The way out is a circle of its own at the top of the column, above
 the rule, on screen for the whole of that gesture and for the whole of every
 other one, so a circle does not also have to be its own way out.
 
-**Which crew that is, is a band and an edge, which is what the rail draws one
-column over.** The row the current crew sits on is filled with the accent's
+**Which group that is, is a band and an edge, which is what the rail draws one
+column over.** The row the current group sits on is filled with the accent's
 ground and an ink bar is drawn down the window edge of it: the same two marks
 `.agent-row` uses for the open channel, because it is the same question asked at
 the other granularity. There was only ever the bar, and it was spelled
@@ -1377,7 +1377,7 @@ the other granularity. There was only ever the bar, and it was spelled
 a #eceae2 column and #33240e over a #0b0b0a one, 1.06 to 1 and 1.31 to 1. So the
 one permanent statement in the app about where the operator is standing was
 drawn in a color neither surface shows, on the column whose entire argument is
-that "which crew am I in" has an answer in a fixed place. Nothing caught it for
+that "which group am I in" has an answer in a fixed place. Nothing caught it for
 as long as the column has existed: the bar was in the document with the right
 class on it the whole time, and no DOM assertion sees a color. `styles.test.ts`
 holds it to three to one against the column it is drawn on, on both surfaces,
@@ -1386,13 +1386,13 @@ held to the same floor. It is a wash under a row, which is what the rail does,
 and a wash that met a text ratio would be a block of accent with faces on it.
 
 **What the circle says, it says in two marks, and they are deliberately not
-one.** A ring means somebody in this crew is working, with no number on it,
+one.** A ring means somebody in this group is working, with no number on it,
 because how many agents are mid-turn is not a thing anybody acts on. A count in
-the corner is how many turns in this crew are parked on the operator, and that
+the corner is how many turns in this group are parked on the operator, and that
 one is a number because three and one are different amounts of work and a dot
 says neither. The same two states the menu bar's glyph already distinguishes:
 that reports them for the workspace while the window is shut, and this reports
-them per crew while it is open. One rule, two granularities, one fold, in
+them per group while it is open. One rule, two granularities, one fold, in
 `src/lib/presence.ts`. It is counted off the activity map rather than off the
 pending requests, and the two agree by construction: an agent runs one turn at a
 time and a turn parks on one request.
@@ -1400,48 +1400,48 @@ time and a turn parks on one request.
 What is deliberately not there is unread. Discord's rail carries a dot for
 messages you have not seen, and Guaca does not know which those are, because
 nothing records what the operator has read. A dot derived from "this channel is
-not the open one" would be lit on every crew but one, forever. Unread is a
+not the open one" would be lit on every group but one, forever. Unread is a
 persisted per-channel marker and a migration, not a badge.
 
 The column is still absent while there is one group, which is the state most
 workspaces are in, and it is the same rule the strip had. A column offering a
 choice of one is a drop target that cannot move anybody anywhere, and with one
-crew the rail *is* that crew: every row of it is already on screen saying what
+group the rail *is* that group: every row of it is already on screen saying what
 the badge would.
 
 The group being looked inside is in the store rather than in the sidebar, because
 it and the open channel have to agree, and both are in the store. One invariant
 holds them together: the rail draws the row of whatever the pane is showing. A
-search hit can land on an agent in another crew, and `select` repairs that by
-following the agent into its crew. It used to drop out
-to the overview instead, which was the only honest answer while the crews were a
+search hit can land on an agent in another group, and `select` repairs that by
+following the agent into its group. It used to drop out
+to the overview instead, which was the only honest answer while the groups were a
 strip inside the rail: the overview was the one view where every row was
-drawable. With a column that is on screen whichever crew you are in, following
+drawable. With a column that is on screen whichever group you are in, following
 is both possible and less, because one lit circle moves instead of the whole
 rail changing shape.
 
 `focusGroup` repairs the same invariant from the other end, and lets go rather
 than following. The asymmetry is the point: `select` is the operator naming an
-agent, so taking them to that agent's crew is what they asked for, and
-`focusGroup` is the operator naming a crew, so following the channel back out of
+agent, so taking them to that agent's group is what they asked for, and
+`focusGroup` is the operator naming a group, so following the channel back out of
 it would undo the click. The pane falls back to nothing rather than to the first
-row of the crew being entered: opening a channel is the operator naming somebody,
-and a crew that picked one for them would put an agent's history on screen as a
-side effect of a click that was about the crew.
+row of the group being entered: opening a channel is the operator naming somebody,
+and a group that picked one for them would put an agent's history on screen as a
+side effect of a click that was about the group.
 
-Closing it is not tidiness. Two crews can hold two agents with the same name and
+Closing it is not tidiness. Two groups can hold two agents with the same name and
 the same face, and a rail that is not drawing the row leaves nothing on screen
-saying which crew the pane belongs to: a channel left open from the group you
+saying which group the pane belongs to: a channel left open from the group you
 came from reads as a member of the group you are looking at, working while nobody
 here is. The agent goes on working either way. Closing a channel is not a control
 on the conversation, only on what you are looking at.
 
 Going back out to the overview keeps whatever was open, because the overview
 draws everybody. Neither does a move close anything: dragging somebody into
-another crew is not a change of view, and the operator who just made the gesture
+another group is not a change of view, and the operator who just made the gesture
 is the one person who does not need telling where that row went.
 
-## Deleting a group deletes the crew, and the machines they were renting
+## Deleting a group deletes the agents in it, and the machines they were renting
 
 One button, two calls. An empty group loses a row; a group with four agents in
 it loses the four agents, their computers, their browsers and the profiles
@@ -1451,18 +1451,18 @@ roster, and the confirmation names the count before it is pressed.
 It was two buttons, and the one for a populated group had exactly one outcome:
 an error telling the operator to go and delete four agents by hand and come
 back. That is not a refusal protecting anything. It is the work, described. An
-operator winding a crew down wants the crew gone, and the half-finished state
+operator winding a group down wants the group gone, and the half-finished state
 that path produces is a group with one agent left in it and no reason to keep
 that one either.
 
-What a disband is not is a bigger *Start fresh*. A reset keeps the crew and
-takes what it accumulated; this takes the crew. They sit next to each other and
+What a disband is not is a bigger *Start fresh*. A reset keeps the group and
+takes what it accumulated; this takes the group. They sit next to each other and
 only one of them is reversible in the sense that matters: a computer is rented
 from a provider, and killing it is not a row in a table.
 
 Each agent goes exactly as `delete_agent` sends one, through `retire_agent`,
 which is why they are the same function. Transcripts stay readable, because a
-delete at the scale of a crew is not a different rule about history: a message
+delete at the scale of a group is not a different rule about history: a message
 survives its author here for the same reason it does there. What is gone is
 everything the agent held privately, which is its memory, its schedule, its
 sign-ins and any standing permission the operator gave it.
@@ -1472,18 +1472,18 @@ can be deleted once another group exists. `Store::group_for_removal` asks that
 question separately from the emptiness check, and the command asks it *first*: a disband
 that killed four computers and then found the group could not go would have
 spent the irreversible half of the work on a call that fails. Terminated agents
-are not in the crew it takes. Their existing deletion lifecycle is unchanged.
+are not in the group it takes. Their existing deletion lifecycle is unchanged.
 
 New agents without an explicit group, and retained agents from a deleted group,
 use the oldest surviving group in the same order as the group list. Group
 cleanup and the last-group check share one immediate transaction, so concurrent
 deletions cannot each count the other group and leave none.
 
-## A group's settings are the app's, with the crew's answer on top
+## A group's settings are the app's, with its own answer on top
 
 Everything in the group editor except the name is an override, and blank means
 inherit. That is why the boxes carry placeholders rather than values: an operator
-has to be able to tell "this crew uses the app's model" apart from "this crew
+has to be able to tell "this group uses the app's model" apart from "this group
 pins that exact model", and an empty box that means two different things is a
 setting nobody can read.
 
@@ -1495,8 +1495,8 @@ cannot discard a half-typed endpoint. Connectors and Secrets are disabled
 until the group exists, because a sign-in and a credential both have to belong
 to something.
 
-The plugins section holds two decisions, not one. Connecting is the crew's
-sign-in; under each connected row is who in the crew may use it, which is every
+The plugins section holds two decisions, not one. Connecting is the group's
+sign-in; under each connected row is who in the group may use it, which is every
 agent until an operator says otherwise. It is written the moment it is clicked,
 like the Connect and Disconnect buttons above it: a draft nobody submitted
 would be a permission the operator believes they granted. The reasoning is in
@@ -1526,7 +1526,7 @@ by a path segment fails the same way whoever typed it.
 
 Two model fields, not one, and only the one belonging to the resolved provider
 is on screen at a time. A model belongs to a provider, which has disjoint names
-from the other and will not accept them, so a crew that tries the subscription for
+from the other and will not accept them, so a group that tries the subscription for
 an hour and moves back has to find its endpoint model where it left it. Test
 connection is here for the same reason it is in Settings, and it sends what is on
 screen resolved over the app settings, which is what the next turn would do.
@@ -1537,7 +1537,7 @@ start with nobody selected. Values are write-only and changes are saved within
 that panel, independently of the group's settings. `docs/SECRETS.md` describes
 where they are supplied and the limits of the process boundary.
 
-## The flow board is analysis, so it is in a crew's settings
+## The flow board is analysis, so it is in a group's settings
 
 Who spoke to whom, in what order, what set a run off and what the run cost. It
 is drawn as a sequence diagram cut into runs, newest first, and the reasoning
@@ -1553,18 +1553,18 @@ four times, which agent started a cascade, what a Tuesday cost — and an entry 
 the primary navigation for a thing you arrive at deliberately is entry that
 every other thing in the rail pays for.
 
-So it is a pane in the group editor, beside the crew's provider and limits, and
+So it is a pane in the group editor, beside the group's provider and limits, and
 `ACTIVITY_CHANNEL` is gone. That last part is most of the value. A board
 addressed as a channel meant every function that took a channel took a value
-that was not an agent, and seven of them carried a branch for it: which crew the
-rail follows, whether the open channel survives going inside a crew, what
+that was not an agent, and seven of them carried a branch for it: which group the
+rail follows, whether the open channel survives going inside a group, what
 `loadChannel` reads, what a fallback selects, and what `messageAppended` and
 `channelsCleared` maintain. A channel is an agent again.
 
-It is one crew's traffic, and scoped in SQL rather than filtered after the read.
+It is one group's traffic, and scoped in SQL rather than filtered after the read.
 The board is the newest four hundred messages, so a workspace where one busy
-crew fills that window would hand a quiet crew a board with nothing on it and no
-way to tell that apart from a crew that has never spoken. The channel is the
+group fills that window would hand a quiet group a board with nothing on it and no
+way to tell that apart from a group that has never spoken. The channel is the
 scope because agents in different groups cannot message each other: every
 message is filed under an agent, and that agent's group is the run's.
 
@@ -1575,7 +1575,7 @@ opens deliberately can afford one read at the moment they open it, and it does
 not follow the conversation afterward: a board that reshuffles under a reader is
 one they lose their place in, and what they came to read has already happened.
 
-## Pinning is the head of a crew, and nothing else
+## Pinning is the head of a group, and nothing else
 
 It does not bump the card version, because the version is how a peer notices a
 card changed under it and nothing a peer can read has. `railOrder` is the same
@@ -1583,24 +1583,24 @@ kind of fact and is kept the same way, and both live on the agent rather than in
 a preferences blob because they have to die with it: a name is free to reuse the
 moment an agent is deleted, and whoever takes it next must not inherit a pin or a
 place. A pinned agent is still in its group in every other sense: same wall, same
-bill, same peers, and counted in the crew it heads.
+bill, same peers, and counted in the group it heads.
 
 The pins used to be a section of their own, above the groups and spanning them.
-That made a pin the one arrangement that came undone on the way into the crew it
+That made a pin the one arrangement that came undone on the way into the group it
 was arranging: inside a group the rail draws that group and nothing else, so the
 section holding the row was not on screen, and pinning something while looking at
 the list it was in moved nothing until the operator went back out to the
-overview. A pin is a band at the head of a crew now, drawn wherever that crew is
+overview. A pin is a band at the head of a group now, drawn wherever that group is
 drawn, which is both views and the same order in each.
 
-The band is why the row that a drag lands on decides both things: the crew it
+The band is why the row that a drag lands on decides both things: the group it
 joins, and whether it is pinned. Dropping onto a pinned row pins the dragged
 agent, dropping below the band unpins it, and dropping on a group says nothing
 about the band and therefore changes nothing about it. A pin is a standing
-instruction about one agent, and moving somebody between crews is not a decision
+instruction about one agent, and moving somebody between groups is not a decision
 to drop it.
 
-The mark on the row is load-bearing. A crew whose pin is also the row the
+The mark on the row is load-bearing. A group whose pin is also the row the
 operator arranged at the top looks exactly like a pin that did nothing, and being
 first is not a state anything on screen can say by itself.
 
@@ -1619,7 +1619,7 @@ the second day.
 
 So the row is gone, and the corner is the icon. The two creatures from the
 app's icon stand in the strip beside the window's own buttons, which was empty,
-with the plus at the other end of it, and the crew starts 45 pixels higher. On
+with the plus at the other end of it, and the group starts 45 pixels higher. On
 a Mac window the strip is inset by `--space-lights`, in pixels because the
 buttons are the operating system's and do not scale with the interface; nothing
 else draws buttons over the page, so nothing else is inset.
@@ -1747,11 +1747,11 @@ state the operator needs before opening it, and a number in the rail is a claim
 on attention that has to earn it like any other interruption.
 
 Settings is last, and named *App settings* to anything that reads the label
-rather than the position, because a crew's own settings are a gear at the top of
+rather than the position, because a group's own settings are a gear at the top of
 the same column. A phone hides it, since the phone has a Settings tab of its
 own, and the other two split the row between them.
 
-## A first task comes before a first crew
+## A first task comes before a first group
 
 A new workspace starts with a brief, a provider connection, and a review of one
 recommended agent. The host must already be connected: credentials belong to
@@ -1807,7 +1807,7 @@ composer's `@` typeahead gives up after two spaces, so a longer title is an
 agent nobody can delegate to.
 
 The six counters are the departments of a small software company, and the set is
-chosen against one test: a crew assembled from it can take a change the whole
+chosen against one test: a group assembled from it can take a change the whole
 way without the operator writing a prompt. Somebody decides what to build,
 somebody draws it, somebody writes it, somebody reviews it, somebody ships it
 and watches it, somebody documents it, somebody tells the market. A gap in that
@@ -1821,7 +1821,7 @@ is a wall rather than a menu. They are two now, because they answer different
 questions: what to build is decided at the first and settled at the second.
 
 The catalog cannot grow past the character cast, and that is a rule rather than
-an accident. A crew is whatever subset the operator ticked, so two presets
+an accident. A group is whatever subset the operator ticked, so two presets
 sharing a character are two agents that look the same in one rail. A new preset
 is a new row in `avatars/catalog.ts` or it is not a preset, and
 `lib/cafeteria.test.ts` is where that is enforced. Since the cast is five
@@ -1840,11 +1840,11 @@ default in at hire time is the obvious thing and it is wrong: it pins every
 hired agent to the app model and silently ignores a group that chose its own
 endpoint, which is exactly what a group-level model exists to express.
 
-A hired crew lands under the arrangement, not inside it, in the order it was
+A hired group lands under the arrangement, not inside it, in the order it was
 picked. The batch reads the bottom of the rail once inside its transaction and
 hands out consecutive slots: asking per agent would give all of them the same
 answer, because none is written until the commit, and the rail would then order
-a crew by the tiebreak rather than by what the operator chose. See *The rail is
+a group by the tiebreak rather than by what the operator chose. See *The rail is
 arranged by hand* above for what those slots are.
 
 `hire_agents` takes the batch rather than the UI looping `create_agent`, for
@@ -1859,7 +1859,7 @@ holding instead of two that can disagree.
 The catalog is content with a test, `lib/cafeteria.test.ts`, holding it to the
 avatar and accent catalogs and to what `AgentDraft::validate` will accept. The
 rule that is not mechanically checkable is the one that matters most: every
-preset prompt states a stopping condition. A prompt without one makes a crew
+preset prompt states a stopping condition. A prompt without one makes a group
 that talks to itself, no automated suite can see it, and the evals are what
 catch it. Run `./scripts/evals.sh` after touching a preset.
 
@@ -1886,7 +1886,7 @@ timidity about the type: there are fifteen queries in this app that ask
 `lifecycle <> 'terminated'` and every one of them is still asking exactly the
 right question, including the partial unique index that frees the name. A
 fourth state would have been fifteen places to remember, each failing silently
-in a different way — a composted agent in a directory listing, in a crew count,
+in a different way — a composted agent in a directory listing, in a group count,
 in a disband, in the roster a peer is told to ask. `NULL` in the column is both
 ends of the wait: an agent nobody deleted and one whose thirty days are over.
 The lifecycle tells those apart.
@@ -1897,7 +1897,7 @@ three weeks on returns to a schedule that has been coming due every morning
 without it and to peers that carried on, so starting it is a decision the
 operator takes on a row that is already drawn as stopped. Renamed because
 throwing an agent out frees its name at once — that is the whole point of the
-partial index — so the crew may have hired somebody into it since, and
+partial index — so the group may have hired somebody into it since, and
 `copy_name` settles it exactly as a duplicate does. Refusing the restore instead
 would show the operator a unique-index violation for a button whose job is to
 succeed.
@@ -1919,11 +1919,11 @@ privately.
 
 **A disband does not use the compost.** Deleting a group takes the place a
 restore would come back to: `delete_group` files whatever is left under the
-oldest surviving group, so a composted crew would be offered a restore into a
-crew that no longer exists, holding sign-ins belonging to a group whose credentials went
+oldest surviving group, so a composted agent would be offered a restore into a
+group that no longer exists, holding sign-ins belonging to a group whose credentials went
 with it. A disband purges each agent outright and its confirmation names the
 count, which is what makes it the irreversible one on screen as well as in the
-code. See *Deleting a group deletes the crew* above.
+code. See *Deleting a group deletes the agents in it* above.
 
 **The sweep is its own loop, and runs hourly.** Not a third statement in the
 scheduler's: a routine is late by however long the tick is, so that one is paced
@@ -1988,7 +1988,7 @@ it, and an agent called Sales is the second thing anybody builds here, so sales
 vocabulary scores into marketing rather than into silence.
 
 Nothing is offered unless OpenRouter is what pays for that agent's turns,
-resolved crew over app the way the backend resolves it. A slug only means
+resolved group over app the way the backend resolves it. A slug only means
 something at the endpoint it was ranked at, and `anthropic/claude-opus-5` put
 into a field pointed at `api.openai.com` is a refusal by name on the next turn,
 an hour after the button was pressed and with nothing connecting the two.
@@ -2157,8 +2157,8 @@ display preferences.
 ## An agent can read the settings, and what the operator is looking at
 
 `settings` with `read` hands an agent the settings every agent runs on, its
-crew's overrides, the host's version and one sentence about the screen: which
-channel is open and which pane of Settings or a crew's settings. No key and no
+group's overrides, the host's version and one sentence about the screen: which
+channel is open and which pane of Settings or a group's settings. No key and no
 fragment of one is in it, and an endpoint is shown without any credentials in
 its address. Changing a value goes through the operator; *A settings change is
 a permission with its own diff* in `docs/ATTENTION.md` is that half.
@@ -2177,7 +2177,7 @@ pushed into every prompt: the screen changes far more often than a turn starts,
 and a line that changed on every click would cost the prompt cache on every
 turn for a fact most turns do not need.
 
-## The status bar holds pages the crews keep, and a click on one is the bar's
+## The status bar holds pages the groups keep, and a click on one is the bar's
 
 The last row of the reading column says which host this window shows, marked
 when this app and the host are on different releases, holds the pages pinned
@@ -2191,7 +2191,7 @@ running in the window with the app's whole authority, which its own loader
 says is not a capability boundary. The artifact origin is one. A page there
 reaches no network and cannot read the document that framed it, so a widget can
 be code without the bar trusting it. What an agent puts on the bar is a page its
-crew already keeps: owner, versions, reads and history are the artifact's, and
+group already keeps: owner, versions, reads and history are the artifact's, and
 the pin (`domain/widget.rs`) is only where it sits, how wide, and how often its
 reads run.
 
@@ -2224,12 +2224,12 @@ is a strip of mis-clicks.
 
 **An agent's pin is the operator's yes, once, for the placement and the
 reads.** `artifact` with `pin` parks the turn on the desk as a settings change,
-because the bar is a setting and the one surface every crew shares. The card
+because the bar is a setting and the one surface every group shares. The card
 names the page, its width, every read it makes, how often and as whom, and a
 yes allows those reads if the page's current version still declares exactly
-the list the card showed: a crewmate can edit the page while the card waits.
+the list the card showed: another agent can edit the page while the card waits.
 Everything that would make a yes useless is refused before anybody is asked: a
-page with no condensed view, one already there, a full bar, another crew's id.
+page with no condensed view, one already there, a full bar, another group's id.
 The operator's own pin, from the page in Artifacts, asks nobody and allows
 nothing; the reads are allowed above the page, where the list is drawn.
 
@@ -2239,15 +2239,15 @@ the page's owner, with no model. A hidden window stops them, and coming back
 reads again if the last one is older than the clock. Reads nobody allowed are
 asked for once, so the page can say they are waiting, and not again.
 
-**Deleting a page takes its pin with it.** Deleting one and disbanding its crew
+**Deleting a page takes its pin with it.** Deleting one and disbanding its group
 both end in `Runtime::unpin_missing`, so no slot is held by a page that is
-gone. Every agent's prompt marks its crew's pages that are on the bar, because
+gone. Every agent's prompt marks its group's pages that are on the bar, because
 an owner that does not know changes the board and leaves the strip saying last
 week's number.
 
 **Quick actions are the operator's own.** A quick action is data from a closed
 set (`domain/quick.rs`): send one agent a fixed message, or open a channel, the
-calendar, For You, a Settings pane or a crew's settings. A message a button
+calendar, For You, a Settings pane or a group's settings. A message a button
 sends arrives as `[OPERATOR]`, on a click made without reading the text again,
 which is why agents used to ask for them through a card that quoted the whole
 message. They no longer can: what an agent wants on the bar is a page, and a
@@ -2286,7 +2286,7 @@ amber. That is the point rather than a side effect: a column that is itself a
 color is a column every agent's color is competing with, and the accent that
 means "answer me" had two values depending on which side of a border it was
 drawn on. Both columns used to pin `--attention` and `--attention-wash`, and the
-crews' column `--danger` as well, because a dark reading column would otherwise
+groups' column `--danger` as well, because a dark reading column would otherwise
 have repainted them silently. Nothing is pinned now. What replaced the pins is the
 other half of the same trap, asserted in `styles.test.ts`: every `--rail-*` and
 `--grail-*` value that is a color has to be declared in both surface blocks, or
@@ -2388,7 +2388,7 @@ and the streaming caret, so "you tabbed here" and "answer me" were one ring. A
 focus ring and a drop target are the system's slate. A primary button and
 anything switched on are ink. Something running is the slate. `styles.test.ts`
 fails a focus rule or an on-state spelled from the attention color, and a
-fill whose text is not its own on-color. The crews' waiting count is still red,
+fill whose text is not its own on-color. The groups' waiting count is still red,
 and that is on purpose: it is drawn to match the menu bar's attention glyph,
 which is the macOS convention for "needs you" and not this app's to repaint.
 
@@ -2520,8 +2520,8 @@ window's alone, and the panel does neither.
 **What it shows is the window's, smaller.** The desk from For you, card for card,
 with "Open channel" bringing the window back at that channel. The rail's rows,
 ordered for the question the panel is opened to answer: whoever is working,
-then whoever spoke last, then the paused. A crew named on a row only when there
-is another crew to tell it from, which is the rule the crews' column is drawn
+then whoever spoke last, then the paused. A group named on a row only when there
+is another group to tell it from, which is the rule the groups' column is drawn
 by. A conversation is the last three things the operator and that agent said to
 each other, the reply being written if there is one, and a field; peer traffic,
 tool calls and routines are the window's, one click away, and a reply taller
@@ -2574,7 +2574,7 @@ them. Each report replaces the last rather than adding to it, so a missed one
 is corrected by the next instead of carried forward. It is also the whole of
 what the icon knows, so a report the tray refuses is an icon that never
 changes: one field Rust required and the window had stopped sending did exactly
-that, and the icon sat at "nothing running" whatever the crew was doing. The
+that, and the icon sat at "nothing running" whatever the group was doing. The
 two lists are compared by `ipc.contract.test.ts` now, and a refusal is logged
 to the window's console rather than swallowed.
 
@@ -2615,15 +2615,15 @@ are exactly as worth stopping.
 
 Below 48rem, and on touch-only devices in either orientation, the workspace
 shows one pane at a time. A bottom bar keeps Chats, For you (with its attention
-count), Search and Settings within thumb reach. Chats opens the crew and agent
-list; a conversation has a back button, its crew name and a Details button.
+count), Search and Settings within thumb reach. Chats opens the group and agent
+list; a conversation has a back button, its group name and a Details button.
 Details has its own back button and an Actions menu. The rail and inspector
 no longer take width from the conversation. Hidden panes stay mounted: changing views must not discard a
 draft, move the transcript or reconnect the event stream. Selecting an agent,
 including the one already selected, returns to Chat. A routine opened from the
 transcript reveals Details.
 
-Crews are selected by name on a phone. The desktop's proximity column is hidden,
+Groups are selected by name on a phone. The desktop's proximity column is hidden,
 and a touch scrolling the agent list never starts a reorder. Settings uses a
 labeled section picker above its pane, and Search has a visible Cancel button; dialogs fit the viewport, controls have
 touch-sized targets and inputs stay large enough to avoid Safari's focus zoom.

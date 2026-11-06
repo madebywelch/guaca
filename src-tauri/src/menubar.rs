@@ -221,7 +221,7 @@ impl Presence {
             match crews_working(&busy).as_slice() {
                 [] => count,
                 [only] => format!("{count} in {}", only.name),
-                several => format!("{count} in {} crews", several.len()),
+                several => format!("{count} in {} groups", several.len()),
             }
         };
 
@@ -705,7 +705,7 @@ mod tests {
 
         let deploy = hire_into(&mut presence, "Deploy", ops.id);
         presence.activity.insert(deploy, Activity::Thinking);
-        assert_eq!(presence.look().tooltip, "Guaca · 3 agents working in 2 crews");
+        assert_eq!(presence.look().tooltip, "Guaca · 3 agents working in 2 groups");
     }
 
     // ---- what it cost ----------------------------------------------------

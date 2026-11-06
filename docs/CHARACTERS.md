@@ -81,7 +81,7 @@ still writes one outline, and all three layers follow it. Each instance owns
 its SVG references; one creature cannot borrow another's shape.
 
 The relief is clipped to `FORM.reach` because its offset is not permission to
-draw outside the space the crew's circle allows. Eyes and attention marks are
+draw outside the space the group's circle allows. Eyes and attention marks are
 outside that clip. The face uses dark ink; marks beside it use the reading
 surface's text color so they remain visible in a dark room. `make-crew.ts`
 renders the same `Skin` component for the README strip.
@@ -95,7 +95,7 @@ is a body nobody can read a face on.
 **`FORM.reach` is a number the rest of the app sizes against.** Nothing is ever
 drawn outside it, at any character, in any mood, at any point of any cycle, and
 `form.test.ts` samples the whole space and holds the geometry to it. `orb.test.ts`
-seats a crew inside its group's circle against the same number, so a mood that
+seats a group inside its circle against the same number, so a mood that
 grew could not quietly push a face through a rim with nothing noticing.
 `FORM.radius` is the resting body and is what two faces are *spaced* on, because
 spacing them on the worst case would push a pair apart for a bulge that happens
@@ -482,7 +482,7 @@ regardless.
 
 The marks beside a head loop in CSS rather than in the frame loop, and CSS has
 only the document's clock, which is the same for everybody. Every avatar on
-screen is written in one frame and a crew told one thing starts thinking in one
+screen is written in one frame and a group told one thing starts thinking in one
 frame, so the marks come out in lockstep unless something says otherwise: the
 phase is handed down as `--gait` and each loop is pulled back by it.
 
@@ -501,7 +501,7 @@ narrower at the sides than a circle and its mass is low, so its characters look
 out of the ball rather than out of the middle of the box, and the seating test
 measures against the character's own silhouette rather than against a circle.
 
-The cast cannot be smaller than the cafeteria's preset list. A crew is whatever
+The cast cannot be smaller than the cafeteria's preset list. A group is whatever
 subset the operator ticked, so two presets sharing a character are two agents
 that look the same in one rail. `lib/cafeteria.test.ts` is where that is
 enforced.

@@ -48,7 +48,7 @@ beforeEach(() => {
 describe("TokenEntry", () => {
   it("asks for a token before it shows anything else", () => {
     open();
-    expect(screen.getByLabelText("Workspace token")).toBeTruthy();
+    expect(screen.getByLabelText("Host token")).toBeTruthy();
     expect(screen.queryByText("the workspace")).toBeNull();
     // Nothing is asked of the box until there is a token to ask with.
     expect(capabilities).not.toHaveBeenCalled();
@@ -58,7 +58,7 @@ describe("TokenEntry", () => {
     window.history.replaceState(null, "", "/#token=abc123");
     open();
     expect(screen.getByText("the workspace")).toBeTruthy();
-    expect(screen.queryByLabelText("Workspace token")).toBeNull();
+    expect(screen.queryByLabelText("Host token")).toBeNull();
     expect(token()).toBe("abc123");
     expect(window.location.hash).toBe("");
   });
@@ -71,8 +71,8 @@ describe("TokenEntry", () => {
 
   it("checks a pasted token against the box before admitting it", async () => {
     open();
-    fireEvent.change(screen.getByLabelText("Workspace token"), { target: { value: " abc123 " } });
-    fireEvent.click(screen.getByRole("button", { name: "Open workspace" }));
+    fireEvent.change(screen.getByLabelText("Host token"), { target: { value: " abc123 " } });
+    fireEvent.click(screen.getByRole("button", { name: "Open Guaca" }));
 
     await waitFor(() => expect(screen.getByText("the workspace")).toBeTruthy());
     expect(capabilities).toHaveBeenCalledTimes(1);
@@ -85,8 +85,8 @@ describe("TokenEntry", () => {
       message: "this workspace needs the token it printed when it started",
     });
     open();
-    fireEvent.change(screen.getByLabelText("Workspace token"), { target: { value: "wrong" } });
-    fireEvent.click(screen.getByRole("button", { name: "Open workspace" }));
+    fireEvent.change(screen.getByLabelText("Host token"), { target: { value: "wrong" } });
+    fireEvent.click(screen.getByRole("button", { name: "Open Guaca" }));
 
     await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("needs the token"));
     expect(screen.queryByText("the workspace")).toBeNull();
@@ -97,7 +97,7 @@ describe("TokenEntry", () => {
 
   it("does not send an empty box", () => {
     open();
-    const button = screen.getByRole("button", { name: "Open workspace" }) as HTMLButtonElement;
+    const button = screen.getByRole("button", { name: "Open Guaca" }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
     fireEvent.submit(button.closest("form")!);
     expect(capabilities).not.toHaveBeenCalled();
@@ -110,7 +110,7 @@ describe("TokenEntry", () => {
 
     window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
 
-    await waitFor(() => expect(screen.getByLabelText("Workspace token")).toBeTruthy());
+    await waitFor(() => expect(screen.getByLabelText("Host token")).toBeTruthy());
     expect(screen.queryByText("the workspace")).toBeNull();
     expect(screen.getByRole("alert").textContent).toContain("stopped accepting");
   });

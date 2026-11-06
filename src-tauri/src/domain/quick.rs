@@ -143,7 +143,7 @@ impl QuickAction {
                     Place::ForYou => "For You".to_string(),
                     Place::Settings { section: Some(section) } => format!("Settings on {section}"),
                     Place::Settings { section: None } => "Settings".to_string(),
-                    Place::CrewSettings { .. } => "a crew's settings".to_string(),
+                    Place::CrewSettings { .. } => "a group's settings".to_string(),
                 };
                 format!("\u{201c}{}\u{201d} opens {place}", self.label)
             }

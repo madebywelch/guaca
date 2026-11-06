@@ -145,7 +145,8 @@ pub async fn open(
     runtime.keep_settings_at(config_path.clone());
     runtime.hold_workspace_lease(lease);
 
-    let started = runtime.start_all().map_err(|err| format!("could not start the crew: {err}"))?;
+    let started =
+        runtime.start_all().map_err(|err| format!("could not start the agents: {err}"))?;
     // Before the scheduler, so an agent with work to carry on reads as busy
     // to its first sweep.
     runtime.pick_up(recovered);
