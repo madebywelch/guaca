@@ -143,6 +143,39 @@ const PLACES: Record<Place, string> = {
   browser: "This host",
 };
 
+/**
+ * The host, as a sentence says it.
+ *
+ * The status bar's label names the window's arrangement ("This Mac", "Remote
+ * host", "This host"); a sentence about where the runtime is has to agree with
+ * it. "This machine" was written when there was only one arrangement, and it is
+ * false of the two where the runtime is not in this window: a browser is on one
+ * machine and its host is on another, and Settings is exactly where somebody
+ * goes to learn which holds what.
+ */
+export function hostAt(place: Place): string {
+  return place === "thisMac" ? "this Mac" : "your host";
+}
+
+/**
+ * What the client in front of the operator keeps of the host's, for About.
+ *
+ * Three arrangements and three answers, because one sentence was true of one of
+ * them. A browser holds no token at all now that the session is an HttpOnly
+ * cookie the daemon sets; a desktop window running its own runtime has no
+ * address to reach and nothing to send; and a desktop window showing a box keeps
+ * that box's address and token so a reload finds it again.
+ */
+export function clientKeeps(facts: { desktop: boolean; attached: boolean }): string {
+  if (!facts.desktop) {
+    return "This page keeps your display preferences. Its session is a cookie the host sets, which this page cannot read, and the host's token is not stored here.";
+  }
+  if (facts.attached) {
+    return "This app keeps the host's address, its token, and your display preferences.";
+  }
+  return "This app keeps your display preferences. Its runtime is its own, so it has no address and no token to keep.";
+}
+
 export interface HostLabel {
   /** What the bar says: the place, and the drift when there is one. */
   text: string;

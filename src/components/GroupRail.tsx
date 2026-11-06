@@ -1,4 +1,5 @@
 import {
+  type CSSProperties,
   type PointerEvent as ReactPointerEvent,
   type RefObject,
   useEffect,
@@ -6,6 +7,7 @@ import {
   useState,
 } from "react";
 
+import { AgentAvatar } from "../avatars/AgentAvatar";
 import { type DropTarget, landsBefore } from "../lib/rail";
 import { reaches } from "../lib/reach";
 import type { Activity, AgentCard, AgentId, Escalation, Group, GroupId } from "../lib/types";
@@ -130,6 +132,13 @@ export function GroupRail({
 
   if (groups.length < 2) return null;
 
+  /* The group the rail is inside, and the face that stands for it in the lip:
+     the same first face its own circle seats. Nothing while the rail shows
+     every group, which has no single face — the lip is then the bare handle
+     rather than a claim about which group is current. */
+  const current = groups.find((group) => group.id === focused);
+  const face = current ? agents.find((agent) => agent.groupId === current.id) : undefined;
+
   /**
    * Which side of a circle the crew in hand would land on, if it were let go
    * over that circle now. Read off `landsBefore`, which is what the drop
@@ -155,6 +164,30 @@ export function GroupRail({
           of the window are lengths, and every length in this app is named in
           one stylesheet rather than written into a component. */}
       <span className="grail__reach" aria-hidden="true" ref={zone} />
+
+      {/* The handle on the band. Eight pixels of ground at the edge of the
+          window says a surface is there and nothing says what it is for, so the
+          lip carries the current group's own circle with the window's edge
+          cutting it in half: which group the rail is inside, without the column
+          standing open. It is drawn before the column, whose ground is opaque,
+          so the column covers it on the way out; and it takes no pointer events,
+          because the only thing that acts on this edge is the proximity zone. */}
+      <span className="grail__mark" aria-hidden="true">
+        {face && (
+          <span
+            className="orb__face"
+            style={{ "--seat-x": "50%", "--seat-y": "50%", "--seat-size": "68%" } as CSSProperties}
+          >
+            <AgentAvatar
+              avatar={face.avatar}
+              color={face.color}
+              size="xs"
+              seed={face.id}
+              lifecycle={face.lifecycle}
+            />
+          </span>
+        )}
+      </span>
 
       <div className="grail__slab" ref={slab}>
         {/* Everybody, which is the view the rail had before crews were places you

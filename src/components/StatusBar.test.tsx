@@ -175,6 +175,23 @@ describe("StatusBar", () => {
     );
   });
 
+  it("names the two things that can live on it while there is nothing on it", () => {
+    // It said "Add a quick action" and nothing else, and a pinned page has no
+    // door on the bar at all: the way to learn that one can live there was
+    // Artifacts -> a page -> the Status bar row.
+    seed([]);
+    render(<StatusBar onOpen={onOpen} onMessage={onMessage} />);
+    expect(screen.getByText("A kept page can be pinned here, from Artifacts.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add a quick action" })).toBeTruthy();
+  });
+
+  it("stops naming them once one of the operator's own is there", () => {
+    seed([calendar]);
+    render(<StatusBar onOpen={onOpen} onMessage={onMessage} />);
+    expect(screen.queryByText(/A kept page can be pinned here/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Calendar" })).toBeTruthy();
+  });
+
   it("adds the operator's own button, and takes one off in edit mode", async () => {
     const before = seed([calendar]);
     addQuickAction.mockResolvedValue({ ...before, quickActions: [calendar, brief] });
@@ -217,6 +234,14 @@ describe("a pinned page", () => {
   });
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("takes the invitation off the bar once a page is on it", async () => {
+    seed([], [pin()]);
+    artifactCondensed.mockResolvedValue({ artifact: page(), page: "<b>3 open</b>" });
+    const { container } = render(<StatusBar onOpen={onOpen} onMessage={onMessage} />);
+    await waitFor(() => expect(container.querySelector("iframe.widget__frame")).toBeTruthy());
+    expect(screen.queryByText(/A kept page can be pinned here/)).toBeNull();
   });
 
   it("is drawn from its condensed view, in the bar's look, and a click opens the page", async () => {

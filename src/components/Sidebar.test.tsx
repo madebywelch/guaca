@@ -657,6 +657,26 @@ describe("groups as places", () => {
     expect(screen.queryByLabelText("Groups")).toBeNull();
   });
 
+  it("puts the current group's own face in the lip, and nothing while the rail is outside them", () => {
+    // The band said a surface was there and nothing said what it was for. The
+    // handle is the current group's own circle with the window's edge cutting
+    // it in half: the one mark that says which group the rail is inside without
+    // the column standing open.
+    draw(
+      [group("everyone"), group("research", null, RESEARCH)],
+      [agent("Manager"), agent("Reader", { groupId: RESEARCH, railOrder: 1, color: "#1c7a51" })],
+    );
+    const face = () => document.querySelector<HTMLElement>(".grail__mark .avatar");
+    // Every group at once has no single face, so the lip is the bare handle.
+    expect(face()).toBeNull();
+
+    fireEvent.click(screen.getByLabelText("research, 1 agent"));
+    // The same face that circle seats first, which is what makes it the group's
+    // own mark rather than a decoration.
+    expect(face()?.style.getPropertyValue("--accent")).toBe("#1c7a51");
+    expect(document.querySelector(".grail__mark")?.getAttribute("aria-hidden")).toBe("true");
+  });
+
   it("draws one circle per group, and the faces in it", () => {
     draw(
       [group("everyone"), group("research", null, RESEARCH)],

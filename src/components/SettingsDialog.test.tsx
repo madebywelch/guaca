@@ -1057,7 +1057,11 @@ describe("the ChatGPT subscription", () => {
     await waitFor(() => expect(subscriptionStatus).toHaveBeenCalled());
     expect(button("Sign in")).toBeTruthy();
     // No key field, no URL: there is nothing here to type wrong.
-    expect(row().textContent).toContain("no per-token bill");
+    // One line under the name, and the whole sentence is the row's own title.
+    // The slot beside the name gives up its room first, and the half it gave up
+    // was the second one: the reason to choose the card.
+    expect(row().querySelector(".preset__url")?.textContent).toBe("Your plan pays for turns");
+    expect(row().title).toBe("Sign in and your plan pays for turns, with no per-token bill.");
   });
 
   it("does not ask the runtime about a sign-in until the pane is opened", async () => {
@@ -1256,6 +1260,117 @@ describe("the ChatGPT subscription", () => {
     // Left on the subscription, every agent's next turn is the same refusal.
     expect(button("Sign in")).toBeTruthy();
     expect(row().textContent).not.toContain("In use");
+  });
+});
+
+/**
+ * The other subscription row, and the three states it has.
+ *
+ * It wrote one line per state, each long enough for the slot beside the name to
+ * cut, and the half that was cut was the reason to choose the card. Now the row
+ * says what it is for in the same short line whatever state it is in, the state
+ * beside it says whether it can be used, and the sentence that used to be cut
+ * is the row's title, where all of it fits.
+ */
+describe("the Claude subscription", () => {
+  /** The subscription row, which is not one of the endpoint presets. */
+  function row(): HTMLElement {
+    const label = screen.getByText("Claude subscription", { selector: ".preset__name" });
+    const found = label.closest(".preset");
+    if (!found) throw new Error("no Claude row");
+    return found as HTMLElement;
+  }
+
+  it("says what it runs, and leaves whether it can to the state beside it", async () => {
+    open();
+    pane("Provider");
+    await waitFor(() => expect(claudeProgram).toHaveBeenCalled());
+    expect(row().querySelector(".preset__url")?.textContent).toBe("Runs the claude program");
+    expect(row().title).toBe(
+      "Runs the claude program, and uses whatever it is signed in to and set to.",
+    );
+  });
+
+  it("says where to install the program when this host has none", async () => {
+    claudeProgram.mockResolvedValue({
+      installed: false,
+      version: "",
+      install: "npm install -g @anthropic-ai/claude-code",
+    });
+    open();
+    pane("Provider");
+    await waitFor(() => expect(row().textContent).toContain("Not installed"));
+    expect(row().querySelector(".preset__url")?.textContent).toBe("Install the claude program");
+    // The host, not "this machine": the program is read off the host, and from
+    // a browser the machine reading the pane is not where it has to be.
+    expect(row().title).toBe("Runs the claude program, which is not installed on this host.");
+  });
+
+  it("says a group reaches a plan's quota, which is the word everywhere else", async () => {
+    // The last "crew" in the app's own strings. A rolling quota is reached
+    // faster by many agents than by one person, and a set of agents is a group.
+    open(stored({ provider: "claude" }));
+    pane("Provider");
+    await waitFor(() => expect(claudeProgram).toHaveBeenCalled());
+    const hint = screen.getByText(/rolling quota/);
+    expect(hint.textContent).toContain("a group reaches it faster than one person does");
+    expect(hint.textContent).not.toContain("crew");
+  });
+});
+
+/**
+ * Where the runtime is, and what this client holds of it.
+ *
+ * Both sentences were written for the one arrangement this app had first: the
+ * keys are on "this machine", and "this app keeps the host's token". A browser
+ * is on one machine with its host on another, and since #258 it holds no token
+ * at all. Settings is where somebody goes to learn which is which, so the two
+ * panes that answer that question have to agree with the bar.
+ */
+describe("the panes that name a machine", () => {
+  const lede = () => document.querySelector(".settings__pane .settings__lede")?.textContent ?? "";
+  const about = () => document.querySelector(".about__facts")?.textContent ?? "";
+
+  it("says this Mac where the runtime is in this window", () => {
+    open();
+    pane("Account");
+    expect(lede()).toContain("Guaca runs on this Mac with your own keys");
+    expect(lede()).not.toContain("your host");
+
+    pane("About");
+    expect(about()).toContain("This app keeps your display preferences");
+    expect(about()).toContain("no address and no token");
+  });
+
+  it("says your host in a browser, which is not where the runtime is", () => {
+    platform.desktop = false;
+    open();
+    pane("Account");
+    expect(lede()).toContain("Guaca runs on your host with your own keys");
+    expect(document.body.textContent).not.toContain("runs on this machine");
+
+    pane("About");
+    // A browser keeps no token: the session is an HttpOnly cookie the daemon
+    // sets, and the token itself is not stored on this side.
+    expect(about()).toContain("a cookie the host sets");
+    expect(about()).toContain("the host's token is not stored here");
+    expect(about()).not.toContain("keeps the host's address, its token");
+  });
+
+  it("says what a machine key lets the host do, not what it gives each agent", () => {
+    open();
+    pane("Machines");
+    const legends = [...document.querySelectorAll<HTMLElement>(".settings__pane .api-key legend")];
+    const computer = legends.find((el) => el.title.startsWith("Lets this host rent a computer"));
+    expect(computer?.title).toContain(
+      "Which agents have one is set on each agent's Computer panel.",
+    );
+    const browser = legends.find((el) => el.title.startsWith("Lets this host rent a browser"));
+    expect(browser?.title).toContain("Which agents have one is set on each agent's Browser panel.");
+    // The key gives nobody a machine: it is what lets the workspace hand one
+    // out, and a legend promising every agent one is a purchase made for
+    // nothing.
+    expect(legends.some((el) => el.title.startsWith("Gives every agent"))).toBe(false);
   });
 });
 
