@@ -36,7 +36,7 @@ RUN test "$GUACA_RELEASE" != 1 || test "$GUACA_VERSION" = "$(node -p 'require(".
 RUN pnpm build
 
 # ---- the daemon -------------------------------------------------------------
-FROM rust:1.95-bookworm AS daemon
+FROM rust:1.99-bookworm AS daemon
 WORKDIR /app/src-tauri
 # Dependencies first, so a source-only change reuses the compiled tree. The
 # stubs stand in for every target the manifest names; build.rs is stubbed

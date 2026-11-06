@@ -39,9 +39,12 @@ const MARKER: &str = "guaca-conversation-arrived";
 /// Puts a stand-in `claude` on `PATH`, exactly once, and says where it is.
 ///
 /// Once, because `PATH` is process-wide and these tests run concurrently:
-/// writing it per test is a read racing a write on another thread. The path
-/// comes back because what the stand-in records about its own start is written
-/// beside it.
+/// writing it per test is a read racing a write on another thread. The script
+/// is also stateless — it records where it started in the directory the
+/// request names, never in one of its own — so one script serves every test
+/// without two of them writing the same file. `host.rs`'s Docker fixture is
+/// the same shape for the same reason: one immutable script, one state
+/// directory per fixture.
 fn stand_in() -> PathBuf {
     static ONCE: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
     ONCE.get_or_init(|| {
@@ -55,6 +58,19 @@ fn stand_in() -> PathBuf {
     .to_path_buf()
 }
 
+/// A request that tells the stand-in where to record where it started.
+///
+/// Per request rather than per process, because five tests run at once and a
+/// single shared file is one test truncating what another is reading. The
+/// path travels in the system prompt, which reaches the program on the command
+/// line and is the only thing about a call that differs between tests.
+fn asking_into(record: &Path) -> ChatRequest {
+    let mut request = asking();
+    request.messages[0] =
+        ChatMessage::system(format!("you are Dana guaca-record={}", record.display()));
+    request
+}
+
 /// The stand-in: reads the conversation, then answers on the basis of it.
 ///
 /// It branches on stdin rather than printing a constant, because the failure
@@ -66,10 +82,16 @@ fn write_stand_in(dir: &Path) {
     // `pwd -P` resolves symlinks because the answer is compared against a
     // canonical path: on this platform the temporary directory is reached
     // through one.
-    let record = dir.join("cwd");
+    //
+    // The record's location comes from the request, not from this script: five
+    // tests share this one executable and run at once, so a path baked in here
+    // would be one test truncating what another is reading. `asking_into` puts
+    // it in the system prompt, which reaches the program on the command line.
     let script = format!(
         "#!/bin/sh\n\
-         pwd -P > '{cwd}'\n\
+         record=''\n\
+         for a in \"$@\"; do case \"$a\" in *guaca-record=*) record=\"${{a##*guaca-record=}}\" ;; esac; done\n\
+         [ -n \"$record\" ] && pwd -P > \"$record\"\n\
          if [ \"$1\" = '--version' ]; then echo 'stand-in'; exit 0; fi\n\
          input=$(cat)\n\
          case \"$input\" in\n\
@@ -80,8 +102,7 @@ fn write_stand_in(dir: &Path) {
            *'no-answer'*) echo 'refusing' >&2; exit 3 ;;\n\
          esac\n\
          printf '%s\\n' '{{\"type\":\"stream_event\",\"event\":{{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"thinking_delta\",\"thinking\":\"weighing it up\"}}}}}}'\n\
-         printf '%s\\n' '{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"stop_reason\":\"end_turn\",\"structured_output\":{{\"say\":\"told Pat\",\"calls\":[{{\"name\":\"send_message\",\"arguments\":{{\"to\":\"Pat\"}}}}]}},\"usage\":{{\"input_tokens\":7,\"cache_read_input_tokens\":3,\"output_tokens\":5}},\"total_cost_usd\":0.42}}'\n",
-        cwd = record.display()
+         printf '%s\\n' '{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"stop_reason\":\"end_turn\",\"structured_output\":{{\"say\":\"told Pat\",\"calls\":[{{\"name\":\"send_message\",\"arguments\":{{\"to\":\"Pat\"}}}}]}},\"usage\":{{\"input_tokens\":7,\"cache_read_input_tokens\":3,\"output_tokens\":5}},\"total_cost_usd\":0.42}}'\n"
     );
     let at = dir.join("claude");
     let mut file = std::fs::File::create(&at).unwrap();
@@ -221,11 +242,20 @@ async fn the_program_is_started_somewhere_this_app_owns() {
     // turn asked for the photo library, the music library, the Desktop and the
     // Downloads folder, and for full disk access, each dialog naming Guaca.
     // `llm/claude.rs` has the log lines.
-    let beside = stand_in();
-    LlmClient::new().unwrap().stream_chat(&on_claude(), &asking(), |_| {}).await.unwrap();
+    stand_in();
+    // Its own directory and its own record. Five tests share the one script and
+    // run at once; a single file beside the script is one of them truncating
+    // what this one is reading, which is the flake this replaces.
+    let dir = tempfile::tempdir().unwrap();
+    let record = dir.path().join("cwd");
+    LlmClient::new()
+        .unwrap()
+        .stream_chat(&on_claude(), &asking_into(&record), |_| {})
+        .await
+        .unwrap();
 
-    let recorded = std::fs::read_to_string(beside.join("cwd"))
-        .expect("the stand-in records where it was started");
+    let recorded =
+        std::fs::read_to_string(&record).expect("the stand-in records where it was started");
     let started_in = Path::new(recorded.trim());
 
     assert_ne!(started_in, Path::new("/"), "started in the root of the disk");

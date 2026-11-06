@@ -42,7 +42,7 @@ pub fn now_ms() -> i64 {
     static LAST: AtomicI64 = AtomicI64::new(0);
     let wall =
         SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
-    LAST.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |prev| Some(wall.max(prev + 1)))
+    LAST.try_update(Ordering::SeqCst, Ordering::SeqCst, |prev| Some(wall.max(prev + 1)))
         .map(|prev| wall.max(prev + 1))
         .unwrap_or(wall)
 }

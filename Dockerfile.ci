@@ -10,7 +10,7 @@
 # GUI bundling is not attempted here: `cargo test` and `cargo clippy` need the
 # webkit headers, not a display.
 
-FROM rust:1.95-bookworm
+FROM rust:1.99-bookworm
 
 # Tauri's Linux backend needs these to compile even when no window is opened.
 RUN apt-get update && apt-get install -y --no-install-recommends \
