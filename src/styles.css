@@ -6033,7 +6033,7 @@ input[type="file"]:disabled {
   bottom: 0;
   z-index: 1;
   background: var(--ground);
-  border-top: 1px solid var(--edge);
+  border-top: 1px solid var(--rule);
 }
 
 .onboarding-actions > span,
