@@ -17,6 +17,7 @@ import {
   parseManager,
   thisApp,
 } from "../lib/host";
+import { expectRestart } from "../lib/link";
 import {
   available,
   clientUpdate,
@@ -189,6 +190,14 @@ export function HostMonitor({ children }: { children: ReactNode }) {
       clearInterval(timer);
     };
   }, [refresh]);
+  // A host an update is stopping goes away on purpose, and the window is told so
+  // here, from the read that says an update is underway, so it does not raise a
+  // lost host over the panel that is drawing that restart. Extended on every
+  // read, because the last thing an update does before its host goes quiet is a
+  // thing a quiet host cannot be asked.
+  useEffect(() => {
+    if (docker?.updating || manager.value?.updating) expectRestart();
+  }, [docker, manager]);
   const blocked = health && ["hostOld", "clientOld"].includes(compatibility(health));
   return (
     <Context.Provider

@@ -1,5 +1,6 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { expectRestart, forgetRestart } from "./lib/link";
 import type { AgentCard, Routine, Settings } from "./lib/types";
 import { aGroup } from "./test-fixtures";
 
@@ -174,7 +175,10 @@ beforeEach(() => {
     streams: {},
     pulses: [],
     banner: null,
+    link: "up",
+    lastHeard: null,
   });
+  forgetRestart();
 });
 
 describe("when the host goes away", () => {
@@ -542,6 +546,76 @@ it("refreshes the roster when the event connection returns", async () => {
   expect(reconnect).toBeTypeOf("function");
   reconnect?.();
   await waitFor(() => expect(listAgents.mock.calls.length).toBeGreaterThan(before));
+});
+
+describe("when the connection to the host is lost", () => {
+  // What the socket hands up, in the words `transport.ts` writes it in: the
+  // address, and the one fact the close adds — that the page is not live.
+  const gone = {
+    kind: "unreachable",
+    message:
+      "lost the connection to this host at http://127.0.0.1:8787. It may be restarting, or the connection to it is down, and nothing on this page is live until it answers again",
+  };
+
+  /** The subscription this page made, as `useRuntime` handed it over. */
+  async function connection() {
+    const { onRuntimeEvent } = await import("./lib/ipc");
+    const calls = vi.mocked(onRuntimeEvent).mock.calls;
+    const [, reconnect, lost] = calls[calls.length - 1]!;
+    expect(lost).toBeTypeOf("function");
+    return { reconnect: reconnect!, lost: lost! };
+  }
+
+  it("says so before anything has been asked for, and marks the page as out of date", async () => {
+    listAgents.mockResolvedValue([agent("Ada")]);
+    const { container } = render(<App />);
+    await screen.findByRole("navigation", { name: /agents/i });
+    const { lost } = await connection();
+
+    act(() => lost(gone));
+
+    // The banner a failed call raises, without a call: the diagnosis, and the
+    // controls that do something about it.
+    expect(screen.getByText(/lost the connection to this host/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    // The page stops claiming what it draws is current, and the one row that
+    // names the host says since when.
+    expect(container.querySelector(".app")?.getAttribute("data-link")).toBe("down");
+    expect(screen.getByText(/last heard/)).toBeTruthy();
+  });
+
+  it("clears itself when the connection comes back", async () => {
+    listAgents.mockResolvedValue([agent("Ada")]);
+    const { container } = render(<App />);
+    await screen.findByRole("navigation", { name: /agents/i });
+    const { reconnect, lost } = await connection();
+
+    act(() => lost(gone));
+    expect(container.querySelector(".app")?.getAttribute("data-link")).toBe("down");
+
+    await act(async () => reconnect());
+
+    await waitFor(() => expect(screen.queryByText(/lost the connection/)).toBeNull());
+    expect(container.querySelector(".app")?.getAttribute("data-link")).toBeNull();
+    expect(screen.queryByText(/last heard/)).toBeNull();
+    expect(useStore.getState().link).toBe("up");
+  });
+
+  it("says nothing while an update is restarting the host on purpose", async () => {
+    // The panel that started the update is already saying the host is
+    // restarting, and a page that also raised a lost host would argue with it.
+    expectRestart();
+    listAgents.mockResolvedValue([agent("Ada")]);
+    const { container } = render(<App />);
+    await screen.findByRole("navigation", { name: /agents/i });
+    const { lost } = await connection();
+
+    act(() => lost(gone));
+
+    expect(screen.queryByText(/lost the connection/)).toBeNull();
+    expect(container.querySelector(".app")?.getAttribute("data-link")).toBeNull();
+    expect(useStore.getState().link).toBe("up");
+  });
 });
 
 describe("phone navigation", () => {

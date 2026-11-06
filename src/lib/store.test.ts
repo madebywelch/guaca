@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { expectRestart, forgetRestart } from "./link";
 import type { AgentCard, Envelope, UiEvent } from "./types";
 
 // The store talks to Tauri, which does not exist in a test runner. Only the
@@ -120,13 +121,53 @@ function reset(messages: Record<string, Envelope[] | undefined> = {}) {
     usage: {},
     pulse: {},
     banner: null,
+    link: "up",
+    lastHeard: null,
     railGroup: null,
   });
 }
 
 const apply = (event: UiEvent) => useStore.getState().applyEvent(event);
 
-beforeEach(() => reset());
+beforeEach(() => {
+  reset();
+  forgetRestart();
+});
+
+describe("the line to the host", () => {
+  const gone = {
+    kind: "unreachable",
+    message: "lost the connection to this host at http://box.local:8787. It may be restarting.",
+  };
+  const state = () => useStore.getState();
+
+  it("is the banner a failed call would raise, and remembers when the host last spoke", () => {
+    state().linkDown(gone, 1_700_000_000_000);
+    expect(state().link).toBe("down");
+    expect(state().lastHeard).toBe(1_700_000_000_000);
+    expect(state().banner).toMatchObject({ tone: "error", fix: "host" });
+    expect(state().banner?.text).toContain("lost the connection");
+  });
+
+  it("takes back only the sentence about the host when it answers again", () => {
+    state().linkDown(gone, 1_700_000_000_000);
+    // A write refused while the host was gone is a different fact, and the host
+    // answering again says nothing about it.
+    state().showFailure({ kind: "storage", message: "the disk is full" });
+    state().linkUp();
+    expect(state().link).toBe("up");
+    expect(state().lastHeard).toBeNull();
+    expect(state().banner?.text).toBe("the disk is full");
+  });
+
+  it("says nothing when an update is restarting the host on purpose", () => {
+    expectRestart();
+    state().linkDown(gone, 1_700_000_000_000);
+    expect(state().link).toBe("up");
+    expect(state().lastHeard).toBeNull();
+    expect(state().banner).toBeNull();
+  });
+});
 
 describe("messageAppended", () => {
   it("appends to a loaded channel", () => {
