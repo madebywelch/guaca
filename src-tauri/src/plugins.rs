@@ -260,9 +260,12 @@ pub async fn connect(
 pub fn for_operator(err: McpError) -> PluginError {
     match err {
         McpError::Transport { endpoint, source } => {
+            // A finished sentence, not a clause: it is read on its own above
+            // the control that asked, so it carries its own capital letter and
+            // final period the way the sentence under it does.
             let says = format!(
-                "could not reach {endpoint}. {}. Check the address and its path, and that the \
-                 server is running and reachable from here",
+                "Could not reach {endpoint}. {}. Check the address and its path, and that the \
+                 server is running and reachable from here.",
                 unreachable_cause(&source)
             );
             PluginError::Unreachable { says, detail: chain(&source) }
@@ -291,14 +294,14 @@ pub fn said_to_operator(err: PluginError) -> PluginError {
 /// resolve are the same string in the error and two different afternoons.
 fn unreachable_cause(err: &reqwest::Error) -> &'static str {
     if err.is_timeout() {
-        "nothing answered in time"
+        "Nothing answered in time"
     } else if err.is_connect() {
-        "no connection was made: the name may not resolve, the port may be closed, or the server \
+        "No connection was made: the name may not resolve, the port may be closed, or the server \
          may have refused the encrypted connection"
     } else if err.is_body() || err.is_decode() {
-        "it answered, and the answer could not be read"
+        "It answered, and the answer could not be read"
     } else {
-        "the request failed before an answer came back"
+        "The request failed before an answer came back"
     }
 }
 
@@ -746,8 +749,12 @@ mod tests {
         assert!(!says.contains("error sending request for url"), "{says}");
         assert!(says.contains("http://127.0.0.1:9/mcp"), "{says}");
         assert!(says.contains("Check the address"), "{says}");
-        assert!(says.contains("no connection was made"), "{says}");
-        assert!(says.starts_with("could not reach"), "{says}");
+        // A finished sentence: a capital, a sentence boundary before the cause,
+        // and a final period. The panel draws it on its own above the button
+        // that asked, so every one of those is read.
+        assert!(says.contains(". No connection was made"), "{says}");
+        assert!(says.starts_with("Could not reach"), "{says}");
+        assert!(says.ends_with('.'), "{says}");
 
         match refused {
             PluginError::Unreachable { detail, .. } => {
