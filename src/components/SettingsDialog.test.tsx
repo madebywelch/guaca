@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Prefs } from "../lib/prefs";
+import type { Section } from "../lib/sections";
 import type {
   AccountConnectors,
   AccountStatus,
@@ -12,7 +13,6 @@ import type {
   SettingsPatch,
   SubscriptionStatus,
 } from "../lib/types";
-import type { Section } from "./SettingsDialog";
 
 /**
  * The settings dialog, over a mocked runtime.

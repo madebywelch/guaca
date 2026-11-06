@@ -44,6 +44,7 @@ import {
   UI_SCALES,
 } from "../lib/prefs";
 import { type Provider as Preset, planLabel } from "../lib/providers";
+import { SECTION_LABELS, SECTIONS, type Section } from "../lib/sections";
 import { useStore } from "../lib/store";
 import {
   ATTENTIONS,
@@ -82,43 +83,6 @@ interface Props {
   /** Told which pane is open, so the host can tell an agent what is on screen. */
   onSection?: (section: Section) => void;
 }
-
-const SECTIONS = [
-  "general",
-  "workspace",
-  "provider",
-  "limits",
-  "machines",
-  "account",
-  "appearance",
-  "notifications",
-  "shortcuts",
-  "skills",
-  "compost",
-  "about",
-] as const;
-
-export type Section = (typeof SECTIONS)[number];
-
-/** A pane name from elsewhere (a quick action, a route), if it is one. */
-export function asSection(name: string | null | undefined): Section | undefined {
-  return SECTIONS.find((section) => section === name);
-}
-
-const SECTION_LABELS: Record<Section, string> = {
-  general: "General",
-  workspace: "Host",
-  provider: "Provider",
-  limits: "Limits",
-  machines: "Machines",
-  account: "Account",
-  appearance: "Appearance",
-  notifications: "Notifications",
-  shortcuts: "Shortcuts",
-  skills: "Skills",
-  compost: "Compost",
-  about: "About",
-};
 
 const SURFACE_LABELS: Record<SurfaceMode, string> = {
   light: "Paper",

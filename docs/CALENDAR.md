@@ -68,8 +68,8 @@ happened to land on another group's board call would move it.
 
 **A refusal is "not found", never "not yours".** `Store::update_occasion` and
 `Store::delete_occasion` match on the group and come back empty, and
-`keep_calendar` says *your crew has no occasion with the id X*. The second
-sentence — "that belongs to another crew" — confirms the row exists and hints at
+`keep_calendar` says *your group has no occasion with the id X*. The second
+sentence — "that belongs to another group" — confirms the row exists and hints at
 whose it is, which is the leak the wall is for. Same reasoning as
 `no agent named Chef` in the directory.
 
@@ -107,7 +107,7 @@ trip wasted.
 
 ## A model has no clock, so the prompt tells it the date
 
-`## Your crew's calendar` opens with today's local date, and it is the only
+`## Your group's calendar` opens with today's local date, and it is the only
 place in the whole prompt that says what day it is. That is deliberate rather
 than an oversight: it is stated in the one section that needs it, beside the
 dates it is used to compute. An agent asked to put "the board meeting next

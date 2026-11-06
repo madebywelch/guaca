@@ -6,6 +6,7 @@
  * about it read alike. A button an agent asked for, from before agents pinned
  * pages instead, still says who asked.
  */
+import { paneName } from "./sections";
 import type { AgentId, QuickAction } from "./types";
 
 export function describeQuick(action: QuickAction, nameOf: (id: AgentId) => string): string {
@@ -19,8 +20,12 @@ export function describeQuick(action: QuickAction, nameOf: (id: AgentId) => stri
       return "Opens the calendar";
     case "forYou":
       return "Opens For You";
-    case "settings":
-      return place.section ? `Opens Settings on ${place.section}` : "Opens Settings";
+    case "settings": {
+      // The pane's own name: the tooltip and the sentence an agent reads about
+      // the screen are the same sentence, and an id is what travels.
+      const pane = paneName(place.section);
+      return pane ? `Opens Settings on ${pane}` : "Opens Settings";
+    }
     case "crewSettings":
       return "Opens a group's settings";
   }

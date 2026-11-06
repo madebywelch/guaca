@@ -117,10 +117,10 @@ shares it. Treat it as production:
 
 ## A workspace to test against
 
-`seed.py` fills a scratch profile with a crew and a transcript covering every
-row a channel can draw: bubbles, a peer burst, a folded tool trail with a
-failure and a credential spend, a routine firing, and files. No key, no
-network, no spend.
+`seed.py` fills a scratch profile with a group of agents and a transcript
+covering every row a channel can draw: bubbles, a peer burst, a folded tool
+trail with a failure and a credential spend, a routine firing, and files. No
+key, no network, no spend.
 
 ```sh
 python3 .claude/skills/run-guaca/seed.py --help
