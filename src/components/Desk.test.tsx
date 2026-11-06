@@ -20,6 +20,7 @@ vi.mock("../lib/ipc", () => ({
     clearEscalation: (id: string) => clearEscalation(id),
     openEscalations: () => openEscalations(),
     approvalStates: async () => ({}),
+    approvalAnswers: async () => ({}),
     channelMessages: async () => [],
     conversationFlow: async () => [],
   },

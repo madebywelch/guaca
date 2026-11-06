@@ -33,12 +33,23 @@ const SETTLED: Record<string, string> = {
  * goes back to the agent, and whatever it does with it passes every guard it
  * already had. Drawn as text, never as markdown, and already cut to a label's
  * length by the runtime.
+ *
+ * Once it has been answered the card keeps the words that answered it, under
+ * the note saying it was answered: the channel is the record of what was
+ * decided with an agent, and "You answered this" on its own is a record of a
+ * decision nobody can read back. The answer is drawn the way `DecisionReply`
+ * draws one, because it is the same fact in the other shape a question leaves
+ * behind. A question whose answer is outside the window the store loads keeps
+ * the sentence alone, which is everything that is known about it.
  */
 export function QuestionRequest({ part, agent }: Props) {
   // A request the store has never heard of is older than the window it loads,
   // so it cannot still be live. Drawing a live field for one would take an
   // answer that reaches nobody.
   const state = useStore((s) => s.approvals[part.id]) ?? "expired";
+  // Read from the store rather than from the part: the part is the question as
+  // it was asked and never changes, and the answer is kept on the request's row.
+  const said = useStore((s) => s.answers[part.id]);
   const answer = useStore((s) => s.answerQuestion);
   const [sending, setSending] = useState(false);
   const [written, setWritten] = useState("");
@@ -75,6 +86,8 @@ export function QuestionRequest({ part, agent }: Props) {
           </p>
         </div>
       </div>
+
+      {state === "answered" && said && <p className="decision__answer ask__given">{said}</p>}
 
       {state === "pending" && (
         <div className="ask__actions">

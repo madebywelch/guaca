@@ -1236,6 +1236,21 @@ pub async fn approval_states(state: &AppState) -> Reply<HashMap<ApprovalId, Appr
     Ok(state.runtime.store().approval_states(500)?)
 }
 
+/// What the operator said to every recent question, keyed by id.
+///
+/// The value half of the same row the states above name, and its own command
+/// because the two are read at different moments: a state is what a card's
+/// buttons are keyed on while the question is live, and an answer is what the
+/// transcript shows once they are gone. Nothing depends on it: it reads a
+/// record `answer_question` has already written, and gives no one a new way in.
+///
+/// Bounded by the same window as the states so the two maps cover the same
+/// requests: a card is never drawn holding a settled state whose answer was
+/// left out of the read.
+pub async fn approval_answers(state: &AppState) -> Reply<HashMap<ApprovalId, String>> {
+    Ok(state.runtime.store().approval_answers(500)?)
+}
+
 /// Every request still waiting on the operator, oldest first.
 ///
 /// Whole rather than as ids, because the caller is the desk and what it needs

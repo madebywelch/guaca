@@ -159,6 +159,18 @@ export interface State {
   approvals: Record<ApprovalId, ApprovalState | undefined>;
 
   /**
+   * What each question was answered with, keyed by the same ids.
+   *
+   * Its own map rather than a field beside the state, because the two have
+   * different lifetimes: a state moves while a question is live and an answer
+   * is written once and never again. Only a question is in here at all, and
+   * only once somebody has answered it; a card with no entry is drawn from its
+   * state alone, which is all there is to say about a request older than the
+   * window this is seeded from.
+   */
+  answers: Record<ApprovalId, string | undefined>;
+
+  /**
    * Every request still waiting on the operator, oldest first, whole.
    *
    * The queue the desk draws. Held as what the runtime last said rather than
@@ -560,6 +572,7 @@ export const useStore = create<State>((set, get) => ({
   usage: {},
   pulse: {},
   approvals: {},
+  answers: {},
   pending: [],
   stuck: [],
   decisions: [],
@@ -611,6 +624,7 @@ export const useStore = create<State>((set, get) => ({
       capabilities,
       usage,
       approvals,
+      answers,
       pending,
       stuck,
       decisions,
@@ -623,6 +637,10 @@ export const useStore = create<State>((set, get) => ({
       api.capabilities(),
       api.usageSummary(),
       api.approvalStates(),
+      // What a question was answered with, which is the half of its record a
+      // channel draws rather than a status: without it the first paint of a
+      // transcript says a question was answered and never what with.
+      api.approvalAnswers(),
       // A turn parked before the window was opened is still parked. The desk
       // has to be right on the first paint, or the operator's first read of
       // it says nobody is waiting.
@@ -642,6 +660,7 @@ export const useStore = create<State>((set, get) => ({
       capabilities,
       usage: byGroup(usage),
       approvals,
+      answers,
       pending,
       stuck,
       ...(decisionSnapshot === decisionRead ? { decisions, decisionError: null } : {}),
@@ -863,16 +882,23 @@ export const useStore = create<State>((set, get) => ({
   },
 
   /**
-   * Re-reads both halves of what is being asked: what every request came to,
-   * and which are still waiting.
+   * Re-reads every half of what is being asked: what each request came to,
+   * what an answered question was answered with, and which are still waiting.
    *
-   * One call for the two, because they are two views of one table and a refresh
-   * that took only one leaves the transcript's buttons and the desk's queue
-   * disagreeing about the same request.
+   * One call for the three, because they are three views of one table and a
+   * refresh that took only some leaves the transcript's buttons, its answer
+   * and the desk's queue disagreeing about the same request. The answers are
+   * here rather than fetched per card for the reason the states are: a settled
+   * question is drawn deep in a transcript that scrolls, and a read per card
+   * would be one round trip per question on screen.
    */
   async refreshApprovals() {
-    const [approvals, pending] = await Promise.all([api.approvalStates(), api.pendingApprovals()]);
-    set({ approvals, pending });
+    const [approvals, answers, pending] = await Promise.all([
+      api.approvalStates(),
+      api.approvalAnswers(),
+      api.pendingApprovals(),
+    ]);
+    set({ approvals, answers, pending });
   },
 
   async refreshEscalations() {

@@ -1333,6 +1333,39 @@ impl Store {
         Ok(out)
     }
 
+    /// What the operator said to every recent question, keyed by id.
+    ///
+    /// Its own read rather than a field on [`Self::approval_states`] because
+    /// the two are facts with different lifetimes: a state is what a request's
+    /// buttons are keyed on and moves while the operator is looking at it, and
+    /// an answer is written once and never moves again. Only a question has
+    /// one — a permission is settled with a token, and the token is the state.
+    ///
+    /// The same window and the same order as the states, so the two agree: a
+    /// row among the newest `limit` requests cannot have `limit` newer rows
+    /// that also carry an answer, so a request whose state is in that map has
+    /// its answer in this one whenever there is an answer to have. A row older
+    /// than the window is drawn from its state alone, which is what the card
+    /// did for every question before this read existed.
+    pub fn approval_answers(&self, limit: u32) -> Result<HashMap<ApprovalId, String>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id,answer FROM approvals WHERE answer IS NOT NULL
+              ORDER BY created_at DESC, id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+
+        let mut out = HashMap::new();
+        for row in rows {
+            let (id, answer) = row?;
+            let id = id.parse::<ApprovalId>().map_err(|e| StoreError::Corrupt(e.to_string()))?;
+            out.insert(id, answer);
+        }
+        Ok(out)
+    }
+
     /// What one run is still waiting on the operator to answer.
     ///
     /// Read from the row rather than from the runtime's map of waiters, because
@@ -7937,6 +7970,34 @@ mod tests {
             f.store.approval_states(500).unwrap().get(&request.id),
             Some(&ApprovalState::Deny)
         );
+    }
+
+    #[test]
+    fn the_answers_read_carries_what_was_said_and_only_what_was_said() {
+        // What the transcript asks for once a question's buttons are gone. Only
+        // a question is in here, and only after it was answered: a permission
+        // is settled with a token and the token is its state, and a question
+        // nobody answered has nothing to draw beside its sentence.
+        let f = fixture();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        let question = asks(&f.store, &manager, &["Northwind", "Contoso"]);
+        let once = ask(&f.store, &manager);
+        let lapsed = asks(&f.store, &manager, &[]);
+
+        assert!(
+            f.store.approval_answers(500).unwrap().is_empty(),
+            "nothing has been said to anything yet"
+        );
+
+        f.store.answer_approval(question.id, "Contoso").unwrap();
+        f.store.settle_approval(once.id, ApprovalState::Allow).unwrap();
+        f.store.settle_approval(lapsed.id, ApprovalState::Expired).unwrap();
+
+        let answers = f.store.approval_answers(500).unwrap();
+        assert_eq!(answers.get(&question.id).map(String::as_str), Some("Contoso"));
+        assert_eq!(answers.get(&once.id), None, "a verdict is a state, not a value");
+        assert_eq!(answers.get(&lapsed.id), None, "nobody said anything to the one that lapsed");
+        assert_eq!(answers.len(), 1);
     }
 
     #[test]

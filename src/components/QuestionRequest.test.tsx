@@ -12,6 +12,7 @@ vi.mock("../lib/ipc", () => ({
     answerQuestion: (id: string, answer: string) => answerQuestion(id, answer),
     decideApproval: async () => undefined,
     approvalStates: async () => ({}),
+    approvalAnswers: async () => ({}),
     pendingApprovals: async () => [],
   },
 }));
@@ -74,8 +75,16 @@ function asked(part: QuestionPart): Envelope {
   };
 }
 
-function draw(state: ApprovalState | undefined, part = CHOICE) {
-  useStore.setState({ approvals: state ? { [part.id]: state } : {}, banner: null });
+function draw(
+  state: ApprovalState | undefined,
+  part = CHOICE,
+  answers: Record<string, string> = {},
+) {
+  useStore.setState({
+    approvals: state ? { [part.id]: state } : {},
+    answers,
+    banner: null,
+  });
   return render(
     <MessageItem
       message={asked(part)}
@@ -150,5 +159,48 @@ describe("a question put to the operator", () => {
   it("is not live at all for a question older than the window the store loads", () => {
     draw(undefined);
     expect(screen.queryByRole("button", { name: "Northwind" })).toBeNull();
+  });
+});
+
+describe("a question that has been answered", () => {
+  beforeEach(() => {
+    answerQuestion.mockReset();
+    answerQuestion.mockResolvedValue(undefined);
+  });
+
+  // What the channel is for. The answer reached the agent either way; what was
+  // missing is the record of it, and a week later "You answered this" is the
+  // one line nobody can reconstruct from anything on screen.
+  it("keeps what was said, not only that something was", () => {
+    const { container } = draw("answered", CHOICE, { q1: "Contoso" });
+
+    expect(screen.getByText("You answered this.")).toBeTruthy();
+    expect(screen.getByText("Contoso")).toBeTruthy();
+    expect(container.querySelector(".ask__given")?.textContent).toBe("Contoso");
+  });
+
+  it("keeps a written answer whole, including the line breaks", () => {
+    const written = "Forty thousand.\nNot a cent more before Q3.";
+    draw("answered", WRITTEN, { q2: written });
+    expect(screen.getByText(/Forty thousand\./)).toBeTruthy();
+  });
+
+  // A decision older than the window the store reads has a state and no answer
+  // with it. The card must still say the one thing that is known, and must not
+  // draw an empty answer as though the operator had said nothing.
+  it("says only that it was answered when no answer came with it", () => {
+    const { container } = draw("answered");
+
+    expect(screen.getByText("You answered this.")).toBeTruthy();
+    expect(container.querySelector(".ask__given")).toBeNull();
+  });
+
+  // A choice is one of the agent's own options, so it can contain anything the
+  // model can write. It reaches the card as a value, never as markup.
+  it("draws the answer as text, whatever the model put in the option", () => {
+    const { container } = draw("answered", CHOICE, { q1: "[Contoso](https://example.com)" });
+
+    expect(screen.getByText("[Contoso](https://example.com)")).toBeTruthy();
+    expect(container.querySelector("a, strong, em")).toBeNull();
   });
 });

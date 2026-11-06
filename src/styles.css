@@ -4525,6 +4525,14 @@ input[type="file"]::file-selector-button {
   color: var(--muted);
 }
 
+/* What was answered, under the note that says there is an answer. Set the way
+   `DecisionReply` sets one — the reading face, the operator's own words, never
+   markup — and the only bright line left on a card that has settled into the
+   paper, because it is the thing the card is a record of. */
+.ask__given {
+  margin: var(--space-4) 0 0;
+}
+
 .ask__detail {
   margin: var(--space-5) 0 0;
   display: grid;

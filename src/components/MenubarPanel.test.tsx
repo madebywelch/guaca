@@ -21,6 +21,7 @@ vi.mock("../lib/ipc", () => ({
   api: {
     ...mocks,
     approvalStates: async () => ({}),
+    approvalAnswers: async () => ({}),
     pendingApprovals: async () => [],
     openEscalations: async () => [],
   },

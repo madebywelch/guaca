@@ -137,6 +137,15 @@ first, and every channel drew the paragraph and the JSON as a bubble from Guaca;
 migration 61 converts those rows, and the paragraph the agent reads is the same
 either way.
 
+A live question is the other kind and leaves the other shape. `ask_operator`
+parks the turn, so the question is a part in a channel and its answer is a
+column on the `approvals` row, and the card that asked it reads that column back
+through `approval_answers` — the same bounded window as `approval_states` — and
+draws it under the sentence saying it was answered. That read is for the page
+only. What the parked turn is handed when it resumes is the tool result
+`runtime::put_to_operator` builds, and the card reading the record neither
+changes it nor gives it a second copy to read.
+
 Completion requires a separate tool call with a concrete outcome after the work
 is done. It cannot be inferred from a turn ending. Outstanding answered records
 remain visible and continue to receive review reminders.

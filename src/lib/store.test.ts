@@ -17,6 +17,9 @@ vi.mock("./ipc", () => ({
     listGroups: vi.fn(async () => []),
     moveAgent: vi.fn(async () => null),
     setAgentPinned: vi.fn(async () => null),
+    approvalStates: async () => ({ "q-1": "answered" }),
+    approvalAnswers: async () => ({ "q-1": "Northwind" }),
+    pendingApprovals: async () => [],
   },
   onRuntimeEvent: vi.fn(),
 }));
@@ -126,6 +129,9 @@ function reset(messages: Record<string, Envelope[] | undefined> = {}) {
     railGroup: null,
   });
 }
+
+const APPROVALS = { "q-1": "answered" };
+const ANSWERS = { "q-1": "Northwind" };
 
 const apply = (event: UiEvent) => useStore.getState().applyEvent(event);
 
@@ -841,5 +847,17 @@ describe("a failure on the banner", () => {
       expect(useStore.getState().banner?.fix).toBeUndefined();
       expect(useStore.getState().banner?.tone).toBe("error");
     }
+  });
+});
+
+describe("what a settled question is read back as", () => {
+  it("keeps the answer beside the state it came with", async () => {
+    // The card in a channel is drawn from two maps seeded by one read, and a
+    // component test that sets both by hand passes with either read missing.
+    // The failure that leaves is quiet and exact: the card says "You answered
+    // this." and never what with, which is the whole reason the pair exists.
+    await useStore.getState().refreshApprovals();
+    expect(useStore.getState().approvals).toEqual(APPROVALS);
+    expect(useStore.getState().answers).toEqual(ANSWERS);
   });
 });
