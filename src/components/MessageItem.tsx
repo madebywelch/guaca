@@ -21,26 +21,24 @@ import { ArtifactCard } from "./Artifacts";
 import { FileCard } from "./FileCard";
 import { Markdown } from "./Markdown";
 import { QuestionRequest } from "./QuestionRequest";
-import { TrailRow } from "./Trail";
+import { TrailFootnote } from "./Trail";
 import { AsideRow, NoticeRow, RoutineRow } from "./WireRow";
 
 interface Props {
   message: Envelope;
   lookups: Lookups;
-  /** Hides the avatar and header when the previous message had the same author. */
+  /** Hides the margin and the running head when the previous message had the same author. */
   continued: boolean;
   /**
-   * Whether the author has to be written out.
+   * Which footnote in the channel this row is, where it is one.
    *
-   * False in an agent's own channel, where there are exactly two participants:
-   * the channel is named after one of them and the operator is the other, so a
-   * name over every message is the loudest thing on the page and the one that
-   * says least. The portrait and the side of the column it sits on carry it.
-   *
-   * True in a pair's thread, where both participants are agents and look alike
-   * in a list.
+   * A row that only did things — the tool calls of a turn, a burst of peer
+   * traffic — is set as a numbered note under the turn it belongs to rather
+   * than as a turn of its own. The number is the channel's, assigned in the
+   * order the footnotes are drawn, so it is passed in rather than counted
+   * here: this component sees one row and a footnote is a position in a page.
    */
-  named?: boolean;
+  footnote?: number;
 }
 
 const HUMAN = { id: "human", name: "You", color: "var(--muted)", avatar: "plain" };
@@ -124,7 +122,7 @@ export const MessageItem = memo(function MessageItem({
   message,
   lookups,
   continued,
-  named = true,
+  footnote,
 }: Props) {
   const { from, to } = message;
 
@@ -167,10 +165,17 @@ export const MessageItem = memo(function MessageItem({
   }
 
   if (from.kind === "agent" && to.kind === "system") {
-    return <ActivityRecord message={message} />;
+    return (
+      <ActivityRecord
+        message={message}
+        byId={lookups.byId}
+        continued={continued}
+        footnote={footnote}
+      />
+    );
   }
 
-  return <ChatBubble message={message} byId={lookups.byId} continued={continued} named={named} />;
+  return <ChatBubble message={message} byId={lookups.byId} continued={continued} />;
 });
 
 /**
@@ -182,8 +187,8 @@ export const MessageItem = memo(function MessageItem({
  * because there is no peer to file it under and the reason it went nowhere is
  * the whole of what there is to see.
  *
- * Tool calls are drawn as one row per run of them rather than one row each: a
- * turn can make two dozen, and a line apiece buried the operator's own
+ * Tool calls are drawn as one footnote per run of them rather than one row
+ * each: a turn can make two dozen, and a line apiece buried the operator's own
  * conversation exactly as peer traffic did before it was collapsed. A notice
  * ends the run it interrupts, for the reason a tool trail ends a burst in
  * `transcriptRows`: the notice is usually about the calls either side of it,
@@ -202,22 +207,56 @@ export const MessageItem = memo(function MessageItem({
  * `lib/figure.ts`. A renderer for `json` before there is a producer is still
  * surface with no caller.
  */
-function ActivityRecord({ message }: { message: Envelope }) {
-  const rows: React.ReactNode[] = [];
+function ActivityRecord({
+  message,
+  byId,
+  continued,
+  footnote,
+}: {
+  message: Envelope;
+  byId: Lookups["byId"];
+  continued: boolean;
+  footnote?: number;
+}) {
+  const blocks: React.ReactNode[] = [];
+  /** What is waiting to be drawn as one note, and the key it is filed under. */
   let run: { steps: Step[]; key: string } | null = null;
+  /**
+   * Whether this row produced something the operator will open.
+   *
+   * A kept page is work, and work gets a turn: the agent's face, its name and
+   * the card under them. Everything else a record holds — calls, notices, a
+   * paragraph it trailed after answering somebody else — is apparatus, and
+   * apparatus is set as a note or a line rather than as somebody speaking.
+   */
+  let produced = false;
 
   const close = () => {
-    if (run) rows.push(<TrailRow key={run.key} steps={run.steps} />);
+    if (run) {
+      blocks.push(
+        <TrailFootnote
+          key={run.key}
+          steps={run.steps}
+          number={footnote ?? 0}
+          // The turn's own clock, where the note is the whole row. Inside a
+          // turn the passage above it already carries the time.
+          at={
+            message.parts.every((part) => part.type === "toolCall") ? message.createdAt : undefined
+          }
+        />,
+      );
+    }
     run = null;
   };
 
   for (const { part, key } of keyed(message)) {
     // A call that wrote a kept page ends the run and is drawn as a card. It is
     // the one call whose result is a thing the operator will open, and folded
-    // into "Used 4 tools" it would be a page they never learn was made.
+    // into a footnote it would be a page they never learn was made.
     if (part.type === "toolCall" && part.artifact) {
       close();
-      rows.push(<ArtifactCard key={key} made={part.artifact} />);
+      produced = true;
+      blocks.push(<ArtifactCard key={key} made={part.artifact} />);
       continue;
     }
     if (part.type === "toolCall") {
@@ -228,15 +267,42 @@ function ActivityRecord({ message }: { message: Envelope }) {
     }
     close();
     if (part.type === "notice") {
-      rows.push(<NoticeRow key={key} kind={part.kind} text={part.text} />);
+      blocks.push(<NoticeRow key={key} kind={part.kind} text={part.text} />);
     }
     if (part.type === "text") {
-      rows.push(<AsideRow key={key} text={part.text} />);
+      blocks.push(<AsideRow key={key} text={part.text} />);
     }
   }
   close();
 
-  return <>{rows}</>;
+  if (!produced) {
+    // Nothing the operator will open: this is the apparatus of a turn rather
+    // than a turn, and it is set as notes and lines under the one before it.
+    return <>{blocks}</>;
+  }
+
+  const author = identity(message.from, byId);
+  return (
+    <article className={continued ? "msg msg--continued" : "msg"}>
+      <div className="msg__margin">
+        {!continued && (
+          <time className="msg__at" dateTime={new Date(message.createdAt).toISOString()}>
+            {clockTime(message.createdAt)}
+          </time>
+        )}
+        {!continued && (
+          <AgentAvatar
+            avatar={author.avatar}
+            color={author.color}
+            size="sm"
+            seed={author.id}
+            title={author.name}
+          />
+        )}
+      </div>
+      <div className="msg__body">{blocks}</div>
+    </article>
+  );
 }
 
 /**
@@ -295,12 +361,10 @@ function ChatBubble({
   message,
   byId,
   continued,
-  named,
 }: {
   message: Envelope;
   byId: Lookups["byId"];
   continued: boolean;
-  named: boolean;
 }) {
   const author = identity(message.from, byId);
   // The operator does not need a portrait of themselves in their own log; the
@@ -323,28 +387,32 @@ function ChatBubble({
       className={continued ? "msg msg--continued" : "msg"}
       data-operator={isOperator ? "true" : undefined}
     >
-      {!isOperator && (
-        <div className="msg__gutter">
-          {!continued && (
-            <AgentAvatar
-              avatar={author.avatar}
-              color={author.color}
-              size="sm"
-              seed={author.id}
-              title={author.name}
-            />
-          )}
-        </div>
-      )}
+      {/* The margin: when, and who. The clock used to be a lane on the right
+          edge that appeared on hover, which put a message's time as far from
+          its first word as the page allowed and hid it besides. A record has
+          its date in the margin, where a reader looks for it once. */}
+      <div className="msg__margin">
+        {!continued && (
+          <time className="msg__at" dateTime={new Date(message.createdAt).toISOString()}>
+            {clockTime(message.createdAt)}
+          </time>
+        )}
+        {!isOperator && !continued && (
+          <AgentAvatar
+            avatar={author.avatar}
+            color={author.color}
+            size="sm"
+            seed={author.id}
+            title={author.name}
+          />
+        )}
+      </div>
 
       <div className="msg__body">
-        {named && !continued && (
-          <div className="msg__head">
-            <span className="msg__author" style={{ color: author.color }}>
-              {author.name}
-            </span>
-          </div>
-        )}
+        {/* The running head: who is speaking, set in the display face the way a
+            printed page sets it, and drawn on the first message of a run
+            rather than on every one. */}
+        {!continued && <div className="msg__head">{author.name}</div>}
 
         {notices.map(({ part, key }) => (
           <NoticeRow
@@ -369,15 +437,6 @@ function ChatBubble({
           <FileCard key={key} file={part} />
         ))}
       </div>
-
-      {/* In a lane of its own at the end of the row, and inked by the pointer.
-          Every message has a time and almost none of them are worth a line:
-          four in a row are usually the same minute. Asking for one is a hover;
-          noticing that an hour passed is the line the transcript draws by
-          itself. */}
-      <time className="msg__at" dateTime={new Date(message.createdAt).toISOString()}>
-        {clockTime(message.createdAt)}
-      </time>
     </article>
   );
 }

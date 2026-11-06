@@ -21,7 +21,48 @@ open, because two exchanges three hours apart are two things that happened.
 What a channel folds and what it must never fold is in *A channel says an
 exchange happened; the pair's thread is what it said*, in `ARCHITECTURE.md`.
 
-## A turn's own work is chips, not a line per call
+## The transcript is a page, and its margin carries when and who
+
+A channel is a record of work, and a record reads as a page rather than as a
+chat. That is the change the whole transcript is arranged around, and it is four
+moves that only work together.
+
+**One margin.** Every row is a two-column grid: a 92-pixel lane, and the measure
+beside it. The lane holds the time a turn was written, the face of whoever wrote
+it, and — under the turn — the numbers of the notes that belong to it. Those
+three used to be scattered: the clock was a lane on the far right that appeared
+on hover, putting a message's time as far from its first word as the window
+allowed and hiding it besides; the face was a gutter of its own; and the notes
+were centered rows of their own. One lane, because they are one question, and
+because a page has one margin.
+
+**A running head.** Every turn is headed with the speaker's name, set in the
+display face in small caps at the ladder's floor. It is drawn once on the first
+message of a run: a second message by the same author inside four minutes is the
+same passage continuing, so it has no head, no clock and no rule above it. The
+head appears in an agent's own channel too, which is a reversal. The old
+argument was that a channel names its agent at the top of the pane, so a name
+over every message was the loudest thing on the page and the one that said
+least. On a page, the head is what tells a reader scanning back up whose
+passage they are in, and it costs one line of 11px type.
+
+**Your turns are quoted, not boxed.** What the operator said is set in the same
+column and the same face, in italic and in the second ink. It was a recessed
+bubble against the right edge, which made every line they had ever typed a shape
+competing with the one card on the page that actually wanted something from
+them. A page quotes the other voice; it does not draw it a box.
+
+**A rule between passages.** `--rule`, not `--rule-hard`: it is the page's
+rhythm rather than a boundary somebody has to find, and one hairline for both
+jobs is why the app could not say where a turn starts any louder than it said
+"hairline".
+
+The margin is what makes the calm work at 1440. Ledger's risk was that a page
+reads as flat on a wide window with one short message in it; the answer is that
+the margin always has something in it — a time, a face, a number — and the eye
+has an edge to return to.
+
+## A turn's own work is a footnote, not a line per call
 
 **Appearance can show live reasoning and tool calls in chat.** The setting is
 `showReasoning`, off by default and stored with the other local preferences.
@@ -45,10 +86,26 @@ turn legitimately spends most of it, and every one of those was a line reading
 arriving from the other direction, and it sat between the operator's question
 and the answer to it.
 
-So a run of calls is one row of chips, one per kind of work, and the calls
-themselves open underneath it. `lib/trail.ts` holds the rules as pure functions
-over a list, the way `lib/rail.ts` does for the rail, so what folds can be read
-and tested without a DOM.
+So a run of calls is a footnote: one numbered line under the passage it
+belongs to, one item per kind of work, and the calls themselves open underneath
+it. `lib/trail.ts` holds the rules as pure functions over a list, the way
+`lib/rail.ts` does for the rail, so what folds can be read and tested without a
+DOM; the footnote is a second drawing of those rules, not a second set.
+
+A footnote rather than a row of chips, and the difference is the page. A chip is
+a box, and a box between two paragraphs is a third voice in the transcript: the
+operator's conversation, the agent's answer, and the tools, all drawn as things
+of the same size. Ledger's page separates them the way a printed page does —
+what somebody said is set as a passage; what the turn *did* is apparatus, set in
+the machine texture at the floor of the ladder, numbered, and under the passage
+it belongs to. Nothing is lost, and nothing has to be clicked to be skipped.
+
+The peer traffic is the same object: a burst becomes one numbered note quoting
+the first thing said in the exchange, so a reader can tell whether opening the
+thread is worth it. `lib/transcript.ts` still decides what folds and what does
+not. The number is the channel's, assigned in the order the notes are drawn,
+because a footnote is a position in a page and only the page knows what came
+before it.
 
 Grouped by tool across the run rather than only where calls are adjacent. The
 order a model happens to interleave `browse` and `run_command` in is not
@@ -840,11 +897,10 @@ of clicking a name. And it would read a bubble being typed a dozen times before
 it was finished, so the streams are `aria-live="off"` and `WorkingNote` already
 says the turn is alive.
 
-What is announced is exactly what is drawn as a full bubble, and that symmetry
-is the rule. Peer traffic and tool trails are collapsed on screen precisely
-because reading them line by line buries the conversation; read aloud they would
-bury it more thoroughly, because there is no glancing past a sentence being
-spoken. A permission request goes ahead of the text, as it does everywhere else:
+What is announced is exactly what is drawn as a passage, and that symmetry is
+the rule. Peer traffic and tool trails are footnotes on screen precisely because
+reading them line by line buries the conversation; read aloud they would bury it
+more thoroughly, because there is no glancing past a sentence being spoken. A permission request goes ahead of the text, as it does everywhere else:
 it is the one thing in a transcript the operator is expected to act on.
 
 The region sits outside the log. Inside it, the sentence is a second copy of the

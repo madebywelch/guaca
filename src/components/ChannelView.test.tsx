@@ -132,8 +132,13 @@ describe("peer traffic in a channel", () => {
       fromPeer("and another"),
     ]);
 
+    // One note for the two of them. What it adds to the old centered row is the
+    // gist: the first thing said, so a reader can tell whether opening the
+    // thread is worth it. The second message is not quoted, which is what keeps
+    // this a note rather than the burst at a smaller size.
     expect(screen.getByRole("button", { name: /2 messages with Chef/ })).toBeTruthy();
-    expect(screen.queryByText("a long report nobody asked to read here")).toBeNull();
+    expect(screen.queryByText("and another")).toBeNull();
+    expect(document.querySelectorAll(".footnote")).toHaveLength(1);
   });
 
   it("opens the pair's own thread when the line is clicked", async () => {
@@ -199,10 +204,11 @@ describe("peer traffic in a channel", () => {
 });
 
 describe("who said what", () => {
-  it("does not write the agent's name over every message it sent", () => {
-    // A channel has two participants: the one named at the top of the pane and
-    // the operator reading it. A name and a clock over each of four replies
-    // written in the same minute is eight lines carrying two facts.
+  it("names the speaker once per turn rather than once per message", () => {
+    // A turn is a passage and a passage has one running head. Two replies
+    // written in the same minute are one turn continuing, so the second one
+    // carries no head and no clock: four of them in a row used to be eight
+    // lines carrying two facts.
     open([
       envelope({ parts: [{ type: "text", text: "what is the status" }] }),
       envelope({
@@ -210,12 +216,19 @@ describe("who said what", () => {
         to: { kind: "human" },
         parts: [{ type: "text", text: "all clear" }],
       }),
+      envelope({
+        from: { kind: "agent", id: MANAGER },
+        to: { kind: "human" },
+        parts: [{ type: "text", text: "and done" }],
+      }),
     ]);
 
     expect(screen.getByText("all clear")).toBeTruthy();
-    // Once, at the top of the pane, and nowhere in the transcript.
-    expect(screen.getAllByText("Manager")).toHaveLength(1);
-    expect(screen.queryByText("You")).toBeNull();
+    // The pane's title, and the running head over the passage: never a third.
+    expect(screen.getAllByText("Manager")).toHaveLength(2);
+    expect(document.querySelectorAll(".msg--continued")).toHaveLength(1);
+    // And the operator's own first turn is headed like any other passage.
+    expect(document.querySelectorAll(".msg__head")).toHaveLength(2);
   });
 
   it("says when the conversation picked up again, where it did", () => {
@@ -230,6 +243,19 @@ describe("who said what", () => {
     expect(line?.getAttribute("datetime")).toBe(new Date(afternoon.createdAt).toISOString());
     // One line for the gap, not one clock per message.
     expect(container.querySelectorAll(".when-row")).toHaveLength(1);
+  });
+});
+
+describe("what the head says answers", () => {
+  it("names the model, and whose choice it was, without naming a field", () => {
+    // The line used to print the card's own model field, so an agent that
+    // inherits said "no model of its own · answering as itself": an empty
+    // column's name and a phrase that means nothing to anybody.
+    const { container } = open([envelope({ parts: [{ type: "text", text: "hi" }] })]);
+    const meta = container.querySelector(".pane__meta")?.textContent ?? "";
+    expect(meta).toContain("m");
+    expect(meta).not.toContain("answering as itself");
+    expect(meta).not.toContain("no model of its own");
   });
 });
 

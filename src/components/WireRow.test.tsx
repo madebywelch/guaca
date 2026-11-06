@@ -30,56 +30,55 @@ describe("why", () => {
 });
 
 describe("a peer message arriving", () => {
-  /** What a chip says and what it is wearing, ignoring the live-only dots. */
-  const chips = (root: HTMLElement) =>
-    [...root.querySelectorAll(".wire__chip")].map((chip) => ({
-      label: chip.querySelector(".wire__label")?.textContent,
-      // The size class, so a chip that grew or lost its face fails here.
-      avatar: chip.querySelector(".avatar")?.className,
-    }));
+  /** What a note says, ignoring the live-only dots. */
+  const said = (root: HTMLElement) =>
+    [...root.querySelectorAll(".footnote__send")].map((one) => one.textContent);
 
-  it("is announced as the chip it settles into", () => {
+  it("is announced as the line it settles into", () => {
     // One message landing must not read as two events. The live row was a
-    // sentence with an arrow and no avatar, and the settled row a chip with an
-    // avatar and different words, so a message arriving moved, renamed itself
-    // and grew a face in one frame.
+    // sentence with an arrow and no face, and the settled row a chip with a
+    // face and different words, so a message arriving moved, renamed itself and
+    // grew an avatar in one frame. Both are the same line of the same page now,
+    // and the only thing that changes is the dots giving way to the gist.
     const live = render(<WritingRow peer={GOV} />);
     const settled = render(
       <PeerBurstRow
-        peers={[{ peer: GOV, agentId: "gov", sent: 0, received: 1 }]}
+        peers={[{ peer: GOV, agentId: "gov", sent: 0, received: 1, gist: null }]}
+        number={1}
+        at={0}
         onOpen={vi.fn()}
       />,
     );
 
-    expect(chips(live.container)).toEqual(chips(settled.container));
-    expect(chips(live.container)).toEqual([
-      { label: "Message from Government Procurement", avatar: "avatar avatar--xs" },
-    ]);
-    expect(live.container.querySelector(".wire__dots")).not.toBeNull();
-    expect(settled.container.querySelector(".wire__dots")).toBeNull();
+    expect(said(live.container)).toEqual(["Message from Government Procurement"]);
+    expect(said(settled.container)).toEqual(said(live.container));
+    expect(live.container.querySelector(".footnote__dots")).not.toBeNull();
+    expect(settled.container.querySelector(".footnote__dots")).toBeNull();
   });
 
-  it("keeps a burst in one group, so the rules bracket it rather than wrap into it", () => {
-    // The rules either side of a wire row are `.wire` pseudo-elements. As items
-    // of a wrapping flex row they were laid out with the chips: the left rule
-    // squeezed onto the first line, the right one stranded beside whichever
-    // chip wrapped last. Every chip goes in one child, and `.wire` never wraps.
+  it("keeps a burst on one line, with the count it stands for", () => {
+    // The row is the page's apparatus: one line under the turn, however many
+    // peers were involved. A line apiece is the burial the burst was collapsed
+    // to fix in the first place.
     const { container } = render(
       <PeerBurstRow
         peers={[
-          { peer: GOV, agentId: "gov", sent: 1, received: 1 },
-          { peer: REV, agentId: "rev", sent: 0, received: 1 },
+          { peer: GOV, agentId: "gov", sent: 1, received: 1, gist: null },
+          { peer: REV, agentId: "rev", sent: 0, received: 1, gist: null },
         ]}
+        number={2}
+        at={0}
         onOpen={vi.fn()}
       />,
     );
 
-    const wire = container.querySelector(".wire");
-    expect(wire?.children).toHaveLength(1);
-    expect(wire?.firstElementChild?.className).toBe("wire__chips");
-    expect(chips(container).map((c) => c.label)).toEqual([
+    const line = container.querySelector(".footnote__line");
+    expect(line?.children).toHaveLength(2);
+    expect(said(container)).toEqual([
       "2 messages with Government Procurement",
       "Message from Revenue Operations",
     ]);
+    // And it is numbered, because a note is a position in a page.
+    expect(container.querySelector(".footnote__number")?.textContent).toBe("2");
   });
 });

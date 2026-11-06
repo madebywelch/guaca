@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
+
 import { type PeerSummary, summaryLabel, type WirePeer } from "../lib/transcript";
 import type { AgentId } from "../lib/types";
 import { Markdown } from "./Markdown";
@@ -36,50 +37,76 @@ function clockTime(ms: number): string {
   return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-/**
- * The inside of a peer chip.
- *
- * Shared rather than written twice because a chip is drawn before the message
- * arrives and again after it has, and the two have to be the same object to the
- * eye. An avatar a size out or a label in a different place turns one message
- * landing into two things happening.
- */
-function PeerFace({ peer, label }: { peer: WirePeer; label: string }) {
-  return (
-    <>
-      <AgentAvatar avatar={peer.avatar} color={peer.color} size="xs" seed={peer.id} />
-      <span className="wire__label">{label}</span>
-    </>
-  );
-}
-
 /** One peer's share of a burst, and the thread behind it. */
 function PeerChip({ summary, onOpen }: { summary: PeerSummary; onOpen: (peer: AgentId) => void }) {
   const { peer, agentId } = summary;
-  const face = <PeerFace peer={peer} label={summaryLabel(summary)} />;
-  const style = { "--accent": peer.color } as React.CSSProperties;
+  const label = summaryLabel(summary);
 
-  // An unresolved name has no thread to open. It still gets a chip: an agent
+  // An unresolved name has no thread to open. It still gets a line: an agent
   // that wrote to a name nobody can find is worth seeing.
   return agentId ? (
     <button
       type="button"
-      className="wire__chip wire__chip--open"
-      style={style}
+      className="footnote__send"
       title={`Read the conversation with ${peer.name}`}
       onClick={() => onOpen(agentId)}
     >
-      {face}
+      {label}
     </button>
   ) : (
-    <span className="wire__chip" style={style}>
-      {face}
-    </span>
+    <span className="footnote__send">{label}</span>
   );
 }
 
 /**
- * A burst of peer traffic, one chip per peer.
+ * The page's apparatus: one numbered line under the turn it belongs to.
+ *
+ * A record has footnotes, and a footnote is a smaller thing than the passage it
+ * annotates: the tool calls a turn made, the messages it exchanged with a
+ * peer. Drawn as their own blocks they were a second and third voice in the
+ * transcript, and the operator's own conversation read as one entry among
+ * them. Set as a note it still says exactly what happened, in the order it
+ * happened, and it is skippable.
+ *
+ * `at` is drawn where the note has one of its own; a note filed under the
+ * message that produced it takes the row's clock from that message instead.
+ */
+export function FootnoteRow({
+  at,
+  number,
+  children,
+  failed,
+}: {
+  at?: number;
+  number: number;
+  children: React.ReactNode;
+  failed?: boolean;
+}) {
+  return (
+    <div className="footnote" data-failed={failed || undefined}>
+      <div className="footnote__margin">
+        {at !== undefined && (
+          <time className="footnote__at" dateTime={new Date(at).toISOString()}>
+            {clockTime(at)}
+          </time>
+        )}
+      </div>
+      <div className="footnote__body">
+        {/* Unnumbered while it is still arriving: a live row has no position in
+            the page yet, because the row it will settle into does not exist. */}
+        {number > 0 && (
+          <span className="footnote__number" aria-hidden="true">
+            {number}
+          </span>
+        )}
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A burst of peer traffic, as one footnote per peer.
  *
  * Per peer rather than "5 messages with 2 agents", for the same reason a
  * fan-out draws one row per recipient: a count that does not name anyone
@@ -87,25 +114,39 @@ function PeerChip({ summary, onOpen }: { summary: PeerSummary; onOpen: (peer: Ag
  * every chip has exactly one thread behind it, so a click never has to ask
  * which conversation was meant.
  *
- * The chips are one child rather than several, so the rules either side of the
- * row bracket the group instead of joining it: as siblings in a wrapping row
- * they were laid out with the chips and ended up inside the burst.
+ * What the mockup's footnote adds to the old centered line is the gist: the
+ * first thing said in the exchange, in the same line, so the reader can tell
+ * whether it is worth opening without opening it. That is a claim about the
+ * message and not about the runtime — a burst is still one row per peer, and
+ * the count is still of what this channel holds.
  */
 export function PeerBurstRow({
   peers,
+  number,
+  at,
   onOpen,
 }: {
   peers: PeerSummary[];
+  number: number;
+  at: number;
   onOpen: (peer: AgentId) => void;
 }) {
   return (
-    <div className="wire">
-      <div className="wire__chips">
-        {peers.map((summary) => (
-          <PeerChip key={summary.peer.id} summary={summary} onOpen={onOpen} />
+    <FootnoteRow number={number} at={at}>
+      <span className="footnote__line">
+        {peers.map((summary, at) => (
+          <span className="footnote__item" key={summary.peer.id}>
+            {at > 0 && (
+              <span className="footnote__dot" aria-hidden="true">
+                ·
+              </span>
+            )}
+            <PeerChip summary={summary} onOpen={onOpen} />
+            {summary.gist && <span className="footnote__gist">{summary.gist}</span>}
+          </span>
         ))}
-      </div>
-    </div>
+      </span>
+    </FootnoteRow>
   );
 }
 
@@ -120,11 +161,13 @@ export function PeerBurstRow({
 export function RefusedRow({
   peer,
   at,
+  number,
   body,
   reason,
 }: {
   peer: WirePeer;
   at: number;
+  number: number;
   body: string;
   reason: string;
 }) {
@@ -133,21 +176,19 @@ export function RefusedRow({
 
   return (
     <>
-      <div className="wire" data-refused="true">
+      <FootnoteRow number={number} at={at} failed>
         <button
           type="button"
-          className="wire__chip"
+          className="footnote__send footnote__send--failed"
           onClick={() => setOpen(true)}
-          style={{ "--accent": peer.color } as React.CSSProperties}
         >
-          <span className="wire__arrow" aria-hidden="true">
+          <span className="footnote__mark" aria-hidden="true">
             ⊘
           </span>
-          <span className="wire__label">{label}</span>
-          <span className="wire__why">{why(reason)}</span>
-          <span className="wire__meta">{clockTime(at)}</span>
+          {label}
+          <span className="footnote__gist">{why(reason)}</span>
         </button>
-      </div>
+      </FootnoteRow>
 
       {open && (
         <MessageModal
@@ -259,18 +300,14 @@ export function MessageModal({
  */
 export function WritingRow({ peer }: { peer: WirePeer }) {
   return (
-    <div className="wire wire--writing">
-      <div className="wire__chips">
-        <span
-          className="wire__chip"
-          title={`${peer.name} is writing`}
-          style={{ "--accent": peer.color } as React.CSSProperties}
-        >
-          <PeerFace
-            peer={peer}
-            label={summaryLabel({ peer, agentId: null, sent: 0, received: 1 })}
-          />
-          <span className="wire__dots" aria-hidden="true">
+    <div className="footnote" data-writing="true">
+      <div className="footnote__margin" />
+      <div className="footnote__body">
+        <span className="footnote__line">
+          <span className="footnote__send">
+            {summaryLabel({ peer, agentId: null, sent: 0, received: 1, gist: null })}
+          </span>
+          <span className="footnote__dots" aria-hidden="true">
             <i />
             <i />
             <i />

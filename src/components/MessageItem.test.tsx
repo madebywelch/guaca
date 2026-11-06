@@ -102,52 +102,51 @@ describe("messages addressed to the operator", () => {
   });
 });
 
-describe("naming the author", () => {
+describe("the running head", () => {
   const reply = envelope({
     from: { kind: "agent", id: "manager" },
     to: { kind: "human" },
     parts: [{ type: "text", text: "on it" }],
   });
 
-  it("writes it out where two agents look alike in a list", () => {
-    // The pair's own thread. Neither participant is the person reading, and
-    // one column of text with two authors in it is unreadable without names.
-    render(<MessageItem message={reply} lookups={lookups} continued={false} named />);
+  it("names the speaker on every turn, including in a channel of one agent", () => {
+    // It used to be left out here, on the argument that a channel names its
+    // agent at the top of the pane. Ledger sets a transcript as a page, and a
+    // page names the speaker over every passage: the head is what tells a
+    // reader scanning back up whose paragraph they are in.
+    render(<MessageItem message={reply} lookups={lookups} continued={false} />);
     expect(screen.getByText("Manager")).toBeTruthy();
+    // The portrait still says it in one glyph, from the margin.
+    expect(document.querySelector(".msg__margin .avatar")).toBeTruthy();
   });
 
-  it("leaves it out where the channel has already answered the question", () => {
-    // An agent's own channel has two participants: the one named at the top of
-    // the pane, and the operator. A name over every message is the loudest
-    // thing on the page and the one that says least.
+  it("keeps your own message unmistakable, and names you too", () => {
     const { container } = render(
-      <MessageItem message={reply} lookups={lookups} continued={false} named={false} />,
+      <MessageItem message={envelope({})} lookups={lookups} continued={false} />,
     );
-    expect(screen.queryByText("Manager")).toBeNull();
-    // The portrait still says which agent, and it is one glyph rather than a
-    // line of display type over every paragraph.
-    expect(container.querySelector(".avatar")).toBeTruthy();
-  });
-
-  it("keeps your own message unmistakable without naming you either", () => {
-    const { container } = render(
-      <MessageItem message={envelope({})} lookups={lookups} continued={false} named={false} />,
-    );
-    expect(screen.queryByText("You")).toBeNull();
+    expect(screen.getByText("You")).toBeTruthy();
     expect(container.querySelector(".msg[data-operator='true']")).toBeTruthy();
+    // No portrait: the avatars are there to tell the agents apart.
     expect(container.querySelector(".avatar")).toBeNull();
   });
 
-  it("still carries the time, out of the way", () => {
-    // Off the header and onto the row itself: every message has one and almost
-    // none of them are worth a line. It is a hover, and the transcript draws a
-    // line of its own wherever the gap was long enough to matter.
+  it("draws it once for a run of messages, on the first", () => {
+    const { container } = render(<MessageItem message={reply} lookups={lookups} continued />);
+    expect(screen.queryByText("Manager")).toBeNull();
+    expect(container.querySelector(".msg--continued")).toBeTruthy();
+  });
+
+  it("still carries the time, in the margin", () => {
+    // Every message has one and almost none of them are worth a line of their
+    // own. It moved off the right edge and out of a hover and into the margin,
+    // which is where a printed page puts a date.
     const { container } = render(
-      <MessageItem message={reply} lookups={lookups} continued={false} named={false} />,
+      <MessageItem message={reply} lookups={lookups} continued={false} />,
     );
     const at = container.querySelector("time.msg__at");
     expect(at).toBeTruthy();
     expect(at?.getAttribute("datetime")).toBe(new Date(reply.createdAt).toISOString());
+    expect(at?.closest(".msg__margin")).toBeTruthy();
   });
 });
 
@@ -505,7 +504,7 @@ describe("a turn that used its computer two dozen times", () => {
       <MessageItem message={browsing()} lookups={lookups} continued={false} />,
     );
     expect(screen.getByRole("button", { name: /3 steps on cnn.com/ })).toBeTruthy();
-    expect(container.querySelectorAll(".trail__chip")).toHaveLength(1);
+    expect(container.querySelectorAll(".footnote__call")).toHaveLength(1);
   });
 
   it("opens the calls behind it, in order, and closes again", () => {

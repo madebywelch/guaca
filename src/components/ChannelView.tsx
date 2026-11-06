@@ -2,6 +2,7 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "re
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { useFollowBottom } from "../lib/follow";
 import { api } from "../lib/ipc";
+import { runsOn } from "../lib/profile";
 import { thoughtNow } from "../lib/reasoning";
 import { type ChannelKey, useAgentLookup, useStore } from "../lib/store";
 import { elapsed, useNow } from "../lib/time";
@@ -19,7 +20,9 @@ import {
   type AgentCard,
   type AgentId,
   type Envelope,
+  type Group,
   plainText,
+  type Settings,
 } from "../lib/types";
 import { Composer } from "./Composer";
 import { Answering } from "./HtmlArtifact";
@@ -69,6 +72,8 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
 
   const agent = lookups.byId(channel);
   const crew = useStore((s) => s.groups.find((group) => group.id === agent?.groupId)?.name);
+  const group = useStore((s) => s.groups.find((entry) => entry.id === agent?.groupId));
+  const settings = useStore((s) => s.settings);
   // Held steady across renders: it is the value of a context read by every page
   // in the transcript, and a fresh object each time would redraw all of them
   // for every token that lands anywhere.
@@ -96,6 +101,21 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
   // Built once per set of messages rather than per render: it walks every
   // message, and it is what decides which of them are drawn at all.
   const rows = useMemo(() => transcriptRows(messages ?? [], lookups), [messages, lookups]);
+  // Which footnote each row is. Counted here rather than in the row, because a
+  // footnote is a position in a page: the row knows what it did and the page is
+  // the only thing that knows what came before it.
+  const footnotes = useMemo(() => {
+    let at = 0;
+    return rows.map((row) =>
+      row.kind === "peers" ||
+      row.kind === "refused" ||
+      (row.kind === "message" &&
+        row.message.from.kind === "agent" &&
+        row.message.to.kind === "system")
+        ? ++at
+        : 0,
+    );
+  }, [rows]);
 
   // A message somebody arrived at from search. Run after the transcript is on
   // screen, because the row cannot be scrolled to before it exists, and the
@@ -148,17 +168,30 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
         )}
         {agent ? (
           <>
-            <AgentAvatar
-              avatar={agent.avatar}
-              color={agent.color}
-              activity={activity[agent.id]}
-              lifecycle={agent.lifecycle}
-              seed={agent.id}
-              size="sm"
-            />
+            {/* The page's own head, as a printed report has one: what this is,
+                then whose it is, then what it runs on. It used to be a toolbar
+                row — a face, a name and a menu — which is the shape of a chat
+                app. A record opens with a title. */}
             <div className="pane__identity">
-              <h1 className="pane__title">{agent.name}</h1>
-              <span className="mobile-only pane__crew">{crew ?? "Independent agent"}</span>
+              <p className="pane__kicker">
+                <span className="pane__rule" aria-hidden="true" />
+                {crew ?? "Independent agent"} · a channel with one agent
+              </p>
+              <span className="pane__line">
+                <AgentAvatar
+                  avatar={agent.avatar}
+                  color={agent.color}
+                  activity={activity[agent.id]}
+                  lifecycle={agent.lifecycle}
+                  seed={agent.id}
+                  size="sm"
+                />
+                <h1 className="pane__title">{agent.name}</h1>
+              </span>
+              <p className="pane__meta">
+                {answeredBy(agent, group, settings)}
+                {paused ? " · paused" : ""}
+              </p>
             </div>
             {onDetails && (
               <button
@@ -219,8 +252,9 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
               <p className="empty__body">No messages with {agent?.name ?? "this agent"} yet.</p>
             </div>
           ) : (
-            rows.map((row) => {
+            rows.map((row, index) => {
               const stands = rowStandsFor(row);
+              const number = footnotes[index] ?? 0;
               return (
                 // Wrapped rather than marked on the entry itself: a row renders
                 // as several different shapes depending on who sent what to
@@ -231,9 +265,20 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
                   data-found={focused && stands.includes(focused) ? "true" : undefined}
                 >
                   {row.kind === "peers" ? (
-                    <PeerBurstRow peers={row.peers} onOpen={setReading} />
+                    <PeerBurstRow
+                      peers={row.peers}
+                      number={number}
+                      at={row.at}
+                      onOpen={setReading}
+                    />
                   ) : row.kind === "refused" ? (
-                    <RefusedRow peer={row.peer} at={row.at} body={row.body} reason={row.reason} />
+                    <RefusedRow
+                      peer={row.peer}
+                      at={row.at}
+                      number={number}
+                      body={row.body}
+                      reason={row.reason}
+                    />
                   ) : row.kind === "when" ? (
                     <WhenRow at={row.at} />
                   ) : (
@@ -244,7 +289,7 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
                       message={row.message}
                       lookups={lookups}
                       continued={row.continued}
-                      named={false}
+                      footnote={number || undefined}
                     />
                   )}
                 </div>
@@ -757,4 +802,21 @@ function announcement(message: Envelope, byId: ReturnType<typeof useAgentLookup>
   // Long enough to be the message, short enough that a reader can interrupt it
   // and go and read the column instead.
   return body.length > 300 ? `${who}: ${body.slice(0, 300)}…` : `${who}: ${body}`;
+}
+
+/**
+ * What answers, in the page's head, in the words a person would use.
+ *
+ * The line used to read the agent's own model field, so an agent that inherits
+ * its group's default said "no model of its own · answering as itself" — the
+ * name of an empty field and a phrase that means nothing to anybody who has not
+ * read the schema. It says which model will answer and whose choice it was, and
+ * says nothing at all about where it came from when the agent chose it itself.
+ */
+function answeredBy(agent: AgentCard, group: Group | undefined, settings: Settings | null): string {
+  const runs = runsOn(agent, group, settings);
+  if (runs.model === "No model set") return "no model set";
+  if (runs.model === "Claude subscription") return "a Claude subscription";
+  if (runs.inherited) return `${group ? "the group's" : "the app's"} model, ${runs.model}`;
+  return runs.model;
 }

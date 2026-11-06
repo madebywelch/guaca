@@ -261,6 +261,15 @@
   --column-inset: 1.5rem;
   --column-face: 1.7rem;
   --column-indent: calc(var(--column-inset) + var(--column-face));
+  /* The transcript's margin: when a turn was written, who wrote it, and the
+     numbers of the notes under it. One lane for all three, because they are one
+     question and because a page's margin is one width.
+     92px at scale 100, which is the mockup's own number: wide enough for a
+     twelve-hour clock and a face, narrow enough that the measure beside it
+     stays a measure on a 1440-wide window. A `--column-*` name because it is a
+     lane of the transcript rather than a step on the spacing scale, and the
+     closed-set suite reads that family. */
+  --column-margin: 5.75rem;
 
   /* Capped against the viewport as well as scaled, because both of these grow
      with the scale and the window's own minimum does not. At the largest scale
@@ -1702,6 +1711,17 @@ input[type="file"]::file-selector-button {
 
 /* Tumbles as it flies, so it reads as something thrown rather than a dot
    sliding along a track. */
+/* A note being written: three dots, each a breath behind the one before it. */
+@keyframes dot {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 @keyframes pulse-travel {
   0% {
     top: var(--pulse-from);
@@ -2487,24 +2507,80 @@ input[type="file"]::file-selector-button {
 }
 
 .pane__header {
-  height: 3.4rem;
-  padding: 0 var(--space-6) 0 var(--column-inset);
+  /* A page's head rather than a toolbar. It used to be 3.4rem tall with
+     everything on one line, which is the shape of a chat window; a record opens
+     with a title, what it is, and what it is set on. */
+  padding: var(--space-7) var(--space-7) var(--space-5) var(--column-inset);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--space-5);
-  border-bottom: 1px solid var(--rule);
+  /* The one boundary in the app that has to be found at a glance: it separates
+     the page's head from its record, and a hairline there reads as decoration. */
+  border-bottom: 1px solid var(--rule-hard);
   background: var(--ground);
   flex: none;
 }
 
-.pane__title {
-  font-family: var(--font-ui);
-  font-size: var(--type-lede);
-  font-weight: 600;
-  letter-spacing: var(--track-tight);
-  margin: 0;
+.pane__identity {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
 }
 
+/* What this page is, in the machine texture and at the floor of the ladder: a
+   line above a title that says which kind of page it is, and nothing more. The
+   rule beside it is the mockup's, and it is there so the kicker reads as a
+   caption rather than as a sentence that lost its first word. */
+.pane__kicker {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.pane__rule {
+  display: block;
+  width: var(--space-7);
+  height: 1px;
+  background: var(--rule-hard);
+}
+
+.pane__line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+}
+
+/* The name, in the display face and at a title's size. It was 22px semibold
+   Inter with a face beside it, which is a chat header; a page sets its title. */
+.pane__title {
+  font-family: var(--font-display);
+  font-size: var(--type-title);
+  font-weight: 400;
+  letter-spacing: var(--track-tight);
+  line-height: var(--lead-tight);
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* What it runs on. The one fact about an agent that changes what the page does
+   and that a reader of the record asks about, in the margin's own texture. */
+.pane__meta {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  color: var(--faint);
+  overflow-wrap: anywhere;
+}
 
 /* An agent that will not answer, said once. It replaces a Pause button whose
    label was the only place this was written down, which meant reading a
@@ -2555,100 +2631,113 @@ input[type="file"]::file-selector-button {
 }
 
 /* ==========================================================================
-   Messages
+   The transcript, as a page
 
-   An agent's words are paper: full measure, a portrait in the gutter, nothing
-   over the top of them. Yours are a bubble against the right edge. That is the
-   whole of the attribution in a channel, and it is enough, because a channel
-   has exactly two participants and one of them is you. What it replaces was a
-   name and a clock over every message, which in a run of four replies written
-   in the same minute is four headers carrying one fact between them.
+   Ledger sets a conversation the way a printed report is set. A turn is a
+   passage: the page's own margin carries when it was written and who wrote it,
+   a running head names the speaker over it, and the words take the measure the
+   page gives them. Nothing floats and nothing is a bubble, because a bubble is
+   a shape that says "this is a message" and a page says "this is a record".
 
-   The pair's own thread still writes the names out: both participants there
-   are agents, and neither of them is the person reading.
+   The margin is the whole of the idea. It is one lane, 92 pixels at the default
+   scale, and it holds three things that used to be scattered: the clock (which
+   was a lane on the far right that appeared on hover), the face (which was a
+   gutter of its own) and, in its absence, the shape of a note. Every row in the
+   transcript agrees with it, which is what makes the column read as set rather
+   than as assembled.
+
+   A footnote is the other half. What a turn *did* — the calls it made, the
+   messages it exchanged with a peer — is apparatus, and apparatus goes under
+   the passage it belongs to, numbered, in the size a note is set in. It is not
+   a smaller message. The distinction is the reason the operator's own
+   conversation is legible at all: a transcript where the tools and the peer
+   traffic are the same kind of object as the answer is a log, and one where
+   they are notes under the answer is a report of work.
    ========================================================================== */
 
 .msg {
-  /* The lane the clock is drawn in, floored at what a twelve-hour one needs.
-     A floor and not a width, because the string is the operator's locale
-     rather than this file's: "22:37", "10:37 PM" and "10:37 p.m." are 1.8rem,
-     2.9rem and 3.6rem of it. Both halves of that earn their keep. Held open
-     whether or not the row has a clock, a bubble settling out of the stream
-     lands at the width it was already being drawn at. Free to grow past the
-     floor, there is no locale where the words run under the time. */
-  --clock: 2.9rem;
-
   display: grid;
-  /* Three lanes: the portrait, the words, and the clock. The clock is a lane
-     of its own rather than something laid over the top right corner, because
-     the top right corner is where the first line of a full-measure paragraph
-     already ends. A reserve in the padding is the same bug one number later:
-     whatever is written there is too small for somebody's locale, and what it
-     is too small by is a word of the message underneath it. */
-  grid-template-columns: 2.1rem minmax(0, 1fr) minmax(var(--clock), auto);
-  gap: var(--space-5);
-  padding: var(--space-2) var(--space-4) var(--space-2) var(--column-inset);
+  /* The margin and the measure. Nothing else: the clock used to be a third
+     lane on the right, which put a message's time as far from its first word
+     as the page allowed, and the face a first lane of its own, which is two
+     columns for one question ("who, and when"). */
+  grid-template-columns: var(--column-margin) minmax(0, 1fr);
+  padding: var(--space-5) var(--space-7) var(--space-5) var(--column-inset);
+  /* A rule between passages, and one weight of it here: `--rule` is decoration
+     and this is the page's own rhythm. Where a boundary has to be *found* —
+     the head of the channel, the line the composer is written on — the rule is
+     `--rule-hard`. */
+  border-top: 1px solid var(--rule);
 }
 
-.msg:hover {
-  background: color-mix(in oklab, var(--sunken) 55%, transparent);
+/* The first passage has nothing above it to be separated from. The wrapper is
+   the row the transcript hangs `data-message` on, so the turn is never the
+   scrollbox's own first child. */
+.pane__scroll > div:first-child > .msg,
+.pane__scroll > div:first-child > .footnote {
+  border-top: none;
 }
 
+/* A second message in the same minute by the same author is the same passage
+   continuing, so it is not a new passage: no rule, no margin, no head. */
 .msg--continued {
+  border-top: none;
   padding-top: 0;
 }
 
-.msg__gutter {
-  grid-column: 1;
+.msg__margin {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
 }
 
-/* A measure, not the width of the window. Nothing else in the transcript
-   constrains these now that the names and clocks are gone, and on a wide window
-   a paragraph ran a hundred and twenty characters to the line, which is a line
-   the eye loses its place on coming back to the left margin. */
+/* In the margin, in the machine texture, and always there. It was a hover on
+   the far edge, which is a fact you have to already be looking for. A record
+   prints its dates. */
+.msg__at {
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+/* A measure, not the width of the window: on a wide one a paragraph ran a
+   hundred and twenty characters to the line, which is a line the eye loses its
+   place on coming back to the left margin. */
 .msg__body {
-  grid-column: 2;
   min-width: 0;
   max-width: 42rem;
 }
 
-/* Yours: no portrait, no gutter, and held off the right edge. Nothing in the
-   log has to say who wrote it, because the side it is on already has. Mirrored
-   down to the clock, which takes the lane on the left, so the bubble is held
-   off that edge by the width of a time rather than by a figure that was about
-   that wide. */
-.msg[data-operator="true"] {
-  grid-template-columns: minmax(var(--clock), auto) minmax(0, 1fr);
-  justify-items: end;
-  padding-left: var(--space-4);
-  padding-right: var(--space-7);
+/* The running head. Literata, small caps, tracked: a printed page's way of
+   naming the speaker over a passage without spending display type on it. It is
+   set at the type floor and in the faint ink, because it is a label for the
+   passage and not part of it. */
+.msg__head {
+  font-family: var(--font-display);
+  font-size: var(--type-fine);
+  font-variant-caps: all-small-caps;
+  letter-spacing: var(--track-caps);
+  color: var(--muted);
+  margin-bottom: var(--space-3);
 }
 
-.msg[data-operator="true"] .msg__body {
-  /* Shorter than an agent's. What you type is a question or an instruction,
-     and a bubble is the wrong shape for anything longer than a few lines. */
-  max-width: min(32rem, 100%);
-  padding: var(--space-3) var(--space-5);
-  border-radius: var(--radius);
-  /* Recessed rather than accented. The amber means the app wants something
-     from you, and a message you already sent wants nothing: tinted with it,
-     every line you have ever typed reads as a pending request and competes
-     with the one card on the page that actually is one. */
-  background: var(--sunken);
+/* Yours: the same column, set apart by being set in italic and in the second
+   ink. It was a recessed bubble against the right edge, which made every line
+   the operator had ever typed a shape competing with the one card on the page
+   that actually wanted something. A page quotes the other voice; it does not
+   draw it a box. */
+.msg[data-operator="true"] .md {
+  font-style: italic;
+  color: var(--muted);
 }
 
-/* Two of your own in a row are two bubbles with air between them. No tail on
-   either: which one a tail belongs on is a question about the end of a run,
-   and a transcript row does not know it is the last of one. */
-.msg--continued[data-operator="true"] .msg__body {
-  margin-top: var(--space-1);
-}
-
-/* A decision answered in For you. The operator's own bubble, because the
-   answer is theirs, carrying the question it answers: it was asked somewhere
-   else, and an answer under nothing reads as a non sequitur. The question is
-   quoted as a blockquote is, in the agent's words, and the line above both
-   says where the answer was given. */
+/* A decision answered in For you. The operator's own words, under the question
+   it answers: it was asked somewhere else, and an answer under nothing reads as
+   a non sequitur. The question is quoted as a blockquote is, in the agent's
+   words, and the line above both says where the answer was given. */
 .decision__label {
   margin: 0 0 var(--space-2);
   font-family: var(--font-ui);
@@ -2659,7 +2748,7 @@ input[type="file"]::file-selector-button {
 .decision__asked {
   margin: 0 0 var(--space-4);
   padding-left: var(--space-4);
-  border-left: 2px solid var(--rule);
+  border-left: 1px solid var(--rule-hard);
   font-family: var(--font-read);
   font-size: var(--type-aside);
   line-height: var(--lead-ui);
@@ -2703,7 +2792,7 @@ input[type="file"]::file-selector-button {
   white-space: pre-wrap;
 }
 
-/* Set as the reading face is in every other bubble, but as text: a choice
+/* Set as the reading face is in every other turn, but as text: a choice
    clicked in For you is one of the agent's options, and never markup. */
 .decision__answer {
   margin: 0;
@@ -2715,53 +2804,140 @@ input[type="file"]::file-selector-button {
   overflow-wrap: anywhere;
 }
 
-.msg__head {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-4);
-  margin-bottom: var(--space-1);
-  flex-wrap: wrap;
+/* A footnote: the page's apparatus, under the passage it belongs to.
+   The same margin, so the numbers line up under the clocks they follow, and a
+   measure of its own — a note is read at a glance and does not earn the
+   reading width. */
+.footnote {
+  display: grid;
+  grid-template-columns: var(--column-margin) minmax(0, 1fr);
+  padding: var(--space-3) var(--space-7) var(--space-3) var(--column-inset);
+  border-top: 1px solid var(--rule);
 }
 
-.msg__author {
-  font-family: var(--font-ui);
-  font-size: var(--type-ui);
-  font-weight: 600;
-  letter-spacing: var(--track-tight);
-}
-
-/* In its own lane and inked on hover, so revealing it moves nothing and
-   nothing is under it to move. Every message has a time; almost none of them
-   are worth a line of their own, and the transcript already draws a line
-   wherever the gap was long enough to notice. */
-.msg__at {
-  grid-column: 3;
-  /* Stated, because it is the one child placed behind the cursor. Sparse
-     auto-placement only ever moves forward, so the operator's clock, which is
-     written after the bubble and drawn in the lane before it, lands on a
-     second row of its own without this. */
-  grid-row: 1;
-  justify-self: end;
-  align-self: start;
-  /* Onto the first line of the message rather than the top of the row. */
-  margin-top: var(--space-1);
-  white-space: nowrap;
+.footnote__at {
   font-family: var(--font-mono);
   font-size: var(--type-fine);
   font-variant-numeric: tabular-nums;
   color: var(--faint);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity var(--tempo-tap) var(--ease);
+  white-space: nowrap;
 }
 
-.msg[data-operator="true"] .msg__at {
-  grid-column: 1;
-  justify-self: start;
+.footnote__body {
+  min-width: 0;
+  max-width: 42rem;
 }
 
-.msg:hover .msg__at {
-  opacity: 1;
+/* The number, set as a superior figure in the one ink that means the app is
+   pointing at something. It is what makes a note a footnote rather than a
+   smaller paragraph. */
+.footnote__number {
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  color: var(--attention);
+  vertical-align: super;
+  margin-right: var(--space-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.footnote__line {
+  display: inline;
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  line-height: var(--lead-ui);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.footnote__item {
+  white-space: normal;
+}
+
+.footnote__dot {
+  color: var(--faint);
+  margin: 0 var(--space-2);
+}
+
+/* What a call was pointed at, and what a burst of traffic was about: the two
+   things a note quotes rather than reproduces. */
+.footnote__target,
+.footnote__gist {
+  color: var(--faint);
+  margin-left: var(--space-2);
+}
+
+.footnote__count {
+  color: var(--faint);
+  margin-left: var(--space-1);
+}
+
+/* A call or a peer, as the note writes it. Not a chip: a chip is a box, and
+   nothing in a footnote is boxed. What says it opens is the ink it takes on
+   hover and the pointer. */
+.footnote__call,
+.footnote__send {
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  color: var(--muted);
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  line-height: var(--lead-ui);
+}
+
+.footnote__call--open,
+.footnote__send:is(button) {
+  cursor: pointer;
+  border-bottom: 1px solid var(--rule-hard);
+}
+
+.footnote__call--open:hover,
+.footnote__send:is(button):hover {
+  color: var(--text);
+}
+
+.footnote__mark {
+  color: var(--danger);
+  margin-right: var(--space-2);
+}
+
+.footnote__send--failed {
+  color: var(--danger);
+}
+
+/* A dot that is still going. Three of them, on the loop curve, so a message
+   being written reads as one line of the page rather than as an event. */
+.footnote__dots {
+  display: inline-flex;
+  gap: var(--space-1);
+  margin-left: var(--space-2);
+}
+
+.footnote__dots > i {
+  width: 3px;
+  height: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--faint);
+  animation: dot 1.2s var(--ease-loop) infinite;
+}
+
+.footnote__dots > i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.footnote__dots > i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+/* The calls behind a note, opened: the same record the chips opened, one
+   indent further in. */
+.footnote__steps {
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--space-3);
 }
 
 /* When a conversation picked up again. The only clock a transcript draws
@@ -4549,7 +4725,10 @@ input[type="file"]::file-selector-button {
   display: flex;
   align-items: center;
   gap: var(--space-4);
-  padding: 0 var(--column-inset) var(--space-3);
+  /* Aligned with the page's measure rather than with its margin: the line is
+     what the agent is doing, which is part of the passage it is writing. */
+  padding: 0 var(--space-7) var(--space-4)
+    calc(var(--column-inset) + var(--column-margin));
   flex: none;
 }
 
@@ -4560,7 +4739,8 @@ input[type="file"]::file-selector-button {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
-  font-size: var(--type-aside);
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
   color: var(--muted);
   opacity: 0;
   transform: translateX(-0.3rem);
