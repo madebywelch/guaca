@@ -467,6 +467,43 @@ describe("a command that used a credential", () => {
   });
 });
 
+describe("a turn that asked the operator something", () => {
+  it("says what it did, and keeps the name a model calls it by one click away", () => {
+    // The note said "Used ask_operator" once: a function name from a file the
+    // operator does not have, on the page they read most. What they read is
+    // the thing that happened; the wire name is on the row under it, for the
+    // bug report that needs it.
+    const asking = envelope({
+      from: { kind: "agent", id: "manager" },
+      to: { kind: "system" },
+      trust: "system",
+      parts: [
+        {
+          type: "toolCall",
+          name: "ask_operator",
+          arguments: { question: "Ship it on Friday?" },
+          outcome: { status: "ok", summary: "answered" },
+        },
+      ],
+    });
+    const { container } = show(asking);
+    const note = screen.getByRole("button", { name: /Asked you/ });
+    expect(note.textContent).not.toContain("ask_operator");
+    // On the note's own words as well as on the row it opens, because a plugin
+    // call is a note with nothing behind it: hover is the only place its name
+    // can live.
+    expect(container.querySelector(".footnote__label")?.getAttribute("title")).toBe("ask_operator");
+
+    fireEvent.click(note);
+    // Both the note and the row under it say the same phrase, which is the
+    // point: the row is the note opened, not a second wording of it.
+    const row = container.querySelector(".trail__step-title");
+    expect(row?.textContent).toBe("Asked you");
+    expect(row?.getAttribute("title")).toBe("ask_operator");
+    expect(screen.getByText("Ship it on Friday?")).toBeTruthy();
+  });
+});
+
 describe("a turn that used its computer two dozen times", () => {
   /** What the runtime writes for one turn: every call in one envelope. */
   function browsing(): Envelope {

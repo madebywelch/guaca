@@ -34,7 +34,7 @@ import {
   token,
   UNAUTHORIZED_EVENT,
 } from "../lib/transport";
-import { errorMessage } from "../lib/types";
+import { asSentence, errorMessage } from "../lib/types";
 
 /** Whether a refusal is this browser being told it needs a token. */
 function refusedForToken(error: unknown): boolean {
@@ -208,8 +208,11 @@ export function TokenEntry({ children }: { children: ReactNode }) {
           />
         </label>
         {refused && (
+          // The daemon writes for a log, and this is the one line read as
+          // prose. Finished here rather than in Rust, for the reason every
+          // banner is: `asSentence` is the app's one rule for it.
           <div className="banner banner--error" role="alert">
-            <span>{refused}</span>
+            <span>{asSentence(refused)}</span>
           </div>
         )}
         <button type="submit" className="btn btn--primary" disabled={checking || !value.trim()}>

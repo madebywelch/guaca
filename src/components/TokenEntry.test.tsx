@@ -45,7 +45,7 @@ function signedIn() {
 }
 
 /** A daemon that turns the token away. */
-function turnedAway(message = "this workspace needs the token it printed when it started") {
+function turnedAway(message = "that token was not accepted") {
   fetched.mockResolvedValue(
     new Response(JSON.stringify({ err: { kind: "unauthorized", message } }), { status: 401 }),
   );
@@ -214,7 +214,7 @@ describe("TokenEntry", () => {
     expect(capabilities).toHaveBeenCalledTimes(2);
   });
 
-  it("refuses a wrong token here, and keeps nothing", async () => {
+  it("refuses a wrong token here, and says only what that added", async () => {
     capabilities.mockRejectedValue({ kind: "unauthorized", message: "needs the token" });
     turnedAway();
     open();
@@ -222,7 +222,15 @@ describe("TokenEntry", () => {
     fireEvent.change(field, { target: { value: "wrong" } });
     fireEvent.click(screen.getByRole("button", { name: "Open Guaca" }));
 
-    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("needs the token"));
+    // The hint above the field already says where the token comes from. What
+    // the operator does not know until this answers is that the one they
+    // pasted was turned away, and that is the whole of what it says now: the
+    // old sentence repeated the hint under it, in the daemon's voice, and
+    // never said the new fact at all.
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("That token was not accepted.");
+    expect(alert.textContent).not.toContain("logs");
+    expect(alert.textContent).not.toContain("token file");
     expect(screen.queryByText("the workspace")).toBeNull();
     // A refused token is not kept: the next reload would only refuse it again,
     // with the app's own reads failing forty times before this form appeared.

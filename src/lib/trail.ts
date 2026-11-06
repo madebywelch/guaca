@@ -257,10 +257,46 @@ function describe(tool: string, args: Args): Described {
     case "request_permission":
       return { title: "Asked for permission", target: text(args, "summary") };
 
+    // The three ways to a person, and they are three sentences rather than one
+    // because what they cost is different. This one stops the turn and waits,
+    // which is why it is the only one that says "you" in the present: the
+    // operator is being asked while they read it.
+    case "ask_operator":
+      return { title: "Asked you", target: text(args, "question") };
+
+    // The same person, filed without stopping anything. Told apart from the
+    // one above in the operator's terms rather than the tool's: one is waiting
+    // in their inbox and one has their attention now.
+    case "decision": {
+      const action = text(args, "action");
+      if (action === "list") return { title: "Checked its decisions", target: null };
+      if (action === "complete")
+        return { title: "Closed a decision", target: text(args, "outcome") };
+      if (action === "withdraw")
+        return { title: "Withdrew a question", target: text(args, "outcome") };
+      return { title: "Left a decision for you", target: text(args, "question") };
+    }
+
     // Not "asked" and not "said": nothing was asked, and this is the one call
     // that reaches the operator wherever they are without stopping the turn.
     case "escalate":
       return { title: "Escalated to the operator", target: text(args, "summary") };
+
+    // What the operator is looking at, from the agent's side of the same
+    // question. The half that changes anything is a request they approve, so
+    // the sentence says who has to decide it rather than what the call did.
+    case "settings": {
+      const action = text(args, "action");
+      if (action === "update") {
+        const changes = asRecord(args.changes);
+        const named = Object.keys(changes);
+        return {
+          title: "Asked you to change a setting",
+          target: named.length > 0 ? clip(named.join(", "), 48) : null,
+        };
+      }
+      return { title: "Read the settings", target: null };
+    }
 
     case "run_command":
       return { title: "Ran a command", target: text(args, "command") };
@@ -305,6 +341,20 @@ function describe(tool: string, args: Args): Described {
         title: named.length > 0 ? `Attached ${named.join(", ")}` : "Attached a file",
         target: null,
       };
+    }
+
+    // Both name the file, for the reason `attach_file` does: a document an
+    // agent made is drawn as a card under the answer it went out with, and a
+    // document it read back is the file the operator saw it attach. What is
+    // behind the chip is the file's name, not the file, so neither opens.
+    case "write_document": {
+      const name = text(args, "name");
+      return { title: name ? `Wrote ${clip(name, 40)}` : "Wrote a document", target: null };
+    }
+
+    case "read_file": {
+      const name = text(args, "name");
+      return { title: name ? `Read ${clip(name, 40)}` : "Read a saved file", target: null };
     }
 
     // A call that wrote a page is drawn as a card, not a chip: see
@@ -361,6 +411,30 @@ function describe(tool: string, args: Args): Described {
       if (action === "list") return { title: "Checked its schedule", target: null };
       const what = text(args, "name") ?? text(args, "what");
       return { title: what ? `Scheduled ${clip(what, 40)}` : "Changed its schedule", target: what };
+    }
+
+    // The other half of a date, and it is not a routine: nothing here fires.
+    // Named with what is on it and when, because a date is the whole of what
+    // an operator opening the note wants.
+    case "calendar": {
+      const action = text(args, "action");
+      if (action === "list") return { title: "Checked the calendar", target: null };
+      if (action === "cancel")
+        return { title: "Took something off the calendar", target: text(args, "id") };
+      const what = text(args, "title");
+      const when = text(args, "starts_at");
+      if (action === "update") {
+        return {
+          title: what
+            ? `Changed ${clip(what, 40)} on the calendar`
+            : "Changed a date on the calendar",
+          target: when,
+        };
+      }
+      return {
+        title: what ? `Put ${clip(what, 40)} on the calendar` : "Added a date to the calendar",
+        target: when,
+      };
     }
 
     case "browse": {
@@ -424,9 +498,28 @@ function describe(tool: string, args: Args): Described {
     default: {
       const from = pluginCall(tool);
       if (!from) return { title: `Used ${tool}`, target: null };
-      return { title: `Used ${from.tool}`, target: null, where: from.plugin };
+      return { title: `Used ${readable(from.tool)}`, target: null, where: from.plugin };
     }
   }
+}
+
+/**
+ * A server's tool name as words, because the wire name is a function.
+ *
+ * A plugin names its tools for a machine — `gmail_search`,
+ * `drive_read_file` — and the runtime hands the model the same spelling with
+ * its server in front. `Used gmail_search` is a name from a schema nobody at
+ * this desk has. Underscores become spaces and the first letter a capital,
+ * which is as far as this build can go: what one of somebody else's tools does
+ * is not knowable here, and inventing a verb for it is how a chip ends up
+ * claiming work that did not happen.
+ *
+ * The name a model calls it by is not lost: `Step.tool` keeps it, and the row
+ * that opens a note puts it on the title a pointer reads.
+ */
+function readable(name: string): string {
+  const words = name.replace(/[_-]+/g, " ").trim();
+  return words === "" ? name : words[0]!.toUpperCase() + words.slice(1);
 }
 
 /** One tool call, read out of a stored message. */
@@ -477,14 +570,17 @@ const ATTEMPT: Record<string, string> = {
   Changed: "change",
   Checked: "check",
   Clicked: "click",
+  Closed: "close",
   Deleted: "delete",
   Escalated: "escalate",
+  Left: "leave",
   Looked: "look",
   Made: "make",
   Moved: "move",
   Noted: "note",
   Opened: "open",
   Pressed: "press",
+  Put: "put",
   Ran: "run",
   Read: "read",
   Scheduled: "schedule",
@@ -495,6 +591,7 @@ const ATTEMPT: Record<string, string> = {
   Updated: "update",
   Used: "use",
   Went: "go",
+  Withdrew: "withdraw",
   Wrote: "write",
 };
 
@@ -583,9 +680,23 @@ export function callInFlight(name: string, raw: unknown): string {
       return "Asking for permission";
     case "escalate":
       return "Escalating to the operator";
+    case "calendar":
+      return "Working on the calendar";
+    case "settings":
+      return text(args, "action") === "update"
+        ? "Asking you to change a setting"
+        : "Reading the settings";
+    case "ask_operator":
+      return "Asking you";
+    case "decision":
+      return "Working on a decision";
+    case "read_file":
+      return "Reading a saved file";
+    case "write_document":
+      return "Writing a document";
     default: {
       const from = pluginCall(name);
-      return from ? `Using ${from.tool} on ${from.plugin}` : `Using ${name}`;
+      return from ? `Using ${readable(from.tool)} at ${from.plugin}` : `Using ${name}`;
     }
   }
 }
@@ -625,6 +736,18 @@ function manyLabel(group: TrailGroup): string {
       return `Used its group's artifacts ${count} times`;
     case "attach_file":
       return `Attached ${count} files`;
+    case "write_document":
+      return `Wrote ${count} documents`;
+    case "read_file":
+      return `Read ${count} files`;
+    case "calendar":
+      return `Used the calendar ${count} times`;
+    case "settings":
+      return `Used the settings ${count} times`;
+    case "decision":
+      return `${count} decisions`;
+    case "ask_operator":
+      return `Asked you ${count} times`;
     case "update_memory":
     case "update_notes":
       return `Updated its memory ${count} times`;
@@ -649,14 +772,14 @@ function manyLabel(group: TrailGroup): string {
  * A plugin's server is named here rather than in the step's own title because
  * the chip is the only place it is missing. A step is only ever drawn under a
  * chip, and that chip already says where the work went: a column of `Used
- * drive_read_file on Google` under one reading `4 calls to Google` says the
+ * Drive read file at Google` under one reading `4 calls to Google` says the
  * place five times over.
  */
 function chipLabel(group: TrailGroup): string {
   if (group.steps.length > 1) return manyLabel(group);
   const only = group.steps[0]!;
   const from = pluginCall(only.tool);
-  return from ? `${only.title} on ${from.plugin}` : only.title;
+  return from ? `${only.title} at ${from.plugin}` : only.title;
 }
 
 /**
@@ -784,6 +907,10 @@ const ECHOES = new Set([
   "update_notes",
   "note_progress",
   "attach_file",
+  // The file is on the answer as a card and the name is in the title. What
+  // comes back is the name and a character count.
+  "read_file",
+  "write_document",
   // Every word of what comes back is an instruction to the model -- do not
   // wait, do what you can, do not raise it again -- and the two numbers in it
   // that the operator would want are on the desk and the rail, read live from

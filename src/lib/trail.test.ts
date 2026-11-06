@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -17,6 +20,8 @@ import {
   trailStep,
 } from "./trail";
 import type { Part, ToolOutcome } from "./types";
+
+const read = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
 
 type ToolCall = Extract<Part, { type: "toolCall" }>;
 
@@ -453,7 +458,7 @@ describe("a call while it is still happening", () => {
     // is not something this build can say: guessing at it is how
     // `update_memory` once drew as a message sent to nobody. Where the wait is
     // is a different question, and the name answers it.
-    expect(callInFlight("linear__create_issue", {})).toBe("Using create_issue on Linear");
+    expect(callInFlight("linear__create_issue", {})).toBe("Using Create issue at Linear");
     expect(callInFlight("run_code", { source: "print(1)" })).toBe("Using run_code");
   });
 });
@@ -466,7 +471,7 @@ describe("a call to a plugin", () => {
     // the runtime's summary saying the same thing in words: the row said it
     // twice, once in a spelling nobody reads.
     const groups = foldTrail(steps(google("gmail_search")));
-    expect(groups[0]?.label).toBe("Used gmail_search on Google");
+    expect(groups[0]?.label).toBe("Used Gmail search at Google");
     expect(groups[0]?.steps[0]?.where).toBe("Google");
   });
 
@@ -474,7 +479,10 @@ describe("a call to a plugin", () => {
     // A step is only ever drawn under a chip that has already said where the
     // work went.
     const [step] = steps(google("gmail_search"));
-    expect(step?.title).toBe("Used gmail_search");
+    expect(step?.title).toBe("Used Gmail search");
+    // The row a note opens onto keeps the name a model calls it by, which is
+    // the one place it survives now that the line is in words.
+    expect(step?.tool).toBe("google__gmail_search");
   });
 
   it("says nothing more beside a chip that already said it", () => {
@@ -490,8 +498,8 @@ describe("a call to a plugin", () => {
     expect(tellsMore(step as Step)).toBe(true);
     // Never folded, and still the one chip that has to name the server itself.
     expect(foldTrail(steps(google("gmail_search"), failed)).map((group) => group.label)).toEqual([
-      "Used gmail_search on Google",
-      "Tried to use gmail_search on Google",
+      "Used Gmail search at Google",
+      "Tried to use Gmail search at Google",
     ]);
   });
 
@@ -501,7 +509,7 @@ describe("a call to a plugin", () => {
     const groups = foldTrail(
       steps(call("home_assistant__turn_on", {}, ok("home_assistant · turn_on"))),
     );
-    expect(groups[0]?.label).toBe("Used turn_on on home_assistant");
+    expect(groups[0]?.label).toBe("Used Turn on at home_assistant");
   });
 
   it("gathers a turn's work at one server, the way it gathers a turn in a browser", () => {
@@ -515,9 +523,9 @@ describe("a call to a plugin", () => {
     // Which tools those were is the whole of what the chip opens onto.
     expect(hasDetail(groups[0]!)).toBe(true);
     expect(groups[0]?.steps.map((step) => step.title)).toEqual([
-      "Used drive_list_files",
-      "Used drive_read_file",
-      "Used gmail_search",
+      "Used Drive list files",
+      "Used Drive read file",
+      "Used Gmail search",
     ]);
   });
 
@@ -526,8 +534,8 @@ describe("a call to a plugin", () => {
       steps(google("gmail_search"), call("linear__create_issue", {}, ok("Linear · create_issue"))),
     );
     expect(groups.map((group) => group.label)).toEqual([
-      "Used gmail_search on Google",
-      "Used create_issue on Linear",
+      "Used Gmail search at Google",
+      "Used Create issue at Linear",
     ]);
   });
 
@@ -537,6 +545,71 @@ describe("a call to a plugin", () => {
     const [step] = steps(call("run_code", { source: "print(1)" }, ok("exit 0")));
     expect(step?.title).toBe("Used run_code");
     expect(step?.where).toBeNull();
+  });
+});
+
+describe("the tools the runtime offers, in a person's words", () => {
+  function said(name: string, args: unknown = {}): string {
+    return steps(call(name, args))[0]!.title;
+  }
+
+  it("names the six that used to reach the row as their wire names", () => {
+    // `Used ask_operator` is a function name from a file the operator does not
+    // have, drawn on the page they read most. Each of these is a thing that
+    // happened, said the way the rest of the footnote says it.
+    expect(said("ask_operator", { question: "Ship it on Friday?" })).toBe("Asked you");
+    expect(said("decision", { action: "request", question: "10 or 11?" })).toBe(
+      "Left a decision for you",
+    );
+    expect(said("decision", { action: "list" })).toBe("Checked its decisions");
+    expect(said("decision", { action: "complete", id: "d", outcome: "shipped" })).toBe(
+      "Closed a decision",
+    );
+    expect(said("decision", { action: "withdraw", id: "d", outcome: "not needed" })).toBe(
+      "Withdrew a question",
+    );
+    expect(said("calendar", { action: "list" })).toBe("Checked the calendar");
+    expect(
+      said("calendar", { action: "add", title: "Board call", starts_at: "2026-09-14 15:00" }),
+    ).toBe("Put Board call on the calendar");
+    expect(said("calendar", { action: "update", starts_at: "2026-09-15 15:00" })).toBe(
+      "Changed a date on the calendar",
+    );
+    expect(said("calendar", { action: "cancel", id: "12" })).toBe(
+      "Took something off the calendar",
+    );
+    expect(said("settings", { action: "read" })).toBe("Read the settings");
+    expect(said("settings", { action: "update", changes: { defaultModel: "x" } })).toBe(
+      "Asked you to change a setting",
+    );
+    expect(said("read_file", { name: "brief.md" })).toBe("Read brief.md");
+    expect(said("write_document", { name: "readiness.md" })).toBe("Wrote readiness.md");
+  });
+
+  it("has a phrase for every tool the runtime offers", () => {
+    // Read off the crate rather than written out here, because the list this
+    // has to agree with is the one the model is handed. A tool added to the
+    // runtime and left out of `describe` reaches the page as `Used tool_name`,
+    // which is exactly the row this replaced.
+    const source = read("src-tauri/src/llm/tools.rs");
+    const names = [...source.matchAll(/^pub const [A-Z_]+: &str = "([a-z][a-z0-9_]*)";$/gm)].map(
+      (match) => match[1]!,
+    );
+    expect(names.length).toBeGreaterThanOrEqual(20);
+    for (const name of names) {
+      const title = said(name);
+      expect(title, name).not.toBe(`Used ${name}`);
+      // A wire name is the fallback's whole content, so one with an underscore
+      // must not survive in a phrase either: "Tried to use ask_operator" is
+      // still the name nobody can read.
+      if (name.includes("_")) expect(title, name).not.toContain(name);
+    }
+  });
+
+  it("says a plugin's own tool as words, and keeps the wire name on the row", () => {
+    const [step] = steps(call("google__drive_read_file", {}, ok("Google · drive_read_file")));
+    expect(step?.title).toBe("Used Drive read file");
+    expect(step?.tool).toBe("google__drive_read_file");
   });
 });
 

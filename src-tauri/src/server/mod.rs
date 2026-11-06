@@ -1241,12 +1241,16 @@ async fn auth_session(State(serving): State<Serving>, headers: HeaderMap) -> Res
             );
             response
         }
+        // Only what this answer adds. The screen this refusal is drawn on has
+        // already said where the token comes from, above the field, and a
+        // second copy of the same advice under it was the one thing the
+        // operator already knew instead of the one thing they did not: that
+        // the token they just pasted was turned away.
         _ => (
             StatusCode::UNAUTHORIZED,
             Json(json!({ "err": {
                 "kind": "unauthorized",
-                "message": "this workspace needs the token it printed when it started. Copy it \
-                            from the box's logs, or from the token file beside its settings",
+                "message": "that token was not accepted",
             }})),
         )
             .into_response(),
