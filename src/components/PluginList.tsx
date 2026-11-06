@@ -40,9 +40,14 @@ type Failure = ReturnType<typeof refusalWords>;
  * what both announce: a tool list is forty rows deep and two buttons reading
  * "Only chosen agents" on each of them crowds out the name the row is about,
  * while a reader who cannot see the row needs the whole sentence either way.
+ *
+ * The short answer was `Everyone`, which is also the name the app gives its
+ * first group: inside that group a tool row offering it to "Everyone" was one
+ * word doing two jobs. `All agents` says the same thing and collides with
+ * nothing. `Every agent` stays the full label, because it is the sentence.
  */
 const ACCESS_MODES = [
-  { value: "everyone", label: "Every agent", short: "Everyone" },
+  { value: "everyone", label: "Every agent", short: "All agents" },
   { value: "chosen", label: "Only chosen agents", short: "Chosen" },
 ] as const;
 
@@ -335,7 +340,10 @@ function rows(offers: PluginOffer[], connected: Plugin[]): Row[] {
 export function PluginList({ groupId, crew }: Props) {
   const [offers, setOffers] = useState<PluginOffer[] | null>(null);
   const [connected, setConnected] = useState<Plugin[] | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
+  // What the panel is waiting on, and what to say about it. The key is what
+  // the controls compare against; the sentence is the one true thing to say
+  // about *this* wait, because only one of them opens a browser window.
+  const [busy, setBusy] = useState<{ key: string; says: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   // What a dial refused, kept beside the control that asked rather than at the
   // foot of the panel. Keyed by where it is drawn — the add form, a row's
@@ -428,12 +436,13 @@ export function PluginList({ groupId, crew }: Props) {
 
   const run = async (
     key: string,
+    says: string,
     action: () => Promise<unknown>,
     /** Where a refusal is drawn. A form's own action row is where the eye is,
      *  and the panel's foot is five controls away below it. */
     at?: string,
   ) => {
-    setBusy(key);
+    setBusy({ key, says });
     setError(null);
     if (at) setFailed((was) => ({ ...was, [at]: undefined }));
     try {
@@ -458,8 +467,8 @@ export function PluginList({ groupId, crew }: Props) {
    * answered. It also keeps its answer on a failure, which `run` cannot: a
    * server that refused is exactly what somebody pressed this to find out.
    */
-  const test = async (key: string, dial: () => Promise<ServerReport>, at: string) => {
-    setBusy(key);
+  const test = async (key: string, says: string, dial: () => Promise<ServerReport>, at: string) => {
+    setBusy({ key, says });
     setError(null);
     setFailed((was) => ({ ...was, [at]: undefined }));
     try {
@@ -473,6 +482,19 @@ export function PluginList({ groupId, crew }: Props) {
     }
   };
 
+  /**
+   * Forgets what a test or an add of one form said, because the address, key
+   * or headers it was about have changed.
+   *
+   * The comment on `tested` above states the rule; this is the half that keeps
+   * it. Both the report and a refusal are dropped: a sentence describing a
+   * server that is no longer on screen is the same lie whichever way it reads.
+   */
+  const forget = (report: string, failure: string) => {
+    setTested(({ [report]: _gone, ...rest }) => rest);
+    setFailed((was) => ({ ...was, [failure]: undefined }));
+  };
+
   if (offers === null || connected === null)
     return <p className="field__hint">Loading connectors…</p>;
 
@@ -481,7 +503,7 @@ export function PluginList({ groupId, crew }: Props) {
       {rows(offers, connected).map((row) => {
         const { kind, held, offer } = row;
         const brand = markFor(kind);
-        const working = busy === kind;
+        const working = busy?.key === kind;
         const chosen = held?.access.mode === "chosen" ? held.access.agents : [];
         // Two Google accounts are two grants, and a crew uses one of them.
         const mine = connections.filter((connection) => connection.provider === kind);
@@ -514,7 +536,13 @@ export function PluginList({ groupId, crew }: Props) {
                   type="button"
                   className="btn btn--small btn--ghost"
                   disabled={busy !== null}
-                  onClick={() => void run(kind, () => api.disconnectPlugin(held.id))}
+                  onClick={() =>
+                    void run(
+                      kind,
+                      "Disconnecting… Its tools leave this group as soon as the host answers.",
+                      () => api.disconnectPlugin(held.id),
+                    )
+                  }
                 >
                   {working ? "Disconnecting…" : "Disconnect"}
                 </button>
@@ -525,12 +553,15 @@ export function PluginList({ groupId, crew }: Props) {
                     className="btn btn--small btn--primary"
                     disabled={busy !== null}
                     onClick={() =>
-                      void run(kind, () =>
-                        // What the picker above says, which defaults to the
-                        // first identity. With none, this connects against the
-                        // account's default and the refusal from Rust is what
-                        // says an account is needed.
-                        api.connectPlugin(groupId, offer.kind, using),
+                      void run(
+                        kind,
+                        `Connecting ${row.name}… If it asks for a sign-in, finish in the browser window that just opened. Guaca is waiting, and gives up after five minutes.`,
+                        () =>
+                          // What the picker above says, which defaults to the
+                          // first identity. With none, this connects against the
+                          // account's default and the refusal from Rust is what
+                          // says an account is needed.
+                          api.connectPlugin(groupId, offer.kind, using),
                       )
                     }
                   >
@@ -591,9 +622,13 @@ export function PluginList({ groupId, crew }: Props) {
                       }
                       // Connected, so this moves the crew. Its own command
                       // rather than a reconnect, which would replace the row
-                      // and lose the per-tool switches.
-                      void run(kind, () =>
-                        api.setPluginConnection(groupId, offer.kind as CatalogKind, chosen),
+                      // and lose the per-tool switches. Its own busy key too,
+                      // so the Disconnect button beside it does not read
+                      // "Disconnecting…" while an account is being switched.
+                      void run(
+                        `${kind}-account`,
+                        "Switching the account… Its tools are re-read with the new one.",
+                        () => api.setPluginConnection(groupId, offer.kind as CatalogKind, chosen),
                       );
                     }}
                   >
@@ -628,12 +663,13 @@ export function PluginList({ groupId, crew }: Props) {
                       className="input"
                       value={moving[held.id]?.url ?? ""}
                       disabled={busy !== null}
-                      onChange={(event) =>
+                      onChange={(event) => {
                         setMoving((was) => ({
                           ...was,
                           [held.id]: { ...was[held.id]!, url: event.target.value },
-                        }))
-                      }
+                        }));
+                        forget(`${kind}-address-test`, `address:${held.id}`);
+                      }}
                     />
                   </label>
                   <label className="field">
@@ -643,12 +679,13 @@ export function PluginList({ groupId, crew }: Props) {
                       type="password"
                       value={moving[held.id]?.key ?? ""}
                       disabled={busy !== null}
-                      onChange={(event) =>
+                      onChange={(event) => {
                         setMoving((was) => ({
                           ...was,
                           [held.id]: { ...was[held.id]!, key: event.target.value },
-                        }))
-                      }
+                        }));
+                        forget(`${kind}-address-test`, `address:${held.id}`);
+                      }}
                     />
                     {/* Empty means "ask the server", not "keep what you had".
                         The stored key cannot be read back, so a box that
@@ -668,12 +705,13 @@ export function PluginList({ groupId, crew }: Props) {
                     <HeaderFields
                       rows={moving[held.id]?.headers ?? []}
                       disabled={busy !== null}
-                      onChange={(rows) =>
+                      onChange={(rows) => {
                         setMoving((was) => ({
                           ...was,
                           [held.id]: { ...was[held.id]!, headers: rows },
-                        }))
-                      }
+                        }));
+                        forget(`${kind}-address-test`, `address:${held.id}`);
+                      }}
                     />
                   ) : (
                     <p className="field__hint">
@@ -684,7 +722,7 @@ export function PluginList({ groupId, crew }: Props) {
                         type="button"
                         className="toolset__more"
                         disabled={busy !== null}
-                        onClick={() =>
+                        onClick={() => {
                           setMoving((was) => ({
                             ...was,
                             [held.id]: {
@@ -694,8 +732,9 @@ export function PluginList({ groupId, crew }: Props) {
                               // comes back, so replacing a set is retyping it.
                               headers: held.headers.map((name) => blankHeader(name)),
                             },
-                          }))
-                        }
+                          }));
+                          forget(`${kind}-address-test`, `address:${held.id}`);
+                        }}
                       >
                         Replace headers
                       </button>
@@ -712,6 +751,7 @@ export function PluginList({ groupId, crew }: Props) {
                       onClick={() =>
                         void run(
                           `${kind}-address`,
+                          "Saving the new details and reconnecting… If it asks for a sign-in, finish in the browser window that just opened. Guaca is waiting, and gives up after five minutes.",
                           async () => {
                             const change = moving[held.id];
                             await api.readdressPlugin(
@@ -722,12 +762,17 @@ export function PluginList({ groupId, crew }: Props) {
                               change?.headers ? sent(change.headers) : undefined,
                             );
                             setMoving(({ [held.id]: _gone, ...rest }) => rest);
+                            // The row that comes back is about a new address,
+                            // so what the last test of the old one found is
+                            // about a server this panel no longer shows.
+                            forget(`${kind}-address-test`, `address:${held.id}`);
+                            setTested(({ [`${kind}-check`]: _gone, ...rest }) => rest);
                           },
                           `address:${held.id}`,
                         )
                       }
                     >
-                      {busy === `${kind}-address` ? "Reconnecting…" : "Save and reconnect"}
+                      {busy?.key === `${kind}-address` ? "Reconnecting…" : "Save and reconnect"}
                     </button>
                     {/* Before the reconnection rather than after it, because a
                         reconnection replaces the tool list: an address that
@@ -740,6 +785,7 @@ export function PluginList({ groupId, crew }: Props) {
                       onClick={() =>
                         void test(
                           `${kind}-address-test`,
+                          "Testing the address… It dials the server and reads its tools, and connects nothing. It gives up if the server stops answering.",
                           () => {
                             const change = moving[held.id];
                             return api.probeServer(
@@ -752,7 +798,7 @@ export function PluginList({ groupId, crew }: Props) {
                         )
                       }
                     >
-                      {busy === `${kind}-address-test` ? "Testing…" : "Test"}
+                      {busy?.key === `${kind}-address-test` ? "Testing…" : "Test"}
                     </button>
                     <button
                       type="button"
@@ -808,10 +854,15 @@ export function PluginList({ groupId, crew }: Props) {
                     className="toolset__more"
                     disabled={busy !== null}
                     onClick={() =>
-                      void test(`${kind}-check`, () => api.checkPlugin(held.id), `check:${held.id}`)
+                      void test(
+                        `${kind}-check`,
+                        "Testing the connection… It asks the server again, reusing this group's sign-in if there is one, and writes nothing. It gives up if the server stops answering.",
+                        () => api.checkPlugin(held.id),
+                        `check:${held.id}`,
+                      )
                     }
                   >
-                    {busy === `${kind}-check` ? "Testing…" : "Test it"}
+                    {busy?.key === `${kind}-check` ? "Testing…" : "Test it"}
                   </button>
                 </p>
 
@@ -841,7 +892,7 @@ export function PluginList({ groupId, crew }: Props) {
                         // would be a click that changed nothing, on the button
                         // whose whole purpose is to take something away.
                         if (held.access.mode === mode.value) return;
-                        void run(`${kind}-access`, () =>
+                        void run(`${kind}-access`, "Saving who can use it…", () =>
                           api.setPluginAccess(
                             held.id,
                             mode.value === "everyone"
@@ -876,7 +927,7 @@ export function PluginList({ groupId, crew }: Props) {
                             aria-pressed={has}
                             disabled={busy !== null}
                             onClick={() =>
-                              void run(`${kind}-${agent.id}`, () =>
+                              void run(`${kind}-${agent.id}`, "Saving who can use it…", () =>
                                 api.setPluginAccess(held.id, {
                                   mode: "chosen",
                                   agents: toggled(held.access, agent.id),
@@ -966,14 +1017,17 @@ export function PluginList({ groupId, crew }: Props) {
                                 // take something away must not be a click that
                                 // changes nothing.
                                 if (tool.access.mode === mode.value) return;
-                                void run(`${kind}-${tool.name}`, () =>
-                                  api.setPluginTool(
-                                    held.id,
-                                    tool.name,
-                                    mode.value === "everyone"
-                                      ? { mode: "everyone" }
-                                      : { mode: "chosen", agents: [] },
-                                  ),
+                                void run(
+                                  `${kind}-${tool.name}`,
+                                  "Saving which tools are offered…",
+                                  () =>
+                                    api.setPluginTool(
+                                      held.id,
+                                      tool.name,
+                                      mode.value === "everyone"
+                                        ? { mode: "everyone" }
+                                        : { mode: "chosen", agents: [] },
+                                    ),
                                 );
                               }}
                             >
@@ -993,11 +1047,14 @@ export function PluginList({ groupId, crew }: Props) {
                                 aria-pressed={allows(tool.access, agent.id)}
                                 disabled={busy !== null}
                                 onClick={() =>
-                                  void run(`${kind}-${tool.name}-${agent.id}`, () =>
-                                    api.setPluginTool(held.id, tool.name, {
-                                      mode: "chosen",
-                                      agents: toggled(tool.access, agent.id),
-                                    }),
+                                  void run(
+                                    `${kind}-${tool.name}-${agent.id}`,
+                                    "Saving which tools are offered…",
+                                    () =>
+                                      api.setPluginTool(held.id, tool.name, {
+                                        mode: "chosen",
+                                        agents: toggled(tool.access, agent.id),
+                                      }),
                                   )
                                 }
                               >
@@ -1074,7 +1131,10 @@ export function PluginList({ groupId, crew }: Props) {
                 className="choice"
                 aria-pressed={!draft.program}
                 disabled={busy !== null}
-                onClick={() => setDraft((was) => ({ ...was, program: false, headers: [] }))}
+                onClick={() => {
+                  setDraft((was) => ({ ...was, program: false, headers: [] }));
+                  forget("add-test", "add");
+                }}
               >
                 At an address
               </button>
@@ -1083,7 +1143,10 @@ export function PluginList({ groupId, crew }: Props) {
                 className="choice"
                 aria-pressed={draft.program}
                 disabled={busy !== null}
-                onClick={() => setDraft((was) => ({ ...was, program: true, headers: [], key: "" }))}
+                onClick={() => {
+                  setDraft((was) => ({ ...was, program: true, headers: [], key: "" }));
+                  forget("add-test", "add");
+                }}
               >
                 A program on the host
               </button>
@@ -1096,7 +1159,10 @@ export function PluginList({ groupId, crew }: Props) {
                   value={draft.command}
                   placeholder="npx -y @modelcontextprotocol/server-github"
                   disabled={busy !== null}
-                  onChange={(event) => setDraft((was) => ({ ...was, command: event.target.value }))}
+                  onChange={(event) => {
+                    setDraft((was) => ({ ...was, command: event.target.value }));
+                    forget("add-test", "add");
+                  }}
                 />
                 <span className="field__hint">
                   The program and its arguments, as you would type them in a terminal on the machine
@@ -1111,7 +1177,10 @@ export function PluginList({ groupId, crew }: Props) {
                   value={draft.url}
                   placeholder="https://example.com/mcp"
                   disabled={busy !== null}
-                  onChange={(event) => setDraft((was) => ({ ...was, url: event.target.value }))}
+                  onChange={(event) => {
+                    setDraft((was) => ({ ...was, url: event.target.value }));
+                    forget("add-test", "add");
+                  }}
                 />
                 <span className="field__hint">
                   The URL its MCP endpoint answers on. HTTPS, unless it is on this machine.
@@ -1125,7 +1194,10 @@ export function PluginList({ groupId, crew }: Props) {
                 type="password"
                 value={draft.key}
                 disabled={busy !== null}
-                onChange={(event) => setDraft((was) => ({ ...was, key: event.target.value }))}
+                onChange={(event) => {
+                  setDraft((was) => ({ ...was, key: event.target.value }));
+                  forget("add-test", "add");
+                }}
               />
               {/* Both halves are worth saying. What it is for, because a server
                   that signs in properly needs nothing here and pasting a key
@@ -1141,7 +1213,10 @@ export function PluginList({ groupId, crew }: Props) {
               rows={draft.headers}
               disabled={busy !== null}
               env={draft.program}
-              onChange={(headers) => setDraft((was) => ({ ...was, headers }))}
+              onChange={(headers) => {
+                setDraft((was) => ({ ...was, headers }));
+                forget("add-test", "add");
+              }}
             />
             {/* Here rather than at the foot of the panel, which is where it
                 used to be: the eye that just pressed Test is on this row, and
@@ -1155,6 +1230,7 @@ export function PluginList({ groupId, crew }: Props) {
                 onClick={() =>
                   void run(
                     "add",
+                    `Adding ${draft.name}… If it asks for a sign-in, finish in the browser window that just opened. Guaca is waiting, and gives up after five minutes.`,
                     async () => {
                       await api.addPlugin(
                         groupId,
@@ -1175,12 +1251,15 @@ export function PluginList({ groupId, crew }: Props) {
                         command: "",
                       });
                       setAdding(false);
+                      // The form is empty again, so a report left over from
+                      // the last server it held is about nobody on screen.
+                      forget("add-test", "add");
                     },
                     "add",
                   )
                 }
               >
-                {busy === "add" ? "Connecting…" : "Add and connect"}
+                {busy?.key === "add" ? "Connecting…" : "Add and connect"}
               </button>
               {/* Needs no name, because nothing is being called by one: this
                   dials the address and reports what is there. It is the one
@@ -1193,12 +1272,13 @@ export function PluginList({ groupId, crew }: Props) {
                 onClick={() =>
                   void test(
                     "add-test",
+                    "Testing the address… It dials the server and reads its tools, and connects nothing. It gives up if the server stops answering.",
                     () => api.probeServer(address, draft.key || undefined, draft.headers),
                     "add",
                   )
                 }
               >
-                {busy === "add-test" ? "Testing…" : "Test"}
+                {busy?.key === "add-test" ? "Testing…" : "Test"}
               </button>
               <button
                 type="button"
@@ -1230,12 +1310,7 @@ export function PluginList({ groupId, crew }: Props) {
         )}
       </div>
 
-      {busy !== null && (
-        <p className="field__hint">
-          Finish in the browser window that just opened. Guaca is waiting, and gives up after five
-          minutes.
-        </p>
-      )}
+      {busy !== null && <p className="field__hint">{busy.says}</p>}
 
       {error && (
         <div className="banner banner--error" style={{ margin: "0.4rem 0 0" }}>

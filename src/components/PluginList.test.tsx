@@ -1000,7 +1000,7 @@ describe("a server the operator added", () => {
     probeServer.mockRejectedValue({
       kind: "plugin",
       message:
-        "could not reach http://127.0.0.1:9/mcp. no connection was made: the name may not resolve, the port may be closed, or the server may have refused the encrypted connection. Check the address and its path, and that the server is running and reachable from here",
+        "Could not reach http://127.0.0.1:9/mcp. No connection was made: the name may not resolve, the port may be closed, or the server may have refused the encrypted connection. Check the address and its path, and that the server is running and reachable from here.",
       detail:
         "error sending request for url (http://127.0.0.1:9/mcp): client error (Connect): tcp connect error: Connection refused (os error 111)",
     });
@@ -1068,5 +1068,89 @@ describe("a server the operator added", () => {
 
     expect(await screen.findByText(/2 tools/)).toBeTruthy();
     expect(screen.queryByText("Change address")).toBeNull();
+  });
+
+  it("says what a test is doing, and promises no window it never opens", async () => {
+    // Only a sign-in opens a browser window: a probe dials the address and
+    // nothing else. The panel used to say the same browser sentence on every
+    // busy state, which sent a person looking for a popup that never came.
+    probeServer.mockReturnValue(new Promise<ServerReport>(() => {}));
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+    fireEvent.click(await screen.findByText("Add a server"));
+    fireEvent.change(screen.getByPlaceholderText("https://example.com/mcp"), {
+      target: { value: "https://ha.example.com/mcp" },
+    });
+    fireEvent.click(screen.getByText("Test"));
+
+    expect(await screen.findByText(/Testing the address/)).toBeTruthy();
+    expect(screen.queryByText(/browser window/)).toBeNull();
+  });
+
+  it("says what a disconnect is doing, and promises no window", async () => {
+    groupPlugins.mockResolvedValue([plugin()]);
+    disconnectPlugin.mockReturnValue(new Promise(() => {}));
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    fireEvent.click(await screen.findByText("Disconnect"));
+    expect(await screen.findByText(/Its tools leave this group/)).toBeTruthy();
+    expect(screen.queryByText(/browser window/)).toBeNull();
+  });
+
+  it("clears what a test found when the address it was run against changes", async () => {
+    // A report that outlived its address reads as one about the address on
+    // screen, which is the one thing it cannot be.
+    probeServer.mockResolvedValue({
+      endpoint: "https://ha.example.com/mcp",
+      transport: "streamable HTTP",
+      protocol: "2026-07-28",
+      handshake: false,
+      signin: "none",
+      server: "Home Assistant",
+      tools: ["turn_on"],
+      ms: 42,
+    });
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+    fireEvent.click(await screen.findByText("Add a server"));
+    const address = screen.getByPlaceholderText("https://example.com/mcp");
+    fireEvent.change(address, { target: { value: "https://ha.example.com/mcp" } });
+    fireEvent.click(screen.getByText("Test"));
+    expect(await screen.findByText(/answered in 42 ms/)).toBeTruthy();
+
+    fireEvent.change(address, { target: { value: "https://ha.example.com/other" } });
+    expect(screen.queryByText(/answered in 42 ms/)).toBeNull();
+    expect(addPlugin).not.toHaveBeenCalled();
+  });
+
+  it("clears a refusal when the key it was about changes", async () => {
+    // The sentence names the address it could not reach. A new key is a new
+    // attempt, and the old sentence would be about an attempt nobody made.
+    probeServer.mockRejectedValue({
+      kind: "plugin",
+      message:
+        "Could not reach https://ha.example.com/mcp. No connection was made: the name may not resolve, the port may be closed, or the server may have refused the encrypted connection. Check the address and its path, and that the server is running and reachable from here.",
+    });
+    const { container } = render(<PluginList groupId={GROUP} crew={CREW} />);
+    fireEvent.click(await screen.findByText("Add a server"));
+    fireEvent.change(screen.getByPlaceholderText("https://example.com/mcp"), {
+      target: { value: "https://ha.example.com/mcp" },
+    });
+    fireEvent.click(screen.getByText("Test"));
+    expect(await screen.findByText(/Could not reach/)).toBeTruthy();
+
+    const key = container.querySelector<HTMLInputElement>('input[type="password"]');
+    fireEvent.change(key!, { target: { value: "sk-new" } });
+    expect(screen.queryByText(/Could not reach/)).toBeNull();
+  });
+
+  it("offers a tool to all agents without borrowing the default group's name", async () => {
+    // The short answer used to be "Everyone", which is what the app calls its
+    // first group. Inside that group the same word answered two questions.
+    groupPlugins.mockResolvedValue([plugin()]);
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    fireEvent.click(await screen.findByText("Show all 2"));
+    expect(screen.getByRole("button", { name: "Every agent: run_sql" }).textContent).toBe(
+      "All agents",
+    );
   });
 });
