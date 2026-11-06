@@ -623,6 +623,24 @@ refused" are one status code and opposite problems: an operator who cannot tell
 them apart re-pastes a key at a server that never wanted one, or goes hunting
 for a sign-in that is really a typo.
 
+**A server that does not answer is said to the operator, in two layers.** The
+transport error is the one refusal on this path whose sentence is about the
+machine rather than about the server: `reqwest` prints "error sending request
+for url (…)" inside a sentence that already names the address, which says
+nothing a person can act on and prints the address they just typed twice. So
+`plugins::for_operator` — applied at the three doors only a person knocks on,
+`inspect`, `check` and `connect` — names what failed at the transport's own
+flags (a timeout, a connection that was never made, an answer that could not be
+read), says what to check, and keeps the raw chain in `PluginError::Unreachable`'s
+`detail`. That travels out as `CommandError.detail` and the panel puts it behind
+`The raw error`, because it is worth nothing until somebody has read the
+sentence and still cannot fix it — and it is what a bug report needs. Every
+other `McpError` is left alone: "speaks MCP 2026-07-28, and this build speaks…" is
+already a sentence for a person, and a status code from a server is the server's
+own words. A tool call inside a turn still reads `McpError`, because what an
+agent should do about a server that is down — nothing, in this turn — is not
+what a person should do about it.
+
 `check_plugin` is the same question asked of a plugin the crew already has, and
 it is a separate command because the credential is separate: it spends the grant
 in the store, which is the only way to answer "is our sign-in still good". That

@@ -5,7 +5,7 @@ import { useFollowBottom } from "../lib/follow";
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
 import { continues, type Lookups, toPeer } from "../lib/transcript";
-import { type AgentId, type Envelope, errorMessage } from "../lib/types";
+import type { AgentId, Envelope } from "../lib/types";
 import { MessageItem } from "./MessageItem";
 
 /**
@@ -37,7 +37,7 @@ export function PairThread({
   lookups: Lookups;
   onClose: () => void;
 }) {
-  const setBanner = useStore((s) => s.setBanner);
+  const showFailure = useStore((s) => s.showFailure);
   const [messages, setMessages] = useState<Envelope[] | undefined>(undefined);
   const { ref: scrollRef, follow } = useFollowBottom();
 
@@ -56,12 +56,12 @@ export function PairThread({
         if (live) setMessages(rows);
       })
       .catch((error) => {
-        if (live) setBanner({ tone: "error", text: errorMessage(error) });
+        if (live) showFailure(error);
       });
     return () => {
       live = false;
     };
-  }, [self, peer, beat, setBanner]);
+  }, [self, peer, beat, showFailure]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {

@@ -4019,6 +4019,36 @@ input[type="file"]::file-selector-button {
   overflow-wrap: anywhere;
 }
 
+/* A refusal said to the operator rather than to the model that earned it.
+   Prose, because it is Guaca explaining what happened: the runtime's sentence
+   is written in a model's vocabulary and belongs in the block below, behind
+   the click that asks what the agent was told. */
+.trail__why {
+  margin: var(--space-2) 0 0;
+  max-width: 42rem;
+  font-family: var(--font-read);
+  font-size: var(--type-aside);
+  line-height: var(--lead-ui);
+  color: var(--system);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* The runtime's own words, kept for whoever is diagnosing the refusal. Shut by
+   default and quiet when open: it is a second opinion about a row whose first
+   one is already on screen. */
+.trail__told > summary {
+  margin-top: var(--space-2);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  cursor: pointer;
+}
+
+.trail__told[open] > summary {
+  color: var(--faint);
+}
+
 /* Two versions of a small page, drawn as the lines between them. Same block as
    the one above and the same reasons for it, with a gutter down the left for
    what happened to each line.
@@ -5406,6 +5436,43 @@ input[type="file"]:disabled {
   padding-block: var(--space-3);
 }
 
+/* A refused dial, drawn where the control that asked for it is. The sentence
+   is Rust's and names what to check; the raw error underneath is folded away,
+   because it repeats the address the operator typed and is worth nothing until
+   they cannot fix it. */
+.connector-failure {
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid color-mix(in oklab, var(--danger) 40%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--danger) 10%, transparent);
+  color: var(--danger);
+  font-size: var(--type-fine);
+  line-height: var(--lead-ui);
+  overflow-wrap: anywhere;
+}
+
+.connector-failure__says {
+  margin: 0;
+}
+
+.connector-failure__detail > summary {
+  margin-top: var(--space-2);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.connector-failure__detail > pre {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) var(--space-3);
+  max-height: 11rem;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  color: var(--text);
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+}
+
 .access__item {
   display: flex;
   flex-direction: column;
@@ -6059,6 +6126,34 @@ input[type="file"]:disabled {
 
 .banner > .btn {
   flex: none;
+}
+
+/* What the banner has to say, which may be two things: the failure, and the
+   one line the app can add to it. A column rather than a longer sentence,
+   because the second is what to go and look at and it is the half a reader
+   comes back for. */
+.banner__text {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+/* What to check, under what happened. Its own color so the failure stays the
+   thing that reads first, and prose rather than a second colored paragraph:
+   this is advice, not a second failure. */
+.banner__hint {
+  color: var(--muted);
+  font-size: var(--type-fine);
+}
+
+/* A banner's controls, held together at its end. The host-down banner is the
+   one with more than one thing to press, and spread across the row by the
+   banner's own spacing they read as three unrelated offers. */
+.banner__actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-3);
 }
 
 .banner--error {

@@ -179,6 +179,27 @@ scrolled if it is long. Only where the call has nothing else to show — somebod
 opening a failed `run_command` came for the command. Open, the chip stops
 repeating the first line of what is directly underneath it.
 
+**A refusal is read in the operator's words, and the agent's are one click
+away.** Every one of them is written for the model that earned it: ``send_message
+needs a non-empty `to` list``, ``schedule needs `repeat` or `every_secs` to keep
+doing it``. That is right where it is read — a model handed a sentence it cannot
+parse retries into the same wall, and every one of them carries the way forward
+for exactly that reason — and wrong in the one place a person meets it, which is
+the trail, at the moment their agent misbehaved. A paragraph of parameter names
+there reads as a stack trace in the row that is meant to sound like a colleague.
+So `lib/refusal.ts` holds one sentence per refusal it knows, about what did not
+happen rather than about what was mistyped, and the runtime's own text is kept
+beside it: the chip and the opened row draw the sentence, and `What the agent
+was told` opens onto the original, next to the arguments it was about. The
+runtime's words do not change — they are what the model is told — what changes
+is which of the two a person reads first. A refusal nobody has translated is
+drawn exactly as it was written, which is the honest answer for a build newer
+than this one: a sentence invented for an unknown failure describes the wrong
+failure. The table carries the runtime's own text beside each sentence, and
+`refusal.test.ts` looks for all of it in `guard.rs`, `errand.rs`,
+`runtime/mod.rs` and `llm/tools.rs`, so a reword on that side fails a test rather
+than quietly putting machine text in front of somebody again.
+
 **The same chips are drawn while the turn is still making them**, above the
 composer rather than in the transcript, from `trail` in the store rather than
 from a message. Same rules, same file, same fold, and the same value: the

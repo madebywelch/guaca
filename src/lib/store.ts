@@ -12,7 +12,7 @@ import { create } from "zustand";
 import { api } from "./ipc";
 import { loadPrefs, type Prefs, savePrefs } from "./prefs";
 import { type DropTarget, landsBefore, railOrder } from "./rail";
-import { hosted, openExternal, PAGE_ID } from "./transport";
+import { hosted, isUnreachable, openExternal, PAGE_ID } from "./transport";
 
 let decisionRead = 0;
 
@@ -80,6 +80,22 @@ export interface Pulse {
 
 /** How long the group meters look back. */
 export const PULSE_WINDOW_MS = 90_000;
+
+/**
+ * The one-line surface for something that went wrong, or right.
+ *
+ * `fix` is what can be done about it, and it is a short list rather than a
+ * callback: a banner is stored in the store and read by two clients — the
+ * window and the menu bar panel — and a closure in here would be a control the
+ * panel cannot draw and still has to carry. `host` is the one failure with a
+ * control: nothing answered, and the two things that help are trying again and
+ * looking at which host this is.
+ */
+export interface Banner {
+  tone: "error" | "info" | "ok";
+  text: string;
+  fix?: "host";
+}
 
 /** Where a move leaves an agent. */
 export interface Placement {
@@ -297,7 +313,7 @@ export interface State {
   skillsVersion: Record<string, number | undefined>;
 
   /** Non-blocking surface for the last thing that went wrong. */
-  banner: { tone: "error" | "info" | "ok"; text: string } | null;
+  banner: Banner | null;
   /**
    * A sign-in page the runtime asked this browser to open, while the flow
    * behind it is still waiting.
@@ -385,7 +401,18 @@ export interface State {
   settle: (answer: () => Promise<unknown>) => Promise<void>;
   applyEvent: (event: UiEvent) => void;
   dismissPulse: (id: number) => void;
-  setBanner: (banner: State["banner"]) => void;
+  setBanner: (banner: Banner | null) => void;
+  /**
+   * Puts a failure on the banner, with whatever can be done about it.
+   *
+   * One place rather than at each call site, because which failures carry a
+   * control is a fact about the failure and a caller made to remember it is a
+   * caller that will forget. The host being gone is the one with something to
+   * offer — trying again, and looking at which host this is — so it is the one
+   * that says so; everything else is a sentence and a dismissal, which is
+   * right, because nothing on screen can change it.
+   */
+  showFailure: (error: unknown) => void;
   setHandoff: (url: string | null) => void;
   setSettings: (settings: Settings) => void;
   /**
@@ -801,7 +828,7 @@ export const useStore = create<State>((set, get) => ({
     try {
       await api.clearEscalation(id);
     } catch (error) {
-      get().setBanner({ tone: "error", text: errorMessage(error) });
+      get().showFailure(error);
     }
     // Read back either way, for the reason `settle` does: a clear that failed
     // must not leave the desk missing a row the store still has, and one that
@@ -821,7 +848,7 @@ export const useStore = create<State>((set, get) => ({
     try {
       await answer();
     } catch (error) {
-      get().setBanner({ tone: "error", text: errorMessage(error) });
+      get().showFailure(error);
     }
     // Read back whether it was taken or refused. A refusal means this side was
     // holding a stale answer; a success is confirmed by the same read rather
@@ -1276,6 +1303,16 @@ export const useStore = create<State>((set, get) => ({
 
   setBanner(banner) {
     set({ banner });
+  },
+
+  showFailure(error) {
+    set({
+      banner: {
+        tone: "error",
+        text: errorMessage(error),
+        ...(isUnreachable(error) ? { fix: "host" as const } : {}),
+      },
+    });
   },
 
   setHandoff(handoff) {

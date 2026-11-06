@@ -13,8 +13,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  */
 
 delete (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
-const { adoptInvitation, invoke, probe, setToken, token, UNAUTHORIZED_EVENT, upload } =
-  await import("./transport");
+const {
+  adoptInvitation,
+  invoke,
+  isUnreachable,
+  probe,
+  setToken,
+  token,
+  UNAUTHORIZED_EVENT,
+  upload,
+} = await import("./transport");
 
 const fetched = vi.fn<typeof fetch>();
 
@@ -257,6 +265,23 @@ describe("a call", () => {
     await expect(invoke("capabilities")).rejects.toMatchObject({
       message: expect.stringContaining("agents keep working"),
     });
+  });
+
+  it("says where it could not reach, and not what the browser called the failure", async () => {
+    // `fetch` has one sentence — "Failed to fetch" — for a box that is off, a
+    // tunnel that dropped and a name that does not resolve. Printing it inside
+    // a sentence that already names the address adds nothing an operator can
+    // act on and reads as a stack trace in the one place that should sound like
+    // a colleague. The address is the part worth having.
+    fetched.mockRejectedValue(new TypeError("Failed to fetch"));
+
+    const refusal = await invoke("capabilities").catch((error: unknown) => error);
+    expect(refusal).toMatchObject({ kind: "unreachable" });
+    expect((refusal as { message: string }).message).toContain(window.location.origin);
+    expect((refusal as { message: string }).message).not.toContain("Failed to fetch");
+    expect(isUnreachable(refusal)).toBe(true);
+    expect(isUnreachable({ kind: "storage", message: "the disk is full" })).toBe(false);
+    expect(isUnreachable(new Error("Failed to fetch"))).toBe(false);
   });
 });
 

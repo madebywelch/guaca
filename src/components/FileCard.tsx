@@ -385,9 +385,7 @@ function SaveButton({ file }: { file: Attachment }) {
         void api
           .saveFile(file.digest, file.name)
           .then((path) => useStore.getState().setBanner({ tone: "ok", text: `Saved to ${path}` }))
-          .catch((error) =>
-            useStore.getState().setBanner({ tone: "error", text: errorMessage(error) }),
-          )
+          .catch((error) => useStore.getState().showFailure(error))
           .finally(() => setSaving(false));
       }}
     >

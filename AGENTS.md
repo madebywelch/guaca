@@ -28,6 +28,7 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/reach.ts        How close the pointer comes before the crews slide out.
   lib/search.ts       One ranking over hits from SQLite and from the store.
   lib/trail.ts        A turn's own tool calls: what folds into one chip.
+  lib/refusal.ts      A refusal written for a model, said to a person.
   lib/callout.ts      The one part of a reply that is for you, in a box.
   lib/figure.ts       A fenced block the transcript draws instead of printing.
   lib/chart.ts        A chart spec, and where every mark goes. No DOM.
@@ -264,6 +265,7 @@ repo: the frontend renders state and forwards intent.
 | A kept page's live data, what the operator allows, a click that reaches the owner | *Live data is declared, allowed once, and read with no model* and *A click on a kept page reaches its owner* in `docs/WORKSPACE.md`, then `Runtime::read_artifact`, `Runtime::call_connector`, and `onSend` in `src/components/HtmlArtifact.tsx` |
 | A page the operator can work, and what it may hand back | *A page can hand one value back* in `docs/WORKSPACE.md`, then `BRIDGE` in `src-tauri/src/artifact.rs` and `Answering` in `src/components/HtmlArtifact.tsx` |
 | A turn's tool calls in a channel: what folds, what a chip says, what opens | *A turn's own work is chips* in `docs/WORKSPACE.md`, then `src/lib/trail.ts` |
+| A refusal the runtime wrote for a model, drawn in a transcript, and the words an operator reads instead | *A refusal is read in the operator's words* in `docs/WORKSPACE.md`, then `src/lib/refusal.ts`, whose table `refusal.test.ts` holds against the Rust sources |
 | What an agent changed about its own memory, and where the version before it came from | *A memory rewrite opens as a diff* in `docs/WORKSPACE.md`, then `Workspace::write` and `src/lib/diff.ts` |
 | What an agent currently remembers, and editing it by hand | *An agent's memory is in the panel* in `docs/WORKSPACE.md`, then `src/components/Memory.tsx` and `src-tauri/src/workspace.rs` |
 | The side panel: its head, what a section is framed in, a mark drawn in a control | *The panel is the agent's, and opens on its profile* in `docs/WORKSPACE.md`, then `src/components/Inspector.tsx`, `src/lib/profile.ts` and `src/components/Icon.tsx` |

@@ -29,6 +29,7 @@
 
 import { type DiffLine, lineDiff } from "./diff";
 import { nameFor } from "./plugins";
+import { plainRefusal } from "./refusal";
 import { asRecord, attachedNames, sendRecipients } from "./toolArgs";
 import type { ToolCallPart, ToolOutcome } from "./types";
 
@@ -90,8 +91,24 @@ export interface Step {
    * A browsing turn that stayed on one site is a turn that can say which site.
    */
   where: string | null;
-  /** What came back, in the runtime's own words. */
+  /**
+   * What came back, in the words of whoever is reading the row.
+   *
+   * A refusal is written for the model that made the call — parameter names,
+   * the missing JSON key, what to send instead — and `lib/refusal.ts` turns the
+   * ones it knows into a sentence for the operator. Everything else, and every
+   * summary, is the runtime's own text unchanged.
+   */
   said: string;
+  /**
+   * The runtime's own words, where `said` is a translation of them.
+   *
+   * Null where they are the same string, which is every call that succeeded and
+   * every refusal nobody has translated. Present means there is something to
+   * open: what the agent was told, kept beside the arguments it was told it
+   * about.
+   */
+  told: string | null;
   /** True when the runtime refused the call or it failed outright. */
   failed: boolean;
   /** Credentials this call spent, by name. Never a value. */
@@ -417,6 +434,9 @@ export function trailStep(part: ToolCallPart, key: string): Step {
   const { title, target, where } = describe(part.name, asRecord(part.arguments));
   const { spent, rest } = readSpent(outcomeText(part.outcome));
   const failed = part.outcome.status === "refused" || part.outcome.status === "failed";
+  // Only a failure. A summary is already written about the work, and a sentence
+  // for one would be a second description of a call that went as it should.
+  const plain = failed ? plainRefusal(part.name, rest) : null;
   return {
     key,
     tool: part.name,
@@ -427,7 +447,8 @@ export function trailStep(part: ToolCallPart, key: string): Step {
     // draws that page as a document with no history instead of as all new.
     replaced: typeof part.replaced === "string" ? part.replaced : null,
     where: where ?? null,
-    said: rest,
+    said: plain ?? rest,
+    told: plain === null ? null : rest,
     failed,
     spent,
   };

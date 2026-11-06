@@ -13,7 +13,7 @@ import {
 } from "../lib/search";
 import { useStore } from "../lib/store";
 import { useNow } from "../lib/time";
-import { type AgentCard, errorMessage, type Group, type SearchHits } from "../lib/types";
+import type { AgentCard, Group, SearchHits } from "../lib/types";
 
 interface Props {
   onClose: () => void;
@@ -63,7 +63,7 @@ export function Search({
   const lastActive = useStore((s) => s.lastActive);
   const openMessage = useStore((s) => s.openMessage);
   const select = useStore((s) => s.select);
-  const setBanner = useStore((s) => s.setBanner);
+  const showFailure = useStore((s) => s.showFailure);
   const showArtifacts = useStore((s) => s.showArtifacts);
   const now = useNow(30_000);
 
@@ -91,10 +91,10 @@ export function Search({
         .then((found) => {
           if (issued.current === wanted) setHits(found);
         })
-        .catch((error) => setBanner({ tone: "error", text: errorMessage(error) }));
+        .catch((error) => showFailure(error));
     }, DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [query, setBanner]);
+  }, [query, showFailure]);
 
   const results = useMemo(
     () => inScope(searchResults({ query, agents, groups, hits, lastActive, now }), scope),

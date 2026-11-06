@@ -1,5 +1,5 @@
 import type { Channel } from "./releases";
-import { invokeLocal, type Remote } from "./transport";
+import { attached, desktop, invokeLocal, type Remote } from "./transport";
 
 /** One host update, as the manager that ran it recorded it. */
 export interface HostOperation {
@@ -90,4 +90,26 @@ export function hostMode(): HostMode {
 }
 export function rememberMode(mode: HostMode) {
   localStorage.setItem(MODE, mode);
+}
+
+/**
+ * What to check when nothing answers, in the words of the workspace this page
+ * shows.
+ *
+ * Three arrangements and three answers, because what is usually wrong differs
+ * in each: a container on this Mac, a host running on this Mac outside the app,
+ * and a host reached over a network. None of them guesses at what failed — the
+ * banner has already said the host did not answer — they say which thing a
+ * person can go and look at, which is the half the banner cannot supply.
+ *
+ * A browser says `host` rather than a box or a container because it cannot tell
+ * the two apart, and guessing would send somebody to Docker for a server in
+ * another country.
+ */
+export function unreachableHint(): string {
+  if (!desktop) return "Check that the host is up, and that this address still answers from here.";
+  if (attached())
+    return "Check that the box is up, and that its address or tunnel still reaches it.";
+  if (hostMode() === "existing") return "Check that the host is still running on this Mac.";
+  return "Check that Docker is running: this workspace is a container on this Mac.";
 }

@@ -124,6 +124,31 @@ export const UNAUTHORIZED_EVENT = "guaca:unauthorized";
 export interface Refusal {
   kind: string;
   message: string;
+  /**
+   * The layer underneath's own words, where the message above them is Guaca's.
+   *
+   * Only some refusals have one, and it is never the first thing to read: it is
+   * what a bug report needs, and what an operator who has read the sentence and
+   * still wants to know exactly what was said opens. A refusal that is already
+   * a sentence for a person carries none.
+   */
+  detail?: string;
+}
+
+/**
+ * Whether a failure is the host being gone rather than anything on it.
+ *
+ * Its own kind on the refusal rather than a message match, and exported because
+ * the banner is not the only place that has a different next step for it: a
+ * host that is restarting is waited out, and everything else in this app is
+ * changed.
+ */
+export function isUnreachable(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { kind?: unknown }).kind === "unreachable"
+  );
 }
 
 /**
@@ -296,10 +321,13 @@ export async function upload<T>(file: File): Promise<T> {
       headers: { authorization: `Bearer ${token()}` },
       body: file,
     });
-  } catch (cause) {
+  } catch {
+    // Said about the file rather than about the string a browser's `fetch`
+    // throws: the operator's question is whether the document went, and the
+    // answer is no.
     throw {
       kind: "unreachable",
-      message: `could not reach this workspace to send ${file.name} (${cause instanceof Error ? cause.message : cause})`,
+      message: `could not reach this workspace to send ${file.name}. Try attaching it again once the host is back`,
     } satisfies Refusal;
   }
   const body = await response.json().catch(() => null);
@@ -332,13 +360,20 @@ export async function invoke<T>(name: string, args?: Record<string, unknown>): P
       headers: { "content-type": "application/json", authorization: `Bearer ${token()}` },
       body: JSON.stringify({ name, args: args ?? {}, client: CLIENT }),
     });
-  } catch (cause) {
+  } catch {
     // The box is off, asleep, or the tunnel is down. Its own kind, because it
     // is the one failure where the thing to do is wait rather than change
     // anything: a crew keeps working while nobody can see it.
+    //
+    // The address is in the sentence and the browser's own words are not. The
+    // cause of a `fetch` that fails is one of four strings — "Failed to fetch"
+    // for all of them — so it tells the operator nothing the address does not,
+    // and reads as a stack trace in the one place that has to sound like a
+    // colleague. What to do about it is the banner's, which is the only thing
+    // that knows whether this host is this Mac's or a box's.
     throw {
       kind: "unreachable",
-      message: `could not reach this workspace (${cause instanceof Error ? cause.message : cause}). It may be starting up, or the connection to it is down. Its agents keep working either way`,
+      message: `could not reach this workspace at ${origin()}. It may be starting up, or the connection to it is down. Its agents keep working either way`,
     } satisfies Refusal;
   }
 

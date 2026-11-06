@@ -7,15 +7,14 @@ import { useStore } from "../lib/store";
 import { whenLabel } from "../lib/time";
 import { type Step, trailStep } from "../lib/trail";
 import type { Lookups } from "../lib/transcript";
-import {
-  type AgentCard,
-  type AgentId,
-  type Envelope,
-  errorMessage,
-  type MessageId,
-  type Part,
-  type Participant,
-  type RoutineId,
+import type {
+  AgentCard,
+  AgentId,
+  Envelope,
+  MessageId,
+  Part,
+  Participant,
+  RoutineId,
 } from "../lib/types";
 import { ApprovalRequest } from "./ApprovalRequest";
 import { ArtifactCard } from "./Artifacts";
@@ -98,7 +97,7 @@ function onOpenRoutine(routineId: RoutineId) {
  */
 function onRetry(agentId: AgentId, messageId: MessageId) {
   void api.retryTurn(agentId, messageId).catch((error) => {
-    useStore.getState().setBanner({ tone: "error", text: errorMessage(error) });
+    useStore.getState().showFailure(error);
   });
 }
 

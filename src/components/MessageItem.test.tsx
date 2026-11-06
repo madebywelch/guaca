@@ -524,6 +524,55 @@ describe("a turn that used its computer two dozen times", () => {
   });
 });
 
+describe("a refusal the runtime wrote for a model", () => {
+  /** One turn whose one call was refused, as the runtime records it. */
+  function refused(): Envelope {
+    return envelope({
+      from: { kind: "agent", id: "manager" },
+      to: { kind: "system" },
+      trust: "system",
+      parts: [
+        {
+          type: "toolCall",
+          name: "send_message",
+          arguments: { text: "on it" },
+          outcome: {
+            status: "failed",
+            error: "send_message needs a non-empty `to` list of agent names",
+          },
+        },
+      ],
+    });
+  }
+
+  it("says it in words for the operator, and keeps the runtime's behind one click", () => {
+    // A parameter name in a monospace block is a traceback in the one place
+    // that should sound like a colleague. The model's version is not thrown
+    // away — it is what somebody diagnosing the refusal wants, and it sits
+    // beside the arguments the row already shows.
+    const { container } = render(
+      <MessageItem message={refused()} lookups={lookups} continued={false} />,
+    );
+    const chip = screen.getByRole("button", { name: /send a message to nobody/ });
+    // Shut, the chip already carries the sentence rather than the vocabulary.
+    expect(container.querySelector(".trail__said")?.textContent).toBe(
+      "Nothing was sent: the call named nobody to send to.",
+    );
+    expect(container.textContent).not.toContain("`to`");
+
+    fireEvent.click(chip);
+    // Open, the refusal is prose rather than the monospace block a command
+    // gets: this is Guaca explaining, not an argument the call carried.
+    expect(container.querySelector(".trail__why")?.textContent).toBe(
+      "Nothing was sent: the call named nobody to send to.",
+    );
+    const detail = container.querySelector<HTMLDetailsElement>(".trail__told");
+    expect(detail?.open).toBe(false);
+    expect(detail?.textContent).toContain("What the agent was told");
+    expect(detail?.textContent).toContain("`to`");
+  });
+});
+
 describe("redrawing a transcript", () => {
   it("does not draw an entry again when nothing about it changed", () => {
     // A transcript is rebuilt whenever any message is appended, and drawing an

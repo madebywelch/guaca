@@ -31,7 +31,7 @@
  * since, and all the message carries is the prefix the tool was called by.
  */
 
-import type { CatalogKind, PluginKind, ServerReport } from "./types";
+import { type CatalogKind, errorMessage, type PluginKind, type ServerReport } from "./types";
 
 export interface Brand {
   /** The `d` of a single path on a 24x24 viewBox, verbatim from Simple Icons. */
@@ -157,6 +157,27 @@ export function hostOf(endpoint: string): string {
   } catch {
     return endpoint;
   }
+}
+
+/**
+ * What a refused dial said, and the layer underneath's words where it kept any.
+ *
+ * Two fields rather than one string, because they are read at different times.
+ * The sentence is for the operator and comes from Rust, which knows what failed
+ * and what to check; the detail is what the transport underneath said, which is
+ * worth nothing until somebody either cannot fix it or is writing a bug report,
+ * and is therefore drawn folded away. A refusal with none is the ordinary case:
+ * most of them are already a sentence for a person, with nothing under them.
+ */
+export function refusalWords(error: unknown): { says: string; detail: string | null } {
+  const kept =
+    typeof error === "object" && error !== null && "detail" in error
+      ? (error as { detail?: unknown }).detail
+      : null;
+  return {
+    says: errorMessage(error),
+    detail: typeof kept === "string" && kept.trim() !== "" ? kept : null,
+  };
 }
 
 /**

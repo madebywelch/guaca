@@ -761,3 +761,38 @@ describe("a sign-in page", () => {
     expect(useStore.getState().handoff).toBe("https://signin.example");
   });
 });
+
+describe("a failure on the banner", () => {
+  beforeEach(() => {
+    useStore.setState({ banner: null });
+  });
+
+  it("offers what can be done about it when the host is the thing that is gone", () => {
+    // The one failure whose next step is a control rather than a sentence, and
+    // the one that reads as a browser bug if the banner is left with only a
+    // dismissal.
+    useStore.getState().showFailure({
+      kind: "unreachable",
+      message: "could not reach this workspace at http://127.0.0.1:8787.",
+    });
+    expect(useStore.getState().banner).toEqual({
+      tone: "error",
+      text: "could not reach this workspace at http://127.0.0.1:8787.",
+      fix: "host",
+    });
+  });
+
+  it("offers nothing but the sentence for everything else", () => {
+    // A refused write, a duplicate name, a missing key: all fixed somewhere the
+    // banner cannot open, so a control here would be a control that lies.
+    for (const error of [
+      { kind: "storage", message: "the disk is full" },
+      { kind: "validation", message: "there are two Pips" },
+      new Error("something else entirely"),
+    ]) {
+      useStore.getState().showFailure(error);
+      expect(useStore.getState().banner?.fix).toBeUndefined();
+      expect(useStore.getState().banner?.tone).toBe("error");
+    }
+  });
+});

@@ -13,7 +13,7 @@ import { useEffect, useState } from "react";
 
 import { onRuntimeEvent } from "./ipc";
 import { useStore } from "./store";
-import { errorMessage, type UiEvent } from "./types";
+import type { UiEvent } from "./types";
 
 /**
  * Events a read that overlapped them may have missed.
@@ -46,7 +46,7 @@ export function useRuntime(onEvent?: (event: UiEvent) => void): boolean {
   const [handler] = useState(() => onEvent);
 
   useEffect(() => {
-    const { applyEvent, setBanner } = useStore.getState();
+    const { applyEvent, showFailure } = useStore.getState();
     let unlisten: (() => void) | undefined;
     // Subscribing is async, so a teardown can arrive before it resolves. Without
     // this flag the listener leaks: StrictMode mounts twice in development, the
@@ -68,7 +68,7 @@ export function useRuntime(onEvent?: (event: UiEvent) => void): boolean {
           await useStore.getState().resynchronize();
         }
       } catch (error) {
-        if (!canceled) setBanner({ tone: "error", text: errorMessage(error) });
+        if (!canceled) showFailure(error);
       } finally {
         refreshing = false;
       }
@@ -96,7 +96,7 @@ export function useRuntime(onEvent?: (event: UiEvent) => void): boolean {
       try {
         await useStore.getState().bootstrap();
       } catch (error) {
-        setBanner({ tone: "error", text: errorMessage(error) });
+        showFailure(error);
       } finally {
         initialReadDone = true;
         if (requested && !canceled) await refresh();

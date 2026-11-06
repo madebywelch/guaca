@@ -177,6 +177,66 @@ beforeEach(() => {
   });
 });
 
+describe("when the host goes away", () => {
+  const down = {
+    tone: "error" as const,
+    text: "could not reach this workspace at http://127.0.0.1:8787. It may be starting up, or the connection to it is down. Its agents keep working either way",
+    fix: "host" as const,
+  };
+
+  it("offers a retry and the place hosts are changed, not only a dismissal", async () => {
+    // The banner used to say the truth and hand over a blindfold: the one
+    // control removed the diagnosis and nothing else. These are the two things
+    // that help, and `Check the host` is where a person changes hosts.
+    useStore.setState({ banner: down });
+    render(<App />);
+    expect(screen.getByText(/could not reach this workspace/)).toBeTruthy();
+    // What to go and look at, in the words of the host this window shows: this
+    // suite is the desktop showing its own workspace.
+    expect(screen.getByText(/Check that Docker is running/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Check the host" }));
+    // The pane that holds On this Mac and Remote host, open rather than the
+    // dialog's first section.
+    const pane = await screen.findByRole("tab", { name: "Workspace" });
+    expect(pane.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("takes the banner away once a retry gets an answer", async () => {
+    useStore.setState({ banner: down });
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(useStore.getState().banner).toBeNull());
+    expect(screen.queryByText(/could not reach this workspace/)).toBeNull();
+  });
+
+  it("leaves it up when the host still is not there", async () => {
+    // The real path rather than a banner set by hand: this is also the one
+    // place the store's classification of an unreachable refusal is drawn.
+    listAgents.mockRejectedValue({ kind: "unreachable", message: down.text });
+    render(<App />);
+    await screen.findByRole("button", { name: "Retry" });
+    const before = listAgents.mock.calls.length;
+
+    // The retry asks again and gets the same nothing, which is not news: the
+    // banner is already saying it, and a second sentence saying it again is
+    // noise on the one line that matters.
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(listAgents.mock.calls.length).toBeGreaterThan(before));
+    expect(useStore.getState().banner?.fix).toBe("host");
+    expect(screen.getByText(/Check that Docker is running/)).toBeTruthy();
+  });
+
+  it("says nothing about Docker to a failure that is not the host", async () => {
+    useStore.setState({ banner: { tone: "error", text: "the disk is full" } });
+    render(<App />);
+    expect(screen.getByText("the disk is full")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByText(/Check that Docker is running/)).toBeNull();
+  });
+});
+
 describe("App", () => {
   it("renders the rail", async () => {
     render(<App />);

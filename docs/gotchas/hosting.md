@@ -41,6 +41,22 @@ The daemon, a browser as a client, and the boot both hosts share.
   A token rotated on the box turns every call away at once. The transport
   raises `UNAUTHORIZED_EVENT` and `TokenEntry` unmounts the app; a caller that
   catches the refusal itself and draws a banner draws forty of them.
+- **A host that is gone is the one failure with a control, and it is the store
+  that decides.** `unreachable` is the kind the transport raises for nothing
+  answered, and `Store::showFailure` is the only place that turns it into a
+  banner with `fix: "host"`: retry, and the way to Settings → Workspace. A call
+  site that drew its own banner would draw one without them, which is what the
+  screenshot in the polish audit was. Retry is `resynchronize` rather than a
+  reload, because a reload throws away the draft in the composer for news the
+  operator can get without it, and a retry that fails says nothing — the banner
+  is already saying it.
+- **The browser's own words are not in that sentence.** A `fetch` that fails
+  says "Failed to fetch" for a box that is off, a tunnel that dropped and a name
+  that does not resolve, so printing it adds nothing an operator can act on and
+  reads as a stack trace in the one place that has to sound like a colleague.
+  What the sentence carries is the address; what to check is `lib/host.ts`'s
+  `unreachableHint`, because whether it is Docker on this Mac or a box's address
+  depends on which host the page is showing and the transport does not know.
 - **A refused token is forgotten, not kept.** `TokenEntry` clears storage
   when `capabilities()` refuses the paste. Kept, the next reload would admit
   the page on the strength of a stored token, and the app's own reads would

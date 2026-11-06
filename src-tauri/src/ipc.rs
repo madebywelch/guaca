@@ -92,7 +92,10 @@ impl Refused {
                     skew(client)
                 ),
             ),
-            Refused::Command(err) => CommandError::new(err.kind, err.message.clone()),
+            // Cloned whole rather than rebuilt from kind and message: a
+            // refusal that carries the layer underneath's words would lose
+            // them here, and it would look like a command that never had any.
+            Refused::Command(err) => err.clone(),
             Refused::Answer(why) => CommandError::new(
                 "storage",
                 format!("the answer could not be encoded to send back ({why})"),
@@ -529,5 +532,24 @@ mod tests {
         let refused = Refused::Command(CommandError::new("duplicateName", "there are two Pips"));
         assert_eq!(refused.status(), 200);
         assert_eq!(refused.body().kind, "duplicateName");
+    }
+
+    #[test]
+    fn the_layer_underneath_a_refusal_reaches_the_page_that_draws_it() {
+        // A detail dropped here would be a disclosure that opens onto nothing,
+        // and it would look like a command that never had one.
+        let refused = Refused::Command(
+            CommandError::new("plugin", "could not reach http://127.0.0.1:9/mcp")
+                .with_detail("error sending request for url (http://127.0.0.1:9/mcp)"),
+        );
+        assert_eq!(
+            refused.body().detail.as_deref(),
+            Some("error sending request for url (http://127.0.0.1:9/mcp)")
+        );
+        // And an ordinary refusal carries none, so the panel has nothing to
+        // fold away and the field does not serialize at all.
+        let plain = Refused::Command(CommandError::new("validation", "there are two Pips"));
+        assert_eq!(plain.body().detail, None);
+        assert!(!serde_json::to_string(&plain.body()).unwrap().contains("detail"));
     }
 }

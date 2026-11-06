@@ -59,6 +59,7 @@ export function MenubarPanel({ ready }: { ready: boolean }) {
   const session = useStore((s) => s.sessionSpend);
   const banner = useStore((s) => s.banner);
   const setBanner = useStore((s) => s.setBanner);
+  const showFailure = useStore((s) => s.showFailure);
   const [open, setOpen] = useState<AgentId | null>(null);
   // What was being typed to each agent, for as long as the panel lives. Going
   // back to the list is not deciding against a message, and the window keeps a
@@ -98,9 +99,7 @@ export function MenubarPanel({ ready }: { ready: boolean }) {
   const running = Object.values(activeRun).filter((run) => run !== undefined).length;
 
   const stopAll = () => {
-    void api
-      .stopEverything()
-      .catch((error) => setBanner({ tone: "error", text: errorMessage(error) }));
+    void api.stopEverything().catch((error) => showFailure(error));
   };
 
   return (

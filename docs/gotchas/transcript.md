@@ -35,6 +35,15 @@ the operator. `docs/WORKSPACE.md`, then `src/lib/reasoning.ts`,
   ends. The two things that stay on the line are the two a count cannot carry —
   a failure, which is the one part somebody may have to act on, and a
   credential by name, which is their audit trail for their own tokens.
+- **A refusal is drawn in the operator's words, and the model's are one click
+  away.** `lib/refusal.ts` is a display layer over text that is deliberately
+  written for a model, so it is a second copy of a decision made in
+  `runtime/guard.rs` and `llm/tools.rs`, and the two can drift. Each rule carries
+  the runtime's own text in `mirrors`, and `refusal.test.ts` looks for every one
+  of them in those files: a reword on the Rust side fails a test rather than
+  silently going back to printing parameter names at a person. Nothing there
+  changes what an agent is told, and a refusal the table has never met is drawn
+  exactly as it was written.
 - **A plugin's own summary is not drawn, because the chip is what it said.**
   The runtime answers a plugin call with `Google · gmail_search` so that
   whatever draws the call can name the server. The chip names the server

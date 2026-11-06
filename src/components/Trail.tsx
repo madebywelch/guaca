@@ -153,7 +153,12 @@ function TrailChip({
  * what the agent changed its mind about, and the content alone never says.
  *
  * A call that went wrong and has nothing else to show is drawn as its reason,
- * for the plainer reason that the reason is what happened.
+ * for the plainer reason that the reason is what happened. Where that reason is
+ * a translation of what the runtime wrote for the model, it is prose: the
+ * runtime's own sentence said "`repeat` or `every_secs`", and a parameter name
+ * in a monospace block reads as a traceback rather than as an answer. The
+ * machine's version stays one click away, which is where somebody diagnosing a
+ * refusal wants it and where nobody else has to read it.
  */
 function StepRow({ step }: { step: Step }) {
   const changed = stepDiff(step);
@@ -189,8 +194,19 @@ function StepRow({ step }: { step: Step }) {
         ))}
       </div>
       {changed && <DiffBlock lines={changed} />}
-      {reason && <pre className="trail__target">{reason}</pre>}
+      {reason &&
+        (step.told === null ? (
+          <pre className="trail__target">{reason}</pre>
+        ) : (
+          <p className="trail__why">{reason}</p>
+        ))}
       {!changed && step.target && !inline && <pre className="trail__target">{step.target}</pre>}
+      {step.told !== null && (
+        <details className="trail__told">
+          <summary>What the agent was told</summary>
+          <pre className="trail__target">{step.told}</pre>
+        </details>
+      )}
     </li>
   );
 }

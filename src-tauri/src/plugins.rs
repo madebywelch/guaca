@@ -43,6 +43,18 @@ pub enum PluginError {
     Signin(#[from] OauthError),
     #[error(transparent)]
     Server(#[from] McpError),
+    /// A server that did not answer, said to the operator who asked.
+    ///
+    /// Its own variant rather than `McpError`'s transport error, because the
+    /// two have different readers. `McpError` is written for a model and for a
+    /// log: it carries the reqwest error, which is a sentence about a URL with
+    /// the same URL inside it, and says nothing about what to check. An
+    /// operator pressing Test is asking a question only they can answer, so
+    /// what comes back names the cause and the thing to look at, and keeps the
+    /// reqwest text in `detail` — where the panel can tuck it behind a
+    /// disclosure, and where a bug report can still find it.
+    #[error("{says}")]
+    Unreachable { says: String, detail: String },
     #[error(
         "{label} is not connected for this group. Ask the operator to connect it in the crew's \
          Connectors settings; nothing you can do from here will connect it."
@@ -232,6 +244,81 @@ pub async fn connect(
     Ok(store.save_plugin(group, kind, &account_label, &tools, grant.as_ref(), "", headers)?)
 }
 
+/// The same failure, said to the operator who asked instead of to a model.
+///
+/// Only the transport error is rewritten, and it is rewritten because it is the
+/// one whose sentence is about the machine rather than about the server: a
+/// reqwest failure prints the URL twice and names nothing a person can act on.
+/// Every other `McpError` already speaks to whoever reads it — "speaks MCP
+/// 2026-07-28, and this build speaks …" is a sentence for an operator, and a
+/// status code from a server is the server's own words.
+///
+/// Applied at the three doors only the operator can knock on: `inspect`,
+/// `check` and `connect`. A tool call inside a turn still reads `McpError`,
+/// because what an agent should do about a server that is down (nothing, in
+/// this turn) is not what a person should do about it.
+pub fn for_operator(err: McpError) -> PluginError {
+    match err {
+        McpError::Transport { endpoint, source } => {
+            let says = format!(
+                "could not reach {endpoint}. {}. Check the address and its path, and that the \
+                 server is running and reachable from here",
+                unreachable_cause(&source)
+            );
+            PluginError::Unreachable { says, detail: chain(&source) }
+        }
+        other => PluginError::Server(other),
+    }
+}
+
+/// A refusal from connecting, with a transport failure said to the operator.
+///
+/// `connect` is a door only a person knocks on — a group's tools are connected
+/// from the panel — and it reaches `ask` from three places, so the translation
+/// happens once on the answer rather than at each of them.
+pub fn said_to_operator(err: PluginError) -> PluginError {
+    match err {
+        PluginError::Server(mcp) => for_operator(mcp),
+        other => other,
+    }
+}
+
+/// What a failed request failed at, in the words of somebody who can fix it.
+///
+/// `reqwest` has one sentence for all of these and it names the URL, which the
+/// operator typed and can see. Its flags are the part that differs, and the
+/// difference is the whole answer: a closed port and a name that does not
+/// resolve are the same string in the error and two different afternoons.
+fn unreachable_cause(err: &reqwest::Error) -> &'static str {
+    if err.is_timeout() {
+        "nothing answered in time"
+    } else if err.is_connect() {
+        "no connection was made: the name may not resolve, the port may be closed, or the server \
+         may have refused the encrypted connection"
+    } else if err.is_body() || err.is_decode() {
+        "it answered, and the answer could not be read"
+    } else {
+        "the request failed before an answer came back"
+    }
+}
+
+/// The error and the causes under it, as one line.
+///
+/// What the panel puts behind its disclosure and what a bug report quotes, so
+/// it keeps each layer's own wording rather than a summary of it: `hyper`'s
+/// connect error names the class of failure and the `io::Error` under it names
+/// the reason, and neither is guessable from the other.
+fn chain(err: &dyn std::error::Error) -> String {
+    let mut said = err.to_string();
+    let mut at = err.source();
+    while let Some(next) = at {
+        said.push_str(": ");
+        said.push_str(&next.to_string());
+        at = next.source();
+    }
+    said
+}
+
 /// How this server is reached, before anything is presented to it.
 ///
 /// The one place the transport question is answered, and it is answered off
@@ -305,7 +392,7 @@ pub async fn inspect(
             tools: Vec::new(),
             ms: started.elapsed().as_millis() as u64,
         }),
-        Err(err) => Err(err.into()),
+        Err(err) => Err(for_operator(err)),
     }
 }
 
@@ -630,6 +717,45 @@ mod tests {
             AccountUse::endpoint("http://localhost:8787", "acct_1"),
             "http://localhost:8787/mcp/acct_1"
         );
+    }
+
+    /// A refused dial, as the panel's own path produces it.
+    async fn refused_dial() -> PluginError {
+        // A port nothing listens on: the request fails the way it fails for a
+        // server that is off, which is the failure this sentence exists for.
+        let failed = reqwest::Client::new()
+            .get("http://127.0.0.1:9/mcp")
+            .send()
+            .await
+            .expect_err("a closed loopback port cannot answer");
+        for_operator(McpError::Transport {
+            endpoint: "http://127.0.0.1:9/mcp".into(),
+            source: failed,
+        })
+    }
+
+    #[tokio::test]
+    async fn a_server_that_does_not_answer_is_said_in_words_a_person_can_act_on() {
+        // A model is told the reqwest error, because its next move is to give
+        // up on this turn. An operator is told what failed and what to check,
+        // because theirs is to fix it — and the reqwest string, which names the
+        // URL the operator just typed a second time, is kept beside it for the
+        // one reader who wants it.
+        let refused = refused_dial().await;
+        let says = refused.to_string();
+        assert!(!says.contains("error sending request for url"), "{says}");
+        assert!(says.contains("http://127.0.0.1:9/mcp"), "{says}");
+        assert!(says.contains("Check the address"), "{says}");
+        assert!(says.contains("no connection was made"), "{says}");
+        assert!(says.starts_with("could not reach"), "{says}");
+
+        match refused {
+            PluginError::Unreachable { detail, .. } => {
+                assert!(detail.contains("error sending request for url"), "{detail}");
+                assert!(detail.contains("Connection refused"), "{detail}");
+            }
+            other => panic!("a transport failure should be said to the operator: {other:?}"),
+        }
     }
 
     #[test]
