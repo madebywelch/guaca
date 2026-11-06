@@ -29,6 +29,8 @@ import {
   DEFAULT_THEME,
   GRAYS,
   type GrayKey,
+  TEMPERATURE_KEYS,
+  type Temperature,
   type Theme,
 } from "./theme";
 
@@ -149,7 +151,7 @@ export const DEFAULT_PREFS: Prefs = Object.freeze({
   surface: "light",
   ...DEFAULT_THEME,
   typeface: "inter",
-  reading: "interface",
+  reading: "serif",
   readingSize: 16,
   cast: "drawn",
   showReasoning: false,
@@ -223,6 +225,7 @@ export function readPrefs(raw: unknown): Prefs {
     grays: pick(GRAY_KEYS, stored.grays, DEFAULT_PREFS.grays),
     attention: pick(ATTENTION_KEYS, stored.attention, DEFAULT_PREFS.attention),
     contrast: pick<ContrastLevel>(CONTRASTS, stored.contrast, DEFAULT_PREFS.contrast),
+    temperature: pick<Temperature>(TEMPERATURE_KEYS, stored.temperature, DEFAULT_PREFS.temperature),
     typeface: pick(TYPEFACES, stored.typeface, DEFAULT_PREFS.typeface),
     reading: pick(READINGS, stored.reading, DEFAULT_PREFS.reading),
     readingSize: pick(READING_SIZES, stored.readingSize, DEFAULT_PREFS.readingSize),

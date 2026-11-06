@@ -22,7 +22,7 @@
 
    Which amber, which grays and how much contrast are the operator's, under
    Appearance. None of those values is written here by hand: `lib/theme.ts`
-   solves every color from those three choices against a ratio, the blocks
+   solves every color from those four choices against a ratio, the blocks
    below are its default answer, and `theme.test.ts` holds them equal.
 
    A color is named for its job, not for what it looked like. `--attention`
@@ -55,30 +55,30 @@
      three surfaces for two jobs: the app's own two edges did not look like
      each other, and the heavier of them was the one carrying the least
      reading. So the rail and the inspector are the same ground, a shade off
-     the page rather than opposite it, and the page is the only white thing on
+     the page rather than opposite it, and the page is the only paper on
      screen. What is left with any saturation in it is an agent's own color and
      the one amber, which is the whole point: a column that is itself a color
      is a column every agent's color is competing with.
 
      They follow the surface now rather than pinning ink under both of them,
      which is why the dark block below redeclares all eight. */
-  --rail-ground: #f2f3f5;
-  --rail-raised: #ffffff;
-  --rail-edge: #e1e2e5;
-  --rail-text: #131314;
-  --rail-muted: #4a4b4d;
-  --rail-wire: #d8dadc;
+  --rail-ground: #f5f1e7;
+  --rail-raised: #fbf9f3;
+  --rail-edge: #e0dacb;
+  --rail-text: #181610;
+  --rail-muted: #524d40;
+  --rail-wire: #d6cfbf;
   /* Recessed from a column, which is not the same value as recessed from the
      page: `--sunken` is a hair off white, which is a field on paper and
      nothing at all on an off-white panel. */
-  --rail-sunken: #e6e7ea;
+  --rail-sunken: #eeeae1;
   /* The ink one of the icon's pair in the rail's corner. The icon's own ink,
      which on the dark column is the column, so there it is paper. */
   --rail-pair: #2e2f2a;
   /* A shade under the rail. The crews sit behind the crew, and a column that
      is the same ground as the one it borders needs a rule drawn between them
      to be a second surface at all. */
-  --grail-ground: #e8eaec;
+  --grail-ground: #eeeadf;
 
   /* The reading surface, and the only half of the app a surface choice moves.
      Messages are long-form text read for minutes at a time, and paper is the
@@ -86,11 +86,18 @@
      names and nothing else, which is what keeps "dark" from meaning "repaint
      the app".
 
-     `--ground` and `--raised` are both white, and that is the decision rather
+     `--ground` and `--raised` are both paper, and that is the decision rather
      than an oversight: a card here is separated by a rule or by the lift's
-     ring, never by being a slightly different white. Two whites a percent
+     ring, never by being a slightly different paper. Two grounds a percent
      apart is exactly the kind of thing that accretes into 41 font sizes, and
      it buys nothing a border does not. `--sunken` is the one recessed value.
+
+     The paper is #fbf9f3 rather than white, which is Ledger's whole ground
+     argument: a page is warm, and a record of work should read as a page. The
+     warmth is not a hex written here either. It arrives through the theme's
+     fourth choice, surface temperature, which lifts the page along the same
+     warm axis the grays already carry; white is what `cool` produces and is
+     an operator's choice rather than the default.
 
      Every color from here to the end of the block, and every one in the dark
      block, is the default theme as `lib/theme.ts` solves it, and
@@ -100,26 +107,36 @@
      which is why none of these values is a decision to be nudged here: a hex
      edited in this block fails the suite, and a hex edited in both fails the
      gates the solver exists to meet. */
-  --ground: #ffffff;
-  --raised: #ffffff;
-  --sunken: #f2f3f4;
-  --edge: #dfe0e3;
-  /* The edge of something you type into or press. `--edge` is a divider at
-     1.3 to 1, and a divider is decoration; the boundary of a control is how
-     anybody finds it, and WCAG 1.4.11 asks 3 to 1 of it. */
-  --edge-control: #8b8d8e;
-  --text: #131314;
-  --muted: #4a4b4d;
+  --ground: #fbf9f3;
+  --raised: #fbf9f3;
+  --sunken: #f2efe6;
+  /* The rule a page is set with, in two weights.
+     `--rule` is decoration: the line between two turns, the border of a card,
+     the edge of a well. It sits at 1.3 to 1 against the page, which is what a
+     printed hairline is, and nothing may be found by it.
+     `--rule-hard` is a boundary somebody has to be able to see: the line the
+     composer is written on, the head of a table, the break between two
+     sections of an index. It sits at 1.6 to 1. One value doing both jobs is
+     why the app could not say "this is where the next turn starts" any louder
+     than "this is a hairline".
+     The boundary of something you type into or press is neither of these.
+     `--edge-control` is held to the 3 to 1 WCAG 1.4.11 asks, because a control
+     that cannot be found is a control that cannot be used. */
+  --rule: #e0dacb;
+  --rule-hard: #cfc8b6;
+  --edge-control: #8e8b86;
+  --text: #181610;
+  --muted: #524d40;
   /* Hints and placeholders are text, and held to the ratio text is. This was
      3.6 to 1 on the page and 3.0 on the crews' column. */
-  --faint: #6e6f72;
+  --faint: #736c5d;
 
   /* Attention is two colors. `--attention` is the ink, readable as words on
      every ground. `--attention-fill` is the shape: a badge, a dot, a mark on a
      face, recognizable as amber and carrying its own text color. An amber
      dark enough to read as text on white is brown, and one value made to do
      both jobs was either illegible or unrecognizable. */
-  --attention: #915d00;
+  --attention: #865600;
   --attention-wash: #fff1e1;
   --attention-fill: #ffb346;
   --on-attention-fill: #161616;
@@ -129,8 +146,8 @@
      rather than the amber: a ring in "answer me" around every control tabbed
      through spent the one signal on "you are here". */
   --focus: var(--system);
-  --ok: #00774d;
-  --danger: #c52b30;
+  --ok: #00794e;
+  --danger: #c72e32;
   /* Failure as a shape, at a lightness the attention fill is not. They were
      one luminance apart from nothing: 2.6 under deuteranopia, which is the
      same color. */
@@ -138,7 +155,15 @@
   --on-danger-fill: #ffffff;
 
   --font-ui: "Inter Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-read: var(--font-ui);
+  --font-read: "Literata Variable", Georgia, serif;
+  /* The face a heading, an agent's name and the wordmark are set in. Literata
+     is promoted from an option to the display face as well as the reading one,
+     because Ledger is a page and a page sets its titles in the face it is
+     read in. It follows the typeface choice below, where that choice exists
+     for somebody who needs every letter told apart, and it does not follow the
+     reading choice: an operator who reads agents in the interface face has not
+     asked for a rail of Inter headings. */
+  --font-display: "Literata Variable", Georgia, serif;
   --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
 
   /* Every length in this file is a rem, so the operator's interface scale is
@@ -211,7 +236,7 @@
   --lead-ui: 1.4; /* Short text that may wrap to a second line. */
   /* A ratio, so it holds at every reading size an operator can pick: 1.6 of
      the larger sizes is a gap you read across rather than down. */
-  --lead-read: 1.55; /* Paragraphs, code blocks, anything read at length. */
+  --lead-read: 1.62; /* Paragraphs, code blocks, anything read at length. */
 
   /* ---- Space --------------------------------------------------------------
      Eight steps on a 2px base. This was 41 padding lengths, 32 pairs of them
@@ -264,9 +289,9 @@
      flattened to zero, since a 0 here would take the softening off a chart
      mark and a keycap as well, which are the two places the shape is doing
      something other than framing. */
-  --radius-xs: 0.125rem; /* Inside a control: menu row, chip, keycap, tag. */
-  --radius-sm: 0.1875rem; /* The control: button, input, select, search. */
-  --radius: 0.25rem; /* A surface: card, dialog, bubble, panel. */
+  --radius-xs: 0.0625rem; /* Inside a control: menu row, chip, keycap, tag. */
+  --radius-sm: 0.125rem; /* The control: button, input, select, search. */
+  --radius: 0.125rem; /* A surface: card, dialog, bubble, panel. */
   --radius-pill: 999px; /* One spelling. `99px` was not a second one. */
 
   /* ---- Controls -----------------------------------------------------------
@@ -339,8 +364,8 @@
      above it are for surfaces that float free and have nothing else holding
      their edge. */
   --lift-1: 0 0.125rem 0.5rem -0.25rem rgb(11 11 10 / 0.1);
-  --lift-2: 0 0.5rem 1.25rem -0.625rem rgb(11 11 10 / 0.13), 0 0 0 1px var(--edge);
-  --lift-3: 0 1.25rem 2.5rem -1rem rgb(11 11 10 / 0.17), 0 0 0 1px var(--edge);
+  --lift-2: 0 0.5rem 1.25rem -0.625rem rgb(11 11 10 / 0.13), 0 0 0 1px var(--rule);
+  --lift-3: 0 1.25rem 2.5rem -1rem rgb(11 11 10 / 0.17), 0 0 0 1px var(--rule);
 }
 
 /* Ink instead of paper.
@@ -360,29 +385,30 @@
    goes pale enough to be a color rather than a shadow. They stay recognizably
    the same colors; they are not the same values. */
 :root[data-surface="dark"] {
-  --rail-ground: #141516;
-  --rail-raised: #1e1f20;
-  --rail-edge: #292a2c;
-  --rail-text: #f5f5f6;
-  --rail-muted: #a7a9ab;
-  --rail-wire: #2e2f31;
-  --rail-sunken: #0d0e0f;
+  --rail-ground: #19160f;
+  --rail-raised: #1e1c18;
+  --rail-edge: #2d291d;
+  --rail-text: #f8f5ec;
+  --rail-muted: #aca697;
+  --rail-wire: #332d20;
+  --rail-sunken: #110f08;
   --rail-pair: #e8e3d6;
-  --grail-ground: #0a0b0d;
+  --grail-ground: #0f0c06;
 
-  --ground: #0e0f10;
-  --raised: #161718;
-  --sunken: #090a0b;
-  --edge: #28292b;
-  --edge-control: #68696a;
-  --text: #f5f5f6;
-  --muted: #a7a9ab;
+  --ground: #12110d;
+  --raised: #171612;
+  --sunken: #0f0c07;
+  --rule: #2c271b;
+  --rule-hard: #3b3526;
+  --edge-control: #696761;
+  --text: #f8f5ec;
+  --muted: #aca697;
   /* The one gray that barely moves between the surfaces: it is the lightest of
      the three and the one hints are set in, so it has the least contrast to
      spare in either direction. */
-  --faint: #848688;
+  --faint: #898373;
 
-  --attention: #f8a300;
+  --attention: #f4a000;
   --attention-wash: #312008;
   /* The fills are the same on both surfaces. Each carries its own text color,
      so neither needs the page to agree with it. */
@@ -400,8 +426,8 @@
      the separation and the drop only deepens the well underneath. Same three
      names, so nothing above this line knows which surface it is drawing on. */
   --lift-1: 0 0.125rem 0.5rem -0.25rem rgb(0 0 0 / 0.45);
-  --lift-2: 0 0.5rem 1.25rem -0.625rem rgb(0 0 0 / 0.55), 0 0 0 1px var(--edge);
-  --lift-3: 0 1.25rem 2.5rem -1rem rgb(0 0 0 / 0.6), 0 0 0 1px var(--edge);
+  --lift-2: 0 0.5rem 1.25rem -0.625rem rgb(0 0 0 / 0.55), 0 0 0 1px var(--rule);
+  --lift-3: 0 1.25rem 2.5rem -1rem rgb(0 0 0 / 0.6), 0 0 0 1px var(--rule);
 }
 
 /* The other two interface faces, each with the monospace drawn to sit beside
@@ -411,19 +437,23 @@
    window on that machine is drawn in. */
 :root[data-typeface="system"] {
   --font-ui: system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", sans-serif;
+  --font-display: system-ui, -apple-system, "Segoe UI Variable Display", "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 :root[data-typeface="legible"] {
   --font-ui: "Atkinson Hyperlegible Next Variable", system-ui, sans-serif;
+  --font-display: "Atkinson Hyperlegible Next Variable", system-ui, sans-serif;
   --font-mono: "Atkinson Hyperlegible Mono Variable", ui-monospace, monospace;
 }
 
-/* What agents wrote, in a serif. `--font-read` is spent only by the
-   transcript and the composer, so the rail and every control stay in the
-   interface face. */
-:root[data-reading="serif"] {
-  --font-read: "Literata Variable", Georgia, serif;
+/* What agents wrote, in the interface face instead. Literata is the default
+   above, so this rule is the option and not the other way round. `--font-read`
+   is spent only by the transcript and the composer, so the rail and every
+   control stay in the interface face either way; `--font-display` is spent by
+   headings and agent names and follows the typeface choice, not this one. */
+:root[data-reading="interface"] {
+  --font-read: var(--font-ui);
 }
 
 * {
@@ -598,7 +628,7 @@ input[type="file"]::file-selector-button {
   flex-wrap: wrap;
   gap: var(--space-3);
   padding: var(--space-2) var(--column-inset);
-  border-top: 1px solid var(--edge);
+  border-top: 1px solid var(--rule);
   background: var(--ground);
   font-size: var(--type-small);
   color: var(--muted);
@@ -733,7 +763,7 @@ input[type="file"]::file-selector-button {
   width: min(22rem, 100%);
   margin-bottom: var(--space-2);
   padding: var(--space-4);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   border-radius: var(--radius);
   background: var(--raised);
   box-shadow: var(--lift-2);
@@ -760,7 +790,7 @@ input[type="file"]::file-selector-button {
    request arrives while the operator is doing something else, and the whole
    point is that they can finish that first. */
 .desk__card + .desk__card {
-  border-top: 1px solid var(--edge);
+  border-top: 1px solid var(--rule);
 }
 
 .desk__card {
@@ -860,7 +890,7 @@ input[type="file"]::file-selector-button {
    `components/MenubarPanel.tsx` has the argument for what it holds, and
    `menubar.rs` says where it stands. Drawn on the columns' ground rather than
    the page's: it is navigation and answers, like the rail it borrows its rows
-   from, and the page is still the only white thing.
+   from, and the page is still the only paper.
 
    Its window is exactly as tall as this is, up to a ceiling, so the chrome is
    fixed and the body between them is the one thing that scrolls.
@@ -2462,7 +2492,7 @@ input[type="file"]::file-selector-button {
   display: flex;
   align-items: center;
   gap: var(--space-5);
-  border-bottom: 1px solid var(--edge);
+  border-bottom: 1px solid var(--rule);
   background: var(--ground);
   flex: none;
 }
@@ -2629,7 +2659,7 @@ input[type="file"]::file-selector-button {
 .decision__asked {
   margin: 0 0 var(--space-4);
   padding-left: var(--space-4);
-  border-left: 2px solid var(--edge);
+  border-left: 2px solid var(--rule);
   font-family: var(--font-read);
   font-size: var(--type-aside);
   line-height: var(--lead-ui);
@@ -2824,7 +2854,7 @@ input[type="file"]::file-selector-button {
   font-family: var(--font-mono);
   font-size: 0.84em;
   background: var(--sunken);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-xs);
   padding: var(--space-1) var(--space-2);
 }
@@ -2833,7 +2863,7 @@ input[type="file"]::file-selector-button {
   margin: var(--space-4) 0;
   padding: var(--space-5) var(--space-5);
   background: var(--sunken);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   overflow-x: auto;
 }
@@ -2849,7 +2879,7 @@ input[type="file"]::file-selector-button {
 .md blockquote {
   margin: var(--space-4) 0;
   padding: var(--space-1) 0 var(--space-1) var(--space-5);
-  border-left: 2px solid var(--edge);
+  border-left: 2px solid var(--rule);
   color: var(--muted);
 }
 
@@ -2865,7 +2895,7 @@ input[type="file"]::file-selector-button {
 
 .md th,
 .md td {
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   padding: var(--space-2) var(--space-4);
   text-align: left;
   /* `break-word` rather than the body's `anywhere`, and the difference is the
@@ -2886,7 +2916,7 @@ input[type="file"]::file-selector-button {
 
 .md hr {
   border: 0;
-  border-top: 1px solid var(--edge);
+  border-top: 1px solid var(--rule);
   margin: var(--space-6) 0;
 }
 
@@ -2926,7 +2956,7 @@ input[type="file"]::file-selector-button {
 .md .callout {
   margin: var(--space-4) 0;
   padding: var(--space-5);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   border-radius: var(--radius);
 }
 
@@ -2937,7 +2967,7 @@ input[type="file"]::file-selector-button {
 }
 
 .md .callout--asks {
-  border-color: color-mix(in oklab, var(--attention) 45%, var(--edge));
+  border-color: color-mix(in oklab, var(--attention) 45%, var(--rule));
   background: var(--attention-wash);
 }
 
@@ -2974,7 +3004,7 @@ input[type="file"]::file-selector-button {
 
 .figure {
   margin: var(--space-5) 0;
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   background: var(--raised);
   overflow: hidden;
@@ -3065,7 +3095,7 @@ input[type="file"]::file-selector-button {
 /* Recessive, hairline and solid. Dashed reads as a threshold or a projection
    when it is only a grid. */
 .chart__grid {
-  stroke: var(--edge);
+  stroke: var(--rule);
   stroke-width: 1;
 }
 
@@ -3158,7 +3188,7 @@ input[type="file"]::file-selector-button {
   pointer-events: none;
   min-width: 6rem;
   padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   background: var(--raised);
   box-shadow: var(--lift-2);
@@ -3338,7 +3368,7 @@ input[type="file"]::file-selector-button {
   gap: var(--space-3);
   margin-top: var(--space-4);
   padding: var(--space-4);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   background: var(--sunken);
 }
@@ -3363,7 +3393,7 @@ input[type="file"]::file-selector-button {
   font-size: var(--type-fine);
   color: var(--text);
   background: var(--raised);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-xs);
 }
 
@@ -3481,12 +3511,12 @@ input[type="file"]::file-selector-button {
   top: 0;
   bottom: 0;
   width: 1px;
-  background: var(--edge);
+  background: var(--rule);
 }
 
 /* One run, collapsed to a line until asked for. */
 .run {
-  border-bottom: 1px solid var(--edge);
+  border-bottom: 1px solid var(--rule);
 }
 
 .run__head {
@@ -3673,7 +3703,7 @@ input[type="file"]::file-selector-button {
   flex: 1;
   min-width: 1.4rem;
   height: 1px;
-  background: linear-gradient(to right, transparent, var(--edge), transparent);
+  background: linear-gradient(to right, transparent, var(--rule), transparent);
 }
 
 /* Shrinks rather than overflows. Two of these sit on one row with an arrow
@@ -3772,7 +3802,7 @@ input[type="file"]::file-selector-button {
   padding: var(--space-1) var(--space-4);
   margin: 0 calc(var(--space-2) * -1);
   background: color-mix(in oklab, var(--accent, var(--text)) 8%, var(--raised));
-  border-color: color-mix(in oklab, var(--accent, var(--text)) 55%, var(--edge));
+  border-color: color-mix(in oklab, var(--accent, var(--text)) 55%, var(--rule));
   color: var(--text);
 }
 
@@ -3831,7 +3861,7 @@ input[type="file"]::file-selector-button {
 }
 
 .aside .md {
-  border-left: 2px solid var(--edge);
+  border-left: 2px solid var(--rule);
   padding-left: var(--space-5);
   font-size: var(--type-ui);
   color: var(--faint);
@@ -3902,7 +3932,7 @@ input[type="file"]::file-selector-button {
 .trail__chip--open:hover,
 .trail__chip--open[aria-expanded="true"] {
   background: var(--sunken);
-  border-color: var(--edge);
+  border-color: var(--rule);
   color: var(--text);
 }
 
@@ -3971,7 +4001,7 @@ input[type="file"]::file-selector-button {
   padding: var(--space-3) 0 var(--space-3) var(--space-5);
   margin-left: var(--column-indent);
   max-width: 42rem;
-  border-left: 2px solid var(--edge);
+  border-left: 2px solid var(--rule);
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -4126,14 +4156,14 @@ input[type="file"]::file-selector-button {
    ========================================================================== */
 .ask {
   margin: var(--space-4) var(--space-7) var(--space-4) var(--column-inset);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   border-radius: var(--radius);
   background: var(--raised);
   padding: var(--space-5) var(--space-6);
 }
 
 .ask[data-state="pending"] {
-  border-color: color-mix(in oklab, var(--attention) 45%, var(--edge));
+  border-color: color-mix(in oklab, var(--attention) 45%, var(--rule));
   box-shadow: var(--lift-1);
 }
 
@@ -4217,7 +4247,7 @@ input[type="file"]::file-selector-button {
    border is the app saying "this one is about to do something in your name",
    and spending it on both makes it mean neither. */
 .ask--question[data-state="pending"] {
-  border-color: var(--edge);
+  border-color: var(--rule);
   box-shadow: none;
 }
 
@@ -4262,7 +4292,7 @@ input[type="file"]::file-selector-button {
   max-height: 55vh;
   overflow-y: auto;
   padding: var(--space-5);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   background: var(--ground);
 }
@@ -4276,7 +4306,7 @@ input[type="file"]::file-selector-button {
   line-height: var(--lead-ui);
   padding: var(--space-2) var(--space-4);
   border-radius: var(--radius-sm);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   background: var(--sunken);
   color: var(--muted);
   max-width: 100%;
@@ -4354,7 +4384,7 @@ input[type="file"]::file-selector-button {
   gap: var(--space-5);
   margin: var(--space-4) var(--column-inset) var(--column-inset);
   padding: var(--space-4) var(--space-5);
-  border: 1px dashed var(--edge);
+  border: 1px dashed var(--rule);
   border-radius: var(--radius);
   background: var(--sunken);
   flex: none;
@@ -4409,7 +4439,7 @@ input[type="file"]::file-selector-button {
 .turn-work {
   margin: var(--space-4) var(--column-inset);
   padding-left: var(--space-5);
-  border-left: 1px solid var(--edge);
+  border-left: 1px solid var(--rule);
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
@@ -4428,7 +4458,7 @@ input[type="file"]::file-selector-button {
 }
 
 .turn-work__call {
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   padding: var(--space-3) var(--space-4);
   background: var(--sunken);
@@ -4464,7 +4494,7 @@ input[type="file"]::file-selector-button {
   overflow-y: auto;
   flex: none;
   margin: 0 var(--column-inset) var(--space-3);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   background: var(--sunken);
 }
@@ -4608,7 +4638,7 @@ input[type="file"]::file-selector-button {
 .working__steps:hover,
 .working__steps[aria-expanded="true"] {
   background: var(--sunken);
-  border-color: var(--edge);
+  border-color: var(--rule);
   color: var(--text);
 }
 
@@ -4685,7 +4715,7 @@ input[type="file"]::file-selector-button {
 }
 
 .composer:focus-within {
-  border-color: color-mix(in oklab, var(--focus) 55%, var(--edge));
+  border-color: color-mix(in oklab, var(--focus) 55%, var(--rule));
 }
 
 /* A drag is over the window and will land here. The whole window is the drop
@@ -4769,7 +4799,7 @@ input[type="file"]::file-selector-button {
   flex-direction: column;
   align-items: stretch;
   margin-top: var(--space-3);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   background: var(--sunken);
   overflow: hidden;
@@ -4794,7 +4824,7 @@ input[type="file"]::file-selector-button {
   width: 100%;
   padding: 0;
   border: 0;
-  border-bottom: 1px solid var(--edge);
+  border-bottom: 1px solid var(--rule);
   background: var(--raised);
   cursor: zoom-in;
   text-align: left;
@@ -5001,7 +5031,7 @@ input[type="file"]::file-selector-button {
   min-height: 0;
   display: flex;
   overflow: auto;
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   background: var(--ground);
 }
@@ -5066,7 +5096,7 @@ input[type="file"]::file-selector-button {
   padding: var(--space-2);
   max-height: 14rem;
   overflow-y: auto;
-  border-bottom: 1px solid var(--edge);
+  border-bottom: 1px solid var(--rule);
 }
 
 .mentions__item {
@@ -5273,7 +5303,7 @@ input[type="file"]::file-selector-button {
 }
 
 .composer__send:disabled {
-  background: var(--edge);
+  background: var(--rule);
   color: var(--faint);
   cursor: not-allowed;
 }
@@ -5402,7 +5432,7 @@ input[type="file"]:disabled {
   display: grid;
   place-items: center;
   background: var(--sunken);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   color: var(--mark, var(--muted));
   font-family: var(--font-ui);
   font-size: var(--type-fine);
@@ -5479,7 +5509,7 @@ input[type="file"]:disabled {
   gap: var(--space-3);
   padding: var(--space-4);
   margin-bottom: var(--space-3);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   background: var(--sunken);
 }
@@ -5541,7 +5571,7 @@ input[type="file"]:disabled {
   flex-wrap: wrap;
   gap: var(--space-4);
   padding: var(--space-2) 0;
-  border-top: 1px solid var(--edge);
+  border-top: 1px solid var(--rule);
 }
 
 .toolset__item:first-child {
@@ -5673,7 +5703,7 @@ input[type="file"]:disabled {
 .input:focus,
 .textarea:focus,
 .select:focus {
-  border-color: color-mix(in oklab, var(--focus) 60%, var(--edge));
+  border-color: color-mix(in oklab, var(--focus) 60%, var(--rule));
 }
 
 .input--mono {
@@ -5883,7 +5913,7 @@ input[type="file"]:disabled {
   place-items: center;
   width: var(--space-7);
   height: var(--space-7);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-pill);
 }
 
@@ -6018,7 +6048,7 @@ input[type="file"]:disabled {
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-4);
-  border-top: 1px solid var(--edge);
+  border-top: 1px solid var(--rule);
   padding-top: var(--space-6);
   margin-top: var(--space-8);
   color: var(--faint);
@@ -6035,7 +6065,7 @@ input[type="file"]:disabled {
   gap: var(--space-6);
   padding: var(--space-7);
   margin-bottom: var(--space-7);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   border-radius: var(--radius);
 }
 
@@ -6050,7 +6080,7 @@ input[type="file"]:disabled {
 }
 
 .onboarding-advanced {
-  border-top: 1px solid var(--edge);
+  border-top: 1px solid var(--rule);
   margin-top: var(--space-7);
   padding-top: var(--space-6);
 }
@@ -6473,7 +6503,7 @@ input[type="file"]:disabled {
 }
 
 .memory__text:focus {
-  border-color: color-mix(in oklab, var(--focus) 60%, var(--edge));
+  border-color: color-mix(in oklab, var(--focus) 60%, var(--rule));
 }
 
 .memory__text::placeholder {
@@ -6492,7 +6522,7 @@ input[type="file"]:disabled {
   overflow: auto;
   margin: var(--space-3) 0 0;
   padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   background: var(--sunken);
   font-family: var(--font-mono);
@@ -6658,7 +6688,7 @@ input[type="file"]:disabled {
   width: 100%;
   aspect-ratio: var(--screen-aspect);
   overflow: hidden;
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   background: var(--sunken);
 }
@@ -7007,7 +7037,7 @@ input[type="file"]:disabled {
   gap: var(--space-3);
   flex-wrap: wrap;
   padding: var(--space-4) var(--space-4);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   background: var(--raised);
 }
@@ -7017,7 +7047,7 @@ input[type="file"]:disabled {
 .webhook {
   margin: var(--space-3) 0 0;
   padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   background: var(--raised);
   font-family: var(--font-mono);
@@ -7042,7 +7072,7 @@ input[type="file"]:disabled {
   padding: var(--space-2) 0;
   font-size: var(--type-small);
   color: var(--text);
-  border-bottom: 1px solid var(--edge);
+  border-bottom: 1px solid var(--rule);
 }
 
 .history__row:last-child {
@@ -7142,7 +7172,7 @@ input[type="file"]:disabled {
 
 .menu__rule {
   border: 0;
-  border-top: 1px solid var(--edge);
+  border-top: 1px solid var(--rule);
   margin: var(--space-2) 0;
 }
 
@@ -7312,7 +7342,7 @@ input[type="file"]:disabled {
   align-items: center;
   gap: var(--space-4);
   padding: var(--space-5) var(--space-6);
-  border-bottom: 1px solid var(--edge);
+  border-bottom: 1px solid var(--rule);
   flex: none;
 }
 
@@ -7341,7 +7371,7 @@ input[type="file"]:disabled {
   display: flex;
   gap: var(--space-1);
   padding: var(--space-4) var(--space-5);
-  border-bottom: 1px solid var(--edge);
+  border-bottom: 1px solid var(--rule);
   overflow-x: auto;
   flex: none;
   scrollbar-width: none;
@@ -7506,7 +7536,7 @@ input[type="file"]:disabled {
   justify-content: space-between;
   gap: var(--space-6);
   padding: var(--space-7) var(--space-7) var(--space-6);
-  border-bottom: 1px solid var(--edge);
+  border-bottom: 1px solid var(--rule);
   flex: none;
 }
 
@@ -7544,14 +7574,14 @@ input[type="file"]:disabled {
   gap: var(--space-5);
   text-align: left;
   padding: var(--space-5) var(--space-5);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   background: var(--raised);
   transition: border-color var(--tempo-tap) var(--ease), background var(--tempo-tap) var(--ease), box-shadow var(--tempo-tap) var(--ease);
 }
 
 .hire:hover {
-  border-color: color-mix(in oklab, var(--accent) 45%, var(--edge));
+  border-color: color-mix(in oklab, var(--accent) 45%, var(--rule));
   background: var(--ground);
 }
 
@@ -7595,7 +7625,7 @@ input[type="file"]:disabled {
   font-size: var(--type-fine);
   font-weight: 500;
   color: var(--faint);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-pill);
   padding: var(--space-1) var(--space-3);
 }
@@ -7627,7 +7657,7 @@ input[type="file"]:disabled {
   align-items: center;
   gap: var(--space-4);
   padding: var(--space-6) var(--space-7);
-  border-top: 1px solid var(--edge);
+  border-top: 1px solid var(--rule);
   flex: none;
 }
 
@@ -7649,7 +7679,7 @@ input[type="file"]:disabled {
   align-items: center;
   gap: var(--space-5);
   padding: var(--space-5) 0;
-  border-bottom: 1px solid var(--edge);
+  border-bottom: 1px solid var(--rule);
 }
 
 .compost__row:last-child {
@@ -7739,7 +7769,7 @@ input[type="file"]:disabled {
 
 .calendar__head {
   padding: var(--space-7) var(--space-7) var(--space-5);
-  border-bottom: 1px solid var(--edge);
+  border-bottom: 1px solid var(--rule);
   flex: none;
 }
 
@@ -7780,7 +7810,7 @@ input[type="file"]:disabled {
   gap: var(--space-3);
   height: var(--control-h-sm);
   padding: 0 var(--space-4);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   background: var(--ground);
   font-family: var(--font-ui);
@@ -7917,7 +7947,7 @@ input[type="file"]:disabled {
 .calendar__editor {
   flex: none;
   padding: var(--space-6) var(--space-7);
-  border-top: 1px solid var(--edge);
+  border-top: 1px solid var(--rule);
   background: var(--sunken);
   max-height: 55vh;
   overflow-y: auto;
@@ -7941,7 +7971,7 @@ input[type="file"]:disabled {
   justify-content: space-between;
   gap: var(--space-6);
   padding: var(--space-5) var(--space-7);
-  border-top: 1px solid var(--edge);
+  border-top: 1px solid var(--rule);
   flex: none;
 }
 
@@ -7984,7 +8014,7 @@ input[type="file"]:disabled {
 
 .artifacts__head {
   padding: var(--space-7) var(--space-7) var(--space-5);
-  border-bottom: 1px solid var(--edge);
+  border-bottom: 1px solid var(--rule);
   flex: none;
 }
 
@@ -8180,7 +8210,7 @@ button.artifacts__version[aria-pressed="true"] {
   align-items: center;
   gap: var(--space-4);
   padding: var(--space-5) var(--space-7);
-  border-top: 1px solid var(--edge);
+  border-top: 1px solid var(--rule);
   flex: none;
 }
 
@@ -8217,7 +8247,7 @@ button.artifacts__version[aria-pressed="true"] {
      drawn among do. */
   margin: var(--space-3) var(--space-7) var(--space-3) calc(var(--column-inset) + var(--column-indent));
   padding: var(--space-4) var(--space-5) var(--space-4) var(--space-4);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   border-radius: var(--radius);
   background: var(--raised);
   box-shadow: var(--lift-1);
@@ -8326,7 +8356,7 @@ button.artifacts__version[aria-pressed="true"] {
 
 .settings__head {
   padding: var(--space-7) var(--space-7) var(--space-6);
-  border-bottom: 1px solid var(--edge);
+  border-bottom: 1px solid var(--rule);
   flex: none;
 }
 
@@ -8340,7 +8370,7 @@ button.artifacts__version[aria-pressed="true"] {
   flex: none;
   width: 11rem;
   padding: var(--space-4) var(--space-4);
-  border-right: 1px solid var(--edge);
+  border-right: 1px solid var(--rule);
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
@@ -8474,7 +8504,7 @@ button.artifacts__version[aria-pressed="true"] {
   justify-content: flex-end;
   gap: var(--space-4);
   padding: var(--space-6) var(--space-7);
-  border-top: 1px solid var(--edge);
+  border-top: 1px solid var(--rule);
   flex: none;
 }
 
@@ -8556,7 +8586,7 @@ button.artifacts__version[aria-pressed="true"] {
 
 .choice:disabled {
   color: var(--faint);
-  border-color: color-mix(in oklab, var(--edge) 60%, transparent);
+  border-color: color-mix(in oklab, var(--rule) 60%, transparent);
   background: none;
   cursor: default;
 }
@@ -8577,7 +8607,7 @@ button.artifacts__version[aria-pressed="true"] {
   align-items: flex-start;
   gap: var(--space-5);
   padding: var(--space-4) 0;
-  border-bottom: 1px solid var(--edge);
+  border-bottom: 1px solid var(--rule);
 }
 
 .switch-row:last-of-type {
@@ -8686,7 +8716,7 @@ button.artifacts__version[aria-pressed="true"] {
 }
 
 .preset--plain:hover {
-  border-color: var(--edge);
+  border-color: var(--rule);
 }
 
 .preset__actions {
@@ -8750,7 +8780,7 @@ button.artifacts__version[aria-pressed="true"] {
   align-items: baseline;
   gap: var(--space-5);
   padding: var(--space-2) 0;
-  border-bottom: 1px solid var(--edge);
+  border-bottom: 1px solid var(--rule);
 }
 
 .keys__row:last-child {
@@ -8769,7 +8799,7 @@ button.artifacts__version[aria-pressed="true"] {
   font-size: var(--type-meta);
   color: var(--muted);
   background: var(--sunken);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   padding: var(--space-1) var(--space-3);
   white-space: nowrap;
@@ -8877,7 +8907,7 @@ button.artifacts__version[aria-pressed="true"] {
   flex-direction: column;
   gap: var(--space-5);
   padding: var(--space-5) var(--space-6);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--rule);
   border-radius: var(--radius);
   background: var(--sunken);
   font-size: var(--type-aside);
@@ -8899,7 +8929,7 @@ button.artifacts__version[aria-pressed="true"] {
   align-items: flex-start;
   gap: var(--space-4);
   padding-top: var(--space-5);
-  border-top: 1px solid var(--edge);
+  border-top: 1px solid var(--rule);
 }
 
 .workspace-settings {
@@ -8943,7 +8973,7 @@ button.artifacts__version[aria-pressed="true"] {
   flex-shrink: 0;
   padding: var(--space-7);
   background: var(--rail-ground);
-  border-bottom: 1px solid var(--edge);
+  border-bottom: 1px solid var(--rule);
 }
 .for-you__title, .for-you__meta, .for-you__actions, .for-you__tabs {
   display: flex;
@@ -8975,7 +9005,7 @@ button.artifacts__version[aria-pressed="true"] {
 }
 .for-you__item, .for-you__requests, .for-you__later, .for-you__empty {
   padding: var(--space-7);
-  border-bottom: 1px solid var(--edge);
+  border-bottom: 1px solid var(--rule);
 }
 .for-you__item h3 {
   font-size: var(--type-body);
@@ -9013,7 +9043,7 @@ button.artifacts__version[aria-pressed="true"] {
   flex-shrink: 0;
   background: var(--rail-ground);
   padding: var(--space-6) var(--space-7);
-  border-top: 1px solid var(--edge);
+  border-top: 1px solid var(--rule);
 }
 .for-you summary {
   cursor: pointer;
@@ -9074,7 +9104,7 @@ button.artifacts__version[aria-pressed="true"] {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     padding: var(--space-2) var(--space-3);
-    border-top: 1px solid var(--edge);
+    border-top: 1px solid var(--rule);
     background: var(--rail-ground);
   }
 
@@ -9393,7 +9423,7 @@ button.artifacts__version[aria-pressed="true"] {
   flex: 1;
   height: var(--space-2);
   border-radius: var(--radius-pill);
-  background: var(--edge);
+  background: var(--rule);
 }
 
 .update-progress__step[data-state="done"] {
@@ -9405,7 +9435,7 @@ button.artifacts__version[aria-pressed="true"] {
 .update-progress__step[data-state="now"] {
   background:
     linear-gradient(90deg, transparent, var(--system), transparent) -100% 0 / 50% 100% no-repeat,
-    color-mix(in oklab, var(--system) 30%, var(--edge));
+    color-mix(in oklab, var(--system) 30%, var(--rule));
   animation: update-sweep 1.6s var(--ease-loop) infinite;
 }
 
@@ -9440,7 +9470,7 @@ button.artifacts__version[aria-pressed="true"] {
 
 .directory__entry {
   padding: var(--space-2) 0;
-  border-top: 1px solid var(--edge);
+  border-top: 1px solid var(--rule);
 }
 
 .directory__reading {

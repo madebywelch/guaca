@@ -15,6 +15,8 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { contrast } from "./color";
+
 import {
   ATTENTIONS,
   type AttentionKey,
@@ -23,6 +25,7 @@ import {
   GRAYS,
   type GrayKey,
   measure,
+  TEMPERATURE_KEYS,
   THEME_TOKENS,
   type Theme,
   type Tokens,
@@ -47,7 +50,9 @@ const INK = ':root[data-surface="dark"]';
 /** Every combination the Appearance pane can reach. */
 const THEMES: Theme[] = (Object.keys(GRAYS) as GrayKey[]).flatMap((grays) =>
   (Object.keys(ATTENTIONS) as AttentionKey[]).flatMap((attention) =>
-    CONTRASTS.map((contrast) => ({ grays, attention, contrast })),
+    CONTRASTS.flatMap((contrast) =>
+      TEMPERATURE_KEYS.map((temperature) => ({ grays, attention, contrast, temperature })),
+    ),
   ),
 );
 
@@ -79,7 +84,8 @@ describe("the gates", () => {
     "--ground": "#ffffff",
     "--raised": "#ffffff",
     "--sunken": "#f4f3f0",
-    "--edge": "#e2e0da",
+    "--rule": "#e2e0da",
+    "--rule-hard": "#d5d2ca",
     "--edge-control": "#e2e0da",
     "--text": "#0b0b0a",
     "--muted": "#54524d",
@@ -121,11 +127,48 @@ describe("the gates", () => {
 });
 
 describe("what a theme can and cannot move", () => {
-  it("keeps the page on paper white, whatever the grays", () => {
-    // The page is the only white thing, and a tint there is the reading
-    // surface picking up a color every agent's color then competes with.
+  it("keeps the page the brightest ground, whatever the grays and climate", () => {
+    // The page used to be required to be white, and a tint there was the
+    // reading surface picking up a color every agent's color then competes
+    // with. Ledger's page is paper instead: warm, and still the brightest
+    // thing on screen, which is the half of that argument that survives. A
+    // column lighter than the page turns the reading surface into another
+    // panel, and no contrast gate sees a relationship between two grounds.
     for (const grays of Object.keys(GRAYS) as GrayKey[]) {
-      expect(themeTokens({ ...DEFAULT_THEME, grays }, "light")["--ground"]).toBe("#ffffff");
+      for (const temperature of TEMPERATURE_KEYS) {
+        const light = themeTokens({ ...DEFAULT_THEME, grays, temperature }, "light");
+        for (const column of [
+          "--rail-ground",
+          "--rail-raised",
+          "--grail-ground",
+          "--sunken",
+        ] as const) {
+          expect(
+            contrast(light["--ground"], light[column]),
+            `${column} under ${grays}/${temperature}`,
+          ).toBeGreaterThanOrEqual(1);
+        }
+        const dark = themeTokens({ ...DEFAULT_THEME, grays, temperature }, "dark");
+        for (const column of ["--rail-ground", "--grail-ground", "--sunken"] as const) {
+          expect(
+            contrast(dark["--ground"], dark[column]),
+            `${column} under ${grays}/${temperature}`,
+          ).toBeGreaterThanOrEqual(1);
+        }
+      }
+    }
+  });
+
+  it("moves the page with the temperature rather than painting over it", () => {
+    // The one thing the fourth choice may not be is a color written down: a
+    // page warmed by a hex is a page the text was not solved against.
+    const pages = TEMPERATURE_KEYS.map(
+      (temperature) => themeTokens({ ...DEFAULT_THEME, temperature }, "light")["--ground"],
+    );
+    expect(new Set(pages).size).toBe(TEMPERATURE_KEYS.length);
+    for (const temperature of TEMPERATURE_KEYS) {
+      const tokens = themeTokens({ ...DEFAULT_THEME, temperature }, "light");
+      expect(tokens["--rail-ground"]).not.toBe(tokens["--ground"]);
     }
   });
 
@@ -148,7 +191,12 @@ describe("what a theme can and cannot move", () => {
   });
 
   it("writes every token it owns into both blocks, and nothing else", () => {
-    const written = themeCss({ grays: "warm", attention: "blue", contrast: "more" });
+    const written = themeCss({
+      grays: "warm",
+      attention: "blue",
+      contrast: "more",
+      temperature: "warm",
+    });
     for (const selector of [PAPER, INK]) {
       expect([...declared(written, selector).keys()]).toEqual([...THEME_TOKENS]);
     }

@@ -21,7 +21,7 @@ export const WIDGET_TOKENS = [
   "--text",
   "--muted",
   "--faint",
-  "--edge",
+  "--rule",
   "--attention",
   "--ok",
   "--danger",

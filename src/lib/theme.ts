@@ -30,18 +30,53 @@ type Surface = "light" | "dark";
 export type GrayKey = "neutral" | "warm" | "avocado" | "slate";
 export type AttentionKey = "amber" | "orange" | "blue" | "violet";
 export type ContrastLevel = "standard" | "more";
+export type Temperature = "cool" | "plain" | "warm";
 
 export interface Theme {
   grays: GrayKey;
   attention: AttentionKey;
   contrast: ContrastLevel;
+  temperature: Temperature;
 }
 
+/**
+ * The default is Ledger: warm grays on a paper page, and the paper itself
+ * warm rather than white.
+ *
+ * `grays` chooses the hue every gray in the app carries and `temperature`
+ * chooses how much of it reaches the page and the two columns. They are
+ * separate because they answer different questions: an operator who likes a
+ * warm rail may still want to read on white, and the page is the one surface
+ * long text sits on for minutes at a time.
+ */
 export const DEFAULT_THEME: Theme = Object.freeze({
-  grays: "neutral",
+  grays: "warm",
   attention: "amber",
   contrast: "standard",
+  temperature: "warm",
 });
+
+/**
+ * Surface temperature: how far the page and the columns move along the warmth
+ * axis the grays already follow.
+ *
+ * Not a color, which is why it is here rather than a fourth palette. It is a
+ * lightness lift applied to every ground (`warm` is the ladder as drawn, so
+ * the lift is zero) and a multiplier on the chroma those grounds carry. Every
+ * ink is solved against the ground it lands on afterwards, so a paper that
+ * moved is a paper the text was measured against, not one it was painted on
+ * top of.
+ */
+export const TEMPERATURES: Record<
+  Temperature,
+  { label: string; lift: Record<Surface, number>; tint: number }
+> = {
+  cool: { label: "Cool", lift: { light: 0.018, dark: -0.009 }, tint: 0.12 },
+  plain: { label: "Plain", lift: { light: 0.014, dark: -0.006 }, tint: 0.4 },
+  warm: { label: "Warm", lift: { light: 0, dark: 0 }, tint: 1 },
+};
+
+export const TEMPERATURE_KEYS = Object.keys(TEMPERATURES) as Temperature[];
 
 /** A gray family: an OKLCH hue, and how much chroma the columns may carry. */
 interface Grays {
@@ -87,79 +122,101 @@ export const ATTENTIONS: Record<AttentionKey, Attention> = {
 export const CONTRASTS: readonly ContrastLevel[] = ["standard", "more"];
 
 /**
- * Grounds by OKLCH lightness. Calibrated on the stylesheet as it stood before
- * themes existed, so the warm grays land on the columns Guaca shipped with.
+ * Grounds by OKLCH lightness, on the warm page Ledger draws.
+ *
+ * Calibrated on the mockup rather than invented: paper lands where `#fbf9f3`
+ * is, the rail where `#f4f1e7` is, and the two rules at the separations a
+ * printed page uses, 1.3 to 1 for a rule and 1.6 for one that has to be found.
+ * The ladder is the `warm` climate; `TEMPERATURES` lifts it for the other two,
+ * which is what keeps one table instead of three.
+ *
+ * `rule` is decoration and `rule-hard` is a boundary. They were one `edge`
+ * value at 1.3 to 1 doing both jobs, which meant a page that could not say
+ * "this is where the next turn starts" any louder than "this is a hairline".
  */
 const GROUNDS: Record<Surface, Record<ContrastLevel, Record<string, number>>> = {
   light: {
     standard: {
-      ground: 1,
-      raised: 1,
-      sunken: 0.964,
-      edge: 0.907,
-      "rail-ground": 0.964,
-      "rail-raised": 1,
-      "rail-edge": 0.913,
-      "rail-wire": 0.887,
-      "rail-sunken": 0.928,
+      ground: 0.982,
+      raised: 0.982,
+      sunken: 0.9515,
+      rule: 0.889,
+      "rule-hard": 0.833,
+      "rail-ground": 0.9577,
+      "rail-raised": 0.982,
+      "rail-edge": 0.889,
+      "rail-wire": 0.856,
+      "rail-sunken": 0.938,
       "grail-ground": 0.936,
     },
     more: {
-      ground: 1,
-      raised: 1,
-      sunken: 0.955,
-      edge: 0.8,
-      "rail-ground": 0.964,
-      "rail-raised": 1,
-      "rail-edge": 0.8,
-      "rail-wire": 0.78,
-      "rail-sunken": 0.92,
-      "grail-ground": 0.93,
+      ground: 0.982,
+      raised: 0.982,
+      sunken: 0.9515,
+      rule: 0.86,
+      "rule-hard": 0.79,
+      "rail-ground": 0.9577,
+      "rail-raised": 0.982,
+      "rail-edge": 0.86,
+      "rail-wire": 0.83,
+      "rail-sunken": 0.938,
+      "grail-ground": 0.945,
     },
   },
   dark: {
     standard: {
-      ground: 0.168,
-      raised: 0.204,
-      sunken: 0.144,
-      edge: 0.281,
-      "rail-ground": 0.195,
-      "rail-raised": 0.238,
-      "rail-edge": 0.285,
-      "rail-wire": 0.305,
-      "rail-sunken": 0.163,
-      "grail-ground": 0.149,
+      ground: 0.177,
+      raised: 0.2,
+      sunken: 0.156,
+      rule: 0.274,
+      "rule-hard": 0.331,
+      "rail-ground": 0.202,
+      "rail-raised": 0.228,
+      "rail-edge": 0.281,
+      "rail-wire": 0.3,
+      "rail-sunken": 0.168,
+      "grail-ground": 0.155,
     },
     more: {
-      ground: 0.12,
-      raised: 0.16,
-      sunken: 0.1,
-      edge: 0.42,
-      "rail-ground": 0.15,
-      "rail-raised": 0.2,
-      "rail-edge": 0.42,
-      "rail-wire": 0.44,
-      "rail-sunken": 0.11,
-      "grail-ground": 0.1,
+      ground: 0.14,
+      raised: 0.165,
+      sunken: 0.12,
+      rule: 0.33,
+      "rule-hard": 0.4,
+      "rail-ground": 0.16,
+      "rail-raised": 0.19,
+      "rail-edge": 0.33,
+      "rail-wire": 0.36,
+      "rail-sunken": 0.13,
+      "grail-ground": 0.115,
     },
   },
 };
 
 /**
- * How much of a family's chroma each ground carries. The page on paper carries
- * none, which is what keeps it the only white thing on screen.
+ * How much of a family's chroma each ground carries, as a multiple of the
+ * family's own.
+ *
+ * The page carries almost all of it now, because the page is paper and paper
+ * has a temperature. It carried none while the page was white, which is what
+ * made white the only white thing on screen; the warmth arrives through
+ * `TEMPERATURES` instead, and an operator who picks `cool` gets a page with a
+ * tenth of it. The rules carry the most of all: a hairline one and a third to
+ * one against the page reads as either a pencil line or a warm shadow, and the
+ * hue is the whole of what makes it the second.
  */
-const TINT: Record<Surface, Record<string, number>> = {
-  light: { ground: 0, raised: 0, "rail-raised": 0 },
-  dark: {},
-};
 const TINT_DEFAULT: Record<string, number> = {
-  sunken: 0.6,
-  edge: 1.2,
-  "rail-edge": 1.2,
-  "rail-wire": 1.3,
-  "rail-sunken": 1.2,
-  "grail-ground": 1.3,
+  ground: 0.91,
+  raised: 0.91,
+  sunken: 1.38,
+  rule: 2.35,
+  "rule-hard": 2.86,
+  "rail-ground": 1.51,
+  "rail-raised": 0.91,
+  "rail-edge": 2.35,
+  "rail-wire": 2.6,
+  "rail-sunken": 1.5,
+  "grail-ground": 1.6,
 };
 
 /** What each role is solved to. `more` is WCAG AAA for text and muted text. */
@@ -195,7 +252,8 @@ export const THEME_TOKENS = [
   "--ground",
   "--raised",
   "--sunken",
-  "--edge",
+  "--rule",
+  "--rule-hard",
   "--edge-control",
   "--text",
   "--muted",
@@ -221,8 +279,14 @@ export function themeTokens(theme: Theme, surface: Surface): Tokens {
   const ladder = GROUNDS[surface][theme.contrast];
   const ratio = RATIOS[theme.contrast];
   const { h, c } = GRAYS[theme.grays];
-  const tint = { ...TINT_DEFAULT, ...TINT[surface] };
-  const ground = (name: string) => hex(ladder[name] as number, c * (tint[name] ?? 1), h);
+  const climate = TEMPERATURES[theme.temperature];
+  const lift = climate.lift[surface];
+  const ground = (name: string) =>
+    hex(
+      Math.min(1, Math.max(dark ? 0.03 : 0, (ladder[name] as number) + lift)),
+      c * (TINT_DEFAULT[name] ?? 1) * climate.tint,
+      h,
+    );
 
   const rail = {
     "--rail-ground": ground("rail-ground"),
@@ -236,7 +300,8 @@ export function themeTokens(theme: Theme, surface: Surface): Tokens {
     "--ground": ground("ground"),
     "--raised": ground("raised"),
     "--sunken": ground("sunken"),
-    "--edge": ground("edge"),
+    "--rule": ground("rule"),
+    "--rule-hard": ground("rule-hard"),
   };
 
   // Text is solved against the ground it has least contrast with: the darkest
@@ -252,8 +317,12 @@ export function themeTokens(theme: Theme, surface: Surface): Tokens {
     ? [page["--ground"], page["--raised"], rail["--rail-ground"], rail["--rail-raised"]]
     : [page["--ground"], rail["--rail-ground"]];
 
-  const text = solve(c * 0.3, h, worst, ratio.text, dark ? 0.97 : 0.2, dark);
-  const muted = solve(c, h, worst, ratio.muted, dark ? 0.72 : 0.46, dark);
+  // Ink carries more of the family's chroma than it used to. A soft black on
+  // warm paper is the page's own temperature at the other end of the scale,
+  // and a neutral #131314 beside a #fbf9f3 page is the one gray the eye reads
+  // as belonging to a different document.
+  const text = solve(c * 1.3, h, worst, ratio.text, dark ? 0.97 : 0.2, dark);
+  const muted = solve(c * 2.4, h, worst, ratio.muted, dark ? 0.72 : 0.46, dark);
 
   const attention = ATTENTIONS[theme.attention];
   const attentionFill = hex(attention.fill, attention.c, attention.h);
@@ -267,8 +336,8 @@ export function themeTokens(theme: Theme, surface: Surface): Tokens {
     "--edge-control": solve(c, h, controls, ratio.control, dark ? 0.4 : 0.72, dark),
     "--text": text,
     "--muted": muted,
-    "--faint": solve(c * 1.2, h, reading, ratio.faint, dark ? 0.6 : 0.62, dark),
-    "--attention": solve(attention.c, attention.h, worst, ratio.signal, dark ? 0.78 : 0.6, dark),
+    "--faint": solve(c * 2.8, h, reading, ratio.faint, dark ? 0.6 : 0.62, dark),
+    "--attention": solve(attention.c, attention.h, worst, ratio.signal, dark ? 0.772 : 0.494, dark),
     "--attention-wash": hex(dark ? 0.26 : 0.965, dark ? 0.045 : 0.035, attention.h),
     "--attention-fill": attentionFill,
     "--on-attention-fill": onFill(attentionFill),

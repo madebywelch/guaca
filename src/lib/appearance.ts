@@ -52,6 +52,7 @@ export type Appearance = Pick<
   | "grays"
   | "attention"
   | "contrast"
+  | "temperature"
   | "typeface"
   | "reading"
   | "readingSize"
