@@ -354,6 +354,98 @@ describe("the event connection", () => {
   });
 });
 
+describe("a host that stops answering", () => {
+  class FakeSocket {
+    onopen?: () => void;
+    onclose?: () => void;
+    onerror?: () => void;
+    onmessage?: (event: { data: string }) => void;
+    constructor(readonly at: number) {}
+    close() {
+      this.onclose?.();
+    }
+  }
+
+  async function connected() {
+    const sockets: FakeSocket[] = [];
+    vi.stubGlobal(
+      "WebSocket",
+      class extends FakeSocket {
+        constructor() {
+          super(sockets.length);
+          sockets.push(this);
+        }
+      },
+    );
+    const { subscribe } = await import("./transport");
+    const lost = vi.fn();
+    const stop = await subscribe("unused", vi.fn(), vi.fn(), lost);
+    return { sockets, lost, stop };
+  }
+
+  it("says so when the socket closes and the redial does not answer", async () => {
+    vi.useFakeTimers();
+    const { sockets, lost, stop } = await connected();
+    try {
+      sockets[0]!.onopen?.();
+      sockets[0]!.onclose?.();
+      // The redial is still owed an answer: a socket that dropped and came back
+      // inside the first backoff is not a host that left, and a page that said
+      // so would be taking it back a moment later.
+      await vi.advanceTimersByTimeAsync(600);
+      expect(lost).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(lost).toHaveBeenCalledTimes(1);
+      const refusal = lost.mock.calls[0]![0];
+      expect(refusal).toMatchObject({ kind: "unreachable" });
+      expect(refusal.message).toContain("lost the connection to this host");
+      // Where it is, because what to do about it depends on which host this is.
+      expect(refusal.message).toContain(window.location.origin);
+      // One silence, one sentence: the banner is not re-raised every attempt.
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(lost).toHaveBeenCalledTimes(1);
+    } finally {
+      stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("says nothing when the redial answers inside the same second", async () => {
+    vi.useFakeTimers();
+    const { sockets, lost, stop } = await connected();
+    try {
+      sockets[0]!.onopen?.();
+      sockets[0]!.onclose?.();
+      // The first redial waits at most the retry floor, so the connection that
+      // lands here is the one that says the host was never gone.
+      await vi.advanceTimersByTimeAsync(500);
+      sockets[1]!.onopen?.();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(lost).not.toHaveBeenCalled();
+    } finally {
+      stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("says nothing when the page lets the subscription go", async () => {
+    // A reload, a token screen or a second window closing this one is the page
+    // leaving, not the host, and a mark left behind would outlive the reason
+    // for it.
+    vi.useFakeTimers();
+    const { sockets, lost, stop } = await connected();
+    try {
+      sockets[0]!.onopen?.();
+      sockets[0]!.onclose?.();
+      stop();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(lost).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("reconnecting", () => {
   it("waits between half and all of the backoff, so windows do not redial in step", async () => {
     const { retryDelay } = await import("./transport");

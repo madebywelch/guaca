@@ -567,18 +567,53 @@ export type Unlisten = () => void;
  * are gone, exactly as they are when the desktop app is closed, and the answer
  * is the same in both: what the UI draws it refetches. `onReconnect` is how a
  * caller is told to do that.
+ *
+ * `onLost` is the other direction and a slower question. A redial usually
+ * answers, and the page that announced a lost host a moment before the host
+ * came back is a page that took it back. So the loss is only reported once the
+ * redial has had its chance, which is also what keeps a socket dropped on
+ * purpose — this page drops a lagging one, and a host does the same — from
+ * reading as a host that left.
  */
 export function subscribe(
   _channel: string,
   handler: (payload: UiEvent) => void,
   onReconnect?: () => void,
+  onLost?: (error: Refusal) => void,
 ): Promise<Unlisten> {
-  return Promise.resolve(openSocket(handler, onReconnect));
+  return Promise.resolve(openSocket(handler, onReconnect, onLost));
+}
+
+/**
+ * Nothing is arriving, said as the refusal the rest of the app already reads.
+ *
+ * The socket knows the host left without being asked, and the sentence it
+ * deserves is the one a call that could not reach it gets: the address, and
+ * what it may be. The half that is different is what this one costs — a page
+ * that is not receiving is a page whose transcript is not current — so it says
+ * that instead of claiming the agents are unaffected, which is a thing a dead
+ * host cannot be known to be.
+ */
+function lostHost(): Refusal {
+  return {
+    kind: "unreachable",
+    message: `lost the connection to this host at ${origin()}. It may be restarting, or the connection to it is down, and nothing on this page is live until it answers again`,
+  };
 }
 
 /** How long to wait before trying the socket again, growing to a ceiling. */
 const RETRY_FLOOR = 500;
 const RETRY_CEILING = 15_000;
+
+/**
+ * How long a closed socket is given to come back before its close is news.
+ *
+ * The first redial waits at most `RETRY_FLOOR`, and a host that is answering
+ * takes the connection in milliseconds, so anything that returns inside this
+ * window was never gone. What is left is a host that is not answering, which is
+ * what the mark and the banner are for.
+ */
+const LOST_GRACE = 1_500;
 
 /**
  * The wait before one retry: half the backoff, and a random share of the rest.
@@ -592,9 +627,17 @@ export function retryDelay(wait: number, random: () => number = Math.random): nu
   return Math.round(wait / 2 + (random() * wait) / 2);
 }
 
-function openSocket(handler: (payload: UiEvent) => void, onReconnect?: () => void): Unlisten {
+function openSocket(
+  handler: (payload: UiEvent) => void,
+  onReconnect?: () => void,
+  onLost?: (error: Refusal) => void,
+): Unlisten {
   let socket: WebSocket | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  /** The pending "the host is gone", cancelled by a redial that answers. */
+  let pending: ReturnType<typeof setTimeout> | null = null;
+  /** Whether this outage has already been reported, so one silence is one sentence. */
+  let said = false;
   let wait = RETRY_FLOOR;
   let closed = false;
 
@@ -610,6 +653,14 @@ function openSocket(handler: (payload: UiEvent) => void, onReconnect?: () => voi
     socket.onopen = () => {
       window.dispatchEvent(new Event(RECONNECTED));
       wait = RETRY_FLOOR;
+      // The redial answered: whatever closed the last socket was not the host
+      // leaving, and a page that said it had would be taking it back a moment
+      // later.
+      said = false;
+      if (pending) {
+        clearTimeout(pending);
+        pending = null;
+      }
       // The first connection may have completed after the initial HTTP reads.
       // Refresh on it too, so that startup gap cannot lose a durable message.
       onReconnect?.();
@@ -630,6 +681,17 @@ function openSocket(handler: (payload: UiEvent) => void, onReconnect?: () => voi
     socket.onclose = () => {
       socket = null;
       if (closed) return;
+      // Reported only if the redial below does not answer first: a socket
+      // closed on purpose, or a network with a hole in it for a second, is not
+      // a host that left.
+      if (!said && !pending) {
+        pending = setTimeout(() => {
+          pending = null;
+          if (closed || said) return;
+          said = true;
+          onLost?.(lostHost());
+        }, LOST_GRACE);
+      }
       timer = setTimeout(connect, retryDelay(wait));
       // Backoff with a ceiling. A box that is rebooting comes back in seconds
       // and a tunnel that is down may be down for an hour, and hammering it
@@ -658,6 +720,7 @@ function openSocket(handler: (payload: UiEvent) => void, onReconnect?: () => voi
     closed = true;
     window.removeEventListener("online", online);
     if (timer) clearTimeout(timer);
+    if (pending) clearTimeout(pending);
     socket?.close();
   };
 }

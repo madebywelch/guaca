@@ -44,6 +44,8 @@ export function StatusBar({ onOpen, onMessage }: Props) {
   const settings = useStore((s) => s.settings);
   const setSettings = useStore((s) => s.setSettings);
   const agents = useStore((s) => s.agents);
+  const link = useStore((s) => s.link);
+  const lastHeard = useStore((s) => s.lastHeard);
   const host = useHostState();
   const look = useBarLook();
   const [editing, setEditing] = useState(false);
@@ -56,10 +58,16 @@ export function StatusBar({ onOpen, onMessage }: Props) {
   const drift = desktop
     ? skew({ version: VERSION, commit: COMMIT }, host?.health ?? null)
     : "unknown";
-  // Which host, and whether its build and this window's are one build. The
-  // version itself is a click away in Workspace settings, where it can be acted
-  // on; see `hostLabel` for why it left the bar.
-  const label = hostLabel({ place: hostPlace(), drift, host: host?.health ?? null });
+  // Which host, whether its build and this window's are one build, and — when
+  // nothing is arriving — when it was last heard from. The version itself is a
+  // click away in Workspace settings, where it can be acted on; see `hostLabel`
+  // for why it left the bar.
+  const label = hostLabel({
+    place: hostPlace(),
+    drift,
+    host: host?.health ?? null,
+    lastHeard: link === "down" ? lastHeard : null,
+  });
 
   const run = async (action: QuickAction) => {
     setError(null);
@@ -101,6 +109,7 @@ export function StatusBar({ onOpen, onMessage }: Props) {
         type="button"
         className="statusbar__host"
         data-drift={label.drift ? "" : undefined}
+        data-stale={link === "down" ? "" : undefined}
         title={label.title}
         onClick={() => onOpen({ kind: "settings", section: "workspace" })}
       >

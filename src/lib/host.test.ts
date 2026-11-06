@@ -133,6 +133,24 @@ describe("which host the bar names, and whether its build agrees", () => {
     ).toBe("Remote host · host older");
   });
 
+  it("says when the host was last heard from, instead of a build it is not running", async () => {
+    const { hostLabel } = await import("./host");
+    // Two in the afternoon on a Tuesday, local: what the transcript's margin
+    // would write for a message, because these are the two times on screen.
+    const at = new Date(2026, 10, 3, 14, 32).getTime();
+    const gone = hostLabel({ place: "remote", drift: "same", host: null, lastHeard: at });
+    expect(gone.text).toMatch(/^Remote host · last heard \d{1,2}:\d{2}/);
+    // The hover says the same time the line does, and what it means.
+    const said = /last heard (.+)$/.exec(gone.text)?.[1];
+    expect(said).toBeTruthy();
+    expect(gone.title).toContain(said!);
+    expect(gone.title).toContain("has not answered since");
+    // A skew is a fact about the build two halves are running, and this row is
+    // not claiming to know either while nothing is arriving.
+    expect(gone.drift).toBe(false);
+    expect(gone.text).not.toContain("build");
+  });
+
   it("leaves the version to Workspace settings, and keeps it in the hover", async () => {
     const { hostLabel } = await import("./host");
     const same = hostLabel({ place: "thisMac", drift: "same", host: health("0.2.0") });

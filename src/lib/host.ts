@@ -166,6 +166,12 @@ export interface HostLabel {
  * The drift is said in words as well as marked in color. A color alone is a
  * difference only an operator who already knows the rule can read, and the bar
  * said a version for either build once already.
+ *
+ * A host that has stopped answering is the same row saying the last thing it
+ * knows: the place, and when it last heard from it. It is the one mark on this
+ * bar about the host itself rather than about the build it runs, and it is here
+ * because this row is the window's answer to "which host", and "none, since
+ * 14:32" is that answer at the moment it matters most.
  */
 export function hostLabel(facts: {
   place: Place;
@@ -173,11 +179,28 @@ export function hostLabel(facts: {
   host: Health | null;
   /** This window's own version, named when the two differ. */
   appVersion?: string;
+  /** When the host last said anything, while it is saying nothing now. */
+  lastHeard?: number | null;
 }): HostLabel {
   const { place, drift, host } = facts;
   const app = facts.appVersion ?? VERSION;
   const where = PLACES[place];
   const version = host?.version;
+  if (facts.lastHeard != null) {
+    // The same clock the transcript's margin writes with, so the two times on
+    // screen are read the same way.
+    const clock = new Date(facts.lastHeard).toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+    return {
+      text: `${where} · last heard ${clock}`,
+      title: `${where} has not answered since ${clock}, so this page is not live. It catches up when the host does.`,
+      // The build it runs is not known to be what it was, and a skew is not the
+      // fact this row is telling while the host is gone.
+      drift: false,
+    };
+  }
   const said =
     drift === "otherBuild"
       ? " · other build"

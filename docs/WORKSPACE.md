@@ -2294,6 +2294,49 @@ message. They no longer can: what an agent wants on the bar is a page, and a
 page's click opens the page rather than speaking for anybody. A button an agent
 asked for before that is still drawn and still says who asked.
 
+## A window whose host has gone is not live, and says so
+
+The window is a client and its host is somewhere else, so the worst thing it can
+do is go on looking like it knows what is happening: the rail still says who is
+working, the transcript still ends where it ended, and nothing on the page says
+that is a picture of a minute ago. The banner has always said so, but only after
+a call failed, which makes the way an operator learns their host is gone is by
+asking it for something (`AUDIT-2`, finding 3).
+
+**The socket closing is the fact, and the store is where it lands.** A call that
+fails says the host did not answer; the event socket says nothing is arriving,
+which is the same fact earlier and without anybody asking. `transport.ts` hands
+the close up as the same `unreachable` refusal a call uses, so it is
+`Store::linkDown` that turns it into the banner a failed call would have raised —
+the address, `Retry`, and the way to Workspace settings — and `linkUp` that takes
+it back when a redial answers. The status bar names the host, so it is where a
+person reads *since when*: `Remote host · last heard 14:32`, in the quiet ink a
+note is set in. The page is also drawn as an earlier one: `data-link="down"` on
+the window reduces the transcript's ink and leaves its place, because a column
+that emptied or turned a warning color would be a page that had lost the
+conversation as well. The composer is untouched — what the operator writes is
+still theirs, and the host takes it when it answers.
+
+**A close is not news until the redial has had its chance.** The first redial
+waits at most `RETRY_FLOOR`, and a host that is answering takes the connection in
+milliseconds, so a socket that comes back inside `LOST_GRACE` was never gone.
+That covers the two closes that are not the host leaving: this page drops a
+lagging socket itself, and a host closes one that fell behind. The mark is raised
+once per silence, not on every failed attempt, and the page that stops watching
+never raises it at all: a reload, a token screen and a second window's close all
+end in this teardown, and the mark would outlive the page that knew it.
+
+**An update restarting the host is not a host that left.** `docs/UPDATES.md` is
+explicit that not answering during an update is drawn as the host restarting,
+and the panel that started it says so for as long as it takes. `lib/link.ts`
+holds that rule where the rest of the window can read it, and `HostMonitor`
+extends it on every read that says an update is underway, so the banner never
+argues with the panel. It is a length of time rather than a flag because the read
+that would clear a flag is the one thing a quiet host cannot provide: long enough
+for a container to stop, copy its volume and pass a health check, and short
+enough that a host still gone afterwards is worth saying. The host answering ends
+it early.
+
 ## The page is the only paper, and both edges are the same off-white
 
 `styles.css` used to say the surface never follows the OS, and the argument was

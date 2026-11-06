@@ -41,6 +41,22 @@ The daemon, a browser as a client, and the boot both hosts share.
   A token rotated on the box turns every call away at once. The transport
   raises `UNAUTHORIZED_EVENT` and `TokenEntry` unmounts the app; a caller that
   catches the refusal itself and draws a banner draws forty of them.
+- **A socket that closed is not a host that left until the redial says so.**
+  `LOST_GRACE` exists because two closes are ordinary: this page closes a lagging
+  socket itself, and a host closes one that fell behind, and both redial inside
+  the first backoff. Without the grace every resynchronization announced a loss
+  it took back half a second later. The page also has to be the one watching:
+  `closed` stops the report on teardown, or a reload, a token screen and a second
+  window's close would leave a mark behind them.
+- **A host an update is restarting is not a host that left.** The close arrives
+  the same way, so `Store::linkDown` asks `lib/link.ts` first, and `HostMonitor`
+  keeps that window open on every read that says an update is underway. Bound it:
+  a flag cannot be cleared by a host that never comes back, and the banner for a
+  host that never comes back is the whole point.
+- **The last-heard time is written once, on the close, not on every event.** It is
+  read by the status bar's host row, and a field written on every event would
+  redraw that row on every frame of a streaming turn. `useRuntime` keeps it in the
+  subscription's own closure and hands it to the store when the socket is gone.
 - **A host that is gone is the one failure with a control, and it is the store
   that decides.** `unreachable` is the kind the transport raises for nothing
   answered, and `Store::showFailure` is the only place that turns it into a

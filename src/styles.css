@@ -616,6 +616,30 @@ input[type="file"]::file-selector-button {
 }
 
 /* ==========================================================================
+   A window whose host has gone
+
+   The rail still knows who was working and the transcript still ends where it
+   ended, and neither is news: the one thing a dead socket is sure of is that
+   the page is showing the state of a moment that has passed. So the transcript
+   loses its weight and keeps its place — a column that emptied, or one drawn
+   in a warning color, would be a page that had lost the conversation as well —
+   and the status bar names the time the host was last heard from, which is the
+   half a reader can act on. The composer is left alone: what the operator
+   writes is still theirs, and the host takes it when it answers.
+
+   `data-link` is on the window rather than on the transcript because the mark
+   is one fact about the whole page, and the row that says when is a different
+   one.
+   ========================================================================== */
+
+.app[data-link="down"] .pane__scroll {
+  /* Paper and ink at reduced strength rather than a second color: this is the
+     same page, read as an earlier one, and the Ledger look has no "stale"
+     hue to spend. */
+  opacity: 0.55;
+}
+
+/* ==========================================================================
    The status bar
 
    The last row of the reading column: the host this window shows, the pages
@@ -672,6 +696,13 @@ input[type="file"]::file-selector-button {
 .statusbar__host[data-drift],
 .host-update-facts dd[data-drift] {
   color: var(--system);
+}
+
+/* A host that is not answering is not a build difference: it is the one row
+   that said which host saying when it last heard from it, in the quieter ink a
+   note is set in. */
+.statusbar__host[data-stale] {
+  color: var(--muted);
 }
 
 /* Scrolls rather than wraps: a second row would take a line from the channel

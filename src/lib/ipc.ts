@@ -16,6 +16,7 @@ import {
   invoke,
   invokeLocal,
   notify,
+  type Refusal,
   type Remote,
   openExternal as reachBrowser,
   subscribe,
@@ -811,12 +812,16 @@ export async function notifyOperator(title: string, body: string): Promise<boole
  * workspace can produce one: the desktop's channel cannot fail without the
  * process failing. What was missed while it was down is gone, exactly as it is
  * while the desktop app is closed, so a caller refetches what it draws.
+ * `onLost` fires when it does not come back, and carries the same refusal a
+ * call to a host that is not there gets, so a caller puts it on the same
+ * banner.
  */
 export function onRuntimeEvent(
   handler: (event: UiEvent) => void,
   onReconnect?: () => void,
+  onLost?: (error: Refusal) => void,
 ): Promise<Unlisten> {
-  return subscribe(EVENT_CHANNEL, handler, onReconnect);
+  return subscribe(EVENT_CHANNEL, handler, onReconnect, onLost);
 }
 
 /**

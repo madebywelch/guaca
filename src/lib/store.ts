@@ -10,6 +10,7 @@ import { useCallback, useMemo } from "react";
 import { create } from "zustand";
 
 import { api } from "./ipc";
+import { forgetRestart, type Link, restarting } from "./link";
 import { loadPrefs, type Prefs, savePrefs } from "./prefs";
 import { type DropTarget, landsBefore, railOrder } from "./rail";
 import { hosted, isUnreachable, openExternal, PAGE_ID } from "./transport";
@@ -50,7 +51,7 @@ import type {
   UiEvent,
   WorkDecision,
 } from "./types";
-import { errorMessage, skillScopeKey } from "./types";
+import { asSentence, errorMessage, skillScopeKey } from "./types";
 
 /**
  * A channel is an agent, and nothing else is one.
@@ -315,6 +316,25 @@ export interface State {
   /** Non-blocking surface for the last thing that went wrong. */
   banner: Banner | null;
   /**
+   * Whether this page is hearing from its host.
+   *
+   * The socket's fact rather than a read's. A call that fails says so on the
+   * banner, and this is the quieter half that lasts: a page whose events have
+   * stopped is a page of the state of a moment that has passed. Two surfaces
+   * draw it — the transcript, and the status bar that names the host and when
+   * it last heard from it.
+   */
+  link: Link;
+  /**
+   * When the host last said anything this page applied, while nothing is
+   * arriving. `null` whenever it is.
+   *
+   * Written once, on the close, rather than on every event: it is read by the
+   * one row that draws it and would otherwise redraw that row on every frame of
+   * a streaming turn.
+   */
+  lastHeard: number | null;
+  /**
    * A sign-in page the runtime asked this browser to open, while the flow
    * behind it is still waiting.
    *
@@ -403,6 +423,18 @@ export interface State {
   dismissPulse: (id: number) => void;
   setBanner: (banner: Banner | null) => void;
   /**
+   * The event socket closed and did not come back: the page is not live.
+   *
+   * `heardAt` is the last thing the host said to it, which is the one fact that
+   * turns "not live" into a time a person can act on.
+   */
+  linkDown: (error: unknown, heardAt: number) => void;
+  /**
+   * The event socket opened again: what the page draws is current, and the
+   * sentence about it not being current goes with it.
+   */
+  linkUp: () => void;
+  /**
    * Puts a failure on the banner, with whatever can be done about it.
    *
    * One place rather than at each call site, because which failures carry a
@@ -425,6 +457,27 @@ export interface State {
 }
 
 let pulseSeq = 0;
+
+/**
+ * The banner for a failure, wherever it came from.
+ *
+ * One place, because which failures carry a control is a fact about the failure
+ * and a caller made to remember it is a caller that will forget. The host being
+ * gone is the one with something to offer — trying again, and looking at which
+ * host this is — so it is the one that says so; everything else is a sentence
+ * and a dismissal, which is right, because nothing on screen can change it.
+ *
+ * Its words are finished before they are stored: a refusal from the transport or
+ * the runtime is written for a log as often as for a person, and the banner is
+ * the one line that is read as prose. See `asSentence`.
+ */
+function failureBanner(error: unknown): Banner {
+  return {
+    tone: "error",
+    text: asSentence(errorMessage(error)),
+    ...(isUnreachable(error) ? { fix: "host" as const } : {}),
+  };
+}
 
 /** Group totals, addressed the way the UI reads them. */
 function byGroup(rows: GroupUsage[]): Record<GroupId, Tokens> {
@@ -542,6 +595,8 @@ export const useStore = create<State>((set, get) => ({
   skillsVersion: {},
   notebookVersion: {},
   banner: null,
+  link: "up",
+  lastHeard: null,
   handoff: null,
   sessionSpend: { prompt: 0, completion: 0, cost: null, calls: 0 },
 
@@ -1306,13 +1361,34 @@ export const useStore = create<State>((set, get) => ({
   },
 
   showFailure(error) {
+    set({ banner: failureBanner(error) });
+  },
+
+  linkDown(error, heardAt) {
+    // A host an update stopped is the update working, and the panel that
+    // started it is already saying the host is restarting. A banner and a mark
+    // here would argue with it, and a page that dimmed on every update would
+    // flicker for a reason it already knows.
+    if (restarting()) return;
+    set({ banner: failureBanner(error), link: "down", lastHeard: heardAt });
+  },
+
+  linkUp() {
+    const { link, banner } = get();
+    // Nothing to take back, and nothing to redraw: the ordinary case, on every
+    // page open.
+    if (link === "up" && banner?.fix !== "host") return;
     set({
-      banner: {
-        tone: "error",
-        text: errorMessage(error),
-        ...(isUnreachable(error) ? { fix: "host" as const } : {}),
-      },
+      link: "up",
+      lastHeard: null,
+      // Only the sentence about a host that was not answering: a refused write
+      // or a missing key is still true, and the host coming back says nothing
+      // about either.
+      ...(banner?.fix === "host" ? { banner: null } : {}),
     });
+    // The host answered, so whatever restart was expected is over, and a
+    // silence after this one is news again.
+    forgetRestart();
   },
 
   setHandoff(handoff) {

@@ -48,6 +48,7 @@ export default function App() {
   const selected = useStore((s) => s.selected);
   const settings = useStore((s) => s.settings);
   const banner = useStore((s) => s.banner);
+  const link = useStore((s) => s.link);
   const showFailure = useStore((s) => s.showFailure);
   const handoff = useStore((s) => s.handoff);
   const setHandoff = useStore((s) => s.setHandoff);
@@ -324,9 +325,12 @@ export default function App() {
         !groups[0]!.apiKeySet &&
         Object.values(groups[0]!.inference).every((value) => value === null)));
 
+  // `data-link` is the one attribute the whole window reads: whether what it
+  // draws is current. `styles.css` is where the transcript loses its weight.
   return (
     <div
       className="app"
+      data-link={link === "down" ? "down" : undefined}
       data-mobile-pane={firstRun ? "conversation" : openAgent ? mobilePane : "agents"}
     >
       <MobileNavigation
