@@ -758,6 +758,29 @@ input[type="file"]::file-selector-button {
   color: var(--faint);
 }
 
+/* The one line a bar with nothing of the operator's on it says. Quieter than
+   the bar's own text, because the control beside it is the thing to press and
+   this is what says there is a second thing that can live here.
+
+   Shown only from the width where the whole of it fits beside the host and that
+   control. The bar wraps when it cannot, and it is the last row of the channel
+   above it: at 800px with every column out it has 288px of content, which is 66
+   left over once the host and the button are on it. Three rows for a sentence
+   takes two of them from what the operator was reading, so a window narrower
+   than this gets the bar it had before instead. 72rem is where a real window
+   holds it: 528px of content, and 513 is what the three need. */
+.statusbar__empty {
+  display: none;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+@media (min-width: 72rem) {
+  .statusbar__empty {
+    display: inline;
+  }
+}
+
 .statusbar__error {
   flex-basis: 100%;
   color: var(--danger);
@@ -1197,6 +1220,33 @@ input[type="file"]::file-selector-button {
   top: var(--space-8);
   bottom: 0;
   width: var(--grail-reach);
+  pointer-events: none;
+}
+
+/* The handle on the band, which is the current group's own circle with the
+   window's edge cutting it in half.
+
+   The circle is drawn twice the band's width and centered on the window's left
+   edge, so half of it hangs where nothing can see it: the cut is the window's
+   edge rather than a border drawn on a shape, and no part of the mark reaches
+   the rail beside it. Nothing is drawn inside it while the rail shows every
+   group — that view has no single face — so the band says there is a surface
+   here either way, and which group the rail is inside as soon as there is one.
+
+   Before the column in the DOM, and the column's ground is opaque, so coming
+   out covers it; and it takes no pointer events, because the only thing that
+   acts on this edge is `grail__reach`. */
+.grail__mark {
+  position: absolute;
+  left: calc(-1 * var(--grail-lip));
+  /* Centered on the band's own height without a margin: a negative margin is
+     a length, and every length in this file comes from the spacing scale. */
+  top: calc(50% - var(--grail-lip));
+  width: calc(2 * var(--grail-lip));
+  height: calc(2 * var(--grail-lip));
+  border-radius: 50%;
+  background: var(--rail-raised);
+  box-shadow: inset 0 0 0 1px var(--rail-edge);
   pointer-events: none;
 }
 

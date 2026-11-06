@@ -51,6 +51,11 @@ export function StatusBar({ onOpen, onMessage }: Props) {
   const [error, setError] = useState<string | null>(null);
   const actions = settings?.quickActions ?? [];
   const widgets = settings?.widgets ?? [];
+  // Nothing of the operator's on the bar yet, which is the one state where it
+  // has room to say what can be. Both of its ideas go here because only one of
+  // them has a control of its own: a pinned page is made in Artifacts and has
+  // no door on the bar at all.
+  const empty = actions.length === 0 && widgets.length === 0;
   const nameOf = (id: AgentId) => agents.find((a) => a.id === id)?.name ?? "a deleted agent";
 
   const drift = desktop
@@ -119,6 +124,13 @@ export function StatusBar({ onOpen, onMessage }: Props) {
           ))}
         </div>
       )}
+      {/* The bar's one invitation, when there is nothing of the operator's on
+          it. A quick action has a button beside this; a pinned page has no door
+          on the bar, so the sentence is the only place the second idea is
+          advertised, and it names where the page is pinned from. */}
+      {empty && (
+        <span className="statusbar__empty">A kept page can be pinned here, from Artifacts.</span>
+      )}
       <div className="statusbar__actions" role="toolbar" aria-label="Quick actions">
         {actions.map((action) => (
           <span className="statusbar__action" key={action.id}>
@@ -149,11 +161,7 @@ export function StatusBar({ onOpen, onMessage }: Props) {
           aria-pressed={editing}
           onClick={() => setEditing(!editing)}
         >
-          {editing
-            ? "Done"
-            : actions.length === 0 && widgets.length === 0
-              ? "Add a quick action"
-              : "Edit"}
+          {editing ? "Done" : empty ? "Add a quick action" : "Edit"}
         </button>
       </div>
       {error && (

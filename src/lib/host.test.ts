@@ -152,3 +152,51 @@ describe("which host the bar names, and whether its build agrees", () => {
     );
   });
 });
+
+/**
+ * The two sentences a pane about the runtime has to get right.
+ *
+ * `hostPlace` names three arrangements and the bar draws all three, but a
+ * sentence about where the runtime is or what this client holds of it was
+ * written when there was only one: "this machine", and "this app keeps the
+ * token". Both are false from a browser, and About and Account are exactly
+ * where somebody goes to learn what is on which side of the wire.
+ */
+describe("the host, said in a sentence", () => {
+  it("is this Mac only while the runtime is in this window", async () => {
+    const { hostAt } = await import("./host");
+    expect(hostAt("thisMac")).toBe("this Mac");
+  });
+
+  it("is your host for the two arrangements where it is somewhere else", async () => {
+    const { hostAt } = await import("./host");
+    // A desktop window showing a box and a browser on one are the same fact
+    // about which machine holds the keys, and neither is this one.
+    expect(hostAt("remote")).toBe("your host");
+    expect(hostAt("browser")).toBe("your host");
+  });
+
+  it("is a cookie and no token, for a browser", async () => {
+    const { clientKeeps } = await import("./host");
+    const said = clientKeeps({ desktop: false, attached: false });
+    // #258 moved the session into an HttpOnly cookie the daemon sets, so there
+    // is no token for a page to keep and none for a script to find.
+    expect(said).toContain("a cookie the host sets");
+    expect(said).toContain("the host's token is not stored here");
+    expect(said).not.toContain("keeps the host's address");
+  });
+
+  it("is the address and the token, for a window showing a box", async () => {
+    const { clientKeeps } = await import("./host");
+    expect(clientKeeps({ desktop: true, attached: true })).toBe(
+      "This app keeps the host's address, its token, and your display preferences.",
+    );
+  });
+
+  it("is neither, for the desktop window whose runtime is its own", async () => {
+    const { clientKeeps } = await import("./host");
+    const said = clientKeeps({ desktop: true, attached: false });
+    expect(said).toContain("its own");
+    expect(said).toContain("no address and no token");
+  });
+});

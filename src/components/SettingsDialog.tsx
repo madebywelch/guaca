@@ -25,6 +25,7 @@ import { AgentAvatar } from "../avatars/AgentAvatar";
 import { ACCENTS, DEFAULT_ACCENT } from "../avatars/catalog";
 import { applyAppearance, resolveSurface } from "../lib/appearance";
 import { buildLabel } from "../lib/build";
+import { clientKeeps, hostAt, hostPlace } from "../lib/host";
 import { api, openExternal } from "../lib/ipc";
 import { BINDINGS, comboLabel, SURFACES } from "../lib/keybinds";
 import { LIMITS } from "../lib/limits";
@@ -55,7 +56,7 @@ import {
   TEMPERATURES,
   themeTokens,
 } from "../lib/theme";
-import { desktop } from "../lib/transport";
+import { attached, desktop } from "../lib/transport";
 import {
   type AccountConnectors,
   type AccountStatus,
@@ -205,6 +206,12 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
   const capabilities = useStore((s) => s.capabilities);
   const prefs = useStore((s) => s.prefs);
   const setPrefs = useStore((s) => s.setPrefs);
+  /* Which host this dialog is about, in the three ways the bar tells them
+     apart, and what this client keeps of it. Both sentences below that name a
+     machine are built from these rather than assuming the runtime runs in the
+     window they are drawn in. */
+  const place = hostPlace();
+  const keeps = clientKeeps({ desktop, attached: attached() !== null });
   /* Kept, and drawn at once. `App` would redraw on the next render anyway; this
      is so the pane the choice was made in is already in it. */
   const setLook = (patch: Partial<Prefs>) => {
@@ -743,16 +750,29 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                 <h3 className="settings__title">Provider</h3>
                 <p className="settings__lede">
                   Three ways to pay for a turn: a subscription you sign in to, a program already
-                  signed in on this machine, or an endpoint and a key you paste. What is chosen here
-                  is the default. Any group can pay its own way, and one that does is not affected
-                  by anything on this page.
+                  signed in on the host, or an endpoint and a key you paste. What is chosen here is
+                  the default. Any group can pay its own way, and one that does is not affected by
+                  anything on this page.
                 </p>
 
                 {/* Its own block, above the endpoint list, because it is not an
                     endpoint. Nothing here is typed: there is no URL to get
                     wrong and no key to paste, which is most of what the list
-                    below exists to protect against. */}
-                <div className="preset preset--plain" aria-current={provider === "chatgpt"}>
+                    below exists to protect against.
+
+                    One line under the name, and the whole sentence is the
+                    row's own title. The slot beside the name gives up its room
+                    first, so the second half of a sentence — which is the
+                    reason to choose the card — was the half that was cut. */}
+                <div
+                  className="preset preset--plain"
+                  aria-current={provider === "chatgpt"}
+                  title={
+                    subscription?.signedIn
+                      ? "Your plan pays for turns, with no per-token bill."
+                      : "Sign in and your plan pays for turns, with no per-token bill."
+                  }
+                >
                   <span className="preset__text">
                     <span className="preset__name">ChatGPT subscription</span>
                     <span className="preset__url">
@@ -760,7 +780,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                         ? `${subscription.email || "signed in"}${
                             subscription.plan ? ` · ${planLabel(subscription.plan)}` : ""
                           }`
-                        : "Sign in and your plan pays for turns, with no per-token bill"}
+                        : "Your plan pays for turns"}
                     </span>
                   </span>
                   {subscription?.signedIn ? (
@@ -822,16 +842,33 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
 
                 {/* No sign-in, no key and no model. All three belong to the
                     program, which is why this row has one control on it: the
-                    only thing this app decides is whether to use it. */}
-                <div className="preset preset--plain" aria-current={provider === "claude"}>
+                    only thing this app decides is whether to use it.
+
+                    Three states, one line. What the row is for never changes,
+                    so the line says that and the state beside it says whether
+                    it can be used; the sentence that says what is missing is
+                    the row's title, where the whole of it fits. `claude` is
+                    read from the host, so "on this host" is where to install
+                    it, and it is the same word onboarding uses. */}
+                <div
+                  className="preset preset--plain"
+                  aria-current={provider === "claude"}
+                  title={
+                    !capabilities.claudeProvider
+                      ? "Runs the claude program where you signed in, which is your own machine, so a server cannot offer it."
+                      : claudeInstalled === false
+                        ? "Runs the claude program, which is not installed on this host."
+                        : "Runs the claude program, and uses whatever it is signed in to and set to."
+                  }
+                >
                   <span className="preset__text">
                     <span className="preset__name">Claude subscription</span>
                     <span className="preset__url">
                       {!capabilities.claudeProvider
-                        ? "Runs the claude program where you signed in, which is your own machine, so a server cannot offer it"
+                        ? "Only where you signed in"
                         : claudeInstalled === false
-                          ? "Runs the claude program, which is not installed on this machine"
-                          : "Runs the claude program, and uses whatever it is signed in to and set to"}
+                          ? "Install the claude program"
+                          : "Runs the claude program"}
                     </span>
                   </span>
                   {!capabilities.claudeProvider ? (
@@ -864,7 +901,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                     Which model runs, and which account pays, are Claude's own settings. This app
                     passes neither, so a model named here or on an agent is not used while Claude is
                     the provider. Your plan has a rolling quota rather than a per-token bill, and a
-                    crew reaches it faster than one person does.
+                    group reaches it faster than one person does.
                   </p>
                 )}
 
@@ -1024,10 +1061,16 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                 </p>
 
                 {/* The line under each key is the state a missing one leaves
-                    the crew in, and nothing once a key is stored. */}
+                    the workspace in, and nothing once a key is stored.
+
+                    What a key does is stated as what it does. It gives nobody a
+                    machine: it is what lets the workspace hand one out, and
+                    `agents.has_computer` is who was handed one, so a legend
+                    promising every agent a computer sends somebody to buy E2B
+                    and then look for whoever did not get one. */}
                 <ApiKeyField
                   label="E2B API key"
-                  title="Gives every agent its own computer: a desktop and a terminal in a sandbox, shown in the corner of its channel."
+                  title="Lets this host rent a computer for an agent: a desktop and a terminal in a sandbox, shown in the corner of its channel. Which agents have one is set on each agent's Computer panel."
                   stored={settings?.e2bKeySet ?? false}
                   hint={settings?.e2bKeyHint ?? ""}
                   value={e2bKey}
@@ -1054,7 +1097,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
 
                 <ApiKeyField
                   label="Kernel API key"
-                  title="Gives every agent its own browser: a Chrome in the cloud, separate from its computer. It is what agents use for the web, because it tells them where everything on a page is instead of making them aim at pixels."
+                  title="Lets this host rent a browser for an agent: a Chrome in the cloud, separate from its computer. It is what agents use for the web, because it tells them where everything on a page is instead of making them aim at pixels. Which agents have one is set on each agent's Browser panel."
                   stored={settings?.kernelKeySet ?? false}
                   hint={settings?.kernelKeyHint ?? ""}
                   value={kernelKey}
@@ -1101,8 +1144,12 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
             {section === "account" && (
               <>
                 <h3 className="settings__title">Account</h3>
+                {/* Where the runtime is, in the words this window can honestly
+                    use: "this machine" was true of the desktop app's own
+                    runtime and false of a host reached over a network, and this
+                    is the pane that explains what leaves which. */}
                 <p className="settings__lede">
-                  Optional, and it stays that way. Guaca runs on this machine with your own keys,
+                  Optional, and it stays that way. Guaca runs on {hostAt(place)} with your own keys,
                   and everything it does today it does without an account. Signing in adds one
                   thing: guaca.bot holds an OAuth client, so an agent can reach a service that only
                   issues access to a registered application. Gmail is the example. Guaca cannot be
@@ -1110,19 +1157,19 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   read.
                 </p>
 
-                {/* What leaves the machine is said on the row that decides
+                {/* What leaves the host is said on the row that decides
                     it, read by whoever hovers before pressing Sign in. */}
                 <div
                   className="preset preset--plain"
                   aria-current={account?.signedIn === true}
-                  title="What leaves this machine, and only once you have signed in: a request for an access token when an agent uses a connector you authorized. Your conversations, your agents and your keys are not sent anywhere, with or without an account."
+                  title="What leaves the host, and only once you have signed in: a request for an access token when an agent uses a connector you authorized. Your conversations, your agents and your keys are not sent anywhere, with or without an account."
                 >
                   <span className="preset__text">
                     <span className="preset__name">Guaca account</span>
                     <span className="preset__url">
                       {/* Short enough for the row. The long version of this
                           sentence is the row's own title, which also says what
-                          leaves the machine and when: the endpoint-width line
+                          leaves the host and when: the endpoint-width line
                           under the name clipped it mid-word instead. */}
                       {account?.signedIn
                         ? account.email || "signed in"
@@ -1701,8 +1748,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                       On that host, in its data folder: <code>guac.db</code> for the transcripts,{" "}
                       <code>config.json</code> for the settings and your keys, written so only that
                       host's user account can read it, <code>workspace/</code> for what each agent
-                      remembers, and <code>files/</code> for anything attached. This app keeps the
-                      host's address, its token, and your display preferences.
+                      remembers, and <code>files/</code> for anything attached. {keeps}
                     </span>
                   </div>
 
