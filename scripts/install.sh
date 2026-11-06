@@ -75,9 +75,43 @@ step "Checking what this needs"
 
 [ "$(uname -s)" = "Darwin" ] || fail "macOS only; this builds a .app bundle."
 
+# The three that stop the build itself rather than one step of it, asked before
+# it starts because each one is otherwise a compiler error four hundred crates
+# into a cold build. `codesign` and `ditto` are in /usr/bin on every Mac as
+# shims, so `command -v` finds them on a machine whose Command Line Tools they
+# stand for are not installed at all; only xcrun can answer that one.
+xcrun --find clang >/dev/null 2>&1 \
+  || fail "the Xcode Command Line Tools are missing; run \`xcode-select --install\`, finish that installer, and run this again."
+
+command -v node >/dev/null 2>&1 \
+  || fail "node is not on PATH; install Node.js from nodejs.org and run this again."
+
 for tool in git pnpm cargo codesign ditto; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is not on PATH; install it and run this again."
 done
+
+# Is $1 at least $2, for dotted version numbers? Written out because `sort -V`
+# is GNU and macOS ships a BSD sort without it, and because the answer decides
+# whether somebody is told now or told by a wall of errors later.
+at_least() {
+  local a b i
+  IFS=. read -r -a a <<<"$1"
+  IFS=. read -r -a b <<<"$2"
+  for i in 0 1 2; do
+    [ "${a[i]:-0}" -gt "${b[i]:-0}" ] && return 0
+    [ "${a[i]:-0}" -lt "${b[i]:-0}" ] && return 1
+  done
+  return 0
+}
+
+# `rust-version` in the crate is the floor, and cargo reports it only once it is
+# already compiling. Without a check here the same fact arrives as a build
+# failure in a terminal nobody is watching.
+FLOOR="$(sed -n 's/^rust-version *= *"\([0-9.]*\)".*/\1/p' src-tauri/Cargo.toml)"
+GOT="$(rustc --version | sed -n 's/^rustc \([0-9][0-9.]*\).*/\1/p')"
+if [ -n "$FLOOR" ] && [ -n "$GOT" ] && ! at_least "$GOT" "$FLOOR"; then
+  fail "rustc $GOT is older than the $FLOOR this app builds with; run \`rustup update stable\` and run this again."
+fi
 
 [ -d "$DEST" ] || fail "$DEST does not exist; set GUACA_DEST to where the app should go."
 [ -w "$DEST" ] || fail "$DEST is not writable by $(id -un); set GUACA_DEST, or fix the permissions."

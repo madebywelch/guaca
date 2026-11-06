@@ -27,6 +27,7 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
   const sending = useRef(false);
   const heading = useRef<HTMLHeadingElement>(null);
   const briefHint = useId();
+  const continueHint = useId();
   const settings = useStore((state) => state.settings);
   const agents = useStore((state) => state.agents);
   const refreshAgents = useStore((state) => state.refreshAgents);
@@ -235,15 +236,22 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
               <button
                 type="button"
                 className="btn btn--primary"
+                aria-describedby={continueHint}
                 disabled={!draft.brief.trim()}
                 onClick={() => setStep("provider")}
               >
                 Continue
               </button>
-              <span>
-                {settings?.provider === "compatible" && !settings.apiKeySet
-                  ? "Next: add an API key or connect ChatGPT."
-                  : "No Guaca account needed."}
+              {/* A button that will not press and says nothing is the first
+                  thing this app does to a stranger. The reason sits here, on
+                  every state of it, and is the button's own description so a
+                  screen reader hears it too. */}
+              <span id={continueHint}>
+                {!draft.brief.trim()
+                  ? "Pick one of the tasks above, or write your own brief, to continue."
+                  : settings?.provider === "compatible" && !settings.apiKeySet
+                    ? "Next: add an API key or connect ChatGPT."
+                    : "No Guaca account needed."}
               </span>
             </div>
             <div className="onboarding-alternatives">

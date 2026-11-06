@@ -3,6 +3,7 @@ import { api, openExternal } from "../lib/ipc";
 import { PROVIDERS, planLabel, providerFor } from "../lib/providers";
 import { useStore } from "../lib/store";
 import {
+  type ClaudeProgram,
   type DeviceCode,
   errorMessage,
   type Provider,
@@ -36,10 +37,30 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
   const [apiKey, setApiKey] = useState("");
   const [subscription, setSubscription] = useState<SubscriptionStatus | null>(null);
   const [pendingCode, setPendingCode] = useState<DeviceCode | null>(null);
+  // Whether the host has the `claude` program, which is a fact about the host
+  // and not about this screen: undefined while it is being asked, null when the
+  // answer could not be read. A screen that guessed "not installed" from a
+  // failed read would refuse a provider that works.
+  const [claude, setClaude] = useState<ClaudeProgram | null | undefined>(undefined);
   const [busy, setBusy] = useState<"signin" | "testing" | "saving" | null>(null);
   const [error, setError] = useState("");
-  const [advanced, setAdvanced] = useState(settings?.provider === "claude");
+  const [advanced, setAdvanced] = useState(false);
   const attempt = useRef(0);
+
+  useEffect(() => {
+    let live = true;
+    void api.claudeProgram().then(
+      (value) => {
+        if (live) setClaude(value);
+      },
+      () => {
+        if (live) setClaude(null);
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, []);
 
   useEffect(() => {
     const current = attempt.current;
@@ -60,6 +81,17 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
   const savedKey = Boolean(settings?.apiKeySet && endpoint(baseUrl) === endpoint(settings.baseUrl));
   const needsKey = preset && !preset.local && !savedKey && !apiKey.trim();
   const ineligible = subscription?.signedIn && !subscription.includesCodex;
+  const claudeReady = capabilities.claudeProvider && claude?.installed !== false;
+
+  // The Claude plan is offered beside the other two rather than behind
+  // "Advanced", because the people most likely to try this app are already
+  // carrying one and a disclosure triangle reads as "for experts". A host that
+  // cannot run the program is a reason on the card, never a reason to hide it.
+  const claudeBlurb = !capabilities.claudeProvider
+    ? "This host does not offer the claude program, so a plan cannot pay for turns here."
+    : claude?.installed === false
+      ? `Runs the claude program, which this host does not have. Install it there with ${claude.install}, sign in, then come back.`
+      : "Use a Claude plan through the claude program already signed in on your Guaca host. No API key needed.";
 
   const choose = (next: Provider) => {
     setProvider(next);
@@ -81,7 +113,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
 
   const connect = async () => {
     if (busy || !settings) return;
-    if (provider === "claude" && !capabilities.claudeProvider) return;
+    if (provider === "claude" && !claudeReady) return;
     if (provider === "compatible" && (needsKey || !baseUrl.trim() || !model.trim())) {
       setError("Enter an endpoint, a model, and the key for that provider, then try again.");
       return;
@@ -166,6 +198,16 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
         >
           <strong>ChatGPT subscription</strong>
           <span>Sign in with a plan that includes Codex. No API key needed.</span>
+        </button>
+        <button
+          type="button"
+          className="onboarding-choice"
+          aria-pressed={provider === "claude"}
+          disabled={Boolean(busy) || !claudeReady}
+          onClick={() => choose("claude")}
+        >
+          <strong>Claude subscription</strong>
+          <span>{claudeBlurb}</span>
         </button>
         <button
           type="button"
@@ -274,6 +316,14 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
         </div>
       )}
 
+      {provider === "claude" && claudeReady && (
+        <p className="onboarding-notice">
+          Claude's own account and model settings apply; Guaca passes neither, so a model named here
+          is not used. Sign in on your Guaca host first — inside the container, for a container
+          host. Testing makes a small request using that account.
+        </p>
+      )}
+
       <details
         className="onboarding-advanced"
         open={advanced}
@@ -315,28 +365,6 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
               effort={effort}
               onEffortChange={(value) => setEffort(value ?? "auto")}
             />
-          )}
-          <button
-            type="button"
-            className="onboarding-choice"
-            aria-pressed={provider === "claude"}
-            disabled={!capabilities.claudeProvider}
-            onClick={() => choose("claude")}
-          >
-            <strong>Claude CLI</strong>
-            <span>
-              {capabilities.claudeProvider
-                ? "Use the claude program already signed in on your Guaca host."
-                : "This Guaca host does not support the Claude CLI provider."}
-            </span>
-          </button>
-          {provider === "claude" && (
-            <p className="field__hint">
-              Install Claude Code and sign in on your Guaca host first. For a container host, do
-              this inside the container. Claude's own account and model settings on that host apply;
-              Guaca does not receive its credentials. Testing makes a small request using that
-              account.
-            </p>
           )}
         </fieldset>
       </details>
@@ -380,7 +408,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
               Boolean(busy) ||
               !settings ||
               Boolean(provider === "compatible" && needsKey) ||
-              (provider === "claude" && !capabilities.claudeProvider)
+              (provider === "claude" && !claudeReady)
             }
             onClick={() => void connect()}
           >

@@ -100,8 +100,13 @@ function TrailChip({
       {/* Only where it belongs to one call and adds something the label has
           not already said. Several calls have several answers, and a chip
           quoting whichever happened to be first is a chip that is wrong about
-          the rest. */}
-      {previewed && <span className="trail__said">{only.said}</span>}
+          the rest. The `title` is the part that was cut: a chip is one line,
+          and what a routine was set for or a page said does not fit in one. */}
+      {previewed && (
+        <span className="trail__said" title={only.said}>
+          {only.said}
+        </span>
+      )}
       {group.spent.map((credential) => (
         <span className="trail__spent" key={credential}>
           {credential}
@@ -170,9 +175,12 @@ function StepRow({ step }: { step: Step }) {
             operator came here to find out. */}
         {changed && <span className="trail__said">{diffSummary(changed)}</span>}
         {/* Not twice. A refusal drawn below is not also a clipped copy of
-            itself on the line above the block holding it. */}
+            itself on the line above the block holding it. The `title` is the
+            part a narrow row cut, for the reason the chip has one. */}
         {step.said && tellsMore(step) && !reason && (
-          <span className="trail__said">{step.said}</span>
+          <span className="trail__said" title={step.said}>
+            {step.said}
+          </span>
         )}
         {step.spent.map((credential) => (
           <span className="trail__spent" key={credential}>

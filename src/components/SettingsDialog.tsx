@@ -1102,9 +1102,13 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   <span className="preset__text">
                     <span className="preset__name">Guaca account</span>
                     <span className="preset__url">
+                      {/* Short enough for the row. The long version of this
+                          sentence is the row's own title, which also says what
+                          leaves the machine and when: the endpoint-width line
+                          under the name clipped it mid-word instead. */}
                       {account?.signedIn
                         ? account.email || "signed in"
-                        : "Sign in to authorize Gmail, Drive or a GitHub repository for your agents"}
+                        : "Sign in to connect Gmail, Drive or GitHub"}
                     </span>
                   </span>
                   {account?.signedIn ? (
@@ -1631,18 +1635,21 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   <div className="field">
                     <span className="field__label">What this is</span>
                     <span className="field__hint">
-                      A local desktop app where you talk to LLM agents and they talk to each other.
-                      The agents run here, in this app, not on anybody's server.
+                      A window into a Guaca host. You talk to LLM agents and they talk to each
+                      other; <code>guacad</code> runs them, in a container on your own machine or on
+                      one you connect to. They keep working while this window is closed, as long as
+                      that host is awake.
                     </span>
                   </div>
 
                   <div className="field">
                     <span className="field__label">Where it keeps things</span>
                     <span className="field__hint">
-                      Everything is under this app's data directory: <code>guac.db</code> for the
-                      transcripts, <code>config.json</code> for the settings and your keys, written
-                      so only your user account can read it, <code>workspace/</code> for what each
-                      agent remembers, and <code>files/</code> for anything attached.
+                      On that host, in its data directory: <code>guac.db</code> for the transcripts,{" "}
+                      <code>config.json</code> for the settings and your keys, written so only that
+                      host's user account can read it, <code>workspace/</code> for what each agent
+                      remembers, and <code>files/</code> for anything attached. This app keeps the
+                      host's address, its token, and your display preferences.
                     </span>
                   </div>
 

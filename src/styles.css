@@ -277,6 +277,12 @@
      control below sets any. */
   --control-h: 2.25rem; /* 36px. The default. */
   --control-h-sm: 1.75rem; /* 28px. Dense rows, inline controls, the send. */
+  /* The floor under a control's own box, which is not a rung of that ladder: a
+     gear glyph, a file name, a disclosure and a link inside a sentence are all
+     shorter than either step, and measured at their type they came out between
+     13 and 22px. 24 is the smallest a pointer, a fingertip or a focus ring can
+     be expected to land on, and the one WCAG 2.2 asks for. */
+  --control-min: 1.5rem; /* 24px. */
 
   /* ---- Motion -------------------------------------------------------------
      One curve, three tempos. Cohesion is mostly this: every surface in the app
@@ -1397,7 +1403,15 @@ input[type="file"]::file-selector-button {
 .rail__gear {
   background: none;
   border: 0;
-  padding: 0 var(--space-1);
+  /* A glyph and nothing else: 17x15, which is what a heading's type measures and
+     is the entrance to a group's whole configuration. The box is a control's
+     floor now, and the mark is centered in it so the heading does not grow a
+     notch where the glyph used to sit. */
+  display: grid;
+  place-items: center;
+  min-width: var(--control-min);
+  min-height: var(--control-min);
+  padding: 0;
   /* A step up from what it sits beside. It is the only thing in either heading
      that is aimed at rather than read, and at the size of a label it was a
      glyph the pointer had to hunt for. */
@@ -3861,6 +3875,9 @@ input[type="file"]::file-selector-button {
   align-items: center;
   gap: var(--space-3);
   min-width: 0;
+  /* One line of the trail's type is 22.5px tall, and the chip is a button where
+     it opens onto anything. */
+  min-height: var(--control-min);
   max-width: 100%;
   /* The one backstop under the rule that the label is never cut: a label wider
      on its own than the pane is cut here rather than drawn over the message
@@ -5323,6 +5340,11 @@ input[type="file"]:disabled {
 .field--row input[type="checkbox"] {
   margin-top: var(--space-2);
   flex: none;
+  /* A native box is 13px. The row is a label, so a click anywhere in it works,
+     but the part a trackpad aims at and the ring the keyboard draws are the box
+     itself, so the box is a control's size. */
+  width: var(--control-min);
+  height: var(--control-min);
 }
 
 .field--row .field__label,
@@ -5378,6 +5400,10 @@ input[type="file"]:disabled {
   color: var(--system);
   text-decoration: underline;
   text-underline-offset: 2px;
+  /* Inline, so this padding is hit area rather than layout: the line box stays
+     where the sentence set it and the box the pointer lands on is a control's
+     height. Measured before this: 103x16. */
+  padding-block: var(--space-3);
 }
 
 .access__item {
@@ -5867,12 +5893,24 @@ input[type="file"]:disabled {
   line-height: var(--lead-read);
 }
 
+/* The one screen that must not have a hidden next step, and the one place they
+   were hidden. Opening Advanced options makes the content 1073px in an 866px
+   pane; the actions are the last thing in it, so they sat at y=1001 in a 900px
+   window. It scrolls, and on a Mac the scrollbar is an overlay that is not drawn
+   until you scroll, so the button was simply not there. Held to the bottom of
+   the pane instead, on the page's own ground so what passes under it does not
+   read through. */
 .onboarding-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-5);
   margin-top: var(--space-7);
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  background: var(--ground);
+  padding-bottom: var(--space-5);
 }
 
 .onboarding-actions > span,
@@ -6227,6 +6265,8 @@ input[type="file"]:disabled {
 .detail__tool {
   flex: none;
   display: inline-flex;
+  min-width: var(--control-min);
+  min-height: var(--control-min);
   align-items: center;
   justify-content: center;
   border: 0;
@@ -6391,6 +6431,9 @@ input[type="file"]:disabled {
 }
 
 .worknotes__more {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--control-min);
   padding: 0;
   background: none;
   border: 0;
@@ -9309,6 +9352,9 @@ button.artifacts__version[aria-pressed="true"] {
 
 .grant__disclosure,
 .worknotes__toggle {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--control-min);
   border: 0;
   padding: 0;
   background: none;

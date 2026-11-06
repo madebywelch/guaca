@@ -1270,7 +1270,7 @@ describe("the Guaca account", () => {
   it("offers a sign-in when there is none", async () => {
     open(stored(), DEFAULT_PREFS, "account");
     await waitFor(() => expect(accountStatus).toHaveBeenCalled());
-    expect(row().textContent).toContain("Sign in to authorize");
+    expect(row().textContent).toContain("Sign in to connect Gmail");
     expect(button("Sign in")).toBeTruthy();
   });
 
@@ -1325,7 +1325,7 @@ describe("the Guaca account", () => {
     fireEvent.click(button("Sign in"));
 
     await waitFor(() => expect(screen.getByText(/could not reach guaca\.bot/)).toBeTruthy());
-    expect(row().textContent).toContain("Sign in to authorize");
+    expect(row().textContent).toContain("Sign in to connect Gmail");
     expect(screen.queryByRole("status")).toBeNull();
   });
 
@@ -1355,7 +1355,7 @@ describe("the Guaca account", () => {
     accountConnectors.mockRejectedValue({ kind: "signedOut", message: "sign in again" });
     open(stored(), DEFAULT_PREFS, "account");
 
-    await waitFor(() => expect(row().textContent).toContain("Sign in to authorize"));
+    await waitFor(() => expect(row().textContent).toContain("Sign in to connect Gmail"));
   });
 
   it("forgets the sign-in and the list it came with", async () => {
@@ -1364,7 +1364,7 @@ describe("the Guaca account", () => {
     await waitFor(() => expect(screen.getByText("Gmail")).toBeTruthy());
 
     fireEvent.click(button("Sign out"));
-    await waitFor(() => expect(row().textContent).toContain("Sign in to authorize"));
+    await waitFor(() => expect(row().textContent).toContain("Sign in to connect Gmail"));
     // The list went with it. Leaving it on screen would be a list of what an
     // account this machine no longer holds can reach.
     expect(screen.queryByText("Gmail")).toBeNull();
@@ -1640,16 +1640,24 @@ describe("shortcuts", () => {
 });
 
 describe("about", () => {
-  it("says which commit this build was made from", () => {
+  it("names the version this build ships as, and the commit behind it", () => {
     open();
     pane("About");
 
-    // The value is baked in at build time, so the assertion is on the shape:
-    // a short hash, dirty or not, or the dash a build with no repository behind
-    // it draws. Nothing here is read from a host, so nothing can fail.
+    // Both values are baked in at build time, so the assertion is on the shape:
+    // the release version, then the short hash, dirty or not. The bare hash
+    // that used to stand here was the one number an operator could not quote.
     expect(document.querySelector(".about__version")?.textContent).toMatch(
-      /^Version (—|[0-9a-f]{7,}(-dirty)?)$/,
+      /^Version \d+\.\d+\.\d+ \([0-9a-f]{7,}(-dirty)?\)$/,
     );
+  });
+
+  it("says where the agents run, which is not in this window", () => {
+    open();
+    pane("About");
+
+    expect(document.querySelector(".about__facts")?.textContent).toContain("guacad");
+    expect(document.body.textContent).not.toContain("not on anybody's server");
   });
 });
 

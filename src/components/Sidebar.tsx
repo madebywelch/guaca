@@ -624,7 +624,12 @@ export function Sidebar({
                         {gear(group)}
                       </div>
                       {here.map(row)}
-                      {members.length === 0 && <p className="rail__empty">No agents in here.</p>}
+                      {/* Only when there are agents somewhere else. With none
+                          anywhere, the line under the groups says it once and
+                          this said it again in other words, stacked. */}
+                      {members.length === 0 && agents.length > 0 && (
+                        <p className="rail__empty">No agents in here.</p>
+                      )}
                     </div>
                   );
                 })}

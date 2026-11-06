@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  attempt,
   callInFlight,
   foldTrail,
   hasDetail,
@@ -156,6 +157,43 @@ describe("what one call was", () => {
   });
 });
 
+describe("a call that failed, said as an attempt", () => {
+  it("does not put the successful past tense on work that did not happen", () => {
+    // The row is already washed and the reason is under it; what it used to say
+    // in words was that the schedule was made.
+    const [step] = steps(
+      call(
+        "schedule",
+        { action: "create", name: "Morning market note" },
+        { status: "failed", error: "a routine with that name already exists" },
+      ),
+    );
+    expect(step?.title).toBe("Tried to schedule Morning market note");
+    expect(step?.failed).toBe(true);
+    // The reason is still the reason, not a restatement of the title.
+    expect(step?.said).toContain("already exists");
+  });
+
+  it("keeps the title through the words in front of it", () => {
+    expect(attempt("Ran a command")).toBe("Tried to run a command");
+    expect(attempt("Read the page")).toBe("Tried to read the page");
+    expect(attempt("Went back a page")).toBe("Tried to go back a page");
+    expect(attempt("Sent an errand")).toBe("Tried to send an errand");
+  });
+
+  it("leaves a successful call in the past tense", () => {
+    const [step] = steps(call("run_command", { command: "make" }, ok("exit 0")));
+    expect(step?.title).toBe("Ran a command");
+  });
+
+  it("says a verb it does not know as a failure rather than rewriting it", () => {
+    // Nothing in `describe` writes this today. It is here so a new title that
+    // nobody added to the table reads as a failure with an odd word in front,
+    // not as a past tense claiming the work happened.
+    expect(attempt("Brewed the coffee")).toBe("Failed: Brewed the coffee");
+  });
+});
+
 describe("credentials a command spent", () => {
   // Mirrors `credentials_named_in` in `runtime/mod.rs`. If that wording changes
   // this test is where it is noticed, rather than a transcript quietly losing
@@ -266,7 +304,12 @@ describe("folding a turn's work", () => {
         call("run_command", { command: "pwd" }, ok("exit 0")),
       ),
     );
-    expect(groups.map((group) => group.label)).toEqual(["Ran 2 commands", "Ran a command"]);
+    // Its own chip, out of the count, and in the words a failure needs: the
+    // command around it is the successful one.
+    expect(groups.map((group) => group.label)).toEqual([
+      "Ran 2 commands",
+      "Tried to run a command",
+    ]);
     expect(groups[1]?.failed).toBe(true);
     expect(groups[1]?.steps[0]?.said).toBe("no machine");
   });
@@ -417,7 +460,7 @@ describe("a call to a plugin", () => {
     // Never folded, and still the one chip that has to name the server itself.
     expect(foldTrail(steps(google("gmail_search"), failed)).map((group) => group.label)).toEqual([
       "Used gmail_search on Google",
-      "Used gmail_search on Google",
+      "Tried to use gmail_search on Google",
     ]);
   });
 

@@ -78,6 +78,17 @@ several of a kind, and it names what it can even then: a browsing turn that
 stayed on one site says which site, for the reason a burst draws one chip per
 peer rather than "5 messages with 2 agents".
 
+**And a call that did not happen is not written in the past tense.** The title
+is the successful phrasing, which is right for a call that finished and is the
+opposite of what happened on one that failed: the chip read `Scheduled Morning
+market note` above a wash saying it did not, with the reason under it, so the
+words claimed the work the row was apologizing for. `attempt` in `lib/trail.ts`
+reads the same work as an attempt — `Tried to schedule Morning market note` —
+from a table of the verbs `describe` writes. The table is explicit because
+English will not conjugate backwards: `Ran` is not `ran` with a suffix, and a
+rule that stripped `ed` would turn `Used` into `us`. A verb missing from it is
+left whole behind a colon, which is clumsy and never wrong.
+
 **A plugin call is drawn as the server and the tool, not as the name a model
 calls it by.** The runtime prefixes the plugin onto the tool so that whatever
 draws the call can say where the work went, and that name is a wire name: `Used
@@ -1564,9 +1575,27 @@ in memory, warns the operator, and guards reload until saving works again.
 The runtime still owns
 every agent and turn; the first-run page only forwards the operator's intent.
 
+Two things on that page say what they are doing rather than leaving it to be
+worked out. Continue cannot be pressed with an empty brief, so the row beside it
+carries the reason — pick one of the tasks, or write your own — and the button is
+described by that sentence, because a dead primary button is the first thing this
+app does to a stranger. And the second step offers the Claude plan beside the
+ChatGPT subscription and the API key rather than inside Advanced options, which
+read as "for experts" in front of an option that costs nothing more to the people
+most likely to already have it. A host without the Claude program is a sentence
+on that card rather than a card that is not there: `claude_program` is asked when
+the step mounts, and the card says either that the program is missing and how to
+install it, or that this deployment does not offer it.
+
+Opening Advanced options makes that step taller than the pane, and the actions
+are the last thing in it, so they were at y=1001 in a 900px window — reachable
+only by scrolling a bar a Mac draws as an overlay that is not there until you
+scroll. They are held to the bottom of the pane now. The one screen that decides
+whether the product works is the one that must not have a hidden next step.
+
 `Onboarding.test.tsx` covers that handoff and recovery, `OnboardingProvider.test.tsx`
 covers connection failures, and `lib/onboarding.test.ts` holds the host boundary
-around the saved brief. Existing workspaces and emptied crews keep their normal
+around the saved brief. Existing workspaces and emptied groups keep their normal
 workspace view.
 
 ## The cafeteria is a copy machine, not a registry
@@ -1898,22 +1927,35 @@ somebody else's server. A local endpoint is marked as local because that changes
 what the key field means: an empty key beside a warning about a missing key is a
 state an operator will try to fix forever.
 
-About says which commit it is, rather than a version. The number in
-`package.json` and `tauri.conf.json` has not moved since the first commit and is
-not going to: what ships here is a commit, so a version read off either file
-tells an operator nothing and tells a bug report less. It used to be read
-through Tauri's `getVersion`, which is exactly that placeholder arriving over
-IPC. So `vite.config.ts` asks git for the short hash while the bundle is being
-built and `src/lib/build.ts` is the one place it is read back from. Nothing is
-asked at runtime, because the built app carries no repository to ask. A tree
-with uncommitted edits to tracked files on top of that commit gets `-dirty`,
-because an unqualified hash sends whoever reads it to check out a commit that
-did not produce the build in front of them. An untracked file does not count:
-nothing is built from it unless a tracked file names it, and when it counted, a
-note left in the checkout made a desktop built from `main` read as a different
-build from the same commit running on a box. And a build made outside a repository at all
-draws a dash: it is the same answer the pane already gave for a version it could
-not read, and it is still a thing to say rather than a failure worth a banner.
+About says the version this build ships as, and the commit behind it. It said
+only the commit for as long as `package.json` and `tauri.conf.json` were
+placeholders that never moved, and that stopped being true when releases started
+bumping the three version files together: a bare hash is not a number anybody
+can quote, and `Version 0.2.0 (99f80ed)` is both halves — the release it came
+from and which build of that release it is. `0.2.0` alone is the lie in the
+other direction, because `main` and a release can read the same version and be a
+week apart.
+
+`vite.config.ts` substitutes both while the bundle is built, and
+`src/lib/build.ts` is the one place they are read back from. Nothing is asked at
+runtime, because the built app carries no repository to ask. A tree with
+uncommitted edits to tracked files on top of that commit gets `-dirty`, because
+an unqualified hash sends whoever reads it to check out a commit that did not
+produce the build in front of them. An untracked file does not count: nothing is
+built from it unless a tracked file names it, and when it counted, a note left
+in the checkout made a desktop built from `main` read as a different build from
+the same commit running on a box. A build made outside a repository at all draws
+the version with no commit after it, and one with neither draws a dash: it is
+still a thing to say rather than a failure worth a banner.
+
+The rest of the pane is the same question. About used to say the agents run in
+this app and "not on anybody's server", which was true of the single-process
+desktop and is false of this one: `guacad` runs them, in a container on the
+operator's own machine or on a box they connect to, and the window is a client
+of it. So the pane names the host, says the work continues while the window is
+closed as long as that host is awake, and says what the host keeps — including
+that this app holds only the host's address, its token and the operator's
+display preferences.
 
 ## An agent can read the settings, and what the operator is looking at
 
