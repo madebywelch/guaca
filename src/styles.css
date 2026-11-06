@@ -4323,6 +4323,17 @@ input[type="file"]::file-selector-button {
   opacity: 0.72;
 }
 
+/* Opened, the answer is the reason the operator clicked, so it wraps instead of
+   clipping. A chip has one line to say what came back; a step has the column,
+   and a calendar's answer carries the id it stored — one unbroken token that
+   `nowrap` pushed under the panel, where it was cut off mid-id. `anywhere`
+   rather than `break-word`, because a uuid has no break opportunity to find. */
+.trail__step .trail__said {
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: anywhere;
+}
+
 /* A credential this command spent, by name. The operator's audit trail for
    their own tokens, so it is never folded into a count and never behind a
    click. Pit brown, because it is Guaca saying something rather than the agent.

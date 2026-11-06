@@ -696,7 +696,7 @@ export function callInFlight(name: string, raw: unknown): string {
       return "Writing a document";
     default: {
       const from = pluginCall(name);
-      return from ? `Using ${readable(from.tool)} at ${from.plugin}` : `Using ${name}`;
+      return from ? `Using ${readable(from.tool)} on ${from.plugin}` : `Using ${name}`;
     }
   }
 }
@@ -772,14 +772,14 @@ function manyLabel(group: TrailGroup): string {
  * A plugin's server is named here rather than in the step's own title because
  * the chip is the only place it is missing. A step is only ever drawn under a
  * chip, and that chip already says where the work went: a column of `Used
- * Drive read file at Google` under one reading `4 calls to Google` says the
+ * Drive read file on Google` under one reading `4 calls to Google` says the
  * place five times over.
  */
 function chipLabel(group: TrailGroup): string {
   if (group.steps.length > 1) return manyLabel(group);
   const only = group.steps[0]!;
   const from = pluginCall(only.tool);
-  return from ? `${only.title} at ${from.plugin}` : only.title;
+  return from ? `${only.title} on ${from.plugin}` : only.title;
 }
 
 /**

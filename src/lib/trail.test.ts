@@ -458,7 +458,7 @@ describe("a call while it is still happening", () => {
     // is not something this build can say: guessing at it is how
     // `update_memory` once drew as a message sent to nobody. Where the wait is
     // is a different question, and the name answers it.
-    expect(callInFlight("linear__create_issue", {})).toBe("Using Create issue at Linear");
+    expect(callInFlight("linear__create_issue", {})).toBe("Using Create issue on Linear");
     expect(callInFlight("run_code", { source: "print(1)" })).toBe("Using run_code");
   });
 });
@@ -471,7 +471,7 @@ describe("a call to a plugin", () => {
     // the runtime's summary saying the same thing in words: the row said it
     // twice, once in a spelling nobody reads.
     const groups = foldTrail(steps(google("gmail_search")));
-    expect(groups[0]?.label).toBe("Used Gmail search at Google");
+    expect(groups[0]?.label).toBe("Used Gmail search on Google");
     expect(groups[0]?.steps[0]?.where).toBe("Google");
   });
 
@@ -498,8 +498,8 @@ describe("a call to a plugin", () => {
     expect(tellsMore(step as Step)).toBe(true);
     // Never folded, and still the one chip that has to name the server itself.
     expect(foldTrail(steps(google("gmail_search"), failed)).map((group) => group.label)).toEqual([
-      "Used Gmail search at Google",
-      "Tried to use Gmail search at Google",
+      "Used Gmail search on Google",
+      "Tried to use Gmail search on Google",
     ]);
   });
 
@@ -509,7 +509,7 @@ describe("a call to a plugin", () => {
     const groups = foldTrail(
       steps(call("home_assistant__turn_on", {}, ok("home_assistant · turn_on"))),
     );
-    expect(groups[0]?.label).toBe("Used Turn on at home_assistant");
+    expect(groups[0]?.label).toBe("Used Turn on on home_assistant");
   });
 
   it("gathers a turn's work at one server, the way it gathers a turn in a browser", () => {
@@ -534,8 +534,8 @@ describe("a call to a plugin", () => {
       steps(google("gmail_search"), call("linear__create_issue", {}, ok("Linear · create_issue"))),
     );
     expect(groups.map((group) => group.label)).toEqual([
-      "Used Gmail search at Google",
-      "Used Create issue at Linear",
+      "Used Gmail search on Google",
+      "Used Create issue on Linear",
     ]);
   });
 

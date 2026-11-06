@@ -122,7 +122,7 @@ function FootnoteGroup({
   // plugin's tool has no phrase this build can write — it is somebody else's
   // function — so its wire name becomes words, and this is where the name
   // itself survives: a note that said `Used mailbox__search_threads` last week
-  // says `Used Search threads at mailbox` and says the rest on hover.
+  // says `Used Search threads on mailbox` and says the rest on hover.
   const tools = [...new Set(group.steps.map((step) => step.tool))].join(", ");
   const face = (
     <>
