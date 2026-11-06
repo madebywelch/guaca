@@ -19,6 +19,7 @@ const {
   isUnreachable,
   probe,
   setToken,
+  settleInvitation,
   token,
   UNAUTHORIZED_EVENT,
   upload,
@@ -26,11 +27,15 @@ const {
 
 const fetched = vi.fn<typeof fetch>();
 
-beforeEach(() => {
-  setToken("");
-  window.history.replaceState(null, "", "/");
-  fetched.mockReset();
+beforeEach(async () => {
+  // Stubbed before signing out: signing out is a request to the daemon now,
+  // and a real `fetch` in jsdom would only fail against nothing listening.
   vi.stubGlobal("fetch", fetched);
+  fetched.mockResolvedValue(new Response(JSON.stringify({ ok: "signed out" })));
+  await setToken("");
+  fetched.mockReset();
+  window.history.replaceState(null, "", "/");
+  window.localStorage.clear();
 });
 
 afterEach(() => {
@@ -38,21 +43,44 @@ afterEach(() => {
 });
 
 describe("an invitation", () => {
-  it("is taken out of the address bar and kept", () => {
+  it("is taken out of the address bar and exchanged, not kept", async () => {
+    fetched.mockResolvedValue(new Response(JSON.stringify({ ok: "signed in" })));
     window.history.replaceState(null, "", "/#token=abc123");
 
     expect(adoptInvitation()).toBe(true);
-    expect(token()).toBe("abc123");
     // The credential must not survive in the URL: a reload, a duplicated tab
     // or a link dragged to somebody else would carry it.
     expect(window.location.hash).toBe("");
     expect(window.location.pathname).toBe("/");
+    // Nor in script-readable storage. It waits for its exchange, which is what
+    // turns it into the HttpOnly cookie this browser keeps instead.
+    expect(token()).toBe("");
+
+    await expect(settleInvitation()).resolves.toBe(true);
+    const [url, init] = fetched.mock.calls[0]!;
+    expect(String(url)).toBe(`${window.location.origin}/v1/auth/session`);
+    expect((init!.headers as Record<string, string>).authorization).toBe("Bearer abc123");
+    expect(init!.credentials).toBe("same-origin");
+    expect(window.localStorage.getItem("guaca.workspace.token")).toBeNull();
   });
 
-  it("leaves a stored token alone when there is nothing in the address bar", () => {
-    setToken("kept");
+  it("migrates a token an older build left in storage, and deletes it", async () => {
+    fetched.mockResolvedValue(new Response(JSON.stringify({ ok: "signed in" })));
+    window.localStorage.setItem("guaca.workspace.token", "old-token");
+
     expect(adoptInvitation()).toBe(false);
-    expect(token()).toBe("kept");
+    await expect(settleInvitation()).resolves.toBe(true);
+    const [url, init] = fetched.mock.calls[0]!;
+    expect(String(url)).toBe(`${window.location.origin}/v1/auth/session`);
+    expect((init!.headers as Record<string, string>).authorization).toBe("Bearer old-token");
+    // The script-readable copy is gone the moment the cookie replaces it.
+    expect(window.localStorage.getItem("guaca.workspace.token")).toBeNull();
+  });
+
+  it("settles nothing when there is neither an invitation nor a stored token", async () => {
+    expect(adoptInvitation()).toBe(false);
+    await expect(settleInvitation()).resolves.toBe(false);
+    expect(fetched).not.toHaveBeenCalled();
   });
 
   it("ignores a fragment that is not a token", () => {
@@ -163,8 +191,7 @@ describe("probing a box", () => {
 });
 
 describe("an upload", () => {
-  it("posts the bytes under the file's name with the token, and unwraps what was stored", async () => {
-    setToken("abc123");
+  it("posts the bytes under the file's name, and unwraps what was stored", async () => {
     fetched.mockResolvedValue(
       new Response(
         JSON.stringify({ ok: { digest: "d", name: "brief.txt", mime: "text/plain", bytes: 5 } }),
@@ -174,7 +201,11 @@ describe("an upload", () => {
     await expect(upload(file)).resolves.toMatchObject({ digest: "d", name: "brief.txt" });
     const [url, init] = fetched.mock.calls[0]!;
     expect(String(url)).toBe(`${window.location.origin}/v1/upload?name=brief.txt`);
-    expect((init!.headers as Record<string, string>).authorization).toBe("Bearer abc123");
+    // A browser holds no script-readable token. The session cookie rides along
+    // because a same-origin request asks for credentials, and no header goes
+    // out empty.
+    expect((init!.headers as Record<string, string>).authorization).toBeUndefined();
+    expect(init!.credentials).toBe("same-origin");
     expect(init!.body).toBe(file);
   });
 
@@ -197,8 +228,7 @@ describe("an upload", () => {
 });
 
 describe("a call", () => {
-  it("carries the token as a bearer and unwraps the answer", async () => {
-    setToken("abc123");
+  it("carries the session cookie and unwraps the answer", async () => {
     fetched.mockResolvedValue(new Response(JSON.stringify({ ok: { fine: true } })));
 
     await expect(invoke("capabilities")).resolves.toEqual({ fine: true });
@@ -206,7 +236,8 @@ describe("a call", () => {
     const [url, init] = fetched.mock.calls[0]!;
     expect(String(url)).toBe(`${window.location.origin}/v1/call`);
     const headers = init!.headers as Record<string, string>;
-    expect(headers.authorization).toBe("Bearer abc123");
+    expect(headers.authorization).toBeUndefined();
+    expect(init!.credentials).toBe("same-origin");
     const sent = JSON.parse(String(init!.body));
     expect(sent).toMatchObject({ name: "capabilities", args: {} });
     // In the body and never a header: an older host's CORS would refuse the
@@ -217,7 +248,7 @@ describe("a call", () => {
       desktop: false,
       id: expect.stringMatching(/^[a-z0-9-]{8,}$/),
     });
-    expect(Object.keys(headers).sort()).toEqual(["authorization", "content-type"]);
+    expect(Object.keys(headers).sort()).toEqual(["content-type"]);
   });
 
   it("says once, on the window, that the token was turned away", async () => {

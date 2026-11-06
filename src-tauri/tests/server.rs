@@ -1099,3 +1099,287 @@ async fn a_box_relays_its_updater_and_only_for_the_token() {
     assert!(body["err"]["message"].as_str().unwrap().contains("review it again"), "{body}");
     updater.abort();
 }
+
+// --- Session cookie auth ---
+
+/// Exchanges the workspace token for the HttpOnly session cookie.
+async fn session_cookie(addr: SocketAddr) -> String {
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("http://{addr}/v1/auth/session"))
+        .bearer_auth(TOKEN)
+        .json(&json!({}))
+        .send()
+        .await
+        .expect("the daemon answers");
+    assert_eq!(response.status(), 200, "the exchange should succeed");
+    let set_cookie =
+        response.headers().get("set-cookie").expect("the daemon sets a cookie").to_str().unwrap();
+    set_cookie.split(';').next().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn a_browser_exchanges_its_token_for_a_cookie() {
+    let (addr, _dir) = workspace().await;
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("http://{addr}/v1/auth/session"))
+        .bearer_auth(TOKEN)
+        .json(&json!({}))
+        .send()
+        .await
+        .expect("the daemon answers");
+    assert_eq!(response.status(), 200);
+    let set_cookie =
+        response.headers().get("set-cookie").expect("the daemon sets a cookie").to_str().unwrap();
+    // The name carries the host's port, because a cookie cannot: two hosts on
+    // one machine keep two sessions rather than replacing each other.
+    assert!(set_cookie.starts_with("guaca_session"), "the cookie is named: {set_cookie}");
+    assert!(set_cookie.contains("HttpOnly"), "the cookie is HttpOnly: {set_cookie}");
+    assert!(set_cookie.contains("SameSite=Strict"), "the cookie is SameSite=Strict: {set_cookie}");
+}
+
+#[tokio::test]
+async fn a_cookie_authenticates_a_call_without_a_bearer_token() {
+    let (addr, _dir) = workspace().await;
+    let cookie = session_cookie(addr).await;
+    let client = reqwest::Client::new();
+    // A state-changing request authenticated by cookie alone must prove
+    // same-origin. The Origin header's hostname matches the request's Host.
+    let response = client
+        .post(format!("http://{addr}/v1/call"))
+        .header("Origin", format!("http://{}", addr.ip()))
+        .header("Cookie", &cookie)
+        .json(&json!({ "name": "list_agents", "args": {} }))
+        .send()
+        .await
+        .expect("the daemon answers");
+    assert_eq!(response.status(), 200, "the cookie should authenticate the call");
+}
+
+#[tokio::test]
+async fn a_state_change_from_another_origin_is_refused_even_with_a_cookie() {
+    let (addr, _dir) = workspace().await;
+    let cookie = session_cookie(addr).await;
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("http://{addr}/v1/call"))
+        .header("Origin", "http://evil.example.com")
+        .header("Cookie", &cookie)
+        .json(&json!({ "name": "list_agents", "args": {} }))
+        .send()
+        .await
+        .expect("the daemon answers");
+    assert_eq!(response.status(), 403, "a cross-origin state change should be refused");
+}
+
+#[tokio::test]
+async fn a_socket_upgrade_from_another_origin_is_refused() {
+    let (addr, _dir) = workspace().await;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let mut request = format!("ws://{addr}/v1/events?token={TOKEN}")
+        .into_client_request()
+        .expect("a valid request");
+    request.headers_mut().insert("Origin", "http://evil.example.com".parse().unwrap());
+    let result = tokio_tungstenite::connect_async(request).await;
+    assert!(result.is_err(), "a cross-origin socket upgrade should be refused");
+}
+
+#[tokio::test]
+async fn a_bearer_token_still_authenticates_a_non_browser_client() {
+    let (addr, _dir) = workspace().await;
+    let (status, body) = call(addr, "list_agents", json!({})).await;
+    assert_eq!(status, 200, "a Bearer token should still work: {body}");
+}
+
+#[tokio::test]
+async fn a_legacy_local_storage_token_can_be_exchanged_for_a_cookie() {
+    let (addr, _dir) = workspace().await;
+    // The same endpoint the client uses to migrate a token from localStorage.
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("http://{addr}/v1/auth/session"))
+        .bearer_auth(TOKEN)
+        .json(&json!({}))
+        .send()
+        .await
+        .expect("the daemon answers");
+    assert_eq!(response.status(), 200);
+    let set_cookie = response.headers().get("set-cookie").expect("a cookie").to_str().unwrap();
+    assert!(set_cookie.starts_with("guaca_session"), "the cookie is set: {set_cookie}");
+}
+
+#[tokio::test]
+async fn a_browser_signs_out_and_its_cookie_is_cleared() {
+    let (addr, _dir) = workspace().await;
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("http://{addr}/v1/auth/logout"))
+        .send()
+        .await
+        .expect("the daemon answers");
+    assert_eq!(response.status(), 200);
+    let set_cookie = response
+        .headers()
+        .get("set-cookie")
+        .expect("the daemon clears the cookie")
+        .to_str()
+        .unwrap();
+    assert!(set_cookie.starts_with("guaca_session"), "the cookie is named: {set_cookie}");
+    assert!(set_cookie.contains("=;"), "the cookie is emptied: {set_cookie}");
+    assert!(set_cookie.contains("Max-Age=0"), "the cookie expires: {set_cookie}");
+}
+
+/// The name half of a `Set-Cookie` value, which is what a browser keys a jar by.
+fn name_of(cookie: &str) -> &str {
+    cookie.split('=').next().unwrap_or_default()
+}
+
+#[tokio::test]
+async fn the_session_cookie_is_secure_when_the_request_arrived_over_https() {
+    let (addr, _dir) = workspace().await;
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/auth/session"))
+        .bearer_auth(TOKEN)
+        .header("x-forwarded-proto", "https")
+        .json(&json!({}))
+        .send()
+        .await
+        .expect("the daemon answers");
+    let set_cookie =
+        response.headers().get("set-cookie").expect("the daemon sets a cookie").to_str().unwrap();
+    // A cookie a proxy carried over https must never come back over http.
+    assert!(set_cookie.contains("; Secure"), "the cookie is Secure: {set_cookie}");
+}
+
+#[tokio::test]
+async fn two_hosts_on_one_machine_keep_their_own_sessions() {
+    let (first, _a) = workspace().await;
+    let (second, _b) = workspace().await;
+    let mine = session_cookie(first).await;
+    let theirs = session_cookie(second).await;
+    // Cookies are not scoped by port, so the port is part of the name: a
+    // daemon and a container beside it would otherwise overwrite each other.
+    assert_ne!(name_of(&mine), name_of(&theirs), "each host names its own cookie");
+
+    let client = reqwest::Client::new();
+    let crossed = client
+        .post(format!("http://{second}/v1/call"))
+        .header("Cookie", &mine)
+        .json(&json!({ "name": "list_agents", "args": {} }))
+        .send()
+        .await
+        .expect("the daemon answers");
+    assert_eq!(crossed.status(), 401, "the first host's cookie is not the second's");
+
+    let own = client
+        .post(format!("http://{second}/v1/call"))
+        .header("Cookie", &theirs)
+        .json(&json!({ "name": "list_agents", "args": {} }))
+        .send()
+        .await
+        .expect("the daemon answers");
+    assert_eq!(own.status(), 200, "the second host's own cookie opens it");
+}
+
+#[tokio::test]
+async fn a_browser_behind_a_proxy_that_rewrites_host_is_admitted_by_sec_fetch_site() {
+    let (addr, _dir) = workspace().await;
+    let cookie = session_cookie(addr).await;
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/call"))
+        .header("Origin", "https://box.example.com")
+        .header("Sec-Fetch-Site", "same-origin")
+        .header("Cookie", &cookie)
+        .json(&json!({ "name": "list_agents", "args": {} }))
+        .send()
+        .await
+        .expect("the daemon answers");
+    // The Origin is the public name and Host is what the proxy forwarded to,
+    // so the authority comparison cannot pass. The browser's own answer can,
+    // and every browser that sends it is the browser that has the cookie.
+    assert_eq!(response.status(), 200, "the browser's own proof is enough");
+}
+
+#[tokio::test]
+async fn a_sign_out_from_another_origin_is_refused() {
+    let (addr, _dir) = workspace().await;
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/auth/logout"))
+        .header("Origin", "http://evil.example.com")
+        .send()
+        .await
+        .expect("the daemon answers");
+    assert_eq!(response.status(), 403, "a page elsewhere must not sign this browser out");
+    assert!(response.headers().get("set-cookie").is_none(), "and must not clear the cookie");
+}
+
+#[tokio::test]
+async fn a_cookie_opens_the_event_channel_from_the_same_origin() {
+    let (addr, _dir) = workspace().await;
+    let cookie = session_cookie(addr).await;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let mut request =
+        format!("ws://{addr}/v1/events").into_client_request().expect("a valid request");
+    request.headers_mut().insert("Origin", format!("http://{addr}").parse().unwrap());
+    request.headers_mut().insert("Cookie", cookie.parse().unwrap());
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(request).await.expect("the cookie opens the socket");
+    // The snapshot is what a client draws before any event arrives.
+    let frame = tokio::time::timeout(std::time::Duration::from_secs(10), socket.next())
+        .await
+        .expect("a frame arrives")
+        .expect("the socket stays open")
+        .expect("the frame is whole");
+    assert!(frame.into_text().is_ok(), "the snapshot is text");
+}
+
+#[tokio::test]
+async fn a_desktop_window_showing_a_box_opens_the_event_channel() {
+    let (addr, _dir) = workspace().await;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    // The third host: a window served from the app's own origin, pointed at a
+    // box, presenting the token in the query because a handshake cannot carry
+    // a header. Its Origin is not the daemon's and never could be.
+    let mut request = format!("ws://{addr}/v1/events?token={TOKEN}")
+        .into_client_request()
+        .expect("a valid request");
+    request.headers_mut().insert("Origin", "tauri://localhost".parse().unwrap());
+    let opened = tokio_tungstenite::connect_async(request).await;
+    assert!(opened.is_ok(), "the app's own window is not a cross-origin page");
+}
+
+#[tokio::test]
+async fn the_dev_ports_origin_gets_no_socket_without_the_token() {
+    let (addr, _dir) = workspace().await;
+    let cookie = session_cookie(addr).await;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    // Same site, another origin. Ports do not count toward a site, so the
+    // browser hands this daemon's cookie to a page served on 1420 — the dev
+    // port Tauri and Vite use by default, and one anything else on the machine
+    // can take. That page is not the app, so the cookie is not its proof.
+    let mut refused =
+        format!("ws://{addr}/v1/events").into_client_request().expect("a valid request");
+    refused.headers_mut().insert("Origin", "http://localhost:1420".parse().unwrap());
+    refused.headers_mut().insert("Cookie", cookie.parse().unwrap());
+    let refused = tokio_tungstenite::connect_async(refused).await;
+    assert!(refused.is_err(), "a cookie is not a shell's proof");
+
+    // The same rule for the desktop's own origin, which is why it holds for
+    // all of them rather than for the one that was tried.
+    let mut desktop =
+        format!("ws://{addr}/v1/events").into_client_request().expect("a valid request");
+    desktop.headers_mut().insert("Origin", "tauri://localhost".parse().unwrap());
+    desktop.headers_mut().insert("Cookie", cookie.parse().unwrap());
+    let desktop = tokio_tungstenite::connect_async(desktop).await;
+    assert!(desktop.is_err(), "the shell's credential is the token, never the cookie");
+
+    // And the token is what a shell presents.
+    let mut admitted = format!("ws://{addr}/v1/events?token={TOKEN}")
+        .into_client_request()
+        .expect("a valid request");
+    admitted.headers_mut().insert("Origin", "http://localhost:1420".parse().unwrap());
+    let admitted = tokio_tungstenite::connect_async(admitted).await;
+    assert!(admitted.is_ok(), "the token opens the channel from the app's own origin");
+}

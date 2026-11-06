@@ -37,10 +37,10 @@ import {
 } from "../lib/releases";
 import { useStore } from "../lib/store";
 import {
+  bearer,
   desktop,
   RECONNECTED,
   restart,
-  token,
   UNAUTHORIZED_EVENT,
   workspaceOrigin,
 } from "../lib/transport";
@@ -115,7 +115,7 @@ export function HostMonitor({ children }: { children: ReactNode }) {
         const results = await Promise.allSettled([
           fetch(`${workspaceOrigin()}/v1/updates?refresh=${manual}`, {
             cache: "no-store",
-            headers: { authorization: `Bearer ${token()}` },
+            headers: bearer(),
             signal: AbortSignal.timeout(15000),
           }).then(async (response) => {
             if (response.status === 401) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
@@ -133,7 +133,7 @@ export function HostMonitor({ children }: { children: ReactNode }) {
           }),
           fetch(`${workspaceOrigin()}/v1/host`, {
             cache: "no-store",
-            headers: { authorization: `Bearer ${token()}` },
+            headers: bearer(),
             signal: AbortSignal.timeout(15000),
           }).then(async (response) => {
             // Older than the route: a 404, or the page served in its place.
@@ -516,7 +516,7 @@ export function HostUpdatePanel() {
       const response = await fetch(`${workspaceOrigin()}/v1/host/update`, {
         method: "POST",
         cache: "no-store",
-        headers: { authorization: `Bearer ${token()}`, "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...bearer() },
         body: JSON.stringify(
           onMain ? { version: latest.version, commit: latest.commit } : { version: latest.version },
         ),

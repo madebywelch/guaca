@@ -13,23 +13,123 @@
  * the app. The form is for the other cases: a token rotated on the box, a
  * browser whose storage was cleared, an address typed by hand.
  *
- * On a desktop this renders its children and nothing else. The runtime is
- * inside the process asking, and there is no token to have.
+ * On a desktop this renders its children and nothing else. The window keeps
+ * the token for the host it was pointed at, and the runtime underneath reads
+ * with it.
+ *
+ * The credential a browser keeps is an HttpOnly cookie, which is the point of
+ * it: nothing on this page can read it back. So whether a session exists is a
+ * question the daemon answers, and this screen asks it before deciding. The
+ * form is what a refusal draws, never what the first paint guesses.
  */
 
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import { api } from "../lib/ipc";
-import { adoptInvitation, hosted, setToken, token, UNAUTHORIZED_EVENT } from "../lib/transport";
+import {
+  adoptInvitation,
+  hosted,
+  setToken,
+  settleInvitation,
+  token,
+  UNAUTHORIZED_EVENT,
+} from "../lib/transport";
 import { errorMessage } from "../lib/types";
 
+/** Whether a refusal is this browser being told it needs a token. */
+function refusedForToken(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { kind?: unknown }).kind === "unauthorized"
+  );
+}
+
 export function TokenEntry({ children }: { children: ReactNode }) {
-  // Decided once, before the first paint. An invitation in the address bar is
-  // taken in the same breath, so a clicked link never flashes the form.
-  const [admitted, setAdmitted] = useState(() => !hosted || adoptInvitation() || token() !== "");
+  // A window pointed at a box carries its token in the Remote record and the
+  // app underneath reads with it. Only a browser has to be asked, and only
+  // when it has nothing to present.
+  const [admitted, setAdmitted] = useState(() => !hosted || token() !== "");
+  // A browser has no script-readable token to look at, so on a reload the only
+  // way to know whether it is signed in is to ask. Until the answer arrives
+  // this holds the viewport rather than drawing the form, because a page that
+  // flashed "this host needs its token" on its way to the workspace would be
+  // asking for a credential the operator already gave it.
+  const [settling, setSettling] = useState(() => hosted && token() === "");
   const [value, setValue] = useState("");
   const [refused, setRefused] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
+  // Whether this browser was ever let in. A refusal that arrives while the
+  // first question is still being asked is not a session that expired, and
+  // telling a first visitor their session stopped would name a problem they
+  // never had.
+  const wasAdmitted = useRef(false);
+
+  // On mount, turn an invitation from the address bar or a token an older
+  // build left in localStorage into a session cookie. The exchange is async
+  // because the daemon sets an HttpOnly cookie, which only a request can do.
+  // Nothing is kept in script-readable storage once the exchange succeeds.
+  //
+  // With nothing to exchange, the cookie may already be valid: a reload of a
+  // signed-in page has no invitation and no stored token. Asking is the only
+  // way to know, and `capabilities` is the cheapest question there is. Only a
+  // refusal for the token means this browser has to be given one; a box that
+  // is down or a build that is too old is the app's own banner to draw, and
+  // holding its workspace back would only hide the sentence that says why.
+  useEffect(() => {
+    if (!hosted) return;
+    adoptInvitation();
+    if (token() !== "") {
+      setSettling(false);
+      return;
+    }
+    let cancelled = false;
+    const settle = async () => {
+      if (await settleInvitation()) {
+        if (!cancelled) {
+          setAdmitted(true);
+          setSettling(false);
+        }
+        return;
+      }
+      try {
+        await api.capabilities();
+        if (!cancelled) setAdmitted(true);
+      } catch (error) {
+        if (!cancelled) setAdmitted(!refusedForToken(error));
+      } finally {
+        if (!cancelled) setSettling(false);
+      }
+    };
+    void settle();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // An invitation pasted into a tab that is already open is a same-document
+  // navigation: the fragment changes and nothing reloads, so the mount above
+  // never sees it. The address bar is where an operator keeps the link, so
+  // this is the case where clicking it again has to work.
+  useEffect(() => {
+    if (!hosted) return;
+    const onHash = () => {
+      if (!adoptInvitation()) return;
+      setSettling(true);
+      void settleInvitation().then((settled) => {
+        setSettling(false);
+        if (settled) setAdmitted(true);
+      });
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  // Remembered for the listener below, which cannot see the render that
+  // admitted this browser.
+  useEffect(() => {
+    if (admitted) wasAdmitted.current = true;
+  }, [admitted]);
 
   // A token the box stopped accepting is one event on the window, raised by
   // the transport the moment any call is turned away. The app underneath is
@@ -39,7 +139,9 @@ export function TokenEntry({ children }: { children: ReactNode }) {
     if (!hosted) return;
     const turnedAway = () => {
       setAdmitted(false);
-      setRefused("This host stopped accepting the token this browser had.");
+      if (wasAdmitted.current) {
+        setRefused("This host stopped accepting this browser's session.");
+      }
     };
     window.addEventListener(UNAUTHORIZED_EVENT, turnedAway);
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, turnedAway);
@@ -47,13 +149,25 @@ export function TokenEntry({ children }: { children: ReactNode }) {
 
   if (admitted) return <>{children}</>;
 
+  if (settling) {
+    return (
+      <main className="threshold">
+        <p className="empty__body" role="status">
+          Opening Guaca…
+        </p>
+      </main>
+    );
+  }
+
   const submit = async () => {
     const pasted = value.trim();
     if (!pasted || checking) return;
     setChecking(true);
     setRefused(null);
-    setToken(pasted);
     try {
+      // Exchanges the pasted token for the HttpOnly session cookie. The token
+      // crosses once and is not stored after this.
+      await setToken(pasted);
       // The cheapest call there is, and the one the app reads first anyway.
       // A wrong token is refused here, on this screen, rather than forty
       // times by the reads the app would make.
@@ -61,7 +175,6 @@ export function TokenEntry({ children }: { children: ReactNode }) {
       setValue("");
       setAdmitted(true);
     } catch (error) {
-      setToken("");
       setRefused(errorMessage(error));
     } finally {
       setChecking(false);

@@ -96,7 +96,13 @@ export function kindLabel(mime: string): string {
 export function fileUrl(file: Pick<Attachment, "digest" | "name">): string {
   if (hosted) {
     const target = `${encodeURIComponent(file.digest)}/${encodeURIComponent(file.name)}`;
-    return `${workspaceOrigin()}/v1/file/${target}?token=${encodeURIComponent(token())}`;
+    const ticket = token();
+    // A browser holds no script-readable token: the HttpOnly session cookie
+    // authenticates the element's request, so the ticket is left off rather
+    // than spelled empty. A desktop window pointed at a box still passes one.
+    return ticket
+      ? `${workspaceOrigin()}/v1/file/${target}?token=${encodeURIComponent(ticket)}`
+      : `${workspaceOrigin()}/v1/file/${target}`;
   }
   // Asked for rather than built: Tauri spells its own scheme differently per
   // platform (`guacfile:` on macOS, `http://guacfile.localhost` on Windows,
