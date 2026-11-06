@@ -5905,12 +5905,21 @@ input[type="file"]:disabled {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-5);
-  margin-top: var(--space-7);
+  /* The gutter is painted ground above the buttons, and it is taken from the
+     row's own bottom padding rather than added to it. Sticking holds the box's
+     bottom edge still, so a taller box grows upward: every pixel of new padding
+     here is a pixel of the sentence above covered instead of a pixel of space
+     between it and the buttons. Measured at 1440x900, this keeps the row's top
+     edge at y=782 exactly where it was and puts the buttons at y=794, which is
+     the 12px a person needs to read a clipped sentence as continuing rather
+     than as sitting on the buttons. The margin and the padding still add up to
+     the 24px the row had above it. */
+  margin-top: var(--space-5);
+  padding-top: var(--space-5);
   position: sticky;
   bottom: 0;
   z-index: 1;
   background: var(--ground);
-  padding-bottom: var(--space-5);
 }
 
 .onboarding-actions > span,
