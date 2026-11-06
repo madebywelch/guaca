@@ -246,6 +246,19 @@ describe("who said what", () => {
   });
 });
 
+describe("what the head says answers", () => {
+  it("names the model, and whose choice it was, without naming a field", () => {
+    // The line used to print the card's own model field, so an agent that
+    // inherits said "no model of its own · answering as itself": an empty
+    // column's name and a phrase that means nothing to anybody.
+    const { container } = open([envelope({ parts: [{ type: "text", text: "hi" }] })]);
+    const meta = container.querySelector(".pane__meta")?.textContent ?? "";
+    expect(meta).toContain("m");
+    expect(meta).not.toContain("answering as itself");
+    expect(meta).not.toContain("no model of its own");
+  });
+});
+
 describe("while an agent is working", () => {
   /** What the runtime tells the UI as a turn moves through its states. */
   const doing = (state: Activity) =>

@@ -2,6 +2,7 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "re
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { useFollowBottom } from "../lib/follow";
 import { api } from "../lib/ipc";
+import { runsOn } from "../lib/profile";
 import { thoughtNow } from "../lib/reasoning";
 import { type ChannelKey, useAgentLookup, useStore } from "../lib/store";
 import { elapsed, useNow } from "../lib/time";
@@ -19,7 +20,9 @@ import {
   type AgentCard,
   type AgentId,
   type Envelope,
+  type Group,
   plainText,
+  type Settings,
 } from "../lib/types";
 import { Composer } from "./Composer";
 import { Answering } from "./HtmlArtifact";
@@ -69,6 +72,8 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
 
   const agent = lookups.byId(channel);
   const crew = useStore((s) => s.groups.find((group) => group.id === agent?.groupId)?.name);
+  const group = useStore((s) => s.groups.find((entry) => entry.id === agent?.groupId));
+  const settings = useStore((s) => s.settings);
   // Held steady across renders: it is the value of a context read by every page
   // in the transcript, and a fresh object each time would redraw all of them
   // for every token that lands anywhere.
@@ -184,7 +189,8 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
                 <h1 className="pane__title">{agent.name}</h1>
               </span>
               <p className="pane__meta">
-                {agent.model || "no model of its own"} · {paused ? "paused" : "answering as itself"}
+                {answeredBy(agent, group, settings)}
+                {paused ? " · paused" : ""}
               </p>
             </div>
             {onDetails && (
@@ -796,4 +802,21 @@ function announcement(message: Envelope, byId: ReturnType<typeof useAgentLookup>
   // Long enough to be the message, short enough that a reader can interrupt it
   // and go and read the column instead.
   return body.length > 300 ? `${who}: ${body.slice(0, 300)}…` : `${who}: ${body}`;
+}
+
+/**
+ * What answers, in the page's head, in the words a person would use.
+ *
+ * The line used to read the agent's own model field, so an agent that inherits
+ * its group's default said "no model of its own · answering as itself" — the
+ * name of an empty field and a phrase that means nothing to anybody who has not
+ * read the schema. It says which model will answer and whose choice it was, and
+ * says nothing at all about where it came from when the agent chose it itself.
+ */
+function answeredBy(agent: AgentCard, group: Group | undefined, settings: Settings | null): string {
+  const runs = runsOn(agent, group, settings);
+  if (runs.model === "No model set") return "no model set";
+  if (runs.model === "Claude subscription") return "a Claude subscription";
+  if (runs.inherited) return `${group ? "the group's" : "the app's"} model, ${runs.model}`;
+  return runs.model;
 }
