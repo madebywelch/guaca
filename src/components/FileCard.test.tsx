@@ -2,11 +2,15 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { fileUrl } from "../lib/files";
-import type { Attachment } from "../lib/types";
+import { type Attachment, errorMessage } from "../lib/types";
 import { FileCard } from "./FileCard";
 
 const saveFile = vi.fn(async (_digest: string, _name: string) => "/Users/robert/Downloads/x");
 const setBanner = vi.fn();
+/** The store's one failure action, as the card uses it: the sentence the banner shows. */
+const showFailure = vi.fn((error: unknown) =>
+  setBanner({ tone: "error", text: errorMessage(error) }),
+);
 const client = vi.hoisted(() => ({ desktop: true }));
 
 vi.mock("../lib/transport", async (original) => ({
@@ -20,9 +24,10 @@ vi.mock("../lib/ipc", () => ({
   api: { saveFile: (digest: string, name: string) => saveFile(digest, name) },
 }));
 
-/** What the card reads off the store: one action, and whether there is a disk. */
+/** What the card reads off the store: two actions, and whether there is a disk. */
 const state = {
   setBanner,
+  showFailure,
   capabilities: {
     loopbackEndpoints: true,
     claudeProvider: true,
@@ -53,6 +58,7 @@ describe("FileCard", () => {
     client.desktop = true;
     saveFile.mockClear();
     setBanner.mockClear();
+    showFailure.mockClear();
     fetched.mockReset();
     fetched.mockResolvedValue({
       ok: true,

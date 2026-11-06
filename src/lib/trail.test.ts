@@ -155,6 +155,37 @@ describe("what one call was", () => {
     expect(step?.failed).toBe(true);
     expect(step?.said).toBe("Refused: name a recipient.");
   });
+
+  it("says a refusal written for the model in words for the person, and keeps the model's", () => {
+    // The runtime's version names a parameter and tells the agent to call
+    // `directory`, which is right for the agent and reads as a traceback in a
+    // transcript. Both are kept: the sentence on the row, the original behind
+    // the click that already holds the arguments it was about.
+    const [step] = steps(
+      call(
+        "send_message",
+        { text: "hello?" },
+        {
+          status: "refused",
+          reason:
+            "Refused: no agent named Zed exists. Call `directory` to see who is actually available.",
+        },
+      ),
+    );
+    expect(step?.said).toBe("Nothing was sent: no agent in this group is called Zed.");
+    expect(step?.told).toContain("`directory`");
+    // What the row draws for a refusal with nothing else to show is the same
+    // sentence, so the opened row and the chip cannot disagree.
+    expect(stepReason(step as Step)).toBe(step?.said);
+  });
+
+  it("leaves a refusal it cannot translate exactly as the runtime wrote it", () => {
+    // A refusal from a build newer than this one, or one the table has not met.
+    const said = "Refused: the archive you named is read-only for this session.";
+    const [step] = steps(call("send_message", { text: "hi" }, { status: "refused", reason: said }));
+    expect(step?.said).toBe(said);
+    expect(step?.told).toBeNull();
+  });
 });
 
 describe("a call that failed, said as an attempt", () => {

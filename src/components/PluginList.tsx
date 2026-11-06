@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { api, openExternal } from "../lib/ipc";
-import { hostOf, markFor, reportLine, STDIO } from "../lib/plugins";
+import { hostOf, markFor, refusalWords, reportLine, STDIO } from "../lib/plugins";
 import { useStore } from "../lib/store";
 import {
   type AccountConnection,
@@ -24,6 +24,9 @@ interface Props {
   /** The group's live agents, in rail order, for the ones a plugin is for. */
   crew: AgentCard[];
 }
+
+/** A dial that was refused: the sentence for the operator, and what was under it. */
+type Failure = ReturnType<typeof refusalWords>;
 
 /**
  * The two answers to who may use a plugin, and to who may call one of its tools.
@@ -334,6 +337,11 @@ export function PluginList({ groupId, crew }: Props) {
   const [connected, setConnected] = useState<Plugin[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // What a dial refused, kept beside the control that asked rather than at the
+  // foot of the panel. Keyed by where it is drawn — the add form, a row's
+  // change-address form, a row's own test — because that is what decides which
+  // one an answer belongs to, and the same address can be tested twice.
+  const [failed, setFailed] = useState<Record<string, Failure | undefined>>({});
   // Which plugins have their tool list open. Shut by default and not
   // remembered anywhere: a crew with three plugins connected has sixty rows
   // between the operator and the button they came here for, and the counts on
@@ -418,14 +426,22 @@ export function PluginList({ groupId, crew }: Props) {
     void load();
   }, [load]);
 
-  const run = async (key: string, action: () => Promise<unknown>) => {
+  const run = async (
+    key: string,
+    action: () => Promise<unknown>,
+    /** Where a refusal is drawn. A form's own action row is where the eye is,
+     *  and the panel's foot is five controls away below it. */
+    at?: string,
+  ) => {
     setBusy(key);
     setError(null);
+    if (at) setFailed((was) => ({ ...was, [at]: undefined }));
     try {
       await action();
       await load();
     } catch (caught) {
-      setError(errorMessage(caught));
+      if (at) setFailed((was) => ({ ...was, [at]: refusalWords(caught) }));
+      else setError(errorMessage(caught));
     } finally {
       setBusy(null);
       // A sign-in page the host asked the browser to open is stale the moment
@@ -442,15 +458,16 @@ export function PluginList({ groupId, crew }: Props) {
    * answered. It also keeps its answer on a failure, which `run` cannot: a
    * server that refused is exactly what somebody pressed this to find out.
    */
-  const test = async (key: string, dial: () => Promise<ServerReport>) => {
+  const test = async (key: string, dial: () => Promise<ServerReport>, at: string) => {
     setBusy(key);
     setError(null);
+    setFailed((was) => ({ ...was, [at]: undefined }));
     try {
       const report = await dial();
       setTested((was) => ({ ...was, [key]: report }));
     } catch (caught) {
       setTested(({ [key]: _gone, ...rest }) => rest);
-      setError(errorMessage(caught));
+      setFailed((was) => ({ ...was, [at]: refusalWords(caught) }));
     } finally {
       setBusy(null);
     }
@@ -684,23 +701,30 @@ export function PluginList({ groupId, crew }: Props) {
                       </button>
                     </p>
                   )}
+                  {failed[`address:${held.id}`] && (
+                    <ConnectorFailure failure={failed[`address:${held.id}`]!} />
+                  )}
                   <div className="choices">
                     <button
                       type="button"
                       className="btn btn--small btn--primary"
                       disabled={busy !== null || !moving[held.id]?.url.trim()}
                       onClick={() =>
-                        void run(`${kind}-address`, async () => {
-                          const change = moving[held.id];
-                          await api.readdressPlugin(
-                            groupId,
-                            held.id,
-                            change?.url ?? "",
-                            change?.key || undefined,
-                            change?.headers ? sent(change.headers) : undefined,
-                          );
-                          setMoving(({ [held.id]: _gone, ...rest }) => rest);
-                        })
+                        void run(
+                          `${kind}-address`,
+                          async () => {
+                            const change = moving[held.id];
+                            await api.readdressPlugin(
+                              groupId,
+                              held.id,
+                              change?.url ?? "",
+                              change?.key || undefined,
+                              change?.headers ? sent(change.headers) : undefined,
+                            );
+                            setMoving(({ [held.id]: _gone, ...rest }) => rest);
+                          },
+                          `address:${held.id}`,
+                        )
                       }
                     >
                       {busy === `${kind}-address` ? "Reconnecting…" : "Save and reconnect"}
@@ -714,14 +738,18 @@ export function PluginList({ groupId, crew }: Props) {
                       className="btn btn--small btn--ghost"
                       disabled={busy !== null || !moving[held.id]?.url.trim()}
                       onClick={() =>
-                        void test(`${kind}-address-test`, () => {
-                          const change = moving[held.id];
-                          return api.probeServer(
-                            change?.url ?? "",
-                            change?.key || undefined,
-                            change?.headers ? sent(change.headers) : undefined,
-                          );
-                        })
+                        void test(
+                          `${kind}-address-test`,
+                          () => {
+                            const change = moving[held.id];
+                            return api.probeServer(
+                              change?.url ?? "",
+                              change?.key || undefined,
+                              change?.headers ? sent(change.headers) : undefined,
+                            );
+                          },
+                          `address:${held.id}`,
+                        )
                       }
                     >
                       {busy === `${kind}-address-test` ? "Testing…" : "Test"}
@@ -779,7 +807,9 @@ export function PluginList({ groupId, crew }: Props) {
                     type="button"
                     className="toolset__more"
                     disabled={busy !== null}
-                    onClick={() => void test(`${kind}-check`, () => api.checkPlugin(held.id))}
+                    onClick={() =>
+                      void test(`${kind}-check`, () => api.checkPlugin(held.id), `check:${held.id}`)
+                    }
                   >
                     {busy === `${kind}-check` ? "Testing…" : "Test it"}
                   </button>
@@ -787,6 +817,9 @@ export function PluginList({ groupId, crew }: Props) {
 
                 {tested[`${kind}-check`] && (
                   <p className="field__hint">{reportLine(tested[`${kind}-check`]!)}</p>
+                )}
+                {failed[`check:${held.id}`] && (
+                  <ConnectorFailure failure={failed[`check:${held.id}`]!} />
                 )}
 
                 {/* Two buttons rather than a list with an "all" entry at the
@@ -1111,33 +1144,41 @@ export function PluginList({ groupId, crew }: Props) {
               env={draft.program}
               onChange={(headers) => setDraft((was) => ({ ...was, headers }))}
             />
+            {/* Here rather than at the foot of the panel, which is where it
+                used to be: the eye that just pressed Test is on this row, and
+                the answer was below Cancel. */}
+            {failed.add && <ConnectorFailure failure={failed.add} />}
             <div className="choices">
               <button
                 type="button"
                 className="btn btn--small btn--primary"
                 disabled={busy !== null || !draft.name.trim() || !addressed}
                 onClick={() =>
-                  void run("add", async () => {
-                    await api.addPlugin(
-                      groupId,
-                      draft.name,
-                      address,
-                      draft.key || undefined,
-                      sent(draft.headers),
-                    );
-                    // Cleared only once it worked. A refused address the
-                    // operator has to retype is a refusal that costs more than
-                    // the mistake did.
-                    setDraft({
-                      name: "",
-                      url: "",
-                      key: "",
-                      headers: [],
-                      program: false,
-                      command: "",
-                    });
-                    setAdding(false);
-                  })
+                  void run(
+                    "add",
+                    async () => {
+                      await api.addPlugin(
+                        groupId,
+                        draft.name,
+                        address,
+                        draft.key || undefined,
+                        sent(draft.headers),
+                      );
+                      // Cleared only once it worked. A refused address the
+                      // operator has to retype is a refusal that costs more than
+                      // the mistake did.
+                      setDraft({
+                        name: "",
+                        url: "",
+                        key: "",
+                        headers: [],
+                        program: false,
+                        command: "",
+                      });
+                      setAdding(false);
+                    },
+                    "add",
+                  )
                 }
               >
                 {busy === "add" ? "Connecting…" : "Add and connect"}
@@ -1151,8 +1192,11 @@ export function PluginList({ groupId, crew }: Props) {
                 className="btn btn--small btn--ghost"
                 disabled={busy !== null || !addressed}
                 onClick={() =>
-                  void test("add-test", () =>
-                    api.probeServer(address, draft.key || undefined, draft.headers))
+                  void test(
+                    "add-test",
+                    () => api.probeServer(address, draft.key || undefined, draft.headers),
+                    "add",
+                  )
                 }
               >
                 {busy === "add-test" ? "Testing…" : "Test"}
@@ -1198,6 +1242,30 @@ export function PluginList({ groupId, crew }: Props) {
         <div className="banner banner--error" style={{ margin: "0.4rem 0 0" }}>
           <span>{error}</span>
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A refused dial, where the control that asked for it is.
+ *
+ * Two layers on purpose. The sentence is Rust's, and it names what failed and
+ * what to check — an address, a port, a name that does not resolve — because
+ * only that side knows what the request failed at. The raw error underneath it
+ * is folded away: it is the transport's own text, it repeats the URL the
+ * operator just typed, and it is what a bug report needs rather than what
+ * somebody with a typo needs.
+ */
+function ConnectorFailure({ failure }: { failure: Failure }) {
+  return (
+    <div className="connector-failure" role="alert">
+      <p className="connector-failure__says">{failure.says}</p>
+      {failure.detail && (
+        <details className="connector-failure__detail">
+          <summary>The raw error</summary>
+          <pre>{failure.detail}</pre>
+        </details>
       )}
     </div>
   );

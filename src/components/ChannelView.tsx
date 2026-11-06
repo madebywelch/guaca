@@ -19,7 +19,6 @@ import {
   type AgentCard,
   type AgentId,
   type Envelope,
-  errorMessage,
   plainText,
 } from "../lib/types";
 import { Composer } from "./Composer";
@@ -56,7 +55,7 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
   const lookups = useAgentLookup();
   const messages = useStore((s) => s.messages[channel]);
   const activity = useStore((s) => s.activity);
-  const setBanner = useStore((s) => s.setBanner);
+  const showFailure = useStore((s) => s.showFailure);
   const focused = useStore((s) => s.focused);
   const clearFocus = useStore((s) => s.clearFocus);
 
@@ -283,7 +282,7 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
           try {
             await api.sendMessage(agent.id, text, files);
           } catch (error) {
-            setBanner({ tone: "error", text: errorMessage(error) });
+            showFailure(error);
             throw error;
           }
         }}
@@ -503,7 +502,7 @@ function WorkingNote({
   // arrives. Subscribing to `streams` here to find it would undo the whole
   // reason this component exists.
   const run = useStore((s) => s.activeRun[agent.id]);
-  const setBanner = useStore((s) => s.setBanner);
+  const showFailure = useStore((s) => s.showFailure);
   const [stopping, setStopping] = useState(false);
   const now = useNow(1000);
 
@@ -611,7 +610,7 @@ function WorkingNote({
                 // the answer is on screen.
                 await api.stopRun(run);
               } catch (error) {
-                setBanner({ tone: "error", text: errorMessage(error) });
+                showFailure(error);
               } finally {
                 setStopping(false);
               }

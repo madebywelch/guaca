@@ -991,6 +991,36 @@ describe("a server the operator added", () => {
     );
   });
 
+  it("says what to check where the eye is, and folds the raw error away", async () => {
+    // Two defects in one: a `reqwest` string printed at a person, and the
+    // answer to a button arriving below the buttons. `detail` is what the layer
+    // underneath said — the same URL twice and nothing to do about it — so it
+    // belongs behind the click that asks for it, and the sentence belongs above
+    // the control that was pressed.
+    probeServer.mockRejectedValue({
+      kind: "plugin",
+      message:
+        "could not reach http://127.0.0.1:9/mcp. no connection was made: the name may not resolve, the port may be closed, or the server may have refused the encrypted connection. Check the address and its path, and that the server is running and reachable from here",
+      detail:
+        "error sending request for url (http://127.0.0.1:9/mcp): client error (Connect): tcp connect error: Connection refused (os error 111)",
+    });
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+    fireEvent.click(await screen.findByText("Add a server"));
+    fireEvent.change(screen.getByPlaceholderText("https://example.com/mcp"), {
+      target: { value: "http://127.0.0.1:9/mcp" },
+    });
+    fireEvent.click(screen.getByText("Test"));
+
+    const says = await screen.findByText(/Check the address and its path/);
+    // Above the row of buttons, not past them.
+    const test = screen.getByRole("button", { name: "Test" });
+    expect(says.compareDocumentPosition(test) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText(/Connection refused/)).toBeTruthy();
+    const detail = document.querySelector<HTMLDetailsElement>(".connector-failure__detail");
+    expect(detail?.open).toBe(false);
+    expect(detail?.querySelector("summary")?.textContent).toBe("The raw error");
+  });
+
   it("tests a connected plugin against the sign-in it already has", async () => {
     // The question a crew notices as an agent reporting a tool it cannot call,
     // and the only other way to ask it is to connect again, which replaces the

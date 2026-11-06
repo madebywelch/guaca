@@ -19,14 +19,15 @@ import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { announcementFor } from "./lib/announce";
 import { applyAppearance, watchSystemSurface } from "./lib/appearance";
+import { unreachableHint } from "./lib/host";
 import { api, notifyOperator, onRevealRequest } from "./lib/ipc";
 import { bindingFor } from "./lib/keybinds";
 import { FEED_COALESCE_MS, presenceOf, samePresence } from "./lib/menubar";
 import { away, burst, markQuiet, quiet, shouldNotify } from "./lib/notify";
 import { readFirstTask } from "./lib/onboarding";
 import { useRuntime } from "./lib/runtime";
-import { useLiveAgents, useStore } from "./lib/store";
-import { attached } from "./lib/transport";
+import { type Banner, useLiveAgents, useStore } from "./lib/store";
+import { attached, desktop } from "./lib/transport";
 import {
   type AgentCard,
   errorMessage,
@@ -47,7 +48,7 @@ export default function App() {
   const selected = useStore((s) => s.selected);
   const settings = useStore((s) => s.settings);
   const banner = useStore((s) => s.banner);
-  const setBanner = useStore((s) => s.setBanner);
+  const showFailure = useStore((s) => s.showFailure);
   const handoff = useStore((s) => s.handoff);
   const setHandoff = useStore((s) => s.setHandoff);
   const refreshAgents = useStore((s) => s.refreshAgents);
@@ -223,7 +224,7 @@ export default function App() {
       await run();
       await refreshAgents();
     } catch (error) {
-      setBanner({ tone: "error", text: errorMessage(error) });
+      showFailure(error);
     }
   };
 
@@ -356,14 +357,7 @@ export default function App() {
           </div>
         )}
 
-        {banner && (
-          <div className={banner.tone === "error" ? "banner banner--error" : "banner"}>
-            <span>{banner.text}</span>
-            <button type="button" className="btn btn--ghost" onClick={() => setBanner(null)}>
-              Dismiss
-            </button>
-          </div>
-        )}
+        {banner && <FailureBanner banner={banner} onSettings={setShowSettings} />}
 
         {firstRun && (
           <Onboarding
@@ -522,6 +516,80 @@ export default function App() {
           onOpenSettings={() => setShowSettings(true)}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * The one line the window keeps for something that went wrong.
+ *
+ * Dismiss is the only control a message can always have, and for most of them
+ * it is the only one that would do anything: a refused write, a duplicate name
+ * and a missing key are all fixed by changing something elsewhere, in a place
+ * the banner cannot open. The host being gone is the exception, and it is the
+ * one failure where the app knows more than it says: nothing answered, and the
+ * two things that help are asking again and looking at which host this is.
+ * Both are actions, and leaving the operator with only the button that removes
+ * the diagnosis is what this exists to stop.
+ */
+function FailureBanner({
+  banner,
+  onSettings,
+}: {
+  banner: Banner;
+  onSettings: (section: Section | true) => void;
+}) {
+  const setBanner = useStore((state) => state.setBanner);
+  const [retrying, setRetrying] = useState(false);
+
+  /**
+   * Asks the host everything again, which is what came back missing.
+   *
+   * The socket redials on its own, and that is why this is not a reload: a host
+   * that has come back is a host whose next read succeeds, and the whole page
+   * reloading would lose the draft in the composer for news the operator can
+   * get without it.
+   */
+  const retry = async () => {
+    setRetrying(true);
+    try {
+      await useStore.getState().resynchronize();
+      setBanner(null);
+    } catch {
+      // The banner is already saying nothing answered. Saying it again in a
+      // sentence the operator has just read is noise on the one line that
+      // matters.
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  return (
+    <div className={banner.tone === "error" ? "banner banner--error" : "banner"}>
+      <span className="banner__text">
+        <span>{banner.text}</span>
+        {/* Under the sentence rather than instead of it: the sentence is what
+            happened, and this is the part the app could not know from the
+            failure alone. */}
+        {banner.fix === "host" && <span className="banner__hint">{unreachableHint()}</span>}
+      </span>
+      <span className="banner__actions">
+        {banner.fix === "host" && (
+          <button type="button" className="btn" disabled={retrying} onClick={() => void retry()}>
+            {retrying ? "Trying…" : "Retry"}
+          </button>
+        )}
+        {/* Where a person changes hosts, and only a desktop can: a browser is
+            pointed at its host by the address it was opened with. */}
+        {banner.fix === "host" && desktop && (
+          <button type="button" className="btn btn--ghost" onClick={() => onSettings("workspace")}>
+            Check the host
+          </button>
+        )}
+        <button type="button" className="btn btn--ghost" onClick={() => setBanner(null)}>
+          Dismiss
+        </button>
+      </span>
     </div>
   );
 }

@@ -1536,6 +1536,14 @@ export interface CommandError {
     | "config"
     | "inference";
   message: string;
+  /**
+   * The layer underneath's own words, where the message above them is Guaca's.
+   *
+   * Only some refusals carry one: it is what a bug report needs and what an
+   * operator reads second, so the panels that draw it fold it away. Absent
+   * everywhere else, which is most refusals.
+   */
+  detail?: string;
 }
 
 export function isCommandError(value: unknown): value is CommandError {

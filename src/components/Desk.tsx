@@ -79,7 +79,10 @@ interface StuckProps {
 function StuckCard({ escalation, agent, onClear, onOpenChannel }: StuckProps) {
   const asker = agent?.name ?? "A deleted agent";
   const age = relativeTime(escalation.raisedAt, Date.now());
-  const turns = escalation.times === 1 ? "1 turn" : `${escalation.times} turns`;
+  // One turn is the count an escalation opens with, so it is the one the
+  // sentence is most often read at, and "1 turn have run into this" is the
+  // shape that reads as a bug in the app rather than as a fact about an agent.
+  const turns = escalation.times === 1 ? "1 turn has" : `${escalation.times} turns have`;
 
   return (
     <article className="desk__card" data-kind="stuck">
@@ -107,7 +110,7 @@ function StuckCard({ escalation, agent, onClear, onOpenChannel }: StuckProps) {
         <button type="button" className="btn btn--ghost btn--small" onClick={onClear}>
           Clear
         </button>
-        <span className="desk__aside">{turns} have run into this</span>
+        <span className="desk__aside">{turns} run into this</span>
       </div>
     </article>
   );

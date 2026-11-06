@@ -257,6 +257,14 @@ describe("an escalation on the desk", () => {
     expect(screen.getByText("6 turns have run into this")).toBeTruthy();
   });
 
+  it("agrees with itself at one, which is the count it opens with", () => {
+    // An escalation goes up with a count of one, so this is the sentence most
+    // of them are read at, and "1 turn have run into this" reads as a bug in
+    // the app at the moment the operator is deciding whether to help.
+    draw([], [stuckOn({ times: 1 })]);
+    expect(screen.getByText("1 turn has run into this")).toBeTruthy();
+  });
+
   // Opening the channel is what actually unblocks the agent. Clearing only
   // takes the row away, so it must not be the loud button.
   it("leads with the channel and not with the clear", () => {

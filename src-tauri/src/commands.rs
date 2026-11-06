@@ -183,18 +183,35 @@ pub struct AppState {
 }
 
 /// A structured error the UI can render as more than a toast.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandError {
     /// Machine-readable discriminant, so the UI can react to a duplicate name
     /// differently from a disk failure.
     pub kind: &'static str,
     pub message: String,
+    /// The layer underneath's own words, where `message` is Guaca's.
+    ///
+    /// Present only where the sentence above it is a translation: a `reqwest`
+    /// error has nothing in it a person can act on and everything a bug report
+    /// needs, so it travels beside the sentence rather than inside it, and the
+    /// panel puts it behind a disclosure. Absent everywhere else, because a
+    /// refusal that is already written for a person has nothing underneath it
+    /// worth unfolding.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 impl CommandError {
     pub fn new(kind: &'static str, message: impl Into<String>) -> Self {
-        Self { kind, message: message.into() }
+        Self { kind, message: message.into(), detail: None }
+    }
+
+    /// The same refusal, with what the layer underneath said.
+    #[must_use]
+    pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
+        self
     }
 }
 
@@ -370,6 +387,12 @@ impl From<crate::plugins::PluginError> for CommandError {
         match err {
             crate::plugins::PluginError::Signin(_) => {
                 CommandError::new("pluginSignin", err.to_string())
+            }
+            // The one refusal here with something underneath it: a server that
+            // did not answer, where the sentence says what to check and the
+            // detail is what the network stack said.
+            crate::plugins::PluginError::Unreachable { says, detail } => {
+                CommandError::new("plugin", says).with_detail(detail)
             }
             other => CommandError::new("plugin", other.to_string()),
         }
@@ -941,7 +964,8 @@ async fn sign_in(
             move |url: &str| open(url)
         },
     )
-    .await?;
+    .await
+    .map_err(crate::plugins::said_to_operator)?;
 
     // The crew's tools changed, which changes what every agent in it is offered
     // on its next turn and what the roster says they can reach.
