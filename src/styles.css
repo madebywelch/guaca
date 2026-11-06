@@ -5861,6 +5861,20 @@ input[type="file"]:disabled {
   margin-bottom: var(--space-7);
 }
 
+/* Three cards, and they have to be three across or the step does not fit.
+   A plain `measure / 3` is 245px, and three of those plus two 12px gaps is
+   759px in a 736px column: the third card wrapped, the row became two rows and
+   365px, and the step was 980px in an 866px pane — which is what put the sticky
+   action row on top of the disclosure above it. Minus the gap it is 233px,
+   three of them and their gaps are 723px, and the whole form with both buttons
+   is 787px: above the fold, with the disclosure above the row where it belongs.
+   Scoped to this step, because the same grid holds the four first-task cards,
+   which are a 2x2 and a better one than 3 + 1. */
+.onboarding-options--three {
+  grid-template-columns:
+    repeat(auto-fit, minmax(min(100%, calc(var(--measure-attention) / 3 - var(--space-5))), 1fr));
+}
+
 .onboarding-choice {
   display: flex;
   flex-direction: column;
@@ -5905,21 +5919,19 @@ input[type="file"]:disabled {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-5);
-  /* The gutter is painted ground above the buttons, and it is taken from the
-     row's own bottom padding rather than added to it. Sticking holds the box's
-     bottom edge still, so a taller box grows upward: every pixel of new padding
-     here is a pixel of the sentence above covered instead of a pixel of space
-     between it and the buttons. Measured at 1440x900, this keeps the row's top
-     edge at y=782 exactly where it was and puts the buttons at y=794, which is
-     the 12px a person needs to read a clipped sentence as continuing rather
-     than as sitting on the buttons. The margin and the padding still add up to
-     the 24px the row had above it. */
+  /* Held to the bottom of the pane only while the pane is too short for it,
+     which is what `sticky` does on its own: with the form fitting, this row sits
+     where the flow puts it, and the disclosure above it is never covered.
+     When it does lift, it is a bar — the page's own ground, a rule along its
+     top, and a gutter above the buttons — so the content scrolling under it
+     reads as continuing past a divider rather than as text on the buttons. */
   margin-top: var(--space-5);
-  padding-top: var(--space-5);
+  padding: var(--space-5) 0;
   position: sticky;
   bottom: 0;
   z-index: 1;
   background: var(--ground);
+  border-top: 1px solid var(--edge);
 }
 
 .onboarding-actions > span,

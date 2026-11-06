@@ -414,6 +414,22 @@ it("does not save after abandoning a pending connection test", async () => {
   expect(onConnected).not.toHaveBeenCalled();
 });
 
+it("says why the primary button cannot be pressed, and stops saying it once it can", async () => {
+  await draw();
+  const button = screen.getByRole("button", { name: "Test and continue" }) as HTMLButtonElement;
+  expect(button.disabled).toBe(true);
+  const described = button.getAttribute("aria-describedby");
+  expect(described).toBeTruthy();
+  expect(document.getElementById(described!)?.textContent).toBe(
+    "Paste a key for OpenRouter, then test it.",
+  );
+
+  key();
+  const ready = screen.getByRole("button", { name: "Test and continue" }) as HTMLButtonElement;
+  expect(ready.disabled).toBe(false);
+  expect(document.body.textContent).not.toContain("then test it.");
+});
+
 it("verifies Claude through the existing program without changing either model", async () => {
   const { onConnected } = await draw();
   // Offered beside the other two rather than behind a disclosure: the plan the

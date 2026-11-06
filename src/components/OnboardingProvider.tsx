@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { api, openExternal } from "../lib/ipc";
 import { PROVIDERS, planLabel, providerFor } from "../lib/providers";
 import { useStore } from "../lib/store";
@@ -45,6 +45,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
   const [busy, setBusy] = useState<"signin" | "testing" | "saving" | null>(null);
   const [error, setError] = useState("");
   const [advanced, setAdvanced] = useState(false);
+  const blockedHint = useId();
   const attempt = useRef(0);
 
   useEffect(() => {
@@ -92,6 +93,17 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
     : claude?.installed === false
       ? `Runs the claude program, which this host does not have. Install it there with ${claude.install}, sign in, then come back.`
       : "Use a Claude plan through the claude program already signed in on your Guaca host. No API key needed.";
+
+  // Why the primary action cannot be pressed, in the row beside it. The brief
+  // step does the same thing for its Continue, and for the same reason: a dead
+  // button with no sentence is the first thing this app does to a stranger.
+  const blockedReason = !settings
+    ? "Waiting for this host to answer with its settings."
+    : provider === "compatible" && needsKey
+      ? `Paste a key for ${preset?.name ?? "this endpoint"}, then test it.`
+      : provider === "claude" && !claudeReady
+        ? "This host cannot run the claude program. Choose another card."
+        : "";
 
   const choose = (next: Provider) => {
     setProvider(next);
@@ -188,7 +200,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
         Guaca uses your provider account. A subscription uses its included quota; an API key is
         billed separately by the provider.
       </p>
-      <div className="onboarding-options">
+      <div className="onboarding-options onboarding-options--three">
         <button
           type="button"
           className="onboarding-choice"
@@ -404,6 +416,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
           <button
             type="button"
             className="btn btn--primary"
+            aria-describedby={blockedReason && !busy ? blockedHint : undefined}
             disabled={
               Boolean(busy) ||
               !settings ||
@@ -417,6 +430,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
               : "Test and continue"}
           </button>
         )}
+        {blockedReason && !busy && <span id={blockedHint}>{blockedReason}</span>}
       </div>
     </section>
   );
