@@ -143,6 +143,14 @@ const claudeProgram = vi.fn<() => Promise<ClaudeProgram>>(async () => ({
   install: "npm install -g @anthropic-ai/claude-code",
 }));
 
+/** A desktop window has a menu bar icon; a browser has nowhere to put one. */
+const platform = vi.hoisted(() => ({ desktop: true }));
+vi.mock("../lib/transport", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/transport")>()),
+  get desktop() {
+    return platform.desktop;
+  },
+}));
 vi.mock("../lib/ipc", () => ({
   api: {
     updateSettings: (patch: SettingsPatch) => updateSettings(patch),
@@ -262,6 +270,7 @@ function kindSwitches(): HTMLButtonElement[] {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  platform.desktop = true;
   localStorage.clear();
   updateSettings.mockResolvedValue(stored());
   testConnection.mockResolvedValue("Reached OpenRouter. 312 models.");
@@ -625,6 +634,27 @@ describe("the Save in the foot", () => {
     expect(saveButton()).toBeNull();
     type(/^Sleep computers after/, "45");
     expect(saveButton()).toBeTruthy();
+  });
+});
+
+describe("the menu bar", () => {
+  it("says the panel exists, on a host with a menu bar to look at", () => {
+    // Nothing in the app pointed at it: its whole entrance was a tray icon
+    // the OS draws, so a stranger who never noticed the icon never saw the
+    // second client that answers what is waiting without the window.
+    open();
+    const said = screen.getByText(/Guaca keeps an icon there/);
+    // A row of its own with a label, not help text under the name field: that
+    // is where a hint about the box above it belongs, and this is a fact about
+    // the window.
+    const row = said.closest(".field");
+    expect(row?.querySelector(".field__label")?.textContent).toBe("Menu bar");
+  });
+
+  it("is not mentioned in a browser, which has no menu bar", () => {
+    platform.desktop = false;
+    open();
+    expect(screen.queryByText(/menu bar/)).toBeNull();
   });
 });
 

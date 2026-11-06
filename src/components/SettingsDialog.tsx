@@ -55,6 +55,7 @@ import {
   TEMPERATURES,
   themeTokens,
 } from "../lib/theme";
+import { desktop } from "../lib/transport";
 import {
   type AccountConnectors,
   type AccountStatus,
@@ -719,6 +720,21 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                     onChange={(event) => setOperatorName(event.target.value)}
                   />
                 </label>
+
+                {/* Its own field with a label, not a hint under the name: help
+                    text for a box sits under that box, and this is a fact about
+                    the window. A browser and a box have no menu bar, and a line
+                    telling somebody to click something that is not on their
+                    screen is worse than saying nothing. */}
+                {desktop && (
+                  <div className="field">
+                    <span className="field__label">Menu bar</span>
+                    <p className="field__hint">
+                      Guaca keeps an icon there. Its panel shows what is waiting on you and who is
+                      working, and takes a reply without bringing this window back.
+                    </p>
+                  </div>
+                )}
               </>
             )}
 

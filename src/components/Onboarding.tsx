@@ -4,7 +4,7 @@ import { HIREABLE, toDraft } from "../lib/cafeteria";
 import { api } from "../lib/ipc";
 import { FIRST_TASKS, type FirstTask, readFirstTask, saveFirstTask } from "../lib/onboarding";
 import { useStore } from "../lib/store";
-import { BEFORE_RELOAD } from "../lib/transport";
+import { BEFORE_RELOAD, desktop } from "../lib/transport";
 import { errorMessage, type Group } from "../lib/types";
 import { OnboardingProvider } from "./OnboardingProvider";
 
@@ -319,6 +319,15 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
                   ? "Your agent is already created. If a connection failed, check the conversation before sending again."
                   : "Start task creates this agent and sends your brief using the provider you just connected. Other services can be connected later, when needed."}
             </p>
+            {/* The last step, and the last moment to say where Guaca goes when
+                the window does. A browser has no menu bar, so it is only said
+                where there is one to look at. */}
+            {desktop && (
+              <p className="onboarding-notice">
+                After you start, you can close this window: Guaca stays in the menu bar, and its
+                icon opens a panel of what is waiting on you and who is working.
+              </p>
+            )}
             {error && (
               <div className="banner banner--error" role="alert">
                 {error}

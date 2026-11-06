@@ -4,9 +4,10 @@ import { prefersDark, resolveSurface, watchSystemSurface } from "../lib/appearan
 import { pageData } from "../lib/artifacts";
 import { COMMIT, VERSION } from "../lib/build";
 import { artifactUrl } from "../lib/files";
+import { hostLabel, hostPlace } from "../lib/host";
 import { api } from "../lib/ipc";
 import { quickTitle } from "../lib/quick";
-import { shortBuild, skew } from "../lib/releases";
+import { skew } from "../lib/releases";
 import { useStore } from "../lib/store";
 import { desktop } from "../lib/transport";
 import {
@@ -52,24 +53,13 @@ export function StatusBar({ onOpen, onMessage }: Props) {
   const widgets = settings?.widgets ?? [];
   const nameOf = (id: AgentId) => agents.find((a) => a.id === id)?.name ?? "a deleted agent";
 
-  const version = host?.health?.version;
   const drift = desktop
     ? skew({ version: VERSION, commit: COMMIT }, host?.health ?? null)
     : "unknown";
-  // One version on two builds reads as a match unless the label says which.
-  const hostLabel = !version
-    ? "Host"
-    : drift === "otherBuild"
-      ? `Host ${version} · ${shortBuild(host?.health?.build ?? "")}`
-      : `Host ${version}`;
-  const hostTitle =
-    drift === "hostBehind"
-      ? `This host runs Guaca ${version} and this app is ${VERSION}. Open Workspace settings to update it.`
-      : drift === "clientBehind"
-        ? `This host runs Guaca ${version} and this app is ${VERSION}. Update this app.`
-        : drift === "otherBuild"
-          ? `This host and this app are different builds of Guaca ${version}. Open Workspace settings to see which.`
-          : "Which host this window shows, and its updates";
+  // Which host, and whether its build and this window's are one build. The
+  // version itself is a click away in Workspace settings, where it can be acted
+  // on; see `hostLabel` for why it left the bar.
+  const label = hostLabel({ place: hostPlace(), drift, host: host?.health ?? null });
 
   const run = async (action: QuickAction) => {
     setError(null);
@@ -110,11 +100,11 @@ export function StatusBar({ onOpen, onMessage }: Props) {
       <button
         type="button"
         className="statusbar__host"
-        data-drift={drift === "same" || drift === "unknown" ? undefined : ""}
-        title={hostTitle}
+        data-drift={label.drift ? "" : undefined}
+        title={label.title}
         onClick={() => onOpen({ kind: "settings", section: "workspace" })}
       >
-        {hostLabel}
+        {label.text}
       </button>
       {widgets.length > 0 && (
         <div className="statusbar__widgets" role="toolbar" aria-label="Pinned pages">

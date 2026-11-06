@@ -1,4 +1,5 @@
-import type { Channel } from "./releases";
+import { VERSION } from "./build";
+import type { Channel, Health, Skew } from "./releases";
 import { attached, desktop, invokeLocal, type Remote } from "./transport";
 
 /** One host update, as the manager that ran it recorded it. */
@@ -112,4 +113,92 @@ export function unreachableHint(): string {
     return "Check that the box is up, and that its address or tunnel still reaches it.";
   if (hostMode() === "existing") return "Check that the host is still running on this Mac.";
   return "Check that Docker is running: Guaca runs in a container on this Mac.";
+}
+
+/** Which host a window is showing, in the three ways a person can tell. */
+export type Place = "thisMac" | "remote" | "browser";
+
+/**
+ * Which host this window shows.
+ *
+ * Read at the call rather than once on import, because the answer is the
+ * chooser's and the page is reloaded when the chooser changes it.
+ *
+ * A window with nothing attached is the app's own runtime, which is on this
+ * Mac. An attached one is a box only when the chooser says remote: the desktop
+ * reaches a container on this Mac and a host already running on this Mac by
+ * the same kind of address, so the stored mode is the only thing that tells
+ * them from a server somebody rented. A browser is told neither and would be
+ * guessing, which is the same reason `unreachableHint` says `host` for one.
+ */
+export function hostPlace(): Place {
+  if (!desktop) return "browser";
+  if (!attached()) return "thisMac";
+  return hostMode() === "remote" ? "remote" : "thisMac";
+}
+
+const PLACES: Record<Place, string> = {
+  thisMac: "This Mac",
+  remote: "Remote host",
+  browser: "This host",
+};
+
+export interface HostLabel {
+  /** What the bar says: the place, and the drift when there is one. */
+  text: string;
+  /** The same fact in a sentence with the versions, for a hover. */
+  title: string;
+  /** Whether this window and the host are on different builds, which is the
+   *  one fact on the bar worth a color. */
+  drift: boolean;
+}
+
+/**
+ * The status bar's left item: which host, and whether its build agrees with
+ * this window's.
+ *
+ * It read `Host 0.2.0`, which is the least useful half of what the bar knows.
+ * A version is what an operator quotes in a bug report, not something they act
+ * on, and it is one click away in Workspace settings. What the bar is for is
+ * which machine is doing the work, and whether the two halves are one build,
+ * because a skew between them is the fact on that bar that breaks commands.
+ *
+ * The drift is said in words as well as marked in color. A color alone is a
+ * difference only an operator who already knows the rule can read, and the bar
+ * said a version for either build once already.
+ */
+export function hostLabel(facts: {
+  place: Place;
+  drift: Skew;
+  host: Health | null;
+  /** This window's own version, named when the two differ. */
+  appVersion?: string;
+}): HostLabel {
+  const { place, drift, host } = facts;
+  const app = facts.appVersion ?? VERSION;
+  const where = PLACES[place];
+  const version = host?.version;
+  const said =
+    drift === "otherBuild"
+      ? " · other build"
+      : drift === "clientBehind"
+        ? " · app older"
+        : drift === "hostBehind"
+          ? " · host older"
+          : "";
+  let title: string;
+  if (!version) {
+    title = "Which host this window shows. Open Workspace settings for its updates.";
+  } else if (drift === "same") {
+    title = `${where} runs Guaca ${version}, the same build as this app.`;
+  } else if (drift === "otherBuild") {
+    title = `${where} runs Guaca ${version}, a different build from this app. Open Workspace settings to see which.`;
+  } else if (drift === "clientBehind") {
+    title = `${where} runs Guaca ${version} and this app is ${app}. Update this app.`;
+  } else if (drift === "hostBehind") {
+    title = `${where} runs Guaca ${version} and this app is ${app}. Open Workspace settings to update the host.`;
+  } else {
+    title = `${where} runs Guaca ${version}. Open Workspace settings for its updates.`;
+  }
+  return { text: `${where}${said}`, title, drift: said !== "" };
 }

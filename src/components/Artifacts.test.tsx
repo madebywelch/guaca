@@ -197,8 +197,34 @@ describe("the status bar, from the page", () => {
     await waitFor(() => expect(unpinArtifact).toHaveBeenCalledWith("artifact-1"));
   });
 
-  it("offers nothing for a page with no condensed view", async () => {
+  it("shows the row for a page with no condensed view, with the reason it cannot be used", async () => {
+    // The row used to render only for a page that already had a condensed
+    // view, which is to say only for the pages whose owner already knew the
+    // status bar exists. The page that cannot be pinned is the one that needs
+    // to hear about it.
     await openOne(kept());
+    const bar = await screen.findByRole("combobox", { name: "Status bar" });
+    const options = [...bar.querySelectorAll("option")];
+    expect(options.map((option) => option.disabled)).toEqual([false, true, true]);
+    const why = screen.getByText("No condensed view yet; ask Rae to add one.");
+    expect(bar.getAttribute("aria-describedby")).toBe(why.id);
+  });
+
+  it("says any agent can add the missing view when the page has no owner", async () => {
+    // An owner can leave the group, and an artifact left behind has nobody to
+    // ask; anyone in the group may edit it, which is the way forward.
+    await openOne(kept({ owner: null }));
+    const bar = await screen.findByRole("combobox", { name: "Status bar" });
+    const why = screen.getByText("No condensed view yet; any agent in its group can add one.");
+    expect(bar.getAttribute("aria-describedby")).toBe(why.id);
+  });
+
+  it("offers no row at all from a host older than the bar's pages", async () => {
+    artifactDetail.mockResolvedValue({ ...detail, artifact: kept() });
+    open(DEFAULT_GROUP, [kept()]);
+    act(() => useStore.setState({ settings: {} as unknown as Settings }));
+    fireEvent.click(await screen.findByRole("button", { name: /Pipeline by stage/ }));
+    await waitFor(() => expect(artifactPage).toHaveBeenCalled());
     expect(screen.queryByRole("combobox", { name: "Status bar" })).toBeNull();
   });
 
@@ -216,6 +242,9 @@ describe("the status bar, from the page", () => {
     const bar = await screen.findByRole("combobox", { name: "Status bar" });
     const options = [...bar.querySelectorAll("option")];
     expect(options.map((option) => option.disabled)).toEqual([false, true, true]);
+    expect(
+      screen.getByText("This version has no condensed view; it can be taken off the bar."),
+    ).toBeTruthy();
   });
 });
 

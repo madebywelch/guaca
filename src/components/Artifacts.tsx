@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import {
   detailsLine,
@@ -69,12 +69,16 @@ interface Props {
  * decides is who answers for the page, which is the way out when its owner has
  * left, and a rare enough act to live beside the record of who held it.
  *
- * ## A page with a condensed view can go on the status bar
+ * ## A page can go on the status bar, or say why it cannot
  *
- * From the foot, as a width or not at all. The operator's own pin asks nobody
- * and allows nothing: reads are allowed here, above the page, where the list
- * is drawn in full. A page pinned while its current version has no condensed
- * view, which a restore can do, can only be taken off.
+ * From the foot, as a width or not at all. The row is drawn for every page,
+ * because the ones that cannot be pinned are exactly the ones nobody would
+ * guess the bar exists from: a page with no condensed view says so beside a
+ * width it cannot take, rather than leaving the whole feature to be found in
+ * the source. The operator's own pin asks nobody and allows nothing: reads are
+ * allowed here, above the page, where the list is drawn in full. A page pinned
+ * while its current version has no condensed view, which a restore can do, can
+ * only be taken off.
  */
 export function Artifacts({ onClose }: Props) {
   const open = useStore((state) => state.artifactsOpen);
@@ -225,6 +229,9 @@ function ArtifactView({
   const widgets = useStore((state) => state.settings?.widgets ?? null);
   const setSettings = useStore((state) => state.setSettings);
   const now = useNow(60_000);
+  // Named so the reason the widths are refused can be described by the field
+  // that refuses them, rather than sitting beside it as an unrelated sentence.
+  const why = useId();
 
   const [detail, setDetail] = useState<ArtifactDetail | null>(null);
   const [reads, setReads] = useState<ArtifactRead[] | null>(null);
@@ -528,25 +535,37 @@ function ArtifactView({
             Refresh
           </button>
         )}
-        {!history && widgets !== null && (artifact.condensed || pinned) && (
-          <label className="artifacts__owner artifacts__pin">
-            <span>Status bar</span>
-            <select
-              className="input input--slim"
-              aria-label="Status bar"
-              disabled={busy}
-              value={pinned?.width ?? ""}
-              onChange={(event) => place(event.target.value as WidgetWidth | "")}
-            >
-              <option value="">Not on it</option>
-              <option value="narrow" disabled={!artifact.condensed}>
-                Narrow
-              </option>
-              <option value="wide" disabled={!artifact.condensed}>
-                Wide
-              </option>
-            </select>
-          </label>
+        {!history && widgets !== null && (
+          <>
+            <label className="artifacts__owner artifacts__pin">
+              <span>Status bar</span>
+              <select
+                className="input input--slim"
+                aria-label="Status bar"
+                aria-describedby={artifact.condensed ? undefined : why}
+                disabled={busy}
+                value={pinned?.width ?? ""}
+                onChange={(event) => place(event.target.value as WidgetWidth | "")}
+              >
+                <option value="">Not on it</option>
+                <option value="narrow" disabled={!artifact.condensed}>
+                  Narrow
+                </option>
+                <option value="wide" disabled={!artifact.condensed}>
+                  Wide
+                </option>
+              </select>
+            </label>
+            {!artifact.condensed && (
+              <span className="artifacts__pin-why" id={why}>
+                {pinned
+                  ? "This version has no condensed view; it can be taken off the bar."
+                  : artifact.owner && !artifact.owner.gone
+                    ? `No condensed view yet; ask ${artifact.owner.name} to add one.`
+                    : "No condensed view yet; any agent in its group can add one."}
+              </span>
+            )}
+          </>
         )}
         <span className="artifacts__spacer" />
         {confirming ? (
