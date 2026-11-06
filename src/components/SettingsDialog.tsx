@@ -51,6 +51,8 @@ import {
   type ContrastLevel,
   GRAYS,
   type GrayKey,
+  TEMPERATURE_KEYS,
+  TEMPERATURES,
   themeTokens,
 } from "../lib/theme";
 import {
@@ -1288,6 +1290,41 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                           }
                         />
                         {GRAYS[grays].label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="field">
+                  <span
+                    className="field__label"
+                    title="How warm the page and the two columns are. Warm is paper, plain is nearly white and cool is white under a northern light; every ink is solved against whichever one you pick."
+                  >
+                    Paper temperature
+                  </span>
+                  <div className="choices">
+                    {TEMPERATURE_KEYS.map((temperature) => (
+                      <button
+                        key={temperature}
+                        type="button"
+                        className="choice choice--swatch"
+                        aria-label={`Paper temperature: ${TEMPERATURES[temperature].label}`}
+                        aria-pressed={prefs.temperature === temperature}
+                        onClick={() => setLook({ temperature })}
+                      >
+                        <span
+                          className="choice__swatch"
+                          aria-hidden="true"
+                          style={
+                            {
+                              "--swatch": themeTokens(
+                                { ...prefs, temperature },
+                                resolveSurface(prefs.surface),
+                              )["--ground"],
+                            } as React.CSSProperties
+                          }
+                        />
+                        {TEMPERATURES[temperature].label}
                       </button>
                     ))}
                   </div>

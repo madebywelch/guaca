@@ -41,8 +41,9 @@ const KEY = "guac.prefs";
 /**
  * The defaults, written out independently of the module's own constant.
  *
- * 100 and light are what the app has always drawn. Neutral grays, amber, Inter,
- * 16px reading and the drawn cast are the first look a new operator gets. Every
+ * 100 and light are what the app has always drawn. Warm grays and warm paper,
+ * amber, Inter, Literata at 16px and the drawn cast are the first look a new
+ * operator gets, which is Ledger. Every
  * notification is on because a blob that cannot be read must not be able to
  * switch interruptions off. Asserting against the module constant would pass
  * whatever it said.
@@ -50,11 +51,12 @@ const KEY = "guac.prefs";
 const DEFAULTS: Prefs = {
   uiScale: 100,
   surface: "light",
-  grays: "neutral",
+  grays: "warm",
   attention: "amber",
   contrast: "standard",
+  temperature: "warm",
   typeface: "inter",
-  reading: "interface",
+  reading: "serif",
   readingSize: 16,
   cast: "drawn",
   showReasoning: false,
@@ -232,6 +234,7 @@ describe("a preference that outlives the window", () => {
       grays: "avocado",
       attention: "violet",
       contrast: "more",
+      temperature: "cool",
       typeface: "legible",
       reading: "serif",
       readingSize: 20,

@@ -137,12 +137,32 @@ export default function App() {
   // it is chosen so a reload draws it before the first paint of anything else,
   // and re-run when the OS changes its mind, which only matters while the
   // surface is set to follow it.
-  const { uiScale, surface, grays, attention, contrast, typeface, reading, readingSize } = prefs;
+  const {
+    uiScale,
+    surface,
+    grays,
+    attention,
+    contrast,
+    temperature,
+    typeface,
+    reading,
+    readingSize,
+  } = prefs;
   useEffect(() => {
-    const look = { uiScale, surface, grays, attention, contrast, typeface, reading, readingSize };
+    const look = {
+      uiScale,
+      surface,
+      grays,
+      attention,
+      contrast,
+      temperature,
+      typeface,
+      reading,
+      readingSize,
+    };
     applyAppearance(look);
     return watchSystemSurface(() => applyAppearance(look));
-  }, [uiScale, surface, grays, attention, contrast, typeface, reading, readingSize]);
+  }, [uiScale, surface, grays, attention, contrast, temperature, typeface, reading, readingSize]);
 
   // Nothing interrupts the operator for the first few seconds. A routine whose
   // slot passed while the app was closed is overdue and fires on the first

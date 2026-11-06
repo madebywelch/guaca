@@ -34,7 +34,7 @@ and *Every length is named* in `AGENTS.md` is the rule they all sit under.
   were a near-black column on the left and a white panel on the right, which is
   three surfaces for two jobs: the app's own two edges did not look like each
   other and the heavier of them carried the least reading. They do the same job,
-  so they are the same off-white, the page is the only white thing on screen,
+  so they are the same off-white, the page is the only paper on screen,
   and the only saturation left is an agent's color and the one amber. The
   columns used to pin `--attention` and `--attention-wash`, and the crews' column
   `--danger` too, because they were ink under a reading column that could go dark. Nothing
@@ -42,6 +42,17 @@ and *Every length is named* in `AGENTS.md` is the rule they all sit under.
   a `--rail-*` or `--grail-*` color declared for paper and forgotten in the ink
   block is a column that stays off-white in a dark room, which no DOM assertion
   sees. `styles.test.ts` reads both blocks and is the gate.
+- **A rule is decoration or it is a boundary, and one value cannot be both.**
+  `--edge` was 1.3 to 1 and drew the line between two turns as well as the line
+  a composer was written on, so the transcript could not say where a turn
+  started any louder than it said "hairline". `--rule` is the decoration and
+  `--rule-hard` is the boundary, and a control's boundary is neither: it is
+  `--edge-control`, held to 3 to 1.
+- **A temperature is a lift on the ladder, not a color on the page.** Paper
+  warmth is solved as a lightness lift and a chroma multiplier on every ground,
+  and every ink is solved against the lifted ground afterwards. A `--paper` hex
+  chosen for warmth is a page no ratio was measured against, and it fails in the
+  one way a gate would have caught: the text on it is a shade under target.
 - **A `-wash` name is a ground, and drawing ink with one is invisible on both
   surfaces.** The bar marking which crew the rail is inside was the attention
   wash for as long as the crews' column has existed: 1.06 to 1 against the

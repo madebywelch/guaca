@@ -186,10 +186,11 @@ function useBarLook(): BarLook {
   const prefs = useStore((s) => s.prefs);
   const [dark, setDark] = useState(prefersDark);
   useEffect(() => watchSystemSurface(setDark), []);
-  const { grays, attention, contrast, surface, uiScale } = prefs;
+  const { grays, attention, contrast, temperature, surface, uiScale } = prefs;
   return useMemo(
-    () => barLook({ grays, attention, contrast }, resolveSurface(surface, dark), uiScale),
-    [grays, attention, contrast, surface, uiScale, dark],
+    () =>
+      barLook({ grays, attention, contrast, temperature }, resolveSurface(surface, dark), uiScale),
+    [grays, attention, contrast, temperature, surface, uiScale, dark],
   );
 }
 

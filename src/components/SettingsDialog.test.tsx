@@ -1484,7 +1484,12 @@ describe("appearance", () => {
     });
     // The pane draws in the theme it just chose rather than waiting on `App`.
     expect(document.getElementById("guac-theme")?.textContent).toBe(
-      themeCss({ grays: "avocado", attention: "violet", contrast: "more" }),
+      themeCss({
+        grays: "avocado",
+        attention: "violet",
+        contrast: "more",
+        temperature: "warm",
+      }),
     );
     expect(choice("Grays: Avocado").getAttribute("aria-pressed")).toBe("true");
     expect(choice("Grays: Neutral").getAttribute("aria-pressed")).toBe("false");

@@ -139,7 +139,8 @@ export function solve(
   prefer: number,
   dark: boolean,
 ): string {
-  const clears = (L: number) => grounds.every((g) => contrast(hex(L, C, h), g) >= ratio);
+  const clearsColor = (color: string) => grounds.every((g) => contrast(color, g) >= ratio);
+  const clears = (L: number) => clearsColor(hex(L, C, h));
   if (clears(prefer)) return hex(prefer, C, h);
   let lo = dark ? prefer : 0;
   let hi = dark ? 1 : prefer;
@@ -148,5 +149,16 @@ export function solve(
     if (dark === clears(mid)) hi = mid;
     else lo = mid;
   }
-  return hex(dark ? hi : lo, C, h);
+  // The search lands on the lightness that clears, measured before the color
+  // is rounded to eight bits. The rounded one can land a hair under the ratio
+  // it was solved for, which is a suite failure with no visible cause, and the
+  // paper being a shade off white was enough to produce one. Step away from
+  // the ground until the color the document is actually given clears.
+  let at = dark ? hi : lo;
+  for (let i = 0; i < 24; i++) {
+    const color = hex(at, C, h);
+    if (clearsColor(color)) return color;
+    at = Math.min(1, Math.max(0, at + (dark ? 0.004 : -0.004)));
+  }
+  return hex(at, C, h);
 }

@@ -2078,13 +2078,21 @@ message. They no longer can: what an agent wants on the bar is a page, and a
 page's click opens the page rather than speaking for anybody. A button an agent
 asked for before that is still drawn and still says who asked.
 
-## The page is the only white thing, and both edges are the same off-white
+## The page is the only paper, and both edges are the same off-white
 
 `styles.css` used to say the surface never follows the OS, and the argument was
 sound as far as it went: a chat log is read for minutes at a time and white wins
 that in a lit room. It does not win it in a dark one. So the reading column is a
 token block behind `data-surface`: every color the theme owns, a scrim and a
 shadow, and nothing else.
+
+The page is `#fbf9f3` rather than white, which is Ledger's ground argument: a
+record of work should read as a page, and paper is warm. What has not changed is
+the relationship the rest of the app hangs off — the page is the brightest
+ground, both navigation columns are the same off-white a shade under it, and
+nothing else on screen is a surface. White is still reachable, as the `cool` end
+of *Paper temperature*; it is a choice an operator makes rather than the thing
+the app assumes.
 
 The two navigation columns are part of that question rather than exempt from it,
 and that is the change. They were ink whichever surface the operator picked, on
@@ -2139,7 +2147,7 @@ Neither preference goes anywhere near the runtime. They are `localStorage`, the
 way the inspector's open-or-closed already is, because the runtime would carry
 them across IPC only to hand them straight back.
 
-## A theme is three choices, and every color in it is solved
+## A theme is four choices, and every color in it is solved
 
 The first look an operator gets was one person's taste: cream columns, a
 near-black, and 9px uppercase monospace over every group. Measured, it was also
@@ -2149,14 +2157,36 @@ control's boundary needs 3. And "answer me" was 2.6 from "failed" under
 simulated deuteranopia, which makes them one color. Some degree of red-green
 colorblindness affects about one man in twelve.
 
-So a theme is not a table of hexes, and nobody writes one. It is three choices
+So a theme is not a table of hexes, and nobody writes one. It is four choices
 under Appearance: how warm or cool the grays are, which hue means the app wants
-something from you, and how much contrast. `lib/theme.ts` solves every color
-from those against a ratio: text to 15 to 1 on the darkest ground it is drawn
-on, hints to 4.5, a control's edge to 3, and so on. Lightness is never a
-choice, the operator's or a preset's. That is the whole of what makes the
-system open to change: a combination nobody has looked at clears the same gates
-the default does, because the gates are where the values came from.
+something from you, how much contrast, and how warm the paper itself is.
+`lib/theme.ts` solves every color from those against a ratio: text to 15 to 1 on
+the darkest ground it is drawn on, hints to 4.5, a control's edge to 3, and so
+on. Lightness is never a choice, the operator's or a preset's. That is the whole
+of what makes the system open to change: a combination nobody has looked at
+clears the same gates the default does, because the gates are where the values
+came from.
+
+The fourth is not a color, which is the point of it. *Paper temperature* moves
+the page and the two columns along the axis the grays already follow: a
+lightness lift applied to every ground in the ladder, and a multiplier on the
+chroma those grounds carry. `warm` is the ladder as drawn, so its lift is zero,
+and `cool` is white under a northern light. Every ink is solved against the
+ground it lands on *after* the lift, so a page that moved is a page the text was
+measured against rather than one it was painted over. It is separate from the
+grays choice because they answer different questions: an operator can like a
+warm rail and still want to read on white, and the page is the one surface long
+text sits on for minutes at a time. `theme.test.ts` runs all three temperatures
+through every other combination the pane can reach.
+
+A rule is two rules now. `--rule` is decoration at 1.3 to 1 — the line between
+two turns, the border of a card, the edge of a well — and `--rule-hard` is a
+boundary somebody has to find, at 1.6 to 1: the line the composer is written on,
+the head of a table, the break between two sections of an index. They were one
+`--edge` value doing both jobs, which is why the app could not say "this is
+where the next turn starts" any louder than "this is a hairline". A control's
+boundary is neither of them and is still `--edge-control` at the 3 to 1 WCAG
+1.4.11 asks.
 `theme.test.ts` runs every combination the pane can reach on both surfaces, and
 holds the stylesheet's own blocks equal to the default theme, so the first
 paint is not a second set of colors nobody measured.
@@ -2191,7 +2221,7 @@ The theme reaches the document as a second pair of token blocks, `:root` and
 properties on the root: those would pin the columns to whichever surface was
 current when they were written, and the surface would stop switching in CSS.
 
-## Type is one interface face, one reading face and a reading size
+## Type is one interface face, one reading face, one display face and a reading size
 
 Inter carries the interface, loaded with its optical-size axis so a title comes
 from the display cut and a line of text from the text cut. That is the job a
@@ -2200,16 +2230,27 @@ the system's own face instead, which is SF Pro on a Mac, or Atkinson
 Hyperlegible, whose letters are drawn so no two are easy to mistake. Each brings
 its own monospace.
 
-What agents wrote is `--font-read`, the interface face until an operator picks
-Literata, and `--type-read`, 16px until they pick another. Only the transcript
-and the composer spend either. A reading size that moved the rail and the
-controls would be the interface scale under a second name, and somebody who
-wants long replies at 18px has not asked for an 18px rail.
+What agents wrote is `--font-read` and `--type-read`. Literata is both of those
+by default now, and `--font-display` with it: Ledger is a page, and a page sets
+its titles in the face it is read in, so the channel's name, an agent's name and
+the wordmark are Literata too. The interface — the rail's rows, every control,
+every label — stays Inter, because an interface that reads as a document stops
+being an interface. An operator who reads agents in the interface face gets
+`--font-read` back and keeps a rail and a title that do not change with it;
+`--font-display` follows the *typeface* choice instead, so somebody who picked
+Atkinson Hyperlegible for its letterforms gets them in a heading as well.
+
+Only the transcript and the composer spend `--type-read`, 16px until an
+operator picks another size. A reading size that moved the rail and the controls
+would be the interface scale under a second name, and somebody who wants long
+replies at 18px has not asked for an 18px rail.
 
 Labels are sentence case in the interface face at 12px. They were 9px uppercase
 monospace, which is 8.1px at the smallest scale, and the ladder's floor is 11px
-now. Two things are still set in capitals, the wordmark and a code somebody
-types by hand, and neither is a label.
+now. Three things are still set in capitals: the wordmark, a code somebody types
+by hand, and the running head over a turn, which is a printed convention and not
+a label — it names who is speaking and is the one line in the transcript that
+sits in the margin.
 
 Every face ships with the app and none is fetched until something is drawn in
 it. Literata is most of the weight, at 729 KB across its subsets and italic,
