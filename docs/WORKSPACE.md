@@ -304,10 +304,25 @@ it earns the line.
 
 The side panel opened on "Routines", under a gear and two typed arrows, and
 nothing in it said whose routines. Every section in it is something one agent
-carries, so the agent heads it: its face, its name, the crew it is in and what
+carries, so the agent heads it: its face, its name, the group it is in and what
 answers for it, and one Edit that opens the profile dialog the gear used to.
 The gear said nothing about what it opened and sat beside the arrow that closes
 the panel; two glyphs a few pixels apart, one of which loses your place.
+
+Ledger sets that head as a ledger's first page: *The agent*, the name in the
+display face, the group and the model in the machine texture, the creature on a
+plate of its own, what it is doing now, and then a table of the facts that are
+read constantly — the model, whether it has a browser, whether it has a
+computer. It was a row of four things beside a 44-pixel portrait, which is a
+contact card. Two of those facts were only ever legible by opening a screen:
+"off" is the answer half the time, and it is an answer a reader wants without
+waiting for a panel to connect to a machine to find out.
+
+The table is short on purpose. Ledger's mockup also counts the working notes
+there, and this app has no count to give it without a second IPC read of a list
+the section below has already fetched; the section says it instead. The
+mockup's "Today" is the same shape of problem: the runtime counts a session, not
+a day, and a per-agent spend is not a number this app has.
 
 The line under the name is `runsOn` in `lib/profile.ts`, which resolves the
 model the way a turn does, agent over crew over app, and draws an inherited one
@@ -326,7 +341,10 @@ of the Details pane, and carries the Actions menu the channel's header cannot
 show there.
 
 Every section under it is one shape, `.detail`: a title, at most one control
-beside it, and one line when it is empty. Four sections had framed themselves
+beside it, and one line when it is empty. The title is set as a ledger labels a
+column — tracked capitals in the machine texture at the floor of the ladder —
+and the control beside it is the row's value, so a section reads as a line of a
+table rather than as a paragraph heading. Four sections had framed themselves
 and no two agreed on the gap under a title. What a store is for is on its
 heading's tooltip rather than in a paragraph under every empty one: memory's
 three sentences about `update_memory` were read on every new agent and never
@@ -1012,6 +1030,28 @@ and still what grows as the draft does. Past the twelve-rem cap the box scrolls,
 and the copy is scrolled with it from two places: the scroll event, and the
 effect that resizes it. Typing at the bottom of a full box moves the view
 without the operator having scrolled anything.
+
+## The rail is an index, and its footer is the back matter
+
+The column lists agents the way an index lists entries: a small mark, the name
+set in the display face, and what the agent is doing at the right in the machine
+texture. The face was 44 pixels, which is a portrait, and a column of portraits
+is a contact list. Ledger's move is the printed page's *one color plate per
+spread*: the creature is the one thing in the column drawn rather than written,
+so it belongs to the entry you have open and every other row carries a mark
+dimmed to gray. The bar saying which row is open is the agent's own color, and
+that is a deliberate difference from the mockup, which draws it in the attention
+amber: amber means "the app wants something from you" and nothing else in this
+app, and "you are looking at this one" is not a request.
+
+Each group heads its entries with its name in tracked capitals and, at the
+right, how many are in it — the one thing a reader opening an index is counting.
+
+The four places at the bottom are back matter: one line each, the name at the
+left and whatever the app can say about it at the right — For you's count,
+today's weekday, and nothing for Artifacts or Settings, which have no count to
+give. It was a row of four icon-and-word columns, 40 pixels of the column spent
+on four marks that each said what their word already said.
 
 ## The rail is arranged by hand, and lends the top of a section out
 

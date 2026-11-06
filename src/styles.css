@@ -1414,25 +1414,38 @@ input[type="file"]::file-selector-button {
 /* A group header. Reads as a label, not a control: the primary thing in the
    rail is still the agent. The gear is the only part that acts. */
 .rail__group-head {
-  font-family: var(--font-ui);
-  font-size: var(--type-meta);
-  font-weight: 600;
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  font-weight: 400;
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
   color: var(--rail-muted);
-  padding: var(--space-5) var(--space-4) var(--space-2) var(--space-6);
+  padding: var(--space-6) var(--space-4) var(--space-2) var(--space-5);
   display: flex;
   align-items: center;
   gap: var(--space-4);
 }
 
-/* The only part of the header that gives up space, and now the only part that
-   needs any: what is left beside it is the gear. The name still ellipses rather
-   than overflowing the rail, because a crew can be called anything. */
+/* The only part of the header that gives up space: what is left beside it is
+   the count and the gear. The name still ellipses rather than overflowing the
+   rail, because a group can be called anything. */
 .rail__group-name {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* How many are in it, where an index prints a count against a heading. It was
+   the only fact the heading carried and then it was dropped for the pointer's
+   own panel; at four characters it costs less than the gear beside it and it is
+   the one thing a reader opening an index is counting. */
+.rail__group-count {
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  color: var(--rail-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 /* The group's pinned model is not drawn here at all. A model id is longer than
@@ -1646,30 +1659,60 @@ input[type="file"]::file-selector-button {
 /* One row of places, each a mark over its name. Equal shares of the width
    rather than a width each, so the phone's two cells meet in the middle when
    the third is hidden. */
+/* The places, as an index's back matter: one line each, the name at the left
+   and what the app can say about it at the right.
+   It was a row of four icon-and-word columns, which is a toolbar: 40 pixels of
+   the column spent on four marks that each say what their word already says. A
+   line of type says it in 20, and the value has somewhere to go. */
 .rail__foot {
-  border-top: 1px solid var(--rail-edge);
-  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--rule-hard);
+  padding: var(--space-3) var(--space-4) var(--space-4);
   flex: none;
   display: flex;
-  gap: var(--space-2);
+  flex-direction: column;
+  gap: var(--space-1);
 }
 
 .rail__place {
-  flex: 1;
+  flex: none;
   min-width: 0;
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3) 0 var(--space-2);
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-3);
   border: 0;
   border-radius: var(--radius-sm);
   background: none;
   color: var(--rail-muted);
-  font-size: var(--type-meta);
+  font-size: var(--type-fine);
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
   font-weight: 500;
   line-height: var(--lead-tight);
   transition: color var(--tempo-tap) var(--ease), background var(--tempo-tap) var(--ease);
+}
+
+/* What the place can say before it is opened: a count, a day, a key. The one
+   value on the list that is allowed to be read as an answer rather than a
+   name. */
+.rail__place b {
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  font-weight: 400;
+  letter-spacing: var(--track-caps);
+  text-transform: none;
+  color: var(--rail-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.rail__place b[data-waiting="true"] {
+  color: var(--attention);
+}
+
+.rail__place:hover {
+  background: var(--rail-raised);
+  color: var(--rail-text);
 }
 
 .rail__place:hover {
@@ -1743,37 +1786,58 @@ input[type="file"]::file-selector-button {
   }
 }
 
+/* A row of an index: a small face, a name in the display face, and what the
+   agent is doing at the right in the machine texture.
+   The face is 24px rather than 44. At 44 the rail was a list of portraits,
+   which is what a chat app has; an index prints the name large and the mark
+   small, because the name is what is being looked up. */
 .agent-row {
   width: 100%;
   display: grid;
   /* The first lane is the character's own box and has to be told when that
      grows, or the face overflows its track and sits under the name. */
-  grid-template-columns: 2.75rem 1fr auto;
+  grid-template-columns: 1.5rem minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-4);
   padding: var(--space-2) var(--space-5) var(--space-2) var(--space-4);
+  /* The bar saying which row is open, drawn whether or not that row is. A
+     border rather than a pseudo-element, so the row does not shift sideways
+     when it is selected. */
+  border-left: 2px solid transparent;
+  border-top: 0;
+  border-right: 0;
+  border-bottom: 0;
   background: none;
-  border: 0;
   text-align: left;
   position: relative;
   color: inherit;
 }
 
-.agent-row:hover,
-.agent-row[aria-current="true"] {
+.agent-row:hover {
   background: var(--rail-raised);
 }
 
-.agent-row[aria-current="true"]::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0.25rem;
-  bottom: 0.25rem;
-  width: 2px;
-  border-radius: 0 1px 1px 0;
-  background: var(--accent, var(--text));
+/* The open row, which is the one place in the rail a color is allowed: the
+   agent's own. Ledger's mockup draws this bar in the attention amber, and that
+   is the one thing in it this app cannot copy — amber means "answer me" and
+   nothing else, and "you are looking at this one" is not a request. The color
+   is already there, on the agent's creature; this says it twice. */
+.agent-row[aria-current="true"] {
+  border-left-color: var(--accent);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent) 9%, transparent),
+    transparent 78%
+  );
 }
+
+/* Everything not open is a mark rather than a portrait: the index is read, and
+   one creature in color per column is the plate a printed page would carry. */
+.agent-row:not([aria-current="true"]) .avatar {
+  filter: grayscale(1) opacity(0.55);
+}
+
+
 
 /* The name and its pin as one cell, rather than a fourth column. A column that
    is empty on every unpinned row still takes its gap, so the names in a crew
@@ -1786,14 +1850,18 @@ input[type="file"]::file-selector-button {
 }
 
 .agent-row__name {
-  font-family: var(--font-ui);
-  font-size: var(--type-ui);
-  font-weight: 500;
+  font-family: var(--font-display);
+  font-size: var(--type-aside);
+  font-weight: 400;
   letter-spacing: var(--track-flat);
-  color: var(--rail-text);
+  color: var(--rail-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.agent-row[aria-current="true"] .agent-row__name {
+  color: var(--rail-text);
 }
 
 /* Quiet, and after the name so the name is what truncates. A pin is read once,
@@ -6476,31 +6544,37 @@ input[type="file"]:disabled {
   background: var(--sunken);
 }
 
+/* The panel's front matter: what this page is about, set the way the page
+   behind it is set. It was a row — a face, a name, a line and a button — which
+   is a contact card. A ledger's first page states the subject and then its
+   facts. */
 .profile {
   flex: 1;
   min-width: 0;
   display: flex;
+  flex-direction: column;
   align-items: flex-start;
-  gap: var(--space-4);
+  gap: var(--space-1);
 }
 
-.profile__body {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  /* The name's cap height against the top of the face, rather than the box. */
-  padding-top: var(--space-2);
+.profile__kicker {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+  color: var(--faint);
 }
 
 .profile__name {
   margin: 0;
-  font-family: var(--font-ui);
-  font-size: var(--type-ui);
-  font-weight: 600;
+  font-family: var(--font-display);
+  font-size: var(--type-lede);
+  font-weight: 400;
   line-height: var(--lead-tight);
+  letter-spacing: var(--track-tight);
   color: var(--text);
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -6508,7 +6582,7 @@ input[type="file"]:disabled {
 
 /* One line each, cut rather than wrapped: a model slug is long and reads
    the same at either end, and the whole of it is in the title and the editor.
-   Wrapped, the three lines became five and the crew name moved every time
+   Wrapped, the three lines became five and the group name moved every time
    the model changed. */
 .profile__line,
 .profile__skills {
@@ -6525,6 +6599,98 @@ input[type="file"]:disabled {
   color: var(--faint);
 }
 
+/* The one line under the name is a machine fact, so it is set as one: the
+   group's name and the model that answers for this agent, in the texture the
+   transcript's margin uses. */
+.profile__line {
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  color: var(--faint);
+}
+
+/* The agent, at the size a portrait plate is: the face is the one thing in the
+   panel drawn rather than written, and it earned a plate of its own rather than
+   a thumbnail beside a name. */
+.profile__plate {
+  margin-top: var(--space-4);
+  display: flex;
+}
+
+/* What it is doing, in the amber only when that means something is waiting. */
+.profile__state {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  color: var(--faint);
+}
+
+.profile__dot {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-pill);
+  background: var(--faint);
+}
+
+.profile__state[data-state="awaitingApproval"] {
+  color: var(--attention);
+}
+
+.profile__state[data-state="awaitingApproval"] .profile__dot {
+  background: var(--attention-fill);
+}
+
+.profile__state[data-state="thinking"] {
+  color: var(--system);
+}
+
+.profile__state[data-state="thinking"] .profile__dot {
+  background: var(--system);
+}
+
+/* The facts, as a ledger table: a label, a value, and a rule between them. The
+   value is mono and right-aligned, so two facts of different lengths line up at
+   the right edge the way a table's numbers do. */
+.facts {
+  margin: var(--space-5) 0 0;
+  width: 100%;
+  border-top: 1px solid var(--rule);
+}
+
+.fact {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.fact dt {
+  font-size: var(--type-small);
+  color: var(--faint);
+}
+
+.fact dd {
+  margin: 0;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile__actions {
+  flex: none;
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
 /* A model the crew or the app chose, not this agent: a shade lighter, so the
    agents that answered for themselves can be told apart down a rail of
    profiles without opening any of them. */
@@ -6532,11 +6698,7 @@ input[type="file"]:disabled {
   color: var(--faint);
 }
 
-.profile__actions {
-  flex: none;
-  display: flex;
-  gap: var(--space-2);
-}
+
 
 /* --- a drawn mark in a control ------------------------------------------
 
@@ -6577,19 +6739,27 @@ input[type="file"]:disabled {
   margin-bottom: var(--space-3);
 }
 
+/* A section of the panel is a row of a ledger: what it is at the left, in the
+   tracked capitals a ledger labels a column with, and what it holds at the
+   right, in the machine texture. It was 15px sentence case, which is the size
+   of a body and made every section read as a paragraph title. */
 .detail__title {
   margin: 0;
   min-width: 0;
-  font-family: var(--font-ui);
-  font-size: var(--type-ui);
-  font-weight: 500;
-  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  font-weight: 400;
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+  color: var(--faint);
 }
 
 /* A count or an age beside a title: there to be glanced past, not read. */
 .detail__count {
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
   font-weight: 400;
-  color: var(--faint);
+  color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
 
@@ -9118,28 +9288,6 @@ button.artifacts__version[aria-pressed="true"] {
   gap: var(--space-8);
 }
 
-/* Decisions are a destination, with the same paper and named rhythm as chat. */
-.rail__for-you {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin: var(--space-4) var(--space-5);
-  padding: var(--space-5) var(--space-6);
-  color: var(--rail-text);
-  background: var(--rail-raised);
-  border: 1px solid var(--rail-edge);
-  border-radius: var(--radius-sm);
-  font-size: var(--type-ui);
-  cursor: pointer;
-}
-.rail__for-you span:last-child {
-  color: var(--rail-muted);
-  font-variant-numeric: tabular-nums;
-}
-.rail__for-you span[data-waiting] {
-  color: var(--attention);
-  font-weight: 600;
-}
 .dialog.for-you {
   height: min(var(--measure-attention), calc(100dvh - var(--space-7) - var(--space-7)));
   max-height: calc(100dvh - var(--space-7) - var(--space-7));
@@ -9376,7 +9524,6 @@ button.artifacts__version[aria-pressed="true"] {
   .pane__more,
   .inspector__head > .inspector__tab:last-child,
   .rail__search,
-  .rail__for-you,
   .rail__foot > button:last-child {
     display: none;
   }
