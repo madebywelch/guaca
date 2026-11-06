@@ -143,6 +143,16 @@ function HeaderFields({
           </button>
         </div>
       ))}
+      {/* The hint is a paragraph, and the control that adds a row comes after
+          it. As a span after an inline button the two shared a line and read as
+          one word — "Add a headerSent on every request" — because a span has no
+          box of its own here. The Key field puts its hint under its input, and
+          this is the same shape: the explanation, then the field's action. */}
+      <p className="field__hint">
+        {env
+          ? "Set in the program's environment, which starts empty apart from what it needs to find its own files: usually its token, under the name its instructions give. A value never reaches a model, a transcript or an agent's machine, and never comes back to this panel."
+          : "Sent on every request to this server, whatever else authorizes it: an API key the server reads from a header it named, or the pair a gate in front of it wants. They stay here: a value never reaches a model, a transcript or an agent's machine, and never comes back to this panel."}
+      </p>
       <button
         type="button"
         className="toolset__more"
@@ -151,11 +161,6 @@ function HeaderFields({
       >
         {env ? "Add a variable" : "Add a header"}
       </button>
-      <span className="field__hint">
-        {env
-          ? "Set in the program's environment, which starts empty apart from what it needs to find its own files: usually its token, under the name its instructions give. A value never reaches a model, a transcript or an agent's machine, and never comes back to this panel."
-          : "Sent on every request to this server, whatever else authorizes it: an API key the server reads from a header it named, or the pair a gate in front of it wants. They stay here: a value never reaches a model, a transcript or an agent's machine, and never comes back to this panel."}
-      </span>
     </div>
   );
 }
