@@ -1,8 +1,13 @@
 # Guaca
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="design/wordmarks/eye-contact.dark.svg">
+  <img src="design/wordmarks/eye-contact.svg" alt="guaca" width="271" height="74">
+</picture>
+
 **A desktop app for AI agents that work together.**
 
-![A Guaca agent reporting back after delegating to three others, with the crew at work in the rail](docs/img/guaca.png)
+![A Guaca agent reporting back after delegating to three others, with the group at work in the rail](docs/img/guaca.png)
 
 Run Guaca locally on your computer or connect it to a VPS. The backend workspace
 runs in a container; you choose where it lives. The desktop is your window into
@@ -31,7 +36,8 @@ checked before it is opened:
 shasum -a 256 -c Guaca_*_universal.dmg.sha256
 ```
 
-## Build a crew
+=======
+## Build a group
 
 Organize your agents into **groups**: isolated spaces with their own collection
 of agents, settings, and **plugins**. Plugins are MCP servers that connect your

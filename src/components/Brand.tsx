@@ -97,7 +97,7 @@ export function Brand({ waiting }: { waiting: boolean }) {
           </span>
         ))}
       </span>
-      <span className="brand__name">Guaca</span>
+      <span className="brand__name">guaca</span>
     </span>
   );
 }

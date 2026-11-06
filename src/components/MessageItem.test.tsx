@@ -553,9 +553,12 @@ describe("a refusal the runtime wrote for a model", () => {
       <MessageItem message={refused()} lookups={lookups} continued={false} />,
     );
     const chip = screen.getByRole("button", { name: /send a message to nobody/ });
-    // Shut, the chip already carries the sentence rather than the vocabulary.
-    expect(container.querySelector(".trail__said")?.textContent).toBe(
-      "Nothing was sent: the call named nobody to send to.",
+    // Shut, the line already carries the sentence rather than the vocabulary.
+    // It is a note's gist now — the transcript draws a turn's own work as a
+    // footnote — and a note's line is a fragment, so it is set without the
+    // full stop the paragraph behind it keeps.
+    expect(container.querySelector(".footnote__gist")?.textContent).toBe(
+      "Nothing was sent: the call named nobody to send to",
     );
     expect(container.textContent).not.toContain("`to`");
 

@@ -4,6 +4,7 @@ import { AgentAvatar } from "../avatars/AgentAvatar";
 import { readDraft, saveDraft } from "../lib/draft";
 import { fileUrl, previewKind, readableSize } from "../lib/files";
 import { api, onFileDrop } from "../lib/ipc";
+import { FIND_KEY } from "../lib/keybinds";
 import { applyMention, matchMentions, mentionAt, splitMentions } from "../lib/mentions";
 import { useLiveAgents, useStore } from "../lib/store";
 import { BEFORE_RELOAD, workspaceOrigin } from "../lib/transport";
@@ -11,6 +12,8 @@ import { type Attachment, errorMessage, type GroupId, type Staged } from "../lib
 
 interface Props {
   placeholder: string;
+  /** The model that will answer, for the row under the line. */
+  model?: string;
   draftKey?: string;
   /**
    * The crew this channel belongs to, or null when it belongs to nobody.
@@ -30,6 +33,7 @@ interface Props {
 
 export function Composer({
   placeholder,
+  model,
   group,
   disabled,
   disabledReason,
@@ -384,15 +388,24 @@ export function Composer({
         </button>
       </div>
 
-      {/* Only when there is something to say. What used to live here
-          permanently was three facts that announce themselves: the typeahead
-          appears when you type @, the drop target says so while a file is over
-          the window, and Enter sends in every chat box ever written. */}
-      {hint && (
-        <div className="composer__foot">
-          <span className="hint">{hint}</span>
-        </div>
-      )}
+      {/* The row under the line. It used to appear only when there was a hint
+          to give, on the argument that the rest announces itself: the typeahead
+          shows up when you type @, the drop target says so while a file is over
+          the window, and Enter sends in every chat box ever written. What that
+          left out is the two things a reader of this particular box needs
+          first — that an @ names an agent at all, and where the commands are.
+          A page's own footnote to its field, permanent and quiet. */}
+      <div className="composer__foot">
+        <span className="hint">
+          {hint ?? (
+            <>
+              {model && `${model} · `}
+              <b>@</b> to name an agent
+            </>
+          )}
+        </span>
+        <span className="composer__keys">{FIND_KEY} commands</span>
+      </div>
     </div>
   );
 }

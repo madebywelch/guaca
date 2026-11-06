@@ -930,16 +930,35 @@ describe("what the attention color is spent on", () => {
    * The boundary of something you type into or press is how anybody finds it,
    * and WCAG 1.4.11 asks 3 to 1 of it. `--edge` is a divider at 1.3.
    */
-  it.each([
-    'input[type="file"]::file-selector-button',
-    ".input, .textarea, .select",
-    ".composer",
-    ".choice",
-  ])("borders %s in a control's edge", (selector) => {
-    const border = declarations().find(
-      (d) => d.selector.endsWith(selector) && d.property === "border",
+  it.each(['input[type="file"]::file-selector-button', ".input, .textarea, .select", ".choice"])(
+    "borders %s in a control's edge",
+    (selector) => {
+      const border = declarations().find(
+        (d) => d.selector.endsWith(selector) && d.property === "border",
+      );
+      expect(border?.value).toBe("1px solid var(--edge-control)");
+    },
+  );
+
+  /**
+   * The composer is a ruled line rather than a box, and the line is still the
+   * boundary.
+   *
+   * Ledger draws the box you type into as a line you write on: no fill, no
+   * radius, no four-sided border. The mockup spends `--rule-hard` on that line,
+   * which is 1.6 to 1, and it can afford to because its field is also bounded
+   * by the page. This one is the field, so it keeps the 3 to 1 WCAG 1.4.11 asks
+   * of the boundary of a control, drawn on one edge instead of four.
+   */
+  it("bounds the composer with a line in a control's edge", () => {
+    const rule = declarations().find((d) => d.selector === ".composer");
+    expect(rule).toBeTruthy();
+    const drawn = declarations()
+      .filter((d) => d.selector === ".composer")
+      .filter((d) => /^border(-top)?$/.test(d.property));
+    expect(drawn.map((d) => `${d.property}: ${d.value}`)).toContain(
+      "border-top: 1px solid var(--edge-control)",
     );
-    expect(border?.value).toBe("1px solid var(--edge-control)");
   });
 });
 

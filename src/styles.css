@@ -1349,16 +1349,19 @@ input[type="file"]::file-selector-button {
 }
 
 /* Written in from the left and folded back into the pair, rather than faded:
-   a name that fades is a name that was there all along. Plain on purpose: the
-   characters are the brand, and this is the label on them. */
+   a name that fades is a name that was there all along. Set the way the drawn
+   wordmark sets it — lowercase, in the display face — so the corner and the
+   icon and the README are one name in one shape rather than three treatments
+   of it. The creatures are still the brand; this is the word the wordmark
+   spells, at the size a label is. */
 .brand__name {
   max-width: 0;
   overflow: hidden;
   white-space: nowrap;
   clip-path: inset(0 100% 0 0);
-  font-family: var(--font-ui);
-  font-size: var(--type-body);
-  font-weight: 600;
+  font-family: var(--font-display);
+  font-size: var(--type-aside);
+  font-weight: 400;
   letter-spacing: var(--track-tight);
   line-height: var(--lead-tight);
   color: var(--rail-text);
@@ -4953,24 +4956,33 @@ input[type="file"]::file-selector-button {
   color: var(--faint);
 }
 
+/* The ruled line you write on, rather than a widget on the page.
+   Ledger's composer is a line and a place to type: no box, no fill, no radius.
+   The line is `--edge-control` rather than the mockup's `--rule-hard` and that
+   is deliberate — it is the only boundary this field has, and WCAG 1.4.11 asks
+   3 to 1 of the boundary of a control. The mockup can spend 1.6 to 1 because
+   its line is drawn under a field that is also bounded by the page; this one is
+   the field. */
 .composer {
-  margin: var(--space-4) var(--column-inset) var(--column-inset);
-  border: 1px solid var(--edge-control);
-  border-radius: var(--radius);
-  background: var(--raised);
+  margin: 0 var(--column-inset) 0;
+  border: 0;
+  border-top: 1px solid var(--edge-control);
+  border-radius: 0;
+  background: none;
+  padding: var(--space-4) 0 var(--space-4);
   transition: border-color var(--tempo-tap) var(--ease);
   flex: none;
 }
 
 .composer:focus-within {
-  border-color: color-mix(in oklab, var(--focus) 55%, var(--rule));
+  border-top-color: var(--focus);
 }
 
 /* A drag is over the window and will land here. The whole window is the drop
    target, so the composer is what says where the file is going. */
 .composer[data-dragging] {
-  border-color: var(--focus);
-  background: color-mix(in oklab, var(--focus) 8%, var(--raised));
+  border-top-color: var(--focus);
+  background: color-mix(in oklab, var(--focus) 8%, transparent);
 }
 
 .composer__files {
@@ -5481,7 +5493,9 @@ input[type="file"]::file-selector-button {
   max-height: 12rem;
 }
 
+/* The line you are asked to write on is set in the face you will write in. */
 .composer__input::placeholder {
+  font-family: var(--font-read);
   color: var(--faint);
 }
 
@@ -5556,10 +5570,43 @@ input[type="file"]::file-selector-button {
   cursor: not-allowed;
 }
 
+/* The hint row under the line: what the box takes, at the left, and how to get
+   out of it, at the right. A page's footnote to its own field, in the same
+   machine texture as the transcript's notes. Permanent rather than conditional,
+   because "@ to name an agent" is the one thing about this box that is not
+   guessable and the row costs twelve pixels. */
 .composer__foot {
   display: flex;
   align-items: center;
-  padding: 0 var(--space-5) var(--space-3);
+  justify-content: space-between;
+  gap: var(--space-5);
+  padding: var(--space-3) 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  color: var(--faint);
+}
+
+.composer__foot .hint {
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  color: var(--faint);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer__keys {
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  color: var(--faint);
+  white-space: nowrap;
+  flex: none;
+}
+
+.composer__foot b {
+  font-weight: 400;
+  color: var(--muted);
 }
 
 .hint {
@@ -6281,7 +6328,7 @@ input[type="file"]:disabled {
   bottom: 0;
   z-index: 1;
   background: var(--ground);
-  border-top: 1px solid var(--edge);
+  border-top: 1px solid var(--rule);
 }
 
 .onboarding-actions > span,
