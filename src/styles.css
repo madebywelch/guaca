@@ -6691,10 +6691,12 @@ input[type="file"]:disabled {
   margin-top: var(--space-4);
 }
 
-/* A model the crew or the app chose, not this agent: a shade lighter, so the
+/* A model the group or the app chose, not this agent: a shade lighter, so the
    agents that answered for themselves can be told apart down a rail of
-   profiles without opening any of them. */
-.profile__model[data-inherited] {
+   profiles without opening any of them. It is the front matter's value now
+   rather than a line under the name, which is where the fact belongs: the name
+   line says whose the agent is, and the table says what it is set on. */
+.fact dd[data-inherited] {
   color: var(--faint);
 }
 
@@ -9828,6 +9830,11 @@ button.artifacts__version[aria-pressed="true"] {
   overflow-wrap: anywhere;
 }
 
+/* A section head that is also a disclosure. A button does not inherit
+   `text-transform`, so "Working notes", "Browser" and "Computer" came out in
+   sentence case beside the tracked capitals every other head is set in — one
+   column of the panel with two type treatments, which reads as a mistake
+   rather than as a hierarchy. */
 .grant__disclosure,
 .worknotes__toggle {
   display: inline-flex;
@@ -9838,6 +9845,8 @@ button.artifacts__version[aria-pressed="true"] {
   background: none;
   color: inherit;
   font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
   text-align: left;
   cursor: pointer;
 }

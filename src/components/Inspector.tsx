@@ -60,8 +60,8 @@ function remembered(): boolean {
  * than a gear in the corner because the gear said nothing about what it
  * opened, and sat beside the arrow that closes the panel.
  *
- * The model is drawn lighter when it is inherited: a crew default is a fact
- * about the crew, and an operator reading the profile should be able to tell
+ * The model is drawn lighter when it is inherited: a group's default is a fact
+ * about the group, and an operator reading the profile should be able to tell
  * which agents chose for themselves without opening each one.
  */
 function Profile({
@@ -85,15 +85,8 @@ function Profile({
       <p className="profile__name" title={agent.name}>
         {agent.name}
       </p>
-      <p className="profile__line" title={`${runs.crew} · ${runs.model}`}>
+      <p className="profile__line" title={runs.crew}>
         {runs.crew}
-        <span aria-hidden="true"> · </span>
-        {/* Lighter when inherited: a group's default is a fact about the
-            group, and an operator reading the profile should be able to tell
-            which agents chose for themselves without opening each one. */}
-        <span className="profile__model" data-inherited={runs.inherited || undefined}>
-          {runs.model}
-        </span>
       </p>
       <div className="profile__plate">
         <AgentAvatar
@@ -112,19 +105,22 @@ function Profile({
         </p>
       )}
       {/* What it is set on, as a page's front matter is set: a table of the
-          facts that are read constantly and were two clicks away. */}
+          facts that are read constantly and were two clicks away.
+
+          It used to hold the browser and the computer as well, and those were
+          the same two things the places below say — twice, one above the other,
+          because a fact and a control about one place are one row and not two.
+          A place is granted, watched and taken back, so it lives where its
+          switch is; what is left here is what has no control at all. */}
       <dl className="facts">
         <div className="fact">
           <dt>Model</dt>
-          <dd title={runs.model}>{runs.model}</dd>
-        </div>
-        <div className="fact">
-          <dt>Browser</dt>
-          <dd>{agent.hasBrowser ? "on" : "off"}</dd>
-        </div>
-        <div className="fact">
-          <dt>Computer</dt>
-          <dd>{agent.hasComputer ? "on" : "off"}</dd>
+          {/* Lighter when inherited: a group's default is a fact about the
+              group, and an operator reading the profile should be able to tell
+              which agents chose for themselves without opening each one. */}
+          <dd title={runs.model} data-inherited={runs.inherited || undefined}>
+            {runs.model}
+          </dd>
         </div>
       </dl>
       {agent.skills.length > 0 && (
