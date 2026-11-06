@@ -5779,7 +5779,12 @@ input[type="file"]:disabled {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--space-8) var(--space-7);
+  /* No bottom padding: a sticky row pins to the scrollport's padding edge, so
+     any bottom padding here is a strip of pane below the bar for the form to
+     show through in. The space under the buttons is the action row's own, kept
+     at the same total — 36 + 12 — where it moves with the bar instead of
+     staying behind at the pane's edge. */
+  padding: var(--space-8) var(--space-7) 0;
   display: flex;
 }
 
@@ -5926,7 +5931,7 @@ input[type="file"]:disabled {
      top, and a gutter above the buttons — so the content scrolling under it
      reads as continuing past a divider rather than as text on the buttons. */
   margin-top: var(--space-5);
-  padding: var(--space-5) 0;
+  padding: var(--space-5) 0 calc(var(--space-8) + var(--space-5));
   position: sticky;
   bottom: 0;
   z-index: 1;
