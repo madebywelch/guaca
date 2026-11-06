@@ -208,7 +208,7 @@ repo: the frontend renders state and forwards intent.
 | Anything an agent stops to ask a person: the desk, the queue, the two kinds of request, `ask_operator` | `docs/ATTENTION.md`, then `domain/approval.rs` and `Runtime::park` |
 | An agent that cannot go on at all, what reaches the operator without parking a turn, `escalate` | *Three things an agent can do about a person* and *What an escalation is* in `docs/ATTENTION.md`, then `domain/escalation.rs` and `Store::raise_escalation` |
 | The box you write in: the ruled line, the row under it, what it says will answer | *The box you write in is a line, and the row under it is permanent* in `docs/WORKSPACE.md`, then `src/components/Composer.tsx` and the composer's rules in `src/styles.css` |
-| The app icon, the menu bar glyphs, the drawn wordmark, the README's header | *The icon is a paper tile, and the wordmark is the icon, drawn* in `docs/WORKSPACE.md`, then `scripts/make-icon.py` and `scripts/make-tray.py` |
+| The app icon, the menu bar glyphs, the drawn wordmark, the README's header | *The icon is a paper tile, and the wordmark is the icon, drawn* in `docs/WORKSPACE.md`, then `scripts/make-icon.py`, `scripts/make-tray.py` and `scripts/make-icons.sh`, which rewrites them, and `scripts/check-icons.py`, which the gate runs |
 | The rail as an index: the mark, the name, the state, the group's count, the four places at the bottom | *The rail is an index, and its footer is the back matter* in `docs/WORKSPACE.md`, then `src/components/Sidebar.tsx` and the rail's rules in `src/styles.css` |
 | The groups' column, its badges, how a group names itself, which group the rail is inside | *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/presence.ts`, `src/components/GroupRail.tsx` and `src/components/OrbTag.tsx` |
 | When the groups' column comes out, how close is close enough, what holds it out | *The column does not stand open* in `docs/WORKSPACE.md`, then `src/lib/reach.ts` and the three boxes in `.grail` |
@@ -546,7 +546,7 @@ the source rather than at the end.
 ## Verify
 
 ```sh
-./scripts/ci.sh          # lint, typecheck, build, every test suite
+./scripts/ci.sh          # lint, typecheck, build, every test suite, the icons
 ./scripts/ci.sh rust     # Rust only
 ./scripts/image.sh       # the daemon's image: build it, run it, prove it answers
 GUAC_LOG=guac=debug pnpm app

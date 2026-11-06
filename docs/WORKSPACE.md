@@ -1691,11 +1691,24 @@ both light and dark at the user's whim.
 `design/wordmarks/eye-contact.svg` is the same claim written out: the word
 `guaca` drawn as circles and one round stroke. It leads the README in both
 surfaces through a `<picture>`, which is the one place the app is seen before it
-is opened. Its generator, `design/wordmarks/wordmarks.py`, still reads
-Instrument Sans for the four prototypes it renders beside it, and that face left
-the dependencies when the reading face arrived — so the comparison page cannot
-be rebuilt from a clean checkout until somebody repoints it at Inter. The SVGs
-are the record until then, and the one that ships is committed.
+is opened. Its generator, `design/wordmarks/wordmarks.py`, cuts the three
+typeset prototypes it is compared with from `--font-display` — Literata, the
+face `.brand__name` sets the rail's name in — so the page shows the app's own
+type rather than a face it used to ship, and it rebuilds from a clean checkout
+with `./design/wordmarks/make.sh`. The page and its five SVGs are committed as
+the record, and the one that ships is the drawn one.
+
+**Both marks are held to the scripts that draw them.** `scripts/check-icons.py`,
+which the gate runs as `./scripts/ci.sh assets`, regenerates the app icon and the
+three glyphs into a temp directory and fails on a byte of difference, naming the
+file and the command that rewrites it. Without it, a mark edited without running
+its script looked right on the machine of whoever edited it: the icons are
+compiled into the binary, and nothing else in the repo can see them change.
+`scripts/make-icons.sh` is that command, and it sorts `icon.icns`'s chunks,
+which `tauri icon` packs by walking a map and therefore in a different order on
+every run. A reader finds a chunk by its type rather than by where it stands, so
+sorting costs nothing and leaves an artifact that only changes when the drawing
+does.
 
 ## Making something is one plus, at the top of the rail
 
