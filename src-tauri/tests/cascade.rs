@@ -5561,6 +5561,73 @@ async fn an_agent_that_cannot_decide_asks_the_operator_and_carries_on_with_the_a
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_settled_question_says_more_on_the_page_and_nothing_more_to_the_agent() {
+    // The channel now draws what was answered under the question, reading it
+    // from the row the store already keeps. This is the pin on the other side
+    // of that: the turn resumed with the same tool result it was handed before
+    // the card learned to say this, word for word, and the question the turn
+    // stored is still only the question. A display change must not become a
+    // second thing the model is told, and must not become a field on a part the
+    // agent wrote.
+    let stub = serve(|body| {
+        if anyone_said(body, "The operator answered") {
+            Script::Say("Going with Northwind, as you said.".into())
+        } else {
+            Script::AskQuestion {
+                question: "Both vendors clear the bar on price. Which do you want?".into(),
+                options: vec!["Northwind".into(), "Contoso".into()],
+            }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Analyst"], GuardLimits::default());
+    let analyst = h.id("Analyst");
+    let run = h.runtime.send_from_human(analyst, "Pick a vendor.").unwrap();
+    let question = h.awaited_request().await;
+
+    h.runtime.answer_question(question, "Northwind").unwrap();
+    h.settle(run).await;
+
+    let resumed = stub.transcript.lock().last().cloned().expect("the turn resumed");
+    let handed_back: Vec<String> = resumed["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .filter(|message| message["role"] == "tool")
+        .filter_map(|message| message["content"].as_str().map(str::to_string))
+        .collect();
+    assert_eq!(handed_back.len(), 1, "one tool result, and it is the answer");
+    assert_eq!(
+        handed_back[0],
+        "The operator answered: Northwind\n\nThat is their decision, so take it and carry on in \
+         this turn. Do not ask them the same thing again and do not ask a colleague to confirm \
+         it. Say in your reply what you did with it.",
+        "what the model is told is exactly what it was told before the card changed"
+    );
+
+    let stored = h.runtime.store().channel_messages(analyst, 50).unwrap();
+    let asked = stored
+        .iter()
+        .find_map(|message| {
+            message
+                .parts
+                .iter()
+                .find(|part| matches!(part, Part::Question { id, .. } if *id == question))
+        })
+        .expect("the question is in the channel");
+    assert_eq!(
+        asked,
+        &Part::Question {
+            id: question,
+            question: "Both vendors clear the bar on price. Which do you want?".into(),
+            options: vec!["Northwind".into(), "Contoso".into()],
+        },
+        "the stored question carries the question and nothing learned since"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_question_nobody_answers_records_no_answer_and_releases_the_turn() {
     // What this proves and what it does not, said plainly. A stop is the one
     // unanswered end an offline test can reach: the ten minute window is a real

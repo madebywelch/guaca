@@ -56,6 +56,7 @@ vi.mock("./lib/ipc", () => ({
     agentActivity: () => agentActivity(),
     usageSummary: async () => [],
     approvalStates: async () => ({}),
+    approvalAnswers: async () => ({}),
     pendingApprovals: async () => [],
     listDecisions: async () => [],
     openEscalations: async () => [],

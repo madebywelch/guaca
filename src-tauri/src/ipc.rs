@@ -347,6 +347,7 @@ surface! {
     scan_agent_signins(id: AgentId) -> Vec<Signin>,
     agent_signins(id: AgentId) -> Vec<Signin>,
     approval_states() -> HashMap<ApprovalId, ApprovalState>,
+    approval_answers() -> HashMap<ApprovalId, String>,
     list_decisions() -> Vec<WorkDecision>,
     answer_decision(id: DecisionId, answer: String, updated_at: i64) -> WorkDecision,
     resume_decision(id: DecisionId) -> WorkDecision,

@@ -321,6 +321,16 @@ export const api = {
    * themselves arrive in the transcript; this is the half that changes.
    */
   approvalStates: () => invoke<Record<ApprovalId, ApprovalState>>("approval_states"),
+  /**
+   * What the operator said to each question, once they have answered it.
+   *
+   * The other half of the request record: `approvalStates` says whether a card
+   * is still live, and this says what it was answered with. Only a question
+   * has one — a permission is settled with a token, and the token is the state.
+   * A question missing from this map was never answered, or is older than the
+   * window the host reads, and its card says only that it was answered.
+   */
+  approvalAnswers: () => invoke<Record<ApprovalId, string>>("approval_answers"),
   /** Every request still waiting on the operator, oldest first. */
   listDecisions: () => invoke<WorkDecision[]>("list_decisions"),
   answerDecision: (id: string, answer: string, updatedAt: number) =>
