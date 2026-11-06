@@ -576,7 +576,7 @@ describe("when the connection to the host is lost", () => {
 
     // The banner a failed call raises, without a call: the diagnosis, and the
     // controls that do something about it.
-    expect(screen.getByText(/lost the connection to this host/)).toBeTruthy();
+    expect(screen.getByText(/Lost the connection to this host/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     // The page stops claiming what it draws is current, and the one row that
     // names the host says since when.
@@ -595,7 +595,7 @@ describe("when the connection to the host is lost", () => {
 
     await act(async () => reconnect());
 
-    await waitFor(() => expect(screen.queryByText(/lost the connection/)).toBeNull());
+    await waitFor(() => expect(screen.queryByText(/Lost the connection/)).toBeNull());
     expect(container.querySelector(".app")?.getAttribute("data-link")).toBeNull();
     expect(screen.queryByText(/last heard/)).toBeNull();
     expect(useStore.getState().link).toBe("up");
@@ -612,7 +612,7 @@ describe("when the connection to the host is lost", () => {
 
     act(() => lost(gone));
 
-    expect(screen.queryByText(/lost the connection/)).toBeNull();
+    expect(screen.queryByText(/Lost the connection/)).toBeNull();
     expect(container.querySelector(".app")?.getAttribute("data-link")).toBeNull();
     expect(useStore.getState().link).toBe("up");
   });

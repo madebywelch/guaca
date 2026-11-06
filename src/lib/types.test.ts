@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { type Envelope, errorMessage, isCommandError, isInterAgent, plainText } from "./types";
+import {
+  asSentence,
+  type Envelope,
+  errorMessage,
+  isCommandError,
+  isInterAgent,
+  plainText,
+} from "./types";
 
 function envelope(overrides: Partial<Envelope> = {}): Envelope {
   return {
@@ -119,5 +126,41 @@ describe("error handling", () => {
     expect(errorMessage(new Error("boom"))).toBe("boom");
     expect(errorMessage("plain string")).toBe("plain string");
     expect(errorMessage(undefined)).toBe("Something went wrong.");
+  });
+});
+
+describe("asSentence", () => {
+  it("finishes a line that was written for a log rather than for a person", () => {
+    // The transport's own words, and the shape the polish audit found twice: an
+    // opening that is not a capital and an ending that is not a full stop.
+    expect(
+      asSentence(
+        "lost the connection to this host at http://127.0.0.1:8787. It may be restarting, and nothing on this page is live until it answers again",
+      ),
+    ).toBe(
+      "Lost the connection to this host at http://127.0.0.1:8787. It may be restarting, and nothing on this page is live until it answers again.",
+    );
+    expect(asSentence("the disk is full")).toBe("The disk is full.");
+  });
+
+  it("leaves a sentence somebody already finished exactly as it is", () => {
+    for (const said of [
+      "Could not authenticate with http://box:8787. Try again.",
+      "Nothing was sent: it addressed itself.",
+      "Is the box up?",
+      "No agents yet!",
+      "The host did not answer…",
+    ]) {
+      expect(asSentence(said)).toBe(said);
+    }
+  });
+
+  it("does not invent a capital on something that is not prose, or words on nothing", () => {
+    expect(asSentence("`name` is a desktop command, and this page is not the desktop app")).toBe(
+      "`name` is a desktop command, and this page is not the desktop app.",
+    );
+    expect(asSentence("  two spaces  ")).toBe("Two spaces.");
+    expect(asSentence("")).toBe("");
+    expect(asSentence("   ")).toBe("");
   });
 });

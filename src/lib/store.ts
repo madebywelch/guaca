@@ -51,7 +51,7 @@ import type {
   UiEvent,
   WorkDecision,
 } from "./types";
-import { errorMessage, skillScopeKey } from "./types";
+import { asSentence, errorMessage, skillScopeKey } from "./types";
 
 /**
  * A channel is an agent, and nothing else is one.
@@ -466,11 +466,15 @@ let pulseSeq = 0;
  * gone is the one with something to offer — trying again, and looking at which
  * host this is — so it is the one that says so; everything else is a sentence
  * and a dismissal, which is right, because nothing on screen can change it.
+ *
+ * Its words are finished before they are stored: a refusal from the transport or
+ * the runtime is written for a log as often as for a person, and the banner is
+ * the one line that is read as prose. See `asSentence`.
  */
 function failureBanner(error: unknown): Banner {
   return {
     tone: "error",
-    text: errorMessage(error),
+    text: asSentence(errorMessage(error)),
     ...(isUnreachable(error) ? { fix: "host" as const } : {}),
   };
 }

@@ -146,7 +146,10 @@ describe("the line to the host", () => {
     expect(state().link).toBe("down");
     expect(state().lastHeard).toBe(1_700_000_000_000);
     expect(state().banner).toMatchObject({ tone: "error", fix: "host" });
-    expect(state().banner?.text).toContain("lost the connection");
+    // Finished for the one line that is read as prose: a capital and a full
+    // stop, even though the transport writes it for a log.
+    expect(state().banner?.text).toMatch(/^Lost the connection to this host/);
+    expect(state().banner?.text).toMatch(/restarting\.$/);
   });
 
   it("takes back only the sentence about the host when it answers again", () => {
@@ -157,7 +160,7 @@ describe("the line to the host", () => {
     state().linkUp();
     expect(state().link).toBe("up");
     expect(state().lastHeard).toBeNull();
-    expect(state().banner?.text).toBe("the disk is full");
+    expect(state().banner?.text).toBe("The disk is full.");
   });
 
   it("says nothing when an update is restarting the host on purpose", () => {
@@ -812,13 +815,16 @@ describe("a failure on the banner", () => {
     // The one failure whose next step is a control rather than a sentence, and
     // the one that reads as a browser bug if the banner is left with only a
     // dismissal.
+    // The transport writes it for a log; the banner is read as prose, so it is
+    // finished on the way in — a capital and a full stop, and nothing doubled.
     useStore.getState().showFailure({
       kind: "unreachable",
-      message: "could not reach this workspace at http://127.0.0.1:8787.",
+      message:
+        "could not reach this workspace at http://127.0.0.1:8787. Its agents keep working either way",
     });
     expect(useStore.getState().banner).toEqual({
       tone: "error",
-      text: "could not reach this workspace at http://127.0.0.1:8787.",
+      text: "Could not reach this workspace at http://127.0.0.1:8787. Its agents keep working either way.",
       fix: "host",
     });
   });

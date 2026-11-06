@@ -1565,6 +1565,30 @@ export function errorMessage(value: unknown): string {
 }
 
 /**
+ * A failure's words finished as a sentence, for the one surface read as one.
+ *
+ * A refusal arrives as the layer that raised it wrote it, and that layer is not
+ * always prose: `could not reach this host at …` and its siblings open lowercase
+ * and stop without a period, which is right in a log line and a fragment on the
+ * banner, where the failure's own sentence is the first thing an operator
+ * reads. The polish audit named that twice — the connector's failed test and,
+ * again, the host's own sentence.
+ *
+ * So this finishes the sentence rather than editing the sentence: a line that
+ * already opens with a capital and ends with punctuation is handed back
+ * untouched, which is what keeps a refusal the runtime wrote as prose from
+ * growing a doubled capital or a second period. Only the banner does this; a
+ * line drawn beside a label keeps the words it was given.
+ */
+export function asSentence(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed === "") return trimmed;
+  const opened = trimmed.replace(/^[a-z]/, (letter) => letter.toUpperCase());
+  // A colon and an ellipsis end a line too, and a period after either is a typo.
+  return /[.!?…:]$/.test(opened) ? opened : `${opened}.`;
+}
+
+/**
  * Concatenated text of an envelope, matching the Rust `plain_text`.
  *
  * A fired routine's instruction counts, exactly as it does there: it is what

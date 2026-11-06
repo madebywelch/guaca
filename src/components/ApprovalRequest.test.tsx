@@ -133,14 +133,19 @@ describe("a request for permission", () => {
     // The turn timed out while this was on screen, or it was answered in
     // another window. Arguing with the store would leave live buttons on a
     // request that is already settled.
-    decideApproval.mockRejectedValue({ kind: "alreadyAnswered", message: "already answered" });
+    decideApproval.mockRejectedValue({
+      kind: "alreadyAnswered",
+      message: "that request was already answered (answered)",
+    });
     draw("pending");
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Deny" }));
     });
 
     expect(approvalStates).toHaveBeenCalled();
-    expect(useStore.getState().banner?.text).toContain("already answered");
+    // The runtime writes that sentence for a log; the banner finishes it, so
+    // the line the operator reads opens with a capital and ends with a stop.
+    expect(useStore.getState().banner?.text).toBe("That request was already answered (answered).");
   });
 
   it("does not offer a standing yes for acting in the operator's name", () => {
