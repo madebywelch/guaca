@@ -850,6 +850,13 @@ mod tests {
         assert_eq!((op.stage, op.target_version.as_str()), (host::Stage::Updated, "0.1.0"));
         let said = report.error.unwrap();
         assert!(said.contains("Another Guaca process"), "{said}");
+        // Released the way the product releases its own: `unlock` first, then
+        // close. Closing the descriptor alone leaves the lock on the open file
+        // description when a docker subprocess forked in that window is still
+        // holding a duplicate of it until exec, and the next attempt below is
+        // then refused by a lock nothing is really holding. `ProcessLock`'s
+        // `Drop` has the same two lines for the same reason.
+        held.unlock().unwrap();
         drop(held);
         bx.updater.update(env!("CARGO_PKG_VERSION").into(), None).await.unwrap();
         let report = settled(&bx.updater).await;

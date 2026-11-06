@@ -519,7 +519,7 @@ an always-on host to keep agents working while it is shut.
 Run `./scripts/ci.sh` for desktop and daemon lint, builds and offline suites.
 `./scripts/image.sh` builds a container, checks the programs it bundles, then
 verifies settings and the token survive a restart on its temporary volume. The script removes its container and volume afterward.
-Rust 1.89 or newer is required; the container builds with 1.95.
+Rust 1.99 or newer is required; `rust-toolchain.toml` pins that version for a laptop and both containers build with it.
 
 For a real browser check, build the frontend and daemon, then run:
 

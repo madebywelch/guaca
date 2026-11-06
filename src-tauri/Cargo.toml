@@ -6,9 +6,14 @@ authors = ["madebywelch"]
 edition = "2021"
 # `tauri dev` runs a bare `cargo run`, which cannot choose between two binaries.
 default-run = "guac"
-# Dependencies require 1.88; the workspace's process lock uses File::try_lock,
-# stabilized in 1.89. Declare the actual floor before Cargo downloads anything.
-rust-version = "1.89"
+# The floor cargo refuses to build below, named to match the compiler the rest
+# of the repository pins: `rust-toolchain.toml` for a checkout and the two
+# `FROM rust:` lines for the containers. A lower number here would be a floor
+# nothing builds on. Dependencies need 1.88 and the workspace's process lock
+# needs `File::try_lock` from 1.89, so 1.99 is what is supported rather than
+# what is required; `Atomic::try_update`, which replaced the deprecated
+# `fetch_update`, is stable from 1.95, so lowering the floor is one edit.
+rust-version = "1.99"
 
 [lib]
 name = "guac_lib"

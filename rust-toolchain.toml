@@ -1,0 +1,20 @@
+# The one Rust this repository is worked on with, named once.
+#
+# Three things build this app and each named its own compiler: a laptop running
+# `scripts/install.sh`, the verification container in `Dockerfile.ci`, and the
+# daemon image in `Dockerfile`. When they disagreed, a lint that exists only on
+# the newer compiler failed on a laptop while the container passed, and "it
+# passed locally" meant nothing.
+#
+# This file is the laptop's half of that: rustup reads it before cargo runs, so
+# a checkout no longer compiles with whatever the machine happens to default to.
+# It is at the repository root deliberately — the image stages copy `src-tauri/`
+# and nothing above it, so a container keeps using the compiler its `FROM` line
+# names and never downloads one at build time. Bumping the version is therefore
+# this file plus those two `FROM` lines; `src-tauri/Cargo.toml`'s `rust-version`
+# names the same number and `scripts/install.sh` reads it from there, so a
+# machine whose rustup is too old is told in one line instead of after a cold
+# build.
+[toolchain]
+channel = "1.99.0"
+components = ["clippy", "rustfmt"]
