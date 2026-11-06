@@ -96,6 +96,21 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
   // Built once per set of messages rather than per render: it walks every
   // message, and it is what decides which of them are drawn at all.
   const rows = useMemo(() => transcriptRows(messages ?? [], lookups), [messages, lookups]);
+  // Which footnote each row is. Counted here rather than in the row, because a
+  // footnote is a position in a page: the row knows what it did and the page is
+  // the only thing that knows what came before it.
+  const footnotes = useMemo(() => {
+    let at = 0;
+    return rows.map((row) =>
+      row.kind === "peers" ||
+      row.kind === "refused" ||
+      (row.kind === "message" &&
+        row.message.from.kind === "agent" &&
+        row.message.to.kind === "system")
+        ? ++at
+        : 0,
+    );
+  }, [rows]);
 
   // A message somebody arrived at from search. Run after the transcript is on
   // screen, because the row cannot be scrolled to before it exists, and the
@@ -148,17 +163,29 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
         )}
         {agent ? (
           <>
-            <AgentAvatar
-              avatar={agent.avatar}
-              color={agent.color}
-              activity={activity[agent.id]}
-              lifecycle={agent.lifecycle}
-              seed={agent.id}
-              size="sm"
-            />
+            {/* The page's own head, as a printed report has one: what this is,
+                then whose it is, then what it runs on. It used to be a toolbar
+                row — a face, a name and a menu — which is the shape of a chat
+                app. A record opens with a title. */}
             <div className="pane__identity">
-              <h1 className="pane__title">{agent.name}</h1>
-              <span className="mobile-only pane__crew">{crew ?? "Independent agent"}</span>
+              <p className="pane__kicker">
+                <span className="pane__rule" aria-hidden="true" />
+                {crew ?? "Independent agent"} · a channel with one agent
+              </p>
+              <span className="pane__line">
+                <AgentAvatar
+                  avatar={agent.avatar}
+                  color={agent.color}
+                  activity={activity[agent.id]}
+                  lifecycle={agent.lifecycle}
+                  seed={agent.id}
+                  size="sm"
+                />
+                <h1 className="pane__title">{agent.name}</h1>
+              </span>
+              <p className="pane__meta">
+                {agent.model || "no model of its own"} · {paused ? "paused" : "answering as itself"}
+              </p>
             </div>
             {onDetails && (
               <button
@@ -219,8 +246,9 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
               <p className="empty__body">No messages with {agent?.name ?? "this agent"} yet.</p>
             </div>
           ) : (
-            rows.map((row) => {
+            rows.map((row, index) => {
               const stands = rowStandsFor(row);
+              const number = footnotes[index] ?? 0;
               return (
                 // Wrapped rather than marked on the entry itself: a row renders
                 // as several different shapes depending on who sent what to
@@ -231,9 +259,20 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
                   data-found={focused && stands.includes(focused) ? "true" : undefined}
                 >
                   {row.kind === "peers" ? (
-                    <PeerBurstRow peers={row.peers} onOpen={setReading} />
+                    <PeerBurstRow
+                      peers={row.peers}
+                      number={number}
+                      at={row.at}
+                      onOpen={setReading}
+                    />
                   ) : row.kind === "refused" ? (
-                    <RefusedRow peer={row.peer} at={row.at} body={row.body} reason={row.reason} />
+                    <RefusedRow
+                      peer={row.peer}
+                      at={row.at}
+                      number={number}
+                      body={row.body}
+                      reason={row.reason}
+                    />
                   ) : row.kind === "when" ? (
                     <WhenRow at={row.at} />
                   ) : (
@@ -244,7 +283,7 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
                       message={row.message}
                       lookups={lookups}
                       continued={row.continued}
-                      named={false}
+                      footnote={number || undefined}
                     />
                   )}
                 </div>

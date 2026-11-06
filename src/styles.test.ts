@@ -478,10 +478,11 @@ describe("a message's clock", () => {
    * It used to be absolutely positioned in the top right of the row, which is
    * also where the first line of a full-measure paragraph ends: on any window
    * narrow enough that the words reached the edge, hovering a message put the
-   * time over the last word of its own first line. A reserve in the row's
-   * padding does not fix it, because the width being reserved for is the
-   * operator's locale rather than this file's, so the check is that the clock
-   * and the words are in different columns and neither is out of flow.
+   * time over the last word of its own first line. It is in the page's margin
+   * now, in a column of its own, and the assertion is that the two are still
+   * different columns and neither is out of flow: a reserve in the row's
+   * padding would not fix the original bug, because the width being reserved
+   * for is the operator's locale rather than this file's.
    */
   it.each([
     ["an agent's", undefined],
@@ -490,17 +491,23 @@ describe("a message's clock", () => {
     const msg = document.createElement("article");
     msg.className = "msg";
     if (operator) msg.dataset.operator = operator;
+    const margin = document.createElement("div");
+    margin.className = "msg__margin";
     const body = document.createElement("div");
     body.className = "msg__body";
     const at = document.createElement("time");
     at.className = "msg__at";
-    msg.append(body, at);
+    margin.append(at);
+    msg.append(margin, body);
     document.body.append(msg);
 
+    // The margin and the measure, declared as two columns of the row.
+    const rule = css.match(/^\.msg \{\n([\s\S]*?)^\}/m)?.[1] ?? "";
+    expect(rule).toMatch(/grid-template-columns: var\(--column-margin\) minmax\(0, 1fr\)/);
     // Read back as declared: jsdom does not default a property nobody set, so
     // in the flow is the empty string rather than `static`.
     expect(getComputedStyle(at).position).not.toBe("absolute");
-    expect(getComputedStyle(at).gridColumn).not.toBe(getComputedStyle(body).gridColumn);
+    expect(at.parentElement?.className).toBe("msg__margin");
   });
 });
 

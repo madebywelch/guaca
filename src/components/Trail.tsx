@@ -11,6 +11,143 @@ import {
   type TrailGroup,
   tellsMore,
 } from "../lib/trail";
+import { FootnoteRow, why } from "./WireRow";
+
+/**
+ * The same work, as one line of a page's footnotes.
+ *
+ * A turn that reads a file, searches and runs a command is three things the
+ * operator asked for by asking for the turn, and set as three chips they were
+ * three blocks between two paragraphs. As a note they are one line under the
+ * paragraph, in the size a note is set in, and the file names are what is read
+ * at — which is what a footnote is for.
+ *
+ * What folds is unchanged: `foldTrail` decides the groups and `hasDetail` says
+ * whether one opens, exactly as the chips do. This is a second drawing of the
+ * same rule, not a second rule.
+ */
+export function TrailFootnote({
+  steps,
+  number,
+  at,
+}: {
+  steps: Step[];
+  number: number;
+  /** When the turn that made them was written, where the note stands alone. */
+  at?: number;
+}) {
+  const groups = foldTrail(steps);
+  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
+  const region = useId();
+
+  if (groups.length === 0) return null;
+
+  const toggle = (key: string) =>
+    setOpen((held) => {
+      const next = new Set(held);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
+  const failed = groups.some((group) => group.failed);
+
+  return (
+    <FootnoteRow number={number} at={at} failed={failed}>
+      <span className="footnote__line">
+        {groups.map((group, at) => (
+          <span className="footnote__item" key={group.key}>
+            {at > 0 && (
+              <span className="footnote__dot" aria-hidden="true">
+                ·
+              </span>
+            )}
+            <FootnoteGroup
+              group={group}
+              id={`${region}-${group.key}`}
+              open={open.has(group.key)}
+              onToggle={() => toggle(group.key)}
+            />
+          </span>
+        ))}
+      </span>
+
+      {groups
+        .filter((group) => open.has(group.key))
+        .map((group) => (
+          <ul className="footnote__steps" id={`${region}-${group.key}`} key={group.key}>
+            {group.steps.map((step) => (
+              <StepRow key={step.key} step={step} />
+            ))}
+          </ul>
+        ))}
+    </FootnoteRow>
+  );
+}
+
+/**
+ * One kind of work in a note: its label, what it was pointed at, and whether
+ * there is more behind it.
+ *
+ * A single call whose whole content is the sentence on the line gets no
+ * control, for the reason a chip with nothing behind it does not: a button
+ * that does nothing is one the operator stops trusting the rest of them for.
+ */
+function FootnoteGroup({
+  group,
+  id,
+  open,
+  onToggle,
+}: {
+  group: TrailGroup;
+  id: string;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const only = group.steps.length === 1 ? group.steps[0]! : null;
+  // Only where nothing opens behind the line. A call with detail draws its
+  // target in the panel underneath, and printing it here as well said the same
+  // filename twice a line apart.
+  const target =
+    only &&
+    !hasDetail(group) &&
+    only.target &&
+    only.target.length <= 48 &&
+    !only.target.includes("\n")
+      ? only.target
+      : null;
+  // A failure that has detail behind it still says why on the line: a refusal
+  // is the one part of a note somebody may have to act on, and a footnote that
+  // hid the reason behind a click would be hiding the only thing worth reading.
+  const failed = only ? stepReason(only) : null;
+  const face = (
+    <>
+      <span className="footnote__label">{group.label}</span>
+      {target && <span className="footnote__target">{target}</span>}
+      {failed && <span className="footnote__gist">{why(failed)}</span>}
+      {group.steps.length > 1 && <span className="footnote__count">×{group.steps.length}</span>}
+      {group.spent.map((credential) => (
+        <span className="trail__spent" key={credential}>
+          {credential}
+        </span>
+      ))}
+    </>
+  );
+
+  if (!hasDetail(group) && (!only || !stepReason(only))) {
+    return <span className="footnote__call">{face}</span>;
+  }
+
+  return (
+    <button
+      type="button"
+      className="footnote__call footnote__call--open"
+      aria-expanded={open}
+      aria-controls={open ? id : undefined}
+      onClick={onToggle}
+    >
+      {face}
+    </button>
+  );
+}
 
 /**
  * What an agent did on its own turn, collapsed.

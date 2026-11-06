@@ -27,6 +27,7 @@
 
 import { sendBody, sendRecipients } from "./toolArgs";
 import type { AgentCard, AgentId, Envelope, MessageId, Part, ToolOutcome } from "./types";
+import { plainText } from "./types";
 
 /**
  * Resolves agents for rendering history. Deleted agents resolve too: they are
@@ -73,6 +74,15 @@ export interface PeerSummary {
   agentId: AgentId | null;
   sent: number;
   received: number;
+  /**
+   * The first thing said in the exchange, for the footnote to quote.
+   *
+   * Display only, and the reason it is a field rather than something the row
+   * works out: which message a burst folded is decided here, and asking that
+   * question a second time where the row is drawn is a second answer waiting to
+   * disagree. Null when nothing in the burst carried words.
+   */
+  gist: string | null;
 }
 
 /** One entry in a channel, in the order it is drawn. */
@@ -84,7 +94,14 @@ export type Row =
    * messages it stands for, so something looking for one of them can be sent
    * to the row that swallowed it.
    */
-  | { kind: "peers"; key: string; peers: PeerSummary[]; folded: MessageId[] }
+  | {
+      kind: "peers";
+      key: string;
+      peers: PeerSummary[];
+      folded: MessageId[];
+      /** When the first message of the burst was written, for the note's margin. */
+      at: number;
+    }
   /** A send the runtime stopped. Never folded into a burst: it did not happen. */
   | {
       kind: "refused";
@@ -166,26 +183,34 @@ export function transcriptRows(messages: Envelope[], lookups: Lookups): Row[] {
     agentId: AgentId | null,
     direction: "sent" | "received",
     key: string,
+    /** When it happened, for a burst that is opening its note here. */
+    at: number,
     /**
      * The message this row now stands for on screen, where there is one. A
      * send made through a tool call has none: it is filed in the recipient's
      * channel, and what this one holds is the sender's record of making it.
      */
-    folded?: MessageId,
+    folded: MessageId | undefined,
+    /** The words that came with it, where there were any. */
+    said: string | null,
   ) => {
     let open = burst;
     if (!open) {
       mark();
-      open = { kind: "peers", key: `peers:${key}`, peers: [], folded: [] };
+      open = { kind: "peers", key: `peers:${key}`, peers: [], folded: [], at };
       rows.push(open);
       burst = open;
     }
     if (folded) open.folded.push(folded);
     let held = open.peers.find((entry) => entry.peer.id === peer.id);
     if (!held) {
-      held = { peer, agentId, sent: 0, received: 0 };
+      held = { peer, agentId, sent: 0, received: 0, gist: null };
       open.peers.push(held);
     }
+    // The first thing said, not the latest: a footnote quotes what opened the
+    // exchange, and a burst that quoted its own tail would change its mind
+    // every time another message landed.
+    if (held.gist === null && said) held.gist = gist(said);
     if (direction === "sent") held.sent += 1;
     else held.received += 1;
   };
@@ -226,7 +251,15 @@ export function transcriptRows(messages: Envelope[], lookups: Lookups): Row[] {
     }
 
     if (from.kind === "agent" && to.kind === "agent") {
-      count(toPeer(lookups.byId(from.id), from.id), from.id, "received", message.id, message.id);
+      count(
+        toPeer(lookups.byId(from.id), from.id),
+        from.id,
+        "received",
+        message.id,
+        message.createdAt,
+        message.id,
+        plainText(message),
+      );
       spoken = undefined;
       continue;
     }
@@ -263,7 +296,15 @@ export function transcriptRows(messages: Envelope[], lookups: Lookups): Row[] {
               reason,
             });
           } else {
-            count(toPeer(card, name, name), card?.id ?? null, "sent", `${message.id}:${name}`);
+            count(
+              toPeer(card, name, name),
+              card?.id ?? null,
+              "sent",
+              `${message.id}:${name}`,
+              message.createdAt,
+              undefined,
+              body,
+            );
           }
         }
       }
@@ -301,6 +342,26 @@ export function rowStandsFor(row: Row): MessageId[] {
   if (row.kind === "peers") return row.folded;
   if (row.kind === "refused" || row.kind === "when") return [];
   return [row.message.id];
+}
+
+/**
+ * The first line of a message, cut at a word.
+ *
+ * A footnote quotes; it does not reproduce. One line and a little under is
+ * enough to tell whether opening the thread is worth it, and a gist that ran to
+ * the length of the message would be the message, set smaller.
+ */
+export function gist(text: string): string | null {
+  const line = text
+    .split("\n")
+    .map((part) => part.trim())
+    .find((part) => part.length > 0);
+  if (!line) return null;
+  const plain = line.replace(/^[#>*\-\s]+/, "").replace(/\*\*/g, "");
+  if (plain.length <= 72) return plain;
+  const cut = plain.slice(0, 72);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > 40 ? cut.slice(0, space) : cut).replace(/[.,;:]$/, "")}…`;
 }
 
 /** How a burst reads for one peer: the count, or what the single message was. */
