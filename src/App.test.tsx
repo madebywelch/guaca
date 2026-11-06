@@ -72,10 +72,19 @@ vi.mock("./lib/ipc", () => ({
       })),
     reportPresence: async () => {},
     reportHost: async () => {},
+    // The window reports what it is showing on a timer. Without this the timer
+    // threw into an unhandled error that vitest reports after whichever test
+    // happened to be running, which is a failure nobody can act on.
+    reportView: async () => {},
     capabilities: async () => ({
       loopbackEndpoints: true,
       claudeProvider: true,
       localFiles: true,
+    }),
+    claudeProgram: async () => ({
+      installed: true,
+      version: "2.1.247 (Claude Code)",
+      install: "npm install -g @anthropic-ai/claude-code",
     }),
     channelMessages: async () => [],
     activityFeed: async () => [],
@@ -238,7 +247,7 @@ describe("App", () => {
     expect(screen.queryByText("Ghost")).toBeNull();
   });
 
-  it("prompts for a key when none is configured", async () => {
+  it("starts a workspace with no provider at the first-run page", async () => {
     getSettings.mockResolvedValue({
       operatorName: "",
       baseUrl: "https://openrouter.ai/api/v1",
@@ -266,7 +275,12 @@ describe("App", () => {
       },
     });
     render(<App />);
-    expect(await screen.findByText(/Add an API key/i)).toBeTruthy();
+    // The banner that says a key is missing is suppressed while the first-run
+    // page is up, because that page is the thing asking for one: step one is a
+    // task and step two is the provider. A test that expected the banner was
+    // asking for two prompts for the same key on one screen.
+    expect(await screen.findByText(/What would you like help with/i)).toBeTruthy();
+    expect(screen.queryByText(/Add an API key/i)).toBeNull();
   });
 
   it.each([

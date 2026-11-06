@@ -416,10 +416,11 @@ function describe(tool: string, args: Args): Described {
 export function trailStep(part: ToolCallPart, key: string): Step {
   const { title, target, where } = describe(part.name, asRecord(part.arguments));
   const { spent, rest } = readSpent(outcomeText(part.outcome));
+  const failed = part.outcome.status === "refused" || part.outcome.status === "failed";
   return {
     key,
     tool: part.name,
-    title,
+    title: failed ? attempt(title) : title,
     target,
     // Checked for the type rather than for truth: an empty previous version is
     // an agent's first memory, and reading it as nothing to compare against
@@ -427,9 +428,61 @@ export function trailStep(part: ToolCallPart, key: string): Step {
     replaced: typeof part.replaced === "string" ? part.replaced : null,
     where: where ?? null,
     said: rest,
-    failed: part.outcome.status === "refused" || part.outcome.status === "failed",
+    failed,
     spent,
   };
+}
+
+/**
+ * What a call that failed was trying to do.
+ *
+ * A title is past tense because a successful call is a finished thing, and on a
+ * failed one that sentence is the opposite of what happened: `Scheduled Morning
+ * market note` above a wash that says it did not, with the reason under it. The
+ * row is styled as a failure and the words still claim it worked, which is the
+ * half of a failure a person reads first.
+ *
+ * The verbs are the ones `describe` writes, in the infinitive, because English
+ * will not hand that back: `Ran` is not `ran` with a suffix, and a rule that
+ * stripped one would rewrite `Used` into `us`. A first word that is not here is
+ * left whole behind a colon, which is clumsy and never wrong; the alternative is
+ * a rule that turns one of these into something that is.
+ */
+const ATTEMPT: Record<string, string> = {
+  Added: "add",
+  Asked: "ask",
+  Attached: "attach",
+  Canceled: "cancel",
+  Changed: "change",
+  Checked: "check",
+  Clicked: "click",
+  Deleted: "delete",
+  Escalated: "escalate",
+  Looked: "look",
+  Made: "make",
+  Moved: "move",
+  Noted: "note",
+  Opened: "open",
+  Pressed: "press",
+  Ran: "run",
+  Read: "read",
+  Scheduled: "schedule",
+  Scrolled: "scroll",
+  Sent: "send",
+  Took: "take",
+  Typed: "type",
+  Updated: "update",
+  Used: "use",
+  Went: "go",
+  Wrote: "write",
+};
+
+export function attempt(title: string): string {
+  const at = title.indexOf(" ");
+  const first = at === -1 ? title : title.slice(0, at);
+  const rest = at === -1 ? "" : title.slice(at + 1);
+  const verb = ATTEMPT[first];
+  return verb ? `Tried to ${verb}${rest ? ` ${rest}` : ""}` : `Failed: ${title}`;
 }
 
 /**

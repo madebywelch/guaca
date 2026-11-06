@@ -5,6 +5,7 @@ import type { DeviceCode, Settings, SettingsPatch, SubscriptionStatus } from "..
 import { OnboardingProvider } from "./OnboardingProvider";
 
 const mocks = vi.hoisted(() => ({
+  claudeProgram: vi.fn(),
   subscriptionStatus: vi.fn(),
   beginSubscriptionSignin: vi.fn(),
   completeSubscriptionSignin: vi.fn(),
@@ -74,6 +75,11 @@ beforeEach(() => {
   useStore.setState({
     settings: stored(),
     capabilities: { claudeProvider: true, loopbackEndpoints: true, localFiles: true },
+  });
+  mocks.claudeProgram.mockResolvedValue({
+    installed: true,
+    version: "2.1.247 (Claude Code)",
+    install: "npm install -g @anthropic-ai/claude-code",
   });
   mocks.subscriptionStatus.mockResolvedValue({
     signedIn: false,
@@ -408,15 +414,46 @@ it("does not save after abandoning a pending connection test", async () => {
   expect(onConnected).not.toHaveBeenCalled();
 });
 
+it("says why the primary button cannot be pressed, and stops saying it once it can", async () => {
+  await draw();
+  const button = screen.getByRole("button", { name: "Test and continue" }) as HTMLButtonElement;
+  expect(button.disabled).toBe(true);
+  const described = button.getAttribute("aria-describedby");
+  expect(described).toBeTruthy();
+  expect(document.getElementById(described!)?.textContent).toBe(
+    "Paste a key for OpenRouter, then test it.",
+  );
+
+  key();
+  const ready = screen.getByRole("button", { name: "Test and continue" }) as HTMLButtonElement;
+  expect(ready.disabled).toBe(false);
+  expect(document.body.textContent).not.toContain("then test it.");
+});
+
 it("verifies Claude through the existing program without changing either model", async () => {
   const { onConnected } = await draw();
-  fireEvent.click(screen.getByText("Advanced options"));
-  fireEvent.click(screen.getByRole("button", { name: /^Claude CLI/ }));
-  expect(screen.getByText(/Install Claude Code and sign in on your Guaca host first/)).toBeTruthy();
+  // Offered beside the other two rather than behind a disclosure: the plan the
+  // operator already pays for is not an advanced case.
+  fireEvent.click(screen.getByRole("button", { name: /^Claude subscription/ }));
+  expect(screen.getByText(/Claude's own account and model settings apply/)).toBeTruthy();
   submit();
   await waitFor(() => expect(onConnected).toHaveBeenCalledOnce());
   expect(mocks.testConnection).toHaveBeenCalledWith({ provider: "claude" });
   expect(mocks.updateSettings).toHaveBeenCalledWith({ provider: "claude" });
+});
+
+it("says the host has no claude program instead of hiding the option", async () => {
+  mocks.claudeProgram.mockResolvedValue({
+    installed: false,
+    version: "",
+    install: "npm install -g @anthropic-ai/claude-code",
+  });
+  await draw();
+  const card = screen.getByRole("button", { name: /^Claude subscription/ }) as HTMLButtonElement;
+  expect(card.disabled).toBe(true);
+  expect(card.textContent).toContain("which this host does not have");
+  expect(card.textContent).toContain("npm install -g @anthropic-ai/claude-code");
+  expect(mocks.testConnection).not.toHaveBeenCalled();
 });
 
 it("refuses Claude when the host lacks the capability", async () => {
@@ -424,12 +461,8 @@ it("refuses Claude when the host lacks the capability", async () => {
     capabilities: { claudeProvider: false, loopbackEndpoints: false, localFiles: false },
   });
   await draw();
-  fireEvent.click(screen.getByText("Advanced options"));
-  expect((screen.getByRole("button", { name: /^Claude CLI/ }) as HTMLButtonElement).disabled).toBe(
-    true,
-  );
-  expect(
-    screen.getByText("This Guaca host does not support the Claude CLI provider."),
-  ).toBeTruthy();
+  const card = screen.getByRole("button", { name: /^Claude subscription/ }) as HTMLButtonElement;
+  expect(card.disabled).toBe(true);
+  expect(card.textContent).toContain("does not offer the claude program");
   expect(mocks.testConnection).not.toHaveBeenCalled();
 });

@@ -223,7 +223,9 @@ describe("an agent's own record of what it did", () => {
         outcome: { status: "refused", reason: "`update` needs a `note`" },
       }),
     );
-    expect(screen.getByText(/Updated an artifact/)).toBeTruthy();
+    // The refused call is its own chip, and it says it was an attempt rather
+    // than an update that happened.
+    expect(screen.getByText(/Tried to update an artifact/)).toBeTruthy();
     expect(screen.queryByText("New artifact")).toBeNull();
   });
 

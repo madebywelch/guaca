@@ -1,24 +1,34 @@
 import { describe, expect, it } from "vitest";
 
-import { buildLabel, COMMIT } from "./build";
+import { buildLabel, COMMIT, VERSION } from "./build";
 
 describe("buildLabel", () => {
-  it("names the commit the build was made from", () => {
-    expect(buildLabel("9f2c1a4")).toBe("Version 9f2c1a4");
+  it("leads with the version a release is published under", () => {
+    expect(buildLabel("0.2.0", "9f2c1a4")).toBe("Version 0.2.0 (9f2c1a4)");
   });
 
   it("carries the mark that says the tree was not clean", () => {
-    expect(buildLabel("9f2c1a4-dirty")).toBe("Version 9f2c1a4-dirty");
+    expect(buildLabel("0.2.0", "9f2c1a4-dirty")).toBe("Version 0.2.0 (9f2c1a4-dirty)");
   });
 
-  it("says a dash when there was no repository to read", () => {
-    expect(buildLabel("")).toBe("Version —");
+  it("says the version alone where there was no repository to read", () => {
+    expect(buildLabel("0.2.0", "")).toBe("Version 0.2.0");
   });
 
-  it("is built from a commit, which is what the define is for", () => {
-    // Guards the wiring rather than the value: an undefined `__COMMIT__` is a
-    // config that stopped substituting, and it would draw as a dash forever
-    // while every other test in this file still passed.
+  it("falls back to the commit where there is no version to name", () => {
+    expect(buildLabel("", "9f2c1a4")).toBe("Version 9f2c1a4");
+  });
+
+  it("says a dash when there was nothing to read", () => {
+    expect(buildLabel("", "")).toBe("Version —");
+  });
+
+  it("is built from a version and a commit, which is what the defines are for", () => {
+    // Guards the wiring rather than the value: an undefined `__VERSION__` is a
+    // config that stopped substituting, and every other test here would still
+    // pass while About drew a dash forever.
+    expect(typeof VERSION).toBe("string");
+    expect(VERSION).toMatch(/^\d+\.\d+\.\d+/);
     expect(typeof COMMIT).toBe("string");
     expect(COMMIT === "" || /^[0-9a-f]{7,}(-dirty)?$/.test(COMMIT)).toBe(true);
   });

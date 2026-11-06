@@ -9,6 +9,28 @@ runs in a container; you choose where it lives. The desktop is your window into
 that workspace. On an always-on VPS, your agents keep working when you close
 your laptop. A local workspace runs while your computer is awake.
 
+## Download
+
+[Download the latest macOS build](https://github.com/madebywelch/guaca/releases/latest).
+It is a signed and notarized universal disk image,
+`Guaca_<version>_universal.dmg`, that runs on Apple Silicon and Intel Macs and
+needs no Node.js, Rust or source checkout. Open it, drag Guaca into
+Applications, and launch it.
+
+The disk image is only half of it: Guaca is a window on a host that runs your
+agents, and the first screen asks which host. **On this Mac** starts one in a
+Docker container, from the backend image published with that release, so it
+needs Docker installed and the image available. **Remote host** connects to a
+`guacad` that is already running somewhere, and needs no Docker here. Building
+from a checkout below produces both halves from the same source.
+
+The release publishes the disk image's SHA-256 beside it, so a download can be
+checked before it is opened:
+
+```sh
+shasum -a 256 -c Guaca_*_universal.dmg.sha256
+```
+
 ## Build a crew
 
 Organize your agents into **groups**: isolated spaces with their own collection
@@ -20,20 +42,22 @@ Agents communicate with you and each other, delegate work, and keep their own
 memory and working notes. They can also have a browser through **Kernel** or a
 computer through **E2B**, configured with the respective vendor's API key.
 
-## Get started
+## Build from a checkout
 
 The desktop app currently supports **macOS**. To build and install from a
-checkout, you need Node.js, pnpm, Rust, and the Xcode Command Line Tools:
+checkout, you need Node.js, pnpm, Rust, the Xcode Command Line Tools, and (for
+a local workspace) Docker:
 
 ```sh
 ./scripts/install.sh --no-pull --launch
 ```
 
-For a local workspace, have Docker installed and running before installing.
-The script builds the matching backend image. Choose **On this Mac** when Guaca
-opens, or **Remote host** to connect to a backend on your VPS. You can change
-that choice later in **Settings → Workspace**. A remote connection does not
-require Docker on your Mac.
+The script checks those before it compiles anything, and says how to fix
+whichever is missing. For a local workspace, have Docker installed and running
+before installing: the script builds the matching backend image. Choose **On
+this Mac** when Guaca opens, or **Remote host** to connect to a backend on your
+VPS. You can change that choice later in **Settings → Workspace**. A remote
+connection does not require Docker on your Mac.
 
 Managed Guaca compute spaces are planned for a later release. Local and
 self-hosted workspaces are available now.
