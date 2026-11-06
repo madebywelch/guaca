@@ -1031,6 +1031,43 @@ and the copy is scrolled with it from two places: the scroll event, and the
 effect that resizes it. Typing at the bottom of a full box moves the view
 without the operator having scrolled anything.
 
+## The box you write in is a line, and the row under it is permanent
+
+The composer was a widget on the page: a rounded box with a fill, a border on
+four sides and a hint that appeared only when there was something to hint. Ledger
+makes it the field of a form printed on the page. There is no box. There is a
+rule across the top, the width of the writing column, and the page under it —
+no fill, no radius, and the placeholder in the reading face, because the
+placeholder is the sentence somebody is about to write and it should look like
+one.
+
+**The line is `--edge-control` and not the mockup's `--rule-hard`.** That is a
+1.6-to-1 line in the mockup and it works there because the field it encloses is
+also bounded by the page around it. Here the line is the field's only boundary,
+and WCAG 1.4.11 asks 3 to 1 of the boundary of a control: an operator who cannot
+see where the box begins cannot tell whether they are typing into the app or
+into nothing. The gate is `styles.test.ts`, which reads `.composer`'s rule back
+through the cascade, so nobody can quietly spend `--rule-hard` here for the
+look of it.
+
+The row under the line used to be conditional and is now permanent, and it earns
+its twelve pixels by carrying the two things the box cannot show: what will
+answer, and that `@` is how an agent is named. The right end says how to leave
+the box for the palette. `FIND_KEY` is in `lib/keybinds.ts` rather than in
+either caller, because the rail's search field draws the same label for the same
+binding and two copies of it is one of them going stale on a Windows machine.
+
+What it names is `runsOn(agent, group, settings)`: the model a turn will
+actually resolve, this agent's own over its group's over the app's, and "Claude
+subscription" where a plan is what answers. A row that showed the app's default
+would be a line about settings where the operator is being told who is going to
+answer.
+
+The mockup also draws a `↵` cap at the right of the line, and that is not built.
+The composer already has a Send button; a key cap beside it is the same control
+said twice, and a second glyph that means "send" is a second thing to learn for
+nothing.
+
 ## The rail is an index, and its footer is the back matter
 
 The column lists agents the way an index lists entries: a small mark, the name
@@ -1596,8 +1633,17 @@ only argument for a performance in an app somebody opens every morning, and it
 is why the performance is not interrupted by the pointer or by anything the
 app says. Afterwards they are ordinary creatures on the avatars' own clock,
 finding each other every eleven seconds and trading something every third
-time. The type is deliberately plain, Instrument Sans at 600 in sentence case:
-the characters are the brand, and the name is the label on them.
+time.
+
+The name is set the way the drawn wordmark sets it — lowercase, in the display
+face — because the corner and the wordmark are one name in one shape at two
+distances. `design/wordmarks/eye-contact.svg` draws `guaca` from circles and one
+round stroke, each a's bowl an eye with a pupil in it, and the two a's look at
+each other: agents talking to agents, which is what the icon says with two
+bodies. The corner is that word awake. Its pair are the wordmark's two, drawn by
+the same code as every agent in the rail, and they do the thing the wordmark
+cannot: they arrive, trade something and turn to whoever is looking. The pupils
+in the SVG follow the pointer on the comparison page for the same reason.
 
 **They report one thing.** A turn parked on the operator turns the first of
 them `blocked`, which is the face every agent in the rail makes for the same
@@ -1616,6 +1662,40 @@ changes, so the corner renders at the beats and at nothing in between, and its
 suite asserts that no change falls between two of them. Reduced motion skips
 the performance entirely: the pair are there and at rest, and the name is out
 while the pointer is.
+
+## The icon is a paper tile, and the wordmark is the icon, drawn
+
+The app icon was an ink tile with a paper creature and an amber one, which is
+what a dark console looks like in a dock. It is a paper tile now: `--ground`,
+with the one that is talking in `--attention` and the one listening in `--ink`.
+That is the redesign in one square, and it is why it changed at all — an icon is
+the first thing that tells somebody which of two apps they are about to open.
+
+Nothing about the drawing is new. `scripts/make-icon.py` seats the app's own
+species: `radius` there is `bodyPoints` from `src/avatars/form.ts` with the gaze
+term kept and the animated terms dropped, so the two shapes are two agents at
+rest leaning after a look, drawn by the same numbers that draw them in the
+window. Change the species and the icon changes with it. Three colors, and they
+are the whole system: no fourth color is a color the app does not have, and an
+eye is a hole punched through to the tile rather than a dark shape laid on one.
+
+**The tile's edge is drawn, in ink.** A paper tile on a pale desktop has no edge
+at all, and macOS gives a custom icon no border and no shadow of its own, so the
+last `RIM` of the tile is ink — the same move the app makes when it puts a
+hairline round a table. The menu bar is unchanged and stays that way:
+`scripts/make-tray.py` imports the species rather than re-deriving it, so the
+dock and the menu bar are one family, but its glyphs are black template images
+and one warm red, because the menu bar is the one surface in this app that is
+both light and dark at the user's whim.
+
+`design/wordmarks/eye-contact.svg` is the same claim written out: the word
+`guaca` drawn as circles and one round stroke. It leads the README in both
+surfaces through a `<picture>`, which is the one place the app is seen before it
+is opened. Its generator, `design/wordmarks/wordmarks.py`, still reads
+Instrument Sans for the four prototypes it renders beside it, and that face left
+the dependencies when the reading face arrived — so the comparison page cannot
+be rebuilt from a clean checkout until somebody repoints it at Inter. The SVGs
+are the record until then, and the one that ships is committed.
 
 ## Making something is one plus, at the top of the rail
 

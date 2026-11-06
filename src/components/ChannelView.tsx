@@ -74,6 +74,10 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
   const crew = useStore((s) => s.groups.find((group) => group.id === agent?.groupId)?.name);
   const group = useStore((s) => s.groups.find((entry) => entry.id === agent?.groupId));
   const settings = useStore((s) => s.settings);
+  // What will answer, resolved the way a turn resolves it: this agent's own
+  // model, over its group's, over the app's. The composer says it because the
+  // box is where the operator commits to a turn.
+  const model = agent && settings ? runsOn(agent, group, settings).model : undefined;
   // Held steady across renders: it is the value of a context read by every page
   // in the transcript, and a fresh object each time would redraw all of them
   // for every token that lands anywhere.
@@ -312,7 +316,8 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
       <Composer
         key={`composer-${channel}`}
         draftKey={channel}
-        placeholder={`Message ${agent?.name ?? "agent"}`}
+        placeholder={`Write to ${agent?.name ?? "agent"}…`}
+        model={model}
         group={agent?.groupId ?? null}
         disabled={!agent || agent.lifecycle === "terminated"}
         disabledReason="This agent has been deleted."

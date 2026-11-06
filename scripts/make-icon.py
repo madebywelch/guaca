@@ -42,13 +42,19 @@ from pathlib import Path
 SIZE = 1024
 SUPERSAMPLE = 3  # 3x3 samples per pixel, enough to kill visible stair-stepping
 
-# Every color is a token from `src/styles.css`. The tile is the app's ink, the
-# talking agent is the one amber the app spends on anything that wants a person,
-# and the listening one is the rail: ink, paper and amber, which is the entire
-# color system. A fourth color here would be a color the app does not have.
-INK = (0x0B, 0x0B, 0x0A, 255)
-AMBER = (0xB4, 0x53, 0x0A, 255)
-RAIL = (0xF5, 0xF3, 0xEE, 255)
+# Every color is a token from `src/styles.css`, and the three of them are the
+# whole color system: paper, ink, and the one ochre the app spends on anything
+# that wants a person. A fourth color here would be a color the app does not
+# have.
+#
+# The tile is the page's paper rather than the ink it used to be. That is the
+# redesign in one square: Guaca is now a page somebody writes on, not a dark
+# console, and an icon is the first thing that says which one to expect. The
+# talking agent keeps the attention ochre, because the icon's whole subject is
+# one of them saying something; the listening one is ink.
+PAPER = (0xFB, 0xF9, 0xF3, 255)  # --ground, the page
+INK = (0x18, 0x16, 0x10, 255)  # --ink, the one listening
+AMBER = (0x86, 0x56, 0x00, 255)  # --attention, the one talking
 
 # macOS draws app icons into 824 of a 1024 canvas and every native neighbor in
 # the dock obeys it. Without the padding this icon is simply bigger than the
@@ -66,6 +72,10 @@ RADIUS = 20.0
 # The corner. n = 5 is close to the macOS continuous corner, and closer than the
 # circular arc this file used to draw.
 CORNER_N = 5.0
+
+# The page's own edge, in box units: about 8 pixels of the 1024, which is the
+# weight of a printed plate's border and survives to a visible hairline at 128.
+RIM = 0.6
 
 # The species, tuned for the icon: a k=1 lobe at phase 0 is wide at the bottom
 # and narrow at the top, which is an avocado without anybody having drawn one.
@@ -102,7 +112,7 @@ SMALL = {
     "gaze": (-0.22, 0.16),
     "eye": 0.22,
     "look": (-0.13, 0.10),
-    "color": RAIL,
+    "color": INK,
 }
 
 TAU = math.tau
@@ -186,9 +196,9 @@ class Body:
 BODIES = [Body(BIG), Body(SMALL)]
 
 
-def in_tile(x: float, y: float) -> bool:
-    """Superellipse, in box units."""
-    a = BOX / 2
+def in_tile(x: float, y: float, inset: float = 0.0) -> bool:
+    """Superellipse, in box units, drawn `inset` units inside the tile's edge."""
+    a = BOX / 2 - inset
     return (abs(x - CENTER) / a) ** CORNER_N + (abs(y - CENTER) / a) ** CORNER_N <= 1.0
 
 
@@ -201,13 +211,19 @@ def sample(px: float, py: float) -> tuple[int, int, int, int]:
 
     if not in_tile(x, y):
         return (0, 0, 0, 0)
+    # A paper tile on a pale desktop has no edge at all, and macOS draws a custom
+    # icon no border and no shadow of its own. So the page's rule is drawn: the
+    # last RIM of the tile is ink, which is the same move the app makes when it
+    # puts a hairline round a table.
+    if not in_tile(x, y, RIM):
+        return INK
     # Drawn back to front: the smaller agent is nearer, so it is tested first.
     for body in reversed(BODIES):
         if body.inside(x, y):
             # An eye is a hole punched through to the tile, not a dark shape
             # laid on top of one. Two colors per body, and none of them a third.
-            return INK if body.in_eye(x, y) else body.color
-    return INK
+            return PAPER if body.in_eye(x, y) else body.color
+    return PAPER
 
 
 def render(size: int) -> bytes:

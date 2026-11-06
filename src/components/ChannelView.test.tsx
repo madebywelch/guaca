@@ -744,7 +744,7 @@ describe("a transcript scrolled up", () => {
     box.to(1200);
 
     await act(async () => {
-      fireEvent.change(screen.getByPlaceholderText("Message Manager"), {
+      fireEvent.change(screen.getByPlaceholderText("Write to Manager…"), {
         target: { value: "carry on" },
       });
     });

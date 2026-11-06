@@ -3,7 +3,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { AgentAvatar, type Look } from "../avatars/AgentAvatar";
 import { FLIGHT_MS, roleOf, usePulseChoreography } from "../lib/choreography";
 import { doing } from "../lib/doing";
-import { IS_MAC } from "../lib/keybinds";
+import { FIND_KEY, IS_MAC } from "../lib/keybinds";
 import { prefersReducedMotion } from "../lib/motion";
 import { type DropTarget, railOrder } from "../lib/rail";
 import { useLiveAgents, useStore } from "../lib/store";
@@ -35,14 +35,6 @@ interface Props {
   /** Where the operator right-clicked, and on whom. */
   onOpenMenu: (agent: AgentCard, at: { x: number; y: number }) => void;
 }
-
-/**
- * How this machine writes the find shortcut.
- *
- * Both modifiers open it wherever the app runs; only the label changes, and a
- * label naming a key the keyboard does not have is worse than none.
- */
-const FIND_KEY = /mac/i.test(navigator.platform || navigator.userAgent) ? "⌘K" : "Ctrl K";
 
 /**
  * How far the pointer travels before a press becomes a drag.

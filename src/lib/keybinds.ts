@@ -49,6 +49,17 @@ export interface Binding {
 /** A Mac, which spells its keys as glyphs and floats its window buttons over the rail. */
 export const IS_MAC = /mac/i.test(navigator.platform || navigator.userAgent);
 
+/**
+ * How this machine writes the find shortcut, for the two places that draw it.
+ *
+ * Both modifiers open the palette wherever the app runs; only the label changes,
+ * and a label naming a key the keyboard does not have is worse than none. It
+ * lives here rather than in either caller because the rail's search field and
+ * the composer's hint row are the same claim about the same binding, and two
+ * copies of it is one of them going stale.
+ */
+export const FIND_KEY = IS_MAC ? "⌘K" : "Ctrl K";
+
 export const BINDINGS: Binding[] = [
   {
     id: "search",

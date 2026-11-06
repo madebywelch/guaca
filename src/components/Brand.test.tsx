@@ -37,7 +37,7 @@ const moods = (container: HTMLElement) =>
 describe("the corner", () => {
   it("names the rail for a screen reader whether or not the name is showing", () => {
     const { container } = render(<Brand waiting={false} />);
-    expect(screen.getByText("Guaca")).toBeTruthy();
+    expect(screen.getByText("guaca")).toBeTruthy();
     expect(corner(container).hasAttribute("data-named")).toBe(false);
     expect(container.querySelector(".brand__pair")?.getAttribute("aria-hidden")).toBe("true");
   });
@@ -50,7 +50,7 @@ describe("the corner", () => {
     expect(corner(container).hasAttribute("data-named")).toBe(true);
     wait(HOLD - 2.1);
     expect(corner(container).hasAttribute("data-named")).toBe(false);
-    expect(screen.getByText("Guaca")).toBeTruthy();
+    expect(screen.getByText("guaca")).toBeTruthy();
   });
 
   it("brings the pair in one at a time", () => {
