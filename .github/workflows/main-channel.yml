@@ -87,7 +87,8 @@ jobs:
           provenance: false
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=guacad-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=guacad-${{ matrix.arch }}
+          # The image is pushed before the cache is exported, so a failed export must not fail the build.
+          cache-to: type=gha,mode=max,scope=guacad-${{ matrix.arch }},ignore-error=true
 
       - name: Keep the digest
         run: |
