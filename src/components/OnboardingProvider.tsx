@@ -45,6 +45,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
   // answer could not be read. A screen that guessed "not installed" from a
   // failed read would refuse a provider that works.
   const [claude, setClaude] = useState<ClaudeProgram | null | undefined>(undefined);
+  const [claudeSignedIn, setClaudeSignedIn] = useState(false);
   // What this Mac already has, and whether the operator has said no to it.
   // Held here rather than in `Onboarding`, because the offer belongs to the
   // step that would otherwise ask for exactly the same thing.
@@ -151,9 +152,12 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
       ? `Paste a key for ${preset?.name ?? "this endpoint"}, then test it.`
       : provider === "claude" && !claudeReady
         ? "This host cannot run the claude program. Choose another card."
-        : "";
+        : provider === "claude" && !claudeSignedIn
+          ? "Sign in to Claude, then test it."
+          : "";
 
   const choose = (next: Provider) => {
+    if (next !== "claude") setClaudeSignedIn(false);
     setProvider(next);
     setError("");
   };
@@ -250,7 +254,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
 
   const connect = async () => {
     if (busy || !settings) return;
-    if (provider === "claude" && !claudeReady) return;
+    if (provider === "claude" && (!claudeReady || !claudeSignedIn)) return;
     if (provider === "compatible" && (needsKey || !baseUrl.trim() || !model.trim())) {
       setError("Enter an endpoint, a model, and the key for that provider, then try again.");
       return;
@@ -542,9 +546,8 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
 
       {provider === "claude" && claudeReady && (
         <div className="onboarding-notice">
-          Claude's own account and model settings apply; Guaca passes neither, so a model named here
-          is not used. Testing makes a small request using that account.
-          <ClaudeSignin />
+          Claude uses your plan's own model settings. Testing sends one small request.
+          <ClaudeSignin onReady={setClaudeSignedIn} />
         </div>
       )}
 
@@ -620,7 +623,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
               Boolean(busy) ||
               !settings ||
               Boolean(provider === "compatible" && needsKey) ||
-              (provider === "claude" && !claudeReady)
+              (provider === "claude" && (!claudeReady || !claudeSignedIn))
             }
             onClick={() => void connect()}
           >

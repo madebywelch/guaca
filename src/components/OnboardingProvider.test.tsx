@@ -450,11 +450,21 @@ it("says why the primary button cannot be pressed, and stops saying it once it c
 });
 
 it("verifies Claude through the existing program without changing either model", async () => {
+  mocks.claudeSigninStatus.mockResolvedValue({ signedIn: true });
   const { onConnected } = await draw();
   // Offered beside the other two rather than behind a disclosure: the plan the
   // operator already pays for is not an advanced case.
   fireEvent.click(screen.getByRole("button", { name: /^Claude subscription/ }));
-  expect(screen.getByText(/Claude's own account and model settings apply/)).toBeTruthy();
+  expect(
+    screen.getByText(
+      "Claude uses your plan's own model settings. Testing sends one small request.",
+    ),
+  ).toBeTruthy();
+  await waitFor(() =>
+    expect(
+      (screen.getByRole("button", { name: "Test and continue" }) as HTMLButtonElement).disabled,
+    ).toBe(false),
+  );
   submit();
   await waitFor(() => expect(onConnected).toHaveBeenCalledOnce());
   expect(mocks.testConnection).toHaveBeenCalledWith({ provider: "claude" });
@@ -472,10 +482,38 @@ it("offers host Claude sign-in even when borrowed sign-ins are unavailable", asy
   mocks.cancelClaudeSignin.mockResolvedValue(undefined);
   await draw();
   fireEvent.click(screen.getByRole("button", { name: /^Claude subscription/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Sign in with Claude" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Sign in with Claude" }));
   await screen.findByRole("link", { name: "https://example.com/claude" });
   fireEvent.click(screen.getByRole("button", { name: /^ChatGPT subscription/ }));
   expect(mocks.cancelClaudeSignin).toHaveBeenCalledWith("host-session");
+});
+
+it("keeps testing disabled until Claude sign-in succeeds, including failures", async () => {
+  const pending = deferred<{ signedIn: boolean }>();
+  const signingIn = deferred<{ id: string; url: string }>();
+  mocks.claudeSigninStatus.mockReturnValue(pending.promise);
+  mocks.beginClaudeSignin.mockReturnValueOnce(signingIn.promise);
+  await draw();
+  fireEvent.click(screen.getByRole("button", { name: /^Claude subscription/ }));
+  const test = screen.getByRole("button", { name: "Test and continue" }) as HTMLButtonElement;
+  expect(test.disabled).toBe(true);
+  await act(async () => pending.resolve({ signedIn: false }));
+  fireEvent.click(await screen.findByRole("button", { name: "Sign in with Claude" }));
+  expect(test.disabled).toBe(true);
+  await act(async () =>
+    signingIn.reject({ kind: "claudeSignin", message: "Claude sign-in timed out." }),
+  );
+  await screen.findByText("Claude sign-in timed out.");
+  expect(test.disabled).toBe(true);
+  expect(mocks.testConnection).not.toHaveBeenCalled();
+  mocks.beginClaudeSignin.mockResolvedValue({ id: "retry", url: "https://example.com/claude" });
+  mocks.completeClaudeSignin.mockResolvedValue({ signedIn: true });
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  fireEvent.change(await screen.findByLabelText("Code from browser"), {
+    target: { value: "code" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Submit code" }));
+  await waitFor(() => expect(test.disabled).toBe(false));
 });
 
 it("says the host has no claude program instead of hiding the option", async () => {

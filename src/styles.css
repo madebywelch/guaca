@@ -5831,6 +5831,38 @@ input[type="file"]:disabled {
   text-decoration: underline;
 }
 
+.settings__pane .claude-signin {
+  font-size: var(--type-aside);
+  line-height: var(--lead-ui);
+}
+
+.claude-signin__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.settings__pane .claude-signin[data-expanded="true"] > .preset {
+  margin-bottom: 0;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
+.settings__pane .claude-signin__panel {
+  border: 1px solid var(--edge-control);
+  border-top: 0;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  padding: var(--space-4);
+  margin-bottom: var(--space-2);
+}
+
+.settings__pane .claude-signin__panel > :first-child {
+  margin-top: 0;
+}
+
+.settings__pane .claude-signin__panel > :last-child {
+  margin-bottom: 0;
+}
+
 .field {
   display: block;
   margin-bottom: var(--space-6);

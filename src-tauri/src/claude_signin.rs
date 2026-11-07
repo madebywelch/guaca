@@ -28,9 +28,17 @@ pub struct Started {
 
 struct Session {
     code: Option<oneshot::Sender<String>>,
-    result: Option<oneshot::Receiver<bool>>,
+    result: Option<oneshot::Receiver<Outcome>>,
     cancel: watch::Sender<bool>,
     task: JoinHandle<()>,
+}
+
+enum Outcome {
+    SignedIn,
+    Failed,
+    InvalidCode,
+    Cancelled,
+    Expired,
 }
 
 struct Starting(Option<watch::Sender<bool>>);
@@ -68,8 +76,8 @@ impl Signin {
             sessions.clear();
             let program = program.to_owned();
             let task = tokio::spawn(async move {
-                let ok = run(&program, url_tx, code_rx, cancel_rx).await;
-                let _ = result_tx.send(ok);
+                let outcome = run(&program, url_tx, code_rx, cancel_rx).await;
+                let _ = result_tx.send(outcome);
             });
             let starting = Starting(Some(cancel_tx.clone()));
             sessions.insert(
@@ -83,9 +91,13 @@ impl Signin {
                 starting.0 = None;
                 Ok(Started { id, url })
             }
-            _ => {
+            Ok(Err(_)) => {
                 self.cancel(&id).await;
-                Err("Claude could not start sign-in. Try again.")
+                Err("Claude sign-in didn't finish.")
+            }
+            Err(_) => {
+                self.cancel(&id).await;
+                Err("Claude sign-in timed out.")
             }
         }
     }
@@ -96,18 +108,20 @@ impl Signin {
         }
         let result = {
             let mut sessions = self.sessions.lock().await;
-            let session = sessions.get_mut(id).ok_or("This sign-in has expired. Start again.")?;
+            let session = sessions.get_mut(id).ok_or("Claude sign-in is no longer active.")?;
             let sender = session.code.take().ok_or("This sign-in is already being completed.")?;
             let result = session.result.take().ok_or("This sign-in is already being completed.")?;
-            sender.send(code).map_err(|_| "This sign-in has expired. Start again.")?;
+            let _ = sender.send(code);
             result
         };
-        let signed_in = result.await.unwrap_or(false);
+        let outcome = result.await.unwrap_or(Outcome::Failed);
         self.cancel(id).await;
-        if signed_in {
-            Ok(Status { signed_in: true })
-        } else {
-            Err("Claude could not complete sign-in. Try again.")
+        match outcome {
+            Outcome::SignedIn => Ok(Status { signed_in: true }),
+            Outcome::Cancelled => Err("Claude sign-in was cancelled."),
+            Outcome::Expired => Err("Claude sign-in timed out."),
+            Outcome::InvalidCode => Err("Claude couldn't read that code; copy the full code."),
+            Outcome::Failed => Err("Claude sign-in didn't finish."),
         }
     }
 
@@ -126,27 +140,47 @@ async fn run(
     url_tx: oneshot::Sender<String>,
     code_rx: oneshot::Receiver<String>,
     mut cancel: watch::Receiver<bool>,
-) -> bool {
+) -> Outcome {
     let Ok(mut child) = tokio::process::Command::new(program)
         .args(["auth", "login", "--claudeai"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
     else {
-        return false;
+        return Outcome::Failed;
     };
+    let Some(stderr) = child.stderr.take() else { return Outcome::Failed };
     let result = tokio::select! {
-        result = perform(program, &mut child, url_tx, code_rx) => result,
-        _ = cancel.changed() => false,
-        _ = tokio::time::sleep(EXPIRES) => false,
+        result = perform(program, &mut child, url_tx, code_rx) => if result { Outcome::SignedIn } else { Outcome::Failed },
+        _ = invalid_code(stderr) => Outcome::InvalidCode,
+        _ = cancel.changed() => Outcome::Cancelled,
+        _ = tokio::time::sleep(EXPIRES) => Outcome::Expired,
     };
     if child.try_wait().ok().flatten().is_none() {
         let _ = child.kill().await;
     }
     let _ = child.wait().await;
     result
+}
+
+async fn invalid_code(stderr: tokio::process::ChildStderr) {
+    let mut lines = BufReader::new(stderr);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        match (&mut lines).take(8193).read_until(b'\n', &mut line).await {
+            Ok(0) | Err(_) => std::future::pending::<()>().await,
+            Ok(_) if line.len() > 8192 => std::future::pending::<()>().await,
+            Ok(_) => {}
+        }
+        if line.strip_suffix(b"\n").unwrap_or(&line)
+            == b"Invalid code. Please make sure the full code was copied."
+        {
+            return;
+        }
+    }
 }
 
 async fn perform(
@@ -230,6 +264,22 @@ mod tests {
         let signin = Signin::default();
         let started = signin.begin(&path).await.unwrap();
         assert!(signin.complete(&started.id, "code".into()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn the_clis_invalid_code_message_is_reported_without_its_other_output() {
+        let (_dir, path) = program(&format!(
+            "{PROMPTS}\nread code\nprintf '%s\\n' 'Invalid code. Please make sure the full code was copied.' >&2\nexec sleep 60"
+        ));
+        let signin = Signin::default();
+        let started = signin.begin(&path).await.unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            signin.complete(&started.id, "dummy".into()),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(result, Err("Claude couldn't read that code; copy the full code.")));
     }
 
     #[tokio::test]
