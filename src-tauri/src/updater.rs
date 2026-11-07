@@ -49,8 +49,15 @@ const SOCKET: &str = "guaca-updater-socket";
 const SOCKET_DIR: &str = "/run/guaca-updater";
 
 /// What a box is configured with, handed to the host by name.
-pub const HOST_ENV: &[&str] =
-    &["GUACA_TOKEN", "GUACA_ORIGIN", "GUACA_UPDATE_CHECKS", "GUAC_LOG", "ANTHROPIC_API_KEY"];
+pub const HOST_ENV: &[&str] = &[
+    "GUACA_TOKEN",
+    "GUACA_ORIGIN",
+    "GUACA_ACCOUNT_ORIGIN",
+    "GUACA_BROKER_BEARER",
+    "GUACA_UPDATE_CHECKS",
+    "GUAC_LOG",
+    "ANTHROPIC_API_KEY",
+];
 /// The updater's own settings. It carries these and the host's to the
 /// updater that replaces it, which is the only way they survive one.
 ///
