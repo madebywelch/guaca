@@ -65,6 +65,7 @@ pub fn pane(section: &str) -> Option<&'static str> {
         "workspace" => "Host",
         "provider" => "Provider",
         "limits" => "Limits",
+        "permissions" => "Permissions",
         "machines" => "Machines",
         "account" => "Account",
         "appearance" => "Appearance",

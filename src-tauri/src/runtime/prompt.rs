@@ -3648,6 +3648,7 @@ mod tests {
             outcome: ToolOutcome::Ok { summary: "Sent to Researcher".into() },
             replaced: None,
             artifact: None,
+            ruled: None,
         };
         let failed = Part::ToolCall {
             name: "run_command".into(),
@@ -3655,6 +3656,7 @@ mod tests {
             outcome: ToolOutcome::Failed { error: "rejected".into() },
             replaced: None,
             artifact: None,
+            ruled: None,
         };
         let paused = Part::Notice { kind: NoticeKind::Lifecycle, text: "stopped here".into() };
         let brief = resumed(&[
@@ -3695,6 +3697,7 @@ mod tests {
             outcome: ToolOutcome::Ok { summary: "Attached report.pdf".into() },
             replaced: None,
             artifact: None,
+            ruled: None,
         };
         let brief = resumed(&[record(vec![attached])]).unwrap();
         assert!(brief.contains("attach them again"), "{brief}");

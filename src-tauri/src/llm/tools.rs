@@ -717,7 +717,9 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                           to carry out: send it the work; it uses its own operator authorization \
                           and asks only if needed. Permission you obtain \
                           and then pass along arrives as your word rather than theirs, which is \
-                          the claim it was right to refuse in the first place."
+                          the claim it was right to refuse in the first place. Fill in what you \
+                          can name, because a rule the operator wrote can then answer without \
+                          waiting for them, and anything left out is a fact they will have to read."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -730,6 +732,11 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                                         for an email; the form and the body for a submission. \
                                         The operator is deciding on this sentence."
                     },
+                    "to": { "type": "array", "items": { "type": "string" } },
+                    "domain": { "type": "string" },
+                    "amount": { "type": "string" },
+                    "currency": { "type": "string" },
+                    "tool": { "type": "string" },
                     "because": {
                         "type": "string",
                         "description": "Why you are asking now, including who asked you and what \

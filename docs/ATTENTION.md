@@ -96,6 +96,20 @@ read full records with `list`. Questions and choices remain agent-authored
 context. Answer deliveries use system envelopes that distinguish that context
 from the operator's answer and explicitly grant no new permission.
 
+## Rules that answer a permission
+
+The operator can write allow and block rules for a workspace or a group, optionally limited to
+agents. A block wins over an allow and a standing grant; a missing or invalid fact required by
+an applicable block makes the turn ask even if a grant exists. Rules never allow settings changes
+or an action after the turn has read a page or screenshot. The browser's existing consent switch
+still decides its normal question; a site block is checked before that switch.
+
+`request_permission` supplies the facts for rules about acting in the operator's name. These are
+the agent's declarations, not a guarantee about the later action. Connector calls are not gated
+by these rules and do not start asking because a rule exists. Only the operator can edit rules.
+An automatic allowance appears in the transcript with the rule that allowed it; a blocked call
+is a refusal, not a pending request.
+
 ## A settings change is a permission with its own diff
 
 `settings` with `update` parks the turn on `ProtectedAction::ChangeSettings`.

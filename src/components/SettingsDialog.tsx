@@ -72,6 +72,7 @@ import { Compost } from "./Compost";
 import { GroupTransfer, LegacyGroups } from "./GroupTransfer";
 import { HostChoice } from "./HostSetup";
 import { HostUpdatePanel } from "./HostUpdates";
+import { Permissions } from "./Permissions";
 import { ProviderPresets, SubscriptionModel } from "./ProviderFields";
 import { SkillList } from "./SkillList";
 
@@ -184,6 +185,10 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
   };
 
   const [section, setSection] = useState<Section>(opening ?? "general");
+  const [visitedPermissions, setVisitedPermissions] = useState(opening === "permissions");
+  useEffect(() => {
+    if (section === "permissions") setVisitedPermissions(true);
+  }, [section]);
   useEffect(() => onSection?.(section), [section, onSection]);
   const [operatorName, setOperatorName] = useState(settings?.operatorName ?? "");
   const [provider, setProvider] = useState<ProviderKind>(settings?.provider ?? "compatible");
@@ -1672,6 +1677,12 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   })}
                 </div>
               </>
+            )}
+
+            {visitedPermissions && (
+              <div hidden={section !== "permissions"}>
+                <Permissions groupId={null} />
+              </div>
             )}
 
             {section === "skills" && (

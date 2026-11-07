@@ -253,6 +253,9 @@ operator a dialog.
 
 ## The consent gate reads the browser's sessions, not the agent's
 
+An operator's site block is checked before the consent switch, and an applicable block whose
+domain is unknown forces a question. A rule cannot allow a browser action.
+
 Once an operator has asked to be asked, `needs_consent` fires on a `click` or
 `type` in the browser, after this turn has taken in a page or a screen, on a
 site the agent holds a session for. The

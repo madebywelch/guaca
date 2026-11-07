@@ -2066,6 +2066,10 @@ goes through `openMessage` rather than `select`.
 
 ## Settings is a nav and a pane, because it stopped being one subject
 
+Permissions holds the operator's allow and block rules; a group's Permissions section also
+shows workspace rules read-only. A rule-approved call keeps its rule wording in the transcript
+and does not fold into a burst. Rules act on declared request facts, not on connector calls.
+
 An endpoint, a set of limits, a machine's credentials, how large the window
 draws and what is allowed to interrupt you are five different questions, and one
 scroll made the operator read all five to change one. So it is a nav and a pane,

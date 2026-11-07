@@ -12,6 +12,7 @@ import {
   machineInUse,
   readSpent,
   type Step,
+  saysMore,
   stepDiff,
   stepReason,
   tallyLabel,
@@ -268,6 +269,25 @@ describe("credentials a command spent", () => {
 });
 
 describe("folding a turn's work", () => {
+  it("keeps each ruled call visible with the rule as written", () => {
+    const ruled = { ...call("run_command", { command: "ls" }), ruled: "Allow reports" };
+    const groups = foldTrail(steps(call("run_command", {}), ruled, ruled, call("run_command", {})));
+    expect(groups.map((group) => group.label)).toEqual([
+      "Ran 2 commands",
+      "Allowed by a rule · Allow reports",
+      "Allowed by a rule · Allow reports",
+    ]);
+    expect(groups[1]?.steps[0]?.target).toBe("ls");
+  });
+
+  it("does not repeat the rule allowance beside its label", () => {
+    const [step] = steps({
+      ...call("request_permission", {}, ok("allowed by a rule")),
+      ruled: "Allow reports",
+    });
+    expect(saysMore(step!)).toBe(false);
+  });
+
   it("says what a single call was, in full", () => {
     const groups = foldTrail(steps(call("run_command", { command: "ls" }, ok("exit 0"))));
     expect(groups.map((group) => group.label)).toEqual(["Ran a command"]);

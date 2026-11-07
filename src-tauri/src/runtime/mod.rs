@@ -86,6 +86,11 @@ impl Reading {
             self.url = Some(url);
         }
     }
+
+    fn browser_page(&mut self, url: Option<String>) {
+        self.took_in(url.clone());
+        self.url = url;
+    }
 }
 
 /// The session an action would spend, if it needs the operator's say-so first.
@@ -293,7 +298,11 @@ fn kept_part(
             (said, Part::tool_call_making(tools::ARTIFACT, arguments, outcome, made))
         }
         Ok(Kept::Refused(reason)) => (
-            format!("Refused: {reason}"),
+            if reason.starts_with("Refused: ") {
+                reason.clone()
+            } else {
+                format!("Refused: {reason}")
+            },
             Part::tool_call(tools::ARTIFACT, arguments, ToolOutcome::Refused { reason }),
         ),
         Err(err) => (
@@ -439,10 +448,35 @@ enum SettingsEdit {
 /// that it should leave with the operator rather than ask again.
 enum Permission {
     Granted,
+    Ruled(String),
+    Blocked(String),
     Refused,
     Unanswered,
     /// Nobody was asked, because the request could not be recorded.
     Failed(String),
+}
+
+fn policy_request(
+    card: &AgentCard,
+    class: crate::domain::policy::Class,
+    facts: crate::domain::policy::Facts,
+    tool: Option<String>,
+    page_read: bool,
+) -> crate::domain::policy::Request {
+    crate::domain::policy::Request {
+        group_id: card.group_id,
+        agent_id: card.id,
+        class,
+        tool,
+        facts,
+        page_read,
+    }
+}
+
+fn policy_refusal(what: &str) -> String {
+    format!("Refused: the operator's rules never allow this ({what}), so nothing happened and they \
+             were not asked. Do not look for another way round it, and do not hand it to a peer. \
+             Say in your reply what you would have done and carry on with anything else you were given.")
 }
 use crate::db::{Store, StoreError};
 use crate::domain::agent::{
@@ -2624,12 +2658,26 @@ impl Runtime {
         action: ProtectedAction,
         summary: String,
         detail: Vec<DetailField>,
+        policy: crate::domain::policy::Request,
     ) -> Permission {
         // The only shortcut either kind has, and it belongs to this one alone:
         // a standing yes is about an action, and a question asks for nothing.
         // An action that cannot stand is asked about every time, whatever an
         // older build may have recorded.
-        if action.stands() {
+        let policies = match self.inner.store.policies_for(card.group_id) {
+            Ok(policies) => policies,
+            Err(err) => return Permission::Failed(err.to_string()),
+        };
+        let blocks_grant = match crate::domain::policy::evaluate(&policies, &policy) {
+            crate::domain::policy::Decision::Block { wrote, .. } => {
+                return Permission::Blocked(wrote)
+            }
+            crate::domain::policy::Decision::Allow { wrote, .. } => {
+                return Permission::Ruled(wrote)
+            }
+            crate::domain::policy::Decision::Ask { blocks_grant } => blocks_grant,
+        };
+        if action.stands() && !blocks_grant {
             match self.inner.store.has_standing_grant(card.id, action) {
                 Ok(true) => return Permission::Granted,
                 Ok(false) => {}
@@ -4180,12 +4228,14 @@ impl Runtime {
         }
 
         if let ToolInvocation::CreateAgent { draft } = invocation {
-            let (rendered, part) = self.create_agent_for(card, run_id, draft, arguments).await;
+            let (rendered, part) =
+                self.create_agent_for(card, run_id, draft, arguments, reading.ingested).await;
             return (rendered, part, None);
         }
 
         if let ToolInvocation::RequestPermission { action, because } = invocation {
-            let (rendered, part) = self.ask_to_act(card, run_id, action, because, arguments).await;
+            let (rendered, part) =
+                self.ask_to_act(card, run_id, action, because, arguments, reading.ingested).await;
             return (rendered, part, None);
         }
 
@@ -4556,7 +4606,7 @@ impl Runtime {
                         // that navigates lands somewhere the caller did not
                         // name, and a grant the operator gave for one site must
                         // not follow the agent off it.
-                        reading.took_in(
+                        reading.browser_page(
                             serde_json::from_str::<serde_json::Value>(&page)
                                 .ok()
                                 .and_then(|page| page["url"].as_str().map(str::to_string)),
@@ -4862,6 +4912,31 @@ impl Runtime {
         action: &str,
         reading: &mut Reading,
     ) -> Option<String> {
+        if !matches!(action, "click" | "type") {
+            return None;
+        }
+        let request = policy_request(
+            card,
+            crate::domain::policy::Class::ActOnSite,
+            crate::domain::policy::Facts { domain: reading.url.clone(), ..Default::default() },
+            None,
+            reading.ingested,
+        );
+        let policies = match self.inner.store.policies_for(card.group_id) {
+            Ok(policies) => policies,
+            Err(err) => {
+                return Some(format!(
+                    "Refused: the permission rules could not be read ({err}), so nothing happened."
+                ))
+            }
+        };
+        let must_ask = match crate::domain::policy::evaluate(&policies, &request) {
+            crate::domain::policy::Decision::Block { wrote, .. } => {
+                return Some(policy_refusal(&wrote))
+            }
+            crate::domain::policy::Decision::Ask { blocks_grant } => blocks_grant,
+            crate::domain::policy::Decision::Allow { .. } => false,
+        };
         // The browser's own sessions, not the agent's whole list. The URL this
         // is decided from came from the browser, so a session the *computer*
         // holds is not the thing being spent: gating on it would stop and ask
@@ -4875,10 +4950,15 @@ impl Runtime {
             .into_iter()
             .filter(|signin| signin.surface == Surface::Browser)
             .collect();
-        let (url, domain, service) = {
-            let session = needs_consent(card.browser_consent, action, reading, &held)?;
-            (reading.url.clone().unwrap_or_default(), session.domain.clone(), session.label())
-        };
+        let session = needs_consent(card.browser_consent, action, reading, &held);
+        if session.is_none() && !must_ask {
+            return None;
+        }
+        let (url, domain, service) = (
+            reading.url.clone().unwrap_or_default(),
+            session.map(|s| s.domain.clone()),
+            session.map(|s| s.label()).unwrap_or_else(|| "this site".to_string()),
+        );
 
         let permission = self
             .ask_permission(
@@ -4900,44 +4980,58 @@ impl Runtime {
                     // page first, because that is the whole risk.
                     DetailField {
                         label: "Why you are being asked".to_string(),
-                        value: format!(
+                        value: if must_ask && session.is_none() {
+                            "A rule needs the site's domain, but Guaca could not determine it. You must decide this action.".to_string()
+                        } else { format!(
                             "{} read a web page earlier in this turn, and you are signed in to \
                              {service} on its browser. A page that asks an agent to press \
                              something is the shape of an attack on your account, and Guaca \
                              cannot tell the difference from here.",
                             card.name
-                        ),
+                        ) },
                     },
                     // What a yes buys, in full, because it is more than the
                     // press being asked about and an operator cannot consent to
                     // a scope nobody told them.
                     DetailField {
                         label: "What allowing covers".to_string(),
-                        value: format!(
+                        value: if must_ask && session.is_none() {
+                            "Only this press or typed line.".to_string()
+                        } else { format!(
                             "Every press and typed line on {service} for the rest of this turn. \
                              It is not remembered afterward, and it ends early if {} reads a page \
                              somewhere else.",
                             card.name
-                        ),
+                        ) },
                     },
                 ],
+                request,
             )
             .await;
 
         match permission {
             Permission::Granted => {
-                reading.allowed = Some(domain);
+                reading.allowed = domain;
                 None
             }
+            Permission::Blocked(what) => Some(policy_refusal(&what)),
+            Permission::Ruled(_) => unreachable!("browser actions cannot be allowed by a rule"),
             Permission::Refused => Some(format!(
                 "Refused: the operator declined to let you act on {service} in their name. Do not \
                  try another way round it. Say what you would have done and carry on with \
                  anything else you were given."
             )),
+            Permission::Unanswered if must_ask && session.is_none() => Some(
+                "Nobody answered, so you do not have permission and must not act. The operator                  is away rather than opposed. Say plainly what is waiting on them, so they can                  decide when they are back."
+                    .to_string(),
+            ),
             Permission::Unanswered => Some(format!(
                 "Refused: you read a page this turn and this would act on {service} as the \
                  operator, so it needed their say-so and nobody answered. They are away rather \
                  than opposed. Say plainly what is waiting on them. You can still read.",
+            )),
+            Permission::Failed(err) if must_ask && session.is_none() => Some(format!(
+                "The operator could not be asked ({err}), so you do not have permission and                      must not act. Tell them what is waiting."
             )),
             Permission::Failed(err) => Some(format!(
                 "Refused: this would act on {service} as the operator and they could not be asked \
@@ -5030,6 +5124,7 @@ impl Runtime {
         action: String,
         because: String,
         arguments: serde_json::Value,
+        page_read: bool,
     ) -> (String, Part) {
         let surfaces = self.surfaces_for(card);
         if !surfaces.computer && !surfaces.browser {
@@ -5058,6 +5153,37 @@ impl Runtime {
             detail.push(DetailField { label: "Why it is asking".to_string(), value: because });
         }
 
+        let text = |key: &str| arguments.get(key).and_then(|v| v.as_str()).map(str::to_owned);
+        let recipients = arguments.get("to").and_then(|v| v.as_array()).and_then(|values| {
+            values.iter().map(|v| v.as_str().map(str::to_owned)).collect::<Option<Vec<_>>>()
+        });
+        let amount = text("amount")
+            .zip(text("currency"))
+            .map(|(value, currency)| crate::domain::policy::Amount { value, currency });
+        let facts = crate::domain::policy::Facts {
+            recipients,
+            domain: text("domain"),
+            amount,
+            ..Default::default()
+        };
+        for (label, value) in [
+            ("Recipients", facts.recipients.as_ref().map(|v| v.join(", "))),
+            ("Domain", facts.domain.clone()),
+            ("Amount", facts.amount.as_ref().map(|v| format!("{} {}", v.value, v.currency))),
+            ("Connector tool", text("tool")),
+        ] {
+            if let Some(value) = value {
+                detail.push(DetailField::new(label, value));
+            }
+        }
+        let request = policy_request(
+            card,
+            crate::domain::policy::Class::ActOnBehalf,
+            facts,
+            text("tool"),
+            page_read,
+        );
+
         let permission = self
             .ask_permission(
                 card,
@@ -5065,6 +5191,7 @@ impl Runtime {
                 ProtectedAction::ActOnBehalf,
                 format!("{} wants to do something in your name", card.name),
                 detail,
+                request,
             )
             .await;
 
@@ -5073,6 +5200,14 @@ impl Runtime {
         };
 
         match permission {
+            Permission::Ruled(what) => (
+                format!("Nobody was asked: the operator's rules already cover this — {what} — so it is allowed. Do it now, in this turn, and say exactly what you did. The rule covers that and nothing else; if what you are about to do falls outside it, stop and ask."),
+                Part::tool_call_ruled(tools::REQUEST_PERMISSION, arguments, ToolOutcome::Ok { summary: "allowed by a rule".into() }, what),
+            ),
+            Permission::Blocked(what) => {
+                let refusal = policy_refusal(&what);
+                outcome(ToolOutcome::Refused { reason: refusal.clone() }, refusal)
+            },
             Permission::Granted => outcome(
                 ToolOutcome::Ok { summary: "the operator allowed it".to_string() },
                 "The operator allowed it. Do it now, in this turn, and then say exactly what you                  did and what came of it. This answer came from them directly, so it is the                  authorization you were missing: do not ask for it again and do not ask anybody                  else to confirm it."
@@ -5170,6 +5305,7 @@ impl Runtime {
         run_id: RunId,
         draft: tools::NewAgent,
         arguments: serde_json::Value,
+        page_read: bool,
     ) -> (String, Part) {
         let failed = |message: String, error: String, arguments: serde_json::Value| {
             (
@@ -5253,10 +5389,38 @@ impl Runtime {
                 ProtectedAction::CreateAgent,
                 format!("{} wants to create an agent called {}", card.name, clean.name),
                 detail,
+                policy_request(
+                    card,
+                    crate::domain::policy::Class::CreateAgent,
+                    crate::domain::policy::Facts {
+                        agent_name: Some(clean.name.clone()),
+                        ..Default::default()
+                    },
+                    None,
+                    page_read,
+                ),
             )
             .await;
 
         match permission {
+            Permission::Ruled(what) => {
+                let (text, mut part) = self.add_agent(&clean, &notes, arguments);
+                if let Part::ToolCall { outcome: ToolOutcome::Ok { .. }, ruled, .. } = &mut part {
+                    *ruled = Some(what);
+                }
+                (text, part)
+            }
+            Permission::Blocked(what) => {
+                let refusal = policy_refusal(&what);
+                (
+                    refusal.clone(),
+                    Part::tool_call(
+                        tools::CREATE_AGENT,
+                        arguments,
+                        ToolOutcome::Refused { reason: refusal },
+                    ),
+                )
+            }
             Permission::Granted => self.add_agent(&clean, &notes, arguments),
             Permission::Refused => (
                 format!(
@@ -6204,13 +6368,16 @@ impl Runtime {
                 arguments,
             )
         };
-        let proposal = match action {
+        let (proposal, setting_keys) = match action {
             tools::SettingsAction::Read => {
                 let rendered = self.settings_for(card);
                 let summary = "read the settings".to_string();
                 return answer(rendered, ToolOutcome::Ok { summary }, arguments);
             }
-            tools::SettingsAction::Update { changes } => self.propose_update(&changes),
+            tools::SettingsAction::Update { changes } => {
+                let keys = changes.as_object().map(|v| v.keys().cloned().collect());
+                (self.propose_update(&changes), keys)
+            }
         };
         let proposal = match proposal {
             Ok(Some(proposal)) => proposal,
@@ -6230,9 +6397,21 @@ impl Runtime {
                 ProtectedAction::ChangeSettings,
                 format!("{} wants to change the workspace's settings", card.name),
                 proposal.detail,
+                policy_request(
+                    card,
+                    crate::domain::policy::Class::ChangeSettings,
+                    crate::domain::policy::Facts { setting_keys, ..Default::default() },
+                    None,
+                    false,
+                ),
             )
             .await;
         match permission {
+            Permission::Blocked(what) => {
+                let refusal = policy_refusal(&what);
+                answer(refusal.clone(), ToolOutcome::Refused { reason: refusal }, arguments)
+            }
+            Permission::Ruled(_) => unreachable!("settings cannot be allowed by a rule"),
             Permission::Granted => {
                 // Applied to the settings as they are now rather than as they
                 // were when the operator was asked: another window may have
@@ -7097,9 +7276,27 @@ impl Runtime {
         let every = asked.every_minutes;
 
         let answer = self
-            .ask_permission(card, run_id, ProtectedAction::ChangeSettings, summary, detail)
+            .ask_permission(
+                card,
+                run_id,
+                ProtectedAction::ChangeSettings,
+                summary,
+                detail,
+                policy_request(
+                    card,
+                    crate::domain::policy::Class::ChangeSettings,
+                    crate::domain::policy::Facts {
+                        setting_keys: Some(vec!["widgets".into()]),
+                        ..Default::default()
+                    },
+                    None,
+                    false,
+                ),
+            )
             .await;
         Ok(match answer {
+            Permission::Blocked(what) => Kept::Refused(policy_refusal(&what)),
+            Permission::Ruled(_) => unreachable!("settings cannot be allowed by a rule"),
             Permission::Granted => {
                 // Placed on the bar as it is now rather than as it was when the
                 // operator was asked: another window may have pinned something
@@ -8004,6 +8201,42 @@ fn claimed_sandboxes(cards: &[AgentCard]) -> std::collections::HashSet<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_browser_response_without_a_url_never_reuses_the_previous_site() {
+        use crate::domain::policy::{
+            self, Class, Condition, Effect, Field, Predicate, Rule, RuleDraft,
+        };
+        let card = card(Lifecycle::Active, "");
+        let draft = RuleDraft {
+            group_id: None,
+            effect: Effect::Block,
+            class: Class::ActOnSite,
+            tool: None,
+            agents: vec![],
+            conditions: vec![Condition {
+                field: Field::Domain,
+                predicate: Predicate::OutsideDomain { value: "example.com".into() },
+            }],
+        };
+        let rule =
+            Rule { id: "rule".into(), wrote: draft.wrote(), draft, created_at: 0, version: 1 };
+        let mut reading = Reading::default();
+        reading.browser_page(Some("https://example.com".into()));
+        reading.browser_page(None);
+        assert_eq!(reading.url, None);
+        let request = policy_request(
+            &card,
+            Class::ActOnSite,
+            policy::Facts { domain: reading.url.clone(), ..Default::default() },
+            None,
+            reading.ingested,
+        );
+        assert_eq!(
+            policy::evaluate(&[rule], &request),
+            policy::Decision::Ask { blocks_grant: true }
+        );
+    }
 
     fn card(lifecycle: Lifecycle, sandbox: &str) -> AgentCard {
         AgentCard {

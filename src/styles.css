@@ -10116,3 +10116,12 @@ button.artifacts__version[aria-pressed="true"] {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
+.permissions__list { margin-top: var(--space-7); }
+.permissions__head, .permissions__row, .permissions__actions { display: flex; align-items: center; gap: var(--space-4); }
+.permissions__head { justify-content: space-between; }
+.permissions__head h4, .permissions__editor h4 { margin: 0; }
+.permissions__row { justify-content: space-between; align-items: flex-start; padding: var(--space-5) 0; border-bottom: 1px solid var(--rule); }
+.permissions__editor { margin-top: var(--space-7); padding: var(--space-6); border: 1px solid var(--rule); border-radius: var(--radius); }
+.permissions__editor .field { margin-top: var(--space-5); }
+.permissions__agents { display: grid; gap: var(--space-3); margin: var(--space-6) 0; padding: 0; border: 0; }
+.permissions__condition { margin: var(--space-5) 0; padding: var(--space-5); border: 1px solid var(--rule); border-radius: var(--radius); }

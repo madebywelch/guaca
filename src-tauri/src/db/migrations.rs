@@ -1884,6 +1884,23 @@ ALTER TABLE agents DROP COLUMN harness;
 ALTER TABLE agents DROP COLUMN gate;
 "#,
     ),
+    (
+        66,
+        r#"
+CREATE TABLE approval_policies (
+    id TEXT PRIMARY KEY,
+    group_id TEXT REFERENCES groups(id) ON DELETE CASCADE,
+    effect TEXT NOT NULL,
+    class TEXT NOT NULL,
+    tool TEXT,
+    agents TEXT NOT NULL,
+    conditions TEXT NOT NULL,
+    wrote TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    version INTEGER NOT NULL
+);
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

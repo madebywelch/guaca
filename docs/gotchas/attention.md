@@ -3,6 +3,10 @@
 Live requests, operational blockers, and durable decisions that stop no turn. `docs/ATTENTION.md`, then `domain/approval.rs`,
 `domain/escalation.rs` and `Runtime::park`.
 
+- **An uncertain applicable block asks before consulting standing grants.** Missing or invalid
+  facts are not evidence that a block does not match. A page or screenshot suppresses rule
+  allows, but not blocks; connector calls themselves are not covered by request rules.
+
 - **An escalation is not an approval with the parking taken out, and folding
   it into one would break the half that matters.** Both mean the operator, and
   everything else about them is opposite. A request stops a turn mid-flight to

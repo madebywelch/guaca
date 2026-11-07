@@ -113,6 +113,8 @@ export interface Step {
   failed: boolean;
   /** Credentials this call spent, by name. Never a value. */
   spent: string[];
+  /** The rule that allowed this call, as written when it fired. */
+  ruled: string | null;
 }
 
 /** A run of steps the row draws as one chip. */
@@ -544,6 +546,7 @@ export function trailStep(part: ToolCallPart, key: string): Step {
     told: plain === null ? null : rest,
     failed,
     spent,
+    ruled: part.ruled ?? null,
   };
 }
 
@@ -778,6 +781,7 @@ function manyLabel(group: TrailGroup): string {
 function chipLabel(group: TrailGroup): string {
   if (group.steps.length > 1) return manyLabel(group);
   const only = group.steps[0]!;
+  if (only.ruled !== null) return `Allowed by a rule · ${only.ruled}`;
   const from = pluginCall(only.tool);
   return from ? `${only.title} on ${from.plugin}` : only.title;
 }
@@ -796,7 +800,7 @@ export function foldTrail(steps: Step[]): TrailGroup[] {
   const open = new Map<string, TrailGroup>();
 
   for (const step of steps) {
-    if (step.failed || step.spent.length > 0) {
+    if (step.failed || step.spent.length > 0 || step.ruled !== null) {
       groups.push({
         key: step.key,
         label: step.title,
@@ -937,6 +941,7 @@ export function tellsMore(step: Step): boolean {
  * directory lookup, not a restatement of it.
  */
 export function saysMore(step: Step): boolean {
+  if (step.ruled !== null && step.said === "allowed by a rule") return false;
   return step.failed || (step.target === null && tellsMore(step));
 }
 

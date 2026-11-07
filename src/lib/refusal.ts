@@ -65,6 +65,15 @@ export interface Rule {
  * exist is worse than one that says nothing.
  */
 export const RULES: Rule[] = [
+  {
+    tool: null,
+    opens:
+      /^Refused: the operator's rules never allow this \(([\s\S]*?)\), so nothing happened and they were not asked\./,
+    mirrors:
+      "Refused: the operator's rules never allow this ({what}), so nothing happened and they",
+    says: (found) =>
+      `Nothing happened: a rule you wrote — ${found[1]} — refuses it, so it never reached you as a request.`,
+  },
   // What the guard stopped, in `runtime/guard.rs`. These are the ones that read
   // most like a policy document and are most about the operator's own limits.
   {

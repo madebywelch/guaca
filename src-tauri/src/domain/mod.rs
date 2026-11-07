@@ -13,6 +13,7 @@ pub mod group;
 pub mod ids;
 pub mod occasion;
 pub mod plugin;
+pub mod policy;
 pub mod promise;
 pub mod quick;
 pub mod routine;
