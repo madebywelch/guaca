@@ -1,0 +1,7 @@
+# The labels this repository's workflows run on. They are WarpBuild's
+# Ubuntu 24.04 machines rather than GitHub's, so actionlint cannot know them
+# from its own list, and it reports every one it is not told about.
+self-hosted-runner:
+  labels:
+    - warp-ubuntu-2404-x64-4x
+    - warp-ubuntu-2404-arm64-4x
