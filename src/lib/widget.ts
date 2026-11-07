@@ -168,7 +168,10 @@ export function dressed(page: string, look: BarLook, face: BarFace = bare(look.t
     `color-scheme: ${look.surface}; }` +
     ":where(html) { background: transparent; color: var(--guaca-text); " +
     "font-family: var(--guaca-font); font-size: var(--guaca-size); " +
-    "line-height: var(--guaca-height); }" +
+    // One pixel less than the frame: the bar's own text is drawn a pixel above
+    // the middle of its button, and the pinned line meets it there rather than
+    // a pixel low, which at 2× is a visible step between two neighbors.
+    "line-height: calc(var(--guaca-height) - 1px); }" +
     ":where(html, body) { height: 100%; margin: 0; overflow: hidden; }" +
     // A page written to the frame's stated width can still outgrow it when
     // the face changes or the operator's scale does. A line that is cut at the

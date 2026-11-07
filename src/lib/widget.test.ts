@@ -52,6 +52,7 @@ describe("a condensed view's frame", () => {
     expect(framed).toContain("text-overflow: ellipsis");
     expect(framed).toContain("white-space: nowrap");
     expect(framed).toContain(`--guaca-height: ${look.heightPx}px;`);
+    expect(framed).toContain("line-height: calc(var(--guaca-height) - 1px)");
     expect(framed).toContain(":where(body > * + *)");
   });
 });
