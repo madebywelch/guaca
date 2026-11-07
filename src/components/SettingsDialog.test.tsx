@@ -142,6 +142,8 @@ const claudeProgram = vi.fn<() => Promise<ClaudeProgram>>(async () => ({
   version: "2.1.247 (Claude Code)",
   install: "npm install -g @anthropic-ai/claude-code",
 }));
+const claudeSigninStatus = vi.fn(async () => ({ signedIn: false }));
+const beginClaudeSignin = vi.fn(async () => ({ id: "session", url: "https://example.com" }));
 
 /** A desktop window has a menu bar icon; a browser has nowhere to put one. */
 const platform = vi.hoisted(() => ({ desktop: true }));
@@ -173,6 +175,9 @@ vi.mock("../lib/ipc", () => ({
     accountConnectors: () => accountConnectors(),
     signOutAccount: () => signOutAccount(),
     claudeProgram: () => claudeProgram(),
+    claudeSigninStatus: () => claudeSigninStatus(),
+    beginClaudeSignin: () => beginClaudeSignin(),
+    cancelClaudeSignin: async () => {},
   },
   notifyOperator: (title: string, body: string) => notifyOperator(title, body),
   openExternal: (url: string) => openExternal(url),
@@ -270,6 +275,12 @@ function kindSwitches(): HTMLButtonElement[] {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  claudeSigninStatus.mockResolvedValue({ signedIn: false });
+  claudeProgram.mockResolvedValue({
+    installed: true,
+    version: "2.1.247 (Claude Code)",
+    install: "npm install -g @anthropic-ai/claude-code",
+  });
   platform.desktop = true;
   localStorage.clear();
   updateSettings.mockResolvedValue(stored());
@@ -978,6 +989,7 @@ describe("provider-specific configuration", () => {
     "hides API configuration while %s is selected and preserves edits across switches",
     async (provider) => {
       subscriptionStatus.mockResolvedValue(signedIn());
+      claudeSigninStatus.mockResolvedValue({ signedIn: true });
       open(stored({ provider }), DEFAULT_PREFS, "provider");
       const subscriptionButton =
         provider === "chatgpt" ? "Use the ChatGPT subscription" : "Use the Claude subscription";
@@ -1317,6 +1329,66 @@ describe("the Claude subscription", () => {
     const hint = screen.getByText(/rolling quota/);
     expect(hint.textContent).toContain("a group reaches it faster than one person does");
     expect(hint.textContent).not.toContain("crew");
+  });
+
+  it("offers host sign-in when Claude is selected", async () => {
+    open(stored({ provider: "claude" }));
+    pane("Provider");
+    expect(await screen.findByRole("button", { name: "Sign in with Claude" })).toBeTruthy();
+  });
+
+  it("keeps one row action through sign-in and allows a retry after failure", async () => {
+    let reject!: (error: unknown) => void;
+    beginClaudeSignin.mockReturnValueOnce(
+      new Promise((_, fail) => {
+        reject = fail;
+      }),
+    );
+    open();
+    pane("Provider");
+    const signIn = await within(row()).findByRole("button", { name: "Sign in with Claude" });
+    expect(row().parentElement?.querySelector(".claude-signin__panel")).toBeNull();
+    expect(within(row()).queryAllByRole("button")).toHaveLength(1);
+    fireEvent.click(signIn);
+    expect(
+      (within(row()).getByRole("button", { name: "Signing in…" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    await act(async () => reject({ kind: "claudeSignin", message: "Claude sign-in timed out." }));
+    expect(within(row()).getByRole("button", { name: "Try again" })).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toBe("Claude sign-in timed out.");
+    expect(
+      row()
+        .parentElement?.querySelector(".claude-signin__panel")
+        ?.contains(screen.getByRole("alert")),
+    ).toBe(true);
+    expect(within(row()).queryAllByRole("button")).toHaveLength(1);
+  });
+
+  it("keeps the row action disabled while the browser code is requested", async () => {
+    open();
+    pane("Provider");
+    fireEvent.click(await within(row()).findByRole("button", { name: "Sign in with Claude" }));
+    await screen.findByLabelText("Code from browser");
+    expect(
+      row()
+        .parentElement?.querySelector(".claude-signin__panel")
+        ?.contains(screen.getByLabelText("Code from browser")),
+    ).toBe(true);
+    expect(
+      (within(row()).getByRole("button", { name: "Signing in…" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(within(row()).queryAllByRole("button")).toHaveLength(1);
+  });
+
+  it("offers use only for a signed-in Claude, and marks the current provider", async () => {
+    claudeSigninStatus.mockResolvedValue({ signedIn: true });
+    open();
+    pane("Provider");
+    const use = await within(row()).findByRole("button", { name: "Use the Claude subscription" });
+    expect(row().parentElement?.querySelector(".claude-signin__panel")).toBeNull();
+    fireEvent.click(use);
+    expect(within(row()).getByText("In use")).toBeTruthy();
+    expect(within(row()).queryAllByRole("button")).toHaveLength(0);
   });
 });
 

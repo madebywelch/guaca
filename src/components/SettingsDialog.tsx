@@ -68,6 +68,7 @@ import {
   type SettingsPatch,
   type SubscriptionStatus,
 } from "../lib/types";
+import { ClaudeSignin } from "./ClaudeSignin";
 import { Compost } from "./Compost";
 import { GroupTransfer, LegacyGroups } from "./GroupTransfer";
 import { HostChoice } from "./HostSetup";
@@ -809,61 +810,58 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   </div>
                 )}
 
-                {/* No sign-in, no key and no model. All three belong to the
-                    program, which is why this row has one control on it: the
-                    only thing this app decides is whether to use it.
-
-                    Three states, one line. What the row is for never changes,
-                    so the line says that and the state beside it says whether
-                    it can be used; the sentence that says what is missing is
-                    the row's title, where the whole of it fits. `claude` is
-                    read from the host, so "on this host" is where to install
-                    it, and it is the same word onboarding uses. */}
-                <div
-                  className="preset preset--plain"
-                  aria-current={provider === "claude"}
-                  title={
-                    !capabilities.claudeProvider
-                      ? "Runs the claude program where you signed in, which is your own machine, so a server cannot offer it."
-                      : claudeInstalled === false
-                        ? "Runs the claude program, which is not installed on this host."
-                        : "Runs the claude program, and uses whatever it is signed in to and set to."
-                  }
-                >
-                  <span className="preset__text">
-                    <span className="preset__name">Claude subscription</span>
-                    <span className="preset__url">
-                      {!capabilities.claudeProvider
-                        ? "Only where you signed in"
-                        : claudeInstalled === false
-                          ? "Install the claude program"
-                          : "Runs the claude program"}
-                    </span>
-                  </span>
-                  {!capabilities.claudeProvider ? (
-                    <span className="preset__state" data-ready="false">
-                      Not on a server
-                    </span>
-                  ) : claudeInstalled === false ? (
-                    <span className="preset__state" data-ready="false">
-                      Not installed
-                    </span>
-                  ) : provider === "claude" ? (
-                    <span className="preset__state" data-ready="true">
-                      In use
-                    </span>
-                  ) : (
-                    <button
-                      type="button"
-                      className="btn btn--small"
-                      aria-label="Use the Claude subscription"
-                      disabled={busy || claudeInstalled === null}
-                      onClick={() => setProvider("claude")}
+                <ClaudeSignin
+                  enabled={capabilities.claudeProvider && claudeInstalled === true}
+                  row={(action, signedIn) => (
+                    <div
+                      className="preset preset--plain"
+                      aria-current={provider === "claude"}
+                      title={
+                        !capabilities.claudeProvider
+                          ? "Runs the claude program where you signed in, which is your own machine, so a server cannot offer it."
+                          : claudeInstalled === false
+                            ? "Runs the claude program, which is not installed on this host."
+                            : "Runs the claude program, and uses whatever it is signed in to and set to."
+                      }
                     >
-                      Use it
-                    </button>
+                      <span className="preset__text">
+                        <span className="preset__name">Claude subscription</span>
+                        <span className="preset__url">
+                          {!capabilities.claudeProvider
+                            ? "Only where you signed in"
+                            : claudeInstalled === false
+                              ? "Install the claude program"
+                              : "Runs the claude program"}
+                        </span>
+                      </span>
+                      {!capabilities.claudeProvider ? (
+                        <span className="preset__state" data-ready="false">
+                          Not on a server
+                        </span>
+                      ) : claudeInstalled === false ? (
+                        <span className="preset__state" data-ready="false">
+                          Not installed
+                        </span>
+                      ) : !signedIn ? (
+                        action
+                      ) : provider === "claude" ? (
+                        <span className="preset__state" data-ready="true">
+                          In use
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn btn--small"
+                          aria-label="Use the Claude subscription"
+                          disabled={busy || claudeInstalled === null}
+                          onClick={() => setProvider("claude")}
+                        >
+                          Use it
+                        </button>
+                      )}
+                    </div>
                   )}
-                </div>
+                />
 
                 {provider === "claude" && (
                   <p className="hint">

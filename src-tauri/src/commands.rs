@@ -167,6 +167,7 @@ pub struct AppState {
     /// The ChatGPT sign-in. The same one the runtime makes calls with, so a
     /// sign-in completed here is usable by the next turn without a restart.
     pub subscription: Arc<Subscription>,
+    pub claude_signin: crate::claude_signin::Signin,
     /// The Guaca account, which is optional and which nothing else in the app
     /// depends on. An install that never signs in never reaches the service.
     pub account: Arc<Account>,
@@ -758,6 +759,35 @@ pub async fn claude_program(_state: &AppState) -> Reply<ClaudeProgram> {
         version: version.unwrap_or_default(),
         install: crate::llm::claude::INSTALL.to_string(),
     })
+}
+
+pub async fn claude_signin_status(_state: &AppState) -> Reply<crate::claude_signin::Status> {
+    Ok(crate::claude_signin::Signin::status(crate::llm::claude::PROGRAM).await)
+}
+
+pub async fn begin_claude_signin(state: &AppState) -> Reply<crate::claude_signin::Started> {
+    state
+        .claude_signin
+        .begin(crate::llm::claude::PROGRAM)
+        .await
+        .map_err(|message| CommandError::new("claudeSignin", message))
+}
+
+pub async fn complete_claude_signin(
+    state: &AppState,
+    id: String,
+    code: String,
+) -> Reply<crate::claude_signin::Status> {
+    state
+        .claude_signin
+        .complete(&id, code)
+        .await
+        .map_err(|message| CommandError::new("claudeSignin", message))
+}
+
+pub async fn cancel_claude_signin(state: &AppState, id: String) -> Reply<()> {
+    state.claude_signin.cancel(&id).await;
+    Ok(())
 }
 
 // ---- sign-ins this machine already has -----------------------------------

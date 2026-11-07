@@ -1000,6 +1000,15 @@ export interface SettingsPatch {
  * credential. The email is here because "signed in" alone does not tell an
  * operator whether they signed in to the account they meant to.
  */
+export interface ClaudeSigninStatus {
+  signedIn: boolean;
+}
+
+export interface ClaudeSignin {
+  id: string;
+  url: string;
+}
+
 export interface SubscriptionStatus {
   signedIn: boolean;
   email: string;

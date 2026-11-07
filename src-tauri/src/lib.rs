@@ -5,6 +5,7 @@ pub mod app;
 pub mod artifact;
 pub mod boot;
 pub mod cdp;
+pub mod claude_signin;
 pub mod commands;
 pub mod config;
 pub mod db;

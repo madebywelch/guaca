@@ -12,6 +12,7 @@ import {
   type SettingsPatch,
   type SubscriptionStatus,
 } from "../lib/types";
+import { ClaudeSignin } from "./ClaudeSignin";
 import { SubscriptionModel } from "./ProviderFields";
 
 interface Props {
@@ -44,6 +45,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
   // answer could not be read. A screen that guessed "not installed" from a
   // failed read would refuse a provider that works.
   const [claude, setClaude] = useState<ClaudeProgram | null | undefined>(undefined);
+  const [claudeSignedIn, setClaudeSignedIn] = useState(false);
   // What this Mac already has, and whether the operator has said no to it.
   // Held here rather than in `Onboarding`, because the offer belongs to the
   // step that would otherwise ask for exactly the same thing.
@@ -139,7 +141,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
     ? "This host does not offer the claude program, so a plan cannot pay for turns here."
     : claude?.installed === false
       ? `Runs the claude program, which this host does not have. Install it there with ${claude.install}, sign in, then come back.`
-      : "Use a Claude plan through the claude program already signed in on your Guaca host. No API key needed.";
+      : "Use a Claude plan through the claude program on your Guaca host. No API key needed.";
 
   // Why the primary action cannot be pressed, in the row beside it. The brief
   // step does the same thing for its Continue, and for the same reason: a dead
@@ -150,9 +152,12 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
       ? `Paste a key for ${preset?.name ?? "this endpoint"}, then test it.`
       : provider === "claude" && !claudeReady
         ? "This host cannot run the claude program. Choose another card."
-        : "";
+        : provider === "claude" && !claudeSignedIn
+          ? "Sign in to Claude, then test it."
+          : "";
 
   const choose = (next: Provider) => {
+    if (next !== "claude") setClaudeSignedIn(false);
     setProvider(next);
     setError("");
   };
@@ -249,7 +254,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
 
   const connect = async () => {
     if (busy || !settings) return;
-    if (provider === "claude" && !claudeReady) return;
+    if (provider === "claude" && (!claudeReady || !claudeSignedIn)) return;
     if (provider === "compatible" && (needsKey || !baseUrl.trim() || !model.trim())) {
       setError("Enter an endpoint, a model, and the key for that provider, then try again.");
       return;
@@ -540,11 +545,10 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
       )}
 
       {provider === "claude" && claudeReady && (
-        <p className="onboarding-notice">
-          Claude's own account and model settings apply; Guaca passes neither, so a model named here
-          is not used. Sign in on your Guaca host first — inside the container, for a container
-          host. Testing makes a small request using that account.
-        </p>
+        <div className="onboarding-notice">
+          Claude uses your plan's own model settings. Testing sends one small request.
+          <ClaudeSignin onReady={setClaudeSignedIn} />
+        </div>
       )}
 
       <details
@@ -619,7 +623,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
               Boolean(busy) ||
               !settings ||
               Boolean(provider === "compatible" && needsKey) ||
-              (provider === "claude" && !claudeReady)
+              (provider === "claude" && (!claudeReady || !claudeSignedIn))
             }
             onClick={() => void connect()}
           >

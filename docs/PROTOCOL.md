@@ -265,10 +265,15 @@ issued to. It does not say the work cannot be done; it says who has to do it.
 
 So `Provider::Claude` does not hold a token. It runs `claude`, once per model
 call, and reads what it writes. The credential never leaves the program it was
-issued to, because this app never has it: there is no Anthropic sign-in in
-Settings, no token in the config file, and nothing in `llm/claude.rs` that could
-carry one. The operator signs in to Claude the way they already did, in their own
-terminal, and this app spends nothing it was not given.
+issued to: there is no Claude token in Guaca's config file, and nothing in
+`llm/claude.rs` that could carry one. On a host, Guaca can start the program's
+own sign-in, show its authorization URL and relay the one-time code returned by
+the browser to that same process. The CLI stores its credential in the host's
+own home directory; a container persists that directory in its volume. The URL
+and code belong only to the window that started the attempt, and neither they
+nor the program's output are logged. Cancelling or expiry stops the process.
+Guaca confirms a subscription sign-in with `claude auth status` before saying
+it succeeded, and never imports the Mac's credential into a host.
 
 All of it follows from one sentence, that a consumer token is spent by the
 program it was issued to, and the answer is to *be* that program rather than to
