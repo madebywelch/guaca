@@ -4,14 +4,35 @@
 # laptop is usually not, and compiling the daemon under emulation takes the
 # better part of an hour. Each architecture builds on a runner of its own kind.
 #
-# The amd64 image builds on the repository's self-hosted aws-medium machine --
-# 4 vCPU, 16 GiB, 100 GiB of disk, the size GitHub gives a public repository
-# under ubuntu-24.04 -- so the Rust build keeps the memory it has today and
-# does not risk the 90-minute timeout on half of it. publish only stitches
-# manifests and signs, so it runs on aws-small, 2 vCPU and 8 GiB. The arm64
-# leg stays on GitHub's ubuntu-24.04-arm: the self-hosted runners do not state
-# an architecture, and GitHub-hosted arm is free for a public repository, so
-# the build stays native there rather than under emulation.
+# The runners are the repository's own, all Ubuntu 24.04, and the label states
+# the machine rather than a tier: aws-linux-<cpus>cpu-<gib>gb on x64,
+# aws-linux-arm-<cpus>cpu-<gib>gb on Graviton. The amd64 image builds on
+# aws-linux-4cpu-16gb -- 4 vCPU, 16 GiB, 100 GiB of disk, the machine the pool
+# called aws-medium, where a warm rebuild takes 5m16s -- so the release build
+# keeps the memory it had and stays clear of the 90-minute timeout. publish
+# compiles nothing: it stitches manifests with buildx imagetools, signs the feed
+# and pushes a branch, 36 seconds of work, so aws-linux-2cpu-4gb carries it. The
+# arm64 leg builds on aws-linux-arm-2cpu-4gb, the pool's native Graviton
+# machine; nothing is emulated, and GitHub's ubuntu-24.04-arm is no longer
+# involved.
+#
+# That last machine is the one worth arguing about, because 4 GiB is all of it
+# and `[profile.release]` is written for a bigger one: `codegen-units = 1` and
+# fat `lto` put every dependency's bitcode through a single process at the end.
+# Measured on a cold build of exactly what this Dockerfile runs -- same two
+# binaries, same profile, rustc 1.99 -- the peak is 1.9 GiB, and it is not the
+# link: it is the one `rustc` compiling the `guac` library, whose three crate
+# types are all codegen'd in that process. The two fat-LTO links after it reach
+# 1.3 GiB even when they run at the same time. The web stage, which BuildKit
+# runs beside this one, adds 0.5 GiB and is done long before the library
+# compiles. The measurement is x86_64; a quarter more on aarch64 still leaves
+# the build under 2.5 GiB, and the machine keeps the other 1.5 GiB for dockerd,
+# buildkitd and the runner. A cold daemon build is 6m18s of one core here --
+# minutes, not the 90-minute timeout.
+#
+# A dependency or a Rust bump that pushed that library past 2.6 GiB would not
+# fit; the leg then goes back to ubuntu-24.04-arm, GitHub's native arm64
+# machine, which is free for a public repository.
 #
 # The layer cache is the GitHub Actions cache, one scope per architecture.
 #
@@ -51,9 +72,9 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner: aws-medium
+            runner: aws-linux-4cpu-16gb
           - arch: arm64
-            runner: ubuntu-24.04-arm
+            runner: aws-linux-arm-2cpu-4gb
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     steps:
@@ -105,7 +126,7 @@ jobs:
 
   publish:
     needs: build
-    runs-on: aws-small
+    runs-on: aws-linux-2cpu-4gb
     timeout-minutes: 15
     steps:
       # All of history, to tell whether the published build is older than this one.
