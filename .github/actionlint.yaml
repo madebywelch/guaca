@@ -1,8 +1,13 @@
-# The labels this repository's workflows run on. The aws-* labels name the
-# self-hosted machines the amd64 build and the publish job run on, which
-# actionlint cannot know from its own list of GitHub-hosted runners.
+# The labels this repository's workflows run on. The aws-linux-* labels name
+# the self-hosted machines the two build jobs and the publish job run on, which
+# actionlint cannot know from its own list of GitHub-hosted runners. Every one
+# of them is Ubuntu 24.04, and the label states the machine instead of a tier:
+# aws-linux-<cpus>cpu-<gib>gb on x64, aws-linux-arm-<cpus>cpu-<gib>gb on
+# Graviton. A label a job names but this file does not fails actionlint, which
+# is how a renamed machine is caught here instead of after a queued job waits
+# for a runner that no longer answers.
 self-hosted-runner:
   labels:
-    - aws-small
-    - aws-medium
-    - aws-large
+    - aws-linux-4cpu-16gb
+    - aws-linux-arm-2cpu-4gb
+    - aws-linux-2cpu-4gb
