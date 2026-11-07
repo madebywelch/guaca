@@ -9,7 +9,7 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/guaca-ink.png">
-  <img src="docs/img/guaca.png" width="2880" height="1800" alt="The Guaca window in paper. On the left, two groups: Studio, with Ines, Marlow, Dara and Kit paused, and Meridian, with Tomás, Wren and Noor. On the right, Ines's channel: asked whether the changelog could ship today, she messaged Marlow and Dara, and the question she asked back is answered on the page. Their two answers came back as one numbered footnote, and her reply says 13.5 shipped, with the type check kept as a page and pinned to the status bar.">
+  <img src="docs/img/guaca.png" alt="The Guaca window in paper. On the left, two groups: Studio, with Ines, Marlow, Dara and Kit paused, and Meridian, with Tomás, Wren and Noor. On the right, Ines's channel: asked whether the changelog could ship today, she messaged Marlow and Dara, and the question she asked back is answered on the page. Their two answers came back as one numbered footnote, and her reply says 13.5 shipped, with the type check kept as a page and pinned to the status bar.">
 </picture>
 
 Run Guaca locally on your computer or connect it to a VPS. The backend runs in a
