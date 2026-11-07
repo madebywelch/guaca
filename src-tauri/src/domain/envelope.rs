@@ -192,6 +192,8 @@ pub enum Part {
         /// in, and only on a call that wrote.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         artifact: Option<Made>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ruled: Option<String>,
     },
     /// A file this message carries.
     ///
@@ -327,7 +329,14 @@ impl Part {
         arguments: serde_json::Value,
         outcome: ToolOutcome,
     ) -> Self {
-        Part::ToolCall { name: name.into(), arguments, outcome, replaced: None, artifact: None }
+        Part::ToolCall {
+            name: name.into(),
+            arguments,
+            outcome,
+            replaced: None,
+            artifact: None,
+            ruled: None,
+        }
     }
 
     /// A call that overwrote something whole, carrying what was there first.
@@ -343,6 +352,7 @@ impl Part {
             outcome,
             replaced: Some(replaced.into()),
             artifact: None,
+            ruled: None,
         }
     }
 
@@ -359,6 +369,23 @@ impl Part {
             outcome,
             replaced: None,
             artifact: Some(made),
+            ruled: None,
+        }
+    }
+
+    pub fn tool_call_ruled(
+        name: impl Into<String>,
+        arguments: serde_json::Value,
+        outcome: ToolOutcome,
+        rule: String,
+    ) -> Self {
+        Part::ToolCall {
+            name: name.into(),
+            arguments,
+            outcome,
+            replaced: None,
+            artifact: None,
+            ruled: Some(rule),
         }
     }
 

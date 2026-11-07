@@ -53,13 +53,8 @@ export function TrailFootnote({
   return (
     <FootnoteRow number={number} at={at} failed={failed}>
       <span className="footnote__line">
-        {groups.map((group, at) => (
+        {groups.map((group) => (
           <span className="footnote__item" key={group.key}>
-            {at > 0 && (
-              <span className="footnote__dot" aria-hidden="true">
-                ·
-              </span>
-            )}
             <FootnoteGroup
               group={group}
               id={`${region}-${group.key}`}
@@ -130,7 +125,12 @@ function FootnoteGroup({
         {group.label}
       </span>
       {target && <span className="footnote__target">{target}</span>}
-      {failed && <span className="footnote__gist">{why(failed)}</span>}
+      {failed && (
+        <>
+          {" — "}
+          <span className="footnote__gist">{why(failed)}</span>
+        </>
+      )}
       {group.steps.length > 1 && <span className="footnote__count">×{group.steps.length}</span>}
       {group.spent.map((credential) => (
         <span className="trail__spent" key={credential}>
@@ -248,9 +248,12 @@ function TrailChip({
           the rest. The `title` is the part that was cut: a chip is one line,
           and what a routine was set for or a page said does not fit in one. */}
       {previewed && (
-        <span className="trail__said" title={only.said}>
-          {only.said}
-        </span>
+        <>
+          {only.failed && " — "}
+          <span className="trail__said" title={only.said}>
+            {only.said}
+          </span>
+        </>
       )}
       {group.spent.map((credential) => (
         <span className="trail__spent" key={credential}>

@@ -31,6 +31,7 @@ import {
 import { CredentialList } from "./CredentialList";
 import { GroupActivity } from "./GroupActivity";
 import { GroupTransfer } from "./GroupTransfer";
+import { Permissions } from "./Permissions";
 import { PluginList } from "./PluginList";
 import { ProviderPresets, SubscriptionModel } from "./ProviderFields";
 import { SkillList } from "./SkillList";
@@ -48,6 +49,7 @@ const SECTIONS = [
   "general",
   "provider",
   "limits",
+  "permissions",
   "plugins",
   "tools",
   "secrets",
@@ -62,6 +64,7 @@ const SECTION_LABELS: Record<Section, string> = {
   general: "General",
   provider: "Provider",
   limits: "Limits",
+  permissions: "Permissions",
   plugins: "Connectors",
   tools: "Tools",
   secrets: "Secrets",
@@ -75,7 +78,7 @@ const SECTION_LABELS: Record<Section, string> = {
  * exist first. A sign-in and a credential both have to belong to something,
  * and there is no row to hang either on until the group is created.
  */
-const NEEDS_GROUP: readonly Section[] = ["plugins", "secrets", "skills", "activity"];
+const NEEDS_GROUP: readonly Section[] = ["plugins", "secrets", "skills", "activity", "permissions"];
 
 /** What a group says when it has no opinion about who pays. */
 const INHERIT = "inherit";
@@ -91,6 +94,10 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
   const agents = useStore((s) => s.agents);
 
   const [section, setSection] = useState<Section>("general");
+  const [visitedPermissions, setVisitedPermissions] = useState(false);
+  useEffect(() => {
+    if (section === "permissions") setVisitedPermissions(true);
+  }, [section]);
   useEffect(() => onSection?.(section), [section, onSection]);
   const [name, setName] = useState(group?.name ?? "");
   const [provider, setProvider] = useState<Provider | typeof INHERIT>(
@@ -713,6 +720,12 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                 </p>
                 <CredentialList groupId={group.id} crew={members} />
               </>
+            )}
+
+            {group && visitedPermissions && (
+              <div hidden={section !== "permissions"}>
+                <Permissions groupId={group.id} />
+              </div>
             )}
 
             {section === "skills" && group && (

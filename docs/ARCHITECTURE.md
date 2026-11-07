@@ -840,6 +840,14 @@ another's instructions by listing peers. There is a test for that too.
 
 ## A protected action parks the turn that asked for it
 
+Operator-written approval rules are evaluated before a standing grant or a parked request.
+A matching block refuses, and an applicable block with missing or invalid facts forces an
+ordinary question even when a standing grant exists. Otherwise a matching allow may skip the
+question except after a page or screenshot was read, or for settings changes. Rule facts about
+an external action are declared by the agent in `request_permission`; they do not verify a
+subsequent action, and connector calls themselves are not intercepted by this mechanism.
+The transcript records the rule on a call it allowed.
+
 Agents can add agents. Every other tool acts on the asking agent's own machine,
 memory or peers; this one changes the workspace and adds something the operator
 pays to run, so it stops and asks.

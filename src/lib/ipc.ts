@@ -72,6 +72,8 @@ import type {
   OccasionDraft,
   OccasionId,
   OperatorView,
+  PermissionRule,
+  PermissionRuleDraft,
   Pickup,
   Plugin,
   PluginAccess,
@@ -120,6 +122,12 @@ const EVENT_CHANNEL = "guac://event";
 const REVEAL_CHANNEL = "guac://reveal";
 
 export const api = {
+  listPermissionRules: (groupId: GroupId | null) =>
+    invoke<PermissionRule[]>("list_permission_rules", { groupId }),
+  savePermissionRule: (rule: PermissionRuleDraft, id: string | null, version: number | null) =>
+    invoke<PermissionRule>("save_permission_rule", { rule, id, version }),
+  deletePermissionRule: (id: string, groupId: GroupId | null, version: number) =>
+    invoke<void>("delete_permission_rule", { id, groupId, version }),
   exportGroup: (id: GroupId) => invoke<GroupArchive>("export_group", { id }),
   importGroup: (archive: GroupArchive, name: string) =>
     invoke<Group>("import_group", { archive, name }),

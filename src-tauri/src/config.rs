@@ -603,7 +603,8 @@ pub const AGENT_WRITABLE: &[&str] = &[
 /// What an agent may never change, even with approval. The endpoint decides
 /// where the API key is sent, so an agent that could move it could send the
 /// key anywhere; the keys themselves are never shown to it at all.
-pub const OPERATOR_ONLY: &[&str] = &["provider", "baseUrl", "apiKey", "e2bApiKey", "kernelApiKey"];
+pub const OPERATOR_ONLY: &[&str] =
+    &["provider", "baseUrl", "apiKey", "e2bApiKey", "kernelApiKey", "permissionRules"];
 
 /// The five limits, as the settings pane labels them. `limits.ts` holds the same
 /// words for the pane, and `manual.test.ts` checks the two agree.

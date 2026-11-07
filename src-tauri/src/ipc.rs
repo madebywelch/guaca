@@ -26,6 +26,7 @@ use crate::domain::ids::{
 use crate::domain::plugin::{
     HeaderPair, Plugin, PluginAccess, PluginKind, PluginOffer, ServerReport,
 };
+use crate::domain::policy::{Rule as PermissionRule, RuleDraft as PermissionRuleDraft};
 use crate::domain::routine::{Routine, RoutineRun};
 use crate::domain::search::SearchHits;
 use crate::domain::signin::Signin;
@@ -358,6 +359,9 @@ surface! {
     resume_decision(id: DecisionId) -> WorkDecision,
     snooze_decision(id: DecisionId, until: i64) -> (),
     pending_approvals() -> Vec<Approval>,
+    list_permission_rules(group_id: Option<GroupId>) -> Vec<PermissionRule>,
+    save_permission_rule(id: Option<String>, version: Option<u64>, rule: PermissionRuleDraft) -> PermissionRule,
+    delete_permission_rule(id: String, group_id: Option<GroupId>, version: u64) -> (),
     agent_grants(id: AgentId) -> Vec<ProtectedAction>,
     revoke_grant(id: AgentId, action: ProtectedAction) -> Vec<ProtectedAction>,
     decide_approval(id: ApprovalId, decision: Decision) -> Approval,

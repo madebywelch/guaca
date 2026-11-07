@@ -1,6 +1,7 @@
 mod artifacts;
 mod decisions;
 pub mod migrations;
+mod policy;
 mod put_down;
 pub mod store;
 

@@ -209,6 +209,7 @@ repo: the frontend renders state and forwards intent.
 | The status bar, a page pinned to it, its condensed view, quick actions | *The status bar holds pages the groups keep, and a click on one is the bar's* in `docs/WORKSPACE.md`, then `domain/widget.rs`, `src/lib/widget.ts` and `src/components/StatusBar.tsx`, and `widget.test.ts`, which holds the widths the `artifact` tool states |
 | An agent reading the settings or asking to change them, the operator's current view | *An agent can read the settings, and what the operator is looking at* in `docs/WORKSPACE.md` and *A settings change is a permission with its own diff* in `docs/ATTENTION.md`, then `config::agent_patch` and `Runtime::use_settings` |
 | Permission prompts, parked turns, acting in the operator's name | *A protected action parks the turn that asked for it* |
+| Approval allow and block rules | `docs/ATTENTION.md`, then `domain/policy.rs` and `db/policy.rs` |
 | A program that is installed and reported missing: `claude` | *A double-clicked app does not have the operator's `PATH`* below, then `src-tauri/src/programs.rs` |
 | A sign-in this Mac already has, the first-run offer, why Codex's token is not imported | *The first run may offer a sign-in that is already there* in `docs/PROTOCOL.md`, then `src-tauri/src/pickup.rs`, `existing_signins` in `commands.rs` and the offer in `OnboardingProvider.tsx` |
 | Anything an agent stops to ask a person: the desk, the queue, the two kinds of request, `ask_operator` | `docs/ATTENTION.md`, then `domain/approval.rs` and `Runtime::park` |

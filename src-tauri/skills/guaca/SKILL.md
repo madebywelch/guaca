@@ -81,6 +81,7 @@ The operator edits them in **Settings**:
   effort, and how long to wait for a model call.
 - **Limits**: the five bounds every conversation runs inside. Defaults for
   groups that do not set their own.
+- **Permissions**: the operator-only rule editor.
 - **Machines**: the E2B key for computers and the Kernel key for browsers, and
   how long each may sit idle before it sleeps.
 - **Account**: the optional Guaca account, used only by the Google connector.

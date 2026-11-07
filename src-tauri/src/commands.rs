@@ -1315,6 +1315,43 @@ pub async fn agent_grants(state: &AppState, id: AgentId) -> Reply<Vec<ProtectedA
     Ok(state.runtime.store().standing_grants(id)?)
 }
 
+pub async fn list_permission_rules(
+    state: &AppState,
+    group_id: Option<GroupId>,
+) -> Reply<Vec<crate::domain::policy::Rule>> {
+    Ok(match group_id {
+        Some(group) => state.runtime.store().policies_for(group)?,
+        None => state.runtime.store().list_policies(None)?,
+    })
+}
+
+pub async fn save_permission_rule(
+    state: &AppState,
+    id: Option<String>,
+    version: Option<u64>,
+    rule: crate::domain::policy::RuleDraft,
+) -> Reply<crate::domain::policy::Rule> {
+    let store = state.runtime.store();
+    let saved = match (id, version) {
+        (None, None) => store.create_policy(rule)?,
+        (Some(id), Some(version)) => store.update_policy(&id, rule.group_id, version, rule)?,
+        _ => return Err(CommandError::new("invalid", "A rule edit needs its id and version")),
+    };
+    Ok(saved)
+}
+
+pub async fn delete_permission_rule(
+    state: &AppState,
+    id: String,
+    group_id: Option<GroupId>,
+    version: u64,
+) -> Reply<()> {
+    if !state.runtime.store().delete_policy(&id, group_id, version)? {
+        return Err(CommandError::new("conflict", "The rule is missing or has changed"));
+    }
+    Ok(())
+}
+
 /// Takes one back. A permission that could only ever be given is a trap, and
 /// "always" has to stay something the operator can change their mind about.
 pub async fn revoke_grant(

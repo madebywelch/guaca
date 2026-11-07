@@ -9,6 +9,31 @@ export type GroupId = string;
 export type MessageId = string;
 export type RunId = string;
 
+export type PermissionClass = "actOnBehalf" | "createAgent" | "changeSettings" | "actOnSite";
+export type PermissionField = "recipients" | "domain" | "amount" | "agentName" | "settingKeys";
+export type PermissionPredicate =
+  | { op: "is" | "under" | "outsideDomain"; value: string }
+  | { op: "oneOf"; values: string[] }
+  | { op: "atMost" | "greaterThan"; value: string; currency: string };
+export interface PermissionCondition {
+  field: PermissionField;
+  predicate: PermissionPredicate;
+}
+export interface PermissionRuleDraft {
+  groupId: GroupId | null;
+  effect: "allow" | "block";
+  class: PermissionClass;
+  tool: string | null;
+  agents: AgentId[];
+  conditions: PermissionCondition[];
+}
+export interface PermissionRule extends PermissionRuleDraft {
+  id: string;
+  version: number;
+  wrote: string;
+  createdAt: number;
+}
+
 export type Lifecycle = "active" | "paused" | "terminated";
 /**
  * Whether an agent's browser asks before it acts in the operator's name.
@@ -82,6 +107,7 @@ export type Part =
       outcome: ToolOutcome;
       replaced?: string;
       artifact?: ArtifactMade;
+      ruled?: string;
     }
   | ({ type: "file" } & Attachment)
   /**
