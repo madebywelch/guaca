@@ -1020,6 +1020,7 @@ export interface AccountStatus {
   signedIn: boolean;
   email: string;
   origin: string;
+  broker?: boolean;
 }
 
 /** One thing an authorized provider can do, as the service describes it. */

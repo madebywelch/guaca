@@ -1,0 +1,5 @@
+BETTER_AUTH_URL="https://your-connector.example"
+BETTER_AUTH_SECRET="replace-with-a-random-secret"
+SELFHOST_BEARER="replace-with-a-different-random-secret"
+GOOGLE_CLIENT_ID="your-client-id"
+GOOGLE_CLIENT_SECRET="your-client-secret"

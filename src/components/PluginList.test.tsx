@@ -44,12 +44,26 @@ const probeServer =
   vi.fn<(url: string, key?: string, headers?: HeaderPair[]) => Promise<ServerReport>>();
 const checkPlugin = vi.fn<(id: string) => Promise<ServerReport>>();
 const openExternal = vi.fn();
+const accountStatus = vi.fn(async () => ({
+  signedIn: true,
+  email: "",
+  origin: "https://broker.example",
+  broker: false,
+}));
+const signInAccount = vi.fn(async () => ({
+  signedIn: true,
+  email: "",
+  origin: "https://broker.example",
+  broker: true,
+}));
 
 vi.mock("../lib/ipc", () => ({
   api: {
     pluginCatalog: () => pluginCatalog(),
     groupPlugins: () => groupPlugins(),
     accountConnectors: () => accountConnectors(),
+    accountStatus: () => accountStatus(),
+    signInAccount: () => signInAccount(),
     connectPlugin: (groupId: string, kind: string, connection?: string) =>
       connectPlugin(groupId, kind, connection),
     setPluginConnection: (groupId: string, kind: string, connection: string) =>
@@ -547,6 +561,28 @@ describe("choosing which account a crew uses", () => {
 
   beforeEach(() => {
     pluginCatalog.mockResolvedValue([GOOGLE_OFFER]);
+  });
+
+  it("opens the configured account origin or a broker handoff", async () => {
+    accountConnectors.mockResolvedValue({ ...two, connections: [] });
+    accountStatus.mockResolvedValue({
+      signedIn: true,
+      email: "",
+      origin: "https://broker.example",
+      broker: false,
+    });
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+    const button = await screen.findByRole("button", { name: "Authorize a Google account" });
+    fireEvent.click(button);
+    await waitFor(() => expect(openExternal).toHaveBeenCalledWith("https://broker.example/app"));
+    accountStatus.mockResolvedValue({
+      signedIn: true,
+      email: "",
+      origin: "https://broker.example",
+      broker: true,
+    });
+    fireEvent.click(button);
+    await waitFor(() => expect(signInAccount).toHaveBeenCalled());
   });
 
   it("says which account it acts as, without an inert picker, when there is one", async () => {

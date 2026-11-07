@@ -1,0 +1,71 @@
+{
+  "name": "@guaca/connector-broker",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Guaca's OAuth connector broker.",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "exports": {
+    "./worker/*": "./worker/*.ts",
+    "./account/*": "./src/account/*.js"
+  },
+  "files": [
+    "worker/*.ts",
+    "!worker/*.test.ts",
+    "!worker/*.itest.ts",
+    "src/account/*.js",
+    "src/account/*.d.ts",
+    "src/components/*.js",
+    "src/components/*.d.ts",
+    "src/content.js",
+    "src/content.d.ts"
+  ],
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.worker.json",
+    "test": "vitest run -c vitest.selfhost.config.ts"
+  },
+  "dependencies": {
+    "@better-auth/oauth-provider": "1.7.1",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@fontsource-variable/literata": "^5.3.0",
+    "better-auth": "^1.7.1",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.13.3",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.3.0",
+    "@cloudflare/vitest-pool-workers": "0.12.21",
+    "@cloudflare/workers-types": "^5.20260822.1",
+    "@tailwindcss/vite": "^4.1.14",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.3.0",
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.0.4",
+    "drizzle-kit": "^0.31.10",
+    "esbuild": "0.25.12",
+    "jsdom": "^27.0.0",
+    "sharp": "^0.34.5",
+    "tailwindcss": "^4.1.14",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.9",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.125.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "workerd",
+      "sharp"
+    ],
+    "patchedDependencies": {
+      "@better-auth/oauth-provider@1.7.1": "patches/@better-auth__oauth-provider@1.7.1.patch"
+    }
+  }
+}

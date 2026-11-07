@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Guaca">
+  <!--
+    Two agents, looking at each other, which is what the app's own icon is of.
+    It is a paper tile now, not an ink one: the app icon became the page's
+    ground with the one that is talking in the attention amber and the one
+    listening in ink, and the site's tab should be the same square a person
+    sees in the Dock.
+
+    The two outlines are `bodyPoints` from guaca's `avatars/form.ts` at rest,
+    leaning after a look, walked at the 32 radii the app walks. The species
+    numbers and the composition are guaca's `scripts/make-icon.py`, which is
+    the file that ships the app icon and the one to re-read if either changes.
+    An eye is a hole punched through to the tile rather than a dark shape laid
+    on one, which is why both are the paper color.
+
+    The tile here has no macOS content inset, because a favicon fills its
+    square. The rim is drawn heavier than the app's 1024px hairline (0.6 of
+    this box) on purpose: it is the only thing separating paper from a pale
+    browser chrome, and at 16 pixels the app's weight disappears. 1.75 of 64
+    survives to a crisp 16, and the .ico is the app's own rasters beside this
+    file for the clients that never read the head.
+  -->
+  <rect width="64" height="64" rx="14" fill="#fbf9f3"/>
+  <rect x="0.875" y="0.875" width="62.25" height="62.25" rx="13.125" fill="none" stroke="#181610" stroke-width="1.75"/>
+  <path d="M36.1 35.1C36.1 36.2 35.9 37.2 35.8 38.2C35.6 39.2 35.4 40.1 35.1 41.1C34.8 42.0 34.5 42.9 34.1 43.8C33.8 44.7 33.3 45.5 32.8 46.3C32.3 47.0 31.7 47.7 31.1 48.3C30.5 48.9 29.8 49.4 29.1 49.8C28.4 50.2 27.7 50.4 27.0 50.6C26.2 50.7 25.5 50.7 24.7 50.6C24.0 50.5 23.3 50.3 22.6 50.0C21.9 49.7 21.2 49.2 20.6 48.7C20.0 48.2 19.5 47.6 19.0 47.0C18.5 46.4 18.0 45.7 17.6 44.9C17.2 44.2 16.8 43.5 16.5 42.7C16.2 41.9 15.9 41.1 15.6 40.3C15.4 39.5 15.2 38.6 15.1 37.8C14.9 36.9 14.8 36.0 14.8 35.1C14.8 34.3 14.8 33.3 15.0 32.5C15.1 31.6 15.3 30.7 15.5 29.9C15.8 29.1 16.1 28.3 16.5 27.6C16.9 26.9 17.3 26.2 17.8 25.6C18.3 25.0 18.8 24.5 19.3 24.0C19.9 23.6 20.5 23.2 21.0 22.9C21.6 22.6 22.2 22.4 22.9 22.2C23.5 22.0 24.1 21.9 24.7 21.8C25.4 21.7 26.0 21.7 26.7 21.7C27.3 21.7 28.0 21.7 28.7 21.9C29.4 22.0 30.2 22.2 30.9 22.5C31.6 22.9 32.3 23.3 32.9 23.9C33.5 24.5 34.1 25.3 34.6 26.1C35.0 26.9 35.4 27.9 35.7 28.9C35.9 29.9 36.1 31.0 36.1 32.0C36.2 33.1 36.2 34.1 36.1 35.1Z" fill="#865600"/>
+  <circle cx="28.7" cy="33.0" r="4.3" fill="#fbf9f3"/>
+  <path d="M49.5 22.2C49.6 22.8 49.6 23.4 49.6 24.0C49.7 24.6 49.6 25.2 49.5 25.8C49.4 26.4 49.3 27.0 49.0 27.6C48.8 28.2 48.6 28.7 48.3 29.2C48.0 29.7 47.6 30.2 47.2 30.6C46.8 31.0 46.4 31.3 46.0 31.6C45.5 31.9 45.1 32.1 44.6 32.3C44.1 32.4 43.6 32.5 43.1 32.6C42.6 32.7 42.1 32.7 41.6 32.6C41.1 32.6 40.6 32.5 40.1 32.3C39.6 32.1 39.1 31.9 38.6 31.6C38.1 31.2 37.6 30.8 37.2 30.3C36.8 29.8 36.5 29.2 36.2 28.6C35.9 27.9 35.8 27.2 35.7 26.4C35.6 25.7 35.5 25.0 35.6 24.3C35.6 23.5 35.7 22.8 35.8 22.2C36.0 21.5 36.2 20.9 36.3 20.3C36.5 19.7 36.8 19.2 37.0 18.7C37.2 18.2 37.5 17.7 37.8 17.3C38.0 16.8 38.3 16.4 38.7 16.0C39.0 15.7 39.3 15.4 39.7 15.1C40.1 14.8 40.4 14.6 40.8 14.5C41.2 14.3 41.6 14.2 42.0 14.2C42.4 14.1 42.8 14.1 43.1 14.2C43.5 14.3 43.9 14.4 44.2 14.6C44.6 14.7 44.9 14.9 45.3 15.2C45.6 15.4 45.9 15.7 46.2 16.0C46.5 16.2 46.7 16.6 47.0 16.9C47.3 17.2 47.5 17.6 47.7 18.0C48.0 18.3 48.2 18.7 48.4 19.2C48.7 19.6 48.9 20.1 49.0 20.6C49.2 21.1 49.4 21.6 49.5 22.2Z" fill="#181610"/>
+  <circle cx="40.8" cy="25.2" r="3.1" fill="#fbf9f3"/>
+</svg>

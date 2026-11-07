@@ -156,6 +156,12 @@ pub enum AccountError {
     Unexpected { detail: String },
     #[error("not signed in to a Guaca account")]
     NotSignedIn,
+    #[error(
+        "Remove GUACA_BROKER_BEARER from the host environment and restart the host to sign out."
+    )]
+    BrokerConfigured,
+    #[error("{detail}")]
+    Broker { detail: String },
     #[error("the sign-in to {origin} has expired. Sign in again.")]
     Expired { origin: String },
     #[error("could not save the sign-in to {path}: {source}")]
@@ -260,6 +266,8 @@ pub struct Status {
     pub signed_in: bool,
     pub email: String,
     pub origin: String,
+    #[serde(default)]
+    pub broker: bool,
 }
 
 /// One thing an authorized provider can do, as the service describes it.
@@ -317,12 +325,14 @@ pub struct Connectors {
 ///
 /// Cheap to clone behind the `Arc` its owner holds. The mutex is held only to
 /// read or replace the token set, never across a request.
-#[derive(Debug)]
 pub struct Account {
     path: PathBuf,
     origin: String,
     http: reqwest::Client,
+    broker_http: reqwest::Client,
     tokens: Mutex<Option<Stored>>,
+    broker: Option<String>,
+    origin_override: bool,
     /// Held across a refresh, so a crew that all reach for the account at once
     /// spends one.
     ///
@@ -341,7 +351,9 @@ pub struct Account {
 impl Account {
     /// Opens the store at `path`, against the service this build ships with.
     pub fn open(path: PathBuf) -> Self {
-        Self::open_at(path, DEFAULT_ORIGIN)
+        let mut account = Self::open_at(path, DEFAULT_ORIGIN);
+        account.origin_override = false;
+        account
     }
 
     /// The same, against a named service.
@@ -379,9 +391,87 @@ impl Account {
             path,
             origin,
             http: reqwest::Client::builder().timeout(HTTP_TIMEOUT).build().unwrap_or_default(),
+            broker_http: reqwest::Client::builder()
+                .timeout(HTTP_TIMEOUT)
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .expect("could not build account HTTP client"),
             tokens: Mutex::new(tokens),
+            broker: None,
+            origin_override: true,
             renewing: tokio::sync::Mutex::new(()),
         }
+    }
+
+    pub fn with_broker(mut self, bearer: String) -> Self {
+        self.broker = Some(bearer);
+        self
+    }
+
+    pub fn has_broker(&self) -> bool {
+        self.broker.is_some()
+    }
+
+    fn broker_token(&self) -> Result<&str, AccountError> {
+        if !self.origin_override || !self.is_safe_origin() {
+            return Err(AccountError::UnsafeOrigin { origin: "configured account origin".into() });
+        }
+        self.broker.as_deref().filter(|s| !s.is_empty()).ok_or(AccountError::NotSignedIn)
+    }
+
+    pub async fn checked_status(&self) -> Status {
+        if self.broker.is_none() {
+            return self.status();
+        }
+        let held = match self.broker_token() {
+            Ok(token) => self.fetch_connectors(token).await.ok(),
+            Err(_) => None,
+        };
+        Status {
+            signed_in: held.is_some(),
+            email: held.map_or_else(String::new, |h| h.email),
+            origin: if self.is_safe_origin() { self.origin.clone() } else { String::new() },
+            broker: true,
+        }
+    }
+
+    pub async fn open_broker(
+        &self,
+        open: impl FnOnce(&str) -> Result<(), String>,
+    ) -> Result<Status, AccountError> {
+        #[derive(Deserialize)]
+        struct Handoff {
+            code: String,
+        }
+        let token = self.broker_token()?;
+        let response = self
+            .broker_http
+            .post(format!("{}/api/selfhost/handoff", self.origin))
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|_| AccountError::Broker { detail: "could not reach the broker".into() })?;
+        if !response.status().is_success() {
+            return Err(AccountError::Broker {
+                detail: format!(
+                    "the broker refused the handoff (HTTP {})",
+                    response.status().as_u16()
+                ),
+            });
+        }
+        let handoff: Handoff = response.json().await.map_err(|_| AccountError::Broker {
+            detail: "the broker returned an invalid handoff".into(),
+        })?;
+        if handoff.code.is_empty() {
+            return Err(AccountError::Broker {
+                detail: "the broker returned an empty handoff".into(),
+            });
+        }
+        let url = format!("{}/enter?code={}", self.origin, oauth::encode(&handoff.code));
+        open(&url).map_err(|_| AccountError::NoBrowser {
+            detail: "could not open the broker page".into(),
+        })?;
+        Ok(self.checked_status().await)
     }
 
     pub fn origin(&self) -> &str {
@@ -390,10 +480,18 @@ impl Account {
 
     pub fn status(&self) -> Status {
         match &*self.tokens.lock() {
-            Some(stored) => {
-                Status { signed_in: true, email: stored.email.clone(), origin: self.origin.clone() }
-            }
-            None => Status { signed_in: false, email: String::new(), origin: self.origin.clone() },
+            Some(stored) => Status {
+                signed_in: true,
+                email: stored.email.clone(),
+                origin: self.origin.clone(),
+                broker: false,
+            },
+            None => Status {
+                signed_in: false,
+                email: String::new(),
+                origin: self.origin.clone(),
+                broker: false,
+            },
         }
     }
 
@@ -489,6 +587,9 @@ impl Account {
     /// own. What it does end here is immediate: the file goes, and the next call
     /// has nothing to present.
     pub fn sign_out(&self) -> Result<(), AccountError> {
+        if self.has_broker() {
+            return Err(AccountError::BrokerConfigured);
+        }
         *self.tokens.lock() = None;
         match fs::remove_file(&self.path) {
             Ok(()) => Ok(()),
@@ -513,6 +614,9 @@ impl Account {
     /// renew, which is not the same fact as having no account and must not
     /// reach an operator or an agent wearing that one's words.
     pub async fn access(&self) -> Result<String, AccountError> {
+        if self.has_broker() {
+            return Ok(self.broker_token()?.to_owned());
+        }
         let stored = self.tokens.lock().clone().ok_or(AccountError::NotSignedIn)?;
         if !stored.expiring() {
             return Ok(stored.access_token);
@@ -636,14 +740,20 @@ impl Account {
     /// credential over plaintext to somewhere on the network. Loopback is
     /// exempt because it does not cross one.
     fn is_safe_origin(&self) -> bool {
-        if self.origin.starts_with("https://") {
-            return true;
-        }
-        let Some(rest) = self.origin.strip_prefix("http://") else {
+        let Ok(url) = reqwest::Url::parse(&self.origin) else {
             return false;
         };
-        let host = rest.split('/').next().unwrap_or("").rsplit_once(':').map_or(rest, |(h, _)| h);
-        matches!(host, "localhost" | "127.0.0.1" | "[::1]" | "::1")
+        if !url.username().is_empty()
+            || url.password().is_some()
+            || url.path() != "/"
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return false;
+        }
+        url.scheme() == "https"
+            || (url.scheme() == "http"
+                && matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]")))
     }
 
     fn is_same_origin(&self, url: &str) -> bool {
@@ -664,7 +774,8 @@ impl Account {
         }
 
         let url = format!("{}/api/connectors", self.origin);
-        let response = self.http.get(&url).bearer_auth(token).send().await.map_err(|err| {
+        let client = if self.has_broker() { &self.broker_http } else { &self.http };
+        let response = client.get(&url).bearer_auth(token).send().await.map_err(|err| {
             AccountError::Transport { origin: self.origin.clone(), detail: err.to_string() }
         })?;
 
@@ -677,7 +788,11 @@ impl Account {
             return Err(AccountError::Upstream {
                 origin: self.origin.clone(),
                 status: status.as_u16(),
-                message: body.chars().take(300).collect(),
+                message: if self.has_broker() {
+                    "broker request failed".into()
+                } else {
+                    body.chars().take(300).collect()
+                },
             });
         }
 
@@ -693,8 +808,12 @@ impl Account {
     }
 
     fn store(&self, stored: Stored) -> Result<Status, AccountError> {
-        let status =
-            Status { signed_in: true, email: stored.email.clone(), origin: self.origin.clone() };
+        let status = Status {
+            signed_in: true,
+            email: stored.email.clone(),
+            origin: self.origin.clone(),
+            broker: false,
+        };
         self.write(&stored)?;
         *self.tokens.lock() = Some(stored);
         Ok(status)
@@ -878,8 +997,12 @@ mod tests {
             signed_in: true,
             email: "a@b.com".to_string(),
             origin: DEFAULT_ORIGIN.to_string(),
+            broker: false,
         })
         .unwrap();
-        assert_eq!(json, r#"{"signedIn":true,"email":"a@b.com","origin":"https://guaca.bot"}"#);
+        assert_eq!(
+            json,
+            r#"{"signedIn":true,"email":"a@b.com","origin":"https://guaca.bot","broker":false}"#
+        );
     }
 }

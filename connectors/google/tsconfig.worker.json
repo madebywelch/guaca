@@ -1,0 +1,35 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+
+    // Workers, not a browser. Sharing the root config would put `lib.dom` in
+    // scope here, and `Request`/`Response` are not the same types in the two
+    // runtimes: code that only compiles because the DOM's version was in
+    // scope is code that fails at the edge.
+    "types": ["@cloudflare/workers-types", "@cloudflare/vitest-pool-workers"],
+
+    // The signed-in area is React, and its components live under `src/` so
+    // Tailwind's source scan reaches them. They are type-checked here as well
+    // as by the root config, and this is the stricter of the two: no DOM lib,
+    // so a component that reaches for `document` fails the build rather than
+    // the request.
+    "jsx": "react-jsx",
+
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["worker"]
+}

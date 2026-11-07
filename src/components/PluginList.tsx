@@ -593,7 +593,15 @@ export function PluginList({ groupId, crew }: Props) {
                   <button
                     type="button"
                     className="btn btn--ghost btn--small"
-                    onClick={() => void openExternal("https://guaca.bot/app")}
+                    onClick={() => {
+                      void api
+                        .accountStatus()
+                        .then(async (account) => {
+                          if (account.broker) await api.signInAccount();
+                          else await openExternal(`${account.origin}/app`);
+                        })
+                        .catch((caught) => setError(errorMessage(caught)));
+                    }}
                   >
                     Authorize a {row.name} account
                   </button>

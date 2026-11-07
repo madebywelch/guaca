@@ -31,6 +31,98 @@ use sha2::{Digest, Sha256};
 use guac_lib::account::{Account, AccountError, CLIENT_ID};
 use guac_lib::oauth::Landing;
 
+#[tokio::test]
+async fn broker_handoff_and_status_use_the_configured_bearer() {
+    let presented = Arc::new(Mutex::new(Vec::new()));
+    let app = Router::new()
+        .route(
+            "/api/selfhost/handoff",
+            post({
+                let presented = presented.clone();
+                move |headers: axum::http::HeaderMap| {
+                    let presented = presented.clone();
+                    async move {
+                        presented
+                            .lock()
+                            .push(headers["authorization"].to_str().unwrap().to_string());
+                        Json(serde_json::json!({"code": "a+b /"}))
+                    }
+                }
+            }),
+        )
+        .route(
+            "/api/connectors",
+            get(|headers: axum::http::HeaderMap| async move {
+                assert_eq!(headers["authorization"], "Bearer secret");
+                Json(serde_json::json!({"user":{"email":"person@example.test"},"providers":[]}))
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let path = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+    let account = Account::open_at(path.clone(), &origin).with_broker("secret".into());
+    let status = account.checked_status().await;
+    assert!(status.signed_in && status.broker);
+    let opened = Mutex::new(String::new());
+    account
+        .open_broker(|url| {
+            *opened.lock() = url.to_string();
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert_eq!(*opened.lock(), format!("{origin}/enter?code=a%2Bb%20%2F"));
+    assert_eq!(*presented.lock(), vec!["Bearer secret"]);
+    assert!(!path.exists());
+    assert!(account.sign_out().unwrap_err().to_string().contains("GUACA_BROKER_BEARER"));
+}
+
+#[tokio::test]
+async fn broker_requires_safe_explicit_origin_and_a_live_service() {
+    let path = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+    for account in [
+        Account::open(path.clone()).with_broker("secret".into()),
+        Account::open_at(path.clone(), "http://example.test").with_broker("secret".into()),
+        Account::open_at(path.clone(), "https://name:password@example.test")
+            .with_broker("secret".into()),
+        Account::open_at(path.clone(), "http://127.0.0.1:9").with_broker("secret".into()),
+    ] {
+        assert!(!account.checked_status().await.signed_in);
+        assert!(account.open_broker(|_| panic!("must not open browser")).await.is_err());
+    }
+}
+
+#[tokio::test]
+async fn redirects_remain_available_to_normal_accounts_but_not_brokers() {
+    let app = Router::new()
+        .route("/api/connectors", get(|| async { Redirect::temporary("/target") }))
+        .route(
+            "/target",
+            get(|| async {
+                Json(serde_json::json!({"user":{"email":"person@example.test"},"providers":[]}))
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let path = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+    std::fs::write(
+        &path,
+        serde_json::json!({
+            "access_token": "test", "token_endpoint": format!("{origin}/token"), "origin": origin
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let normal = Account::open_at(path.clone(), &origin);
+    assert!(normal.connectors().await.is_ok());
+    let broker = Account::open_at(path.clone(), &origin).with_broker("secret".into());
+    assert!(!broker.checked_status().await.signed_in);
+    assert!(broker.connectors().await.is_err());
+    std::fs::remove_file(path).unwrap();
+}
+
 /// What the browser did with the authorization request, as the stub saw it.
 #[derive(Debug, Clone, Default)]
 struct Asked {

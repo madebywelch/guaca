@@ -164,6 +164,19 @@ naming a third party would have Guaca accept a code minted by that third party.
 
 ## Where the service is
 
+A self-hosted broker can instead be configured on the host with both
+`GUACA_ACCOUNT_ORIGIN` and `GUACA_BROKER_BEARER`. The origin must be HTTPS or
+loopback HTTP and must be an origin without credentials, a path, query, or
+fragment. The bearer stays on the host and is never written to the account
+file. Status is connected only when `/api/connectors` accepts it. To sign out,
+remove the bearer from the host environment and restart the host.
+
+To open the broker's account page, the host sends `POST /api/selfhost/handoff`
+with `Authorization: Bearer <bearer>` and no body. The broker answers with
+JSON `{"code":"..."}`. The host opens `/enter?code=<url-encoded code>` on the
+same origin. This one-time code is separate from the bearer; redirects are not
+followed on broker credential requests.
+
 `DEFAULT_ORIGIN`, a constant. `GUACA_ACCOUNT_ORIGIN` moves it and exists so the
 flow can be run end to end against a Worker on this machine.
 

@@ -1,0 +1,13 @@
+services:
+  connector:
+    build: .
+    ports:
+      - "127.0.0.1:8788:8788"
+    volumes:
+      - connector-data:/data
+    env_file:
+      - .dev.vars
+    restart: unless-stopped
+
+volumes:
+  connector-data:

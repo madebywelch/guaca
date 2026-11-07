@@ -496,7 +496,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
         // account with an empty list under it.
         if (!live) return;
         if ((error as { kind?: string })?.kind === "signedOut") {
-          setAccount({ signedIn: false, email: "", origin: account.origin });
+          setAccount({ ...account, signedIn: false, email: "" });
         }
       });
     return () => {
@@ -518,7 +518,12 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
       const next = await api.signInAccount();
       setAccount(next);
       setConnectors(null);
-      setStatus({ tone: "ok", text: `Signed in as ${next.email || "your Guaca account"}.` });
+      setStatus({
+        tone: "ok",
+        text: next.broker
+          ? "Opened the account service."
+          : `Signed in as ${next.email || "your Guaca account"}.`,
+      });
     } catch (error) {
       setStatus({ tone: "error", text: errorMessage(error) });
     } finally {
@@ -1113,12 +1118,9 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                     runtime and false of a host reached over a network, and this
                     is the pane that explains what leaves which. */}
                 <p className="settings__lede">
-                  Optional, and it stays that way. Guaca runs on {hostAt(place)} with your own keys,
-                  and everything it does today it does without an account. Signing in adds one
-                  thing: guaca.bot holds an OAuth client, so an agent can reach a service that only
-                  issues access to a registered application. Gmail is the example. Guaca cannot be
-                  that application, because its client secret would be inside a download anybody can
-                  read.
+                  {account?.broker
+                    ? "Your connector runs with your own Google OAuth client and keeps its grants on your host."
+                    : `Optional, and it stays that way. Guaca runs on ${hostAt(place)} with your own keys, and everything it does today it does without an account. Signing in adds one thing: guaca.bot holds an OAuth client, so an agent can reach a service that only issues access to a registered application. Gmail is the example. Guaca cannot be that application, because its client secret would be inside a download anybody can read.`}
                 </p>
 
                 {/* What leaves the host is said on the row that decides
@@ -1129,15 +1131,19 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   title="What leaves the host, and only once you have signed in: a request for an access token when an agent uses a connector you authorized. Your conversations, your agents and your keys are not sent anywhere, with or without an account."
                 >
                   <span className="preset__text">
-                    <span className="preset__name">Guaca account</span>
+                    <span className="preset__name">
+                      {account?.broker ? "Your connector" : "Guaca account"}
+                    </span>
                     <span className="preset__url">
                       {/* Short enough for the row. The long version of this
                           sentence is the row's own title, which also says what
                           leaves the host and when: the endpoint-width line
                           under the name clipped it mid-word instead. */}
                       {account?.signedIn
-                        ? account.email || "signed in"
-                        : "Sign in to connect Gmail, Drive or GitHub"}
+                        ? account.email || (account.broker ? "connected" : "signed in")
+                        : account?.broker
+                          ? "Connector is not reachable"
+                          : "Sign in to connect Gmail, Drive or GitHub"}
                     </span>
                   </span>
                   {account?.signedIn ? (
@@ -1146,19 +1152,25 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                         type="button"
                         className="btn btn--small"
                         disabled={linking}
-                        onClick={() => void openExternal(`${account.origin}/app`)}
+                        onClick={() =>
+                          account.broker
+                            ? void linkAccount()
+                            : void openExternal(`${account.origin}/app`)
+                        }
                       >
                         Manage
                       </button>
-                      <button
-                        type="button"
-                        className="btn btn--small"
-                        disabled={linking}
-                        title="Forgets the sign-in on this machine immediately."
-                        onClick={() => void unlinkAccount()}
-                      >
-                        Sign out
-                      </button>
+                      {!account.broker && (
+                        <button
+                          type="button"
+                          className="btn btn--small"
+                          disabled={linking}
+                          title="Forgets the sign-in on this machine immediately."
+                          onClick={() => void unlinkAccount()}
+                        >
+                          Sign out
+                        </button>
+                      )}
                     </span>
                   ) : (
                     <button
@@ -1167,10 +1179,17 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                       disabled={linking}
                       onClick={() => void linkAccount()}
                     >
-                      Sign in
+                      {account?.broker ? "Open connector" : "Sign in"}
                     </button>
                   )}
                 </div>
+
+                {account?.broker && (
+                  <p className="field__hint">
+                    To sign out, remove GUACA_BROKER_BEARER from the host environment and restart
+                    the host.
+                  </p>
+                )}
 
                 {/* Shown for as long as the browser has it. There is no code to
                     carry here, so this says what is happening rather than
@@ -1178,8 +1197,9 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                 {linking && (
                   <div className="devicecode" role="status">
                     <p className="devicecode__lede">
-                      Finish in the browser window that just opened. Guaca is listening on a port on
-                      this machine for the answer, and gives up after five minutes.
+                      {account?.broker
+                        ? "Finish in the browser window that just opened."
+                        : "Finish in the browser window that just opened. Guaca is listening on a port on this machine for the answer, and gives up after five minutes."}
                     </p>
                     <p className="hint">
                       Only continue if you started this here. Nothing else can have opened it.
@@ -1190,8 +1210,8 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                 {account?.signedIn && (
                   <>
                     <p className="settings__lede" style={{ marginTop: "1.4rem" }}>
-                      What this account has authorized. Ticking and unticking happens on guaca.bot,
-                      in a browser, because that is where the consent screens are.
+                      What this account has authorized. Ticking and unticking happens at the account
+                      service, in a browser, because that is where the consent screens are.
                     </p>
                     {connectors ? (
                       <ul className="settings__list">
@@ -1227,7 +1247,8 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                      rather than leaving an operator to assume guaca.bot: the two
                      hold different accounts and only one of them is the real one. */
                   <p className="field__hint" style={{ marginTop: "1.4rem" }}>
-                    This build signs in to <code>{account.origin}</code>, not guaca.bot.
+                    {account.broker ? "Your connector is at " : "This build signs in to "}
+                    <code>{account.origin}</code>, not guaca.bot.
                   </p>
                 )}
               </>

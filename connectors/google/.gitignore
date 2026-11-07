@@ -1,0 +1,7 @@
+node_modules/
+.wrangler/
+.dev.vars
+src/**/*.js
+src/**/*.d.ts
+src/content.js
+src/content.d.ts
