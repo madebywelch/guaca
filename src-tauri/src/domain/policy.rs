@@ -242,45 +242,61 @@ impl RuleDraft {
     }
 
     pub fn wrote(&self) -> String {
-        let effect = match self.effect {
-            Effect::Allow => "Allow",
-            Effect::Block => "Never",
+        let action = match (self.effect, self.class) {
+            (Effect::Allow, Class::ActOnBehalf) => "Allow acting in your name",
+            (Effect::Block, Class::ActOnBehalf) => "Never act in your name",
+            (Effect::Allow, Class::CreateAgent) => "Allow adding an agent",
+            (Effect::Block, Class::CreateAgent) => "Never add an agent",
+            (_, Class::ChangeSettings) => "Never change settings",
+            (_, Class::ActOnSite) => "Never press or type on a site",
         };
-        let class = match self.class {
-            Class::ActOnBehalf => "act in your name",
-            Class::CreateAgent => "create an agent",
-            Class::ChangeSettings => "change settings",
-            Class::ActOnSite => "act on a site",
-        };
-        let mut line = format!("{effect} {class}");
+        let mut line = action.to_string();
         if let Some(tool) = &self.tool {
-            line.push_str(&format!(" · tool {tool}"));
+            if let Some((slug, tool)) = tool.split_once("__") {
+                let connector = super::plugin::PluginKind::from_slug(slug)
+                    .map(|kind| kind.label().to_string())
+                    .unwrap_or_else(|| slug.to_string());
+                let tool = tool.strip_prefix(&format!("{slug}_")).unwrap_or(tool).replace('_', " ");
+                let mut chars = tool.chars();
+                let title = chars
+                    .next()
+                    .map(|first| format!("{}{rest}", first.to_uppercase(), rest = chars.as_str()))
+                    .unwrap_or_default();
+                line.push_str(&format!(" with {connector} › {title}"));
+            }
         }
         if !self.agents.is_empty() {
-            line.push_str(&format!(
-                " · agents {}",
-                self.agents.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
-            ));
+            line.push_str(" for selected agents");
         }
-        for c in &self.conditions {
-            let field = match c.field {
-                Field::Recipients => "recipients",
-                Field::Domain => "domain",
-                Field::Amount => "amount",
-                Field::AgentName => "agent name",
-                Field::SettingKeys => "setting keys",
-            };
-            let condition = match &c.predicate {
-                Predicate::Is { value } => format!("is {value}"),
-                Predicate::OneOf { values } => format!("is one of {}", values.join(", ")),
-                Predicate::Under { value } => format!("is under {value}"),
-                Predicate::OutsideDomain { value } => format!("is outside {value}"),
-                Predicate::AtMost { value, currency } => format!("is at most {value} {currency}"),
-                Predicate::GreaterThan { value, currency } => {
-                    format!("is greater than {value} {currency}")
-                }
-            };
-            line.push_str(&format!(" · {field} {condition}"));
+        let conditions: Vec<String> = self
+            .conditions
+            .iter()
+            .map(|c| {
+                let field = match c.field {
+                    Field::Recipients if self.effect == Effect::Allow => "every recipient",
+                    Field::Recipients => "any recipient",
+                    Field::Domain => "the domain",
+                    Field::Amount => "the amount",
+                    Field::AgentName => "the agent name",
+                    Field::SettingKeys => "a setting key",
+                };
+                let comparison = match &c.predicate {
+                    Predicate::Is { value } => format!("is {value}"),
+                    Predicate::OneOf { values } => format!("is one of {}", values.join(", ")),
+                    Predicate::Under { value } => format!("is at {value}"),
+                    Predicate::OutsideDomain { value } => format!("is outside {value}"),
+                    Predicate::AtMost { value, currency } => {
+                        format!("is at most {value} {currency}")
+                    }
+                    Predicate::GreaterThan { value, currency } => {
+                        format!("is over {value} {currency}")
+                    }
+                };
+                format!("{field} {comparison}")
+            })
+            .collect();
+        if !conditions.is_empty() {
+            line.push_str(&format!(" when {}", conditions.join(" and ")));
         }
         line
     }
@@ -314,7 +330,12 @@ fn matches_condition(c: &Condition, facts: &Facts, effect: Effect) -> Option<boo
         .iter()
         .map(|v| {
             Some(match &c.predicate {
+                Predicate::Is { value } if c.field == Field::Domain => domain(v)? == domain(value)?,
                 Predicate::Is { value } => v.eq_ignore_ascii_case(value),
+                Predicate::OneOf { values } if c.field == Field::Domain => {
+                    let host = domain(v)?;
+                    values.iter().any(|x| domain(x).as_deref() == Some(host.as_str()))
+                }
                 Predicate::OneOf { values } => values.iter().any(|x| v.eq_ignore_ascii_case(x)),
                 Predicate::Under { value } | Predicate::OutsideDomain { value } => {
                     let host = domain(v)?;
@@ -471,6 +492,25 @@ mod tests {
     }
 
     #[test]
+    fn exact_domain_comparisons_use_the_url_host() {
+        let mut block = rule(
+            Effect::Block,
+            Condition {
+                field: Field::Domain,
+                predicate: Predicate::Is { value: "example.com".into() },
+            },
+        );
+        let mut req = request();
+        req.facts.domain = Some("https://EXAMPLE.com/path".into());
+        assert!(matches!(evaluate(std::slice::from_ref(&block), &req), Decision::Block { .. }));
+        block.draft.conditions[0].predicate =
+            Predicate::OneOf { values: vec!["example.com".into()] };
+        assert!(matches!(evaluate(std::slice::from_ref(&block), &req), Decision::Block { .. }));
+        req.facts.domain = Some("https://example.com@evil.com/path".into());
+        assert_eq!(evaluate(&[block], &req), Decision::Ask { blocks_grant: false });
+    }
+
+    #[test]
     fn allows_are_suspended_after_page_read() {
         let allow = rule(
             Effect::Allow,
@@ -505,5 +545,28 @@ mod tests {
         );
         req.tool = Some("gmail__SEND".into());
         assert_eq!(evaluate(&[block], &req), Decision::Ask { blocks_grant: false });
+    }
+
+    #[test]
+    fn rule_sentences_name_the_connector_and_explain_the_comparison() {
+        let mut rule = rule(
+            Effect::Block,
+            Condition {
+                field: Field::Amount,
+                predicate: Predicate::GreaterThan { value: "50".into(), currency: "USD".into() },
+            },
+        );
+        rule.draft.tool = Some("stripe__refund".into());
+        assert_eq!(
+            rule.draft.wrote(),
+            "Never act in your name with Stripe › Refund when the amount is over 50 USD"
+        );
+        rule.draft.effect = Effect::Allow;
+        rule.draft.tool = Some("google__send_message".into());
+        rule.draft.conditions = vec![Condition {
+            field: Field::Recipients,
+            predicate: Predicate::Under { value: "acme.com".into() },
+        }];
+        assert_eq!(rule.draft.wrote(), "Allow acting in your name with Google › Send message when every recipient is at acme.com");
     }
 }

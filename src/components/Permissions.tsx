@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../lib/ipc";
+import { nameFor } from "../lib/plugins";
 import { useStore } from "../lib/store";
 import {
   errorMessage,
@@ -50,6 +51,13 @@ const predicate = (op: PermissionPredicate["op"]): PermissionPredicate => {
   if (op === "atMost" || op === "greaterThan") return { op, value: "", currency: "" };
   return { op, value: "" };
 };
+const toolLabel = (value: string, connector?: string) => {
+  const [kind, ...parts] = value.split("__");
+  const raw = parts.join("__");
+  if (!kind || !raw) return value;
+  const name = raw.startsWith(`${kind}_`) ? raw.slice(kind.length + 1) : raw;
+  return `${connector ?? nameFor(kind)} › ${name.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase())}`;
+};
 const empty = (groupId: string | null, effect: "allow" | "block"): PermissionRuleDraft => ({
   groupId,
   effect,
@@ -58,12 +66,32 @@ const empty = (groupId: string | null, effect: "allow" | "block"): PermissionRul
   agents: [],
   conditions: [],
 });
-const describeCondition = ({ field, predicate: p }: PermissionCondition) =>
-  `${FIELD_LABELS[field]} ${OP_LABELS[p.op]} ${p.op === "oneOf" ? p.values.join(", ") : p.value}${p.op === "atMost" || p.op === "greaterThan" ? ` ${p.currency}` : ""}`;
+const describeCondition = (
+  { field, predicate: p }: PermissionCondition,
+  effect: "allow" | "block",
+) => {
+  const subject =
+    field === "recipients"
+      ? `${effect === "allow" ? "every" : "any"} recipient`
+      : field === "settingKeys"
+        ? "a setting key"
+        : `the ${FIELD_LABELS[field].toLowerCase()}`;
+  const value = (p.op === "oneOf" ? p.values.join(", ") : p.value) || "…";
+  const comparison = {
+    is: "is",
+    oneOf: "is one of",
+    under: "is at",
+    outsideDomain: "is outside",
+    atMost: "is at most",
+    greaterThan: "is over",
+  }[p.op];
+  return `${subject} ${comparison} ${value}${p.op === "atMost" || p.op === "greaterThan" ? ` ${p.currency || "…"}` : ""}`;
+};
 
 export function Permissions({ groupId }: { groupId: string | null }) {
   const agents = useStore((s) => s.agents);
   const groups = useStore((s) => s.groups);
+  const availableAgents = agents.filter((agent) => groupId === null || agent.groupId === groupId);
   const groupIds = groupId === null ? groups.map((group) => group.id).join(",") : groupId;
   const [tools, setTools] = useState<{ value: string; label: string }[]>([]);
   const [toolError, setToolError] = useState<string | null>(null);
@@ -103,7 +131,7 @@ export function Permissions({ groupId }: { groupId: string | null }) {
         for (const plugin of sets.flat())
           for (const tool of plugin.tools) {
             const value = `${plugin.kind}__${tool.name}`;
-            found.set(value, `${plugin.name} · ${tool.name}`);
+            found.set(value, toolLabel(value, plugin.name));
           }
         setTools(
           [...found]
@@ -195,16 +223,17 @@ export function Permissions({ groupId }: { groupId: string | null }) {
   return (
     <>
       <h3 className="settings__title">Permissions</h3>
-      <p className="settings__lede">
-        Rules answer some requests for you. Blocks win over allows and standing permissions. When a
-        block needs a fact that is missing, you are asked.
-      </p>
-      <p className="field__hint">
-        Rules match facts the agent declares in its request. Connector calls do not automatically
-        ask for permission, and these rules do not gate them. Rules do not grant access to a
-        connector or a browser. Actions after reading a page or screenshot cannot be allowed by a
-        rule.
-      </p>
+      <p className="settings__lede">Rules answer some requests for you, and a block always wins.</p>
+      <details>
+        <summary>How rules match</summary>
+        <p className="field__hint">
+          Rules match facts the agent declares in its request. At a domain includes its subdomains.
+          When a block needs a fact that is missing, you are asked. Connector calls do not
+          automatically ask for permission, and these rules do not gate them. Rules do not grant
+          access to a connector or a browser. Actions after reading a page or screenshot cannot be
+          allowed by a rule.
+        </p>
+      </details>
       {error && (
         <div className="banner banner--error" role="alert">
           {error}
@@ -294,6 +323,27 @@ export function Permissions({ groupId }: { groupId: string | null }) {
         <div className="permissions__editor" ref={editorRef}>
           <h4>{editing ? "Edit rule" : "New rule"}</h4>
           <label className="field">
+            <span className="field__label">Verdict</span>
+            <select
+              className="input"
+              value={draft.effect}
+              onChange={(e) => {
+                const effect = e.target.value as "allow" | "block";
+                const reset =
+                  effect === "allow" &&
+                  (draft.class === "changeSettings" || draft.class === "actOnSite");
+                setDraft({
+                  ...draft,
+                  effect,
+                  ...(reset ? { class: "actOnBehalf", conditions: [], tool: null } : {}),
+                });
+              }}
+            >
+              <option value="allow">Allow</option>
+              <option value="block">Never</option>
+            </select>
+          </label>
+          <label className="field">
             <span className="field__label">What</span>
             <select
               className="input"
@@ -329,11 +379,13 @@ export function Permissions({ groupId }: { groupId: string | null }) {
               >
                 <option value="">Any tool</option>
                 {draft.tool && !tools.some((tool) => tool.value === draft.tool) && (
-                  <option value={draft.tool}>{draft.tool} (not currently connected)</option>
+                  <option value={draft.tool}>
+                    {toolLabel(draft.tool)} (not currently connected)
+                  </option>
                 )}
                 {tools.map((tool) => (
                   <option key={tool.value} value={tool.value}>
-                    {tool.label} ({tool.value})
+                    {tool.label}
                   </option>
                 ))}
               </select>
@@ -342,14 +394,13 @@ export function Permissions({ groupId }: { groupId: string | null }) {
               )}
             </label>
           )}
-          <fieldset className="permissions__agents">
-            <legend className="field__label">Who</legend>
-            <span className="field__hint">
-              No selection means everyone {groupId ? "in this group" : "in every group"}.
-            </span>
-            {agents
-              .filter((agent) => groupId === null || agent.groupId === groupId)
-              .map((agent) => (
+          {availableAgents.length > 0 && (
+            <fieldset className="permissions__agents">
+              <legend className="field__label">Who</legend>
+              <span className="field__hint">
+                No selection means everyone {groupId ? "in this group" : "in every group"}.
+              </span>
+              {availableAgents.map((agent) => (
                 <label key={agent.id}>
                   <input
                     type="checkbox"
@@ -364,9 +415,13 @@ export function Permissions({ groupId }: { groupId: string | null }) {
                     }
                   />{" "}
                   {agent.name}
+                  {groupId === null
+                    ? ` · ${groups.find((group) => group.id === agent.groupId)?.name ?? "Unavailable group"}`
+                    : ""}
                 </label>
               ))}
-          </fieldset>
+            </fieldset>
+          )}
           <div className="permissions__head">
             <span className="field__label">When</span>
             <button
@@ -488,18 +543,32 @@ export function Permissions({ groupId }: { groupId: string | null }) {
             </div>
           ))}
           <p className="field__hint">
-            Preview: {draft.effect === "allow" ? "Acts without asking" : "Never"} ·{" "}
-            {CLASSES[draft.class]}
-            {draft.tool ? ` · ${draft.tool}` : ""} ·{" "}
-            {draft.agents.length
-              ? agents
-                  .filter((agent) => draft.agents.includes(agent.id))
-                  .map((agent) => agent.name)
-                  .join(", ")
-              : "Everyone"}
+            Preview: {draft.effect === "allow" ? "Allow" : "Never"}{" "}
+            {draft.class === "actOnBehalf"
+              ? draft.effect === "allow"
+                ? "acting in your name"
+                : "act in your name"
+              : draft.class === "createAgent"
+                ? draft.effect === "allow"
+                  ? "adding an agent"
+                  : "add an agent"
+                : draft.class === "changeSettings"
+                  ? "change settings"
+                  : "press or type on a site"}
+            {draft.tool
+              ? ` with ${tools.find((tool) => tool.value === draft.tool)?.label ?? toolLabel(draft.tool)}`
+              : ""}
+            {draft.agents.length ? " for selected agents" : ""}
             {draft.conditions.length
-              ? ` · ${draft.conditions.map(describeCondition).join(" · ")}`
-              : " · any time"}
+              ? ` when ${draft.conditions.map((condition) => describeCondition(condition, draft.effect)).join(" and ")}`
+              : ""}
+            . Applies to{" "}
+            {draft.agents.length
+              ? draft.agents
+                  .map((id) => agents.find((agent) => agent.id === id)?.name ?? "Unavailable agent")
+                  .join(", ")
+              : `everyone ${groupId ? "in this group" : "in every group"}`}
+            .
           </p>
           <div className="permissions__actions">
             <button

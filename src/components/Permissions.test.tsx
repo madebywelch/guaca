@@ -3,11 +3,15 @@ import { beforeEach, expect, it, vi } from "vitest";
 import type { PermissionRule } from "../lib/types";
 import { Permissions } from "./Permissions";
 
-const { list, save, remove, plugins } = vi.hoisted(() => ({
+const { list, save, remove, plugins, state } = vi.hoisted(() => ({
   list: vi.fn(),
   save: vi.fn(),
   remove: vi.fn(),
   plugins: vi.fn(),
+  state: {
+    agents: [] as { id: string; name: string; groupId: string }[],
+    groups: [] as { id: string; name: string }[],
+  },
 }));
 vi.mock("../lib/ipc", () => ({
   api: {
@@ -18,8 +22,7 @@ vi.mock("../lib/ipc", () => ({
   },
 }));
 vi.mock("../lib/store", () => ({
-  useStore: (select: (state: { agents: unknown[]; groups: unknown[] }) => unknown) =>
-    select({ agents: [], groups: [] }),
+  useStore: (select: (state: { agents: unknown[]; groups: unknown[] }) => unknown) => select(state),
 }));
 
 const global: PermissionRule = {
@@ -44,6 +47,8 @@ const local: PermissionRule = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  state.agents = [];
+  state.groups = [];
   list.mockResolvedValue([global, local]);
   save.mockResolvedValue(local);
   remove.mockResolvedValue(undefined);
@@ -116,7 +121,7 @@ it("uses the connector-prefixed tool identifier", async () => {
   render(<Permissions groupId="group" />);
   fireEvent.click((await screen.findAllByRole("button", { name: "Add rule" }))[0]!);
   const choice = await screen.findByRole("option", {
-    name: "Gmail · send_message (gmail__send_message)",
+    name: "Gmail › Send message",
   });
   expect(choice).toBeTruthy();
   fireEvent.change(screen.getByLabelText("Connector tool (optional)"), {
@@ -130,4 +135,58 @@ it("uses the connector-prefixed tool identifier", async () => {
       null,
     ),
   );
+});
+
+it("makes the verdict, scope, and natural preview explicit", async () => {
+  list.mockResolvedValue([]);
+  state.groups = [{ id: "group", name: "Sales" }];
+  state.agents = [{ id: "agent", name: "Ava", groupId: "group" }];
+  render(<Permissions groupId={null} />);
+  fireEvent.click((await screen.findAllByRole("button", { name: "Add rule" }))[0]!);
+  expect(screen.getByLabelText("Verdict")).toHaveProperty("value", "allow");
+  fireEvent.click(screen.getByLabelText("Ava · Sales"));
+  await screen.findByRole("option", { name: "Gmail › Send message" });
+  fireEvent.change(screen.getByLabelText("Connector tool (optional)"), {
+    target: { value: "gmail__send_message" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Add condition" }));
+  fireEvent.change(screen.getByLabelText("Comparison"), { target: { value: "under" } });
+  fireEvent.change(screen.getByLabelText("Value"), { target: { value: "acme.com" } });
+  expect(
+    screen.getByText(
+      /Allow acting in your name with Gmail › Send message for selected agents when every recipient is at acme.com/,
+    ),
+  ).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("Verdict"), { target: { value: "block" } });
+  fireEvent.change(screen.getByLabelText("Fact"), { target: { value: "amount" } });
+  fireEvent.change(screen.getByLabelText("Comparison"), { target: { value: "greaterThan" } });
+  fireEvent.change(screen.getByLabelText("Value"), { target: { value: "50" } });
+  fireEvent.change(screen.getByLabelText("Currency"), { target: { value: "USD" } });
+  expect(
+    screen.getByText(
+      /Never act in your name with Gmail › Send message for selected agents when the amount is over 50 USD/,
+    ),
+  ).toBeTruthy();
+  expect(screen.getByText(/Applies to Ava\./)).toBeTruthy();
+});
+
+it("shows an empty agent picker and starts Never from the block list", async () => {
+  list.mockResolvedValue([]);
+  render(<Permissions groupId="group" />);
+  fireEvent.click((await screen.findAllByRole("button", { name: "Add rule" }))[1]!);
+  expect(screen.getByLabelText("Verdict")).toHaveProperty("value", "block");
+  expect(screen.queryByText("Who")).toBeNull();
+  expect(screen.getByText(/Applies to everyone in this group/)).toBeTruthy();
+  expect(screen.getByText("How rules match")).toBeTruthy();
+});
+
+it("humanizes a disconnected connector in the selector and preview", async () => {
+  list.mockResolvedValue([{ ...local, class: "actOnBehalf", tool: "stripe__stripe_refund" }]);
+  plugins.mockResolvedValue([]);
+  render(<Permissions groupId="group" />);
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  expect(
+    screen.getByRole("option", { name: "Stripe › Refund (not currently connected)" }),
+  ).toBeTruthy();
+  expect(screen.getByText(/Never act in your name with Stripe › Refund/)).toBeTruthy();
 });
