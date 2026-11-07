@@ -4,6 +4,13 @@
 # laptop is usually not, and compiling the daemon under emulation takes the
 # better part of an hour. Each architecture builds on a runner of its own kind.
 #
+# The runners are WarpBuild's Ubuntu 24.04 machines, x64 for amd64 and arm64
+# for arm64. The 4x size is what a public repository gets from GitHub under
+# ubuntu-24.04 -- 4 vCPU and 16 GB -- so no job is smaller than it is today,
+# and the arm leg still compiles on an arm64 machine rather than under
+# emulation. The layer cache is WarpBuild's, reached through the gha backend
+# at the loopback proxy its docs name.
+#
 # What a box reads is one file, guaca-main.json on the main-feed branch: the
 # image's digest and the commit it came from, signed with the key in the
 # GUACA_MAIN_SIGNING_KEY secret, whose public half is main-keys.pub. The
@@ -40,9 +47,9 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner: ubuntu-24.04
+            runner: warp-ubuntu-2404-x64-4x
           - arch: arm64
-            runner: ubuntu-24.04-arm
+            runner: warp-ubuntu-2404-arm64-4x
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     steps:
@@ -52,7 +59,13 @@ jobs:
         id: version
         run: echo "version=$(jq -r .version package.json)" >> "$GITHUB_OUTPUT"
 
+      # WarpBuild Cache listens on the runner's own loopback, and a buildkit
+      # container only shares that loopback when the driver runs with host
+      # networking.
       - uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            network=host
 
       - uses: docker/login-action@v3
         with:
@@ -75,8 +88,8 @@ jobs:
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
           provenance: false
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=guacad-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=guacad-${{ matrix.arch }}
+          cache-from: type=gha,url=http://127.0.0.1:49160/,scope=guacad-${{ matrix.arch }},version=1
+          cache-to: type=gha,url=http://127.0.0.1:49160/,mode=max,scope=guacad-${{ matrix.arch }},version=1
 
       - name: Keep the digest
         run: |
@@ -93,7 +106,7 @@ jobs:
 
   publish:
     needs: build
-    runs-on: ubuntu-24.04
+    runs-on: warp-ubuntu-2404-x64-4x
     timeout-minutes: 15
     steps:
       # All of history, to tell whether the published build is older than this one.
