@@ -1,0 +1,34 @@
+diff --git a/dist/introspect-6ew7sakf.mjs b/dist/introspect-6ew7sakf.mjs
+index 8786e0d65d7d61e2b1537a959fc43f0a3e624e33..5a3e030a1df939b14bfdc46ccacb61128ad840b4 100644
+--- a/dist/introspect-6ew7sakf.mjs
++++ b/dist/introspect-6ew7sakf.mjs
+@@ -2169,6 +2169,20 @@ async function handleRefreshTokenGrant(ctx, opts) {
+ 		error: "invalid_request"
+ 	});
+ 	const authTime = refreshToken.authTime != null ? normalizeTimestampValue(refreshToken.authTime) : void 0;
++	// guaca-bot patch: an offline_access refresh token outlives its session (see
++	// refresh-token introspection below), so tokens it mints must not stay bound
++	// to a session that has ended, or validation reads every one as inactive.
++	let sessionId = refreshToken.sessionId ?? void 0;
++	if (sessionId) {
++		const session = await ctx.context.adapter.findOne({
++			model: "session",
++			where: [{
++				field: "id",
++				value: sessionId
++			}]
++		});
++		if (!session || session.expiresAt < /* @__PURE__ */ new Date()) sessionId = void 0;
++	}
+ 	return createUserTokens(ctx, opts, {
+ 		client,
+ 		scopes: requestedScopes ?? scopes,
+@@ -2176,7 +2190,7 @@ async function handleRefreshTokenGrant(ctx, opts) {
+ 		grantType: "refresh_token",
+ 		referenceId: refreshToken.referenceId,
+ 		authorizationCodeId: refreshToken.authorizationCodeId,
+-		sessionId: refreshToken.sessionId,
++		sessionId,
+ 		refreshToken,
+ 		resources: resources ?? refreshToken.resources,
+ 		authTime,

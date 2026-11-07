@@ -278,13 +278,17 @@ pub fn recover(store: &Store) -> Result<crate::db::Recovered, String> {
 /// is a credential sent somewhere nobody chose. An override is logged, because
 /// a machine left pointed at a development service must not be a silent state.
 pub fn account_store(path: PathBuf) -> Account {
-    match std::env::var("GUACA_ACCOUNT_ORIGIN") {
+    let account = match std::env::var("GUACA_ACCOUNT_ORIGIN") {
         Ok(origin) if !origin.trim().is_empty() => {
             let origin = origin.trim().to_string();
-            tracing::warn!(%origin, "signing in to a Guaca account somewhere other than the default");
+            tracing::warn!("using an overridden Guaca account origin");
             Account::open_at(path, origin)
         }
         _ => Account::open(path),
+    };
+    match std::env::var("GUACA_BROKER_BEARER") {
+        Ok(bearer) => account.with_broker(bearer),
+        Err(_) => account,
     }
 }
 

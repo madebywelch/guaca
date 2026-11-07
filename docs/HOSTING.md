@@ -22,10 +22,10 @@ makes to someone who runs it themselves.
   connectors, not about Guaca. A workspace opens, takes turns, keeps its
   schedules and its memory, and answers its settings pane with no account file
   at all and with `guaca.bot` unreachable.
-- **Nothing in the runtime depends on that service except the connectors.**
-  The `guaca.bot` connectors — Gmail, Calendar, Drive, and the GitHub access
-  the same server brokers — are reached through it, because an OAuth client
-  for Gmail cannot ship inside a download. Everything else runs on the
+- **Nothing in the runtime depends on that service except its connectors.**
+  Gmail, Calendar and Drive can instead use a connector you run with your own
+  Google OAuth client, as described below. GitHub access through the existing
+  account still uses that account's service. Everything else runs on the
   operator's own keys and the operator's own machine. Where a self-hoster has
   not signed in, or has signed in and the service has since gone away, the
   connector refuses in its own pane with a sentence naming what to fix rather
@@ -46,6 +46,47 @@ service fails as that test rather than as a timeout. It also asserts the
 refusal a connector gives when the account is absent, and that a workspace
 signed in to a service that has since vanished still takes a turn.
 `./scripts/ci.sh` runs it in the daemon phase.
+
+## Your own Google connector
+
+You can run the connector beside your host with your own Google OAuth client.
+The connector keeps the Google grant on your machine and does not need a Guaca
+account. It uses the same connector implementation as the existing service.
+
+1. In Google Cloud Console, create or choose a project and enable the Gmail API,
+   Google Calendar API, and Google Drive API. Configure the OAuth consent
+   screen with an app name, support email, and audience. For an external app in
+   testing, add your Google address as a test user. Google expires refresh
+   tokens for these scopes after seven days in testing, so you must authorize
+   again; publishing and verification have separate requirements.
+2. Create an OAuth client of type **Web application**. Register the exact
+   redirect URI `https://YOUR-CONNECTOR-ORIGIN/api/auth/callback/google`. Use a
+   stable HTTPS origin reachable by your browser and by the host. Google permits
+   HTTP for localhost testing, but not an arbitrary remote HTTP origin.
+3. Add the scopes you intend to use to the consent screen: `openid`, `email`,
+   `profile`, `https://www.googleapis.com/auth/gmail.readonly`,
+   `https://www.googleapis.com/auth/gmail.send`,
+   `https://www.googleapis.com/auth/calendar`,
+   `https://www.googleapis.com/auth/drive.file`, and
+   `https://www.googleapis.com/auth/drive.readonly`. The connector requests
+   only the capabilities you select. Gmail and Drive include restricted scopes;
+   Google may require verification or a security assessment for broader use.
+4. In `connectors/google`, copy `.dev.vars.example` to `.dev.vars`, restrict
+   the file to your user, and fill in the origin, Google client ID and secret,
+   and two different random secrets for `BETTER_AUTH_SECRET` and
+   `SELFHOST_BEARER`. `openssl rand -hex 32` makes a suitable value for each.
+   Keep this file and the `connector-data` volume private and backed up: losing
+   the auth secret makes stored Google tokens unreadable.
+5. Run `docker compose -f compose.yml up -d --build` in that directory. The
+   connector listens on loopback port 8788. Put a TLS reverse proxy in front of
+   it for the registered HTTPS origin; disable access logs, or configure them to
+   omit query strings, because the browser handoff contains a short-lived code.
+   Do not expose the loopback port directly to the network.
+6. Set `GUACA_ACCOUNT_ORIGIN` on the host to the connector's HTTPS origin and
+   `GUACA_BROKER_BEARER` to the same value as `SELFHOST_BEARER`, then restart
+   the host. Open the connector from Settings, choose the Google capabilities,
+   and complete Google's consent screen. The sign-out control explains how to
+   remove the configured bearer; it cannot remove an environment variable.
 
 ## The runtime runs in two hosts, and neither knows which
 

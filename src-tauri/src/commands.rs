@@ -2809,7 +2809,7 @@ pub async fn get_settings(state: &AppState) -> Reply<RedactedConfig> {
 /// The origin is on it because in development it is not `guaca.bot`, and an
 /// operator who cannot see which service they linked cannot tell the two apart.
 pub async fn account_status(state: &AppState) -> Reply<crate::account::Status> {
-    Ok(state.account.status())
+    Ok(state.account.checked_status().await)
 }
 
 /// The whole sign-in, in one call.
@@ -2827,6 +2827,9 @@ pub async fn sign_in_account(state: &AppState) -> Reply<crate::account::Status> 
     // this app has no business holding, and the whole argument for a loopback
     // redirect is that the browser is the operator's own.
     let open = state.open_url.clone();
+    if account.has_broker() {
+        return Ok(account.open_broker(|url| open(url)).await?);
+    }
     let landing = state.reach.landing()?;
     Ok(account.sign_in(|url| open(url), &landing).await?)
 }

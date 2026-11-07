@@ -1430,6 +1430,18 @@ describe("the Guaca account", () => {
     expect(button("Manage")).toBeTruthy();
   });
 
+  it("explains broker sign-out and manages through a handoff", async () => {
+    accountStatus.mockResolvedValue(linked({ broker: true }));
+    signInAccount.mockResolvedValue(linked({ broker: true }));
+    open(stored(), DEFAULT_PREFS, "account");
+    await waitFor(() => expect(screen.getByText("Your connector")).toBeTruthy());
+    expect(screen.getByText(/remove GUACA_BROKER_BEARER/i)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Sign out" })).toBeNull();
+    fireEvent.click(button("Manage"));
+    await waitFor(() => expect(signInAccount).toHaveBeenCalled());
+    expect(openExternal).not.toHaveBeenCalled();
+  });
+
   it("says what is happening while the browser has it, and offers nothing to carry", async () => {
     // Unlike the subscription there is no code: the answer comes back to a port
     // this process already holds, so this state is a sentence, not a task.

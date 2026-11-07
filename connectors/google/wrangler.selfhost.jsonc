@@ -1,0 +1,8 @@
+{
+  "name": "guaca-connectors",
+  "main": "worker/selfhost-entry.ts",
+  "compatibility_date": "2026-08-22",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/api/*", "/app", "/app/*", "/enter", "/signin", "/signin/*", "/signout", "/consent", "/mcp", "/mcp/*", "/.well-known/*"] },
+  "d1_databases": [{ "binding": "DB", "database_name": "guaca-connectors", "database_id": "local", "migrations_dir": "migrations" }]
+}

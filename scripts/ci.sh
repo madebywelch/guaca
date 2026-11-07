@@ -41,6 +41,11 @@ run_scripts() {
   bash scripts/versions.test.sh
 }
 
+run_connector() {
+  step "Self-hosted Google connector"
+  (cd connectors/google && pnpm install --frozen-lockfile && pnpm typecheck && pnpm test)
+}
+
 run_web() {
   step "Lint and format"
   pnpm check
@@ -97,6 +102,7 @@ case "${1:-all}" in
     run_scripts
     run_web
     run_rust
+    run_connector
     ;;
   *)
     echo "usage: $0 [all|assets|scripts|web|rust]" >&2
