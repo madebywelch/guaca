@@ -2979,6 +2979,22 @@ input[type="file"]::file-selector-button {
   border-top: 1px solid var(--rule);
 }
 
+/* A note inside a passage rather than a row of its own — the one under a card
+   a turn kept — is already on the column and has no margin to give it. It used
+   to reserve the lane a second time, which put its line 116px in from the
+   passage it belongs to: a note that starts further right than everything
+   above it reads as a reply to something else. The time is the turn's own, and
+   the turn's margin above already carries it, so the note does not say it
+   again. */
+.msg__body .footnote {
+  grid-template-columns: minmax(0, 1fr);
+  padding-left: 0;
+}
+
+.msg__body .footnote__margin {
+  display: none;
+}
+
 .footnote__at {
   font-family: var(--font-mono);
   font-size: var(--type-fine);
@@ -8793,9 +8809,13 @@ button.artifacts__version[aria-pressed="true"] {
   width: fit-content;
   min-width: min(18rem, 100%);
   max-width: min(28rem, 100%);
-  /* The trail's own two insets, so the card starts where the chips it is
-     drawn among do. */
-  margin: var(--space-3) var(--space-7) var(--space-3) calc(var(--column-inset) + var(--column-indent));
+  /* The column's own edge, because the card is a block in the passage and not
+     a chip in the note under it. It carried the trail's two insets so it would
+     start where the chips it sat among did, and when the trail became a
+     footnote the card was left 75px into the measure with nothing beside it:
+     a card that starts further right than every line of the turn it belongs to
+     reads as a reply to something else. */
+  margin: var(--space-3) var(--space-7) var(--space-3) 0;
   padding: var(--space-4) var(--space-5) var(--space-4) var(--space-4);
   border: 1px solid var(--rule);
   border-radius: var(--radius);

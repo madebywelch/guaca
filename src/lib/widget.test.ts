@@ -28,6 +28,23 @@ describe("a condensed view's frame", () => {
     const rules = framed.match(/\}([^{}]+)\{/g) ?? [];
     for (const rule of rules) expect(rule).toMatch(/:where\(/);
   });
+
+  it("is handed the bar's face as a data: URL, because the frame may load no other", () => {
+    const framed = dressed("", barLook(DEFAULT_THEME, "light", 100), {
+      family: '"Inter Variable"',
+      stack: '"Inter Variable", system-ui, sans-serif',
+      src: "data:font/woff2;base64,AAAA",
+    });
+    expect(framed).toContain('@font-face { font-family: "Inter Variable";');
+    expect(framed).toContain('src: url("data:font/woff2;base64,AAAA") format("woff2-variations")');
+    expect(framed).toContain('--guaca-font: "Inter Variable", system-ui, sans-serif;');
+  });
+
+  it("draws a face the machine already has without an @font-face", () => {
+    const framed = dressed("", barLook(DEFAULT_THEME, "light", 100, "system"));
+    expect(framed).not.toContain("@font-face");
+    expect(framed).toContain("--guaca-font: system-ui, -apple-system");
+  });
 });
 
 describe("the sizes an agent is told", () => {

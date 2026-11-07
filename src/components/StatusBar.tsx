@@ -20,7 +20,7 @@ import {
   type QuickPlace,
   type Widget,
 } from "../lib/types";
-import { type BarLook, barLook, dressed } from "../lib/widget";
+import { type BarFace, type BarLook, barFace, barLook, dressed } from "../lib/widget";
 import { useHostState } from "./HostUpdates";
 
 interface Props {
@@ -193,11 +193,16 @@ function useBarLook(): BarLook {
   const prefs = useStore((s) => s.prefs);
   const [dark, setDark] = useState(prefersDark);
   useEffect(() => watchSystemSurface(setDark), []);
-  const { grays, attention, contrast, temperature, surface, uiScale } = prefs;
+  const { grays, attention, contrast, temperature, surface, uiScale, typeface } = prefs;
   return useMemo(
     () =>
-      barLook({ grays, attention, contrast, temperature }, resolveSurface(surface, dark), uiScale),
-    [grays, attention, contrast, temperature, surface, uiScale, dark],
+      barLook(
+        { grays, attention, contrast, temperature },
+        resolveSurface(surface, dark),
+        uiScale,
+        typeface,
+      ),
+    [grays, attention, contrast, temperature, surface, uiScale, typeface, dark],
   );
 }
 
@@ -295,7 +300,18 @@ function PinnedPage({
   }, [id, version, declares, allowed, widget.everyMinutes]);
 
   const html = view?.page ?? null;
-  const framed = useMemo(() => (html === null ? null : dressed(html, look)), [html, look]);
+  const [face, setFace] = useState<BarFace | null>(null);
+  useEffect(() => {
+    let live = true;
+    void barFace(look.typeface).then((found) => live && setFace(found));
+    return () => {
+      live = false;
+    };
+  }, [look.typeface]);
+  const framed = useMemo(
+    () => (html === null || face === null ? null : dressed(html, look, face)),
+    [html, look, face],
+  );
   useEffect(() => {
     setSrc(null);
     loaded.current = false;
