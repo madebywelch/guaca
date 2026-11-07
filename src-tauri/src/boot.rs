@@ -287,8 +287,8 @@ pub fn account_store(path: PathBuf) -> Account {
         _ => Account::open(path),
     };
     match std::env::var("GUACA_BROKER_BEARER") {
-        Ok(bearer) => account.with_broker(bearer),
-        Err(_) => account,
+        Ok(bearer) if !bearer.trim().is_empty() => account.with_broker(bearer),
+        _ => account,
     }
 }
 

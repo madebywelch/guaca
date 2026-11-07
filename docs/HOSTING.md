@@ -84,8 +84,10 @@ account. It uses the same connector implementation as the existing service.
    Do not expose the loopback port directly to the network.
 6. Set `GUACA_ACCOUNT_ORIGIN` on the host to the connector's HTTPS origin and
    `GUACA_BROKER_BEARER` to the same value as `SELFHOST_BEARER`, then restart
-   the host. Open the connector from Settings, choose the Google capabilities,
-   and complete Google's consent screen. The sign-out control explains how to
+   the host. The root `docker-compose.yml` forwards both variables; for that
+   setup, put them in a private `.env` beside the file before restarting.
+   Open the connector from Settings, choose the Google capabilities, and
+   complete Google's consent screen. The sign-out control explains how to
    remove the configured bearer; it cannot remove an environment variable.
 
 ## The runtime runs in two hosts, and neither knows which

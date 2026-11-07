@@ -21,6 +21,8 @@ services:
       # Absent, the daemon generates one on first run and prints it.
       GUACA_TOKEN: ${GUACA_TOKEN:-}
       GUACA_UPDATE_CHECKS: ${GUACA_UPDATE_CHECKS:-on}
+      GUACA_ACCOUNT_ORIGIN: ${GUACA_ACCOUNT_ORIGIN:-}
+      GUACA_BROKER_BEARER: ${GUACA_BROKER_BEARER:-}
       # Read by the `claude` program, separately from the model key in
       # Settings. Set, it bills the API instead of the plan it is signed in to.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
