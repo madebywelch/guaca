@@ -20,6 +20,7 @@ pub mod mcp;
 pub mod menubar;
 pub mod notebook;
 pub mod oauth;
+pub mod pickup;
 pub mod plugins;
 pub mod programs;
 pub mod proxy;

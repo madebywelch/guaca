@@ -1,11 +1,18 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { useStore } from "../lib/store";
-import type { DeviceCode, Settings, SettingsPatch, SubscriptionStatus } from "../lib/types";
+import type { DeviceCode, Pickup, Settings, SettingsPatch, SubscriptionStatus } from "../lib/types";
 import { OnboardingProvider } from "./OnboardingProvider";
+
+const place = vi.hoisted(() => ({ hostPlace: vi.fn(() => "thisMac") }));
+vi.mock("../lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/host")>()),
+  hostPlace: place.hostPlace,
+}));
 
 const mocks = vi.hoisted(() => ({
   claudeProgram: vi.fn(),
+  existingSignins: vi.fn(),
   subscriptionStatus: vi.fn(),
   beginSubscriptionSignin: vi.fn(),
   completeSubscriptionSignin: vi.fn(),
@@ -74,8 +81,15 @@ beforeEach(() => {
   vi.resetAllMocks();
   useStore.setState({
     settings: stored(),
-    capabilities: { claudeProvider: true, loopbackEndpoints: true, localFiles: true },
+    capabilities: {
+      claudeProvider: true,
+      loopbackEndpoints: true,
+      localFiles: true,
+      borrowedSignins: true,
+    },
   });
+  place.hostPlace.mockReturnValue("thisMac");
+  mocks.existingSignins.mockResolvedValue([]);
   mocks.claudeProgram.mockResolvedValue({
     installed: true,
     version: "2.1.247 (Claude Code)",
@@ -458,11 +472,114 @@ it("says the host has no claude program instead of hiding the option", async () 
 
 it("refuses Claude when the host lacks the capability", async () => {
   useStore.setState({
-    capabilities: { claudeProvider: false, loopbackEndpoints: false, localFiles: false },
+    capabilities: {
+      claudeProvider: false,
+      loopbackEndpoints: false,
+      localFiles: false,
+      borrowedSignins: false,
+    },
   });
   await draw();
   const card = screen.getByRole("button", { name: /^Claude subscription/ }) as HTMLButtonElement;
   expect(card.disabled).toBe(true);
   expect(card.textContent).toContain("does not offer the claude program");
   expect(mocks.testConnection).not.toHaveBeenCalled();
+});
+const claudePickup: Pickup = {
+  program: "claudeCode",
+  account: "robin@example.com",
+  plan: "max",
+};
+const codexPickup: Pickup = { program: "codex", account: "", plan: "" };
+
+it("offers the Claude Code sign-in this Mac already has, and uses it in one step", async () => {
+  mocks.existingSignins.mockResolvedValue([claudePickup]);
+  const { onConnected } = await draw();
+  // The account is named so the operator can tell it is theirs, and the card
+  // says plainly that nothing has changed yet.
+  expect(await screen.findByText(/robin@example.com/)).toBeTruthy();
+  expect(screen.getByText(/Nothing changes until you choose/)).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("button", { name: "Use Claude Code" }));
+  await waitFor(() => expect(onConnected).toHaveBeenCalledOnce());
+  // The same test the provider card runs, so the offer is a shortcut rather
+  // than a second way in that can drift from the first.
+  expect(mocks.testConnection).toHaveBeenCalledWith({ provider: "claude" });
+  expect(mocks.updateSettings).toHaveBeenCalledWith({ provider: "claude" });
+  expect(mocks.beginSubscriptionSignin).not.toHaveBeenCalled();
+});
+
+it("reuses the Codex account through Guaca's own sign-in rather than its token", async () => {
+  mocks.existingSignins.mockResolvedValue([codexPickup]);
+  const { onConnected } = await draw();
+  expect(await screen.findByText(/both programs refresh that token/)).toBeTruthy();
+  expect(screen.getByText(/signed in to ChatGPT/)).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("button", { name: "Sign in with the same account" }));
+  await waitFor(() => expect(onConnected).toHaveBeenCalledOnce());
+  expect(mocks.beginSubscriptionSignin).toHaveBeenCalledOnce();
+  expect(mocks.completeSubscriptionSignin).toHaveBeenCalledWith(code);
+  expect(mocks.updateSettings).toHaveBeenCalledWith({ provider: "chatgpt" });
+});
+
+it("skips the offer without writing anything and shows the provider choices", async () => {
+  mocks.existingSignins.mockResolvedValue([claudePickup, codexPickup]);
+  await draw();
+  fireEvent.click(await screen.findByRole("button", { name: "Skip and choose a provider" }));
+  expect(screen.getByText("Choose how your agents are paid for")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Use Claude Code" })).toBeNull();
+  expect(mocks.testConnection).not.toHaveBeenCalled();
+  expect(mocks.updateSettings).not.toHaveBeenCalled();
+  expect(mocks.beginSubscriptionSignin).not.toHaveBeenCalled();
+});
+
+it("does not offer a sign-in in a browser, which cannot see the host's programs", async () => {
+  mocks.existingSignins.mockResolvedValue([claudePickup]);
+  place.hostPlace.mockReturnValue("browser");
+  await draw();
+  expect(screen.getByText("Choose how your agents are paid for")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Use Claude Code" })).toBeNull();
+  expect(mocks.existingSignins).not.toHaveBeenCalled();
+});
+
+it("does not offer a sign-in on a remote host", async () => {
+  mocks.existingSignins.mockResolvedValue([claudePickup]);
+  place.hostPlace.mockReturnValue("remote");
+  await draw();
+  expect(screen.queryByRole("button", { name: "Use Claude Code" })).toBeNull();
+  expect(mocks.existingSignins).not.toHaveBeenCalled();
+});
+
+it("does not offer a sign-in on a box, even one that can run the claude program", async () => {
+  // `claudeProvider` is true on a server too, which is exactly why the offer
+  // reads its own capability rather than borrowing that one.
+  useStore.setState({
+    capabilities: {
+      claudeProvider: true,
+      loopbackEndpoints: true,
+      localFiles: false,
+      borrowedSignins: false,
+    },
+  });
+  mocks.existingSignins.mockResolvedValue([claudePickup]);
+  await draw();
+  expect(screen.queryByRole("button", { name: "Use Claude Code" })).toBeNull();
+  expect(mocks.existingSignins).not.toHaveBeenCalled();
+});
+
+it("offers nothing when a program is installed but logged out", async () => {
+  // Detection's answer for a logged-out program is an empty list, and an empty
+  // list is the ordinary provider step rather than an error.
+  mocks.existingSignins.mockResolvedValue([]);
+  await draw();
+  expect(screen.getByText("Choose how your agents are paid for")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /^Use Claude Code$/ })).toBeNull();
+});
+
+it("does not offer anything to an operator who already configured a provider", async () => {
+  useStore.setState({ settings: stored({ provider: "chatgpt" }) });
+  mocks.existingSignins.mockResolvedValue([claudePickup]);
+  await draw();
+  expect(screen.queryByRole("button", { name: "Use Claude Code" })).toBeNull();
+  expect(mocks.existingSignins).not.toHaveBeenCalled();
 });

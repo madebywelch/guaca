@@ -333,6 +333,7 @@ surface! {
     update_connector(id: ConnectorId, agents: Vec<AgentId>, secret: Option<String>) -> (),
     delete_connector(id: ConnectorId) -> (),
     claude_program() -> ClaudeProgram,
+    existing_signins() -> Vec<crate::pickup::Pickup>,
     plugin_catalog() -> Vec<PluginOffer>,
     group_plugins(group_id: GroupId) -> Vec<Plugin>,
     connect_plugin(group_id: GroupId, kind: PluginKind, connection: Option<String>) -> Plugin,

@@ -264,6 +264,7 @@ describe("who pays for a group's turns", () => {
     useStore.setState({
       capabilities: {
         loopbackEndpoints: false,
+        borrowedSignins: false,
         claudeProvider: false,
         localFiles: false,
       },
@@ -280,6 +281,7 @@ describe("who pays for a group's turns", () => {
       useStore.setState({
         capabilities: {
           loopbackEndpoints: true,
+          borrowedSignins: true,
           claudeProvider: true,
           localFiles: true,
         },

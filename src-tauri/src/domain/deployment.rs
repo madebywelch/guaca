@@ -49,12 +49,18 @@ impl Deployment {
     /// What this deployment can do, which is the value every panel asks.
     pub const fn capabilities(self) -> Capabilities {
         match self {
-            Deployment::Desktop => {
-                Capabilities { loopback_endpoints: true, claude_provider: true, local_files: true }
-            }
-            Deployment::Server => {
-                Capabilities { loopback_endpoints: true, claude_provider: true, local_files: false }
-            }
+            Deployment::Desktop => Capabilities {
+                loopback_endpoints: true,
+                claude_provider: true,
+                local_files: true,
+                borrowed_signins: true,
+            },
+            Deployment::Server => Capabilities {
+                loopback_endpoints: true,
+                claude_provider: true,
+                local_files: false,
+                borrowed_signins: false,
+            },
         }
     }
 
@@ -84,6 +90,15 @@ pub struct Capabilities {
     /// On a server both become the browser's own upload and download. The
     /// capability is gone; the ability to hand a document over is not.
     pub local_files: bool,
+    /// Whether the machine the runtime runs on is the operator's own, and a
+    /// sign-in already sitting on it may therefore be offered to them.
+    ///
+    /// False for every server, even one this person rents: the offer is about
+    /// the desktop they are looking at, the panel says "This Mac" when it makes
+    /// it, and a box may be shared with people who are not in this window. A
+    /// host that guessed from `claude_provider` would be offering somebody
+    /// else's account, which is the reason this is a capability of its own.
+    pub borrowed_signins: bool,
 }
 
 /// Why a capability is absent, phrased for whoever is about to hit it.
@@ -233,6 +248,17 @@ mod tests {
                 "{what:?} is interpolated mid-sentence and must not open with a capital: {said}"
             );
         }
+    }
+
+    #[test]
+    fn a_box_may_not_offer_a_signin_its_machine_already_has() {
+        // The offer names "This Mac", so the capability has to be the one fact
+        // that means the runtime is on the operator's own machine. A server
+        // offers the Claude provider and still may not do this: the programs
+        // there may be signed in to somebody else's account.
+        assert!(Deployment::Desktop.capabilities().borrowed_signins);
+        assert!(Deployment::Server.capabilities().claude_provider);
+        assert!(!Deployment::Server.capabilities().borrowed_signins);
     }
 
     #[test]

@@ -307,6 +307,43 @@ what an operator would quote to the vendor.
 Claude models still reach Guaca the other two ways as well, through an API key or
 through OpenRouter, which remains the default endpoint and the default model.
 
+### The first run may offer a sign-in that is already there
+
+An operator who already uses Claude Code or Codex has an account before Guaca has
+ever run, and asking them to find a key or repeat a sign-in is a poor first thing
+for the app to do. So the provider step asks both programs about themselves
+and, when one answers, offers what it found in place of the three cards. Nothing
+is adopted because a program is there: the offer is a button, and a setting
+changes only when it is pressed.
+
+For Claude Code the offer is the whole of the reuse, because that provider
+already *is* "run the program". `claude auth status` answers with a JSON document
+and an exit code, and `pickup.rs` reads only `loggedIn`, `authMethod`, `email`
+and `subscriptionType`. The credential stays where it was, as it does everywhere
+else in this file. Only `claude.ai` and `oauth_token` count: an `api_key` method
+would name a plan and then bill a key, which is the other provider's business.
+
+For Codex the offer cannot be the same shape, and the reason is the token.
+`~/.codex/auth.json` holds a refresh token, and a refresh token rotates:
+whichever program spends it next retires every other holder's copy. Guaca already
+serializes its own refreshes for exactly that reason (*A token's `exp` is a floor
+on its life, not a ceiling* in `docs/ARCHITECTURE.md`); two processes have no
+lock between them, so copying the CLI's token in would leave the CLI and Guaca
+signing each other out at the next refresh — alternately broken, with no way to
+tell which one did it. Detection therefore stops at "this Mac is signed in to
+Codex" (`codex login status`, and only the `Logged in using ChatGPT` line), and
+what is offered is Guaca's own sign-in through the browser session that CLI has
+already opened. The card says why, because a sign-in asked for twice with no
+explanation reads as a bug.
+
+The offer is desktop-only. A browser client cannot see the host's programs, and a
+box's programs may be signed in to accounts the person in the window does not
+own, so `Capabilities::borrowed_signins` is false for every server and
+`existing_signins` answers with nothing there whatever the panel asks. The window
+checks the same capability and that it is on this Mac before it offers anything,
+and the command answers with nothing of its own so a stale bundle cannot offer
+what the host will not do.
+
 ## Considered and declined
 
 **A verifier agent.** The failure taxonomy above puts task verification at 17.3%

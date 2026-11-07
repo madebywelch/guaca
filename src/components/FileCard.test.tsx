@@ -30,6 +30,7 @@ const state = {
   showFailure,
   capabilities: {
     loopbackEndpoints: true,
+    borrowedSignins: true,
     claudeProvider: true,
     localFiles: false,
   },
