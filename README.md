@@ -62,8 +62,12 @@ a local host) Docker:
 
 The script checks those before it compiles anything, and says how to fix
 whichever is missing. For a local host, have Docker installed and running
-before installing: the script builds the matching backend image. Choose **On
-this Mac** when Guaca opens, or **Remote host** to connect to a backend on your
+before installing: the script pulls the signed published backend for the exact
+clean checkout, or builds it locally if the checkout is dirty or has no
+published image. A local build needs Docker configured with at least 4 GiB of
+memory; use `colima start --memory 4` or Docker Desktop Resources to increase
+it. A failed feed lookup or image pull stops the install. Choose **On this Mac**
+when Guaca opens, or **Remote host** to connect to a backend on your
 VPS. You can change that choice later in **Settings → Host**. A remote
 connection does not require Docker on your Mac.
 
