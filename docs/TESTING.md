@@ -91,6 +91,19 @@ a break in it does not show anywhere else.
 cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --features server --test server
 ```
 
+`tests/unreachable.rs` is the same host asked what it promises an operator
+whose account service is not there. Every `guaca.bot` route is pointed at a
+port that refuses connections — `GUACA_ACCOUNT_ORIGIN`, the seam `boot.rs`
+already reads — and the suite then creates a group and an agent, takes a turn
+against the scripted model, fires a routine, reads the settings pane, and
+asserts that a connector whose grant lives at that service refuses with a
+sentence naming what to fix. Every call has a deadline, so a boot or a turn
+that waits on the absent service fails as this suite rather than as a harness
+timeout. A third case plants an account file whose token has expired, which is
+the operator who signed in once and whose service has since gone away. It is
+the guarantee `docs/HOSTING.md#what-self-hosting-guarantees` states, held as a
+test; `ci.sh` names it on its own line in the daemon phase.
+
 Another, `tests/plugins.rs`, does the same job for MCP: a scripted server that
 publishes the four metadata documents an OAuth sign-in needs, and one runtime
 turn that calls a plugin tool end to end. Its `deployments` module is a second

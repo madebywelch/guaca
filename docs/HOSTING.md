@@ -6,6 +6,47 @@ Mac or on an always-on remote machine. Closing the app stops no backend work.
 A container on a sleeping laptop still sleeps; unattended work needs a host
 that stays awake.
 
+## What self-hosting guarantees
+
+Guaca is one product with one build. These are the four promises that build
+makes to someone who runs it themselves.
+
+- **The same open-source build.** There is no edition a self-hoster cannot
+  have. `install.sh` installs the app from this source and the same
+  `Dockerfile` runs the daemon, with no feature withheld from a workspace that
+  is not ours. The differences between a desktop and a box are facts about a
+  machine — a box has no operator's Downloads folder — and
+  [Resources belong to the backend](#resources-belong-to-the-backend) names
+  each one.
+- **No account.** Signing in to a Guaca account is optional and is about
+  connectors, not about Guaca. A workspace opens, takes turns, keeps its
+  schedules and its memory, and answers its settings pane with no account file
+  at all and with `guaca.bot` unreachable.
+- **Nothing in the runtime depends on that service except the connectors.**
+  The `guaca.bot` connectors — Gmail, Calendar, Drive, and the GitHub access
+  the same server brokers — are reached through it, because an OAuth client
+  for Gmail cannot ship inside a download. Everything else runs on the
+  operator's own keys and the operator's own machine. Where a self-hoster has
+  not signed in, or has signed in and the service has since gone away, the
+  connector refuses in its own pane with a sentence naming what to fix rather
+  than holding a turn, a boot or the page.
+- **Your groups are yours to move.** A group exports to a versioned file and
+  imports into another workspace
+  ([Moving an existing workspace](#moving-an-existing-workspace)), and a whole
+  workspace is a directory and a volume anyone can copy. Nothing asks this
+  project's service for permission to exist, and nothing stops working because
+  an address changed.
+
+[`src-tauri/tests/unreachable.rs`](../src-tauri/tests/unreachable.rs) holds the
+second and third as a test: it starts a host with every `guaca.bot` route
+pointed at a port that refuses connections, creates a group and an agent,
+takes a turn against a scripted model, fires a routine, reads the settings
+pane, and holds every call to a deadline so a workspace that waited on the
+service fails as that test rather than as a timeout. It also asserts the
+refusal a connector gives when the account is absent, and that a workspace
+signed in to a service that has since vanished still takes a turn.
+`./scripts/ci.sh` runs it in the daemon phase.
+
 ## The runtime runs in two hosts, and neither knows which
 
 The native client no longer constructs `Runtime`, opens the live database or

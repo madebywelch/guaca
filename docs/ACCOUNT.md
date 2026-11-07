@@ -13,6 +13,13 @@ schedules without a Guaca account. The Google plugin does require the account:
 its tools use the grant held at guaca.bot. Model-provider sign-ins are separate
 from that account.
 
+Nothing else in the runtime depends on that service. With no account file, and with
+`guaca.bot` unreachable, a workspace still opens, takes turns, runs its
+schedules and answers its settings pane; the connectors that do need it refuse
+in their own pane with a sentence saying what to fix.
+[Hosting](HOSTING.md#what-self-hosting-guarantees) states the guarantees and
+names the test that holds them.
+
 A future managed compute space will require an account to establish ownership
 and discover its connection. That requirement belongs to the managed service;
 it must not become a prerequisite for starting the self-hosted runtime.

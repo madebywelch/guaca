@@ -113,6 +113,15 @@ name = "server"
 path = "tests/server.rs"
 required-features = ["server"]
 
+# The other half of the same question: `server.rs` asks what the daemon's
+# transport promises, and this asks what it promises when the account service
+# is not there at all. Declared rather than discovered so the desktop pass,
+# which has no daemon, does not build a binary with nothing in it.
+[[test]]
+name = "unreachable"
+path = "tests/unreachable.rs"
+required-features = ["server"]
+
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time", "test-util"] }
