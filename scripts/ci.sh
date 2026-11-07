@@ -39,6 +39,8 @@ run_scripts() {
   # `scripts/versions.sh` and held here, on Linux, where this gate runs too.
   step "Shell checks"
   bash scripts/versions.test.sh
+  node --test scripts/install-image.test.mjs
+  bash scripts/install-host.test.sh
 }
 
 run_connector() {

@@ -10,8 +10,8 @@
 #   GUACA_DEST             where the app goes            (/Applications)
 #   GUACA_SIGN_IDENTITY    what signs it                 (-, ad-hoc)
 #
-# There is nothing to download. Latest means the tip of `main`, compiled on
-# this machine, so this script is a fetch, a build and a swap.
+# The desktop is built here. The matching published host is pulled when one
+# exists; otherwise the host is built here too.
 #
 # The swap is the part worth reading. It is two renames on one volume rather
 # than a copy over the top: `cp -R` onto an existing bundle merges into it, and
@@ -74,6 +74,7 @@ fail() { printf '\033[1m%s\033[0m\n' "$1" >&2; exit 1; }
 # could not be tested from here at all. `scripts/versions.test.sh` is that test.
 # shellcheck source=scripts/versions.sh
 . scripts/versions.sh
+. scripts/install-host.sh
 
 # Everything that can be known before a five minute build is checked before it,
 # including whether the answer can be written where it is going: a permission
@@ -158,8 +159,7 @@ pnpm install --frozen-lockfile
 # Remote-only installations do not require Docker on the client machine.
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
   step "Building the local host"
-  export GUACA_BACKEND_IMAGE="guacad:$(git rev-parse --short=12 HEAD)"
-  docker build --build-arg "GUACA_VERSION=$(node -p 'require("./package.json").version')" --build-arg "GUACA_COMMIT=$COMMIT" -t "$GUACA_BACKEND_IMAGE" .
+  install_host || exit 1
 else
   note "Docker is not ready; installing the desktop client for a remote host."
   note "For a local source build, start Docker and run this installer again."

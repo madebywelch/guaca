@@ -342,8 +342,17 @@ a box that follows `main` the panel offers the host update, and holds back
 `scripts/install.sh` in the checkout the app was built from (`rebuild.rs`),
 which quits the app once the new bundle is built and opens the new one. A
 release of the app has no checkout and is never offered it. On this Mac the
-order is the other way round and needs nothing new: the app build is what
-produces the host image, and the existing local update installs it after.
+order is the other way round: the installer pulls the signed main-channel image
+for the desktop's exact clean commit, including older commits in the feed's
+history. It builds the host locally when the checkout is dirty or the verified
+feed has no matching commit. An unreadable or invalid feed, or a failed pull,
+stops the install instead of silently starting a build. Local host builds need
+Docker configured with at least 4 GiB of memory. The check accepts 3.5 GiB of
+reported memory to allow for the VM kernel's reservation, not as a measured
+minimum or a guarantee that a build will succeed. A cold x86-64 build on a
+4 GiB machine peaked at 2.566 GiB whole-machine use in one-second samples,
+and a cold ARM64 CI build also succeeded on a nominal 4 GiB machine. The
+existing local update installs the result after the app is built.
 
 **CI does not move the feed backward or past what a box can pull.** A build
 that is running is never cancelled: `main` takes pushes every few minutes and
