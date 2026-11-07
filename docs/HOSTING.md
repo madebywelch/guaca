@@ -263,7 +263,12 @@ reads with it.
 The daemon serves the same frontend bundle that Tauri embeds. `HostSetup`
 runs before the workspace mounts. A saved local connection starts the managed
 Docker container and retrieves its token automatically; a saved remote
-connection is probed before the UI opens. Failure returns to host setup.
+connection is probed before the UI opens. The saved host is named while it is
+being checked, and another host can be chosen immediately. Setup gives the
+whole probe 15 seconds even if a fetch does not settle when aborted; failure
+opens the chooser and offers a retry without discarding the saved credentials.
+Opening the chooser prevents a late answer from switching the window underneath
+the operator.
 
 `Settings → Host` exposes the same On this Mac / Remote host choices.
 Changing hosts probes the new connection, saves it and reloads the UI. Groups

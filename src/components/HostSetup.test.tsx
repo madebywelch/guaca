@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -55,6 +55,70 @@ beforeEach(() => {
   probe.mockResolvedValue({});
 });
 describe("desktop host setup", () => {
+  it("lets the operator choose another host while a saved host is connecting", async () => {
+    const connection = { origin: "https://k1-guaca.tailnet.test", token: "private" };
+    current.mockReturnValue(connection);
+    let finish!: () => void;
+    probe.mockReturnValue(
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+    );
+    render(
+      <HostSetup>
+        <div>Workspace mounted</div>
+      </HostSetup>,
+    );
+    expect(screen.getByText("Connecting to k1-guaca…")).toBeTruthy();
+    expect(screen.getByText(connection.origin)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Choose another host" }));
+    expect(screen.getByRole("button", { name: "Remote host" })).toBeTruthy();
+    expect(screen.getByText(/Each group stays on the host it was made on/)).toBeTruthy();
+    finish();
+    await waitFor(() => expect(screen.queryByText("Connecting to k1-guaca…")).toBeNull());
+    expect(activate).not.toHaveBeenCalled();
+    expect(screen.queryByText("Workspace mounted")).toBeNull();
+  });
+  it("explains a failed saved host probe and retries using its saved credentials", async () => {
+    const connection = { origin: "https://k1-guaca.tailnet.test", token: "private" };
+    current.mockReturnValue(connection);
+    probe.mockRejectedValueOnce({
+      kind: "unreachable",
+      message: `nothing answered at ${connection.origin} (timeout)`,
+    });
+    render(
+      <HostSetup>
+        <div>Workspace mounted</div>
+      </HostSetup>,
+    );
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "k1-guaca isn't answering at https://k1-guaca.tailnet.test. It may be off or offline.",
+    );
+    expect(screen.getByRole("button", { name: "Remote host" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await screen.findByText("Workspace mounted");
+    expect(probe).toHaveBeenLastCalledWith(connection);
+  });
+  it("opens the chooser within 15 seconds even if the probe never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      current.mockReturnValue({ origin: "https://k1-guaca.tailnet.test", token: "private" });
+      probe.mockReturnValue(new Promise(() => {}));
+      render(
+        <HostSetup>
+          <div>Workspace mounted</div>
+        </HostSetup>,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_000);
+      });
+      expect(screen.getByRole("alert").textContent).toContain("Couldn't connect to k1-guaca");
+      expect(screen.getByRole("button", { name: "Remote host" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("does not mount the workspace until a host is ready and authenticated", async () => {
     start.mockResolvedValue({ origin: "http://127.0.0.1:54321", token: "private" });
     render(
