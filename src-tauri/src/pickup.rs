@@ -105,7 +105,8 @@ pub async fn find() -> Vec<Pickup> {
 /// it a stand-in: the alternative is a test that sets `PATH` for the whole
 /// process, which races every other test in the binary.
 async fn from_claude(program: &str) -> Option<Pickup> {
-    let said = answer(program, &["auth", "status"]).await?;
+    let output = answer(program, &["auth", "status"]).await?;
+    let said = String::from_utf8_lossy(&output.stdout);
     // A banner before the document is why this is a slice rather than the whole
     // string. Truncated output, a version that does not know the question and a
     // program that never ran all end here, as nothing to offer. The closing
@@ -126,10 +127,14 @@ async fn from_claude(program: &str) -> Option<Pickup> {
 
 /// What the Codex CLI says about its own sign-in.
 async fn from_codex(program: &str) -> Option<Pickup> {
-    let said = answer(program, &["login", "status"]).await?;
+    let output = answer(program, &["login", "status"]).await?;
     // A line rather than the whole document, because the CLI prints one line
     // and a banner above it would otherwise hide the answer.
-    if !said.lines().any(|line| line.trim().eq_ignore_ascii_case(CODEX_PLAN)) {
+    if ![&output.stdout, &output.stderr].iter().any(|stream| {
+        String::from_utf8_lossy(stream)
+            .lines()
+            .any(|line| line.trim().eq_ignore_ascii_case(CODEX_PLAN))
+    }) {
         return None;
     }
     Some(Pickup { program: Program::Codex, account: String::new(), plan: String::new() })
@@ -138,18 +143,17 @@ async fn from_codex(program: &str) -> Option<Pickup> {
 /// Runs one question and returns what it wrote, when it says it worked.
 ///
 /// A non-zero exit is the answer to "is it there and signed in", so it is
-/// `None`, not an error. Nothing here is logged: `stderr` is dropped rather than
-/// carried into a sentence, because a program's own failure text has been known
-/// to quote the thing it was reading.
-async fn answer(program: &str, args: &[&str]) -> Option<String> {
+/// `None`, not an error. Nothing here is logged or carried into a sentence,
+/// because a program's own failure text has been known to quote what it read.
+async fn answer(program: &str, args: &[&str]) -> Option<std::process::Output> {
     let asked = tokio::process::Command::new(program)
         .args(args)
         .stdin(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .kill_on_drop(true)
         .output();
     let answered = tokio::time::timeout(WITHIN, asked).await.ok()?.ok()?;
-    answered.status.success().then(|| String::from_utf8_lossy(&answered.stdout).trim().to_string())
+    answered.status.success().then_some(answered)
 }
 
 /// The fields `claude auth status` writes that this file reads.
@@ -248,6 +252,24 @@ mod tests {
         // The CLI names no account, and this file does not read the token to
         // find one.
         assert_eq!(found.account, "");
+    }
+
+    #[tokio::test]
+    async fn a_codex_cli_that_writes_its_login_to_stderr_is_offered() {
+        let dir = tempfile::tempdir().unwrap();
+        let at = dir.path().join("codex");
+        std::fs::write(&at, "#!/bin/sh\nprintf 'Logged in using ChatGPT\\n' >&2\nexit 0\n")
+            .unwrap();
+        std::fs::set_permissions(&at, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let found = from_codex(at.to_str().unwrap()).await.expect("a ChatGPT login is a pickup");
+        assert_eq!(found.program, Program::Codex);
+        assert_eq!(found.account, "");
+    }
+
+    #[tokio::test]
+    async fn a_failed_codex_command_cannot_offer_a_login() {
+        let (_dir, at) = says("Logged in using ChatGPT", 1);
+        assert_eq!(from_codex(&at).await, None);
     }
 
     #[tokio::test]
