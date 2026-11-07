@@ -75,6 +75,15 @@ run_rust() {
   step "Daemon (no Tauri, no frontend bundle)"
   cargo clippy --manifest-path src-tauri/Cargo.toml \
     --no-default-features --features server --all-targets -- -D warnings
+
+  # A promise to an operator rather than a check of the code, so it gets a line
+  # of its own: a self-hosted workspace runs with its account service absent.
+  # The blanket run below covers it too, which is what keeps a new target from
+  # being forgotten here; this line is what tells a reader which promise broke.
+  step "A workspace whose account service is not there"
+  cargo test --manifest-path src-tauri/Cargo.toml \
+    --no-default-features --features server --test unreachable
+
   cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --features server
 }
 
