@@ -874,6 +874,21 @@ export interface ClaudeProgram {
   install: string;
 }
 
+/**
+ * A sign-in this machine already has, offered once on first run.
+ *
+ * Detection only: nothing here is a credential, and receiving one never changes
+ * a setting by itself.
+ */
+export interface Pickup {
+  /** Which program answered, and therefore which card the offer draws. */
+  program: "claudeCode" | "codex";
+  /** The account the program named, or empty when it names none. */
+  account: string;
+  /** The plan the program reported, or empty. */
+  plan: string;
+}
+
 export interface Capabilities {
   /** Whether inference may point at a model server on loopback. */
   loopbackEndpoints: boolean;
@@ -881,6 +896,11 @@ export interface Capabilities {
   claudeProvider: boolean;
   /** Whether a file may be named by a path on the operator's own disk. */
   localFiles: boolean;
+  /**
+   * Whether this host is on the operator's own machine, and may therefore offer
+   * a sign-in that machine already has. False for every server.
+   */
+  borrowedSignins: boolean;
 }
 
 export interface Settings {

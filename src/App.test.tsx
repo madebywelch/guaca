@@ -82,6 +82,7 @@ vi.mock("./lib/ipc", () => ({
       loopbackEndpoints: true,
       claudeProvider: true,
       localFiles: true,
+      borrowedSignins: true,
     }),
     claudeProgram: async () => ({
       installed: true,

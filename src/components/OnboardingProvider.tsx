@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { hostPlace } from "../lib/host";
 import { api, openExternal } from "../lib/ipc";
 import { PROVIDERS, planLabel, providerFor } from "../lib/providers";
 import { useStore } from "../lib/store";
@@ -6,6 +7,7 @@ import {
   type ClaudeProgram,
   type DeviceCode,
   errorMessage,
+  type Pickup,
   type Provider,
   type SettingsPatch,
   type SubscriptionStatus,
@@ -42,6 +44,11 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
   // answer could not be read. A screen that guessed "not installed" from a
   // failed read would refuse a provider that works.
   const [claude, setClaude] = useState<ClaudeProgram | null | undefined>(undefined);
+  // What this Mac already has, and whether the operator has said no to it.
+  // Held here rather than in `Onboarding`, because the offer belongs to the
+  // step that would otherwise ask for exactly the same thing.
+  const [pickups, setPickups] = useState<Pickup[]>([]);
+  const [skipped, setSkipped] = useState(false);
   const [busy, setBusy] = useState<"signin" | "testing" | "saving" | null>(null);
   const [error, setError] = useState("");
   const [advanced, setAdvanced] = useState(false);
@@ -78,11 +85,51 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
     };
   }, []);
 
+  // The offer is for a machine the operator is at, so both facts are read
+  // rather than inferred: the window has to be the desktop showing this Mac,
+  // and the host has to say it is on the operator's own machine. A browser
+  // cannot see the host's programs and a box may be shared, so either answer
+  // alone would be a guess about whose account that sign-in is.
+  const offerHere = capabilities.borrowedSignins && hostPlace() === "thisMac";
+  const unconfigured = provider === "compatible" && !settings?.apiKeySet;
+
+  useEffect(() => {
+    if (!offerHere || !unconfigured) return;
+    let live = true;
+    void api.existingSignins().then(
+      (found) => {
+        if (live) setPickups(found);
+      },
+      () => {
+        // A host that cannot answer has nothing to offer. The provider cards
+        // are one click away, so a failed question costs nobody a choice.
+        if (live) setPickups([]);
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [offerHere, unconfigured]);
+
   const preset = providerFor(baseUrl);
   const savedKey = Boolean(settings?.apiKeySet && endpoint(baseUrl) === endpoint(settings.baseUrl));
   const needsKey = preset && !preset.local && !savedKey && !apiKey.trim();
   const ineligible = subscription?.signedIn && !subscription.includesCodex;
   const claudeReady = capabilities.claudeProvider && claude?.installed !== false;
+  // Detection filled a list and changed nothing. This is the list deciding
+  // whether there is an offer to draw, and the operator's Skip is what removes
+  // it: no setting is written until one of its buttons is pressed.
+  //
+  // It may replace the cards only while they are still untouched. A program can
+  // take a second to answer, and swapping the screen out from under somebody
+  // who has already picked a card and started typing a key is worse than never
+  // offering at all.
+  const touched =
+    provider !== "compatible" ||
+    Boolean(apiKey.trim()) ||
+    advanced ||
+    baseUrl !== (settings?.baseUrl ?? PROVIDERS[0]!.baseUrl);
+  const offer = offerHere && unconfigured && !skipped && !touched && pickups.length > 0;
 
   // The Claude plan is offered beside the other two rather than behind
   // "Advanced", because the people most likely to try this app are already
@@ -123,6 +170,83 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
     setError("");
   };
 
+  /**
+   * Guaca's own ChatGPT sign-in, from whichever card asked for it.
+   *
+   * Shared rather than written twice because the browser step is the part a
+   * person has to finish, and two copies of it would eventually disagree about
+   * what cancelling means. `live` is the caller's answer to "am I still the
+   * current attempt", so an abandoned dialog writes nothing.
+   */
+  const signInChatgpt = async (live: () => boolean): Promise<SubscriptionStatus | null> => {
+    if (subscription?.signedIn && subscription.includesCodex) return subscription;
+    setBusy("signin");
+    const code = await api.beginSubscriptionSignin();
+    if (!live()) return null;
+    setPendingCode(code);
+    void openExternal(code.verificationUrl).catch(() => {});
+    const account = await api.completeSubscriptionSignin(code);
+    if (!live()) return null;
+    setPendingCode(null);
+    setSubscription(account);
+    return account;
+  };
+
+  /**
+   * Takes one sign-in and makes it the provider.
+   *
+   * Claude is a setting because that program already holds the sign-in: the
+   * `claude` provider is only "run that program", so accepting is the whole of
+   * it, and the test is the same one the card runs rather than a second way in.
+   *
+   * Codex cannot be a setting, and this is the trade-off `pickup.rs` argues: the
+   * token under `~/.codex` belongs to that CLI and rotates on refresh, so
+   * copying it would leave the two programs signing each other out. What is
+   * reused instead is the account and the browser session that CLI already
+   * opened, through Guaca's own sign-in.
+   */
+  const accept = async (pickup: Pickup) => {
+    if (busy || !settings) return;
+    const current = ++attempt.current;
+    const live = () => attempt.current === current;
+    setError("");
+    try {
+      if (pickup.program === "codex") {
+        const account = await signInChatgpt(live);
+        if (!account) return;
+        if (!account.signedIn || !account.includesCodex) {
+          setError(
+            `This ${planLabel(account.plan) || "ChatGPT"} plan does not include Codex. Skip to choose another provider.`,
+          );
+          return;
+        }
+        setBusy("saving");
+        const next = await api.updateSettings({ provider: "chatgpt" });
+        if (!live()) return;
+        setSettings(next);
+        onConnected();
+      } else {
+        setBusy("testing");
+        await api.testConnection({ provider: "claude" });
+        if (!live()) return;
+        setBusy("saving");
+        const next = await api.updateSettings({ provider: "claude" });
+        if (!live()) return;
+        setSettings(next);
+        onConnected();
+      }
+    } catch (failure) {
+      if (live()) {
+        setError(`${errorMessage(failure)} Skip to choose another provider, or try again.`);
+      }
+    } finally {
+      if (live()) {
+        setPendingCode(null);
+        setBusy(null);
+      }
+    }
+  };
+
   const connect = async () => {
     if (busy || !settings) return;
     if (provider === "claude" && !claudeReady) return;
@@ -135,18 +259,8 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
     setError("");
     try {
       if (provider === "chatgpt") {
-        let account = subscription;
-        if (!account?.signedIn || !account.includesCodex) {
-          setBusy("signin");
-          const code = await api.beginSubscriptionSignin();
-          if (!live()) return;
-          setPendingCode(code);
-          void openExternal(code.verificationUrl).catch(() => {});
-          account = await api.completeSubscriptionSignin(code);
-          if (!live()) return;
-          setPendingCode(null);
-          setSubscription(account);
-        }
+        const account = await signInChatgpt(live);
+        if (!account) return;
         if (!account.signedIn || !account.includesCodex) {
           setError(
             `This ${planLabel(account.plan) || "ChatGPT"} plan does not include Codex. Use an API key or sign in with an eligible account.`,
@@ -192,6 +306,129 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
       }
     }
   };
+
+  // The state of whatever was last pressed, in one place: the provider cards
+  // and the offer ask different questions but answer with the same failure,
+  // the same wait, and the same sign-in code.
+  const notices = (
+    <>
+      {error && (
+        <p className="onboarding-notice" role="alert">
+          {error}
+        </p>
+      )}
+      {busy && !pendingCode && (
+        <p className="onboarding-notice" role="status">
+          {busy === "signin"
+            ? "Starting sign-in…"
+            : busy === "testing"
+              ? "Testing the connection…"
+              : "Saving your provider…"}
+        </p>
+      )}
+      {pendingCode && (
+        <div className="onboarding-notice" role="status">
+          <p>
+            Enter this code in your browser: <strong>{pendingCode.userCode}</strong>
+          </p>
+          <p>{pendingCode.verificationUrl}</p>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => {
+              const current = attempt.current;
+              void openExternal(pendingCode.verificationUrl).catch(() => {
+                if (attempt.current === current)
+                  setError("The browser could not open. Copy the address above into your browser.");
+              });
+            }}
+          >
+            Open sign-in page
+          </button>
+          <p>
+            Only enter this code if you started this sign-in here. If you cancel, do not finish it
+            in the browser.
+          </p>
+        </div>
+      )}
+    </>
+  );
+
+  if (offer)
+    return (
+      <section className="onboarding-provider" aria-label="Connect a provider">
+        <h2>This Mac is already signed in</h2>
+        <p>
+          Guaca found a sign-in this Mac already has. Use it for your agents' turns, or skip and
+          choose a provider yourself. Nothing changes until you choose.
+        </p>
+        <ul className="onboarding-pickups">
+          {pickups.map((pickup) => (
+            <li className="onboarding-pickup" key={pickup.program}>
+              <div className="onboarding-pickup__head">
+                <strong>{pickup.program === "claudeCode" ? "Claude Code" : "Codex"}</strong>
+                <span>
+                  {pickup.program === "claudeCode"
+                    ? [
+                        pickup.account || "signed in on this Mac",
+                        pickup.plan ? `${planLabel(pickup.plan)} plan` : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")
+                    : "signed in to ChatGPT"}
+                </span>
+              </div>
+              {pickup.program === "codex" && (
+                <p className="onboarding-pickup__why">
+                  Guaca keeps its own ChatGPT sign-in rather than copying Codex's token: both
+                  programs refresh that token, and the first to refresh would sign the other one
+                  out. This opens the browser you just used, so it is one confirmation.
+                </p>
+              )}
+              <button
+                type="button"
+                className="btn btn--primary"
+                disabled={Boolean(busy)}
+                onClick={() => void accept(pickup)}
+              >
+                {pickup.program === "claudeCode"
+                  ? "Use Claude Code"
+                  : "Sign in with the same account"}
+              </button>
+            </li>
+          ))}
+        </ul>
+        {notices}
+        <div className="onboarding-actions">
+          <button
+            type="button"
+            className="btn"
+            disabled={busy === "saving"}
+            onClick={() => {
+              abandon();
+              setApiKey("");
+              onBack();
+            }}
+          >
+            Back
+          </button>
+          {busy === "signin" ? (
+            <button type="button" className="btn" onClick={abandon}>
+              Cancel sign-in
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn"
+              disabled={Boolean(busy)}
+              onClick={() => setSkipped(true)}
+            >
+              Skip and choose a provider
+            </button>
+          )}
+        </div>
+      </section>
+    );
 
   return (
     <section className="onboarding-provider" aria-label="Connect a provider">
@@ -302,32 +539,6 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
         </div>
       )}
 
-      {pendingCode && (
-        <div className="onboarding-notice" role="status">
-          <p>
-            Enter this code in your browser: <strong>{pendingCode.userCode}</strong>
-          </p>
-          <p>{pendingCode.verificationUrl}</p>
-          <button
-            type="button"
-            className="btn"
-            onClick={() => {
-              const current = attempt.current;
-              void openExternal(pendingCode.verificationUrl).catch(() => {
-                if (attempt.current === current)
-                  setError("The browser could not open. Copy the address above into your browser.");
-              });
-            }}
-          >
-            Open sign-in page
-          </button>
-          <p>
-            Only enter this code if you started this sign-in here. If you cancel, do not finish it
-            in the browser.
-          </p>
-        </div>
-      )}
-
       {provider === "claude" && claudeReady && (
         <p className="onboarding-notice">
           Claude's own account and model settings apply; Guaca passes neither, so a model named here
@@ -381,20 +592,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
         </fieldset>
       </details>
 
-      {error && (
-        <p className="onboarding-notice" role="alert">
-          {error}
-        </p>
-      )}
-      {busy && !pendingCode && (
-        <p className="onboarding-notice" role="status">
-          {busy === "signin"
-            ? "Starting sign-in…"
-            : busy === "testing"
-              ? "Testing the connection…"
-              : "Saving your provider…"}
-        </p>
-      )}
+      {notices}
       <div className="onboarding-actions">
         <button
           type="button"

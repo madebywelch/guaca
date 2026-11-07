@@ -22,6 +22,7 @@ const EVERYTHING: Capabilities = {
   loopbackEndpoints: true,
   claudeProvider: true,
   localFiles: true,
+  borrowedSignins: true,
 };
 
 import { keepThought } from "./reasoning";

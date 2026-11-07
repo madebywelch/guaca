@@ -760,6 +760,22 @@ pub async fn claude_program(_state: &AppState) -> Reply<ClaudeProgram> {
     })
 }
 
+// ---- sign-ins this machine already has -----------------------------------
+
+/// Sign-ins this machine already has, for the first run to offer.
+///
+/// Empty on a server, and that is the rule rather than a convenience: the offer
+/// says "This Mac", a box may be shared with people who are not in this window,
+/// and its programs may be signed in to accounts this operator does not own.
+/// The panel reads the same fact as `Capabilities::borrowed_signins`; this is
+/// the half that would still be true if the panel forgot.
+pub async fn existing_signins(state: &AppState) -> Reply<Vec<crate::pickup::Pickup>> {
+    if state.deployment.is_server() {
+        return Ok(Vec::new());
+    }
+    Ok(crate::pickup::find().await)
+}
+
 // ---- plugins -------------------------------------------------------------
 
 /// The servers Guaca knows how to sign in to. Static, and the same for every

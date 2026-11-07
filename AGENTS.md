@@ -155,6 +155,9 @@ src-tauri/src/
   config.rs           Operator settings, and the API key the webview never sees.
   programs.rs         The PATH the `claude` program is found on, which is not
                       the one a double-clicked app is started with.
+  pickup.rs           A sign-in this machine already has: the `claude` program
+                      and the Codex CLI, asked about themselves and never read.
+                      Detection only, and the Codex token is not imported.
   commands.rs         The entire IPC surface. Knows no host.
   ipc.rs              That surface written once: one macro makes the Tauri
                       wrappers, the HTTP dispatch and the list the contract
@@ -207,6 +210,7 @@ repo: the frontend renders state and forwards intent.
 | An agent reading the settings or asking to change them, the operator's current view | *An agent can read the settings, and what the operator is looking at* in `docs/WORKSPACE.md` and *A settings change is a permission with its own diff* in `docs/ATTENTION.md`, then `config::agent_patch` and `Runtime::use_settings` |
 | Permission prompts, parked turns, acting in the operator's name | *A protected action parks the turn that asked for it* |
 | A program that is installed and reported missing: `claude` | *A double-clicked app does not have the operator's `PATH`* below, then `src-tauri/src/programs.rs` |
+| A sign-in this Mac already has, the first-run offer, why Codex's token is not imported | *The first run may offer a sign-in that is already there* in `docs/PROTOCOL.md`, then `src-tauri/src/pickup.rs`, `existing_signins` in `commands.rs` and the offer in `OnboardingProvider.tsx` |
 | Anything an agent stops to ask a person: the desk, the queue, the two kinds of request, `ask_operator` | `docs/ATTENTION.md`, then `domain/approval.rs` and `Runtime::park` |
 | An agent that cannot go on at all, what reaches the operator without parking a turn, `escalate` | *Three things an agent can do about a person* and *What an escalation is* in `docs/ATTENTION.md`, then `domain/escalation.rs` and `Store::raise_escalation` |
 | The box you write in: the ruled line, the row under it, what it says will answer | *The box you write in is a line, and the row under it is permanent* in `docs/WORKSPACE.md`, then `src/components/Composer.tsx` and the composer's rules in `src/styles.css` |

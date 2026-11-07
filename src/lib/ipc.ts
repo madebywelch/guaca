@@ -72,6 +72,7 @@ import type {
   OccasionDraft,
   OccasionId,
   OperatorView,
+  Pickup,
   Plugin,
   PluginAccess,
   PluginId,
@@ -216,6 +217,15 @@ export const api = {
    * rather than assumed, so the provider row says so before a turn finds out.
    */
   claudeProgram: () => invoke<ClaudeProgram>("claude_program"),
+
+  /**
+   * Sign-ins this machine already has, for the first run to offer.
+   *
+   * Empty on a host that is not this Mac, and on any host with nothing to
+   * offer. Asked only by the first run's provider step, and the answer never
+   * changes a setting on its own.
+   */
+  existingSignins: () => invoke<Pickup[]>("existing_signins"),
 
   pluginCatalog: () => invoke<PluginOffer[]>("plugin_catalog"),
 

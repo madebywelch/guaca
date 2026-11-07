@@ -50,6 +50,7 @@ let roster: AgentCard[] = [];
 const state = {
   capabilities: {
     loopbackEndpoints: true,
+    borrowedSignins: true,
     claudeProvider: true,
     localFiles: true,
   },

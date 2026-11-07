@@ -35,6 +35,7 @@ const EVERYTHING = {
   loopbackEndpoints: true,
   claudeProvider: true,
   localFiles: true,
+  borrowedSignins: true,
 };
 
 const TOKEN_KEY = "guaca.workspace.token";

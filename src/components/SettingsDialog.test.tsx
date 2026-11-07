@@ -861,6 +861,7 @@ describe("the provider presets", () => {
     useStore.setState({
       capabilities: {
         loopbackEndpoints: false,
+        borrowedSignins: false,
         claudeProvider: false,
         localFiles: false,
       },
@@ -881,6 +882,7 @@ describe("the provider presets", () => {
       useStore.setState({
         capabilities: {
           loopbackEndpoints: true,
+          borrowedSignins: true,
           claudeProvider: true,
           localFiles: true,
         },
