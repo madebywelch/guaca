@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { ROOT_PX } from "./appearance";
 import { DEFAULT_THEME, themeTokens } from "./theme";
-import { BAR_TYPE_PX, barLook, dressed } from "./widget";
+import { BAR_HEIGHT_PX, BAR_TYPE_PX, barLook, dressed } from "./widget";
 
 const read = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
 
@@ -28,6 +28,33 @@ describe("a condensed view's frame", () => {
     const rules = framed.match(/\}([^{}]+)\{/g) ?? [];
     for (const rule of rules) expect(rule).toMatch(/:where\(/);
   });
+
+  it("is handed the bar's face as a data: URL, because the frame may load no other", () => {
+    const framed = dressed("", barLook(DEFAULT_THEME, "light", 100), {
+      family: '"Inter Variable"',
+      stack: '"Inter Variable", system-ui, sans-serif',
+      src: "data:font/woff2;base64,AAAA",
+    });
+    expect(framed).toContain('@font-face { font-family: "Inter Variable";');
+    expect(framed).toContain('src: url("data:font/woff2;base64,AAAA") format("woff2-variations")');
+    expect(framed).toContain('--guaca-font: "Inter Variable", system-ui, sans-serif;');
+  });
+
+  it("draws a face the machine already has without an @font-face", () => {
+    const framed = dressed("", barLook(DEFAULT_THEME, "light", 100, "system"));
+    expect(framed).not.toContain("@font-face");
+    expect(framed).toContain("--guaca-font: system-ui, -apple-system");
+  });
+
+  it("ends a line too long for the frame with an ellipsis rather than a cut letter", () => {
+    const look = barLook(DEFAULT_THEME, "light", 100);
+    const framed = dressed("<b>13.5</b><span>4 steps checked</span>", look);
+    expect(framed).toContain("text-overflow: ellipsis");
+    expect(framed).toContain("white-space: nowrap");
+    expect(framed).toContain(`--guaca-height: ${look.heightPx}px;`);
+    expect(framed).toContain("line-height: calc(var(--guaca-height) - 1px)");
+    expect(framed).toContain(":where(body > * + *)");
+  });
 });
 
 describe("the sizes an agent is told", () => {
@@ -47,5 +74,11 @@ describe("the sizes an agent is told", () => {
   it("draw a condensed view in the bar's own type size", () => {
     expect(css).toMatch(/\.statusbar \{[^}]*font-size: var\(--type-small\);/);
     expect(rem("--type-small") * ROOT_PX).toBe(BAR_TYPE_PX);
+  });
+
+  it("draw a condensed view in the bar's own height", () => {
+    // The one line is set to the frame's height so it is centered in the frame
+    // and a line too long for it can end in an ellipsis.
+    expect(rem("--control-h-sm") * ROOT_PX).toBe(BAR_HEIGHT_PX);
   });
 });
