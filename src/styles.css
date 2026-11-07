@@ -5825,6 +5825,12 @@ input[type="file"]:disabled {
   color: var(--text);
 }
 
+.claude-signin__link {
+  color: inherit;
+  overflow-wrap: anywhere;
+  text-decoration: underline;
+}
+
 .field {
   display: block;
   margin-bottom: var(--space-6);

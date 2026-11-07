@@ -173,6 +173,7 @@ vi.mock("../lib/ipc", () => ({
     accountConnectors: () => accountConnectors(),
     signOutAccount: () => signOutAccount(),
     claudeProgram: () => claudeProgram(),
+    claudeSigninStatus: async () => ({ signedIn: false }),
   },
   notifyOperator: (title: string, body: string) => notifyOperator(title, body),
   openExternal: (url: string) => openExternal(url),
@@ -1317,6 +1318,12 @@ describe("the Claude subscription", () => {
     const hint = screen.getByText(/rolling quota/);
     expect(hint.textContent).toContain("a group reaches it faster than one person does");
     expect(hint.textContent).not.toContain("crew");
+  });
+
+  it("offers host sign-in when Claude is selected", async () => {
+    open(stored({ provider: "claude" }));
+    pane("Provider");
+    expect(await screen.findByRole("button", { name: "Sign in with Claude" })).toBeTruthy();
   });
 });
 

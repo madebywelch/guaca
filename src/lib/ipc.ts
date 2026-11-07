@@ -746,6 +746,12 @@ export const api = {
 
   subscriptionStatus: () => invoke<SubscriptionStatus>("subscription_status"),
 
+  claudeSigninStatus: () => invoke<import("./types").ClaudeSigninStatus>("claude_signin_status"),
+  beginClaudeSignin: () => invoke<import("./types").ClaudeSignin>("begin_claude_signin"),
+  completeClaudeSignin: (id: string, code: string) =>
+    invoke<import("./types").ClaudeSigninStatus>("complete_claude_signin", { id, code }),
+  cancelClaudeSignin: (id: string) => invoke<void>("cancel_claude_signin", { id }),
+
   /** Asks for a code to carry to a browser. Returns in one round trip. */
   beginSubscriptionSignin: () => invoke<DeviceCode>("begin_subscription_signin"),
 

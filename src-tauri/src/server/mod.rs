@@ -221,6 +221,7 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
         // than left as a path that means nothing.
         downloads: settings.root.join("downloads"),
         subscription: booted.subscription,
+        claude_signin: Default::default(),
         account: booted.account,
         catalog: Arc::new(crate::llm::catalog::Catalog::new()),
         artifacts: booted.artifacts,

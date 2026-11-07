@@ -12,6 +12,7 @@ import {
   type SettingsPatch,
   type SubscriptionStatus,
 } from "../lib/types";
+import { ClaudeSignin } from "./ClaudeSignin";
 import { SubscriptionModel } from "./ProviderFields";
 
 interface Props {
@@ -139,7 +140,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
     ? "This host does not offer the claude program, so a plan cannot pay for turns here."
     : claude?.installed === false
       ? `Runs the claude program, which this host does not have. Install it there with ${claude.install}, sign in, then come back.`
-      : "Use a Claude plan through the claude program already signed in on your Guaca host. No API key needed.";
+      : "Use a Claude plan through the claude program on your Guaca host. No API key needed.";
 
   // Why the primary action cannot be pressed, in the row beside it. The brief
   // step does the same thing for its Continue, and for the same reason: a dead
@@ -540,11 +541,11 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
       )}
 
       {provider === "claude" && claudeReady && (
-        <p className="onboarding-notice">
+        <div className="onboarding-notice">
           Claude's own account and model settings apply; Guaca passes neither, so a model named here
-          is not used. Sign in on your Guaca host first — inside the container, for a container
-          host. Testing makes a small request using that account.
-        </p>
+          is not used. Testing makes a small request using that account.
+          <ClaudeSignin />
+        </div>
       )}
 
       <details

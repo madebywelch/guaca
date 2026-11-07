@@ -68,6 +68,7 @@ import {
   type SettingsPatch,
   type SubscriptionStatus,
 } from "../lib/types";
+import { ClaudeSignin } from "./ClaudeSignin";
 import { Compost } from "./Compost";
 import { GroupTransfer, LegacyGroups } from "./GroupTransfer";
 import { HostChoice } from "./HostSetup";
@@ -859,6 +860,8 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                     </button>
                   )}
                 </div>
+
+                {capabilities.claudeProvider && claudeInstalled !== false && <ClaudeSignin />}
 
                 {provider === "claude" && (
                   <p className="hint">

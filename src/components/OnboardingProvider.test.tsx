@@ -12,6 +12,10 @@ vi.mock("../lib/host", async (importOriginal) => ({
 
 const mocks = vi.hoisted(() => ({
   claudeProgram: vi.fn(),
+  claudeSigninStatus: vi.fn(),
+  beginClaudeSignin: vi.fn(),
+  completeClaudeSignin: vi.fn(),
+  cancelClaudeSignin: vi.fn(),
   existingSignins: vi.fn(),
   subscriptionStatus: vi.fn(),
   beginSubscriptionSignin: vi.fn(),
@@ -90,6 +94,7 @@ beforeEach(() => {
   });
   place.hostPlace.mockReturnValue("thisMac");
   mocks.existingSignins.mockResolvedValue([]);
+  mocks.claudeSigninStatus.mockResolvedValue({ signedIn: false });
   mocks.claudeProgram.mockResolvedValue({
     installed: true,
     version: "2.1.247 (Claude Code)",
@@ -454,6 +459,23 @@ it("verifies Claude through the existing program without changing either model",
   await waitFor(() => expect(onConnected).toHaveBeenCalledOnce());
   expect(mocks.testConnection).toHaveBeenCalledWith({ provider: "claude" });
   expect(mocks.updateSettings).toHaveBeenCalledWith({ provider: "claude" });
+});
+
+it("offers host Claude sign-in even when borrowed sign-ins are unavailable", async () => {
+  useStore.setState({
+    capabilities: { ...useStore.getState().capabilities, borrowedSignins: false },
+  });
+  mocks.beginClaudeSignin.mockResolvedValue({
+    id: "host-session",
+    url: "https://example.com/claude",
+  });
+  mocks.cancelClaudeSignin.mockResolvedValue(undefined);
+  await draw();
+  fireEvent.click(screen.getByRole("button", { name: /^Claude subscription/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Sign in with Claude" }));
+  await screen.findByRole("link", { name: "https://example.com/claude" });
+  fireEvent.click(screen.getByRole("button", { name: /^ChatGPT subscription/ }));
+  expect(mocks.cancelClaudeSignin).toHaveBeenCalledWith("host-session");
 });
 
 it("says the host has no claude program instead of hiding the option", async () => {

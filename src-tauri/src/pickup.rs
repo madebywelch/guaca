@@ -104,7 +104,7 @@ pub async fn find() -> Vec<Pickup> {
 /// The program is named rather than read from a constant so the suite can hand
 /// it a stand-in: the alternative is a test that sets `PATH` for the whole
 /// process, which races every other test in the binary.
-async fn from_claude(program: &str) -> Option<Pickup> {
+pub(crate) async fn from_claude(program: &str) -> Option<Pickup> {
     let output = answer(program, &["auth", "status"]).await?;
     let said = String::from_utf8_lossy(&output.stdout);
     // A banner before the document is why this is a slice rather than the whole
