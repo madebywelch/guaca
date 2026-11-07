@@ -41,11 +41,21 @@ export const WIDGET_TOKENS = [
  */
 export const BAR_TYPE_PX = 13;
 
+/**
+ * The bar's height at scale 100, in pixels: `--widget-h`, which is
+ * `--control-h-sm`. The frame sets its one line to that height so the line is
+ * centered in the frame rather than sitting on the body's first baseline, and
+ * so a line too long for the frame can end in an ellipsis. `widget.test.ts`
+ * reads it out of the stylesheet.
+ */
+export const BAR_HEIGHT_PX = 28;
+
 /** Everything about the operator's appearance a condensed view is drawn in. */
 export interface BarLook {
   surface: Surface;
   colors: Record<(typeof WIDGET_TOKENS)[number], string>;
   sizePx: number;
+  heightPx: number;
   typeface: Typeface;
 }
 
@@ -61,6 +71,7 @@ export function barLook(
     surface,
     colors: colors as BarLook["colors"],
     sizePx: (BAR_TYPE_PX * uiScale) / 100,
+    heightPx: (BAR_HEIGHT_PX * uiScale) / 100,
     typeface,
   };
 }
@@ -153,11 +164,19 @@ export function dressed(page: string, look: BarLook, face: BarFace = bare(look.t
     font +
     `:root { ${colors.join(" ")} ` +
     `--guaca-font: ${face.stack}; ` +
-    `--guaca-size: ${look.sizePx}px; color-scheme: ${look.surface}; }` +
+    `--guaca-size: ${look.sizePx}px; --guaca-height: ${look.heightPx}px; ` +
+    `color-scheme: ${look.surface}; }` +
     ":where(html) { background: transparent; color: var(--guaca-text); " +
-    "font: var(--guaca-size) / 1.2 var(--guaca-font); }" +
+    "font-family: var(--guaca-font); font-size: var(--guaca-size); " +
+    "line-height: var(--guaca-height); }" +
     ":where(html, body) { height: 100%; margin: 0; overflow: hidden; }" +
-    ":where(body) { display: flex; align-items: center; gap: 0.4em; white-space: nowrap; }" +
+    // A page written to the frame's stated width can still outgrow it when
+    // the face changes or the operator's scale does. A line that is cut at the
+    // edge loses its last letters; the same line ended with an ellipsis says
+    // there was more rather than that a letter was drawn wrong.
+    ":where(body) { display: block; height: 100%; overflow: hidden; " +
+    "text-overflow: ellipsis; white-space: nowrap; }" +
+    ":where(body > * + *) { margin-left: 0.4em; }" +
     "</style>" +
     page
   );

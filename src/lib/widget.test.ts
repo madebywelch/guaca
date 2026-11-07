@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { ROOT_PX } from "./appearance";
 import { DEFAULT_THEME, themeTokens } from "./theme";
-import { BAR_TYPE_PX, barLook, dressed } from "./widget";
+import { BAR_HEIGHT_PX, BAR_TYPE_PX, barLook, dressed } from "./widget";
 
 const read = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
 
@@ -45,6 +45,15 @@ describe("a condensed view's frame", () => {
     expect(framed).not.toContain("@font-face");
     expect(framed).toContain("--guaca-font: system-ui, -apple-system");
   });
+
+  it("ends a line too long for the frame with an ellipsis rather than a cut letter", () => {
+    const look = barLook(DEFAULT_THEME, "light", 100);
+    const framed = dressed("<b>13.5</b><span>4 steps checked</span>", look);
+    expect(framed).toContain("text-overflow: ellipsis");
+    expect(framed).toContain("white-space: nowrap");
+    expect(framed).toContain(`--guaca-height: ${look.heightPx}px;`);
+    expect(framed).toContain(":where(body > * + *)");
+  });
 });
 
 describe("the sizes an agent is told", () => {
@@ -64,5 +73,11 @@ describe("the sizes an agent is told", () => {
   it("draw a condensed view in the bar's own type size", () => {
     expect(css).toMatch(/\.statusbar \{[^}]*font-size: var\(--type-small\);/);
     expect(rem("--type-small") * ROOT_PX).toBe(BAR_TYPE_PX);
+  });
+
+  it("draw a condensed view in the bar's own height", () => {
+    // The one line is set to the frame's height so it is centered in the frame
+    // and a line too long for it can end in an ellipsis.
+    expect(rem("--control-h-sm") * ROOT_PX).toBe(BAR_HEIGHT_PX);
   });
 });
