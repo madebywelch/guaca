@@ -3033,9 +3033,8 @@ input[type="file"]::file-selector-button {
   white-space: normal;
 }
 
-.footnote__dot {
-  color: var(--faint);
-  margin: 0 var(--space-2);
+.footnote__item + .footnote__item {
+  margin-left: var(--space-2);
 }
 
 /* What a call was pointed at, and what a burst of traffic was about: the two

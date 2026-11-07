@@ -53,13 +53,8 @@ export function TrailFootnote({
   return (
     <FootnoteRow number={number} at={at} failed={failed}>
       <span className="footnote__line">
-        {groups.map((group, at) => (
+        {groups.map((group) => (
           <span className="footnote__item" key={group.key}>
-            {at > 0 && (
-              <span className="footnote__dot" aria-hidden="true">
-                ·
-              </span>
-            )}
             <FootnoteGroup
               group={group}
               id={`${region}-${group.key}`}

@@ -5,6 +5,32 @@ import { trailStep } from "../lib/trail";
 import { TrailFootnote, TrailRow } from "./Trail";
 
 describe("a turn's trail", () => {
+  it("does not leave separators after a wrapped footnote item", () => {
+    const steps = [
+      trailStep(
+        {
+          type: "toolCall",
+          name: "directory",
+          arguments: {},
+          outcome: { status: "ok", summary: "Found agents" },
+        },
+        "first",
+      ),
+      trailStep(
+        {
+          type: "toolCall",
+          name: "request_permission",
+          arguments: {},
+          outcome: { status: "failed", error: "Nothing happened." },
+        },
+        "second",
+      ),
+    ];
+    const { container } = render(<TrailFootnote steps={steps} number={1} />);
+    expect(container.querySelectorAll(".footnote__item")).toHaveLength(2);
+    expect(container.querySelector(".footnote__line")?.textContent).not.toContain("·");
+  });
+
   it("separates a failed call from its reason in the footnote and accessible name", () => {
     const step = trailStep(
       {
