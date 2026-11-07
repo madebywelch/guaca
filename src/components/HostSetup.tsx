@@ -25,42 +25,125 @@ export function HostSetup({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(!desktop);
   const [checking, setChecking] = useState(desktop && !!attached());
   const [error, setError] = useState("");
+  const [chooser, setChooser] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const choosing = useRef(false);
+  const saved = attached();
+  const origin = saved?.origin;
+  const name =
+    hostMode() === "local" ? "On this Mac" : saved ? hostName(saved.origin) : "your host";
   useEffect(() => {
     if (!desktop || !attached()) return;
     let disposed = false;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
     const connect = async () => {
       try {
         const connection = hostMode() === "local" ? await localHost.start() : attached()!;
-        await probe(connection);
-        if (!disposed) {
+        if (disposed) return;
+        await Promise.race([
+          probe(connection),
+          new Promise<never>((_, reject) => {
+            deadline = setTimeout(
+              () =>
+                reject(
+                  new Error(
+                    `Couldn't connect to ${name} at ${connection.origin}. It may be off or offline.`,
+                  ),
+                ),
+              15_000,
+            );
+          }),
+        ]);
+        if (!disposed && !choosing.current) {
           activateRemote(connection);
           setReady(true);
         }
       } catch (cause) {
-        if (!disposed) setError(errorMessage(cause));
+        if (!disposed) {
+          const message = errorMessage(cause);
+          setError(
+            message.startsWith("nothing answered at ") && origin
+              ? `${name} isn't answering at ${origin}. It may be off or offline.`
+              : message,
+          );
+          choosing.current = true;
+          setChooser(true);
+        }
       } finally {
+        clearTimeout(deadline);
         if (!disposed) setChecking(false);
       }
     };
     void connect();
     return () => {
       disposed = true;
+      clearTimeout(deadline);
     };
-  }, []);
+  }, [attempt, name, origin]);
   if (ready) return children;
   return (
     <main className="threshold">
       <section className="host-setup">
         <h1 className="empty__title">Where should your agents work?</h1>
-        {checking ? (
-          <p role="status">Connecting to your host…</p>
+        {saved ? (
+          <div className="host-choice">
+            {checking ? (
+              <div role="status">
+                <p>Connecting to {name}…</p>
+                <p className="field__hint">{saved.origin}</p>
+              </div>
+            ) : error ? (
+              <p role="alert">{error}</p>
+            ) : null}
+            <div className="access__row">
+              {!checking && (
+                <button
+                  className="btn btn--small"
+                  type="button"
+                  onClick={() => {
+                    choosing.current = false;
+                    setChooser(false);
+                    setError("");
+                    setChecking(true);
+                    setAttempt((n) => n + 1);
+                  }}
+                >
+                  Try again
+                </button>
+              )}
+              {!chooser && (
+                <button
+                  className="btn btn--small"
+                  type="button"
+                  onClick={() => {
+                    choosing.current = true;
+                    setChooser(true);
+                  }}
+                >
+                  Choose another host
+                </button>
+              )}
+            </div>
+            {!chooser && (
+              <p className="field__hint">Choosing another host does not move this host's groups.</p>
+            )}
+            {chooser && <HostChoice onConnected={() => setReady(true)} />}
+          </div>
         ) : (
-          <HostChoice initialError={error} onConnected={() => setReady(true)} />
+          <HostChoice onConnected={() => setReady(true)} />
         )}
         <LegacyGroups />
       </section>
     </main>
   );
+}
+
+function hostName(origin: string): string {
+  try {
+    return new URL(origin).hostname.split(".")[0] || origin;
+  } catch {
+    return origin;
+  }
 }
 
 /** Shared by onboarding and Settings. Switching never transfers or stops groups. */
