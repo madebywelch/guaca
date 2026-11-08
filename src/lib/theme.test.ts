@@ -68,7 +68,10 @@ describe("the gates", () => {
   it("holds every preset to the contrast gates on both surfaces", () => {
     for (const theme of Object.values(THEME_PRESETS)) {
       for (const surface of ["light", "dark"] as const) {
-        expect(failures(themeTokens(theme, surface), theme.contrast)).toEqual([]);
+        const tokens = themeTokens(theme, surface);
+        expect(failures(tokens, theme.contrast)).toEqual([]);
+        expect(contrast(tokens["--edge-control"], tokens["--raised"])).toBeGreaterThanOrEqual(3);
+        expect(contrast(tokens["--muted"], tokens["--raised"])).toBeGreaterThanOrEqual(4.5);
       }
     }
   });
