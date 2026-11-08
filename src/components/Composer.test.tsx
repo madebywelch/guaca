@@ -127,7 +127,7 @@ describe("Composer", () => {
     expect(screen.getByRole("button", { name: "Send" }).textContent).toContain("Send");
     expect(select.selectedOptions[0]?.textContent).toBe("Ines");
     expect(screen.getByRole("group", { name: "Studio" }).textContent).toBe("Ines");
-    expect(screen.getByRole("group", { name: "Office" }).textContent).toBe("Ines (Office)");
+    expect(screen.getByRole("group", { name: "Office" }).textContent).toBe("Ines");
   });
 
   it("moves the draft and attachments to the selected channel", async () => {

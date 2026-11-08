@@ -273,7 +273,6 @@ export function Composer({
                     .map((agent) => (
                       <option key={agent.id} value={agent.id}>
                         {agent.name}
-                        {groupId !== group && ` (${name})`}
                       </option>
                     ))}
                 </optgroup>
