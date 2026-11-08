@@ -1,5 +1,3 @@
-# Guaca
-
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="design/wordmarks/eye-contact.dark.svg">
   <img src="design/wordmarks/eye-contact.svg" alt="guaca" width="271" height="74">
@@ -7,10 +5,7 @@
 
 **A desktop app for AI agents that work together.**
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/guaca-ink.png">
-  <img src="docs/img/guaca.png" alt="The Guaca window in paper. On the left, two groups: Studio, with Ines, Marlow, Dara and Kit paused, and Meridian, with Tomás, Wren and Noor. On the right, Ines's channel: asked whether the changelog could ship today, she messaged Marlow and Dara, and the question she asked back is answered on the page. Their two answers came back as one numbered footnote, and her reply says 13.5 shipped, with the type check kept as a page and pinned to the status bar.">
-</picture>
+![A group conversation in Guaca: Manager responds to a question about planning a neighborhood garden after consulting Researcher. The composer is visible below.](docs/img/guaca-signal.png)
 
 Run Guaca locally on your computer or connect it to a VPS. The backend runs in a
 container; you choose where it lives. The desktop is your window into that host.
@@ -70,9 +65,6 @@ it. A failed feed lookup or image pull stops the install. Choose **On this Mac**
 when Guaca opens, or **Remote host** to connect to a backend on your
 VPS. You can change that choice later in **Settings → Host**. A remote
 connection does not require Docker on your Mac.
-
-Managed Guaca compute spaces are planned for a later release. Local and remote
-hosts are available now.
 
 For building and publishing signed macOS downloads, see
 [macOS releases](docs/RELEASING.md). It covers versioning, Developer ID signing,
