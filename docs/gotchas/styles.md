@@ -114,10 +114,6 @@ and *Every length is named* in `AGENTS.md` is the rule they all sit under.
   not lower that width; only `anywhere` does. A failure arrived as
   a provider's JSON with no space in it for a line and a half, and it pushed
   Dismiss past the column's edge and under the inspector.
-- **A control drawn as one line has only that line to be seen by.** The
-  composer's boundary is a rule across the top and nothing else — no fill, no
-  radius, no other side — so that rule is the whole of WCAG 1.4.11's 3 to 1 for
-  the field. `--rule-hard` is the right color for a line that decorates
-  something already enclosed and the wrong one here, however much closer it is
-  to the mockup, and the operator who cannot see where the box begins cannot
-  tell whether they are typing into the app.
+- **A composer needs a visible control boundary.** Its border uses
+  `--edge-control`, not the decorative `--rule-hard`, so the operator can find
+  the field against the surrounding surface.

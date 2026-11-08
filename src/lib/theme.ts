@@ -56,6 +56,44 @@ export const DEFAULT_THEME: Theme = Object.freeze({
   temperature: "warm",
 });
 
+export const THEME_PRESETS: Record<string, Theme & { reading: "interface" | "serif" }> = {
+  Signal: {
+    grays: "slate",
+    attention: "amber",
+    contrast: "standard",
+    temperature: "cool",
+    reading: "interface",
+  },
+  Field: {
+    grays: "avocado",
+    attention: "amber",
+    contrast: "standard",
+    temperature: "cool",
+    reading: "serif",
+  },
+  Violet: {
+    grays: "neutral",
+    attention: "amber",
+    contrast: "standard",
+    temperature: "plain",
+    reading: "interface",
+  },
+  Paper: { ...DEFAULT_THEME, reading: "serif" },
+};
+
+export function matchesPreset(
+  theme: Theme & { reading: string },
+  preset: Theme & { reading: string },
+): boolean {
+  return (
+    theme.grays === preset.grays &&
+    theme.attention === preset.attention &&
+    theme.contrast === preset.contrast &&
+    theme.temperature === preset.temperature &&
+    theme.reading === preset.reading
+  );
+}
+
 /**
  * Surface temperature: how far the page and the columns move along the warmth
  * axis the grays already follow.
@@ -93,7 +131,7 @@ interface Grays {
 export const GRAYS: Record<GrayKey, Grays> = {
   neutral: { label: "Neutral", h: 260, c: 0.003 },
   warm: { label: "Warm", h: 89, c: 0.009 },
-  avocado: { label: "Avocado", h: 145, c: 0.014 },
+  avocado: { label: "Avocado", h: 165, c: 0.014 },
   slate: { label: "Slate", h: 250, c: 0.013 },
 };
 
@@ -264,6 +302,8 @@ export const THEME_TOKENS = [
   "--on-attention-fill",
   "--system",
   "--system-wash",
+  "--action-fill",
+  "--on-action-fill",
   "--ok",
   "--danger",
   "--danger-fill",
@@ -276,7 +316,17 @@ export type Tokens = Record<ThemeToken, string>;
 /** Every color a theme draws with on one surface. */
 export function themeTokens(theme: Theme, surface: Surface): Tokens {
   const dark = surface === "dark";
-  const ladder = GROUNDS[surface][theme.contrast];
+  const base = GROUNDS[surface][theme.contrast];
+  const ladder =
+    theme.grays === "slate" && theme.contrast === "standard"
+      ? dark
+        ? { ...base, ground: 0.229, raised: 0.269, "rail-ground": 0.199, "rail-raised": 0.249 }
+        : { ...base, ground: 0.958, raised: 0.982, "rail-ground": 0.912, "rail-raised": 0.942 }
+      : theme.grays === "avocado" && theme.contrast === "standard"
+        ? dark
+          ? { ...base, ground: 0.229, raised: 0.269, "rail-ground": 0.205, "rail-raised": 0.249 }
+          : { ...base, ground: 0.944, raised: 0.982, "rail-ground": 0.905, "rail-raised": 0.942 }
+        : base;
   const ratio = RATIOS[theme.contrast];
   const { h, c } = GRAYS[theme.grays];
   const climate = TEMPERATURES[theme.temperature];
@@ -284,7 +334,9 @@ export function themeTokens(theme: Theme, surface: Surface): Tokens {
   const ground = (name: string) =>
     hex(
       Math.min(1, Math.max(dark ? 0.03 : 0, (ladder[name] as number) + lift)),
-      c * (TINT_DEFAULT[name] ?? 1) * climate.tint,
+      c *
+        (TINT_DEFAULT[name] ?? 1) *
+        (theme.grays === "slate" || theme.grays === "avocado" ? 1 : climate.tint),
       h,
     );
 
@@ -309,13 +361,19 @@ export function themeTokens(theme: Theme, surface: Surface): Tokens {
   // grounds a hint is actually written on, which are not the crews' column.
   const worst = dark
     ? [rail["--rail-raised"], page["--raised"], page["--ground"]]
-    : [rail["--grail-ground"], rail["--rail-sunken"], page["--sunken"], page["--ground"]];
+    : [
+        rail["--grail-ground"],
+        rail["--rail-ground"],
+        rail["--rail-sunken"],
+        page["--sunken"],
+        page["--ground"],
+      ];
   const reading = dark
     ? [rail["--rail-raised"], page["--raised"]]
     : [rail["--rail-ground"], page["--sunken"], page["--ground"]];
   const controls = dark
     ? [page["--ground"], page["--raised"], rail["--rail-ground"], rail["--rail-raised"]]
-    : [page["--ground"], rail["--rail-ground"]];
+    : [page["--ground"], page["--raised"], rail["--rail-ground"]];
 
   // Ink carries more of the family's chroma than it used to. A soft black on
   // warm paper is the page's own temperature at the other end of the scale,
@@ -327,6 +385,17 @@ export function themeTokens(theme: Theme, surface: Surface): Tokens {
   const attention = ATTENTIONS[theme.attention];
   const attentionFill = hex(attention.fill, attention.c, attention.h);
   const dangerFill = hex(DANGER_FILL.L, DANGER_FILL.c, DANGER_FILL.h);
+  const systemHue =
+    theme.grays === "neutral"
+      ? 295
+      : theme.grays === "avocado"
+        ? 210
+        : theme.grays === "slate"
+          ? 255
+          : 237;
+  const systemChroma = theme.grays === "warm" ? 0.045 : 0.16;
+  const system = solve(systemChroma, systemHue, worst, ratio.system, dark ? 0.75 : 0.39, dark);
+  const actionFill = theme.grays === "warm" ? text : system;
 
   return {
     ...rail,
@@ -341,8 +410,10 @@ export function themeTokens(theme: Theme, surface: Surface): Tokens {
     "--attention-wash": hex(dark ? 0.26 : 0.965, dark ? 0.045 : 0.035, attention.h),
     "--attention-fill": attentionFill,
     "--on-attention-fill": onFill(attentionFill),
-    "--system": solve(0.045, 237, worst, ratio.system, dark ? 0.75 : 0.39, dark),
-    "--system-wash": hex(dark ? 0.25 : 0.965, dark ? 0.02 : 0.012, 237),
+    "--system": system,
+    "--system-wash": hex(dark ? 0.25 : 0.965, dark ? 0.02 : 0.012, systemHue),
+    "--action-fill": actionFill,
+    "--on-action-fill": onFill(actionFill),
     "--ok": solve(0.13, 160, worst, ratio.signal, dark ? 0.75 : 0.55, dark),
     "--danger": solve(0.19, 25, worst, ratio.signal, dark ? 0.7 : 0.55, dark),
     "--danger-fill": dangerFill,
@@ -396,6 +467,16 @@ export function measure(tokens: Tokens, level: ContrastLevel): Check[] {
     { name: "ok as text", value: least("--ok", pages), target: ratio.signal },
     { name: "danger as text", value: least("--danger", pages), target: ratio.signal },
     { name: "the system's voice", value: least("--system", pages), target: ratio.system },
+    {
+      name: "action fill beside raised",
+      value: contrast(tokens["--action-fill"], tokens["--raised"]),
+      target: 3,
+    },
+    {
+      name: "text on the action fill",
+      value: contrast(tokens["--action-fill"], tokens["--on-action-fill"]),
+      target: 4.5,
+    },
     {
       name: "text on the attention fill",
       value: contrast(tokens["--attention-fill"], tokens["--on-attention-fill"]),

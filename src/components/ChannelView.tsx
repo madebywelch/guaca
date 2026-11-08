@@ -61,6 +61,7 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
   const showFailure = useStore((s) => s.showFailure);
   const focused = useStore((s) => s.focused);
   const clearFocus = useStore((s) => s.clearFocus);
+  const select = useStore((s) => s.select);
 
   /** The peer whose thread is open over this channel, if any. */
   const [reading, setReading] = useState<AgentId | null>(null);
@@ -178,7 +179,6 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
                 app. A record opens with a title. */}
             <div className="pane__identity">
               <p className="pane__kicker">
-                <span className="pane__rule" aria-hidden="true" />
                 {crew ?? "Independent agent"} · a channel with one agent
               </p>
               <span className="pane__line">
@@ -316,6 +316,8 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
       <Composer
         key={`composer-${channel}`}
         draftKey={channel}
+        recipient={agent ? { id: agent.id, name: agent.name } : undefined}
+        onRecipientChange={(id) => void select(id)}
         placeholder={`Write to ${agent?.name ?? "agent"}…`}
         model={model}
         group={agent?.groupId ?? null}

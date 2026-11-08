@@ -1,0 +1,71 @@
+.rail__group-head {
+  font-family: var(--font-ui);
+  font-size: var(--type-aside);
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--rail-text);
+}
+
+.agent-row {
+  width: calc(100% - var(--space-4));
+  margin-left: var(--space-4);
+  border-radius: var(--radius-signal) 0 0 var(--radius-signal);
+}
+
+.agent-row[aria-current="true"] {
+  border-left-color: var(--system);
+  background: color-mix(in srgb, var(--system) 16%, var(--rail-ground));
+}
+
+.agent-row:not([aria-current="true"]) .avatar {
+  filter: none;
+}
+
+.btn--primary,
+.btn--primary:hover:not(:disabled) {
+  background: var(--action-fill);
+  border-color: var(--action-fill);
+  color: var(--on-action-fill);
+}
+
+.agent-row__name,
+.brand__name,
+.pane__title {
+  font-family: var(--font-ui);
+}
+
+.msg__margin + .msg__body {
+  border-left: 2px solid var(--rule);
+  padding-left: var(--space-5);
+}
+
+.msg__head {
+  font-family: var(--font-ui);
+}
+
+.host-setup {
+  padding: var(--space-8);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-signal);
+  background: var(--raised);
+}
+
+.host-setup .empty__title {
+  font-family: var(--font-ui);
+}
+
+.host-setup .choice--place,
+.host-setup .host-status {
+  border-radius: var(--radius-signal);
+}
+
+@media (max-width: 36rem) {
+  .host-setup {
+    padding: var(--space-6);
+  }
+
+  .host-choice__places {
+    grid-template-columns: 1fr;
+  }
+}

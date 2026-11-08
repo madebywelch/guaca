@@ -23,7 +23,12 @@ import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { ACCENTS, DEFAULT_ACCENT } from "../avatars/catalog";
-import { applyAppearance, resolveSurface } from "../lib/appearance";
+import {
+  applyAppearance,
+  prefersDark,
+  resolveSurface,
+  watchSystemSurface,
+} from "../lib/appearance";
 import { buildLabel } from "../lib/build";
 import { clientKeeps, hostAt, hostPlace } from "../lib/host";
 import { api, openExternal } from "../lib/ipc";
@@ -53,8 +58,10 @@ import {
   type ContrastLevel,
   GRAYS,
   type GrayKey,
+  matchesPreset,
   TEMPERATURE_KEYS,
   TEMPERATURES,
+  THEME_PRESETS,
   themeTokens,
 } from "../lib/theme";
 import { attached, desktop } from "../lib/transport";
@@ -87,9 +94,9 @@ interface Props {
 }
 
 const SURFACE_LABELS: Record<SurfaceMode, string> = {
-  light: "Paper",
-  dark: "Ink",
-  system: "Follow the system",
+  light: "Light",
+  dark: "Dark",
+  system: "Match system",
 };
 
 const TYPEFACE_LABELS: Record<Typeface, string> = {
@@ -171,6 +178,8 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
   const setSettings = useStore((s) => s.setSettings);
   const capabilities = useStore((s) => s.capabilities);
   const prefs = useStore((s) => s.prefs);
+  const [systemDark, setSystemDark] = useState(prefersDark);
+  useEffect(() => watchSystemSurface(setSystemDark), []);
   const setPrefs = useStore((s) => s.setPrefs);
   /* Which host this dialog is about, in the three ways the bar tells them
      apart, and what this client keeps of it. Both sentences below that name a
@@ -1286,10 +1295,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                 </div>
 
                 <div className="field">
-                  <span
-                    className="field__label"
-                    title="The whole window follows it: the page, both columns and everything drawn on them."
-                  >
+                  <span className="field__label" title="The whole window follows this setting.">
                     Reading surface
                   </span>
                   <div className="choices">
@@ -1307,14 +1313,45 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                     ))}
                   </div>
                   <span className="field__hint">
-                    Currently drawing {resolveSurface(prefs.surface) === "dark" ? "ink" : "paper"}.
+                    {resolveSurface(prefs.surface, systemDark) === "dark" ? "Dark" : "Light"} mode
+                    {prefs.surface === "system" ? ", matching your system" : ""}.
                   </span>
+                </div>
+
+                <div className="field">
+                  <span className="field__label">Theme presets</span>
+                  <div className="choices">
+                    {Object.entries(THEME_PRESETS).map(([name, theme]) => (
+                      <button
+                        key={name}
+                        type="button"
+                        className="choice choice--swatch"
+                        aria-label={`Theme: ${name}`}
+                        aria-pressed={matchesPreset(prefs, theme)}
+                        onClick={() => setLook(theme)}
+                      >
+                        <span
+                          className="choice__swatch"
+                          aria-hidden="true"
+                          style={
+                            {
+                              "--swatch": themeTokens(theme, resolveSurface(prefs.surface))[
+                                "--rail-ground"
+                              ],
+                            } as React.CSSProperties
+                          }
+                        />
+                        {name}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="field__hint">Choose a preset or adjust its colors below.</span>
                 </div>
 
                 <div className="field">
                   <span
                     className="field__label"
-                    title="The tint in the columns and the rules around the page. Warm is how Guaca looked before any of this could be chosen."
+                    title="The tint in the workspace surfaces and dividers."
                   >
                     Grays
                   </span>
@@ -1349,9 +1386,9 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                 <div className="field">
                   <span
                     className="field__label"
-                    title="How warm the page and the two columns are. Warm is paper, plain is nearly white and cool is white under a northern light; every ink is solved against whichever one you pick."
+                    title="Adjust the warmth of the workspace surfaces."
                   >
-                    Paper temperature
+                    Surface temperature
                   </span>
                   <div className="choices">
                     {TEMPERATURE_KEYS.map((temperature) => (
@@ -1359,7 +1396,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                         key={temperature}
                         type="button"
                         className="choice choice--swatch"
-                        aria-label={`Paper temperature: ${TEMPERATURES[temperature].label}`}
+                        aria-label={`Surface temperature: ${TEMPERATURES[temperature].label}`}
                         aria-pressed={prefs.temperature === temperature}
                         onClick={() => setLook({ temperature })}
                       >
@@ -1511,7 +1548,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                 <div className="field">
                   <span
                     className="field__label"
-                    title="How every agent is drawn. Cut is paper, with eyes that have a pupil and lids. Drawn is a brush line at twelve drawings a second, with brows, and a mouth where there is room for one. Which character each agent is stays the same."
+                    title="How every agent is drawn. Cut uses flat shapes with pupils and lids. Drawn uses a brush line with brows and, where there is room, a mouth. Each agent keeps the same character."
                   >
                     Characters
                   </span>

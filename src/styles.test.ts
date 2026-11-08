@@ -32,11 +32,13 @@ import { ROOT_PX } from "./lib/appearance";
 // From the project root rather than from this module: the jsdom environment
 // rewrites `import.meta.url` to an `http:` URL, which `readFileSync` refuses.
 const css = readFileSync(join(process.cwd(), "src/styles.css"), "utf8");
+const signalCss = readFileSync(join(process.cwd(), "src/signal-layout.css"), "utf8");
+const composerCss = readFileSync(join(process.cwd(), "src/components/Composer.css"), "utf8");
 
 /** The app's own stylesheet, in the document, so the cascade is the real one. */
 beforeAll(() => {
   const style = document.createElement("style");
-  style.textContent = css;
+  style.textContent = `${css}\n${signalCss}\n${composerCss}`;
   document.head.append(style);
 });
 
@@ -681,7 +683,10 @@ describe("the composer's mention layer", () => {
  * rule is skipped.
  */
 function declarations(): { selector: string; property: string; value: string }[] {
-  const body = css.slice(css.indexOf("\n* {")).replace(/\/\*[\s\S]*?\*\//g, "");
+  const body = `${css.slice(css.indexOf("\n* {"))}\n${signalCss}\n${composerCss}`.replace(
+    /\/\*[\s\S]*?\*\//g,
+    "",
+  );
   const found: { selector: string; property: string; value: string }[] = [];
   const stack: string[] = [];
   let token = "";
@@ -859,7 +864,7 @@ describe("every token a rule spends exists", () => {
    * name, in a string. Nothing else can give one a value.
    */
   it("names a property this file declares or a component sets", () => {
-    const rules = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    const rules = `${css}\n${signalCss}\n${composerCss}`.replace(/\/\*[\s\S]*?\*\//g, "");
     const declared = new Set([...rules.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]));
     const root = join(process.cwd(), "src");
     const code = readdirSync(root, { recursive: true, encoding: "utf8" })
@@ -940,24 +945,30 @@ describe("what the attention color is spent on", () => {
     },
   );
 
-  /**
-   * The composer is a ruled line rather than a box, and the line is still the
-   * boundary.
-   *
-   * Ledger draws the box you type into as a line you write on: no fill, no
-   * radius, no four-sided border. The mockup spends `--rule-hard` on that line,
-   * which is 1.6 to 1, and it can afford to because its field is also bounded
-   * by the page. This one is the field, so it keeps the 3 to 1 WCAG 1.4.11 asks
-   * of the boundary of a control, drawn on one edge instead of four.
-   */
-  it("bounds the composer with a line in a control's edge", () => {
-    const rule = declarations().find((d) => d.selector === ".composer");
-    expect(rule).toBeTruthy();
-    const drawn = declarations()
-      .filter((d) => d.selector === ".composer")
-      .filter((d) => /^border(-top)?$/.test(d.property));
-    expect(drawn.map((d) => `${d.property}: ${d.value}`)).toContain(
-      "border-top: 1px solid var(--edge-control)",
+  it("bounds the composer on every side", () => {
+    const rules = declarations();
+    const last = (selector: string, property: string) =>
+      rules.filter((d) => d.selector === selector && d.property === property).at(-1)?.value;
+    expect(last(".composer", "border")).toBe("1px solid var(--edge-control)");
+    expect(last(".composer", "border-radius")).toBe("var(--radius-signal)");
+    expect(last(".composer:focus-within", "border-color")).toBe("var(--focus)");
+    expect(
+      last(
+        ".composer__send, .composer__send:disabled, .composer__send:hover:not(:disabled)",
+        "background",
+      ),
+    ).toBe("var(--action-fill)");
+    expect(
+      last(
+        ".composer__send, .composer__send:disabled, .composer__send:hover:not(:disabled)",
+        "color",
+      ),
+    ).toBe("var(--on-action-fill)");
+    expect(last(".composer__recipient option, .composer__recipient optgroup", "color")).toBe(
+      "var(--text)",
+    );
+    expect(last(".composer__recipient option, .composer__recipient optgroup", "background")).toBe(
+      "var(--raised)",
     );
   });
 });

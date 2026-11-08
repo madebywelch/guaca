@@ -225,7 +225,7 @@ describe("who said what", () => {
 
     expect(screen.getByText("all clear")).toBeTruthy();
     // The pane's title, and the running head over the passage: never a third.
-    expect(screen.getAllByText("Manager")).toHaveLength(2);
+    expect(screen.getAllByText("Manager", { selector: "h1, .msg__head" })).toHaveLength(2);
     expect(document.querySelectorAll(".msg--continued")).toHaveLength(1);
     // And the operator's own first turn is headed like any other passage.
     expect(document.querySelectorAll(".msg__head")).toHaveLength(2);

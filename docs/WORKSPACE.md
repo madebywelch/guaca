@@ -57,6 +57,9 @@ rhythm rather than a boundary somebody has to find, and one hairline for both
 jobs is why the app could not say where a turn starts any louder than it said
 "hairline".
 
+Signal adds a vertical trace beside each passage. The channel header names the
+group and the agent without a decorative rule before the group name.
+
 The margin is what makes the calm work at 1440. Ledger's risk was that a page
 reads as flat on a wide window with one short message in it; the answer is that
 the margin always has something in it — a time, a face, a number — and the eye
@@ -1048,31 +1051,18 @@ and the copy is scrolled with it from two places: the scroll event, and the
 effect that resizes it. Typing at the bottom of a full box moves the view
 without the operator having scrolled anything.
 
-## The box you write in is a line, and the row under it is permanent
+## The composer is bounded and names its recipient
 
-The composer was a widget on the page: a rounded box with a fill, a border on
-four sides and a hint that appeared only when there was something to hint. Ledger
-makes it the field of a form printed on the page. There is no box. There is a
-rule across the top, the width of the writing column, and the page under it —
-no fill, no radius, and the placeholder in the reading face, because the
-placeholder is the sentence somebody is about to write and it should look like
-one.
+The composer is a raised, bounded field with a visible send control. Its edge
+uses `--edge-control`, which is solved against the surfaces on both sides.
+Focus adds a distinct boundary without moving the field. The recipient is the
+agent whose channel is open, and selecting another recipient opens that agent's
+channel with the unsent draft. An @mention names an agent in the text; it does
+not change the recipient.
 
-**The line is `--edge-control` and not the mockup's `--rule-hard`.** That is a
-1.6-to-1 line in the mockup and it works there because the field it encloses is
-also bounded by the page around it. Here the line is the field's only boundary,
-and WCAG 1.4.11 asks 3 to 1 of the boundary of a control: an operator who cannot
-see where the box begins cannot tell whether they are typing into the app or
-into nothing. The gate is `styles.test.ts`, which reads `.composer`'s rule back
-through the cascade, so nobody can quietly spend `--rule-hard` here for the
-look of it.
-
-The row under the line used to be conditional and is now permanent, and it earns
-its twelve pixels by carrying the two things the box cannot show: what will
-answer, and that `@` is how an agent is named. The right end says how to leave
-the box for the palette. `FIND_KEY` is in `lib/keybinds.ts` rather than in
-either caller, because the rail's search field draws the same label for the same
-binding and two copies of it is one of them going stale on a Windows machine.
+The permanent row names the model that will answer and says that `@` names an
+agent. Its shortcut comes from `FIND_KEY` in `lib/keybinds.ts`, shared with the
+rail's search field.
 
 What it names is `runsOn(agent, group, settings)`: the model a turn will
 actually resolve, this agent's own over its group's over the app's, and "Claude
@@ -1080,26 +1070,13 @@ subscription" where a plan is what answers. A row that showed the app's default
 would be a line about settings where the operator is being told who is going to
 answer.
 
-The mockup also draws a `↵` cap at the right of the line, and that is not built.
-The composer already has a Send button; a key cap beside it is the same control
-said twice, and a second glyph that means "send" is a second thing to learn for
-nothing.
-
 ## The rail is an index, and its footer is the back matter
 
-The column lists agents the way an index lists entries: a small mark, the name
-set in the display face, and what the agent is doing at the right in the machine
-texture. The face was 44 pixels, which is a portrait, and a column of portraits
-is a contact list. Ledger's move is the printed page's *one color plate per
-spread*: the creature is the one thing in the column drawn rather than written,
-so it belongs to the entry you have open and every other row carries a mark
-dimmed to gray. The bar saying which row is open is the agent's own color, and
-that is a deliberate difference from the mockup, which draws it in the attention
-amber: amber means "the app wants something from you" and nothing else in this
-app, and "you are looking at this one" is not a request.
-
-Each group heads its entries with its name in tracked capitals and, at the
-right, how many are in it — the one thing a reader opening an index is counting.
+The column lists each agent with a small colored creature, a name, and its
+activity. The selected row has a filled lane and a left marker, so selection
+does not depend on color alone. That marker uses the system color, not the
+attention color reserved for requests that need the operator. Group names are
+set in the interface face.
 
 The four places at the bottom are back matter: one line each, the name at the
 left and whatever the app can say about it at the right — For you's count,
@@ -2366,126 +2343,40 @@ for a container to stop, copy its volume and pass a health check, and short
 enough that a host still gone afterwards is worth saying. The host answering ends
 it early.
 
-## The page is the only paper, and both edges are the same off-white
+## The workspace follows the selected surface
 
-`styles.css` used to say the surface never follows the OS, and the argument was
-sound as far as it went: a chat log is read for minutes at a time and white wins
-that in a lit room. It does not win it in a dark one. So the reading column is a
-token block behind `data-surface`: every color the theme owns, a scrim and a
-shadow, and nothing else.
+Signal uses a cool, layered workspace with a distinct navigation rail and a
+raised composer. The same layout is used by every preset. The light and dark
+surfaces are solved independently, and Match system follows the operating
+system as its appearance changes. `data-surface` is always `light` or `dark`;
+the system preference is resolved before it reaches the document.
 
-The page is `#fbf9f3` rather than white, which is Ledger's ground argument: a
-record of work should read as a page, and paper is warm. What has not changed is
-the relationship the rest of the app hangs off — the page is the brightest
-ground, both navigation columns are the same off-white a shade under it, and
-nothing else on screen is a surface. White is still reachable, as the `cool` end
-of *Paper temperature*; it is a choice an operator makes rather than the thing
-the app assumes.
-
-The two navigation columns are part of that question rather than exempt from it,
-and that is the change. They were ink whichever surface the operator picked, on
-the argument that a dark rail against a white page is what makes the page read
-as paper rather than as another panel. What it actually produced was an app with
-three surfaces for two jobs: a near-black column on the left, a white page, and
-a white panel on the right, so the app's own two edges did not look like each
-other and the heavier of them was the one carrying the least reading. The rail
-and the inspector do the same job — everything about an agent that is not what
-it said — so they are one ground, a shade off the page rather than opposite it,
-and the page is the only white thing on screen.
-
-What is left with any saturation in it is an agent's own color and the one
-amber. That is the point rather than a side effect: a column that is itself a
-color is a column every agent's color is competing with, and the accent that
-means "answer me" had two values depending on which side of a border it was
-drawn on. Both columns used to pin `--attention` and `--attention-wash`, and the
-groups' column `--danger` as well, because a dark reading column would otherwise
-have repainted them silently. Nothing is pinned now. What replaced the pins is the
-other half of the same trap, asserted in `styles.test.ts`: every `--rail-*` and
-`--grail-*` value that is a color has to be declared in both surface blocks, or
-a column stays off-white in a dark room and no DOM assertion sees it.
-
-One value did not exist before and had to. `--sunken` is a hair off white, which
-is a recessed field on paper and nothing at all on an off-white panel, so the
-columns remap it onto `--rail-sunken` in one rule that names all three of them.
-Remapped there rather than at each rule inside, so a row added to the inspector
-tomorrow is recessed from what it is actually drawn on without having to know
-which half of the app it is in.
-
-One surface is still ink under both, and now says so itself. The full-window
-machine viewer is a light-tight box around somebody else's desktop, because a
-pale chrome around a picture is a chrome the eye keeps reading instead of the
-picture. It pins four values of its own on `.screen`, including its shadow: a
-lift resolved against the reading column would put a paper-weight ring on a
-black surface.
-
-`system` is resolved before it reaches the document, so `data-surface` is only
-ever `light` or `dark`. A rule keyed on `system` would have to duplicate the one
-keyed on `dark`, and CSS has no way to share the two.
-
-Scale is the same idea from the other side: every length in the stylesheet is
-already a `rem`, so the whole interface is one root font size. It is anchored at
-16px because that is what a `rem` already resolved to — nothing had ever set a
-root font size — and `body` moved from `15px` to `0.9375rem` so that everything
-inheriting from it grows too. The rail and the inspector are capped against the
-viewport as well as scaled: both grow with the scale and the window's own minimum
-does not, so at the largest scale in the smallest window they would otherwise
-leave the reading column narrower than a message can draw.
-
-Neither preference goes anywhere near the runtime. They are `localStorage`, the
-way the inspector's open-or-closed already is, because the runtime would carry
-them across IPC only to hand them straight back.
+The machine viewer keeps its own dark surroundings so its chrome does not
+compete with the screen it shows. Interface scale changes the root font size;
+the rail and inspector are capped against the viewport so they cannot consume
+the reading column in a small window. Both scale and surface are operator
+preferences in `localStorage`, not runtime settings.
 
 ## A theme is four choices, and every color in it is solved
 
-The first look an operator gets was one person's taste: cream columns, a
-near-black, and 9px uppercase monospace over every group. Measured, it was also
-wrong in ways taste could not see. Hints were 3.2 to 1 against the page, under
-the 4.5 WCAG asks of text. The border of every input was 1.3 to 1, where a
-control's boundary needs 3. And "answer me" was 2.6 from "failed" under
-simulated deuteranopia, which makes them one color. Some degree of red-green
-colorblindness affects about one man in twelve.
+Appearance offers Signal, Field, Violet and Paper presets. Signal is the
+default. A preset chooses the palette and reading face; it does not change the
+layout. Each has a light and a dark surface, and Match system is the default.
+The choice stays in local preferences and never reaches the runtime.
+Signal uses cool blue-gray and blue actions, Field uses mineral greens and teal,
+Violet uses neutral grounds and violet actions, and Paper retains the warmer
+paper palette. The send control is filled in the action color even before a
+draft is entered, so its position is visible while it is disabled.
 
-So a theme is not a table of hexes, and nobody writes one. It is four choices
-under Appearance: how warm or cool the grays are, which hue means the app wants
-something from you, how much contrast, and how warm the paper itself is.
-`lib/theme.ts` solves every color from those against a ratio: text to 15 to 1 on
-the darkest ground it is drawn on, hints to 4.5, a control's edge to 3, and so
-on. Lightness is never a choice, the operator's or a preset's. That is the whole
-of what makes the system open to change: a combination nobody has looked at
-clears the same gates the default does, because the gates are where the values
-came from.
+A palette is expressed through the four theme choices: gray hue, attention hue,
+contrast and temperature. `lib/theme.ts` solves the semantic colors against
+contrast ratios, including text, control edges and focus. `theme.test.ts` checks
+both surfaces and the combinations the controls can reach. The stylesheet's
+initial token blocks are also checked so first paint is not an unmeasured palette.
 
-The fourth is not a color, which is the point of it. *Paper temperature* moves
-the page and the two columns along the axis the grays already follow: a
-lightness lift applied to every ground in the ladder, and a multiplier on the
-chroma those grounds carry. `warm` is the ladder as drawn, so its lift is zero,
-and `cool` is white under a northern light. Every ink is solved against the
-ground it lands on *after* the lift, so a page that moved is a page the text was
-measured against rather than one it was painted over. It is separate from the
-grays choice because they answer different questions: an operator can like a
-warm rail and still want to read on white, and the page is the one surface long
-text sits on for minutes at a time. `theme.test.ts` runs all three temperatures
-through every other combination the pane can reach.
-
-A rule is two rules now. `--rule` is decoration at 1.3 to 1 — the line between
-two turns, the border of a card, the edge of a well — and `--rule-hard` is a
-boundary somebody has to find, at 1.6 to 1: the line the composer is written on,
-the head of a table, the break between two sections of an index. They were one
-`--edge` value doing both jobs, which is why the app could not say "this is
-where the next turn starts" any louder than "this is a hairline". A control's
-boundary is neither of them and is still `--edge-control` at the 3 to 1 WCAG
-1.4.11 asks.
-`theme.test.ts` runs every combination the pane can reach on both surfaces, and
-holds the stylesheet's own blocks equal to the default theme, so the first
-paint is not a second set of colors nobody measured.
-
-What an operator cannot choose is as deliberate. There is no field for a hex, a
-radius or a spacing. Those are what the gates hold, and a theme that could set
-any color is a theme that can make the app illegible, after which every bug
-report starts with which theme. Hues were refused on the same grounds: rose and
-teal both fail on ink, where their fill sits at the lightness of a routine's
-green dot and the two are drawn on one mark to mean "waiting on you" and
-"fine".
+A structural rule and a control boundary have different jobs: `--rule` divides
+content, while `--edge-control` must meet the 3 to 1 contrast required for a
+visible control boundary against its adjacent surfaces.
 
 The attention color is two colors now. `--attention` is an ink, legible as
 words. `--attention-fill` is a shape, a badge or a dot or the mark on a parked
@@ -2497,8 +2388,9 @@ lightness, which is the axis red-green colorblindness keeps.
 And it is spent only on attention. It had become the focus ring, the primary
 button, the send button, every toggle that was on, every link, a running job
 and the streaming caret, so "you tabbed here" and "answer me" were one ring. A
-focus ring and a drop target are the system's slate. A primary button and
-anything switched on are ink. Something running is the slate. `styles.test.ts`
+focus ring and a drop target use the system color. Primary and send buttons use
+the preset's action fill and its paired text color. Something running uses the
+system color. `styles.test.ts`
 fails a focus rule or an on-state spelled from the attention color, and a
 fill whose text is not its own on-color. The groups' waiting count is still red,
 and that is on purpose: it is drawn to match the menu bar's attention glyph,
@@ -2518,15 +2410,10 @@ the system's own face instead, which is SF Pro on a Mac, or Atkinson
 Hyperlegible, whose letters are drawn so no two are easy to mistake. Each brings
 its own monospace.
 
-What agents wrote is `--font-read` and `--type-read`. Literata is both of those
-by default now, and `--font-display` with it: Ledger is a page, and a page sets
-its titles in the face it is read in, so the channel's name, an agent's name and
-the wordmark are Literata too. The interface — the rail's rows, every control,
-every label — stays Inter, because an interface that reads as a document stops
-being an interface. An operator who reads agents in the interface face gets
-`--font-read` back and keeps a rail and a title that do not change with it;
-`--font-display` follows the *typeface* choice instead, so somebody who picked
-Atkinson Hyperlegible for its letterforms gets them in a heading as well.
+What agents wrote is `--font-read` and `--type-read`. Signal uses the
+interface face for reading; Field and Paper use Literata. A preset selects its
+reading face alongside its colors, while interface typeface and reading size
+remain separately adjustable.
 
 Only the transcript and the composer spend `--type-read`, 16px until an
 operator picks another size. A reading size that moved the rail and the controls

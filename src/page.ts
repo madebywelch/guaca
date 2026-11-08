@@ -22,6 +22,7 @@ import "@fontsource-variable/literata/opsz-italic.css";
 import { applyAppearance } from "./lib/appearance";
 import { loadPrefs } from "./lib/prefs";
 import "./styles.css";
+import "./signal-layout.css";
 
 /**
  * The operator's appearance, before anything is drawn.

@@ -9,12 +9,15 @@ import { applyMention, matchMentions, mentionAt, splitMentions } from "../lib/me
 import { useLiveAgents, useStore } from "../lib/store";
 import { BEFORE_RELOAD, workspaceOrigin } from "../lib/transport";
 import { type Attachment, errorMessage, type GroupId, type Staged } from "../lib/types";
+import "./Composer.css";
 
 interface Props {
   placeholder: string;
   /** The model that will answer, for the row under the line. */
   model?: string;
   draftKey?: string;
+  recipient?: { id: string; name: string };
+  onRecipientChange?: (id: string) => void;
   /**
    * The crew this channel belongs to, or null when it belongs to nobody.
    *
@@ -39,11 +42,14 @@ export function Composer({
   disabledReason,
   onSend,
   draftKey,
+  recipient,
+  onRecipientChange,
 }: Props) {
   const storageKey = `guaca.draft:${workspaceOrigin()}:${draftKey ?? group ?? "composer"}`;
   const [initial] = useState(() => readDraft(storageKey));
   const [text, setText] = useState(initial.text);
   const [sending, setSending] = useState(false);
+  const [stagingCount, setStagingCount] = useState(0);
   const [caret, setCaret] = useState(0);
   const [highlighted, setHighlighted] = useState(0);
   const [dismissed, setDismissed] = useState(false);
@@ -51,6 +57,14 @@ export function Composer({
   /** What was dropped and could not be taken, in the words the runtime used. */
   const [refused, setRefused] = useState<string[]>([]);
   const [dragging, setDragging] = useState(false);
+  useEffect(() => {
+    if (!draftKey) return;
+    try {
+      saveDraft(storageKey, { text, files });
+    } catch {
+      return;
+    }
+  }, [draftKey, storageKey, text, files]);
   useEffect(() => {
     const preserve = (event: Event) => {
       try {
@@ -77,6 +91,7 @@ export function Composer({
 
   /** What a drop or a pick became, folded into what is already attached. */
   const take = useCallback((staging: Promise<Staged>) => {
+    setStagingCount((count) => count + 1);
     void staging
       .then((staged) => {
         // The same file twice is one attachment, by content rather than by
@@ -88,7 +103,8 @@ export function Composer({
         ]);
         setRefused(staged.refused);
       })
-      .catch((error) => setRefused([errorMessage(error)]));
+      .catch((error) => setRefused([errorMessage(error)]))
+      .finally(() => setStagingCount((count) => count - 1));
   }, []);
 
   // Dropping anywhere on the window attaches to whatever channel is open,
@@ -107,6 +123,7 @@ export function Composer({
   }, [disabled, take]);
 
   const live = useLiveAgents();
+  const groups = useStore((s) => s.groups);
   const crew = useMemo(
     () => (group ? live.filter((agent) => agent.groupId === group) : []),
     [live, group],
@@ -217,6 +234,53 @@ export function Composer({
 
   return (
     <div className="composer" data-dragging={dragging || undefined}>
+      {recipient && onRecipientChange && (
+        <label className="composer__recipient">
+          <span>To</span>
+          <select
+            aria-label="Recipient"
+            value={recipient.id}
+            disabled={sending || stagingCount > 0}
+            onChange={(event) => {
+              const id = event.target.value;
+              if (id === recipient.id) return;
+              const destination = `guaca.draft:${workspaceOrigin()}:${id}`;
+              try {
+                const held = readDraft(destination);
+                if (held.text || held.files.length) {
+                  setRefused([
+                    "That channel already has a saved draft. Open it before moving this draft.",
+                  ]);
+                  return;
+                }
+                saveDraft(destination, { text, files });
+                sessionStorage.removeItem(storageKey);
+                onRecipientChange(id);
+              } catch (error) {
+                setRefused([errorMessage(error)]);
+              }
+            }}
+          >
+            {!live.some((agent) => agent.id === recipient.id) && (
+              <option value={recipient.id}>{recipient.name}</option>
+            )}
+            {[...new Set(live.map((agent) => agent.groupId))].map((groupId) => {
+              const name = groups.find((entry) => entry.id === groupId)?.name ?? "Independent";
+              return (
+                <optgroup key={groupId ?? "independent"} label={name}>
+                  {live
+                    .filter((agent) => agent.groupId === groupId)
+                    .map((agent) => (
+                      <option key={agent.id} value={agent.id}>
+                        {agent.name}
+                      </option>
+                    ))}
+                </optgroup>
+              );
+            })}
+          </select>
+        </label>
+      )}
       {files.length > 0 && (
         <ul className="composer__files" aria-label="Attached files">
           {files.map((file) => (
@@ -384,6 +448,7 @@ export function Composer({
           onClick={() => void submit()}
           disabled={disabled || sending || (text.trim().length === 0 && files.length === 0)}
         >
+          <span>Send</span>
           <span aria-hidden="true">↑</span>
         </button>
       </div>

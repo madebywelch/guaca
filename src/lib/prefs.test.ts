@@ -27,7 +27,7 @@ import {
   TYPEFACES,
   UI_SCALES,
 } from "./prefs";
-import { ATTENTIONS, CONTRASTS, GRAYS } from "./theme";
+import { ATTENTIONS, CONTRASTS, GRAYS, THEME_PRESETS } from "./theme";
 
 /**
  * The key the blob lives under, written out again rather than imported.
@@ -41,22 +41,20 @@ const KEY = "guac.prefs";
 /**
  * The defaults, written out independently of the module's own constant.
  *
- * 100 and light are what the app has always drawn. Warm grays and warm paper,
- * amber, Inter, Literata at 16px and the drawn cast are the first look a new
- * operator gets, which is Ledger. Every
+ * Signal and the system surface are the first look a new operator gets. Every
  * notification is on because a blob that cannot be read must not be able to
  * switch interruptions off. Asserting against the module constant would pass
  * whatever it said.
  */
 const DEFAULTS: Prefs = {
   uiScale: 100,
-  surface: "light",
-  grays: "warm",
+  surface: "system",
+  grays: "slate",
   attention: "amber",
   contrast: "standard",
-  temperature: "warm",
+  temperature: "cool",
   typeface: "inter",
-  reading: "serif",
+  reading: "interface",
   readingSize: 16,
   cast: "drawn",
   showReasoning: false,
@@ -92,6 +90,31 @@ beforeEach(() => {
 });
 
 describe("a blob that cannot be trusted", () => {
+  it("retains an existing Ledger preference instead of replacing it with Signal", () => {
+    expect(
+      readPrefs({
+        surface: "light",
+        grays: "warm",
+        attention: "amber",
+        contrast: "standard",
+        temperature: "warm",
+        reading: "serif",
+      }),
+    ).toMatchObject({
+      surface: "light",
+      ...THEME_PRESETS.Paper,
+    });
+  });
+
+  it("round trips every preset and surface", () => {
+    for (const preset of Object.values(THEME_PRESETS)) {
+      for (const surface of ["light", "dark", "system"] as const) {
+        const prefs = { ...DEFAULTS, ...preset, surface };
+        savePrefs(prefs);
+        expect(loadPrefs()).toEqual(prefs);
+      }
+    }
+  });
   it("takes the defaults from anything that is not an object", () => {
     // The last two are the ones that actually happen: a blob stringified twice
     // parses back to a string, and a truncated file can parse to a bare number.

@@ -148,10 +148,12 @@ export interface Prefs extends Theme {
  */
 export const DEFAULT_PREFS: Prefs = Object.freeze({
   uiScale: 100,
-  surface: "light",
+  surface: "system",
   ...DEFAULT_THEME,
+  grays: "slate",
+  temperature: "cool",
   typeface: "inter",
-  reading: "serif",
+  reading: "interface",
   readingSize: 16,
   cast: "drawn",
   showReasoning: false,

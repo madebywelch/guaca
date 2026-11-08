@@ -271,7 +271,7 @@ describe("App", () => {
     render(<App />);
 
     await waitFor(() => expect(screen.getByText("Manager")).toBeTruthy());
-    expect(screen.getByText("Chef")).toBeTruthy();
+    expect(railRow("Chef")).toBeTruthy();
     // A channel header, meaning the pane rendered rather than staying empty.
     await waitFor(() => expect(screen.getByRole("heading", { name: "Manager" })).toBeTruthy());
   });
