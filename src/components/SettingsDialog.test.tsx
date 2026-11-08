@@ -1667,7 +1667,7 @@ describe("appearance", () => {
     expect(document.documentElement.dataset.surface).toBe("dark");
     expect(choice("Reading surface: Dark").getAttribute("aria-pressed")).toBe("true");
     expect(choice("Reading surface: Light").getAttribute("aria-pressed")).toBe("false");
-    expect(screen.getByText(/Currently drawing ink/)).toBeTruthy();
+    expect(screen.getByText("Dark mode.")).toBeTruthy();
   });
 
   it("resolves the system's answer rather than handing it on as one", () => {
@@ -1679,6 +1679,29 @@ describe("appearance", () => {
     // is given. The stub here reports no preference, which is paper.
     expect(useStore.getState().prefs.surface).toBe("system");
     expect(document.documentElement.dataset.surface).toBe("light");
+    expect(screen.getByText("Light mode, matching your system.")).toBeTruthy();
+  });
+
+  it("updates the system hint when the system changes", () => {
+    let change: ((event: MediaQueryListEvent) => void) | undefined;
+    vi.stubGlobal("matchMedia", () => ({
+      matches: false,
+      addEventListener: (_: string, listener: (event: MediaQueryListEvent) => void) => {
+        change = listener;
+      },
+      removeEventListener: () => {},
+    }));
+    try {
+      open();
+      pane("Appearance");
+      fireEvent.click(choice("Reading surface: Match system"));
+      act(() => change?.({ matches: true } as MediaQueryListEvent));
+      expect(screen.getByText("Dark mode, matching your system.")).toBeTruthy();
+      fireEvent.click(choice("Reading surface: Light"));
+      expect(screen.getByText("Light mode.")).toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("keeps a chosen cast and shows each one before it is chosen", () => {

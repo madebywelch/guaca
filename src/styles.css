@@ -142,6 +142,8 @@
   --on-attention-fill: #161616;
   --system: #2d495a;
   --system-wash: #ecf5fb;
+  --action-fill: #181610;
+  --on-action-fill: #ffffff;
   /* Where the keyboard is, and where a drop will land. The system's voice
      rather than the amber: a ring in "answer me" around every control tabbed
      through spent the one signal on "you are here". */
@@ -426,6 +428,8 @@
   --on-attention-fill: #161616;
   --system: #94b3c7;
   --system-wash: #19232a;
+  --action-fill: #f8f5ec;
+  --on-action-fill: #161616;
   --ok: #57c791;
   --danger: #ff645f;
   --danger-fill: #c21725;

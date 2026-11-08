@@ -2363,6 +2363,10 @@ Appearance offers Signal, Field, Violet and Paper presets. Signal is the
 default. A preset chooses the palette and reading face; it does not change the
 layout. Each has a light and a dark surface, and Match system is the default.
 The choice stays in local preferences and never reaches the runtime.
+Signal uses cool blue-gray and blue actions, Field uses mineral greens and teal,
+Violet uses neutral grounds and violet actions, and Paper retains the warmer
+paper palette. The send control is filled in the action color even before a
+draft is entered, so its position is visible while it is disabled.
 
 A palette is expressed through the four theme choices: gray hue, attention hue,
 contrast and temperature. `lib/theme.ts` solves the semantic colors against
@@ -2384,8 +2388,9 @@ lightness, which is the axis red-green colorblindness keeps.
 And it is spent only on attention. It had become the focus ring, the primary
 button, the send button, every toggle that was on, every link, a running job
 and the streaming caret, so "you tabbed here" and "answer me" were one ring. A
-focus ring and a drop target are the system's slate. A primary button and
-anything switched on are ink. Something running is the slate. `styles.test.ts`
+focus ring and a drop target use the system color. Primary and send buttons use
+the preset's action fill and its paired text color. Something running uses the
+system color. `styles.test.ts`
 fails a focus rule or an on-state spelled from the attention color, and a
 fill whose text is not its own on-color. The groups' waiting count is still red,
 and that is on purpose: it is drawn to match the menu bar's attention glyph,

@@ -48,7 +48,10 @@ let roster: AgentCard[] = [];
 
 /** What the composer reads off the store: the roster, and whether there is a disk. */
 const state = {
-  groups: [{ id: "00000000-0000-4000-8000-000000000001", name: "Studio" }],
+  groups: [
+    { id: "00000000-0000-4000-8000-000000000001", name: "Studio" },
+    { id: "00000000-0000-4000-8000-000000000002", name: "Office" },
+  ],
   capabilities: {
     loopbackEndpoints: true,
     borrowedSignins: true,
@@ -105,6 +108,26 @@ describe("Composer", () => {
     over = null;
     roster = [];
     staging = async (paths) => ({ attached: paths.map(stored), refused: [] });
+  });
+
+  it("groups recipients and identifies agents outside the current group", () => {
+    const first = anAgent("Ines");
+    const other = anAgent("Ines", ELSEWHERE);
+    roster = [other, first];
+    render(
+      <Composer
+        placeholder="Message"
+        group={CREW}
+        recipient={first}
+        onRecipientChange={vi.fn()}
+        onSend={vi.fn()}
+      />,
+    );
+    const select = screen.getByRole("combobox", { name: "Recipient" }) as HTMLSelectElement;
+    expect(screen.getByRole("button", { name: "Send" }).textContent).toContain("Send");
+    expect(select.selectedOptions[0]?.textContent).toBe("Ines");
+    expect(screen.getByRole("group", { name: "Studio" }).textContent).toBe("Ines");
+    expect(screen.getByRole("group", { name: "Office" }).textContent).toBe("Ines (Office)");
   });
 
   it("moves the draft and attachments to the selected channel", async () => {

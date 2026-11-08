@@ -22,6 +22,13 @@
   filter: none;
 }
 
+.btn--primary,
+.btn--primary:hover:not(:disabled) {
+  background: var(--action-fill);
+  border-color: var(--action-fill);
+  color: var(--on-action-fill);
+}
+
 .agent-row__name,
 .brand__name,
 .pane__title {

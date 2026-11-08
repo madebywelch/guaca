@@ -15,7 +15,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { contrast } from "./color";
+import { contrast, distance, linear, oklab } from "./color";
 
 import {
   ATTENTIONS,
@@ -85,6 +85,53 @@ describe("the gates", () => {
       expect(violet["--attention-fill"]).toBe(blue["--attention-fill"]);
     }
   });
+
+  it("keeps the preset surfaces and action accents distinct", () => {
+    for (const surface of ["light", "dark"] as const) {
+      const presets = Object.values(THEME_PRESETS).map((theme) => themeTokens(theme, surface));
+      for (let i = 0; i < presets.length; i++) {
+        for (let j = i + 1; j < presets.length; j++) {
+          expect(
+            distance(presets[i]!["--rail-ground"], presets[j]!["--rail-ground"]),
+          ).toBeGreaterThan(1);
+          expect(
+            distance(presets[i]!["--action-fill"], presets[j]!["--action-fill"]),
+          ).toBeGreaterThan(4);
+        }
+      }
+      const field = presets[1]!;
+      const violet = presets[2]!;
+      const [, fieldA, fieldB] = oklab(linear(field["--system"]));
+      const [, violetA, violetB] = oklab(linear(violet["--system"]));
+      expect(fieldA).toBeLessThan(0);
+      expect(fieldB).toBeLessThan(0);
+      expect(violetA).toBeGreaterThan(0.04);
+      expect(violetB).toBeLessThan(-0.04);
+    }
+  });
+
+  it("keeps selected rail text readable over the translucent system color", () => {
+    for (const theme of Object.values(THEME_PRESETS)) {
+      for (const surface of ["light", "dark"] as const) {
+        const tokens = themeTokens(theme, surface);
+        const mix = (a: string, b: string) =>
+          `#${[1, 3, 5]
+            .map((i) =>
+              Math.round(
+                Number.parseInt(a.slice(i, i + 2), 16) * 0.16 +
+                  Number.parseInt(b.slice(i, i + 2), 16) * 0.84,
+              )
+                .toString(16)
+                .padStart(2, "0"),
+            )
+            .join("")}`;
+        expect(
+          contrast(tokens["--rail-text"], mix(tokens["--system"], tokens["--rail-ground"])),
+        ).toBeGreaterThanOrEqual(4.5);
+        expect(contrast(tokens["--action-fill"], tokens["--raised"])).toBeGreaterThanOrEqual(3);
+      }
+    }
+  });
   /**
    * The stylesheet as it stood before themes, in today's names.
    *
@@ -117,6 +164,8 @@ describe("the gates", () => {
     "--on-attention-fill": "#ffffff",
     "--system": "#2f4858",
     "--system-wash": "#e9eff3",
+    "--action-fill": "#2f4858",
+    "--on-action-fill": "#ffffff",
     "--ok": "#14713f",
     "--danger": "#c1271b",
     "--danger-fill": "#c1271b",

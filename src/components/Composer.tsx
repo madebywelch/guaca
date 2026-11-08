@@ -264,12 +264,21 @@ export function Composer({
             {!live.some((agent) => agent.id === recipient.id) && (
               <option value={recipient.id}>{recipient.name}</option>
             )}
-            {live.map((agent) => (
-              <option key={agent.id} value={agent.id}>
-                {agent.name} (
-                {groups.find((entry) => entry.id === agent.groupId)?.name ?? "Independent"})
-              </option>
-            ))}
+            {[...new Set(live.map((agent) => agent.groupId))].map((groupId) => {
+              const name = groups.find((entry) => entry.id === groupId)?.name ?? "Independent";
+              return (
+                <optgroup key={groupId ?? "independent"} label={name}>
+                  {live
+                    .filter((agent) => agent.groupId === groupId)
+                    .map((agent) => (
+                      <option key={agent.id} value={agent.id}>
+                        {agent.name}
+                        {groupId !== group && ` (${name})`}
+                      </option>
+                    ))}
+                </optgroup>
+              );
+            })}
           </select>
         </label>
       )}
@@ -440,6 +449,7 @@ export function Composer({
           onClick={() => void submit()}
           disabled={disabled || sending || (text.trim().length === 0 && files.length === 0)}
         >
+          <span>Send</span>
           <span aria-hidden="true">↑</span>
         </button>
       </div>

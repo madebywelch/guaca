@@ -11,10 +11,20 @@
   box-shadow: 0 0 0 2px color-mix(in oklab, var(--focus) 25%, transparent);
 }
 
-.composer__send:disabled {
-  border: 1px solid var(--edge-control);
-  background: var(--raised);
-  color: var(--muted);
+.composer__send {
+  width: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-5);
+  border-radius: var(--radius-signal);
+}
+
+.composer__send,
+.composer__send:disabled,
+.composer__send:hover:not(:disabled) {
+  background: var(--action-fill);
+  color: var(--on-action-fill);
 }
 
 .composer__recipient {
@@ -34,7 +44,8 @@
   cursor: pointer;
 }
 
-.composer__recipient option {
+.composer__recipient option,
+.composer__recipient optgroup {
   color: var(--text);
   background: var(--raised);
 }

@@ -952,10 +952,24 @@ describe("what the attention color is spent on", () => {
     expect(last(".composer", "border")).toBe("1px solid var(--edge-control)");
     expect(last(".composer", "border-radius")).toBe("var(--radius-signal)");
     expect(last(".composer:focus-within", "border-color")).toBe("var(--focus)");
-    expect(last(".composer__send:disabled", "border")).toBe("1px solid var(--edge-control)");
-    expect(last(".composer__send:disabled", "color")).toBe("var(--muted)");
-    expect(last(".composer__recipient option", "color")).toBe("var(--text)");
-    expect(last(".composer__recipient option", "background")).toBe("var(--raised)");
+    expect(
+      last(
+        ".composer__send, .composer__send:disabled, .composer__send:hover:not(:disabled)",
+        "background",
+      ),
+    ).toBe("var(--action-fill)");
+    expect(
+      last(
+        ".composer__send, .composer__send:disabled, .composer__send:hover:not(:disabled)",
+        "color",
+      ),
+    ).toBe("var(--on-action-fill)");
+    expect(last(".composer__recipient option, .composer__recipient optgroup", "color")).toBe(
+      "var(--text)",
+    );
+    expect(last(".composer__recipient option, .composer__recipient optgroup", "background")).toBe(
+      "var(--raised)",
+    );
   });
 });
 
