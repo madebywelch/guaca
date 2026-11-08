@@ -458,6 +458,15 @@ exec sleep 30
         }
         std::fs::write(repo.join("scripts/install.sh"), include_str!("../../scripts/install.sh"))
             .unwrap();
+        std::fs::write(repo.join("scripts/versions.sh"), include_str!("../../scripts/versions.sh"))
+            .unwrap();
+        std::fs::write(
+            repo.join("scripts/install-host.sh"),
+            include_str!("../../scripts/install-host.sh"),
+        )
+        .unwrap();
+        std::fs::write(repo.join("package.json"), include_str!("../../package.json")).unwrap();
+        std::fs::write(repo.join("src-tauri/Cargo.toml"), include_str!("../Cargo.toml")).unwrap();
         std::fs::write(
             built.join("Info.plist"),
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict>\
@@ -470,8 +479,10 @@ exec sleep 30
         let (exec, quit, seen) = (exec.display(), quit.display(), seen.display());
         for (tool, body) in [
             ("git", "echo 0000000".to_string()),
-            ("pnpm", "exit 0".into()),
+            ("pnpm", "if [ \"$1\" = --version ]; then echo 99.0.0; fi".into()),
             ("cargo", "exit 0".into()),
+            ("node", "exit 0".into()),
+            ("rustc", "echo 'rustc 99.0.0'".into()),
             ("codesign", "exit 0".into()),
             ("osascript", format!("touch '{quit}'")),
             (

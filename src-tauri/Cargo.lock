@@ -1562,7 +1562,7 @@ dependencies = [
 
 [[package]]
 name = "guac"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
