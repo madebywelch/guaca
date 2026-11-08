@@ -118,7 +118,7 @@ pub enum AccountError {
     NoBrowser { detail: String },
     #[error("nothing came back from your browser within five minutes; the sign-in was abandoned")]
     TimedOut,
-    #[error("the sign-in was refused: {error}{}", .description.as_deref().map(|d| format!(" — {d}")).unwrap_or_default())]
+    #[error("the sign-in was refused: {error}{}", .description.as_deref().map(|d| format!(": {d}")).unwrap_or_default())]
     Refused { error: String, description: Option<String> },
     #[error("the answer from your browser did not match the sign-in that was started")]
     StateMismatch,

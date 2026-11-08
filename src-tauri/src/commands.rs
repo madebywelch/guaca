@@ -967,8 +967,8 @@ fn presented(
         return Err(CommandError::new(
             "validation",
             "you gave a key and an `authorization` header, and they are the same slot on the \
-             request. Keep the key and drop the header, or keep the header — which is how to \
-             send a scheme other than `Bearer` — and clear the key.",
+             request. Keep the key and drop the header, or keep the header (which is how to \
+             send a scheme other than `Bearer`) and clear the key.",
         ));
     }
     Ok((key, headers))

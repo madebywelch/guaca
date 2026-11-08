@@ -49,6 +49,10 @@ run_connector() {
 }
 
 run_web() {
+  step "Operator copy"
+  node --test scripts/check-operator-copy.test.mjs
+  node scripts/check-operator-copy.mjs
+
   step "Lint and format"
   pnpm check
 

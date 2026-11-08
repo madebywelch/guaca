@@ -127,7 +127,7 @@ function FootnoteGroup({
       {target && <span className="footnote__target">{target}</span>}
       {failed && (
         <>
-          {" — "}
+          {": "}
           <span className="footnote__gist">{why(failed)}</span>
         </>
       )}
@@ -249,7 +249,7 @@ function TrailChip({
           and what a routine was set for or a page said does not fit in one. */}
       {previewed && (
         <>
-          {only.failed && " — "}
+          {only.failed && ": "}
           <span className="trail__said" title={only.said}>
             {only.said}
           </span>

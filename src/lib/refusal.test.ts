@@ -20,7 +20,7 @@ const SAMPLES: { tool: string; said: string; says: string }[] = [
   {
     tool: "request_permission",
     said: "Refused: the operator's rules never allow this (Never email example.com), so nothing happened and they were not asked. Do not look for another way round it.",
-    says: "Nothing happened: a rule you wrote — Never email example.com — refuses it, so it never reached you as a request.",
+    says: "Nothing happened: your rule (Never email example.com) refuses it, so it never reached you as a request.",
   },
   // The guard, from `runtime/guard.rs`.
   {

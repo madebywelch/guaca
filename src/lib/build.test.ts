@@ -20,7 +20,7 @@ describe("buildLabel", () => {
   });
 
   it("says a dash when there was nothing to read", () => {
-    expect(buildLabel("", "")).toBe("Version —");
+    expect(buildLabel("", "")).toBe("Version unknown");
   });
 
   it("is built from a version and a commit, which is what the defines are for", () => {

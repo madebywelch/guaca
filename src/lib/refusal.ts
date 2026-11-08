@@ -72,7 +72,7 @@ export const RULES: Rule[] = [
     mirrors:
       "Refused: the operator's rules never allow this ({what}), so nothing happened and they",
     says: (found) =>
-      `Nothing happened: a rule you wrote — ${found[1]} — refuses it, so it never reached you as a request.`,
+      `Nothing happened: your rule (${found[1]}) refuses it, so it never reached you as a request.`,
   },
   // What the guard stopped, in `runtime/guard.rs`. These are the ones that read
   // most like a policy document and are most about the operator's own limits.
