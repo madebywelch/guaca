@@ -301,6 +301,7 @@
   --radius-xs: 0.0625rem; /* Inside a control: menu row, chip, keycap, tag. */
   --radius-sm: 0.125rem; /* The control: button, input, select, search. */
   --radius: 0.125rem; /* A surface: card, dialog, bubble, panel. */
+  --radius-signal: 0.625rem;
   --radius-pill: 999px; /* One spelling. `99px` was not a second one. */
 
   /* ---- Controls -----------------------------------------------------------

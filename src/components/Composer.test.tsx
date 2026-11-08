@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
+import { workspaceOrigin } from "../lib/transport";
 import type { AgentCard, Attachment, Staged } from "../lib/types";
 import { Composer } from "./Composer";
 
@@ -48,6 +48,7 @@ let roster: AgentCard[] = [];
 
 /** What the composer reads off the store: the roster, and whether there is a disk. */
 const state = {
+  groups: [{ id: "00000000-0000-4000-8000-000000000001", name: "Studio" }],
   capabilities: {
     loopbackEndpoints: true,
     borrowedSignins: true,
@@ -99,10 +100,83 @@ function anAgent(name: string, group = CREW): AgentCard {
 
 describe("Composer", () => {
   beforeEach(() => {
+    sessionStorage.clear();
     dropped = null;
     over = null;
     roster = [];
     staging = async (paths) => ({ attached: paths.map(stored), refused: [] });
+  });
+
+  it("moves the draft and attachments to the selected channel", async () => {
+    const first = anAgent("Ines");
+    const second = anAgent("Marlow");
+    roster = [first, second];
+    const change = vi.fn();
+    const view = render(
+      <Composer
+        placeholder="Message"
+        group={CREW}
+        draftKey={first.id}
+        recipient={first}
+        onRecipientChange={change}
+        onSend={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByPlaceholderText("Message"), {
+      target: { value: "Hello @Marlow" },
+    });
+    const file = { ...stored("proposal.txt"), digest: "a".repeat(64) };
+    await act(async () => dropped?.(Promise.resolve({ attached: [file], refused: [] })));
+    fireEvent.change(screen.getByRole("combobox", { name: "Recipient" }), {
+      target: { value: second.id },
+    });
+    expect(change).toHaveBeenCalledWith(second.id);
+    expect(
+      JSON.parse(sessionStorage.getItem(`guaca.draft:${workspaceOrigin()}:${second.id}`)!),
+    ).toEqual({ text: "Hello @Marlow", files: [file] });
+    view.rerender(
+      <Composer
+        key={second.id}
+        placeholder="Message"
+        group={CREW}
+        draftKey={second.id}
+        recipient={second}
+        onRecipientChange={change}
+        onSend={vi.fn()}
+      />,
+    );
+    expect((screen.getByPlaceholderText("Message") as HTMLTextAreaElement).value).toBe(
+      "Hello @Marlow",
+    );
+    expect(screen.getByText("proposal.txt")).toBeTruthy();
+  });
+
+  it("keeps a draft when the destination already has one", () => {
+    const first = anAgent("Ines");
+    const second = anAgent("Marlow");
+    roster = [first, second];
+    const change = vi.fn();
+    sessionStorage.setItem(
+      `guaca.draft:${workspaceOrigin()}:${second.id}`,
+      JSON.stringify({ text: "Already here", files: [] }),
+    );
+    render(
+      <Composer
+        placeholder="Message"
+        group={CREW}
+        draftKey={first.id}
+        recipient={first}
+        onRecipientChange={change}
+        onSend={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByPlaceholderText("Message"), { target: { value: "My draft" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Recipient" }), {
+      target: { value: second.id },
+    });
+    expect(change).not.toHaveBeenCalled();
+    expect(screen.getByText(/already has a saved draft/)).toBeTruthy();
+    expect((screen.getByPlaceholderText("Message") as HTMLTextAreaElement).value).toBe("My draft");
   });
 
   async function draw(onSend = vi.fn(async () => {})) {

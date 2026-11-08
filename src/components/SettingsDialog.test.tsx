@@ -186,7 +186,7 @@ vi.mock("../lib/ipc", () => ({
 const { SettingsDialog } = await import("./SettingsDialog");
 const { useStore } = await import("../lib/store");
 const transport = await import("../lib/transport");
-const { DEFAULT_PREFS, NOTIFY_KINDS } = await import("../lib/prefs");
+const { DEFAULT_PREFS, loadPrefs, NOTIFY_KINDS } = await import("../lib/prefs");
 const { BINDINGS, SURFACES } = await import("../lib/keybinds");
 const { PROVIDERS } = await import("../lib/providers");
 const { themeCss, themeTokens } = await import("../lib/theme");
@@ -590,7 +590,7 @@ describe("the Save in the foot", () => {
     // Appearance and Notifications are kept the moment they are pressed, and a
     // Save under them said the opposite about settings that were already saved.
     open(stored(), DEFAULT_PREFS, "appearance");
-    fireEvent.click(screen.getByRole("button", { name: "Reading surface: Ink" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reading surface: Dark" }));
     expect(saveButton()).toBeNull();
 
     pane("Notifications");
@@ -1659,21 +1659,21 @@ describe("appearance", () => {
   it("keeps a chosen surface and paints it onto the document", () => {
     open();
     pane("Appearance");
-    fireEvent.click(choice("Reading surface: Ink"));
+    fireEvent.click(choice("Reading surface: Dark"));
 
     // Both halves matter: the preference is what survives the window closing,
     // and the attribute is what the stylesheet reads.
     expect(useStore.getState().prefs.surface).toBe("dark");
     expect(document.documentElement.dataset.surface).toBe("dark");
-    expect(choice("Reading surface: Ink").getAttribute("aria-pressed")).toBe("true");
-    expect(choice("Reading surface: Paper").getAttribute("aria-pressed")).toBe("false");
+    expect(choice("Reading surface: Dark").getAttribute("aria-pressed")).toBe("true");
+    expect(choice("Reading surface: Light").getAttribute("aria-pressed")).toBe("false");
     expect(screen.getByText(/Currently drawing ink/)).toBeTruthy();
   });
 
   it("resolves the system's answer rather than handing it on as one", () => {
     open();
     pane("Appearance");
-    fireEvent.click(choice("Reading surface: Follow the system"));
+    fireEvent.click(choice("Reading surface: Match system"));
 
     // `system` is a choice the operator makes; it is never what the stylesheet
     // is given. The stub here reports no preference, which is paper.
@@ -1719,13 +1719,36 @@ describe("appearance", () => {
         grays: "avocado",
         attention: "violet",
         contrast: "more",
-        temperature: "warm",
+        temperature: "cool",
       }),
     );
     expect(choice("Grays: Avocado").getAttribute("aria-pressed")).toBe("true");
     expect(choice("Grays: Neutral").getAttribute("aria-pressed")).toBe("false");
     // A theme is colors. It is not a third way to write the surface.
     expect(useStore.getState().prefs.surface).toBe(DEFAULT_PREFS.surface);
+  });
+
+  it("applies a preset without changing the surface and recognizes customization", () => {
+    open(stored(), { ...DEFAULT_PREFS, surface: "dark" });
+    pane("Appearance");
+    fireEvent.click(choice("Theme: Field"));
+    expect(useStore.getState().prefs).toMatchObject({
+      grays: "avocado",
+      attention: "amber",
+      contrast: "standard",
+      temperature: "cool",
+      reading: "serif",
+      surface: "dark",
+    });
+    expect(loadPrefs()).toMatchObject({
+      grays: "avocado",
+      temperature: "cool",
+      reading: "serif",
+      surface: "dark",
+    });
+    expect(choice("Theme: Field").getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(choice("Contrast: More"));
+    expect(choice("Theme: Field").getAttribute("aria-pressed")).toBe("false");
   });
 
   it("shows each gray and each attention hue before it is chosen", () => {

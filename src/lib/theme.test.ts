@@ -26,6 +26,7 @@ import {
   type GrayKey,
   measure,
   TEMPERATURE_KEYS,
+  THEME_PRESETS,
   THEME_TOKENS,
   type Theme,
   type Tokens,
@@ -64,6 +65,23 @@ function failures(tokens: Tokens, level: Theme["contrast"]): string[] {
 }
 
 describe("the gates", () => {
+  it("holds every preset to the contrast gates on both surfaces", () => {
+    for (const theme of Object.values(THEME_PRESETS)) {
+      for (const surface of ["light", "dark"] as const) {
+        expect(failures(themeTokens(theme, surface), theme.contrast)).toEqual([]);
+      }
+    }
+  });
+
+  it("gives Violet its own system accent without spending attention", () => {
+    for (const surface of ["light", "dark"] as const) {
+      const violet = themeTokens(THEME_PRESETS.Violet!, surface);
+      const blue = themeTokens({ ...THEME_PRESETS.Violet!, grays: "slate" }, surface);
+      expect(violet["--system"]).not.toBe(blue["--system"]);
+      expect(violet["--system-wash"]).not.toBe(blue["--system-wash"]);
+      expect(violet["--attention-fill"]).toBe(blue["--attention-fill"]);
+    }
+  });
   /**
    * The stylesheet as it stood before themes, in today's names.
    *

@@ -1,0 +1,40 @@
+.composer {
+  margin-bottom: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--edge-control);
+  border-radius: var(--radius-signal);
+  background: var(--raised);
+}
+
+.composer:focus-within {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--focus) 25%, transparent);
+}
+
+.composer__send:disabled {
+  border: 1px solid var(--edge-control);
+  background: var(--raised);
+  color: var(--muted);
+}
+
+.composer__recipient {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--type-small);
+}
+
+.composer__recipient select {
+  max-width: 100%;
+  color: var(--text);
+  font: inherit;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.composer__recipient option {
+  color: var(--text);
+  background: var(--raised);
+}

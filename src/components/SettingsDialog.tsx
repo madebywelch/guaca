@@ -53,8 +53,10 @@ import {
   type ContrastLevel,
   GRAYS,
   type GrayKey,
+  matchesPreset,
   TEMPERATURE_KEYS,
   TEMPERATURES,
+  THEME_PRESETS,
   themeTokens,
 } from "../lib/theme";
 import { attached, desktop } from "../lib/transport";
@@ -87,9 +89,9 @@ interface Props {
 }
 
 const SURFACE_LABELS: Record<SurfaceMode, string> = {
-  light: "Paper",
-  dark: "Ink",
-  system: "Follow the system",
+  light: "Light",
+  dark: "Dark",
+  system: "Match system",
 };
 
 const TYPEFACE_LABELS: Record<Typeface, string> = {
@@ -1309,6 +1311,36 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   <span className="field__hint">
                     Currently drawing {resolveSurface(prefs.surface) === "dark" ? "ink" : "paper"}.
                   </span>
+                </div>
+
+                <div className="field">
+                  <span className="field__label">Theme presets</span>
+                  <div className="choices">
+                    {Object.entries(THEME_PRESETS).map(([name, theme]) => (
+                      <button
+                        key={name}
+                        type="button"
+                        className="choice choice--swatch"
+                        aria-label={`Theme: ${name}`}
+                        aria-pressed={matchesPreset(prefs, theme)}
+                        onClick={() => setLook(theme)}
+                      >
+                        <span
+                          className="choice__swatch"
+                          aria-hidden="true"
+                          style={
+                            {
+                              "--swatch": themeTokens(theme, resolveSurface(prefs.surface))[
+                                "--rail-ground"
+                              ],
+                            } as React.CSSProperties
+                          }
+                        />
+                        {name}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="field__hint">Choose a preset or adjust its colors below.</span>
                 </div>
 
                 <div className="field">
