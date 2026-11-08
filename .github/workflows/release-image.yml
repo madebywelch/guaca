@@ -1,0 +1,110 @@
+name: release image
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version in the release checkout
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/madebywelch/guaca/guacad
+
+jobs:
+  build:
+    name: build ${{ matrix.arch }}
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: aws-linux-4cpu-16gb
+          - arch: arm64
+            runner: aws-linux-arm-2cpu-4gb
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify the release version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          actual=$(jq -r .version package.json)
+          if [ "$VERSION" != "$actual" ] || ! [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::The requested version must be the stable version in package.json."
+            exit 1
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          build-args: |
+            GUACA_COMMIT=${{ github.sha }}
+            GUACA_VERSION=${{ inputs.version }}
+            GUACA_RELEASE=1
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          provenance: false
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=guacad-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=guacad-${{ matrix.arch }},ignore-error=true
+
+      - name: Keep the digest
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "$RUNNER_TEMP/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-digests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: build
+    runs-on: aws-linux-2cpu-4gb
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: release-digests-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish the multi-platform image
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          cd "$RUNNER_TEMP/digests"
+          # shellcheck disable=SC2046
+          docker buildx imagetools create --tag "$IMAGE:$VERSION" $(printf "$IMAGE@sha256:%s " *)
+          digest=$(docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{json .Manifest}}' | jq -r .digest)
+          case "$digest" in
+            sha256:*) echo "Image: $IMAGE@$digest" >> "$GITHUB_STEP_SUMMARY" ;;
+            *) echo "::error::The registry named no image digest."; exit 1 ;;
+          esac
