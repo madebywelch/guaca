@@ -35,6 +35,6 @@ export const COMMIT: string = __COMMIT__;
  * pane, and there is nothing here for an operator to act on either way.
  */
 export function buildLabel(version: string = VERSION, commit: string = COMMIT): string {
-  if (!version) return `Version ${commit || "—"}`;
+  if (!version) return `Version ${commit || "unknown"}`;
   return commit ? `Version ${version} (${commit})` : `Version ${version}`;
 }

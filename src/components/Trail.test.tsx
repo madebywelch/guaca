@@ -43,10 +43,10 @@ describe("a turn's trail", () => {
     );
     const { container } = render(<TrailFootnote steps={[step]} number={1} />);
     const button = screen.getByRole("button", {
-      name: "Tried to ask for permission — Nothing happened",
+      name: "Tried to ask for permission: Nothing happened",
     });
     expect(container.querySelector(".footnote__call")?.textContent).toBe(
-      "Tried to ask for permission — Nothing happened",
+      "Tried to ask for permission: Nothing happened",
     );
     fireEvent.click(button);
     expect(button.getAttribute("aria-expanded")).toBe("true");
@@ -83,11 +83,11 @@ describe("a turn's trail", () => {
     );
     render(<TrailRow steps={[step]} />);
     const button = screen.getByRole("button", {
-      name: "Tried to ask for permission — Nothing happened.",
+      name: "Tried to ask for permission: Nothing happened.",
     });
-    expect(button.textContent).toContain("Tried to ask for permission — Nothing happened.");
+    expect(button.textContent).toContain("Tried to ask for permission: Nothing happened.");
     fireEvent.click(button);
     expect(button.getAttribute("aria-expanded")).toBe("true");
-    expect(button.textContent).not.toContain(" — ");
+    expect(button.textContent).not.toContain(": ");
   });
 });

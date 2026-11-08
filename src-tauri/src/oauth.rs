@@ -92,7 +92,7 @@ pub enum OauthError {
     #[error("nothing came back from your browser within five minutes; the sign-in was abandoned")]
     TimedOut,
     /// The operator pressed Cancel, or the authorization server refused.
-    #[error("the sign-in was refused: {error}{}", .description.as_deref().map(|d| format!(" — {d}")).unwrap_or_default())]
+    #[error("the sign-in was refused: {error}{}", .description.as_deref().map(|d| format!(": {d}")).unwrap_or_default())]
     Refused { error: String, description: Option<String> },
     /// The redirect did not match the request that started it. Treated as an
     /// attack rather than as a mistake, because that is the only thing it can
