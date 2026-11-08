@@ -458,6 +458,13 @@ exec sleep 30
         }
         std::fs::write(repo.join("scripts/install.sh"), include_str!("../../scripts/install.sh"))
             .unwrap();
+        std::fs::write(repo.join("scripts/versions.sh"), include_str!("../../scripts/versions.sh"))
+            .unwrap();
+        std::fs::write(
+            repo.join("scripts/install-host.sh"),
+            include_str!("../../scripts/install-host.sh"),
+        )
+        .unwrap();
         std::fs::write(
             built.join("Info.plist"),
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict>\
