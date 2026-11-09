@@ -547,8 +547,8 @@ export const api = {
   agentMemory: (id: AgentId) => invoke<string>("agent_memory", { id }),
 
   /** Lets the operator seed or correct an agent's memory by hand. */
-  setAgentMemory: (id: AgentId, content: string) =>
-    invoke<string>("set_agent_memory", { id, content }),
+  setAgentMemory: (id: AgentId, content: string, expected?: string) =>
+    invoke<string>("set_agent_memory", { id, content, expected }),
 
   /** What an agent is in the middle of, oldest first. */
   agentNotebook: (id: AgentId) => invoke<NotebookEntry[]>("agent_notebook", { id }),
