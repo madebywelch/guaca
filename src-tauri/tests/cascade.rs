@@ -5874,6 +5874,139 @@ fn notices_of(h: &Harness, name: &str, kind: NoticeKind) -> Vec<String> {
         .collect()
 }
 
+async fn guard_after_restart(
+    second_message: &'static str,
+    max_sends_per_pair: u32,
+    edit_limits: bool,
+) -> Vec<String> {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let manager_calls = calls.clone();
+    let stub = serve(move |body| {
+        if speaker(body) != "Manager" {
+            return Script::Say("Done.".into());
+        }
+        match manager_calls.fetch_add(1, Ordering::SeqCst) {
+            0 => {
+                Script::Instruct { recipients: vec!["Chef".into()], text: "Prepare lunch.".into() }
+            }
+            1 => Script::Hang,
+            2 => Script::Instruct { recipients: vec!["Chef".into()], text: second_message.into() },
+            _ => Script::Say("Finished.".into()),
+        }
+    })
+    .await;
+    let h = harness(
+        &stub,
+        &["Manager", "Chef"],
+        GuardLimits { max_sends_per_pair, ..GuardLimits::default() },
+    );
+    h.pause("Chef");
+    let run = h.runtime.send_from_human(h.id("Manager"), "Ask Chef to prepare lunch.").unwrap();
+    h.wait_until("the first send and the next model call", |h| {
+        calls.load(Ordering::SeqCst) >= 2
+            && h.feed().iter().any(|message| message.plain_text() == "Prepare lunch.")
+    })
+    .await;
+
+    if edit_limits {
+        use guac_lib::domain::group::{CleanGroup, GroupLimits};
+        let store = h.runtime.store();
+        let agent = store.get_agent(h.id("Manager")).unwrap().unwrap();
+        let group = store.get_group(agent.group_id).unwrap().unwrap();
+        store
+            .update_group(
+                group.id,
+                &CleanGroup {
+                    name: group.name,
+                    limits: Some(GroupLimits { max_sends_per_pair: Some(6), ..Default::default() }),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+
+    let (h, drained) = h.restart(Duration::from_secs(5)).await;
+    assert!(drained.is_complete(), "{drained:?}");
+    h.wait_until("the resumed send to return", |_| calls.load(Ordering::SeqCst) >= 4).await;
+    let results = tool_results(&stub);
+    h.resume("Chef");
+    h.settle(run).await;
+    results
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pair_quota_spent_before_an_update_is_still_spent_after_it() {
+    let results = guard_after_restart("Prepare dinner.", 1, false).await;
+    assert!(
+        results.iter().any(|result| result.contains("already sent Chef 1 messages")),
+        "{results:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_message_sent_before_an_update_is_still_a_duplicate_after_it() {
+    let results = guard_after_restart("Prepare lunch.", 6, false).await;
+    assert!(
+        results.iter().any(|result| result.contains("already sent Chef this exact message")),
+        "{results:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_group_limit_edited_before_an_update_does_not_change_the_resumed_run() {
+    let results = guard_after_restart("Prepare dinner.", 1, true).await;
+    assert!(
+        results.iter().any(|result| result.contains("already sent Chef 1 messages")),
+        "{results:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_reply_owed_before_an_update_does_not_request_another_reply() {
+    let manager_calls = Arc::new(AtomicUsize::new(0));
+    let calls = manager_calls.clone();
+    let stub = serve(move |body| {
+        if speaker(body) == "Chef" {
+            if has_tool_result(body) {
+                return Script::Say("Done.".into());
+            }
+            return Script::SendTo {
+                recipients: vec!["Manager".into()],
+                text: "Lunch is ready.".into(),
+            };
+        }
+        match calls.fetch_add(1, Ordering::SeqCst) {
+            0 => {
+                Script::Instruct { recipients: vec!["Chef".into()], text: "Prepare lunch.".into() }
+            }
+            1 => Script::Hang,
+            _ => Script::Say("Noted.".into()),
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    h.pause("Chef");
+    let run = h.runtime.send_from_human(h.id("Manager"), "Arrange lunch.").unwrap();
+    h.wait_until("the instruction to queue", |h| {
+        manager_calls.load(Ordering::SeqCst) >= 2
+            && h.feed().iter().any(|message| message.plain_text() == "Prepare lunch.")
+    })
+    .await;
+    let (h, drained) = h.restart(Duration::from_secs(5)).await;
+    assert!(drained.is_complete(), "{drained:?}");
+    h.resume("Chef");
+    h.settle(run).await;
+    let feed = h.feed();
+    let answer = feed
+        .iter()
+        .find(|message| message.plain_text() == "Lunch is ready.")
+        .expect("Chef's answer was delivered");
+    assert!(
+        !answer.expects_reply,
+        "the outstanding instruction made this an answer, not a new request"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_turn_an_update_stops_carries_on_after_it_without_making_its_calls_again() {
     // The case the drain exists for. The turn has already done something (a

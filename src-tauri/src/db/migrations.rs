@@ -1929,6 +1929,7 @@ CREATE TABLE pending_sandbox_resume (
 ALTER TABLE plugins ADD COLUMN grant_generation INTEGER NOT NULL DEFAULT 0;
 "#,
     ),
+    (69, r#"ALTER TABLE put_down_runs ADD COLUMN guard_snapshot TEXT;"#),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -2083,7 +2084,7 @@ mod tests {
         assert_eq!(old_query, "access");
         assert!(matches!(
             apply(&mut conn, 67),
-            Err(MigrationError::FromTheFuture { found: 68, supported: 67 })
+            Err(MigrationError::FromTheFuture { found, supported: 67 }) if found == latest_version()
         ));
     }
 
