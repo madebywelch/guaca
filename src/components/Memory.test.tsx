@@ -34,6 +34,37 @@ describe("Memory", () => {
     useStore.setState({ memoryVersion: {} });
   });
 
+  it("preserves text typed while a save is pending", async () => {
+    let finish!: (value: string) => void;
+    setAgentMemory.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    render(<Memory agentId="a1" />);
+    await screen.findByText("Nothing yet.");
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    type("first");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    type("first and more");
+    await act(async () => finish("first"));
+    expect(box().value).toBe("first and more");
+  });
+
+  it("ignores an older read that finishes after a newer read", async () => {
+    let finish!: (value: string) => void;
+    agentMemory.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; })).mockResolvedValueOnce("new");
+    render(<Memory agentId="a1" />);
+    act(() => useStore.getState().applyEvent({ type: "memoryChanged", agentId: "a1" }));
+    await screen.findByText("new");
+    await act(async () => finish("old"));
+    expect(screen.getByText("new")).toBeTruthy();
+  });
+
+  it("does not present a failed initial read as empty memory", async () => {
+    agentMemory.mockRejectedValue(new Error("read failed"));
+    render(<Memory agentId="a1" />);
+    await screen.findByText(/read failed/);
+    expect(screen.queryByText("Nothing yet.")).toBeNull();
+    expect((screen.getByRole("button", { name: "Edit" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("reads without a textarea and Cancel restores the stored page", async () => {
     agentMemory.mockResolvedValue("Original page");
     render(<Memory agentId="a1" />);

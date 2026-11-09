@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef } from "react";
 
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
@@ -90,6 +90,57 @@ interface Props {
   agentId: AgentId;
 }
 
+type Page = { held: Held; error: string | null; cut: boolean };
+export type MemoryState =
+  | { phase: "loading"; editing: boolean }
+  | { phase: "failed"; error: string }
+  | ({ phase: "view" | "editing" } & Page)
+  | ({ phase: "saving"; sent: string } & Page);
+
+export type MemoryAction =
+  | { type: "read"; content: string }
+  | { type: "readFailed"; error: string }
+  | { type: "edit" }
+  | { type: "change"; value: string }
+  | { type: "cancel" }
+  | { type: "save"; sent: string }
+  | { type: "saved"; saved: string }
+  | { type: "saveFailed"; error: string };
+
+export function memoryReducer(state: MemoryState, action: MemoryAction): MemoryState {
+  switch (action.type) {
+    case "read":
+      if (state.phase === "loading" || state.phase === "failed") {
+        return { phase: state.phase === "loading" && state.editing ? "editing" : "view", held: arrived(null, action.content), error: null, cut: false };
+      }
+      return { ...state, held: arrived(state.held, action.content), error: null };
+    case "readFailed":
+      if (state.phase === "loading" || state.phase === "failed") return { phase: "failed", error: action.error };
+      return { ...state, error: action.error };
+    case "edit":
+      if (state.phase === "loading") return { ...state, editing: true };
+      if (state.phase === "view") return { ...state, phase: "editing", cut: false };
+      return state;
+    case "change":
+      if (state.phase !== "editing" && state.phase !== "saving") return state;
+      return { ...state, held: { ...state.held, draft: action.value }, cut: false };
+    case "cancel":
+      if (state.phase !== "editing") return state;
+      return { ...state, phase: "view", held: { stored: state.held.incoming ?? state.held.stored, draft: null, incoming: null }, cut: false };
+    case "save":
+      if (state.phase !== "editing") return state;
+      return { ...state, phase: "saving", sent: action.sent, error: null };
+    case "saved": {
+      if (state.phase !== "saving") return state;
+      const draft = state.held.draft === state.sent ? null : state.held.draft;
+      return { phase: draft === null ? "view" : "editing", held: { stored: action.saved, draft, incoming: null }, error: null, cut: action.saved !== state.sent.trim() };
+    }
+    case "saveFailed":
+      if (state.phase !== "saving") return state;
+      return { ...state, phase: "editing", error: action.error };
+  }
+}
+
 /**
  * An agent's memory, in the column beside it.
  *
@@ -104,35 +155,37 @@ interface Props {
  * A rewrite arriving under that draft is held until Save or Cancel decides it.
  */
 export function Memory({ agentId }: Props) {
-  const [held, setHeld] = useState<Held | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  /** Set when the runtime stored something other than what was sent. */
-  const [cut, setCut] = useState(false);
+  return <MemoryPage key={agentId} agentId={agentId} />;
+}
+
+function MemoryPage({ agentId }: Props) {
+  const [state, dispatch] = useReducer(memoryReducer, { phase: "loading", editing: false });
+  const generation = useRef(0);
   const box = useRef<HTMLTextAreaElement>(null);
   // The agent rewrote it. Same counter as the schedule's, one panel over.
   const changed = useStore((state) => state.memoryVersion[agentId] ?? 0);
 
   const load = useCallback(async () => {
+    const request = ++generation.current;
     try {
       const content = await api.agentMemory(agentId);
-      // Through `arrived` rather than straight onto the state, so what happens
-      // to an operator mid-sentence is decided against what is held right now
-      // rather than against what was held when this read was started.
-      setHeld((current) => arrived(current, content));
-      setError(null);
+      if (request === generation.current) dispatch({ type: "read", content });
     } catch (caught) {
-      setError(errorMessage(caught));
-      setHeld((current) => current ?? { stored: "", draft: null, incoming: null });
+      if (request === generation.current) dispatch({ type: "readFailed", error: errorMessage(caught) });
     }
   }, [agentId]);
 
   useEffect(() => {
     void load();
+    return () => { generation.current++; };
   }, [load, changed]);
 
-  const loading = held === null;
+  const held = "held" in state ? state.held : null;
+  const loading = state.phase === "loading";
+  const editing = state.phase === "editing" || state.phase === "saving" || (loading && state.editing);
+  const busy = state.phase === "saving";
+  const error = "error" in state ? state.error : null;
+  const cut = "cut" in state && state.cut;
   const value = held === null ? "" : (held.draft ?? held.stored);
   const shown = loading ? "Loading…" : value;
   const dirty = held !== null && held.draft !== null && held.draft !== held.stored;
@@ -150,20 +203,16 @@ export function Memory({ agentId }: Props) {
   const save = async () => {
     if (held?.draft == null) return;
     const sent = held.draft;
-    setBusy(true);
-    setError(null);
+    dispatch({ type: "save", sent });
     try {
       // What comes back is what was actually stored: the runtime trims it and
       // cuts anything over the cap, so leaving what was typed on screen would
       // show the operator a page their agent is never going to be given.
       const saved = await api.setAgentMemory(agentId, sent);
-      setHeld({ stored: saved, draft: null, incoming: null });
-      setCut(saved !== sent.trim());
-      setEditing(false);
+      generation.current++;
+      dispatch({ type: "saved", saved });
     } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setBusy(false);
+      dispatch({ type: "saveFailed", error: errorMessage(caught) });
     }
   };
 
@@ -185,10 +234,8 @@ export function Memory({ agentId }: Props) {
           <button
             type="button"
             className="btn btn--small btn--ghost"
-            onClick={() => {
-              setCut(false);
-              setEditing(true);
-            }}
+            disabled={state.phase === "failed"}
+            onClick={() => dispatch({ type: "edit" })}
           >
             Edit
           </button>
@@ -206,11 +253,10 @@ export function Memory({ agentId }: Props) {
           placeholder="Nothing yet."
           onChange={(event) => {
             const next = event.target.value;
-            setCut(false);
-            setHeld((current) => current && { ...current, draft: next });
+            dispatch({ type: "change", value: next });
           }}
         />
-      ) : shown ? (
+      ) : state.phase === "failed" ? null : shown ? (
         <p className="memory__text memory__read">{shown}</p>
       ) : (
         <p className="detail__empty">Nothing yet.</p>
@@ -230,18 +276,7 @@ export function Memory({ agentId }: Props) {
             type="button"
             className="btn btn--small btn--ghost"
             disabled={busy}
-            onClick={() => {
-              setEditing(false);
-              setCut(false);
-              setHeld(
-                (current) =>
-                  current && {
-                    stored: current.incoming ?? current.stored,
-                    draft: null,
-                    incoming: null,
-                  },
-              );
-            }}
+            onClick={() => dispatch({ type: "cancel" })}
           >
             Cancel
           </button>
