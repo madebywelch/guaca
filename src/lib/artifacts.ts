@@ -152,7 +152,7 @@ export function sentMessage(artifact: Artifact, json: string): string {
   const longest = Math.max(0, ...[...json.matchAll(/`+/g)].map((run) => run[0].length));
   const rail = "`".repeat(Math.max(3, longest + 1));
   return (
-    `I pressed a control on "${artifact.title}" (artifact ${artifact.id}, version ${artifact.version}). ` +
+    `I confirmed a value from "${artifact.title}" (artifact ${artifact.id}, version ${artifact.version}). ` +
     `The page sent this:\n\n${rail}json\n${json}\n${rail}`
   );
 }

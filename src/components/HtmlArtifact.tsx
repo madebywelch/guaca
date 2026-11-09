@@ -61,11 +61,10 @@ export function HtmlArtifact({
    */
   data?: unknown;
   /**
-   * Where a kept page's `guaca.send` goes, with whether the operator's click is
-   * what caused it. Absent for a fenced page, where a send is an answer like
+   * Where a kept page's `guaca.send` goes. Absent for a fenced page, where a send is an answer like
    * any other and waits in the strip for the operator.
    */
-  onSend?: (json: string, clicked: boolean) => void;
+  onSend?: (json: string) => void;
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const to = useContext(Answering);
@@ -127,14 +126,7 @@ export function HtmlArtifact({
       }
 
       if (guaca === "artifact-send" && typeof value === "string" && sendTo.current) {
-        // A click inside a frame on another origin cannot be seen from out
-        // here, but where it moves the focus can: clicking a page's button
-        // gives the frame the focus. A page sending while something else has
-        // it, or while the window is in the background, is a page sending by
-        // itself. This bounds a page rather than proving a click, and the
-        // surface that carries the send bounds it again.
-        const clicked = document.hasFocus() && document.activeElement === frame.current;
-        sendTo.current(value, clicked);
+        sendTo.current(value);
         return;
       }
 

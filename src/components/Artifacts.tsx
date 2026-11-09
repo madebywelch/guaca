@@ -27,6 +27,8 @@ interface Props {
   onClose: () => void;
 }
 
+let sendingPage = false;
+
 /**
  * The pages the crews keep, and one of them opened.
  *
@@ -247,6 +249,13 @@ function ArtifactView({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [proposal, setProposal] = useState<{
+    json: string;
+    artifact: Artifact;
+    shown: number;
+  } | null>(null);
+  const proposalRef = useRef(false);
+  const [sending, setSending] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -264,6 +273,11 @@ function ArtifactView({
   const current = detail?.artifact.version ?? null;
   const shown = viewing ?? current;
   const allowed = detail?.artifact.sourcesAllowed ?? false;
+
+  useEffect(() => {
+    proposalRef.current = false;
+    setProposal(null);
+  }, [shown, detail?.artifact.owner?.id, detail?.artifact.owner?.gone, history]);
 
   // A version's reads, made when it is shown and again on Refresh or once the
   // operator allows them. Every version is asked, because Rust is where it is
@@ -333,10 +347,11 @@ function ArtifactView({
   // Where a click on the page goes. Refused here rather than sent and
   // explained later, because every refusal is something the operator can see
   // the reason for on the screen they are already looking at.
-  const send = (json: string, clicked: boolean) => {
+  const send = (json: string) => {
     const owner = artifact.owner;
-    if (!clicked) {
-      setSaid("The page tried to send something without a click, so nothing was sent.");
+    if (proposalRef.current || sendingPage || shown === null) return;
+    if (json.length > 4000) {
+      setSaid("This value is too long to send. The limit is 4,000 characters.");
       return;
     }
     if (!owner || owner.gone) {
@@ -350,10 +365,9 @@ function ArtifactView({
       setSaid(`${owner.name} is still working. Try again once they have finished.`);
       return;
     }
-    void act(async () => {
-      await api.sendMessage(owner.id, sentMessage(artifact, json));
-      setSaid(`Sent to ${owner.name}. The page changes here when ${owner.name} updates it.`);
-    });
+    proposalRef.current = true;
+    setSaid(null);
+    setProposal({ json, artifact, shown });
   };
   const crewAgents = agents.filter((agent) => agent.groupId === artifact.groupId);
   // An earlier version the operator picked, or `null` while the current one is
@@ -484,6 +498,66 @@ function ArtifactView({
             </div>
           )}
           {said && <p className="artifacts__said">{said}</p>}
+          {proposal &&
+            proposal.shown === shown &&
+            proposal.artifact.version === artifact.version &&
+            proposal.artifact.owner?.id === artifact.owner?.id &&
+            !artifact.owner?.gone && (
+              <div className="artifact__answer">
+                <p className="artifact__answer-note">Send this value to {artifact.owner?.name}?</p>
+                <pre className="artifact__answer-value">{proposal.json}</pre>
+                <div className="artifact__answer-acts">
+                  <button
+                    type="button"
+                    className="btn btn--small"
+                    disabled={sending}
+                    onClick={() => {
+                      const owner = artifact.owner;
+                      if (!owner || owner.gone || sendingPage || !proposalRef.current) return;
+                      const state = useStore.getState().activity[owner.id]?.state;
+                      if (state === "thinking" || state === "queued") {
+                        setSaid(
+                          `${owner.name} is still working. Try again once they have finished.`,
+                        );
+                        return;
+                      }
+                      sendingPage = true;
+                      proposalRef.current = false;
+                      setSending(true);
+                      void api
+                        .sendMessage(owner.id, sentMessage(proposal.artifact, proposal.json))
+                        .then(() => {
+                          setSaid(
+                            `Sent to ${owner.name}. The page changes here when ${owner.name} updates it.`,
+                          );
+                          setProposal(null);
+                        })
+                        .catch((caught) => {
+                          setError(errorMessage(caught));
+                          setProposal(null);
+                        })
+                        .finally(() => {
+                          sendingPage = false;
+                          setSending(false);
+                        });
+                    }}
+                  >
+                    {sending ? "Sending…" : `Send to ${artifact.owner?.name}`}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--small"
+                    disabled={sending}
+                    onClick={() => {
+                      proposalRef.current = false;
+                      setProposal(null);
+                    }}
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            )}
           {earlier !== null && (
             <div className="artifacts__old">
               <span>
