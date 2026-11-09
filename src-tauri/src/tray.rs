@@ -107,6 +107,13 @@ pub struct Host {
     pub token: String,
 }
 
+#[derive(Serialize)]
+pub struct PanelAssignment {
+    #[serde(flatten)]
+    host: Host,
+    generation: u64,
+}
+
 /// What placing the panel needs to remember between one call and the next.
 #[derive(Default)]
 struct Spot {
@@ -121,12 +128,12 @@ struct Spot {
 pub struct Tray {
     app: AppHandle,
     icon: TrayIcon<Wry>,
-    drawn: Mutex<Look>,
+    drawn: Mutex<Option<Look>>,
     wake: Arc<Notify>,
     /// What the window last reported.
     fed: Mutex<Option<Presence>>,
     /// The host the window is attached to, which the panel shows too.
-    host: Mutex<Option<Host>>,
+    host: Mutex<menubar::PanelHost<Host>>,
     spot: Mutex<Spot>,
 }
 
@@ -165,10 +172,10 @@ impl Tray {
         let tray = Arc::new(Self {
             app: app.clone(),
             icon,
-            drawn: Mutex::new(look),
+            drawn: Mutex::new(Some(look)),
             wake: Arc::new(Notify::new()),
             fed: Mutex::new(None),
-            host: Mutex::new(None),
+            host: Mutex::new(menubar::PanelHost::default()),
             spot: Mutex::new(Spot::default()),
         });
 
@@ -242,8 +249,8 @@ impl Tray {
         // Committed only when it all landed: recording a change that failed
         // leaves the icon stale for good, because the next pass compares
         // against what it thinks it wrote.
-        if look != *drawn && self.wear(&look) {
-            *drawn = look;
+        if !menubar::update_icon(&mut drawn, look, |look| self.wear(look)) {
+            self.wake.notify_one();
         }
     }
 
@@ -281,27 +288,24 @@ impl Tray {
     /// loads, and reloading the panel for each would drop whatever the operator
     /// was typing in it.
     pub fn attach(self: &Arc<Self>, host: Host) {
-        {
-            let mut held = self.host.lock();
-            if held.as_ref() == Some(&host) {
-                return;
-            }
-            *held = Some(host);
+        if !self.host.lock().request(host) {
+            return;
         }
         match self.app.get_webview_window(PANEL) {
             // Reloaded rather than told: the page reads its host once, at
             // load, like the window does, so there is nothing to update in
             // place and nothing that can be half updated.
-            Some(panel) => match panel.reload() {
-                Ok(()) => {
-                    tracing::info!("the menu bar panel is showing the window's new workspace")
+            Some(panel) => {
+                self.put_away(&panel, false);
+                match panel.reload() {
+                    Ok(()) => tracing::info!("the menu bar panel is reloading"),
+                    Err(err) => {
+                        tracing::warn!(%err, "the menu bar panel is still showing the last workspace")
+                    }
                 }
-                Err(err) => {
-                    tracing::warn!(%err, "the menu bar panel is still showing the last workspace")
-                }
-            },
+            }
             None => match self.build_panel() {
-                Ok(()) => tracing::info!("the menu bar panel is ready for the window's workspace"),
+                Ok(()) => tracing::info!("the menu bar panel was created"),
                 Err(err) => {
                     tracing::warn!(%err, "no menu bar panel this session; the icon opens the window")
                 }
@@ -310,8 +314,12 @@ impl Tray {
     }
 
     /// The host the panel is to show, or nothing before the window has said.
-    pub fn host(&self) -> Option<Host> {
-        self.host.lock().clone()
+    pub fn host(&self) -> Option<PanelAssignment> {
+        self.host.lock().desired().map(|(host, generation)| PanelAssignment { host, generation })
+    }
+
+    pub fn adopted(&self, generation: u64) -> bool {
+        self.host.lock().acknowledge(generation)
     }
 
     /// Makes the panel's window, hidden, drawing its page.
@@ -347,6 +355,10 @@ impl Tray {
 
     /// The icon, clicked: the panel opens, or closes if it was open.
     fn toggle(&self, rect: tauri::Rect) {
+        if !self.host.lock().ready() {
+            self.open_window(None);
+            return;
+        }
         let Some(panel) = self.app.get_webview_window(PANEL) else {
             // No panel until the window has said which workspace it is
             // showing, and until then the window is where there is anything

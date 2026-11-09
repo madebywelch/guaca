@@ -6,12 +6,36 @@ import {
   liveReply,
   panelOrder,
   presenceOf,
+  presenceReporter,
   said,
   samePresence,
   workingCount,
 } from "./menubar";
 import { type StreamBuffer, useStore } from "./store";
 import type { AgentCard, Envelope, Part, Participant } from "./types";
+
+describe("presence reports", () => {
+  it("retries a failed report and sends the latest value after a delayed report", async () => {
+    const sent: number[] = [];
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    let calls = 0;
+    const report = presenceReporter(async (value: number) => {
+      sent.push(value);
+      if (++calls === 1) throw new Error("offline");
+      if (calls === 2) await pending;
+    });
+    await report(1);
+    const retry = report(1);
+    const next = report(2);
+    finish();
+    await Promise.all([retry, next]);
+    await report(2);
+    expect(sent).toEqual([1, 1, 2]);
+  });
+});
 
 /**
  * The icon's view of the store, and what the panel under it decides about its

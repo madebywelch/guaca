@@ -22,7 +22,7 @@ import { applyAppearance, watchSystemSurface } from "./lib/appearance";
 import { unreachableHint } from "./lib/host";
 import { api, notifyOperator, onRevealRequest } from "./lib/ipc";
 import { bindingFor } from "./lib/keybinds";
-import { FEED_COALESCE_MS, presenceOf, samePresence } from "./lib/menubar";
+import { FEED_COALESCE_MS, presenceOf, presenceReporter, samePresence } from "./lib/menubar";
 import { away, burst, markQuiet, quiet, shouldNotify } from "./lib/notify";
 import { readFirstTask } from "./lib/onboarding";
 import { useRuntime } from "./lib/runtime";
@@ -39,6 +39,15 @@ import {
 } from "./lib/types";
 import { useReportView } from "./lib/view";
 import { followViewport } from "./lib/viewport";
+
+const reportPresence = presenceReporter(async (presence: ReturnType<typeof presenceOf>) => {
+  try {
+    await api.reportPresence(presence);
+  } catch (error) {
+    console.warn(`The menu bar refused what this window is showing: ${errorMessage(error)}`);
+    throw error;
+  }
+}, samePresence);
 
 export default function App() {
   useEffect(followViewport, []);
@@ -188,22 +197,16 @@ export default function App() {
       console.warn(`The menu bar refused ${what}: ${errorMessage(error)}`);
     void api.reportHost(host).catch(refused("the workspace this window is showing"));
 
-    let last = presenceOf(useStore.getState());
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const report = () => {
-      timer = null;
-      const next = presenceOf(useStore.getState());
-      if (samePresence(next, last)) return;
-      last = next;
-      void api.reportPresence(next).catch(refused("what this window is showing"));
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const report = async () => {
+      await reportPresence(presenceOf(useStore.getState()));
+      if (!stopped) timer = setTimeout(() => void report(), FEED_COALESCE_MS);
     };
-    void api.reportPresence(last).catch(refused("what this window is showing"));
-    const unsubscribe = useStore.subscribe(() => {
-      if (timer === null) timer = setTimeout(report, FEED_COALESCE_MS);
-    });
+    void report();
     return () => {
-      unsubscribe();
-      if (timer !== null) clearTimeout(timer);
+      stopped = true;
+      clearTimeout(timer);
     };
   }, []);
 

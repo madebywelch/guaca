@@ -55,6 +55,25 @@ export function samePresence(a: Presence, b: Presence): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+export function presenceReporter<T>(send: (value: T) => Promise<void>, equal = Object.is) {
+  let acknowledged: T | undefined;
+  let hasAcknowledged = false;
+  let queue = Promise.resolve();
+  return (value: T): Promise<void> => {
+    queue = queue.then(async () => {
+      if (hasAcknowledged && equal(value, acknowledged as T)) return;
+      try {
+        await send(value);
+        acknowledged = value;
+        hasAcknowledged = true;
+      } catch {
+        return;
+      }
+    });
+    return queue;
+  };
+}
+
 /** Whether an agent is doing something now, as opposed to having done it. */
 function busy(state: Activity | undefined): boolean {
   return state?.state === "thinking" || state?.state === "queued";
