@@ -500,6 +500,16 @@ pub fn normalize_base_url(input: &str) -> Result<String, ConfigError> {
 /// without ever round-tripping the secret.
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
+pub struct LimitsPatch {
+    pub max_hops: Option<u16>,
+    pub max_steps_per_run: Option<u32>,
+    pub max_fanout_per_call: Option<usize>,
+    pub max_sends_per_pair: Option<u32>,
+    pub max_tool_rounds: Option<u16>,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct SettingsPatch {
     pub operator_name: Option<String>,
     pub provider: Option<Provider>,
@@ -509,7 +519,7 @@ pub struct SettingsPatch {
     pub subscription_model: Option<String>,
     pub reasoning_effort: Option<crate::domain::effort::ReasoningEffort>,
     pub request_timeout_secs: Option<u64>,
-    pub limits: Option<GuardLimits>,
+    pub limits: Option<LimitsPatch>,
     pub e2b_api_key: Option<String>,
     pub computer_idle_minutes: Option<u32>,
     pub kernel_api_key: Option<String>,
@@ -578,7 +588,20 @@ impl AppConfig {
             self.inference.request_timeout_secs = timeout.clamp(5, 900);
         }
         if let Some(limits) = patch.limits {
-            self.limits = limits.sanitized();
+            self.limits = GuardLimits {
+                max_hops: limits.max_hops.unwrap_or(self.limits.max_hops),
+                max_steps_per_run: limits
+                    .max_steps_per_run
+                    .unwrap_or(self.limits.max_steps_per_run),
+                max_fanout_per_call: limits
+                    .max_fanout_per_call
+                    .unwrap_or(self.limits.max_fanout_per_call),
+                max_sends_per_pair: limits
+                    .max_sends_per_pair
+                    .unwrap_or(self.limits.max_sends_per_pair),
+                max_tool_rounds: limits.max_tool_rounds.unwrap_or(self.limits.max_tool_rounds),
+            }
+            .sanitized();
         }
         Ok(())
     }
@@ -615,6 +638,21 @@ pub const LIMIT_LABELS: &[(&str, &str)] = &[
     ("maxSendsPerPair", "Messages between any two agents"),
     ("maxFanoutPerCall", "Recipients per send"),
 ];
+
+#[allow(dead_code)]
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct AgentPatchValidation {
+    operator_name: Option<String>,
+    default_model: Option<String>,
+    subscription_model: Option<String>,
+    reasoning_effort: Option<ReasoningEffort>,
+    request_timeout_secs: Option<u64>,
+    limits: Option<GuardLimits>,
+    computer_idle_minutes: Option<u32>,
+    browser_idle_minutes: Option<u32>,
+    browser_stealth: Option<bool>,
+}
 
 /// Reads the changes an agent asked for into a patch, refusing what it may
 /// not touch with a sentence that says what it may.
@@ -663,7 +701,11 @@ pub fn agent_patch(
             value.insert(key.clone(), wanted.clone());
         }
     }
-    serde_json::from_value(serde_json::Value::Object(value)).map_err(|err| {
+    let value = serde_json::Value::Object(value);
+    serde_json::from_value::<AgentPatchValidation>(value.clone()).map_err(|err| {
+        format!("those values could not be read ({err}). `read` shows each setting's type.")
+    })?;
+    serde_json::from_value(value).map_err(|err| {
         format!("those values could not be read ({err}). `read` shows each setting's type.")
     })
 }
@@ -821,8 +863,8 @@ mod tests {
         let patch =
             agent_patch(&serde_json::json!({ "limits": { "maxHops": 12 } }), &current).unwrap();
         let limits = patch.limits.unwrap();
-        assert_eq!(limits.max_hops, 12);
-        assert_eq!(limits.max_steps_per_run, current.limits.max_steps_per_run);
+        assert_eq!(limits.max_hops, Some(12));
+        assert_eq!(limits.max_steps_per_run, Some(current.limits.max_steps_per_run));
         let refused =
             agent_patch(&serde_json::json!({ "limits": { "maxEverything": 1 } }), &current);
         assert!(refused.unwrap_err().contains("maxHops"));

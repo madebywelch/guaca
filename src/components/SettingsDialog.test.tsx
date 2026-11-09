@@ -80,6 +80,7 @@ function signedIn(over: Partial<SubscriptionStatus> = {}): SubscriptionStatus {
 }
 
 const updateSettings = vi.fn<(patch: SettingsPatch) => Promise<Settings>>(async () => stored());
+const getSettings = vi.fn<() => Promise<Settings>>(async () => stored());
 const testConnection = vi.fn<(patch?: SettingsPatch) => Promise<string>>(async () => "Reached it.");
 const notifyOperator = vi.fn<(title: string, body: string) => Promise<boolean>>(async () => true);
 const subscriptionStatus = vi.fn<() => Promise<SubscriptionStatus>>(async () => signedOut());
@@ -156,6 +157,7 @@ vi.mock("../lib/transport", async (importOriginal) => ({
 vi.mock("../lib/ipc", () => ({
   api: {
     updateSettings: (patch: SettingsPatch) => updateSettings(patch),
+    getSettings: () => getSettings(),
     testConnection: (patch?: SettingsPatch) => testConnection(patch),
     subscriptionStatus: () => subscriptionStatus(),
     subscriptionModels: async () =>
@@ -284,6 +286,7 @@ beforeEach(() => {
   platform.desktop = true;
   localStorage.clear();
   updateSettings.mockResolvedValue(stored());
+  getSettings.mockResolvedValue(stored());
   testConnection.mockResolvedValue("Reached OpenRouter. 312 models.");
   notifyOperator.mockResolvedValue(true);
   subscriptionStatus.mockResolvedValue(signedOut());
@@ -346,6 +349,166 @@ describe("when the runtime refuses", () => {
 
     settle(stored());
     await waitFor(() => expect(save().disabled).toBe(false));
+  });
+});
+
+describe("concurrent settings edits", () => {
+  it("retries an older host's rejected partial limits over its latest settings", async () => {
+    updateSettings
+      .mockRejectedValueOnce({
+        kind: "badArguments",
+        message:
+          "`update_settings` was called with arguments this build does not recognize (missing field `maxStepsPerRun`). Update the host.",
+      })
+      .mockResolvedValueOnce(stored({ limits: { ...HELD, maxHops: 12, maxStepsPerRun: 80 } }));
+    getSettings.mockResolvedValue(stored({ limits: { ...HELD, maxStepsPerRun: 80 } }));
+    open();
+    pane("Limits");
+    type(/^Relay depth/, "12");
+    fireEvent.click(save());
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(2));
+    expect(getSettings).toHaveBeenCalledTimes(1);
+    expect(updateSettings.mock.calls[1]?.[0]).toEqual({
+      limits: { ...HELD, maxHops: 12, maxStepsPerRun: 80 },
+    });
+  });
+
+  it("does not retry an unrelated host refusal", async () => {
+    updateSettings.mockRejectedValue({ kind: "config", message: "config.json is read-only" });
+    open();
+    pane("Limits");
+    type(/^Relay depth/, "12");
+    fireEvent.click(save());
+    await waitFor(() => expect(screen.getByText(/config\.json is read-only/i)).toBeTruthy());
+    expect(updateSettings).toHaveBeenCalledTimes(1);
+    expect(getSettings).not.toHaveBeenCalled();
+  });
+
+  it("keeps distinct limit edits from two clients with stale snapshots", async () => {
+    let runtime = stored();
+    updateSettings.mockImplementation(async (patch) => {
+      runtime = { ...runtime, limits: { ...runtime.limits, ...patch.limits } };
+      return runtime;
+    });
+    const first = open(stored());
+    pane("Limits");
+    type(/^Relay depth/, "12");
+    fireEvent.click(save());
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+    first.unmount();
+
+    open(stored());
+    pane("Limits");
+    type(/^Model calls per conversation/, "80");
+    fireEvent.click(save());
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(2));
+    expect(runtime.limits).toEqual({ ...HELD, maxHops: 12, maxStepsPerRun: 80 });
+  });
+
+  it("sends only the limit edited by this client", async () => {
+    open();
+    pane("Limits");
+    type(/^Relay depth/, "12");
+    fireEvent.click(save());
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+    expect(sentPatch().limits).toEqual({ maxHops: 12 });
+  });
+
+  it("preserves a limit edited again while its save is delayed", async () => {
+    let finish!: (value: Settings) => void;
+    updateSettings.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    open();
+    pane("Limits");
+    type(/^Relay depth/, "12");
+    fireEvent.click(save());
+    type(/^Relay depth/, "14");
+    await act(async () => finish(stored({ limits: { ...HELD, maxHops: 12 } })));
+    expect(field(/^Relay depth/).value).toBe("14");
+    expect(save().disabled).toBe(false);
+  });
+
+  it("preserves a revert made while the previous value is saving", async () => {
+    let finish!: (value: Settings) => void;
+    updateSettings.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    open();
+    type(/^Your name/, "Bob");
+    fireEvent.click(save());
+    type(/^Your name/, "Robert");
+    act(() =>
+      useStore.getState().applyEvent({
+        type: "settingsChanged",
+        settings: stored({ operatorName: "Bob" }),
+      }),
+    );
+    expect(field(/^Your name/).value).toBe("Robert");
+    await act(async () => finish(stored({ operatorName: "Bob" })));
+    expect(field(/^Your name/).value).toBe("Robert");
+    expect(save().disabled).toBe(false);
+  });
+
+  it("restores a closed draft while following untouched remote fields", () => {
+    const view = open();
+    type(/^Your name/, "Draft name");
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    view.unmount();
+    open(stored({ defaultModel: "remote/model" }));
+    expect(field(/^Your name/).value).toBe("Draft name");
+    pane("Provider");
+    expect(field(/^Default model/).value).toBe("remote/model");
+  });
+
+  it("discards all staged edits and does not restore them on reopen", () => {
+    const view = open();
+    expect(screen.queryByRole("button", { name: "Discard changes" })).toBeNull();
+    type(/^Your name/, "Draft name");
+    pane("Limits");
+    type(/^Relay depth/, "12");
+    pane("Machines");
+    type(/^E2B API key/, "discard-me");
+    type(/^Sleep computers after/, "45");
+    fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
+    expect(screen.queryByRole("button", { name: "Discard changes" })).toBeNull();
+    expect(field(/^E2B API key/).value).toBe("");
+    expect(field(/^Sleep computers after/).value).toBe("");
+    pane("Limits");
+    expect(field(/^Relay depth/).value).toBe(String(HELD.maxHops));
+    pane("General");
+    expect(field(/^Your name/).value).toBe("Robert");
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    view.unmount();
+    open();
+    expect(field(/^Your name/).value).toBe("Robert");
+  });
+
+  it("does not retain keys or key editors in a closed draft", () => {
+    const view = open();
+    type(/^Your name/, "Draft name");
+    pane("Provider");
+    fireEvent.click(screen.getByRole("button", { name: "Change API key" }));
+    type(/^API key/, "provider-secret");
+    pane("Machines");
+    type(/^E2B API key/, "computer-secret");
+    type(/^Kernel API key/, "browser-secret");
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    view.unmount();
+    open();
+    expect(field(/^Your name/).value).toBe("Draft name");
+    pane("Provider");
+    fireEvent.click(screen.getByRole("button", { name: "Change API key" }));
+    expect(field(/^API key/).value).toBe("");
+    pane("Machines");
+    expect(field(/^E2B API key/).value).toBe("");
+    expect(field(/^Kernel API key/).value).toBe("");
   });
 });
 
@@ -420,7 +583,7 @@ describe("what a save sends", () => {
 
     fireEvent.click(save());
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
-    expect(sentPatch().limits).toEqual({ ...HELD, maxHops: 1 });
+    expect(sentPatch().limits).toEqual({ maxHops: 1 });
   });
 
   it("sends a limit the runtime will clamp exactly as it was typed", async () => {
