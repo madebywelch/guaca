@@ -203,6 +203,41 @@ surface, because a computer and a browser are scanned independently: a replace
 that took the agent's whole set would mean asking one erases everything the
 other reported.
 
+## Provider ownership belongs to the workspace
+
+A workspace stores a random identity and a resource ledger in its database.
+New computers and browsers carry that identity in provider tags. Automatic
+cleanup deletes a computer or browser only when the ledger records that this
+workspace created it, no agent still holds it or its release is recorded, and
+the provider tag matches. A failed ownership read stops the sweep. Resources
+without a ledger entry or matching tag are left alone and reported in the log.
+
+Kernel profiles have no provider tags. The ledger alone governs their automatic
+deletion: a profile this workspace created may be removed, while an adopted or
+unrecorded profile is kept. Browser and profile name conflicts can still adopt
+the existing resource to preserve sign-ins, but adoption is recorded separately
+and does not authorize automatic deletion. A profile name can be reused, so a
+later conflict retains created ownership only when the provider's immutable
+profile ID matches the ledger. A changed or unavailable ID is treated as
+adopted on conflict; a profile created without an ID is retained at cleanup.
+An operator can explicitly delete a
+referenced legacy computer or close a browser without a ledger entry. A later
+observation of a confirmed 404 records that a ledgered resource is gone; a
+timeout or provider error does not.
+
+Resuming a computer records its intent before the provider reissues access
+tokens. The new tokens and completion are committed together. If that write
+fails or the host stops mid-resume, the next attempt first pauses a running
+computer and resumes it again, rather than using the old tokens or replacing
+its disk.
+
+A database copy retains its identity and the ledger as they stood at the copy.
+The ledgers then diverge, so one copy does not automatically delete resources
+the other creates later. A resource created before the copy can still be
+released by one copy while the other uses it; the latter sees a confirmed 404.
+Restoring an older backup has the same boundary. An older build cannot open a
+newer schema, so rollback restores the pre-update backup.
+
 ## A cookie's presence is not a login, and this is the trap
 
 A profile that has browsed for an hour holds a thousand cookies across three

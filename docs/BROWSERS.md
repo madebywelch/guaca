@@ -95,18 +95,18 @@ written to the row and not to that snapshot. Read from the snapshot, the second
 under a name only one live browser may have. Kernel answers 409, and it answers
 it to every page the agent tries to open for the rest of the turn.
 
-So `ensure_browser` reads `browser_id` from the store. `Runtime::held` is the
-whole of it, and `ensure_computer` reads the sandbox the same way for the same
-reason, where the provider does not refuse the second one and simply bills for
-it.
+So `ensure_browser` reads `browser_id` from the store, and `ensure_computer`
+reads the sandbox the same way for the same reason. Both refuse if that read
+fails, because the provider does not refuse a second sandbox and simply bills
+for it.
 
 A conflict is still possible without that mistake, because the row can be lost
 while the browser is up: a crash between creating one and writing it down leaves
 a browser running, holding the agent's name, with nothing in the app pointing at
-it. `KernelClient::create` treats the 409 as the answer it wanted and adopts
-that browser, found by its `guac-agent` tag rather than by the name the conflict
-was about, and asked for by id so the reply carries a socket. The alternative is
-a `browse` tool that refuses every call until the orphan times out.
+it. A 409 can still adopt a browser found by its `guac-agent` tag and asked for
+by id so the reply carries a socket. The workspace records a newly adopted
+browser as adopted, not created, and never deletes it automatically. A browser
+already recorded as created keeps that ownership when it is found again.
 
 `tests/machines.rs` drives both of these against a scripted control plane: a
 provider that refuses a duplicate name is the only thing that can tell one

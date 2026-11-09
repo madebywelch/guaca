@@ -1901,6 +1901,28 @@ CREATE TABLE approval_policies (
 );
 "#,
     ),
+    (
+        67,
+        r#"
+CREATE TABLE workspace_identity (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    id TEXT NOT NULL
+);
+CREATE TABLE resource_ledger (
+    provider TEXT NOT NULL,
+    resource_id TEXT NOT NULL,
+    origin TEXT NOT NULL CHECK (origin IN ('created', 'adopted')),
+    provider_id TEXT,
+    created_at INTEGER NOT NULL,
+    released_at INTEGER,
+    gone_at INTEGER,
+    PRIMARY KEY (provider, resource_id)
+);
+CREATE TABLE pending_sandbox_resume (
+    resource_id TEXT PRIMARY KEY
+);
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

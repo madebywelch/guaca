@@ -112,6 +112,7 @@ const TAG: &str = "guac";
 /// Marks a browser with the agent it was made for, which is how one is found
 /// again when nothing in this app is holding its id.
 const AGENT_TAG: &str = "guac-agent";
+const WORKSPACE_TAG: &str = "guac-workspace";
 
 #[derive(Debug, thiserror::Error)]
 pub enum KernelError {
@@ -234,6 +235,8 @@ pub struct Session {
 struct BrowserRow {
     session_id: String,
     #[serde(default)]
+    tags: std::collections::HashMap<String, String>,
+    #[serde(default)]
     cdp_ws_url: String,
     #[serde(default)]
     browser_live_view_url: Option<String>,
@@ -252,7 +255,27 @@ impl From<BrowserRow> for Session {
 #[derive(Debug, Deserialize)]
 struct ProfileRow {
     #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
     name: Option<String>,
+}
+
+#[derive(Debug)]
+pub enum ProfileCreation {
+    Created { id: String, name: String },
+    Existing { name: String },
+}
+
+#[derive(Debug)]
+pub enum BrowserCreation {
+    Created(Session),
+    Conflict { candidates: Vec<BrowserCandidate> },
+}
+
+#[derive(Debug)]
+pub struct BrowserCandidate {
+    pub id: String,
+    pub workspace: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -320,6 +343,167 @@ impl KernelClient {
         {
             Ok(row) => Ok(row.name.unwrap_or(name)),
             Err(KernelError::Api { status: 409, .. }) => Ok(name),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn create_profile(&self, agent: &str) -> Result<ProfileCreation, KernelError> {
+        let name = profile_name(agent);
+        match self
+            .call::<ProfileRow>(
+                self.http.post(format!("{}/profiles", self.base)).json(&json!({ "name": name })),
+            )
+            .await
+        {
+            Ok(row) => {
+                let name = row.name.unwrap_or(name);
+                Ok(ProfileCreation::Created {
+                    id: row.id.filter(|id| !id.is_empty()).unwrap_or_else(|| name.clone()),
+                    name,
+                })
+            }
+            Err(KernelError::Api { status: 409, .. }) => Ok(ProfileCreation::Existing { name }),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn profile_id(&self, name: &str) -> Result<Option<String>, KernelError> {
+        match self.call::<ProfileRow>(self.http.get(format!("{}/profiles/{name}", self.base))).await
+        {
+            Ok(row) => Ok(row.id.filter(|id| !id.is_empty())),
+            Err(KernelError::Api { status: 404, .. }) => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn create_for_workspace(
+        &self,
+        agent: &str,
+        profile: &str,
+        idle_seconds: u32,
+        stealth: bool,
+        workspace: &str,
+    ) -> Result<BrowserCreation, KernelError> {
+        if workspace.trim().is_empty() {
+            return Err(KernelError::Protocol("workspace identity is empty".into()));
+        }
+        let mut body = create_body(agent, profile, idle_seconds, stealth);
+        body["tags"][WORKSPACE_TAG] = json!(workspace);
+        match self
+            .call::<BrowserRow>(self.http.post(format!("{}/browsers", self.base)).json(&body))
+            .await
+        {
+            Ok(row) => Ok(BrowserCreation::Created(row.into())),
+            Err(KernelError::Api { status: 409, .. }) => {
+                Ok(BrowserCreation::Conflict { candidates: self.list_candidates(agent).await? })
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn list_candidates(&self, agent: &str) -> Result<Vec<BrowserCandidate>, KernelError> {
+        let mut result = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut offset = 0;
+        loop {
+            let rows: Vec<BrowserRow> = self
+                .call(self.http.get(format!("{}/browsers", self.base)).query(&[
+                    ("status", "active".to_string()),
+                    ("tags[guac]", "true".to_string()),
+                    ("tags[guac-agent]", agent.to_string()),
+                    ("limit", "100".to_string()),
+                    ("offset", offset.to_string()),
+                ]))
+                .await?;
+            let count = rows.len();
+            for row in rows {
+                if !seen.insert(row.session_id.clone()) {
+                    return Err(KernelError::Protocol(
+                        "Kernel repeated a browser in its inventory".into(),
+                    ));
+                }
+                if row.tags.get(TAG).map(String::as_str) == Some("true")
+                    && row.tags.get(AGENT_TAG).map(String::as_str) == Some(agent)
+                {
+                    result.push(BrowserCandidate {
+                        id: row.session_id,
+                        workspace: row.tags.get(WORKSPACE_TAG).cloned(),
+                    });
+                }
+            }
+            if count < 100 {
+                return Ok(result);
+            }
+            offset += count;
+        }
+    }
+
+    pub async fn list_workspace(
+        &self,
+        workspace: &str,
+        agent: Option<&str>,
+    ) -> Result<Vec<String>, KernelError> {
+        if workspace.trim().is_empty() {
+            return Err(KernelError::Protocol("workspace identity is empty".into()));
+        }
+        let mut result = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut offset = 0;
+        loop {
+            let mut query = vec![
+                ("status".to_string(), "active".to_string()),
+                (format!("tags[{TAG}]"), "true".to_string()),
+                (format!("tags[{WORKSPACE_TAG}]"), workspace.to_string()),
+                ("limit".to_string(), "100".to_string()),
+                ("offset".to_string(), offset.to_string()),
+            ];
+            if let Some(agent) = agent {
+                query.push((format!("tags[{AGENT_TAG}]"), agent.to_string()));
+            }
+            let rows: Vec<BrowserRow> =
+                self.call(self.http.get(format!("{}/browsers", self.base)).query(&query)).await?;
+            let count = rows.len();
+            for row in rows {
+                if !seen.insert(row.session_id.clone()) {
+                    return Err(KernelError::Protocol(
+                        "Kernel repeated a browser in its inventory".into(),
+                    ));
+                }
+                if row.tags.get(TAG).map(String::as_str) == Some("true")
+                    && row.tags.get(WORKSPACE_TAG).map(String::as_str) == Some(workspace)
+                    && agent.is_none_or(|agent| {
+                        row.tags.get(AGENT_TAG).map(String::as_str) == Some(agent)
+                    })
+                {
+                    result.push(row.session_id);
+                }
+            }
+            if count < 100 {
+                return Ok(result);
+            }
+            offset += count;
+        }
+    }
+
+    pub async fn get_for_workspace(
+        &self,
+        id: &str,
+        workspace: &str,
+    ) -> Result<Option<Session>, KernelError> {
+        if workspace.trim().is_empty() {
+            return Err(KernelError::Protocol("workspace identity is empty".into()));
+        }
+        match self.call::<BrowserRow>(self.http.get(format!("{}/browsers/{id}", self.base))).await {
+            Ok(row)
+                if row.tags.get(TAG).map(String::as_str) == Some("true")
+                    && row.tags.get(WORKSPACE_TAG).map(String::as_str) == Some(workspace) =>
+            {
+                Ok(Some(row.into()))
+            }
+            Ok(_) => Err(KernelError::Protocol(
+                "browser ownership tag does not match this workspace".into(),
+            )),
+            Err(KernelError::Api { status: 404, .. }) => Ok(None),
             Err(err) => Err(err),
         }
     }
@@ -423,7 +607,10 @@ impl KernelClient {
     /// deleted, and the profile is named from the agent, so leaving it behind
     /// would hand the next agent of that name somebody else's sessions.
     pub async fn delete_profile(&self, agent: &str) -> Result<(), KernelError> {
-        let name = profile_name(agent);
+        self.delete_profile_named(&profile_name(agent)).await
+    }
+
+    pub async fn delete_profile_named(&self, name: &str) -> Result<(), KernelError> {
         match self.call::<Value>(self.http.delete(format!("{}/profiles/{name}", self.base))).await {
             Ok(_) => Ok(()),
             Err(KernelError::Api { status: 404, .. }) => Ok(()),
@@ -887,6 +1074,81 @@ mod tests {
         assert_eq!(body["tags"]["guac-agent"], json!("agent-1"), "{body}");
     }
 
+    #[tokio::test]
+    async fn workspace_creation_distinguishes_conflicts_and_filters_candidates() {
+        use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
+
+        #[derive(Default)]
+        struct Requests {
+            profiles: AtomicUsize,
+            browsers: AtomicUsize,
+            bodies: Mutex<Vec<Value>>,
+        }
+        async fn profile(State(state): State<Arc<Requests>>) -> (StatusCode, Json<Value>) {
+            match state.profiles.fetch_add(1, Ordering::SeqCst) {
+                0 => (StatusCode::CREATED, Json(json!({"id":"profile-id", "name":"guac-agent-1"}))),
+                1 => (StatusCode::CONFLICT, Json(json!({"message":"exists"}))),
+                _ => (StatusCode::CREATED, Json(json!({"name":"guac-agent-1"}))),
+            }
+        }
+        async fn create(
+            State(state): State<Arc<Requests>>,
+            Json(body): Json<Value>,
+        ) -> (StatusCode, Json<Value>) {
+            state.bodies.lock().push(body);
+            if state.browsers.fetch_add(1, Ordering::SeqCst) == 0 {
+                (
+                    StatusCode::CREATED,
+                    Json(json!({"session_id":"created", "cdp_ws_url":"ws://created"})),
+                )
+            } else {
+                (StatusCode::CONFLICT, Json(json!({"message":"exists"})))
+            }
+        }
+        async fn list() -> Json<Value> {
+            Json(json!([
+                {"session_id":"ours", "tags":{"guac":"true", "guac-agent":"agent-1", "guac-workspace":"workspace-1"}},
+                {"session_id":"foreign", "tags":{"guac":"true", "guac-agent":"agent-1", "guac-workspace":"workspace-2"}},
+                {"session_id":"legacy", "tags":{"guac":"true", "guac-agent":"agent-1"}}
+            ]))
+        }
+        let state = Arc::new(Requests::default());
+        let app = Router::new()
+            .route("/profiles", post(profile))
+            .route("/browsers", post(create).get(list))
+            .with_state(state.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = KernelClient { http: reqwest::Client::new(), api_key: "test".into(), base };
+        assert!(
+            matches!(client.create_profile("agent-1").await.unwrap(), ProfileCreation::Created { id, name } if id == "profile-id" && name == "guac-agent-1")
+        );
+        assert!(
+            matches!(client.create_profile("agent-1").await.unwrap(), ProfileCreation::Existing { name } if name == "guac-agent-1")
+        );
+        assert!(
+            matches!(client.create_profile("agent-1").await.unwrap(), ProfileCreation::Created { id, name } if id == name && name == "guac-agent-1")
+        );
+        assert!(
+            matches!(client.create_for_workspace("agent-1", "guac-agent-1", 3600, false, "workspace-1").await.unwrap(), BrowserCreation::Created(session) if session.id == "created")
+        );
+        let BrowserCreation::Conflict { candidates } = client
+            .create_for_workspace("agent-1", "guac-agent-1", 3600, false, "workspace-1")
+            .await
+            .unwrap()
+        else {
+            panic!("expected conflict")
+        };
+        assert_eq!(
+            candidates.iter().map(|c| (c.id.as_str(), c.workspace.as_deref())).collect::<Vec<_>>(),
+            [("ours", Some("workspace-1")), ("foreign", Some("workspace-2")), ("legacy", None)]
+        );
+        assert_eq!(client.list_workspace("workspace-1", Some("agent-1")).await.unwrap(), ["ours"]);
+        assert_eq!(state.bodies.lock()[0]["tags"]["guac-workspace"], json!("workspace-1"));
+        server.abort();
+    }
+
     #[test]
     fn an_out_of_range_timeout_is_clamped_rather_than_rejected() {
         // An operator typing a number into a settings box must not be able to
@@ -952,6 +1214,7 @@ mod tests {
         // frame, which draws a copy of the window inside the pane.
         let row = BrowserRow {
             session_id: "s".into(),
+            tags: Default::default(),
             cdp_ws_url: "wss://x".into(),
             browser_live_view_url: Some("  ".into()),
         };
