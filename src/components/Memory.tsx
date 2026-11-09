@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { api } from "../lib/ipc";
+import { memoryDraft } from "../lib/memoryDraft";
 import { useStore } from "../lib/store";
 import { type AgentId, errorMessage } from "../lib/types";
+
+export { arrived, type MemoryState, memoryReducer } from "../lib/memoryDraft";
 
 /**
  * The cap the runtime enforces, mirrored here so the operator is warned before
@@ -54,110 +57,8 @@ export function crowding(text: string): { text: string; over: boolean } | null {
   return null;
 }
 
-/** The versions of one page this panel can be holding at once. */
-export interface Held {
-  /** What is on disk, as of the last read. */
-  stored: string;
-  /** What the operator has typed since, or null when they have not. */
-  draft: string | null;
-  /**
-   * A newer version that landed while they were typing, held rather than
-   * applied. Null when nothing has.
-   */
-  incoming: string | null;
-}
-
-/**
- * A version read off disk, against what the panel is already holding.
- *
- * The operator's unsaved text is never replaced by it. An agent rewrites this
- * file in the middle of a turn, and the operator is most likely to be editing
- * it exactly then, so a read that applied itself would take a sentence away as
- * it was being typed. It is held to one side instead and the panel says so:
- * keeping what you wrote is Save, and taking what the agent wrote is Cancel.
- *
- * A draft typed back to what is on disk is not an edit, and holding it as one
- * would leave the panel on a page the agent has since replaced.
- */
-export function arrived(held: Held | null, content: string): Held {
-  if (held === null || held.draft === null || held.draft === held.stored) {
-    return { stored: content, draft: null, incoming: null };
-  }
-  return { ...held, incoming: content };
-}
-
 interface Props {
   agentId: AgentId;
-}
-
-type Page = { held: Held; error: string | null; cut: boolean };
-export type MemoryState =
-  | { phase: "loading"; editing: boolean }
-  | { phase: "failed"; error: string }
-  | ({ phase: "view" | "editing" } & Page)
-  | ({ phase: "saving"; sent: string } & Page);
-
-export type MemoryAction =
-  | { type: "read"; content: string }
-  | { type: "readFailed"; error: string }
-  | { type: "edit" }
-  | { type: "change"; value: string }
-  | { type: "cancel" }
-  | { type: "save"; sent: string }
-  | { type: "saved"; saved: string }
-  | { type: "saveFailed"; error: string };
-
-export function memoryReducer(state: MemoryState, action: MemoryAction): MemoryState {
-  switch (action.type) {
-    case "read":
-      if (state.phase === "loading" || state.phase === "failed") {
-        return {
-          phase: state.phase === "loading" && state.editing ? "editing" : "view",
-          held: arrived(null, action.content),
-          error: null,
-          cut: false,
-        };
-      }
-      if (state.phase === "saving" && state.held.draft !== state.sent) {
-        return { ...state, held: { ...state.held, incoming: action.content }, error: null };
-      }
-      return { ...state, held: arrived(state.held, action.content), error: null };
-    case "readFailed":
-      if (state.phase === "loading" || state.phase === "failed")
-        return { phase: "failed", error: action.error };
-      return { ...state, error: action.error };
-    case "edit":
-      if (state.phase === "loading") return { ...state, editing: true };
-      if (state.phase === "view") return { ...state, phase: "editing", cut: false };
-      return state;
-    case "change":
-      if (state.phase !== "editing" && state.phase !== "saving") return state;
-      return { ...state, held: { ...state.held, draft: action.value }, cut: false };
-    case "cancel":
-      if (state.phase !== "editing") return state;
-      return {
-        ...state,
-        phase: "view",
-        held: { stored: state.held.incoming ?? state.held.stored, draft: null, incoming: null },
-        cut: false,
-      };
-    case "save":
-      if (state.phase !== "editing") return state;
-      return { ...state, phase: "saving", sent: action.sent, error: null };
-    case "saved": {
-      if (state.phase !== "saving") return state;
-      const draft = state.held.draft === state.sent ? null : state.held.draft;
-      return {
-        phase: draft === null ? "view" : "editing",
-        held: { stored: action.saved, draft, incoming: null },
-        error: null,
-        cut: action.saved !== state.sent.trim(),
-      };
-    }
-    case "saveFailed":
-      if (state.phase !== "saving") return state;
-      return { ...state, phase: "editing", error: action.error };
-  }
 }
 
 /**
@@ -178,29 +79,30 @@ export function Memory({ agentId }: Props) {
 }
 
 function MemoryPage({ agentId }: Props) {
-  const [state, dispatch] = useReducer(memoryReducer, { phase: "loading", editing: false });
-  const generation = useRef(0);
+  const [draft] = useState(() => memoryDraft(agentId));
+  const state = useSyncExternalStore(draft.subscribe, draft.getSnapshot);
+  const { dispatch } = draft;
   const box = useRef<HTMLTextAreaElement>(null);
   // The agent rewrote it. Same counter as the schedule's, one panel over.
   const changed = useStore((state) => state.memoryVersion[agentId] ?? 0);
 
   const load = useCallback(async () => {
-    const request = ++generation.current;
+    const request = ++draft.generation;
     try {
       const content = await api.agentMemory(agentId);
-      if (request === generation.current) dispatch({ type: "read", content });
+      if (request === draft.generation) dispatch({ type: "read", content });
     } catch (caught) {
-      if (request === generation.current)
+      if (request === draft.generation)
         dispatch({ type: "readFailed", error: errorMessage(caught) });
     }
-  }, [agentId]);
+  }, [agentId, draft, dispatch]);
 
   useEffect(() => {
     void load();
     return () => {
-      generation.current++;
+      draft.generation++;
     };
-  }, [load, changed]);
+  }, [load, changed, draft]);
 
   const held = "held" in state ? state.held : null;
   const loading = state.phase === "loading";
@@ -232,7 +134,7 @@ function MemoryPage({ agentId }: Props) {
       // cuts anything over the cap, so leaving what was typed on screen would
       // show the operator a page their agent is never going to be given.
       const saved = await api.setAgentMemory(agentId, sent);
-      generation.current++;
+      draft.generation++;
       dispatch({ type: "saved", saved });
     } catch (caught) {
       dispatch({ type: "saveFailed", error: errorMessage(caught) });

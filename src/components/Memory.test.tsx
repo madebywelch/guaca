@@ -2,8 +2,9 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { memoryDraft } from "../lib/memoryDraft";
 import { useStore } from "../lib/store";
 import { arrived, CAP, crowding, Memory, type MemoryState, memoryReducer } from "./Memory";
 
@@ -27,6 +28,15 @@ function type(text: string) {
 }
 
 describe("Memory", () => {
+  afterEach(() => {
+    act(() => {
+      for (const id of ["a1", "a2"]) {
+        const draft = memoryDraft(id);
+        draft.dispatch({ type: "saveFailed", error: "test cleanup" });
+        draft.dispatch({ type: "cancel" });
+      }
+    });
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     agentMemory.mockResolvedValue("");
@@ -114,8 +124,33 @@ describe("Memory", () => {
     rerender(<Memory key="a2" agentId="a2" />);
     await screen.findByText("second agent");
     await act(async () => finish("sent"));
-    rerender(<Memory key="a1" agentId="a1" />);
+    await act(async () => rerender(<Memory key="a1" agentId="a1" />));
     expect(box().value).toBe("sent and more");
+  });
+
+  it("restores a pending save after unmount and settles it on the remounted panel", async () => {
+    let finish!: (value: string) => void;
+    agentMemory.mockResolvedValue("old");
+    setAgentMemory.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const { unmount } = render(<Memory agentId="a1" />);
+    await screen.findByText("old");
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    type("sent");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    type("later");
+    unmount();
+    render(<Memory agentId="a1" />);
+    expect(box().value).toBe("later");
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => finish("sent"));
+    expect(box().value).toBe("later");
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
   });
 
   it("reads without a textarea and Cancel restores the stored page", async () => {
