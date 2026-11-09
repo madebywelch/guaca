@@ -18,6 +18,7 @@ import { api } from "../lib/ipc";
 import { exchange, headline, liveReply, panelOrder, said, workingCount } from "../lib/menubar";
 import { useLiveAgents, useStore } from "../lib/store";
 import { useNow } from "../lib/time";
+import { BEFORE_RELOAD, workspaceOrigin } from "../lib/transport";
 import { type AgentCard, type AgentId, errorMessage, type Tokens } from "../lib/types";
 import { Brand } from "./Brand";
 import { Desk } from "./Desk";
@@ -61,10 +62,34 @@ export function MenubarPanel({ ready }: { ready: boolean }) {
   const setBanner = useStore((s) => s.setBanner);
   const showFailure = useStore((s) => s.showFailure);
   const [open, setOpen] = useState<AgentId | null>(null);
-  // What was being typed to each agent, for as long as the panel lives. Going
-  // back to the list is not deciding against a message, and the window keeps a
-  // draft across every change of view for the same reason.
-  const drafts = useRef(new Map<AgentId, string>());
+  const [draftKey] = useState(() => `guaca.panel.drafts:${new URL(workspaceOrigin()).origin}`);
+  const [drafts] = useState(() => {
+    try {
+      const saved: unknown = JSON.parse(sessionStorage.getItem(draftKey) ?? "{}");
+      if (saved && typeof saved === "object" && !Array.isArray(saved)) {
+        return new Map(
+          Object.entries(saved).filter(
+            (entry): entry is [string, string] => typeof entry[1] === "string",
+          ),
+        );
+      }
+    } catch {}
+    return new Map<AgentId, string>();
+  });
+  const saveDrafts = useCallback(() => {
+    sessionStorage.setItem(draftKey, JSON.stringify(Object.fromEntries(drafts)));
+  }, [draftKey, drafts]);
+  useLayoutEffect(() => {
+    const preserve = (event: Event) => {
+      try {
+        saveDrafts();
+      } catch {
+        event.preventDefault();
+      }
+    };
+    window.addEventListener(BEFORE_RELOAD, preserve);
+    return () => window.removeEventListener(BEFORE_RELOAD, preserve);
+  }, [saveDrafts]);
 
   const root = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLDivElement>(null);
@@ -134,7 +159,8 @@ export function MenubarPanel({ ready }: { ready: boolean }) {
               key={talking.id}
               agent={talking}
               scroller={scroller}
-              drafts={drafts.current}
+              drafts={drafts}
+              saveDrafts={saveDrafts}
               onBack={() => setOpen(null)}
             />
           ) : (
@@ -259,6 +285,7 @@ function Conversation({
   agent,
   scroller,
   drafts,
+  saveDrafts,
   onBack,
 }: {
   agent: AgentCard;
@@ -266,6 +293,7 @@ function Conversation({
   scroller: () => HTMLElement | null;
   /** Unsent words, by agent, kept by the panel so leaving is not discarding. */
   drafts: Map<AgentId, string>;
+  saveDrafts: () => void;
   onBack: () => void;
 }) {
   const loadChannel = useStore((s) => s.loadChannel);
@@ -284,6 +312,9 @@ function Conversation({
     setDraftState(text);
     if (text) drafts.set(agent.id, text);
     else drafts.delete(agent.id);
+    try {
+      saveDrafts();
+    } catch {}
   };
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);

@@ -93,6 +93,26 @@ function readRemote(): Remote | null {
 }
 
 let ATTACHED: Remote | null = desktop ? readRemote() : null;
+let panelGuard: { host: Remote; valid: () => Promise<boolean> } | null = null;
+
+export function guardPanelHost(host: Remote, valid: () => Promise<boolean>): void {
+  panelGuard = { host, valid };
+}
+
+async function checkPanelHost(): Promise<void> {
+  const guard = panelGuard;
+  if (!guard) return;
+  let valid = false;
+  try {
+    valid = await guard.valid();
+  } catch {}
+  const saved = readRemote();
+  if (valid && saved?.origin === guard.host.origin && saved.token === guard.host.token) return;
+  try {
+    restart();
+  } catch {}
+  throw { kind: "config", message: "The host changed. Open Guaca to reconnect." } satisfies Refusal;
+}
 
 /** The host this window is showing, or null before desktop setup. */
 export function attached(): Remote | null {
@@ -536,6 +556,7 @@ export function workspaceOrigin(): string {
  * file, its size, and the limit.
  */
 export async function upload<T>(file: File): Promise<T> {
+  if (panelGuard) await checkPanelHost();
   const credential = credentialGeneration;
   let response: Response;
   try {
@@ -582,6 +603,7 @@ export async function upload<T>(file: File): Promise<T> {
  * duplicate name differently from a disk failure.
  */
 export async function invoke<T>(name: string, args?: Record<string, unknown>): Promise<T> {
+  if (panelGuard) await checkPanelHost();
   const credential = credentialGeneration;
   let response: Response;
   try {
@@ -753,6 +775,7 @@ function openSocket(
           const probe = async () => {
             let refused = false;
             try {
+              if (panelGuard) await checkPanelHost();
               const response = await fetch(`${origin()}/v1/call`, {
                 method: "POST",
                 headers: { "content-type": "application/json", ...bearer() },

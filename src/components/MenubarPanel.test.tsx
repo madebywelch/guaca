@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../lib/store";
+import { adoptRemote, BEFORE_RELOAD } from "../lib/transport";
 import type { AgentCard, Approval, Envelope, Participant, Reveal } from "../lib/types";
 import { aDecision, aGroup, DEFAULT_GROUP } from "../test-fixtures";
 import { MenubarPanel } from "./MenubarPanel";
@@ -95,6 +96,8 @@ function waiting(over: Partial<Approval> = {}): Approval {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  sessionStorage.clear();
+  adoptRemote({ origin: window.location.origin, token: "" });
   mocks.openWindow.mockResolvedValue(undefined);
   mocks.closeMenubar.mockResolvedValue(undefined);
   mocks.fitMenubar.mockResolvedValue(undefined);
@@ -129,6 +132,56 @@ async function talkToChef() {
 }
 
 describe("a line to an agent from the panel", () => {
+  it("restores drafts only for the host and agent where they were written", async () => {
+    adoptRemote({ origin: "https://a.example", token: "secret-a" });
+    const first = render(<MenubarPanel ready />);
+    fireEvent.click(screen.getByRole("button", { name: /Chef/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Message Chef" }), {
+      target: { value: "Draft on A" },
+    });
+    first.unmount();
+    adoptRemote({ origin: "https://b.example", token: "secret-b" });
+    const second = render(<MenubarPanel ready />);
+    fireEvent.click(screen.getByRole("button", { name: /Chef/ }));
+    expect(screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Message Chef" }).value).toBe(
+      "",
+    );
+    second.unmount();
+    adoptRemote({ origin: "https://a.example", token: "secret-a" });
+    const third = render(<MenubarPanel ready />);
+    fireEvent.click(screen.getByRole("button", { name: /Chef/ }));
+    expect(screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Message Chef" }).value).toBe(
+      "Draft on A",
+    );
+    expect(JSON.stringify(sessionStorage)).not.toContain("secret-a");
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Message Chef" }), { key: "Enter" });
+    await waitFor(() =>
+      expect(screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Message Chef" }).value).toBe(
+        "",
+      ),
+    );
+    third.unmount();
+    render(<MenubarPanel ready />);
+    fireEvent.click(screen.getByRole("button", { name: /Chef/ }));
+    expect(screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Message Chef" }).value).toBe(
+      "",
+    );
+  });
+
+  it("cancels a panel reload when its draft cannot be saved", async () => {
+    const field = await talkToChef();
+    fireEvent.change(field, { target: { value: "Keep me" } });
+    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("full");
+    });
+    try {
+      expect(window.dispatchEvent(new Event(BEFORE_RELOAD, { cancelable: true }))).toBe(false);
+      expect(field.value).toBe("Keep me");
+    } finally {
+      setItem.mockRestore();
+    }
+  });
+
   it("keeps the words when the message could not be sent, and says why", async () => {
     mocks.sendMessage.mockRejectedValue({ kind: "unreachable", message: "the host is down" });
     const field = await talkToChef();

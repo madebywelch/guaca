@@ -52,6 +52,104 @@ vi.mock("./GroupTransfer", () => ({ LegacyGroups: () => null }));
 
 import { HostChoice, HostSetup } from "./HostSetup";
 
+it("does not send a stale panel command after another window commits a host", async () => {
+  const transport = await vi.importActual<typeof import("../lib/transport")>("../lib/transport");
+  const a = { origin: "https://host-a.example", token: "a" };
+  const b = { origin: "https://host-b.example", token: "b" };
+  const fetch = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValue(new Response(JSON.stringify({ ok: null }), { status: 200 }));
+  const preserve = (event: Event) => event.preventDefault();
+  window.addEventListener(transport.BEFORE_RELOAD, preserve);
+  try {
+    transport.saveConnection(a, "remote");
+    transport.adoptRemote(a);
+    transport.guardPanelHost(a, async () => true);
+    transport.saveConnection(b, "remote");
+    await transport.invoke("list_agents").catch(() => {});
+    expect(fetch).not.toHaveBeenCalledWith(`${a.origin}/v1/call`, expect.anything());
+  } finally {
+    fetch.mockRestore();
+    window.removeEventListener(transport.BEFORE_RELOAD, preserve);
+    transport.adoptRemote({ origin: "", token: "" });
+    localStorage.clear();
+  }
+});
+
+it("refuses a command if B commits while the panel generation check is pending", async () => {
+  const transport = await vi.importActual<typeof import("../lib/transport")>("../lib/transport");
+  const a = { origin: "https://host-a.example", token: "a" };
+  const b = { origin: "https://host-b.example", token: "b" };
+  let acknowledge!: (valid: boolean) => void;
+  const fetch = vi.spyOn(globalThis, "fetch");
+  const preserve = (event: Event) => event.preventDefault();
+  window.addEventListener(transport.BEFORE_RELOAD, preserve);
+  try {
+    transport.saveConnection(a, "remote");
+    transport.adoptRemote(a);
+    transport.guardPanelHost(
+      a,
+      () =>
+        new Promise((resolve) => {
+          acknowledge = resolve;
+        }),
+    );
+    const command = transport.invoke("list_agents");
+    transport.saveConnection(b, "remote");
+    acknowledge(true);
+    await expect(command).rejects.toMatchObject({ kind: "config" });
+    expect(fetch).not.toHaveBeenCalled();
+  } finally {
+    fetch.mockRestore();
+    window.removeEventListener(transport.BEFORE_RELOAD, preserve);
+    localStorage.clear();
+  }
+});
+
+it("allows a same-host panel retry after a transient command failure", async () => {
+  const transport = await vi.importActual<typeof import("../lib/transport")>("../lib/transport");
+  const a = { origin: "https://host-a.example", token: "a" };
+  const fetch = vi
+    .spyOn(globalThis, "fetch")
+    .mockRejectedValueOnce(new Error("offline"))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ ok: "ready" }), { status: 200 }));
+  try {
+    transport.saveConnection(a, "remote");
+    transport.adoptRemote(a);
+    transport.guardPanelHost(a, async () => true);
+    await expect(transport.invoke("list_agents")).rejects.toMatchObject({ kind: "unreachable" });
+    await expect(transport.invoke("list_agents")).resolves.toBe("ready");
+    expect(fetch).toHaveBeenCalledTimes(2);
+  } finally {
+    fetch.mockRestore();
+    localStorage.clear();
+  }
+});
+
+it("preserves a draft and refuses a panel with a stale generation", async () => {
+  const transport = await vi.importActual<typeof import("../lib/transport")>("../lib/transport");
+  const a = { origin: "https://host-a.example", token: "a" };
+  const fetch = vi.spyOn(globalThis, "fetch");
+  const preserve = (event: Event) => {
+    sessionStorage.setItem("panel-draft", "unsent");
+    event.preventDefault();
+  };
+  window.addEventListener(transport.BEFORE_RELOAD, preserve);
+  try {
+    transport.saveConnection(a, "remote");
+    transport.adoptRemote(a);
+    transport.guardPanelHost(a, async () => false);
+    await expect(transport.invoke("send_message")).rejects.toMatchObject({ kind: "config" });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem("panel-draft")).toBe("unsent");
+  } finally {
+    fetch.mockRestore();
+    window.removeEventListener(transport.BEFORE_RELOAD, preserve);
+    localStorage.clear();
+    sessionStorage.removeItem("panel-draft");
+  }
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   mode.mockReturnValue("remote");

@@ -13,7 +13,7 @@ import { api } from "./lib/ipc";
 import { loadPrefs } from "./lib/prefs";
 import { useRuntime } from "./lib/runtime";
 import { useStore } from "./lib/store";
-import { adoptRemote, UNAUTHORIZED_EVENT } from "./lib/transport";
+import { adoptRemote, guardPanelHost, UNAUTHORIZED_EVENT } from "./lib/transport";
 import { errorMessage } from "./lib/types";
 
 /**
@@ -106,6 +106,7 @@ api
     adoptRemote(host);
     const generation = (host as typeof host & { generation: number }).generation;
     if (!(await invoke<boolean>("report_host", { host, generation }))) return;
+    guardPanelHost(host, () => invoke<boolean>("report_host", { host, generation }));
     draw(<Panel />);
   })
   .catch((error) => draw(<Nowhere text={`The panel could not start: ${errorMessage(error)}`} />));
