@@ -3,6 +3,20 @@ import { describe, expect, it } from "vitest";
 import { memoryDraft } from "./memoryDraft";
 
 describe("memory draft ownership", () => {
+  it("retains the original text when it is the draft in conflict", () => {
+    const draft = memoryDraft("conflict-original");
+    draft.dispatch({ type: "read", content: "old", version: "old-version" });
+    draft.dispatch({ type: "edit" });
+    draft.dispatch({ type: "change", value: "sent" });
+    draft.dispatch({ type: "save", sent: "sent" });
+    draft.dispatch({ type: "change", value: "old" });
+    draft.dispatch({ type: "conflict", current: "agent", version: "agent-version" });
+    expect(memoryDraft("conflict-original")).toBe(draft);
+    expect(draft.getSnapshot()).toMatchObject({
+      held: { draft: "old", incoming: "agent", incomingVersion: "agent-version" },
+    });
+    draft.dispatch({ type: "cancel" });
+  });
   it("retains a pending save and later edits across remounts, then releases a settled draft", () => {
     const first = memoryDraft("draft-test");
     first.dispatch({ type: "read", content: "old" });

@@ -157,6 +157,12 @@ impl Workspace {
         self.read_unlocked(id)
     }
 
+    pub fn read_versioned(&self, id: AgentId) -> MemorySnapshot {
+        let _guard = MEMORY_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let content = self.read_unlocked(id);
+        MemorySnapshot { version: version(&content), content }
+    }
+
     fn read_unlocked(&self, id: AgentId) -> String {
         self.existing_path(id).and_then(|path| fs::read_to_string(path).ok()).unwrap_or_default()
     }
@@ -254,6 +260,12 @@ pub struct Stored {
 pub enum WriteResult {
     Stored(Stored),
     Conflict { current: String, draft: String },
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MemorySnapshot {
+    pub content: String,
+    pub version: String,
 }
 
 #[cfg(test)]

@@ -389,6 +389,7 @@ surface! {
     hire_agents(group_id: GroupId, drafts: Vec<AgentDraft>) -> Vec<AgentCard>,
     agent_activity() -> HashMap<AgentId, Activity>,
     agent_memory(id: AgentId) -> String,
+    agent_memory_versioned(id: AgentId) -> crate::workspace::MemorySnapshot,
     set_agent_memory(id: AgentId, content: String, expected: Option<String>) -> String,
     agent_notebook(id: AgentId) -> Vec<crate::notebook::Entry>,
     read_notebook(id: AgentId, path: String) -> String,

@@ -2235,6 +2235,13 @@ pub async fn agent_memory(state: &AppState, id: AgentId) -> Reply<String> {
     Ok(state.runtime.workspace().read(id))
 }
 
+pub async fn agent_memory_versioned(
+    state: &AppState,
+    id: AgentId,
+) -> Reply<crate::workspace::MemorySnapshot> {
+    Ok(state.runtime.workspace().read_versioned(id))
+}
+
 /// Lets the operator seed or correct an agent's memory by hand.
 pub async fn set_agent_memory(
     state: &AppState,
@@ -2256,8 +2263,12 @@ pub async fn set_agent_memory(
     match result {
         crate::workspace::WriteResult::Stored(stored) => Ok(stored.content),
         crate::workspace::WriteResult::Conflict { current, draft } => {
+            let version = crate::workspace::version(&current);
             Err(CommandError::new("memoryConflict", "Memory changed while you were editing it.")
-                .with_detail(serde_json::json!({ "current": current, "draft": draft }).to_string()))
+                .with_detail(
+                    serde_json::json!({ "current": current, "draft": draft, "version": version })
+                        .to_string(),
+                ))
         }
     }
 }
