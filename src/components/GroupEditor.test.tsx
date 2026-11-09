@@ -427,6 +427,35 @@ describe("the Save in the foot", () => {
 });
 
 describe("deleting a group", () => {
+  it("restores the pending reset confirmation after canceling delete", () => {
+    open();
+    fireEvent.click(button("Start fresh"));
+    fireEvent.click(button("Delete"));
+    expect(screen.queryByRole("button", { name: "Reset every agent" })).toBeNull();
+    fireEvent.click(button("Keep"));
+    expect(button("Reset every agent")).toBeTruthy();
+    fireEvent.click(button("Keep them"));
+    expect(button("Start fresh")).toBeTruthy();
+    expect(clearGroup).not.toHaveBeenCalled();
+    expect(deleteGroup).not.toHaveBeenCalled();
+  });
+
+  it("keeps the reset pending and disables its action until the response arrives", async () => {
+    let finish!: (result: GroupReset) => void;
+    clearGroup.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    open();
+    fireEvent.click(button("Start fresh"));
+    fireEvent.click(button("Reset every agent"));
+    expect(button("Reset every agent").disabled).toBe(true);
+    finish({ messages: 1, routines: 0, notes: 0, workingNotes: 0, calls: 0 });
+    expect(await screen.findByText(/Reset: 1 message/)).toBeTruthy();
+  });
+
   it("takes two clicks to delete anything", () => {
     open();
     fireEvent.click(button("Delete"));
