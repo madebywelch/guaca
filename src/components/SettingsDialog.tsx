@@ -72,6 +72,7 @@ import {
   errorMessage,
   type GuardLimits,
   type Provider as ProviderKind,
+  type Settings,
   type SettingsPatch,
   type SubscriptionStatus,
 } from "../lib/types";
@@ -173,7 +174,30 @@ const NOTIFY_COPY: Record<NotifyKind, { label: string; title: string }> = {
 const differs = (text: string, stored: number | undefined) =>
   text.trim() !== "" && Number(text) !== stored;
 
+type Draft = {
+  baseline: Settings | null;
+  operatorName: string;
+  provider: ProviderKind;
+  baseUrl: string;
+  model: string;
+  reasoningEffort: import("../lib/types").ReasoningEffort;
+  subscriptionModel: string;
+  apiKey: string;
+  editingApiKey: boolean;
+  e2bKey: string;
+  editingE2bKey: boolean;
+  idleMinutes: string;
+  kernelKey: string;
+  editingKernelKey: boolean;
+  browserIdleMinutes: string;
+  stealth: boolean;
+  timeout: string;
+  limits: GuardLimits;
+};
+let draft: Draft | null = null;
+
 export function SettingsDialog({ onClose, section: opening, onSection }: Props) {
+  const initial = useRef(draft).current;
   const settings = useStore((s) => s.settings);
   const setSettings = useStore((s) => s.setSettings);
   const capabilities = useStore((s) => s.capabilities);
@@ -200,66 +224,87 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
     if (section === "permissions") setVisitedPermissions(true);
   }, [section]);
   useEffect(() => onSection?.(section), [section, onSection]);
-  const [operatorName, setOperatorName] = useState(settings?.operatorName ?? "");
-  const [provider, setProvider] = useState<ProviderKind>(settings?.provider ?? "compatible");
-  const [baseUrl, setBaseUrl] = useState(settings?.baseUrl ?? "");
-  const [model, setModel] = useState(settings?.defaultModel ?? "");
-  const [reasoningEffort, setReasoningEffort] = useState<import("../lib/types").ReasoningEffort>(
-    settings?.reasoningEffort ?? "auto",
+  const [operatorName, setOperatorName] = useState(
+    initial?.operatorName ?? settings?.operatorName ?? "",
   );
-  const [subscriptionModel, setSubscriptionModel] = useState(settings?.subscriptionModel ?? "");
-  const [apiKey, setApiKey] = useState("");
-  const [editingApiKey, setEditingApiKey] = useState(false);
-  const [e2bKey, setE2bKey] = useState("");
-  const [editingE2bKey, setEditingE2bKey] = useState(false);
-  const [idleMinutes, setIdleMinutes] = useState("");
-  const [kernelKey, setKernelKey] = useState("");
-  const [editingKernelKey, setEditingKernelKey] = useState(false);
-  const [browserIdleMinutes, setBrowserIdleMinutes] = useState("");
-  const [stealth, setStealth] = useState(settings?.browserStealth ?? false);
-  const [timeout, setTimeoutSecs] = useState("");
+  const [provider, setProvider] = useState<ProviderKind>(
+    initial?.provider ?? settings?.provider ?? "compatible",
+  );
+  const [baseUrl, setBaseUrl] = useState(initial?.baseUrl ?? settings?.baseUrl ?? "");
+  const [model, setModel] = useState(initial?.model ?? settings?.defaultModel ?? "");
+  const [reasoningEffort, setReasoningEffort] = useState<import("../lib/types").ReasoningEffort>(
+    initial?.reasoningEffort ?? settings?.reasoningEffort ?? "auto",
+  );
+  const [subscriptionModel, setSubscriptionModel] = useState(
+    initial?.subscriptionModel ?? settings?.subscriptionModel ?? "",
+  );
+  const [apiKey, setApiKey] = useState(initial?.apiKey ?? "");
+  const [editingApiKey, setEditingApiKey] = useState(initial?.editingApiKey ?? false);
+  const [e2bKey, setE2bKey] = useState(initial?.e2bKey ?? "");
+  const [editingE2bKey, setEditingE2bKey] = useState(initial?.editingE2bKey ?? false);
+  const [idleMinutes, setIdleMinutes] = useState(initial?.idleMinutes ?? "");
+  const [kernelKey, setKernelKey] = useState(initial?.kernelKey ?? "");
+  const [editingKernelKey, setEditingKernelKey] = useState(initial?.editingKernelKey ?? false);
+  const [browserIdleMinutes, setBrowserIdleMinutes] = useState(initial?.browserIdleMinutes ?? "");
+  const [stealth, setStealth] = useState(initial?.stealth ?? settings?.browserStealth ?? false);
+  const [timeout, setTimeoutSecs] = useState(initial?.timeout ?? "");
   const [limits, setLimits] = useState<GuardLimits>(
-    settings?.limits ?? {
-      maxHops: 8,
-      maxStepsPerRun: 60,
-      maxFanoutPerCall: 8,
-      maxSendsPerPair: 6,
-      maxToolRounds: 24,
-    },
+    initial?.limits ??
+      settings?.limits ?? {
+        maxHops: 8,
+        maxStepsPerRun: 60,
+        maxFanoutPerCall: 8,
+        maxSendsPerPair: 6,
+        maxToolRounds: 24,
+      },
   );
   const [status, setStatus] = useState<{ tone: "ok" | "error" | "info"; text: string } | null>(
     null,
   );
   const [busy, setBusy] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  const pending = useRef<SettingsPatch | null>(null);
 
   // Settings change under an open dialog: another window, a browser on the
   // same host, or an agent. A field the operator has not touched follows the
   // change; one they have edited keeps their edit. Without this the form keeps
   // what it read on open, and Save writes it back over the change.
-  const base = useRef(settings);
+  const base = useRef(initial?.baseline ?? settings);
   useEffect(() => {
     const was = base.current;
     base.current = settings;
     if (!settings || !was || was === settings) return;
+    const inFlight = pending.current;
     const follow =
       <T,>(before: T, after: T) =>
       (mine: T) =>
         mine === before ? after : mine;
-    setOperatorName(follow(was.operatorName, settings.operatorName));
-    setProvider(follow(was.provider, settings.provider));
-    setBaseUrl(follow(was.baseUrl, settings.baseUrl));
-    setModel(follow(was.defaultModel, settings.defaultModel));
-    setReasoningEffort(follow(was.reasoningEffort, settings.reasoningEffort));
-    setSubscriptionModel(follow(was.subscriptionModel, settings.subscriptionModel));
-    setStealth(follow(was.browserStealth, settings.browserStealth));
+    if (inFlight?.operatorName === undefined)
+      setOperatorName(follow(was.operatorName, settings.operatorName));
+    if (inFlight?.provider === undefined) setProvider(follow(was.provider, settings.provider));
+    if (inFlight?.baseUrl === undefined) setBaseUrl(follow(was.baseUrl, settings.baseUrl));
+    if (inFlight?.defaultModel === undefined)
+      setModel(follow(was.defaultModel, settings.defaultModel));
+    if (inFlight?.reasoningEffort === undefined)
+      setReasoningEffort(follow(was.reasoningEffort, settings.reasoningEffort));
+    if (inFlight?.subscriptionModel === undefined)
+      setSubscriptionModel(follow(was.subscriptionModel, settings.subscriptionModel));
+    if (inFlight?.browserStealth === undefined)
+      setStealth(follow(was.browserStealth, settings.browserStealth));
     setLimits((mine) => {
       const next = { ...mine };
       for (const { key } of LIMITS)
-        next[key] = follow(was.limits[key], settings.limits[key])(mine[key]);
+        if (inFlight?.limits?.[key] === undefined)
+          next[key] = follow(was.limits[key], settings.limits[key])(mine[key]);
       return next;
     });
   }, [settings]);
+  useEffect(() => {
+    draft = null;
+  }, []);
+
+  const currentKeys = useRef({ apiKey, e2bKey, kernelKey });
+  currentKeys.current = { apiKey, e2bKey, kernelKey };
 
   // The sign-in, which is three states rather than a boolean: not signed in,
   // waiting for the operator to enter a code in a browser, and signed in. All
@@ -281,14 +326,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
   const [account, setAccount] = useState<AccountStatus | null>(null);
   const [connectors, setConnectors] = useState<AccountConnectors | null>(null);
   const [linking, setLinking] = useState(false);
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
 
   // Focus moves into the dialog on open, as it does in every other dialog here.
   // Onto the panel rather than the first field: the first thing on this surface
@@ -374,7 +411,13 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
    * had on open, over whatever another client saved since.
    */
   const changes = (): SettingsPatch => {
-    const all: SettingsPatch = { operatorName, limits, ...patch() };
+    const changedLimits = Object.fromEntries(
+      LIMITS.filter(({ key }) => limits[key] !== settings?.limits[key]).map(({ key }) => [
+        key,
+        limits[key],
+      ]),
+    );
+    const all: SettingsPatch = { operatorName, limits: changedLimits, ...patch() };
     if (!settings) return all;
     const now: Partial<Record<keyof SettingsPatch, unknown>> = {
       operatorName: settings.operatorName,
@@ -398,33 +441,92 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
   const save = async () => {
     setBusy(true);
     setStatus(null);
+    const sent = changes();
+    pending.current = sent;
     try {
-      const next = await api.updateSettings(changes());
+      const next = await api.updateSettings(sent);
+      if (base.current) {
+        base.current = {
+          ...base.current,
+          operatorName: sent.operatorName ?? base.current.operatorName,
+          provider: sent.provider ?? base.current.provider,
+          baseUrl: sent.baseUrl ?? base.current.baseUrl,
+          defaultModel: sent.defaultModel ?? base.current.defaultModel,
+          reasoningEffort: sent.reasoningEffort ?? base.current.reasoningEffort,
+          subscriptionModel: sent.subscriptionModel ?? base.current.subscriptionModel,
+          browserStealth: sent.browserStealth ?? base.current.browserStealth,
+          limits: { ...base.current.limits, ...sent.limits },
+        };
+      }
+      pending.current = null;
       setSettings(next);
       // Read the limits back rather than leaving what was typed. The `max` on a
       // number input is advisory — a pasted or typed value sails past it — and
       // the runtime sanitizes what it stores, so a relay depth of 40 is kept as
       // 16. Saying "Saved." over a box still reading 40 tells the operator
       // something untrue about what is running.
-      setLimits(next.limits);
+      setLimits(
+        (current) =>
+          Object.fromEntries(
+            LIMITS.map(({ key }) => [
+              key,
+              current[key] === limits[key] ? next.limits[key] : current[key],
+            ]),
+          ) as unknown as GuardLimits,
+      );
       // Clear staged secrets and close their editors only after storage succeeds.
       // Timers return to the stored placeholder because the runtime clamps them.
-      setApiKey("");
-      setEditingApiKey(false);
-      setE2bKey("");
-      setKernelKey("");
-      setEditingE2bKey(false);
-      setEditingKernelKey(false);
-      setIdleMinutes("");
-      setBrowserIdleMinutes("");
-      setTimeoutSecs("");
+      setApiKey((value) => (value === apiKey ? "" : value));
+      if (apiKey && currentKeys.current.apiKey === apiKey) setEditingApiKey(false);
+      setE2bKey((value) => (value === e2bKey ? "" : value));
+      setKernelKey((value) => (value === kernelKey ? "" : value));
+      if (e2bKey && currentKeys.current.e2bKey === e2bKey) setEditingE2bKey(false);
+      if (kernelKey && currentKeys.current.kernelKey === kernelKey) setEditingKernelKey(false);
+      setIdleMinutes((value) => (value === idleMinutes ? "" : value));
+      setBrowserIdleMinutes((value) => (value === browserIdleMinutes ? "" : value));
+      setTimeoutSecs((value) => (value === timeout ? "" : value));
       setStatus({ tone: "ok", text: "Saved." });
     } catch (error) {
       setStatus({ tone: "error", text: errorMessage(error) });
     } finally {
+      pending.current = null;
       setBusy(false);
     }
   };
+
+  const close = () => {
+    draft = dirty
+      ? {
+          baseline: settings,
+          operatorName,
+          provider,
+          baseUrl,
+          model,
+          reasoningEffort,
+          subscriptionModel,
+          apiKey,
+          editingApiKey,
+          e2bKey,
+          editingE2bKey,
+          idleMinutes,
+          kernelKey,
+          editingKernelKey,
+          browserIdleMinutes,
+          stealth,
+          timeout,
+          limits,
+        }
+      : null;
+    onClose();
+  };
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
   const test = async () => {
     setBusy(true);
@@ -639,7 +741,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
     <div className="scrim">
       {/* A real button, so dismissing by clicking away is reachable from the
           keyboard and announced, rather than being an invisible div handler. */}
-      <button type="button" className="scrim__close" aria-label="Close dialog" onClick={onClose} />
+      <button type="button" className="scrim__close" aria-label="Close dialog" onClick={close} />
       <div
         className="dialog dialog--settings"
         role="dialog"
@@ -1811,7 +1913,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
         )}
 
         <div className="settings__foot">
-          <button type="button" className="btn" onClick={onClose}>
+          <button type="button" className="btn" onClick={close}>
             Close
           </button>
           {dirty && (

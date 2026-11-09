@@ -1016,7 +1016,7 @@ export interface SettingsPatch {
   subscriptionModel?: string;
   reasoningEffort?: ReasoningEffort;
   requestTimeoutSecs?: number;
-  limits?: GuardLimits;
+  limits?: Partial<GuardLimits>;
 }
 
 /**

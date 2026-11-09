@@ -379,6 +379,59 @@ describe("concurrent settings edits", () => {
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
     expect(sentPatch().limits).toEqual({ maxHops: 12 });
   });
+
+  it("preserves a limit edited again while its save is delayed", async () => {
+    let finish!: (value: Settings) => void;
+    updateSettings.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    open();
+    pane("Limits");
+    type(/^Relay depth/, "12");
+    fireEvent.click(save());
+    type(/^Relay depth/, "14");
+    await act(async () => finish(stored({ limits: { ...HELD, maxHops: 12 } })));
+    expect(field(/^Relay depth/).value).toBe("14");
+    expect(save().disabled).toBe(false);
+  });
+
+  it("preserves a revert made while the previous value is saving", async () => {
+    let finish!: (value: Settings) => void;
+    updateSettings.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    open();
+    type(/^Your name/, "Bob");
+    fireEvent.click(save());
+    type(/^Your name/, "Robert");
+    act(() =>
+      useStore.getState().applyEvent({
+        type: "settingsChanged",
+        settings: stored({ operatorName: "Bob" }),
+      }),
+    );
+    expect(field(/^Your name/).value).toBe("Robert");
+    await act(async () => finish(stored({ operatorName: "Bob" })));
+    expect(field(/^Your name/).value).toBe("Robert");
+    expect(save().disabled).toBe(false);
+  });
+
+  it("restores a closed draft while following untouched remote fields", () => {
+    const view = open();
+    type(/^Your name/, "Draft name");
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    view.unmount();
+    open(stored({ defaultModel: "remote/model" }));
+    expect(field(/^Your name/).value).toBe("Draft name");
+    pane("Provider");
+    expect(field(/^Default model/).value).toBe("remote/model");
+  });
 });
 
 describe("what a save sends", () => {
@@ -452,7 +505,7 @@ describe("what a save sends", () => {
 
     fireEvent.click(save());
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
-    expect(sentPatch().limits).toEqual({ ...HELD, maxHops: 1 });
+    expect(sentPatch().limits).toEqual({ maxHops: 1 });
   });
 
   it("sends a limit the runtime will clamp exactly as it was typed", async () => {
