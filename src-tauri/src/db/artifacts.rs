@@ -200,6 +200,29 @@ fn standing(
         .optional()?)
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum Approval {
+    Current,
+    Changed,
+}
+
+impl Approval {
+    fn compare(
+        version: u32,
+        owner: Option<&str>,
+        sources: &[Source],
+        seen_version: u32,
+        seen_owner: Option<&str>,
+        seen_sources: &[Source],
+    ) -> Self {
+        if version == seen_version && owner == seen_owner && sources == seen_sources {
+            Self::Current
+        } else {
+            Self::Changed
+        }
+    }
+}
+
 fn version_at(
     tx: &Transaction<'_>,
     id: ArtifactId,
@@ -542,6 +565,59 @@ impl Store {
         seen: &[Source],
     ) -> Result<Option<Artifact>, StoreError> {
         self.allow_sources(id, Some(seen))
+    }
+
+    pub fn approve_artifact_sources(
+        &self,
+        id: ArtifactId,
+        seen_version: u32,
+        seen_owner: Option<AgentId>,
+        seen_sources: &[Source],
+    ) -> Result<Option<bool>, StoreError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current: Option<(u32, Option<String>, Option<String>)> = tx.query_row(
+            "SELECT r.version, o.id, o.name FROM artifacts r LEFT JOIN agents o ON o.id = r.owner_id WHERE r.id = ?1",
+            params![id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).optional()?;
+        let Some((version, owner_id, owner_name)) = current else { return Ok(None) };
+        let Some(Stored { sources, .. }) = version_at(&tx, id, version)? else { return Ok(None) };
+        let current_sources: Vec<Source> =
+            serde_json::from_str(&sources).map_err(|e| corrupt("artifact sources", &sources, e))?;
+        let seen_owner = seen_owner.map(|id| id.to_string());
+        if Approval::compare(
+            version,
+            owner_id.as_deref(),
+            &current_sources,
+            seen_version,
+            seen_owner.as_deref(),
+            seen_sources,
+        ) == Approval::Changed
+        {
+            return Ok(Some(false));
+        }
+        if sources != "[]" {
+            tx.execute(
+                "UPDATE artifacts SET allowed_sources = ?2 WHERE id = ?1",
+                params![id.to_string(), sources],
+            )?;
+            append(
+                &tx,
+                id,
+                now_ms(),
+                Written {
+                    change: Change::Allowed,
+                    by: &Actor::Operator,
+                    version,
+                    owner: owner_name.as_deref(),
+                    note: "",
+                    version_of: None,
+                },
+            )?;
+        }
+        tx.commit()?;
+        Ok(Some(true))
     }
 
     fn allow_sources(
@@ -1073,6 +1149,160 @@ mod tests {
 
     fn reads(tool: &str) -> Vec<Source> {
         vec![Source { name: "issues".into(), tool: tool.into(), arguments: serde_json::json!({}) }]
+    }
+
+    #[test]
+    fn operator_approval_does_not_authorize_an_unseen_edit() {
+        let f = fixture();
+        let shown = reads("linear__list_issues");
+        let page = f
+            .store
+            .create_artifact(
+                f.crew,
+                f.rae.id,
+                "Rae",
+                ArtifactDraft {
+                    title: "Board",
+                    page: "<p>v1</p>",
+                    sources: &shown,
+                    condensed: None,
+                    note: "",
+                },
+            )
+            .unwrap();
+        f.store
+            .edit_artifact(
+                page.id,
+                f.crew,
+                &by(&f.milo),
+                ArtifactRevision {
+                    title: None,
+                    page: None,
+                    sources: Some(&reads("linear__list_projects")),
+                    condensed: None,
+                    note: "",
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            f.store
+                .approve_artifact_sources(page.id, page.version, Some(f.rae.id), &shown)
+                .unwrap(),
+            Some(false)
+        );
+        assert!(
+            !f.store.any_artifact(page.id).unwrap().unwrap().sources_allowed,
+            "an approval of the shown list must not allow its replacement"
+        );
+    }
+
+    #[test]
+    fn approval_compares_every_displayed_field() {
+        let a = reads("linear__list_issues");
+        let b = reads("linear__list_projects");
+        assert_eq!(Approval::compare(1, Some("a"), &a, 1, Some("a"), &a), Approval::Current);
+        assert_eq!(Approval::compare(2, Some("a"), &a, 1, Some("a"), &a), Approval::Changed);
+        assert_eq!(Approval::compare(1, Some("b"), &a, 1, Some("a"), &a), Approval::Changed);
+        assert_eq!(Approval::compare(1, Some("a"), &b, 1, Some("a"), &a), Approval::Changed);
+        assert_eq!(Approval::compare(1, None, &a, 1, None, &a), Approval::Current);
+    }
+
+    #[test]
+    fn approval_checks_owner_version_and_deletion() {
+        let f = fixture();
+        let shown = reads("linear__list_issues");
+        let page = f
+            .store
+            .create_artifact(
+                f.crew,
+                f.rae.id,
+                "Rae",
+                ArtifactDraft {
+                    title: "Board",
+                    page: "<p>v1</p>",
+                    sources: &shown,
+                    condensed: None,
+                    note: "",
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            f.store.approve_artifact_sources(page.id, 1, Some(f.rae.id), &shown).unwrap(),
+            Some(true)
+        );
+        f.store.hand_artifact(page.id, f.milo.id).unwrap();
+        assert_eq!(
+            f.store.approve_artifact_sources(page.id, 1, Some(f.rae.id), &shown).unwrap(),
+            Some(false)
+        );
+        f.store
+            .edit_artifact(
+                page.id,
+                f.crew,
+                &by(&f.milo),
+                ArtifactRevision {
+                    title: None,
+                    page: Some("<p>v2</p>"),
+                    sources: None,
+                    condensed: None,
+                    note: "",
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            f.store.approve_artifact_sources(page.id, 1, Some(f.milo.id), &shown).unwrap(),
+            Some(false)
+        );
+        assert_eq!(
+            f.store.approve_artifact_sources(page.id, 2, Some(f.milo.id), &shown).unwrap(),
+            Some(true)
+        );
+        f.store.delete_artifact(page.id).unwrap();
+        assert_eq!(
+            f.store.approve_artifact_sources(page.id, 2, Some(f.milo.id), &shown).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn concurrent_approvals_of_the_same_snapshot_are_safe() {
+        let f = fixture();
+        let shown = reads("linear__list_issues");
+        let page = f
+            .store
+            .create_artifact(
+                f.crew,
+                f.rae.id,
+                "Rae",
+                ArtifactDraft {
+                    title: "Board",
+                    page: "<p>v1</p>",
+                    sources: &shown,
+                    condensed: None,
+                    note: "",
+                },
+            )
+            .unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let id = page.id;
+        let version = page.version;
+        let handles: Vec<_> = (0..2)
+            .map(|_| {
+                let store = f.store.clone();
+                let barrier = barrier.clone();
+                let shown = shown.clone();
+                let owner = f.rae.id;
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    store.approve_artifact_sources(id, version, Some(owner), &shown).unwrap()
+                })
+            })
+            .collect();
+        barrier.wait();
+        for handle in handles {
+            assert_eq!(handle.join().unwrap(), Some(true));
+        }
+        assert!(f.store.any_artifact(page.id).unwrap().unwrap().sources_allowed);
     }
 
     #[test]
