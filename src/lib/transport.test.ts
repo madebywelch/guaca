@@ -34,6 +34,7 @@ beforeEach(async () => {
   fetched.mockResolvedValue(new Response(JSON.stringify({ ok: "signed out" })));
   await setToken("");
   fetched.mockReset();
+  fetched.mockRejectedValue(new TypeError("offline"));
   window.history.replaceState(null, "", "/");
   window.localStorage.clear();
 });
@@ -43,6 +44,29 @@ afterEach(() => {
 });
 
 describe("an invitation", () => {
+  it("serializes cookie-setting exchanges so an older response cannot replace a newer session", async () => {
+    let finish!: (response: Response) => void;
+    fetched.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    fetched.mockResolvedValueOnce(new Response(JSON.stringify({ ok: "signed in" })));
+    const older = setToken("older");
+    const newer = setToken("newer");
+    await Promise.resolve();
+    expect(fetched).toHaveBeenCalledTimes(1);
+    expect((fetched.mock.calls[0]![1]!.headers as Record<string, string>).authorization).toBe(
+      "Bearer older",
+    );
+    finish(new Response(JSON.stringify({ ok: "signed in" })));
+    await older;
+    await newer;
+    expect(fetched).toHaveBeenCalledTimes(2);
+    expect((fetched.mock.calls[1]![1]!.headers as Record<string, string>).authorization).toBe(
+      "Bearer newer",
+    );
+  });
   it("is taken out of the address bar and exchanged, not kept", async () => {
     fetched.mockResolvedValue(new Response(JSON.stringify({ ok: "signed in" })));
     window.history.replaceState(null, "", "/#token=abc123");
@@ -228,6 +252,28 @@ describe("an upload", () => {
 });
 
 describe("a call", () => {
+  it("ignores an old refusal after a new invitation arrives", async () => {
+    let finish!: (response: Response) => void;
+    fetched.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const unauthorized = vi.fn();
+    window.addEventListener(UNAUTHORIZED_EVENT, unauthorized);
+    try {
+      const old = invoke("capabilities").catch(() => undefined);
+      window.history.replaceState(null, "", "/#token=new-token");
+      expect(adoptInvitation()).toBe(true);
+      finish(new Response(JSON.stringify({ err: { kind: "unauthorized" } }), { status: 401 }));
+      await old;
+      expect(unauthorized).not.toHaveBeenCalled();
+      fetched.mockResolvedValue(new Response(JSON.stringify({ ok: "signed in" })));
+      await settleInvitation();
+    } finally {
+      window.removeEventListener(UNAUTHORIZED_EVENT, unauthorized);
+    }
+  });
   it("carries the session cookie and unwraps the answer", async () => {
     fetched.mockResolvedValue(new Response(JSON.stringify({ ok: { fine: true } })));
 
@@ -317,6 +363,30 @@ describe("a call", () => {
 });
 
 describe("the event connection", () => {
+  it("bounds a handshake that never opens and reports the outage", async () => {
+    vi.useFakeTimers();
+    class StalledSocket {
+      onopen?: () => void;
+      onclose?: () => void;
+      onerror?: () => void;
+      onmessage?: (event: { data: string }) => void;
+      close() {
+        this.onclose?.();
+      }
+    }
+    vi.stubGlobal("WebSocket", StalledSocket);
+    const { subscribe } = await import("./transport");
+    const lost = vi.fn();
+    const stop = await subscribe("unused", vi.fn(), vi.fn(), lost);
+    try {
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(lost).toHaveBeenCalledOnce();
+    } finally {
+      stop();
+      vi.useRealTimers();
+    }
+  });
+
   it("refreshes on first open and reconnect, and reconnects on legacy event loss", async () => {
     vi.useFakeTimers();
     const sockets: FakeSocket[] = [];
@@ -441,6 +511,72 @@ describe("a host that stops answering", () => {
       await vi.advanceTimersByTimeAsync(5_000);
       expect(lost).not.toHaveBeenCalled();
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("asks for a token only when an authenticated probe confirms a refusal", async () => {
+    vi.useFakeTimers();
+    fetched.mockResolvedValue(
+      new Response(JSON.stringify({ err: { kind: "unauthorized" } }), { status: 401 }),
+    );
+    const unauthorized = vi.fn();
+    window.addEventListener(UNAUTHORIZED_EVENT, unauthorized);
+    const { sockets, stop } = await connected();
+    try {
+      sockets[0]!.onopen?.();
+      sockets[0]!.onclose?.();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(unauthorized).toHaveBeenCalledOnce();
+      expect(fetched).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(unauthorized).toHaveBeenCalledOnce();
+    } finally {
+      stop();
+      window.removeEventListener(UNAUTHORIZED_EVENT, unauthorized);
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not mistake an unreachable probe for an expired session", async () => {
+    vi.useFakeTimers();
+    const unauthorized = vi.fn();
+    window.addEventListener(UNAUTHORIZED_EVENT, unauthorized);
+    const { sockets, stop } = await connected();
+    try {
+      sockets[0]!.onclose?.();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(fetched).toHaveBeenCalledOnce();
+      expect(unauthorized).not.toHaveBeenCalled();
+    } finally {
+      stop();
+      window.removeEventListener(UNAUTHORIZED_EVENT, unauthorized);
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores a late refusal after the socket reconnects", async () => {
+    vi.useFakeTimers();
+    let finish!: (response: Response) => void;
+    fetched.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const unauthorized = vi.fn();
+    window.addEventListener(UNAUTHORIZED_EVENT, unauthorized);
+    const { sockets, stop } = await connected();
+    try {
+      sockets[0]!.onopen?.();
+      sockets[0]!.onclose?.();
+      await vi.advanceTimersByTimeAsync(2_000);
+      sockets[1]!.onopen?.();
+      finish(new Response(JSON.stringify({ err: { kind: "unauthorized" } }), { status: 401 }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(unauthorized).not.toHaveBeenCalled();
+    } finally {
+      stop();
+      window.removeEventListener(UNAUTHORIZED_EVENT, unauthorized);
       vi.useRealTimers();
     }
   });

@@ -104,6 +104,8 @@ export const hosted = true;
 /** Whether calls go over Tauri's own bridge, to the runtime in this process. */
 
 const TOKEN_KEY = "guaca.workspace.token";
+let credentialGeneration = 0;
+let exchangeQueue: Promise<void> = Promise.resolve();
 
 /**
  * The fragment a daemon prints its invitation with.
@@ -198,6 +200,7 @@ export function bearer(): Record<string, string> {
  */
 export async function setToken(value: string): Promise<void> {
   if (ATTACHED) {
+    credentialGeneration++;
     // A rotated token on a box the window is showing is kept with the box's
     // address, and in memory for the rest of this load.
     ATTACHED.token = value;
@@ -221,11 +224,18 @@ export async function setToken(value: string): Promise<void> {
  */
 export async function exchangeToken(value: string): Promise<void> {
   if (!hosted) return;
+  const credential = ++credentialGeneration;
   if (ATTACHED) {
     ATTACHED.token = value;
     setRemote(value ? ATTACHED : null);
     return;
   }
+  const exchange = exchangeQueue.then(() => exchangeBrowserToken(value, credential));
+  exchangeQueue = exchange.catch(() => {});
+  return exchange;
+}
+
+async function exchangeBrowserToken(value: string, credential: number): Promise<void> {
   const base = origin();
   let response: Response;
   try {
@@ -240,6 +250,7 @@ export async function exchangeToken(value: string): Promise<void> {
       // is served by the daemon it talks to, and a window showing a box
       // exchanges nothing, because it keeps its token instead.
       credentials: "same-origin",
+      signal: AbortSignal.timeout(15_000),
     });
   } catch {
     throw {
@@ -250,7 +261,9 @@ export async function exchangeToken(value: string): Promise<void> {
   const body = await response.json().catch(() => null);
   if (body && typeof body === "object" && "err" in body) {
     const refused = (body as { err: Refusal }).err;
-    if (refused.kind === "unauthorized") window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    if (refused.kind === "unauthorized" && credential === credentialGeneration) {
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    }
     throw refused;
   }
   if (!response.ok) {
@@ -277,19 +290,25 @@ export async function exchangeToken(value: string): Promise<void> {
  */
 export async function signOut(): Promise<void> {
   if (!hosted) return;
+  credentialGeneration++;
   if (ATTACHED) {
     ATTACHED.token = "";
     setRemote(null);
     return;
   }
-  try {
-    await fetch(`${origin()}/v1/auth/logout`, {
-      method: "POST",
-      credentials: "same-origin",
-    });
-  } catch {
-    /* the cookie is HttpOnly and the daemon clears it when reachable */
-  }
+  const logout = exchangeQueue.then(async () => {
+    try {
+      await fetch(`${origin()}/v1/auth/logout`, {
+        method: "POST",
+        credentials: "same-origin",
+        signal: AbortSignal.timeout(15_000),
+      });
+    } catch {
+      /* the cookie is HttpOnly and the daemon clears it when reachable */
+    }
+  });
+  exchangeQueue = logout.catch(() => {});
+  await logout;
   try {
     window.localStorage.removeItem(TOKEN_KEY);
   } catch {
@@ -311,6 +330,7 @@ export function adoptInvitation(): boolean {
   const hash = window.location.hash.replace(/^#/, "");
   const found = new URLSearchParams(hash).get(FRAGMENT_KEY)?.trim();
   if (!found) return false;
+  credentialGeneration++;
   PENDING_INVITATION = found;
   window.history.replaceState(null, "", window.location.pathname + window.location.search);
   return true;
@@ -467,6 +487,7 @@ export function workspaceOrigin(): string {
  * file, its size, and the limit.
  */
 export async function upload<T>(file: File): Promise<T> {
+  const credential = credentialGeneration;
   let response: Response;
   try {
     response = await fetch(`${origin()}/v1/upload?name=${encodeURIComponent(file.name)}`, {
@@ -490,7 +511,9 @@ export async function upload<T>(file: File): Promise<T> {
   const body = await response.json().catch(() => null);
   if (body && typeof body === "object" && "err" in body) {
     const refused = (body as { err: Refusal }).err;
-    if (refused.kind === "unauthorized") window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    if (refused.kind === "unauthorized" && credential === credentialGeneration) {
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    }
     throw refused;
   }
   if (!response.ok) {
@@ -510,6 +533,7 @@ export async function upload<T>(file: File): Promise<T> {
  * duplicate name differently from a disk failure.
  */
 export async function invoke<T>(name: string, args?: Record<string, unknown>): Promise<T> {
+  const credential = credentialGeneration;
   let response: Response;
   try {
     response = await fetch(`${origin()}/v1/call`, {
@@ -541,7 +565,9 @@ export async function invoke<T>(name: string, args?: Record<string, unknown>): P
     // Said once, on the window, rather than handled in every caller. A token
     // that was rotated on the box turns every call away at once, and the
     // right answer is one screen asking for the new one, not forty banners.
-    if (refused.kind === "unauthorized") window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    if (refused.kind === "unauthorized" && credential === credentialGeneration) {
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    }
     throw refused;
   }
   if (!response.ok) {
@@ -580,8 +606,9 @@ export function subscribe(
   handler: (payload: UiEvent) => void,
   onReconnect?: () => void,
   onLost?: (error: Refusal) => void,
+  onClose?: () => void,
 ): Promise<Unlisten> {
-  return Promise.resolve(openSocket(handler, onReconnect, onLost));
+  return Promise.resolve(openSocket(handler, onReconnect, onLost, onClose));
 }
 
 /**
@@ -614,6 +641,7 @@ const RETRY_CEILING = 15_000;
  * what the mark and the banner are for.
  */
 const LOST_GRACE = 1_500;
+const HANDSHAKE_TIMEOUT = 10_000;
 
 /**
  * The wait before one retry: half the backoff, and a random share of the rest.
@@ -631,6 +659,7 @@ function openSocket(
   handler: (payload: UiEvent) => void,
   onReconnect?: () => void,
   onLost?: (error: Refusal) => void,
+  onClose?: () => void,
 ): Unlisten {
   let socket: WebSocket | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -640,6 +669,10 @@ function openSocket(
   let said = false;
   let wait = RETRY_FLOOR;
   let closed = false;
+  let handshake: ReturnType<typeof setTimeout> | null = null;
+  let generation = 0;
+  let recovery = 0;
+  let authTimer: ReturnType<typeof setTimeout> | null = null;
 
   const connect = () => {
     if (closed) return;
@@ -648,9 +681,79 @@ function openSocket(
     const url = socketToken
       ? `${base}/v1/events?token=${encodeURIComponent(socketToken)}`
       : `${base}/v1/events`;
-    socket = new WebSocket(url);
+    const current = new WebSocket(url);
+    socket = current;
+    const attempt = ++generation;
+    let ended = false;
 
-    socket.onopen = () => {
+    const end = () => {
+      if (closed || ended || attempt !== generation) return;
+      ended = true;
+      if (handshake) clearTimeout(handshake);
+      handshake = null;
+      socket = null;
+      onClose?.();
+      if (!said && !pending) {
+        pending = setTimeout(() => {
+          pending = null;
+          if (closed || said) return;
+          said = true;
+          onLost?.(lostHost());
+          const before = recovery;
+          const credential = credentialGeneration;
+          const probe = async () => {
+            let refused = false;
+            try {
+              const response = await fetch(`${origin()}/v1/call`, {
+                method: "POST",
+                headers: { "content-type": "application/json", ...bearer() },
+                body: JSON.stringify({ name: "capabilities", args: {}, client: CLIENT }),
+                credentials: "same-origin",
+                signal: AbortSignal.timeout(5_000),
+              });
+              if (response.status !== 401) return;
+              const body = await response.json();
+              if (
+                !closed &&
+                said &&
+                recovery === before &&
+                credential === credentialGeneration &&
+                body?.err?.kind === "unauthorized"
+              ) {
+                refused = true;
+                window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+              }
+            } catch {
+            } finally {
+              if (
+                !refused &&
+                !closed &&
+                said &&
+                recovery === before &&
+                credential === credentialGeneration
+              ) {
+                authTimer = setTimeout(() => void probe(), RETRY_CEILING);
+              }
+            }
+          };
+          void probe();
+        }, LOST_GRACE);
+      }
+      timer = setTimeout(connect, retryDelay(wait));
+      wait = Math.min(wait * 2, RETRY_CEILING);
+    };
+    handshake = setTimeout(() => {
+      end();
+      current.close();
+    }, HANDSHAKE_TIMEOUT);
+
+    current.onopen = () => {
+      if (closed || ended || attempt !== generation) return;
+      if (handshake) clearTimeout(handshake);
+      handshake = null;
+      recovery++;
+      if (authTimer) clearTimeout(authTimer);
+      authTimer = null;
       window.dispatchEvent(new Event(RECONNECTED));
       wait = RETRY_FLOOR;
       // The redial answered: whatever closed the last socket was not the host
@@ -665,12 +768,13 @@ function openSocket(
       // Refresh on it too, so that startup gap cannot lose a durable message.
       onReconnect?.();
     };
-    socket.onmessage = (message) => {
+    current.onmessage = (message) => {
+      if (closed || ended || attempt !== generation) return;
       try {
         const event = JSON.parse(message.data as string);
         // Sent by hosts older than the one that closes a lagging socket itself.
         // A page newer than its host still has to resynchronize on it.
-        if (event.type === "streamLagged") socket?.close();
+        if (event.type === "streamLagged") current.close();
         else handler(event as UiEvent);
       } catch {
         // A frame this build cannot parse is a newer daemon talking to an
@@ -678,29 +782,10 @@ function openSocket(
         // else on the socket still arrives.
       }
     };
-    socket.onclose = () => {
-      socket = null;
-      if (closed) return;
-      // Reported only if the redial below does not answer first: a socket
-      // closed on purpose, or a network with a hole in it for a second, is not
-      // a host that left.
-      if (!said && !pending) {
-        pending = setTimeout(() => {
-          pending = null;
-          if (closed || said) return;
-          said = true;
-          onLost?.(lostHost());
-        }, LOST_GRACE);
-      }
-      timer = setTimeout(connect, retryDelay(wait));
-      // Backoff with a ceiling. A box that is rebooting comes back in seconds
-      // and a tunnel that is down may be down for an hour, and hammering it
-      // helps neither.
-      wait = Math.min(wait * 2, RETRY_CEILING);
-    };
+    current.onclose = end;
     // `onerror` is always followed by `onclose`, so reconnecting is handled in
     // one place rather than raced between two.
-    socket.onerror = () => {};
+    current.onerror = () => {};
   };
 
   // A laptop waking or a network coming back is the moment the host is most
@@ -721,6 +806,8 @@ function openSocket(
     window.removeEventListener("online", online);
     if (timer) clearTimeout(timer);
     if (pending) clearTimeout(pending);
+    if (handshake) clearTimeout(handshake);
+    if (authTimer) clearTimeout(authTimer);
     socket?.close();
   };
 }

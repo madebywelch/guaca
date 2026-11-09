@@ -56,6 +56,10 @@ export function restarting(now = Date.now()): boolean {
   return now < quietUntil;
 }
 
+export function restartQuietRemaining(now = Date.now()): number {
+  return Math.max(0, quietUntil - now);
+}
+
 /** The host answered again: whatever restart was expected has happened. */
 export function forgetRestart(): void {
   quietUntil = 0;

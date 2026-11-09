@@ -1,3 +1,4 @@
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { expectRestart, forgetRestart } from "./link";
@@ -9,6 +10,8 @@ vi.mock("./ipc", () => ({
   api: {
     listAgents: vi.fn(async () => [] as AgentCard[]),
     agentActivity: vi.fn(async () => ({})),
+    agentLastActive: vi.fn(async () => ({})),
+    capabilities: vi.fn(async () => ({})),
     getSettings: vi.fn(async () => null),
     channelMessages: vi.fn(async () => [] as Envelope[]),
     activityFeed: vi.fn(async () => [] as Envelope[]),
@@ -20,6 +23,8 @@ vi.mock("./ipc", () => ({
     approvalStates: async () => ({ "q-1": "answered" }),
     approvalAnswers: async () => ({ "q-1": "Northwind" }),
     pendingApprovals: async () => [],
+    openEscalations: async () => [],
+    listDecisions: async () => [],
   },
   onRuntimeEvent: vi.fn(),
 }));
@@ -792,6 +797,89 @@ describe("reconnecting to a running workspace", () => {
     finish([envelope()]);
     await loading;
     expect(useStore.getState().messages.chef?.map((m) => m.id)).toEqual(["m1", "new"]);
+  });
+
+  it("does not commit a channel snapshot after its connection is invalidated", async () => {
+    const { api } = await import("./ipc");
+    let finish!: (rows: Envelope[]) => void;
+    vi.mocked(api.channelMessages).mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    reset({ chef: [envelope({ id: "current" })] });
+    let valid = true;
+    const loading = useStore.getState().loadChannel("chef", undefined, () => valid);
+    valid = false;
+    finish([envelope({ id: "stale" })]);
+    await loading;
+    expect(useStore.getState().messages.chef?.map((m) => m.id)).toEqual(["current"]);
+  });
+
+  it("does not restore a cleared channel from an older read", async () => {
+    const { api } = await import("./ipc");
+    let finish!: (rows: Envelope[]) => void;
+    vi.mocked(api.channelMessages).mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    reset({ chef: [envelope()] });
+    const loading = useStore.getState().loadChannel("chef");
+    useStore.setState({ selected: "manager" });
+    apply({ type: "channelsCleared", agents: ["chef"] });
+    finish([envelope()]);
+    await loading;
+    expect(useStore.getState().messages.chef).toBeUndefined();
+  });
+
+  it("does not commit an event-triggered roster read after disconnect", async () => {
+    const { api } = await import("./ipc");
+    let finish!: (agents: AgentCard[]) => void;
+    vi.mocked(api.listAgents).mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    let valid = true;
+    const loading = useStore.getState().refreshAgents(() => valid);
+    valid = false;
+    finish([]);
+    await loading;
+    expect(useStore.getState().agents).toEqual(AGENTS);
+  });
+
+  it("reconciles the host snapshot and an event into the final visible channel", async () => {
+    const { api, onRuntimeEvent } = await import("./ipc");
+    const { useRuntime } = await import("./runtime");
+    let emit!: (event: UiEvent) => void;
+    let opened!: () => void;
+    vi.mocked(onRuntimeEvent).mockImplementation(async (event, open) => {
+      emit = event;
+      opened = open!;
+      return () => {};
+    });
+    vi.mocked(api.listAgents).mockResolvedValue(AGENTS);
+    vi.mocked(api.channelMessages).mockClear();
+    const view = renderHook(() => useRuntime());
+    await waitFor(() => expect(view.result.current).toBe(true));
+    let finish!: (rows: Envelope[]) => void;
+    vi.mocked(api.channelMessages)
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+      )
+      .mockResolvedValueOnce([envelope(), envelope({ id: "new", createdAt: 200 })]);
+    act(() => opened());
+    await waitFor(() => expect(finish).toBeTypeOf("function"));
+    act(() => emit({ type: "messageAppended", message: envelope({ id: "new", createdAt: 200 }) }));
+    await act(async () => finish([envelope()]));
+    await waitFor(() => expect(api.channelMessages).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(useStore.getState().link).toBe("up"));
+    expect(useStore.getState().messages.chef?.map((m) => m.id)).toEqual(["m1", "new"]);
+    view.unmount();
+    vi.mocked(api.listAgents).mockResolvedValue([]);
   });
 });
 
