@@ -94,6 +94,23 @@ async fn broker_requires_safe_explicit_origin_and_a_live_service() {
 }
 
 #[tokio::test]
+async fn unavailable_and_invalid_brokers_remain_configured() {
+    let app = Router::new()
+        .route("/api/connectors", get(|| async { (axum::http::StatusCode::UNAUTHORIZED, "no") }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    for origin in [&origin[..], "http://127.0.0.1:9"] {
+        let account = Account::open_at(scratch(), origin).with_broker("secret".into());
+        let status = account.checked_status().await;
+        assert!(status.broker);
+        assert!(!status.signed_in);
+        assert!(account.has_broker());
+        assert!(matches!(account.sign_out(), Err(AccountError::BrokerConfigured)));
+    }
+}
+
+#[tokio::test]
 async fn redirects_remain_available_to_normal_accounts_but_not_brokers() {
     let app = Router::new()
         .route("/api/connectors", get(|| async { Redirect::temporary("/target") }))
@@ -136,6 +153,12 @@ struct Asked {
 
 /// One posted form, as name/value pairs in the order they arrived.
 type Form = Vec<(String, String)>;
+type BlockGrant = (
+    bool,
+    Arc<tokio::sync::Semaphore>,
+    Arc<tokio::sync::Semaphore>,
+    Arc<std::sync::atomic::AtomicBool>,
+);
 
 struct Stub {
     origin: String,
@@ -149,6 +172,7 @@ struct Stub {
 /// How the stub should behave, so one server covers the failure paths too.
 #[derive(Debug, Clone, Default)]
 struct Script {
+    block_grant: Option<BlockGrant>,
     /// Refuse in the browser rather than redirecting with a code.
     deny: bool,
     /// Answer the redirect with a state the app never sent.
@@ -356,6 +380,17 @@ async fn serve(script: Script) -> Stub {
                         }
 
                         exchanges.lock().push(fields);
+
+                        if let Some((block_refresh, entered, release, blocked)) =
+                            &script.block_grant
+                        {
+                            if refreshing == *block_refresh
+                                && !blocked.swap(true, std::sync::atomic::Ordering::SeqCst)
+                            {
+                                entered.add_permits(1);
+                                release.acquire().await.unwrap().forget();
+                            }
+                        }
 
                         if refreshing && script.slow_refresh {
                             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -785,6 +820,84 @@ async fn signing_out_leaves_nothing_a_later_call_could_present() {
     assert!(matches!(account.connectors().await, Err(AccountError::NotSignedIn)));
     // And a relaunch finds nothing either.
     assert!(!Account::open_at(path, &stub.origin).is_signed_in());
+}
+
+async fn sign_out_wins_over_blocked_operation(refreshing: bool) {
+    let entered = Arc::new(tokio::sync::Semaphore::new(0));
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let stub = serve(Script {
+        expires_in: Some(1),
+        block_grant: Some((
+            refreshing,
+            entered.clone(),
+            release.clone(),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )),
+        ..Script::default()
+    })
+    .await;
+    let path = scratch();
+    let account = Arc::new(Account::open_at(path.clone(), &stub.origin));
+    if refreshing {
+        account.sign_in(browse, &Landing::Loopback).await.unwrap();
+    }
+    let pending = {
+        let account = account.clone();
+        tokio::spawn(async move {
+            if refreshing {
+                account.access().await.map(|_| ())
+            } else {
+                account.sign_in(browse, &Landing::Loopback).await.map(|_| ())
+            }
+        })
+    };
+    entered.acquire().await.unwrap().forget();
+    account.sign_out().unwrap();
+    release.add_permits(1);
+    let _ = pending.await.unwrap();
+    assert!(!account.is_signed_in(), "stale operation restored the account");
+    assert!(!path.exists());
+    assert!(!Account::open_at(path, &stub.origin).is_signed_in());
+}
+
+#[tokio::test]
+async fn sign_out_wins_over_blocked_refresh() {
+    sign_out_wins_over_blocked_operation(true).await;
+}
+
+#[tokio::test]
+async fn sign_out_wins_over_blocked_exchange() {
+    sign_out_wins_over_blocked_operation(false).await;
+}
+
+#[tokio::test]
+async fn newer_sign_in_wins_over_blocked_refresh() {
+    let entered = Arc::new(tokio::sync::Semaphore::new(0));
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let stub = serve(Script {
+        expires_in: Some(1),
+        block_grant: Some((
+            true,
+            entered.clone(),
+            release.clone(),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )),
+        ..Script::default()
+    })
+    .await;
+    let path = scratch();
+    let account = Arc::new(Account::open_at(path.clone(), &stub.origin));
+    account.sign_in(browse, &Landing::Loopback).await.unwrap();
+    let pending = {
+        let account = account.clone();
+        tokio::spawn(async move { account.access().await })
+    };
+    entered.acquire().await.unwrap().forget();
+    account.sign_in(browse, &Landing::Loopback).await.unwrap();
+    release.add_permits(1);
+    let _ = pending.await.unwrap();
+    let stored = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&stored).unwrap()["access_token"], "at-1");
 }
 
 /// Whether the real service still publishes what this build knows how to read.
