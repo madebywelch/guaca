@@ -1,21 +1,17 @@
 import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from "react";
-import {
-  type DockerStatus,
-  type ExistingHost,
-  hostMode,
-  localHost,
-  rememberMode,
-} from "../lib/host";
+import { type DockerStatus, type ExistingHost, hostMode, localHost } from "../lib/host";
 import { INSTRUCTIONS, RELEASES } from "../lib/releases";
 import {
   activateRemote,
+  adoptRemote,
   attached,
   desktop,
   openExternal,
+  preflightReload,
   probe,
   type Remote,
   restart,
-  setRemote,
+  saveConnection,
 } from "../lib/transport";
 import { errorMessage } from "../lib/types";
 import { LegacyGroups } from "./GroupTransfer";
@@ -195,13 +191,13 @@ export function HostChoice({
     try {
       const connection = await localHost.connect(name);
       await probe(connection);
-      rememberMode("existing");
+      preflightReload();
+      saveConnection(connection, "existing");
       if (onConnected) {
-        activateRemote(connection);
+        adoptRemote(connection);
         onConnected();
       } else {
-        setRemote(connection);
-        restart();
+        restart(false);
       }
     } catch (cause) {
       setError(errorMessage(cause));
@@ -238,13 +234,13 @@ export function HostChoice({
         connection = { origin: url.origin, token: token.trim() };
       }
       await probe(connection);
-      rememberMode(mode);
+      preflightReload();
+      saveConnection(connection, mode);
       if (onConnected) {
-        activateRemote(connection);
+        adoptRemote(connection);
         onConnected();
       } else {
-        setRemote(connection);
-        restart();
+        restart(false);
       }
     } catch (cause) {
       setError(errorMessage(cause));

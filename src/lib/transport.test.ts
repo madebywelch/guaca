@@ -116,6 +116,79 @@ describe("an invitation", () => {
 });
 
 describe("a window pointed at a box", () => {
+  it("migrates a legacy connection and mode on first read", async () => {
+    localStorage.setItem(
+      "guaca.workspace.remote",
+      JSON.stringify({ origin: "https://old.example", token: "old" }),
+    );
+    localStorage.setItem("guaca.workspace.hostMode", "local");
+    (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    vi.resetModules();
+    const loaded = await import("./transport");
+    expect(loaded.attached()?.origin).toBe("https://old.example");
+    expect(JSON.parse(localStorage.getItem("guaca.workspace.connection")!)).toEqual({
+      version: 1,
+      mode: "local",
+      origin: "https://old.example",
+      token: "old",
+    });
+    delete (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  });
+  it("retains the committed connection when a legacy mirror fails", async () => {
+    const { saveConnection, savedHostMode } = await import("./transport");
+    const original = Storage.prototype.setItem;
+    const write = vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (
+      this: Storage,
+      key,
+      value,
+    ) {
+      if (key === "guaca.workspace.remote") throw new Error("full");
+      return original.call(this, key, value);
+    });
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(() =>
+      saveConnection({ origin: "https://b.example", token: "secret" }, "existing"),
+    ).not.toThrow();
+    expect(savedHostMode()).toBe("existing");
+    expect(warning).toHaveBeenCalledWith("Could not update the legacy host settings.");
+    write.mockRestore();
+    warning.mockRestore();
+  });
+  it("commits one versioned connection and mirrors legacy records for rollback", async () => {
+    const { saveConnection } = await import("./transport");
+    saveConnection({ origin: "https://b.example", token: "secret" }, "existing");
+    expect(JSON.parse(localStorage.getItem("guaca.workspace.connection")!)).toEqual({
+      version: 1,
+      mode: "existing",
+      origin: "https://b.example",
+      token: "secret",
+    });
+    expect(JSON.parse(localStorage.getItem("guaca.workspace.remote")!)).toEqual({
+      origin: "https://b.example",
+      token: "secret",
+    });
+    expect(localStorage.getItem("guaca.workspace.hostMode")).toBe("existing");
+    (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    vi.resetModules();
+    const reloaded = await import("./transport");
+    expect(reloaded.attached()).toEqual({ origin: "https://b.example", token: "secret" });
+    expect(reloaded.savedHostMode()).toBe("existing");
+    delete (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  });
+  it("leaves the previous connection intact when the atomic write fails", async () => {
+    const { saveConnection } = await import("./transport");
+    saveConnection({ origin: "https://a.example", token: "a" }, "local");
+    const before = localStorage.getItem("guaca.workspace.connection");
+    const write = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("full");
+    });
+    expect(() => saveConnection({ origin: "https://b.example", token: "b" }, "remote")).toThrow();
+    write.mockRestore();
+    expect(localStorage.getItem("guaca.workspace.connection")).toBe(before);
+    expect(JSON.parse(localStorage.getItem("guaca.workspace.remote")!).origin).toBe(
+      "https://a.example",
+    );
+  });
   // The module reads the arrangement once, on import, so this is a second
   // import with the bridge present and a box on record: the third host.
   it("sends its calls to the box, with the box's token, and files from the box", async () => {

@@ -17,11 +17,29 @@ const BRIDGE = (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNA
 afterEach(() => {
   (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = BRIDGE;
   window.localStorage.removeItem(REMOTE);
+  window.localStorage.removeItem("guaca.workspace.connection");
   window.localStorage.removeItem("guaca.workspace.hostMode");
   vi.resetModules();
 });
 
 describe("what to check when nothing answers", () => {
+  it.each(["local", "existing"] as const)(
+    "gives %s advice for an attached local host",
+    async (mode) => {
+      window.localStorage.setItem(
+        REMOTE,
+        JSON.stringify({ origin: "http://localhost:8787", token: "t" }),
+      );
+      window.localStorage.setItem("guaca.workspace.hostMode", mode);
+      vi.resetModules();
+      const { unreachableHint } = await import("./host");
+      expect(unreachableHint()).toBe(
+        mode === "local"
+          ? "Check that Docker is running: Guaca runs in a container on this Mac."
+          : "Check that the host is still running on this Mac.",
+      );
+    },
+  );
   it("is Docker, for a desktop showing its own workspace", async () => {
     window.localStorage.removeItem(REMOTE);
     vi.resetModules();
