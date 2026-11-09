@@ -26,6 +26,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
@@ -92,6 +93,18 @@ describe("the corner", () => {
 });
 
 describe("reduced motion", () => {
+  it("resumes the scene when reduced motion is turned off", () => {
+    const media = new EventTarget();
+    vi.stubGlobal("matchMedia", () => media);
+    still.reduce = true;
+    const { container } = render(<Brand waiting={false} />);
+    act(() => {
+      still.reduce = false;
+      media.dispatchEvent(new Event("change"));
+    });
+    wait(2.1);
+    expect(corner(container).hasAttribute("data-named")).toBe(true);
+  });
   it("never performs: both there at once, the name only for the pointer", () => {
     still.reduce = true;
     const { container } = render(<Brand waiting={false} />);

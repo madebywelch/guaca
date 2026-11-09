@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
@@ -164,7 +164,7 @@ export function WorkingNotes({ agentId }: Props) {
   // than memory does and sharing one would refetch a page that has not changed.
   const changed = useStore((state) => state.workingNotesVersion[agentId] ?? 0);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     const request = ++generation.current;
     dispatch({ type: "load", agentId, generation: request });
     void (async () => {
@@ -175,7 +175,11 @@ export function WorkingNotes({ agentId }: Props) {
         dispatch({ type: "readFailed", agentId, generation: request, error: errorMessage(caught) });
       }
     })();
-  }, [agentId, changed]);
+  }, [agentId]);
+
+  useEffect(() => {
+    load();
+  }, [load, changed]);
 
   const clear = async () => {
     const owner = currentAgent.current;
@@ -272,7 +276,17 @@ export function WorkingNotes({ agentId }: Props) {
 
       {error && (
         <div className="banner banner--error" style={{ margin: "0.5rem 0 0" }}>
-          <span>{error}</span>
+          <span>{read.kind === "failed" ? `Could not read working notes. ${error}` : error}</span>
+          {read.kind === "failed" && (
+            <button
+              type="button"
+              className="btn btn--small btn--ghost"
+              aria-label="Retry reading working notes"
+              onClick={load}
+            >
+              Retry
+            </button>
+          )}
         </div>
       )}
     </section>

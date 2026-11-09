@@ -725,6 +725,32 @@ async function type(text: string) {
 }
 
 describe("drafts across an update reload", () => {
+  it.each([1, 2])("names %i attached files in a saved draft", async (count) => {
+    let reject!: (error: Error) => void;
+    const pending = new Promise<void>((_, fail) => {
+      reject = fail;
+    });
+    render(
+      <Composer
+        placeholder="Message"
+        group={CREW}
+        draftKey={`file-count-${count}`}
+        onSend={() => pending}
+      />,
+    );
+    const files = Array.from({ length: count }, (_, i) => ({
+      ...stored(`${i}.txt`),
+      digest: String(i).repeat(64),
+    }));
+    await act(async () => dropped?.(Promise.resolve({ attached: files, refused: [] })));
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "another draft" } });
+    await act(async () => reject(new Error("lost acknowledgment")));
+    fireEvent.click(screen.getByRole("button", { name: "Conversation checked" }));
+    expect(
+      screen.getByText(`Saved draft: ${count} attached file${count === 1 ? "" : "s"}`),
+    ).toBeTruthy();
+  });
   it("retains both drafts and attachments after checking an unconfirmed delivery", async () => {
     let reject!: (error: Error) => void;
     const pending = new Promise<void>((_, fail) => {
