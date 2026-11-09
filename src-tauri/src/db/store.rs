@@ -2537,7 +2537,7 @@ impl Store {
         let mut stmt = conn.prepare(&format!(
             "SELECT id,access_token,refresh_token,expires_at,client_id,client_secret,
                     token_endpoint,{PLUGIN_REACHED_BY_AGENT},
-                    {PLUGIN_TOOL_REACHED_BY_AGENT},{PLUGIN_TOOL_REACHED_BY_ANYONE},tools,headers
+                    {PLUGIN_TOOL_REACHED_BY_AGENT},{PLUGIN_TOOL_REACHED_BY_ANYONE},tools,headers,grant_generation
                FROM plugins WHERE group_id=:group AND kind=:kind",
         ))?;
         let row = stmt
@@ -2562,6 +2562,7 @@ impl Store {
                         row.get::<_, i64>(9)? != 0,
                         row.get::<_, String>(10)?,
                         row.get::<_, String>(11)?,
+                        row.get::<_, i64>(12)?,
                     ))
                 },
             )
@@ -2580,6 +2581,7 @@ impl Store {
             tool_anyones,
             tools,
             headers,
+            generation,
         )) = row
         else {
             return Ok(PluginReach::NotConnected);
@@ -2625,6 +2627,7 @@ impl Store {
         Ok(PluginReach::Granted(Box::new(Reached {
             id,
             grant,
+            generation,
             headers: Headers::decode(&headers),
             schema,
         })))
@@ -2876,7 +2879,8 @@ impl Store {
                 expires_at=excluded.expires_at,
                 connected_at=excluded.connected_at,
                 endpoint=excluded.endpoint,
-                headers=excluded.headers",
+                headers=excluded.headers,
+                grant_generation=plugins.grant_generation+1",
             params![
                 id.to_string(),
                 group.to_string(),
@@ -2922,7 +2926,7 @@ impl Store {
         let row = conn
             .query_row(
                 "SELECT kind,endpoint,headers,connection,access_token,refresh_token,expires_at,
-                        client_id,client_secret,token_endpoint
+                        client_id,client_secret,token_endpoint,grant_generation
                    FROM plugins WHERE id=?1",
                 params![id.to_string()],
                 |row| {
@@ -2937,6 +2941,7 @@ impl Store {
                         row.get::<_, String>(7)?,
                         row.get::<_, String>(8)?,
                         row.get::<_, String>(9)?,
+                        row.get::<_, i64>(10)?,
                     ))
                 },
             )
@@ -2953,6 +2958,7 @@ impl Store {
             client_id,
             client_secret,
             token_endpoint,
+            generation,
         )) = row
         else {
             return Ok(None);
@@ -2973,6 +2979,7 @@ impl Store {
             }),
             headers: Headers::decode(&headers),
             connection,
+            generation,
         }))
     }
 
@@ -2980,19 +2987,21 @@ impl Store {
     pub fn refresh_plugin_grant(
         &self,
         id: PluginId,
+        generation: i64,
         grant: &crate::oauth::Grant,
-    ) -> Result<(), StoreError> {
+    ) -> Result<bool, StoreError> {
         let conn = self.conn()?;
-        conn.execute(
-            "UPDATE plugins SET access_token=?2, refresh_token=?3, expires_at=?4 WHERE id=?1",
+        let changed = conn.execute(
+            "UPDATE plugins SET access_token=?2, refresh_token=?3, expires_at=?4, grant_generation=grant_generation+1 WHERE id=?1 AND grant_generation=?5",
             params![
                 id.to_string(),
                 grant.access_token,
                 grant.refresh_token.clone().unwrap_or_default(),
                 grant.expires_at,
+                generation,
             ],
         )?;
-        Ok(())
+        Ok(changed == 1)
     }
 
     /// Forgets a plugin, its grant, and who was allowed to spend it.
@@ -4550,6 +4559,7 @@ pub enum PluginReach {
 pub struct Reached {
     pub id: PluginId,
     pub grant: Option<crate::oauth::Grant>,
+    pub generation: i64,
     pub headers: Headers,
     pub schema: Option<serde_json::Value>,
 }
@@ -4564,6 +4574,7 @@ pub struct Reached {
 pub struct Dialed {
     pub kind: PluginKind,
     pub grant: Option<crate::oauth::Grant>,
+    pub generation: i64,
     pub headers: Headers,
     pub connection: String,
 }
@@ -5194,7 +5205,7 @@ mod tests {
         // adds to groups, which no migration since 51 rebuilds, and 65's needs
         // none: what it drops, 54, 59 and 62 make again on the way back up.
         // 67 adds the workspace identity, resource ledger and resume marker.
-        conn.execute_batch("DROP TABLE pending_sandbox_resume; DROP TABLE resource_ledger; DROP TABLE workspace_identity; DROP TABLE approval_policies; ALTER TABLE groups DROP COLUMN rail_order; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
+        conn.execute_batch("ALTER TABLE plugins DROP COLUMN grant_generation; DROP TABLE pending_sandbox_resume; DROP TABLE resource_ledger; DROP TABLE workspace_identity; DROP TABLE approval_policies; ALTER TABLE groups DROP COLUMN rail_order; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
         migrations::run(&mut conn).unwrap();
         drop(conn);
         assert_eq!(f.store.connector_env(mine.id).unwrap()["TOKEN"], "private-token");

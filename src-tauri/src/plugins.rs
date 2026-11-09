@@ -34,6 +34,8 @@ use crate::domain::now_ms;
 use crate::domain::plugin::{Headers, Plugin, PluginKind, PluginTool, ServerReport, SigninNeed};
 use crate::mcp::{self, McpError};
 use crate::oauth::{self, Grant, OauthError};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 #[derive(Debug, thiserror::Error)]
 pub enum PluginError {
@@ -416,14 +418,14 @@ pub async fn check(
     endpoint: &str,
     account: Held<'_>,
 ) -> Result<ServerReport, PluginError> {
-    let crate::db::store::Dialed { kind, grant, headers, .. } = dialed;
+    let crate::db::store::Dialed { kind, grant, generation, headers, .. } = dialed;
     if kind.account_backed() {
         let used = account.spend(&kind)?;
         return inspect(kind.is_custom(), endpoint, Some(used.token), &headers).await;
     }
     let grant = match grant {
         Some(held) if held.stale(now_ms()) => {
-            Some(renew(store, id, &held, &kind, endpoint, &headers).await?)
+            Some(renew(store, id, generation, &kind, endpoint, &headers).await?.0)
         }
         other => other,
     };
@@ -605,19 +607,20 @@ pub async fn call(
 ) -> Result<mcp::Called, PluginError> {
     let Target { group, agent, kind, endpoint, account } = target;
     let label = || kind.label().to_string();
-    let (id, grant, headers, schema) = match store.plugin_reach(group, agent, kind, tool)? {
-        PluginReach::Granted(reached) => {
-            (reached.id, reached.grant, reached.headers, reached.schema)
-        }
-        PluginReach::NotConnected => return Err(PluginError::NotConnected { label: label() }),
-        PluginReach::NotChosen => return Err(PluginError::NotChosen { label: label() }),
-        PluginReach::ToolDenied => {
-            return Err(PluginError::ToolDenied { label: label(), tool: tool.to_string() })
-        }
-        PluginReach::ToolNotChosen => {
-            return Err(PluginError::ToolNotChosen { label: label(), tool: tool.to_string() })
-        }
-    };
+    let (id, grant, mut generation, headers, schema) =
+        match store.plugin_reach(group, agent, kind, tool)? {
+            PluginReach::Granted(reached) => {
+                (reached.id, reached.grant, reached.generation, reached.headers, reached.schema)
+            }
+            PluginReach::NotConnected => return Err(PluginError::NotConnected { label: label() }),
+            PluginReach::NotChosen => return Err(PluginError::NotChosen { label: label() }),
+            PluginReach::ToolDenied => {
+                return Err(PluginError::ToolDenied { label: label(), tool: tool.to_string() })
+            }
+            PluginReach::ToolNotChosen => {
+                return Err(PluginError::ToolNotChosen { label: label(), tool: tool.to_string() })
+            }
+        };
 
     // The reach check above is the same one every plugin gets — the crew, the
     // agent and the tool — and running it before this branch is what makes both
@@ -636,7 +639,9 @@ pub async fn call(
 
     let grant = match grant {
         Some(held) if held.stale(now_ms()) => {
-            Some(renew(store, id, &held, kind, endpoint, &headers).await?)
+            let (renewed, next) = renew(store, id, generation, kind, endpoint, &headers).await?;
+            generation = next;
+            Some(renewed)
         }
         other => other,
     };
@@ -649,10 +654,10 @@ pub async fn call(
             // public server answering 401 is a server that changed its mind
             // about being public, which no refresh fixes — and so is a key the
             // operator pasted, which has no refresh token behind it either.
-            let Some(held) = grant else {
+            let Some(_held) = grant else {
                 return Err(PluginError::SigninExpired { label: label() });
             };
-            let renewed = renew(store, id, &held, kind, endpoint, &headers).await?;
+            let (renewed, _) = renew(store, id, generation, kind, endpoint, &headers).await?;
             run(dialed, Some(&renewed), tool, arguments, schema.as_ref()).await.map_err(Into::into)
         }
         other => other.map_err(Into::into),
@@ -680,16 +685,42 @@ async fn run(
 async fn renew(
     store: &Store,
     id: PluginId,
-    grant: &Grant,
+    generation: i64,
     kind: &PluginKind,
     endpoint: &str,
     headers: &Headers,
-) -> Result<Grant, PluginError> {
-    let renewed = oauth::refresh(grant, &oauth::Gate::on(endpoint, headers.wire()), now_ms)
+) -> Result<(Grant, i64), PluginError> {
+    static LOCKS: OnceLock<Mutex<HashMap<PluginId, Weak<tokio::sync::Mutex<()>>>>> =
+        OnceLock::new();
+    let lock = {
+        let mut locks = LOCKS.get_or_init(Default::default).lock().unwrap();
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        match locks.get(&id).and_then(Weak::upgrade) {
+            Some(lock) => lock,
+            None => {
+                let lock = Arc::new(tokio::sync::Mutex::new(()));
+                locks.insert(id, Arc::downgrade(&lock));
+                lock
+            }
+        }
+    };
+    let _guard = lock.lock().await;
+    let expired = || PluginError::SigninExpired { label: kind.label().to_string() };
+    let current = store.plugin_dial(id)?.ok_or_else(expired)?;
+    if current.kind != *kind || current.headers != *headers {
+        return Err(expired());
+    }
+    let grant = current.grant.ok_or_else(expired)?;
+    if current.generation != generation {
+        return Ok((grant, current.generation));
+    }
+    let renewed = oauth::refresh(&grant, &oauth::Gate::on(endpoint, headers.wire()), now_ms)
         .await
-        .map_err(|_| PluginError::SigninExpired { label: kind.label().to_string() })?;
-    store.refresh_plugin_grant(id, &renewed)?;
-    Ok(renewed)
+        .map_err(|_| expired())?;
+    if !store.refresh_plugin_grant(id, generation, &renewed)? {
+        return Err(expired());
+    }
+    Ok((renewed, generation + 1))
 }
 
 #[cfg(test)]
