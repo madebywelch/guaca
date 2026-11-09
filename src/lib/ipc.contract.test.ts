@@ -62,6 +62,16 @@ function definedCommands(): Set<string> {
 }
 
 describe("IPC contract", () => {
+  it("makes idempotency keys optional for older hire and send clients", () => {
+    const surface = read("src-tauri/src/ipc.rs");
+    expect(surface).toMatch(
+      /hire_agents\(group_id: GroupId, drafts: Vec<AgentDraft>, idempotency_key: Option<String>\)/,
+    );
+    expect(surface).toMatch(
+      /send_message\(agent_id: AgentId, text: String, files: Option<Vec<FileRef>>, idempotency_key: Option<String>\)/,
+    );
+  });
+
   it("allows older clients to save memory without an expected version", () => {
     expect(read("src-tauri/src/ipc.rs")).toMatch(
       /set_agent_memory\(id: AgentId, content: String, expected: Option<String>\)/,

@@ -53,7 +53,10 @@ export default function App() {
   useEffect(followViewport, []);
   const agents = useLiveAgents();
   const allAgents = useStore((s) => s.agents);
-  const [onboardingActive, setOnboardingActive] = useState(() => !!readFirstTask().agentId);
+  const [onboardingActive, setOnboardingActive] = useState(() => {
+    const task = readFirstTask();
+    return !!(task.agentId || task.key);
+  });
   const [checkingFirstTask, setCheckingFirstTask] = useState(false);
   const selected = useStore((s) => s.selected);
   const settings = useStore((s) => s.settings);

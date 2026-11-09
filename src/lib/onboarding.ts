@@ -39,6 +39,7 @@ export interface FirstTask {
   brief: string;
   agentId: string | null;
   sent: boolean;
+  key?: string;
 }
 
 export function readFirstTask(): FirstTask {
@@ -58,6 +59,7 @@ export function readFirstTask(): FirstTask {
       brief: value.brief,
       agentId: typeof value.agentId === "string" ? value.agentId : null,
       sent: value.sent === true,
+      ...(typeof value.key === "string" && value.key ? { key: value.key } : {}),
     };
   } catch {
     return empty;

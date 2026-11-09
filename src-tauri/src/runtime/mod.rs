@@ -2563,6 +2563,45 @@ impl Runtime {
         Ok(run_id)
     }
 
+    pub fn send_from_human_keyed(
+        &self,
+        to: AgentId,
+        text: &str,
+        files: Vec<Attachment>,
+        key: &str,
+        fingerprint: &str,
+    ) -> Result<(MessageId, RunId), RuntimeError> {
+        let card = self.inner.store.get_agent(to)?.ok_or(RuntimeError::UnknownAgent(to))?;
+        let parts = with_files(text.trim(), files);
+        let envelope = Envelope {
+            id: MessageId::new(),
+            run_id: RunId::new(),
+            channel_id: to,
+            from: Participant::Human,
+            to: Participant::Agent { id: to },
+            parts,
+            trust: Trust::Operator,
+            hop: 0,
+            expects_reply: true,
+            intent: Intent::Work,
+            cause: None,
+            created_at: now_ms(),
+        };
+        let mut runs = self.inner.runs.lock();
+        let (message, run, created) = self.inner.store.claim_operator_send(
+            key,
+            fingerprint,
+            &envelope,
+            !runs.draining && card.lifecycle != Lifecycle::Terminated,
+        )?;
+        if created {
+            self.book(&mut runs, run);
+            drop(runs);
+            self.enqueue_delivery(envelope);
+        }
+        Ok((message, run))
+    }
+
     /// Puts a turn that failed back on its feet.
     ///
     /// Delivers the same envelope again rather than a summary of it: what broke

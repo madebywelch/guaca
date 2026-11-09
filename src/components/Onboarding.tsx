@@ -19,7 +19,9 @@ interface Props {
 
 export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onCreate }: Props) {
   const [draft, setDraft] = useState(readFirstTask);
-  const [step, setStep] = useState<"task" | "provider" | "start">(draft.agentId ? "start" : "task");
+  const [step, setStep] = useState<"task" | "provider" | "start">(
+    draft.agentId || draft.key ? "start" : "task",
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [storageError, setStorageError] = useState(false);
@@ -92,19 +94,19 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
 
   const start = async () => {
     if (sending.current || !draft.brief.trim()) return;
-    if (!keep(draft)) return;
+    let next = { ...draft, key: draft.key ?? crypto.randomUUID() };
+    if (!keep(next)) return;
     sending.current = true;
     setBusy(true);
     setError("");
     onStarting();
-    let next = draft;
     try {
       if (next.agentId && !hired)
         throw new Error(
           "This agent is no longer available. Choose another task below; your brief is kept here.",
         );
       if (!next.agentId) {
-        const created = await api.hireAgents(group.id, [toDraft(preset)]);
+        const created = await api.hireAgents(group.id, [toDraft(preset)], next.key);
         if (!created[0]) throw new Error("The host did not return an agent. Try again.");
         next = { ...next, agentId: created[0].id };
         const saved = keep(next);
@@ -114,7 +116,7 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
         if (!saved) return;
       }
       if (!next.sent) {
-        await api.sendMessage(next.agentId!, next.brief.trim());
+        await api.sendMessage(next.agentId!, next.brief.trim(), [], next.key);
         next = { ...next, sent: true };
         if (!keep(next)) return;
       }
@@ -308,7 +310,7 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
                 rows={5}
                 aria-label="Your first brief"
                 value={draft.brief}
-                readOnly={busy || !!draft.agentId}
+                readOnly={busy || !!draft.key || !!draft.agentId}
                 onChange={(event) => keep({ ...draft, brief: event.target.value })}
               />
             </label>
@@ -317,7 +319,9 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
                 ? "Your task was sent. Open the conversation to see how it is going."
                 : draft.agentId
                   ? "Your agent is already created. If a connection failed, check the conversation before sending again."
-                  : "Start task creates this agent and sends your brief using the provider you just connected. Other services can be connected later, when needed."}
+                  : draft.key
+                    ? "Your previous start may have created this agent. Retry with the same brief to continue safely."
+                    : "Start task creates this agent and sends your brief using the provider you just connected. Other services can be connected later, when needed."}
             </p>
             {/* The last step, and the last moment to say where Guaca goes when
                 the window does. A browser has no menu bar, so it is only said
@@ -334,7 +338,7 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
               </div>
             )}
             <div className="onboarding-actions">
-              {!draft.agentId && (
+              {!draft.agentId && !draft.key && (
                 <button
                   type="button"
                   className="btn"
@@ -350,7 +354,7 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
                   className="btn"
                   disabled={busy}
                   onClick={() => {
-                    keep({ ...draft, agentId: null, sent: false });
+                    keep({ ...draft, agentId: null, sent: false, key: undefined });
                     setError("");
                     setStep("task");
                   }}

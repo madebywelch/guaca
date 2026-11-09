@@ -24,7 +24,13 @@ describe("the first task", () => {
   });
 
   it("keeps the brief and partial completion through reloads, scoped to the host", () => {
-    const draft = { task: "plan" as const, brief: "Plan a launch", agentId: "agent-1", sent: true };
+    const draft = {
+      task: "plan" as const,
+      brief: "Plan a launch",
+      agentId: "agent-1",
+      sent: true,
+      key: "task-key",
+    };
     saveFirstTask(draft);
     expect(readFirstTask()).toEqual(draft);
     origin.mockReturnValue("https://second.example");
@@ -32,6 +38,12 @@ describe("the first task", () => {
     origin.mockReturnValue("https://first.example");
     saveFirstTask(null);
     expect(readFirstTask().agentId).toBeNull();
+  });
+
+  it("reads checkpoints written before task keys existed", () => {
+    const draft = { task: "plan" as const, brief: "Saved brief", agentId: "agent-1", sent: false };
+    saveFirstTask(draft);
+    expect(readFirstTask()).toEqual(draft);
   });
 
   it("offers one existing preset per task, without inventing a new agent prompt", () => {

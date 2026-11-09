@@ -2182,12 +2182,25 @@ pub async fn hire_agents(
     state: &AppState,
     group_id: GroupId,
     drafts: Vec<AgentDraft>,
+    idempotency_key: Option<String>,
 ) -> Reply<Vec<AgentCard>> {
     if drafts.is_empty() {
         return Ok(Vec::new());
     }
 
     let store = state.runtime.store();
+    let fingerprint = idempotency_key.as_ref().map(|_| {
+        use sha2::{Digest, Sha256};
+        format!("{:x}", Sha256::digest(format!("{group_id}:{drafts:?}").as_bytes()))
+    });
+    if let Some(key) = &idempotency_key {
+        if key.is_empty() || key.len() > 128 || drafts.len() != 1 {
+            return Err(CommandError::new(
+                "validation",
+                "A hire key requires one agent and at most 128 characters.",
+            ));
+        }
+    }
     // Checked rather than left to the foreign key, which would surface as an
     // opaque storage failure on a group the operator picked from a list. The
     // realistic way to get here is a group deleted while the cafeteria was open.
@@ -2214,11 +2227,19 @@ pub async fn hire_agents(
         .map(|(name, draft)| AgentDraft { group_id: Some(group_id), name, ..draft }.validate())
         .collect::<Result<Vec<_>, _>>()?;
 
-    let hired = store.create_agents(&clean)?;
+    let hired = if let Some(key) = idempotency_key {
+        let (card, _) =
+            store.create_onboarding_agent(&key, fingerprint.as_deref().unwrap(), &clean[0])?;
+        vec![card]
+    } else {
+        store.create_agents(&clean)?
+    };
     // Actors start only once the rows are committed. Starting them inside the
     // write would leave a live agent behind for a hire that rolled back.
     for card in &hired {
-        state.runtime.start_agent(card.id);
+        if card.lifecycle != Lifecycle::Terminated {
+            state.runtime.start_agent(card.id);
+        }
     }
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(hired)
@@ -2522,12 +2543,25 @@ pub struct FileRef {
 /// The files are already in the store by now: `stage_files` put them there when
 /// they were dropped. This resolves each one again rather than trusting what
 /// came back over IPC, so a message carries a file the operator actually has.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum SentMessage {
+    Legacy(RunId),
+    Keyed {
+        #[serde(rename = "messageId")]
+        message_id: MessageId,
+        #[serde(rename = "runId")]
+        run_id: RunId,
+    },
+}
+
 pub async fn send_message(
     state: &AppState,
     agent_id: AgentId,
     text: String,
     files: Option<Vec<FileRef>>,
-) -> Reply<RunId> {
+    idempotency_key: Option<String>,
+) -> Reply<SentMessage> {
     let trimmed = text.trim();
     let files = files.unwrap_or_default();
     // A file on its own is a message. "Here, read this" with the document
@@ -2536,6 +2570,26 @@ pub async fn send_message(
     if trimmed.is_empty() && files.is_empty() {
         return Err(CommandError::new("validation", "message must not be empty"));
     }
+
+    let fingerprint = if let Some(key) = &idempotency_key {
+        if key.is_empty() || key.len() > 128 {
+            return Err(CommandError::new(
+                "validation",
+                "A message key must have between 1 and 128 characters.",
+            ));
+        }
+        use sha2::{Digest, Sha256};
+        let fingerprint =
+            format!("{:x}", Sha256::digest(format!("{agent_id}:{trimmed}:{files:?}").as_bytes()));
+        if let Some((message_id, run_id)) =
+            state.runtime.store().operator_send_receipt(key, &fingerprint)?
+        {
+            return Ok(SentMessage::Keyed { message_id, run_id });
+        }
+        Some(fingerprint)
+    } else {
+        None
+    };
 
     let mut attached = Vec::new();
     for file in &files {
@@ -2546,7 +2600,21 @@ pub async fn send_message(
             Err(err) => return Err(CommandError::new("file", err.to_string())),
         }
     }
-    Ok(state.runtime.send_from_human_with(agent_id, trimmed, attached)?)
+    match idempotency_key {
+        Some(key) => {
+            let (message_id, run_id) = state.runtime.send_from_human_keyed(
+                agent_id,
+                trimmed,
+                attached,
+                &key,
+                fingerprint.as_deref().unwrap(),
+            )?;
+            Ok(SentMessage::Keyed { message_id, run_id })
+        }
+        None => Ok(SentMessage::Legacy(
+            state.runtime.send_from_human_with(agent_id, trimmed, attached)?,
+        )),
+    }
 }
 
 /// Puts a copy of a stored file where a person can get at it, and says where.

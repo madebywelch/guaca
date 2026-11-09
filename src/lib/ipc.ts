@@ -513,8 +513,8 @@ export const api = {
    * settled on the Rust side against the roster *and* the rest of the batch,
    * which is the one place that rule can live without being written twice.
    */
-  hireAgents: (groupId: GroupId, drafts: AgentDraft[]) =>
-    invoke<AgentCard[]>("hire_agents", { groupId, drafts }),
+  hireAgents: (groupId: GroupId, drafts: AgentDraft[], idempotencyKey?: string) =>
+    invoke<AgentCard[]>("hire_agents", { groupId, drafts, idempotencyKey }),
 
   setAgentPaused: (id: AgentId, paused: boolean) =>
     invoke<AgentCard>("set_agent_paused", { id, paused }),
@@ -678,11 +678,17 @@ export const api = {
    * its own store, so the size and the type on the message are read off the
    * disk rather than taken from here.
    */
-  sendMessage: (agentId: AgentId, text: string, files: Attachment[] = []) =>
-    invoke<RunId>("send_message", {
+  sendMessage: (
+    agentId: AgentId,
+    text: string,
+    files: Attachment[] = [],
+    idempotencyKey?: string,
+  ) =>
+    invoke<RunId | { messageId: string; runId: RunId }>("send_message", {
       agentId,
       text,
       files: files.map(({ digest, name }) => ({ digest, name })),
+      idempotencyKey,
     }),
 
   clearChannel: (channelId: AgentId) => invoke<number>("clear_channel", { channelId }),
