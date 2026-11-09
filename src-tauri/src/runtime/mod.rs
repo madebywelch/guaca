@@ -5049,21 +5049,39 @@ impl Runtime {
         // holds is not the thing being spent: gating on it would stop and ask
         // about an account this action cannot touch, which teaches an operator
         // to click through the prompt without reading it.
-        let held: Vec<Signin> = self
-            .inner
-            .store
-            .agent_signins(card.id)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|signin| signin.surface == Surface::Browser)
-            .collect();
-        let session = needs_consent(card.browser_consent, action, reading, &held);
-        if session.is_none() && !must_ask {
+        let inventory = self.inner.store.agent_signins(card.id);
+        let unknown = inventory.is_err()
+            && card.browser_consent.asks()
+            && reading.ingested
+            && !reading
+                .url
+                .as_deref()
+                .zip(reading.allowed.as_deref())
+                .is_some_and(|(url, domain)| signin::on_domain(url, domain));
+        let held = inventory.ok().map(|signins| {
+            signins
+                .into_iter()
+                .filter(|signin| signin.surface == Surface::Browser)
+                .collect::<Vec<_>>()
+        });
+        let session = held
+            .as_deref()
+            .and_then(|held| needs_consent(card.browser_consent, action, reading, held));
+        if session.is_none() && !must_ask && !unknown {
             return None;
         }
         let (url, domain, service) = (
             reading.url.clone().unwrap_or_default(),
-            session.map(|s| s.domain.clone()),
+            session.map(|s| s.domain.clone()).or_else(|| {
+                if !unknown {
+                    return None;
+                }
+                let url = reqwest::Url::parse(reading.url.as_deref()?).ok()?;
+                if !matches!(url.scheme(), "http" | "https") {
+                    return None;
+                }
+                url.host_str().map(str::to_string)
+            }),
             session.map(|s| s.label()).unwrap_or_else(|| "this site".to_string()),
         );
 
@@ -5087,7 +5105,9 @@ impl Runtime {
                     // page first, because that is the whole risk.
                     DetailField {
                         label: "Why you are being asked".to_string(),
-                        value: if must_ask && session.is_none() {
+                        value: if unknown {
+                            "Guaca could not check which sites are signed in. You must decide this action.".to_string()
+                        } else if must_ask && session.is_none() {
                             "A rule needs the site's domain, but Guaca could not determine it. You must decide this action.".to_string()
                         } else { format!(
                             "{} read a web page earlier in this turn, and you are signed in to \
@@ -5102,7 +5122,7 @@ impl Runtime {
                     // a scope nobody told them.
                     DetailField {
                         label: "What allowing covers".to_string(),
-                        value: if must_ask && session.is_none() {
+                        value: if (must_ask && session.is_none()) || (unknown && domain.is_none()) {
                             "Only this press or typed line.".to_string()
                         } else { format!(
                             "Every press and typed line on {service} for the rest of this turn. \
@@ -8626,6 +8646,97 @@ mod tests {
     /// is what the gate does once they have said so; `Consent::Open` is the
     /// default and has its own test.
     const ASKING: Consent = Consent::AskBeforeActing;
+
+    #[tokio::test]
+    async fn unreadable_signin_inventory_parks_before_a_browser_action() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("guac.db")).unwrap();
+        let mut card = store
+            .create_agent(&crate::domain::agent::CleanDraft {
+                group_id: None,
+                name: "Reader".into(),
+                avatar: "orb".into(),
+                color: "#7fb069".into(),
+                model: "test/model".into(),
+                subscription_model: None,
+                reasoning_effort: None,
+                system_prompt: String::new(),
+                skills: vec![],
+            })
+            .unwrap();
+        card.browser_consent = ASKING;
+        let mut signin = session("example.com");
+        signin.agent_id = card.id;
+        store.replace_signins(card.id, Surface::Browser, &[signin]).unwrap();
+        assert_eq!(store.agent_signins(card.id).unwrap().len(), 1);
+        store.conn().unwrap().execute("DROP TABLE signins", []).unwrap();
+        assert!(store.agent_signins(card.id).is_err());
+        let sink = crate::runtime::events::RecordingSink::new();
+        let config = crate::config::AppConfig {
+            version: crate::config::CURRENT_VERSION,
+            operator_name: String::new(),
+            inference: Default::default(),
+            limits: Default::default(),
+            e2b: Default::default(),
+            kernel: Default::default(),
+            webhook: Default::default(),
+            quick_actions: vec![],
+            widgets: vec![],
+        };
+        let runtime = Runtime::new(
+            store,
+            LlmClient::new().unwrap(),
+            config,
+            OnDisk::under(dir.path()),
+            sink.clone(),
+        );
+        async fn answer(
+            runtime: &Runtime,
+            card: &AgentCard,
+            reading: &mut Reading,
+            action: &str,
+            decision: crate::domain::approval::Decision,
+        ) -> Option<String> {
+            let run = RunId::new();
+            let future = runtime.may_act_on(card, run, action, reading);
+            tokio::pin!(future);
+            let result =
+                tokio::time::timeout(std::time::Duration::from_millis(100), &mut future).await;
+            assert!(result.is_err(), "the action must park before it can run: {result:?}");
+            let id = runtime.store().pending_approvals_for_run(run).unwrap()[0];
+            let approval = runtime.store().get_approval(id).unwrap().unwrap();
+            assert!(approval
+                .detail
+                .iter()
+                .any(|field| field.value.contains("could not check which sites are signed in")));
+            runtime.decide_approval(id, decision).unwrap();
+            future.await
+        }
+        use crate::domain::approval::Decision;
+        let mut reading = having_read("https://example.com/form");
+        assert!(answer(&runtime, &card, &mut reading, "click", Decision::Deny).await.is_some());
+        assert!(answer(&runtime, &card, &mut reading, "type", Decision::Deny).await.is_some());
+        assert!(answer(&runtime, &card, &mut reading, "click", Decision::Allow).await.is_none());
+        assert!(runtime.may_act_on(&card, RunId::new(), "type", &mut reading).await.is_none());
+        reading.browser_page(Some("https://other.example/form".into()));
+        assert!(answer(&runtime, &card, &mut reading, "click", Decision::Allow).await.is_none());
+        reading.took_in(None);
+        assert!(answer(&runtime, &card, &mut reading, "click", Decision::Deny).await.is_some());
+        let mut fresh = having_read("https://example.com/form");
+        assert!(answer(&runtime, &card, &mut fresh, "click", Decision::Deny).await.is_some());
+        let mut unknown_site = Reading { ingested: true, ..Default::default() };
+        assert!(answer(&runtime, &card, &mut unknown_site, "click", Decision::Allow)
+            .await
+            .is_none());
+        assert!(unknown_site.allowed.is_none());
+        assert!(answer(&runtime, &card, &mut unknown_site, "type", Decision::Deny).await.is_some());
+        card.browser_consent = Consent::Open;
+        assert!(runtime.may_act_on(&card, RunId::new(), "click", &mut fresh).await.is_none());
+        assert!(sink
+            .snapshot()
+            .iter()
+            .any(|event| matches!(event, UiEvent::ApprovalRequested { .. })));
+    }
 
     #[test]
     fn a_browser_the_operator_did_not_hold_back_never_stops_to_ask() {
