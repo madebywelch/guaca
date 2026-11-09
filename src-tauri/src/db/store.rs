@@ -121,6 +121,8 @@ pub enum StoreError {
          list on screen is older than the one the server last sent, so connect it again"
     )]
     PluginToolNotFound(PluginId, String),
+    #[error("{plugin} does not offer a tool called {tool}. Use one of the {plugin} tools in your tool list.")]
+    PluginToolNotOffered { plugin: String, tool: String },
     #[error("no permission request with id {0}")]
     ApprovalNotFound(ApprovalId),
     #[error("that request was already answered ({})", state.as_str())]
@@ -2640,8 +2642,8 @@ impl Store {
     /// agent asking an operator to connect a plugin they are looking at in the
     /// settings panel, or handing a peer work nobody in the crew can do.
     ///
-    /// The tool is asked about here and not only where the definitions are
-    /// built, because a model names tools it was never offered.
+    /// Discovery is checked before policy because a model can name a tool it
+    /// was never offered or one the server no longer publishes.
     ///
     /// Asked most-general first, because more than one of these is true at
     /// once and the widest true answer is the useful one. A tool narrowed to
@@ -2658,19 +2660,17 @@ impl Store {
         tool: &str,
     ) -> Result<PluginReach, StoreError> {
         let conn = self.conn()?;
-        let mut stmt = conn.prepare(&format!(
+        let tx = conn.unchecked_transaction()?;
+        let mut stmt = tx.prepare(
             "SELECT id,access_token,refresh_token,expires_at,client_id,client_secret,
-                    token_endpoint,{PLUGIN_REACHED_BY_AGENT},
-                    {PLUGIN_TOOL_REACHED_BY_AGENT},{PLUGIN_TOOL_REACHED_BY_ANYONE},tools,headers,grant_generation
+                    token_endpoint,tools,headers,grant_generation
                FROM plugins WHERE group_id=:group AND kind=:kind",
-        ))?;
+        )?;
         let row = stmt
             .query_row(
                 named_params! {
                     ":group": group.to_string(),
                     ":kind": kind.slug(),
-                    ":agent": agent.to_string(),
-                    ":tool": tool,
                 },
                 |row| {
                     Ok((
@@ -2681,12 +2681,9 @@ impl Store {
                         row.get::<_, String>(4)?,
                         row.get::<_, String>(5)?,
                         row.get::<_, String>(6)?,
-                        row.get::<_, i64>(7)? != 0,
-                        row.get::<_, i64>(8)? != 0,
-                        row.get::<_, i64>(9)? != 0,
-                        row.get::<_, String>(10)?,
-                        row.get::<_, String>(11)?,
-                        row.get::<_, i64>(12)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, String>(8)?,
+                        row.get::<_, i64>(9)?,
                     ))
                 },
             )
@@ -2700,9 +2697,6 @@ impl Store {
             client_id,
             client_secret,
             token_endpoint,
-            reached,
-            tool_mine,
-            tool_anyones,
             tools,
             headers,
             generation,
@@ -2710,6 +2704,26 @@ impl Store {
         else {
             return Ok(PluginReach::NotConnected);
         };
+        let tools: Vec<PluginTool> = serde_json::from_str(&tools)
+            .map_err(|e| StoreError::Corrupt(format!("bad tool list for {kind:?}: {e}")))?;
+        let Some(held) = tools.into_iter().find(|held| held.name == tool) else {
+            return Err(StoreError::PluginToolNotOffered {
+                plugin: kind.label().to_string(),
+                tool: tool.to_string(),
+            });
+        };
+        let (reached, tool_mine, tool_anyones) = tx.query_row(
+            &format!(
+                "SELECT {PLUGIN_REACHED_BY_AGENT}, {PLUGIN_TOOL_REACHED_BY_AGENT},
+                            {PLUGIN_TOOL_REACHED_BY_ANYONE}
+                       FROM plugins WHERE group_id=:group AND kind=:kind"
+            ),
+            named_params! {
+                ":group": group.to_string(), ":kind": kind.slug(),
+                ":agent": agent.to_string(), ":tool": tool,
+            },
+            |row| Ok((row.get::<_, bool>(0)?, row.get::<_, bool>(1)?, row.get::<_, bool>(2)?)),
+        )?;
         if !tool_anyones {
             return Ok(PluginReach::ToolDenied);
         }
@@ -2736,17 +2750,7 @@ impl Store {
             token_endpoint,
         });
 
-        // The schema this tool was published with, for the transport rather
-        // than for the model. A modern MCP server may ask for some of a call's
-        // arguments to be mirrored into HTTP headers and says which ones here,
-        // and a call built without it is refused as a header mismatch. A list
-        // that will not parse costs the mirroring rather than the call: the
-        // tool definitions came from the same column on the same turn, so a
-        // failure here is one the turn has already survived once.
-        let schema = serde_json::from_str::<Vec<PluginTool>>(&tools)
-            .ok()
-            .and_then(|all| all.into_iter().find(|held| held.name == tool))
-            .map(|held| held.input_schema);
+        let schema = Some(held.input_schema);
 
         Ok(PluginReach::Granted(Box::new(Reached {
             id,
@@ -4702,9 +4706,7 @@ pub enum PluginReach {
 /// nothing. The headers are the operator's own and are usually empty: they are
 /// here rather than looked up separately because a call made without them does
 /// not fail at the server, it fails at whatever is in front of it, with a
-/// refusal that says nothing about MCP. The schema is `None` for a tool the
-/// stored list no longer describes, which mirrors no headers and is otherwise
-/// called exactly the same way.
+/// refusal that says nothing about MCP. The schema comes from the stored tool.
 #[derive(Debug)]
 pub struct Reached {
     pub id: PluginId,
@@ -8675,14 +8677,78 @@ mod tests {
         };
         assert_eq!(reached.schema.unwrap()["properties"]["region"]["x-mcp-header"], "Region");
 
-        // And a tool the stored list no longer describes has none, which is a
-        // call that mirrors nothing rather than a call that cannot be made.
-        let PluginReach::Granted(reached) =
-            f.store.plugin_reach(group, agent.id, &PluginKind::Neon, "gone").unwrap()
-        else {
-            panic!("the reach check is about the plugin, not about the tool list")
+        let error = f.store.plugin_reach(group, agent.id, &PluginKind::Neon, "gone").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Neon does not offer a tool called gone. Use one of the Neon tools in your tool list."
+        );
+        assert_eq!(
+            crate::plugins::PluginError::from(error).to_string(),
+            "Neon does not offer a tool called gone. Use one of the Neon tools in your tool list."
+        );
+    }
+
+    #[test]
+    fn discovery_precedes_policy_and_reconnection_replaces_the_callable_set() {
+        let f = fixture();
+        let group = default_group_id();
+        let first = f.store.create_agent(&draft("First")).unwrap();
+        let peer = f.store.create_agent(&draft("Peer")).unwrap();
+        let save = |tools: &[PluginTool]| {
+            f.store
+                .save_plugin(group, &PluginKind::Neon, "", tools, None, "", &Headers::none())
+                .unwrap()
         };
-        assert!(reached.schema.is_none());
+        let plugin = save(&[tool("offered"), tool("removed"), tool("disabled"), tool("peer")]);
+        f.store.set_plugin_tool(plugin.id, "disabled", &nobody()).unwrap();
+        f.store
+            .set_plugin_tool(plugin.id, "peer", &PluginAccess::Chosen { agents: vec![peer.id] })
+            .unwrap();
+        assert!(matches!(
+            f.store.plugin_reach(group, first.id, &PluginKind::Neon, "offered").unwrap(),
+            PluginReach::Granted(_)
+        ));
+        assert!(matches!(
+            f.store.plugin_reach(group, first.id, &PluginKind::Neon, "disabled").unwrap(),
+            PluginReach::ToolDenied
+        ));
+        assert!(matches!(
+            f.store.plugin_reach(group, first.id, &PluginKind::Neon, "peer").unwrap(),
+            PluginReach::ToolNotChosen
+        ));
+        assert!(f.store.plugin_reach(group, first.id, &PluginKind::Neon, "invented").is_err());
+        for name in ["", "run sql"] {
+            assert!(f.store.plugin_reach(group, first.id, &PluginKind::Neon, name).is_err());
+        }
+        save(&[tool("offered"), tool("disabled"), tool("peer"), tool("new")]);
+        assert!(f.store.plugin_reach(group, first.id, &PluginKind::Neon, "removed").is_err());
+        assert!(matches!(
+            f.store.plugin_reach(group, first.id, &PluginKind::Neon, "new").unwrap(),
+            PluginReach::Granted(_)
+        ));
+        assert!(matches!(
+            f.store.plugin_reach(group, first.id, &PluginKind::Neon, "disabled").unwrap(),
+            PluginReach::ToolDenied
+        ));
+        assert!(matches!(
+            f.store.plugin_reach(group, first.id, &PluginKind::Neon, "peer").unwrap(),
+            PluginReach::ToolNotChosen
+        ));
+        save(&[tool("removed"), tool("disabled")]);
+        f.store.set_plugin_tool(plugin.id, "removed", &nobody()).unwrap();
+        save(&[tool("disabled")]);
+        assert!(f.store.plugin_reach(group, first.id, &PluginKind::Neon, "removed").is_err());
+        save(&[tool("removed"), tool("disabled")]);
+        assert!(matches!(
+            f.store.plugin_reach(group, first.id, &PluginKind::Neon, "removed").unwrap(),
+            PluginReach::ToolDenied
+        ));
+        f.store
+            .conn()
+            .unwrap()
+            .execute("UPDATE plugins SET tools='not json' WHERE id=?1", [plugin.id.to_string()])
+            .unwrap();
+        assert!(f.store.plugin_reach(group, first.id, &PluginKind::Neon, "disabled").is_err());
     }
 
     #[test]
@@ -8693,7 +8759,17 @@ mod tests {
         // carry `Bearer `. The kind is incidental: the column is what decides.
         let f = fixture();
         let group = default_group_id();
-        f.store.save_plugin(group, &PluginKind::Neon, "", &[], None, "", &Headers::none()).unwrap();
+        f.store
+            .save_plugin(
+                group,
+                &PluginKind::Neon,
+                "",
+                &[tool("run_sql")],
+                None,
+                "",
+                &Headers::none(),
+            )
+            .unwrap();
 
         let agent = f.store.create_agent(&draft("Manager")).unwrap();
         let PluginReach::Granted(reached) =
