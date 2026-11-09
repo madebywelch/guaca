@@ -860,8 +860,9 @@ export function onRuntimeEvent(
   handler: (event: UiEvent) => void,
   onReconnect?: () => void,
   onLost?: (error: Refusal) => void,
+  onClose?: () => void,
 ): Promise<Unlisten> {
-  return subscribe(EVENT_CHANNEL, handler, onReconnect, onLost);
+  return subscribe(EVENT_CHANNEL, handler, onReconnect, onLost, onClose);
 }
 
 /**

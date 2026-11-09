@@ -64,6 +64,8 @@ export function TokenEntry({ children }: { children: ReactNode }) {
   // telling a first visitor their session stopped would name a problem they
   // never had.
   const wasAdmitted = useRef(false);
+  const generation = useRef(0);
+  const submitting = useRef<number | null>(null);
 
   // On mount, turn an invitation from the address bar or a token an older
   // build left in localStorage into a session cookie. The exchange is async
@@ -84,9 +86,11 @@ export function TokenEntry({ children }: { children: ReactNode }) {
       return;
     }
     let cancelled = false;
+    const current = ++generation.current;
+    const valid = () => !cancelled && generation.current === current;
     const settle = async () => {
       if (await settleInvitation()) {
-        if (!cancelled) {
+        if (valid()) {
           setAdmitted(true);
           setSettling(false);
         }
@@ -94,11 +98,11 @@ export function TokenEntry({ children }: { children: ReactNode }) {
       }
       try {
         await api.capabilities();
-        if (!cancelled) setAdmitted(true);
+        if (valid()) setAdmitted(true);
       } catch (error) {
-        if (!cancelled) setAdmitted(!refusedForToken(error));
+        if (valid()) setAdmitted(!refusedForToken(error));
       } finally {
-        if (!cancelled) setSettling(false);
+        if (valid()) setSettling(false);
       }
     };
     void settle();
@@ -115,14 +119,21 @@ export function TokenEntry({ children }: { children: ReactNode }) {
     if (!hosted) return;
     const onHash = () => {
       if (!adoptInvitation()) return;
+      const current = ++generation.current;
+      submitting.current = null;
+      setChecking(false);
       setSettling(true);
       void settleInvitation().then((settled) => {
+        if (generation.current !== current) return;
         setSettling(false);
         if (settled) setAdmitted(true);
       });
     };
     window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
+    return () => {
+      generation.current++;
+      window.removeEventListener("hashchange", onHash);
+    };
   }, []);
 
   // Remembered for the listener below, which cannot see the render that
@@ -138,7 +149,10 @@ export function TokenEntry({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!hosted) return;
     const turnedAway = () => {
+      if (submitting.current !== null) return;
+      generation.current++;
       setAdmitted(false);
+      setSettling(false);
       if (wasAdmitted.current) {
         setRefused("This host stopped accepting this browser's session.");
       }
@@ -162,6 +176,8 @@ export function TokenEntry({ children }: { children: ReactNode }) {
   const submit = async () => {
     const pasted = value.trim();
     if (!pasted || checking) return;
+    const current = ++generation.current;
+    submitting.current = current;
     setChecking(true);
     setRefused(null);
     try {
@@ -172,12 +188,14 @@ export function TokenEntry({ children }: { children: ReactNode }) {
       // A wrong token is refused here, on this screen, rather than forty
       // times by the reads the app would make.
       await api.capabilities();
+      if (generation.current !== current) return;
       setValue("");
       setAdmitted(true);
     } catch (error) {
-      setRefused(errorMessage(error));
+      if (generation.current === current) setRefused(errorMessage(error));
     } finally {
-      setChecking(false);
+      if (submitting.current === current) submitting.current = null;
+      if (generation.current === current) setChecking(false);
     }
   };
 

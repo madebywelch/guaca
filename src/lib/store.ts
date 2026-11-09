@@ -16,6 +16,11 @@ import { type DropTarget, landsBefore, railOrder } from "./rail";
 import { hosted, isUnreachable, openExternal, PAGE_ID } from "./transport";
 
 let decisionRead = 0;
+let rosterRead = 0;
+let usageRead = 0;
+let approvalRead = 0;
+let escalationRead = 0;
+const channelReads = new Map<string, number>();
 
 /** A desktop's answer, which is every capability there is. */
 const EVERYTHING: Capabilities = {
@@ -211,7 +216,7 @@ export interface State {
    */
   artifactsOpen: { id: ArtifactId | null } | null;
   showArtifacts: (open: { id: ArtifactId | null } | null) => void;
-  refreshDecisions: () => Promise<void>;
+  refreshDecisions: (valid?: () => boolean) => Promise<void>;
 
   selected: ChannelKey | null;
   /**
@@ -366,11 +371,11 @@ export interface State {
    */
   sessionSpend: Tokens;
 
-  bootstrap: () => Promise<void>;
-  resynchronize: () => Promise<void>;
-  refreshAgents: () => Promise<void>;
-  refreshUsage: () => Promise<void>;
-  refreshApprovals: () => Promise<void>;
+  bootstrap: (valid?: () => boolean) => Promise<void>;
+  resynchronize: (valid?: () => boolean) => Promise<void>;
+  refreshAgents: (valid?: () => boolean) => Promise<void>;
+  refreshUsage: (valid?: () => boolean) => Promise<void>;
+  refreshApprovals: (valid?: () => boolean) => Promise<void>;
   /**
    * Re-reads the open escalations.
    *
@@ -378,10 +383,10 @@ export interface State {
    * queues change on different events, and folding them together would make
    * every answered permission re-read a list that cannot have moved.
    */
-  refreshEscalations: () => Promise<void>;
+  refreshEscalations: (valid?: () => boolean) => Promise<void>;
   /** Takes one off the desk. Nothing is waiting on it, so nothing resumes. */
   clearEscalation: (id: EscalationId) => Promise<void>;
-  select: (key: ChannelKey) => Promise<void>;
+  select: (key: ChannelKey, valid?: () => boolean) => Promise<void>;
   /**
    * Looks inside one group, or back out at all of them. Closes the open channel
    * if the crew being opened is not the one it belongs to.
@@ -396,7 +401,7 @@ export interface State {
   dropAgent: (id: AgentId, target: DropTarget) => Promise<void>;
   /** A crew's circle, let go over another crew's. */
   dropGroup: (id: GroupId, onto: GroupId) => Promise<void>;
-  loadChannel: (key: ChannelKey, through?: MessageId) => Promise<void>;
+  loadChannel: (key: ChannelKey, through?: MessageId, valid?: () => boolean) => Promise<void>;
   /** Opens a message's channel with the message itself in the window. */
   openMessage: (channel: AgentId, message: MessageId) => Promise<void>;
   clearFocus: () => void;
@@ -432,7 +437,7 @@ export interface State {
    * together. Private in spirit; on the store because the two callers are.
    */
   settle: (answer: () => Promise<unknown>) => Promise<void>;
-  applyEvent: (event: UiEvent) => void;
+  applyEvent: (event: UiEvent, valid?: () => boolean) => void;
   dismissPulse: (id: number) => void;
   setBanner: (banner: Banner | null) => void;
   /**
@@ -442,11 +447,12 @@ export interface State {
    * turns "not live" into a time a person can act on.
    */
   linkDown: (error: unknown, heardAt: number) => void;
+  linkReconciling: (heardAt: number) => void;
   /**
    * The event socket opened again: what the page draws is current, and the
    * sentence about it not being current goes with it.
    */
-  linkUp: () => void;
+  linkUp: (forget?: boolean) => void;
   /**
    * Puts a failure on the banner, with whatever can be done about it.
    *
@@ -582,13 +588,13 @@ export const useStore = create<State>((set, get) => ({
   showForYou: (open) => set({ forYou: open }),
   artifactsOpen: null,
   showArtifacts: (open) => set({ artifactsOpen: open }),
-  async refreshDecisions() {
+  async refreshDecisions(valid = () => true) {
     const read = ++decisionRead;
     try {
       const decisions = await api.listDecisions();
-      if (read === decisionRead) set({ decisions, decisionError: null });
+      if (valid() && read === decisionRead) set({ decisions, decisionError: null });
     } catch (error) {
-      if (read === decisionRead) set({ decisionError: errorMessage(error) });
+      if (valid() && read === decisionRead) set({ decisionError: errorMessage(error) });
     }
   },
   selected: null,
@@ -614,8 +620,12 @@ export const useStore = create<State>((set, get) => ({
   handoff: null,
   sessionSpend: { prompt: 0, completion: 0, cost: null, calls: 0 },
 
-  async bootstrap() {
+  async bootstrap(valid = () => true) {
     const decisionSnapshot = ++decisionRead;
+    const rosterSnapshot = ++rosterRead;
+    const usageSnapshot = ++usageRead;
+    const approvalSnapshot = ++approvalRead;
+    const escalationSnapshot = ++escalationRead;
     const [
       agents,
       groups,
@@ -652,30 +662,29 @@ export const useStore = create<State>((set, get) => ({
       api.openEscalations(),
       api.listDecisions(),
     ]);
+    if (!valid()) return;
     set({
-      agents,
-      groups,
+      ...(rosterSnapshot === rosterRead ? { agents, groups } : {}),
       ...(activity ? { activity } : {}),
       lastActive,
       settings,
       capabilities,
-      usage: byGroup(usage),
-      approvals,
-      answers,
-      pending,
-      stuck,
+      ...(usageSnapshot === usageRead ? { usage: byGroup(usage) } : {}),
+      ...(approvalSnapshot === approvalRead ? { approvals, answers, pending } : {}),
+      ...(escalationSnapshot === escalationRead ? { stuck } : {}),
       ...(decisionSnapshot === decisionRead ? { decisions, decisionError: null } : {}),
     });
 
-    const live = agents.filter((a) => a.lifecycle !== "terminated");
+    const live = get().agents.filter((a) => a.lifecycle !== "terminated");
     const current = get().selected;
     if (!current && live.length > 0) {
-      await get().select(live[0]!.id);
+      await get().select(live[0]!.id, valid);
     }
   },
 
-  async resynchronize() {
-    await get().bootstrap();
+  async resynchronize(valid = () => true) {
+    await get().bootstrap(valid);
+    if (!valid()) return;
     const { selected, agents } = get();
     const live = agents.filter((a) => a.lifecycle !== "terminated");
     const next = live.some((a) => a.id === selected) ? selected : (live[0]?.id ?? null);
@@ -692,13 +701,15 @@ export const useStore = create<State>((set, get) => ({
         agents.map((a) => [a.id, (state.workingNotesVersion[a.id] ?? 0) + 1]),
       ),
     }));
-    if (next) await get().loadChannel(next);
+    if (next) await get().loadChannel(next, undefined, valid);
   },
 
-  async refreshAgents() {
+  async refreshAgents(valid = () => true) {
+    const rosterSnapshot = ++rosterRead;
     // Groups come back with the roster because an agent moving between them
     // changes both counts, and one refresh keeps the two consistent on screen.
     const [agents, groups] = await Promise.all([api.listAgents(), api.listGroups()]);
+    if (!valid() || rosterSnapshot !== rosterRead) return;
     // A group the rail was looking inside can be deleted from the group editor,
     // and a focus on one that is gone draws an empty rail with no way out of it.
     set((state) => ({
@@ -715,23 +726,24 @@ export const useStore = create<State>((set, get) => ({
       if (!still) {
         const next = agents.find((a) => a.lifecycle !== "terminated");
         set({ selected: next ? next.id : null });
-        if (next) await get().loadChannel(next.id);
+        if (next) await get().loadChannel(next.id, undefined, valid);
       }
     }
   },
 
-  async select(key) {
+  async select(key, valid = () => true) {
     // A pending routine request goes with the channel it was asked from, for
     // the same reason `focused` does: it is about a row on the screen the
     // operator is leaving, and honoring it later would open something they
     // asked for somewhere else.
+    if (!valid()) return;
     set((state) => ({
       selected: key,
       focused: null,
       openingRoutine: null,
       railGroup: keptFocus(state, key),
     }));
-    await get().loadChannel(key);
+    await get().loadChannel(key, undefined, valid);
   },
 
   /**
@@ -836,9 +848,12 @@ export const useStore = create<State>((set, get) => ({
     set({ groups: await api.moveGroup(id, before) });
   },
 
-  async loadChannel(key, through) {
+  async loadChannel(key, through, valid = () => true) {
+    const read = (channelReads.get(key) ?? 0) + 1;
+    channelReads.set(key, read);
     const before = new Set((get().messages[key] ?? []).map((m) => m.id));
     const messages = await api.channelMessages(key, 300, through);
+    if (!valid() || channelReads.get(key) !== read) return;
     set((state) => {
       let merged = messages;
       for (const arrived of state.messages[key] ?? []) {
@@ -878,8 +893,10 @@ export const useStore = create<State>((set, get) => ({
     set({ openingRoutine: null });
   },
 
-  async refreshUsage() {
-    set({ usage: byGroup(await api.usageSummary()) });
+  async refreshUsage(valid = () => true) {
+    const read = ++usageRead;
+    const usage = await api.usageSummary();
+    if (valid() && read === usageRead) set({ usage: byGroup(usage) });
   },
 
   /**
@@ -893,17 +910,20 @@ export const useStore = create<State>((set, get) => ({
    * question is drawn deep in a transcript that scrolls, and a read per card
    * would be one round trip per question on screen.
    */
-  async refreshApprovals() {
+  async refreshApprovals(valid = () => true) {
+    const read = ++approvalRead;
     const [approvals, answers, pending] = await Promise.all([
       api.approvalStates(),
       api.approvalAnswers(),
       api.pendingApprovals(),
     ]);
-    set({ approvals, answers, pending });
+    if (valid() && read === approvalRead) set({ approvals, answers, pending });
   },
 
-  async refreshEscalations() {
-    set({ stuck: await api.openEscalations() });
+  async refreshEscalations(valid = () => true) {
+    const read = ++escalationRead;
+    const stuck = await api.openEscalations();
+    if (valid() && read === escalationRead) set({ stuck });
   },
 
   async clearEscalation(id) {
@@ -939,17 +959,17 @@ export const useStore = create<State>((set, get) => ({
     await get().refreshApprovals();
   },
 
-  applyEvent(event) {
+  applyEvent(event, valid = () => true) {
     switch (event.type) {
       case "decisionsChanged":
-        void get().refreshDecisions();
+        void get().refreshDecisions(valid);
         return;
       case "decisionReminder":
-        void get().refreshDecisions();
+        void get().refreshDecisions(valid);
         return;
       case "agentsChanged": {
-        void get().refreshAgents();
-        void get().refreshDecisions();
+        void get().refreshAgents(valid);
+        void get().refreshDecisions(valid);
         break;
       }
 
@@ -1181,6 +1201,7 @@ export const useStore = create<State>((set, get) => ({
         // the operator clicks away and back, which is exactly what they had to
         // do before this event existed.
         const emptied = new Set<ChannelKey>(event.agents);
+        for (const key of emptied) channelReads.set(key, (channelReads.get(key) ?? 0) + 1);
         set((state) => {
           const messages = { ...state.messages };
           for (const key of Object.keys(messages) as ChannelKey[]) {
@@ -1191,7 +1212,7 @@ export const useStore = create<State>((set, get) => ({
 
         const open = get().selected;
         if (open && emptied.has(open)) {
-          void get().loadChannel(open);
+          void get().loadChannel(open, undefined, valid);
         }
         // The panels beside the transcript hold the two stores a reset also
         // takes, and neither is read again on its own. Left alone, the inspector
@@ -1207,7 +1228,7 @@ export const useStore = create<State>((set, get) => ({
           return { memoryVersion: memory, workingNotesVersion: working };
         });
         // The meters are counting rows that no longer exist.
-        void get().refreshUsage();
+        void get().refreshUsage(valid);
         break;
       }
 
@@ -1272,7 +1293,7 @@ export const useStore = create<State>((set, get) => ({
         });
         // The live totals are additions to a number this corrects. Cheap: one
         // grouped sum over a local table, and only when a run has gone quiet.
-        void get().refreshUsage();
+        void get().refreshUsage(valid);
         break;
       }
 
@@ -1287,7 +1308,7 @@ export const useStore = create<State>((set, get) => ({
         set((state) => ({
           approvals: { ...state.approvals, [event.approvalId]: "pending" },
         }));
-        void get().refreshApprovals();
+        void get().refreshApprovals(valid);
         break;
       }
 
@@ -1295,7 +1316,7 @@ export const useStore = create<State>((set, get) => ({
         set((state) => ({
           approvals: { ...state.approvals, [event.approvalId]: event.state },
         }));
-        void get().refreshApprovals();
+        void get().refreshApprovals(valid);
         break;
       }
 
@@ -1304,7 +1325,7 @@ export const useStore = create<State>((set, get) => ({
       // invalidate the queue and the read is where the desk's card comes from.
       case "escalationRaised":
       case "escalationCleared": {
-        void get().refreshEscalations();
+        void get().refreshEscalations(valid);
         break;
       }
 
@@ -1400,8 +1421,13 @@ export const useStore = create<State>((set, get) => ({
     set({ banner: failureBanner(error), link: "down", lastHeard: heardAt });
   },
 
-  linkUp() {
+  linkReconciling(heardAt) {
+    set({ link: "down", lastHeard: heardAt });
+  },
+
+  linkUp(forget = true) {
     const { link, banner } = get();
+    if (forget) forgetRestart();
     // Nothing to take back, and nothing to redraw: the ordinary case, on every
     // page open.
     if (link === "up" && banner?.fix !== "host") return;
@@ -1413,9 +1439,6 @@ export const useStore = create<State>((set, get) => ({
       // about either.
       ...(banner?.fix === "host" ? { banner: null } : {}),
     });
-    // The host answered, so whatever restart was expected is over, and a
-    // silence after this one is news again.
-    forgetRestart();
   },
 
   setHandoff(handoff) {

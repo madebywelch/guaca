@@ -84,6 +84,21 @@ afterEach(() => {
 });
 
 describe("TokenEntry", () => {
+  it("does not readmit a session after a later refusal", async () => {
+    let answer!: (value: unknown) => void;
+    capabilities.mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    open();
+    await act(async () => {});
+    act(() => window.dispatchEvent(new Event(UNAUTHORIZED_EVENT)));
+    await act(async () => answer(EVERYTHING));
+    expect(screen.getByLabelText("Host token")).toBeTruthy();
+    expect(screen.queryByText("the workspace")).toBeNull();
+  });
+
   it("asks for a token when the box refuses the session", async () => {
     capabilities.mockRejectedValue({ kind: "unauthorized", message: "needs the token" });
     open();
