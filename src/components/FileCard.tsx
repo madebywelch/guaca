@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
+import { useDismiss } from "../lib/dismiss";
 import {
   fileUrl,
   kindLabel,
@@ -284,13 +285,7 @@ function Snippet({
 export function FilePreview({ file, onClose }: { file: Attachment; onClose: () => void }) {
   const kind = previewKind(file.mime);
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  useDismiss(onClose);
 
   return (
     <div className="scrim">

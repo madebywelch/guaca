@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
 import {
   detailsLine,
@@ -8,6 +8,7 @@ import {
   sentMessage,
   sourceLine,
 } from "../lib/artifacts";
+import { useDismiss } from "../lib/dismiss";
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
 import { useNow, whenLabel } from "../lib/time";
@@ -95,11 +96,26 @@ export function Artifacts({ onClose }: Props) {
   const [list, setList] = useState<Artifact[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const rows = useRef(new Map<ArtifactId, HTMLButtonElement>());
   const id = open?.id ?? null;
+  const previousId = useRef(id);
+  useDismiss(() => {
+    if (id) show({ id: null });
+    else onClose();
+  });
 
   useEffect(() => {
     panelRef.current?.focus();
   }, []);
+
+  useLayoutEffect(() => {
+    if (previousId.current !== id) {
+      const target =
+        id === null && previousId.current ? rows.current.get(previousId.current) : null;
+      (target ?? panelRef.current)?.focus();
+      previousId.current = id;
+    }
+  }, [id]);
 
   useEffect(() => {
     let live = true;
@@ -139,7 +155,6 @@ export function Artifacts({ onClose }: Props) {
           <ArtifactView id={id} onBack={() => show({ id: null })} onClose={onClose} />
         ) : (
           <>
-            <Escape onEscape={onClose} />
             <div className="artifacts__head">
               <h2 className="dialog__title">Artifacts</h2>
               <p className="artifacts__details">{crew ? crew.name : "All groups"}</p>
@@ -163,6 +178,10 @@ export function Artifacts({ onClose }: Props) {
                       <button
                         type="button"
                         className="artifacts__row"
+                        ref={(node) => {
+                          if (node) rows.current.set(artifact.id, node);
+                          else rows.current.delete(artifact.id);
+                        }}
                         onClick={() => show({ id: artifact.id })}
                       >
                         <span className="artifacts__name">{artifact.title}</span>
@@ -198,22 +217,6 @@ export function Artifacts({ onClose }: Props) {
   );
 }
 
-/**
- * Escape, for whichever view is on top. Each view says what backing out of it
- * means, so Escape on the history closes the history rather than the dialog out
- * from under it.
- */
-function Escape({ onEscape }: { onEscape: () => void }) {
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onEscape();
-    };
-    globalThis.addEventListener("keydown", onKey);
-    return () => globalThis.removeEventListener("keydown", onKey);
-  }, [onEscape]);
-  return null;
-}
-
 /** One artifact: its page at a version, and behind a button, its history. */
 function ArtifactView({
   id,
@@ -245,6 +248,16 @@ function ArtifactView({
   // operator picked from the history, and stays put while agents keep editing.
   const [viewing, setViewing] = useState<number | null>(null);
   const [history, setHistory] = useState(false);
+  useDismiss(() => setHistory(false), history);
+  const backRef = useRef<HTMLButtonElement>(null);
+  const historyRef = useRef<HTMLButtonElement>(null);
+  const wasHistory = useRef(false);
+  useLayoutEffect(() => {
+    if (history !== wasHistory.current) {
+      (history ? backRef.current : historyRef.current)?.focus();
+      wasHistory.current = history;
+    }
+  }, [history]);
   const [page, setPage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -342,7 +355,6 @@ function ArtifactView({
   if (!detail) {
     return (
       <>
-        <Escape onEscape={onBack} />
         <div className="artifacts__head">
           <button type="button" className="btn btn--ghost" onClick={onBack}>
             ‹ All artifacts
@@ -400,10 +412,9 @@ function ArtifactView({
 
   return (
     <>
-      <Escape onEscape={back} />
       <div className="artifacts__head">
         <div className="artifacts__title-row">
-          <button type="button" className="btn btn--ghost" onClick={back}>
+          <button type="button" className="btn btn--ghost" onClick={back} ref={backRef}>
             {history ? "‹ Back to the page" : "‹ All artifacts"}
           </button>
           <h2 className="dialog__title artifacts__title">{artifact.title}</h2>
@@ -625,7 +636,15 @@ function ArtifactView({
 
       <div className="artifacts__foot">
         {!history && (
-          <button type="button" className="btn btn--ghost" onClick={() => setHistory(true)}>
+          <button
+            type="button"
+            className="btn btn--ghost"
+            onClick={(event) => {
+              event.currentTarget.focus();
+              setHistory(true);
+            }}
+            ref={historyRef}
+          >
             History
           </button>
         )}

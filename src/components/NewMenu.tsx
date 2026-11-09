@@ -1,6 +1,8 @@
 import type { CSSProperties } from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { useDismiss } from "../lib/dismiss";
+
 interface Props {
   onNewAgent: () => void;
   onNewGroup: () => void;
@@ -65,22 +67,19 @@ export function NewMenu({ onNewAgent, onNewGroup, onOpenCafeteria }: Props) {
     });
   }, [open]);
 
+  useDismiss(() => setOpen(false), open);
+
   useEffect(() => {
     if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
     // Named, so the same function is the one removed. An inline arrow in both
     // calls registers a listener nothing can take off again, and this one
     // outlives the menu it was closing.
     const close = () => setOpen(false);
     // Anything that moves the button closes the menu, or it would hang under
     // nothing. Same rule as the agent menu, and for the same reason.
-    window.addEventListener("keydown", onKey);
     window.addEventListener("resize", close);
     window.addEventListener("scroll", close, true);
     return () => {
-      window.removeEventListener("keydown", onKey);
       window.removeEventListener("resize", close);
       window.removeEventListener("scroll", close, true);
     };

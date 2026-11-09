@@ -12,6 +12,7 @@ import {
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { needsAnswer } from "../lib/decisions";
+import { useDismiss } from "../lib/dismiss";
 import { doing } from "../lib/doing";
 import { useFollowBottom } from "../lib/follow";
 import { api } from "../lib/ipc";
@@ -109,16 +110,10 @@ export function MenubarPanel({ ready }: { ready: boolean }) {
     if (listing && body.current) body.current.scrollTop = 0;
   }, [listing]);
 
-  useEffect(() => {
-    const onKey = (event: globalThis.KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
-      event.preventDefault();
-      if (talking) setOpen(null);
-      else void api.closeMenubar();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [talking]);
+  useDismiss(() => {
+    if (talking) setOpen(null);
+    else void api.closeMenubar();
+  });
 
   const waiting = pending.length + stuck.length + decisions.filter(needsAnswer).length;
   const running = Object.values(activeRun).filter((run) => run !== undefined).length;

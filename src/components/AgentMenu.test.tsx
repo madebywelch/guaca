@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { AgentCard, Group, Provider } from "../lib/types";
@@ -150,6 +150,22 @@ describe("AgentMenu", () => {
 
     fireEvent.blur(inside, { relatedTarget: document.body });
     expect(screen.queryByRole("button", { name: "research" })).toBeNull();
+  });
+
+  it("dismisses the group submenu before its parent menu", () => {
+    const handlers = open(card(), { x: 40, y: 40 }, [
+      group("g1", "everyone"),
+      group("g2", "research"),
+    ]);
+    const opener = screen.getByRole("button", { name: "Move to another group" });
+    act(() => opener.focus());
+    expect(screen.getByRole("button", { name: "research" })).toBeTruthy();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("button", { name: "research" })).toBeNull();
+    expect(handlers.onClose).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(opener);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(handlers.onClose).toHaveBeenCalledTimes(1);
   });
 
   it("says nothing about groups while there is only one", () => {

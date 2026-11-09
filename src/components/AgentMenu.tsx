@@ -1,6 +1,7 @@
 import type { CSSProperties, FocusEvent } from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { useDismiss } from "../lib/dismiss";
 import { ownModel } from "../lib/providers";
 import type { AgentCard, Group, Provider } from "../lib/types";
 
@@ -105,18 +106,15 @@ export function AgentMenu({
     });
   }, [target.x, target.y]);
 
+  useDismiss(onClose);
+
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
     // Anything that moves what is under the menu closes it, or it would point
     // at a row that has scrolled away. The rail reorders itself as agents
     // talk, so this is not hypothetical.
-    window.addEventListener("keydown", onKey);
     window.addEventListener("resize", onClose);
     window.addEventListener("scroll", onClose, true);
     return () => {
-      window.removeEventListener("keydown", onKey);
       window.removeEventListener("resize", onClose);
       window.removeEventListener("scroll", onClose, true);
     };
@@ -221,6 +219,7 @@ export function AgentMenu({
  */
 function MoveToGroup({ groups, onPick }: { groups: Group[]; onPick: (group: Group) => void }) {
   const [open, setOpen] = useState(false);
+  useDismiss(() => setOpen(false), open);
   const wrap = useRef<HTMLDivElement>(null);
   const sub = useRef<HTMLDivElement>(null);
   const [at, setAt] = useState({ side: "right", shift: 0, origin: "top left" });

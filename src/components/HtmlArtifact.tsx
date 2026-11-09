@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
+import { useDismiss } from "../lib/dismiss";
 import { artifactUrl } from "../lib/files";
 import { api } from "../lib/ipc";
 import { type AgentId, errorMessage } from "../lib/types";
@@ -67,6 +68,8 @@ export function HtmlArtifact({
   onSend?: (json: string) => void;
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
+  const openButton = useRef<HTMLButtonElement>(null);
+  const returnFocus = useRef(false);
   const to = useContext(Answering);
   // Read through a ref by the message handler, which is bound once.
   const sendTo = useRef(onSend);
@@ -163,13 +166,13 @@ export function HtmlArtifact({
     post();
   }, [post]);
 
+  useDismiss(() => setFull(false), full);
+
   useEffect(() => {
-    if (!full) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setFull(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    if (!full && returnFocus.current) {
+      returnFocus.current = false;
+      openButton.current?.focus();
+    }
   }, [full]);
 
   if (failed) {
@@ -271,7 +274,11 @@ export function HtmlArtifact({
           <button
             type="button"
             className="btn btn--ghost btn--small artifact__open"
-            onClick={() => setFull(true)}
+            ref={openButton}
+            onClick={() => {
+              returnFocus.current = true;
+              setFull(true);
+            }}
           >
             Open
           </button>

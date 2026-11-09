@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useEffect, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_PREFS } from "../lib/prefs";
@@ -6,6 +7,8 @@ import { useStore } from "../lib/store";
 import type { LiveCall } from "../lib/trail";
 import type { Activity, AgentCard, Envelope, MessageId, Part, ToolOutcome } from "../lib/types";
 import { ChannelView } from "./ChannelView";
+import { Search } from "./Search";
+import { SettingsDialog } from "./SettingsDialog";
 
 /**
  * What a channel shows, and what it keeps one click away.
@@ -29,6 +32,8 @@ vi.mock("../lib/ipc", () => ({
     sendMessage: async () => "run",
     agentComputer: async () => null,
     pairMessages: () => pairMessages(),
+    search: async () => ({ messages: [], files: [], links: [], routines: [], artifacts: [] }),
+    claudeProgram: async () => ({ installed: false }),
   },
   onFileDrop: async () => () => {},
   openExternal: async () => {},
@@ -102,7 +107,37 @@ function record(part: Part): Envelope {
   });
 }
 
-function open(messages: Envelope[]) {
+function Workspace() {
+  const [overlay, setOverlay] = useState<"search" | "settings" | null>(null);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!event.ctrlKey) return;
+      if (event.key === "k") setOverlay("search");
+      if (event.key === ",") setOverlay("settings");
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  return (
+    <>
+      <ChannelView channel={MANAGER} onOpenMenu={() => {}} />
+      {overlay === "search" && (
+        <Search
+          onClose={() => setOverlay(null)}
+          onEditAgent={() => {}}
+          onEditGroup={() => {}}
+          onNewAgent={() => {}}
+          onNewGroup={() => {}}
+          onOpenCafeteria={() => {}}
+          onOpenSettings={() => {}}
+        />
+      )}
+      {overlay === "settings" && <SettingsDialog onClose={() => setOverlay(null)} />}
+    </>
+  );
+}
+
+function open(messages: Envelope[], withOverlays = false) {
   useStore.setState({
     prefs: DEFAULT_PREFS,
     agents: [card(MANAGER, "Manager"), card(CHEF, "Chef")],
@@ -114,7 +149,9 @@ function open(messages: Envelope[]) {
     lastActive: {},
     banner: null,
   });
-  return render(<ChannelView channel={MANAGER} onOpenMenu={() => {}} />);
+  return render(
+    withOverlays ? <Workspace /> : <ChannelView channel={MANAGER} onOpenMenu={() => {}} />,
+  );
 }
 
 beforeEach(() => {
@@ -125,6 +162,28 @@ beforeEach(() => {
 });
 
 describe("peer traffic in a channel", () => {
+  it.each([
+    ["Search", "k"],
+    ["Settings", ","],
+  ])("dismisses %s above the pair thread before closing the thread", async (name, key) => {
+    open([fromPeer("hi")], true);
+    const opener = screen.getByRole("button", { name: /Message from Chef/ });
+    opener.focus();
+    fireEvent.click(opener);
+    await screen.findByText(/view-only/);
+    const close = screen.getByRole("button", { name: "Close chat" });
+    close.focus();
+    fireEvent.keyDown(window, { key, ctrlKey: true });
+    const dialog = await screen.findByRole("dialog", { name });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(dialog.isConnected).toBe(false);
+    expect(screen.getByRole("button", { name: "Close chat" })).toBe(close);
+    expect(document.activeElement).toBe(close);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("button", { name: "Close chat" })).toBeNull();
+    expect(screen.getByRole("button", { name: /Message from Chef/ })).toBeTruthy();
+  });
   it("shows one line for a burst, not one per message", () => {
     open([
       envelope({}),

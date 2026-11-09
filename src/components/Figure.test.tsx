@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const frameArtifact = vi.fn(async () => ({ port: 9999, id: "a".repeat(64) }));
@@ -138,6 +138,16 @@ describe("a chart that will not draw", () => {
 describe("a page in a message", () => {
   const PAGE =
     "<!doctype html><html><body><h1>Plan</h1><p>Something worth framing.</p></body></html>";
+
+  it.each(["Escape", "Close"])("returns focus to Open after %s", async (how) => {
+    render(<Markdown>{fence("html", PAGE)}</Markdown>);
+    const open = await screen.findByRole("button", { name: "Open" });
+    open.focus();
+    fireEvent.click(open);
+    if (how === "Escape") fireEvent.keyDown(window, { key: "Escape" });
+    else fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Open" }));
+  });
 
   it("mounts exactly one frame, however many places it could go", async () => {
     // The same element written into both the inline card and the full view is

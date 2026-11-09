@@ -440,6 +440,17 @@ describe("BrowserScreen", () => {
     expect(screen.getByRole("dialog", { name: "Cook's browser" })).toBeTruthy();
   });
 
+  it.each(["Escape", "button"])("returns focus to the browser control after %s", async (how) => {
+    agentBrowser.mockResolvedValue(HAS_ONE);
+    render(<BrowserScreen agent={card("a", "Cook")} />);
+    const veil = await screen.findByRole("button", { name: /take over/i });
+    veil.focus();
+    fireEvent.click(veil);
+    if (how === "Escape") fireEvent.keyDown(window, { key: "Escape" });
+    else fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /take over/i }));
+  });
+
   it("keeps the same connection open across the change of size", async () => {
     // Remounting the frame would drop the live view and reconnect, which loses
     // whatever half-typed sign-in was on the screen.

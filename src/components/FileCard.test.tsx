@@ -1,9 +1,11 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useEffect, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { fileUrl } from "../lib/files";
 import { type Attachment, errorMessage } from "../lib/types";
 import { FileCard } from "./FileCard";
+import { Search } from "./Search";
 
 const saveFile = vi.fn(async (_digest: string, _name: string) => "/Users/robert/Downloads/x");
 const setBanner = vi.fn();
@@ -21,13 +23,20 @@ vi.mock("../lib/transport", async (original) => ({
 }));
 
 vi.mock("../lib/ipc", () => ({
-  api: { saveFile: (digest: string, name: string) => saveFile(digest, name) },
+  api: {
+    saveFile: (digest: string, name: string) => saveFile(digest, name),
+    search: async () => ({ messages: [], files: [], links: [], routines: [], artifacts: [] }),
+  },
+  openExternal: vi.fn(),
 }));
 
 /** What the card reads off the store: two actions, and whether there is a disk. */
 const state = {
   setBanner,
   showFailure,
+  agents: [],
+  groups: [],
+  lastActive: {},
   capabilities: {
     loopbackEndpoints: true,
     borrowedSignins: true,
@@ -53,6 +62,33 @@ function file(name: string, mime: string, bytes = 2048): Attachment {
 const fetched = vi.fn();
 const made: string[] = [];
 const revoked: string[] = [];
+
+function Workspace() {
+  const [searching, setSearching] = useState(false);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.ctrlKey && event.key === "k") setSearching(true);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  return (
+    <>
+      <FileCard file={file("archive.zip", "application/zip")} />
+      {searching && (
+        <Search
+          onClose={() => setSearching(false)}
+          onEditAgent={() => {}}
+          onEditGroup={() => {}}
+          onNewAgent={() => {}}
+          onNewGroup={() => {}}
+          onOpenCafeteria={() => {}}
+          onOpenSettings={() => {}}
+        />
+      )}
+    </>
+  );
+}
 
 describe("FileCard", () => {
   beforeEach(() => {
@@ -205,6 +241,27 @@ describe("FileCard", () => {
 
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("dismisses search above a file preview and restores focus through both", () => {
+    render(<Workspace />);
+    const opener = screen.getByRole("button", { name: "archive.zip" });
+    opener.focus();
+    fireEvent.click(opener);
+    const preview = screen.getByRole("dialog", { name: "archive.zip" });
+    const close = within(preview).getByRole("button", { name: "Close" });
+    close.focus();
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    const search = screen.getByRole("dialog", { name: "Search" });
+    expect(document.activeElement).toBe(within(search).getByRole("textbox"));
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(search.isConnected).toBe(false);
+    expect(preview.isConnected).toBe(true);
+    expect(document.activeElement).toBe(close);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(preview.isConnected).toBe(false);
+    expect(document.activeElement).toBe(opener);
   });
 
   it.each([

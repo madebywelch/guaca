@@ -270,7 +270,8 @@ describe("one artifact", () => {
   }
 
   async function openHistory() {
-    fireEvent.click(await screen.findByRole("button", { name: "History" }));
+    const button = await screen.findByRole("button", { name: "History" });
+    fireEvent.click(button);
     await screen.findByText(/Milo edited it/);
   }
 
@@ -323,6 +324,35 @@ describe("one artifact", () => {
     await waitFor(() => expect(screen.queryByText(/Milo edited it/)).toBeNull());
     expect(useStore.getState().artifactsOpen).toEqual({ id: "artifact-1" });
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it.each(["Escape", "button"])(
+    "returns focus through history and the list using %s",
+    async (way) => {
+      await openOne();
+      const dialog = screen.getByRole("dialog", { name: "Artifacts" });
+      expect(document.activeElement).toBe(dialog);
+      const history = await screen.findByRole("button", { name: "History" });
+      history.focus();
+      fireEvent.click(history);
+      const back = screen.getByRole("button", { name: "‹ Back to the page" });
+      expect(document.activeElement).toBe(back);
+      if (way === "Escape") fireEvent.keyDown(window, { key: "Escape" });
+      else fireEvent.click(back);
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "History" }));
+      if (way === "Escape") fireEvent.keyDown(window, { key: "Escape" });
+      else fireEvent.click(screen.getByRole("button", { name: "‹ All artifacts" }));
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: /Pipeline by stage/ }),
+      );
+    },
+  );
+
+  it("returns focus to History after choosing a version", async () => {
+    await openOne();
+    await openHistory();
+    fireEvent.click(screen.getByRole("button", { name: "v1" }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "History" }));
   });
 
   it("asks before deleting an artifact and its history", async () => {

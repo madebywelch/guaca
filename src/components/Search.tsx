@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
+import { useDismiss } from "../lib/dismiss";
 import { api, openExternal } from "../lib/ipc";
 import {
   inScope,
@@ -200,6 +201,7 @@ export function Search({
     ],
   );
 
+  const isTop = useDismiss(onClose);
   // Bound to the window rather than to the panel. The palette is modal, and a
   // handler on the panel stops working the moment focus lands on a tab button,
   // which is exactly when somebody reaches for Escape.
@@ -209,11 +211,8 @@ export function Search({
       // arrows walk the candidate list, and Escape cancels the composition.
       // Consuming any of them here would fire the palette at a person who is
       // still typing.
-      if (event.isComposing) return;
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onClose();
-      } else if (event.key === "ArrowDown") {
+      if (event.isComposing || !isTop()) return;
+      if (event.key === "ArrowDown") {
         event.preventDefault();
         setCursor((c) => Math.min(c + 1, results.length - 1));
       } else if (event.key === "ArrowUp") {
@@ -234,7 +233,7 @@ export function Search({
 
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [chosen, onClose, results.length, run, scope]);
+  }, [chosen, isTop, results.length, run, scope]);
 
   // Keeps the selected row in view when the cursor is driven from the keyboard.
   useEffect(() => {

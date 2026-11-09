@@ -30,6 +30,7 @@ import {
   watchSystemSurface,
 } from "../lib/appearance";
 import { buildLabel } from "../lib/build";
+import { useDismiss } from "../lib/dismiss";
 import { clientKeeps, hostAt, hostPlace } from "../lib/host";
 import { api, openExternal } from "../lib/ipc";
 import { BINDINGS, comboLabel, SURFACES } from "../lib/keybinds";
@@ -559,17 +560,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
     setStatus(null);
   };
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      const dialogs = document.querySelectorAll('[role="dialog"][aria-modal="true"]');
-      if (dialogs[dialogs.length - 1] !== panelRef.current) return;
-      event.stopImmediatePropagation();
-      close();
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  });
+  useDismiss(close);
 
   const test = async () => {
     setBusy(true);

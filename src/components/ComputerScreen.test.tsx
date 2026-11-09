@@ -275,6 +275,17 @@ describe("ComputerScreen", () => {
     expect(screen.getByTitle("Cook's computer")).toBe(before);
   });
 
+  it.each(["Escape", "button"])("returns focus to the computer control after %s", async (how) => {
+    agentComputer.mockResolvedValue(HAS_ONE);
+    render(<ComputerScreen agent={card("has-one", "Cook")} />);
+    const veil = await screen.findByRole("button", { name: /take over/i });
+    veil.focus();
+    fireEvent.click(veil);
+    if (how === "Escape") fireEvent.keyDown(window, { key: "Escape" });
+    else fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /take over/i }));
+  });
+
   it("holds the space the screen had while it covers the window", async () => {
     // The picture leaves the flow to grow, so something has to stay behind
     // holding its place. Without it the rest of the panel jumps up the moment

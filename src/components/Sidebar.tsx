@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 
 import { AgentAvatar, type Look } from "../avatars/AgentAvatar";
 import { FLIGHT_MS, roleOf, usePulseChoreography } from "../lib/choreography";
+import { useDismiss } from "../lib/dismiss";
 import { doing } from "../lib/doing";
 import { FIND_KEY, IS_MAC } from "../lib/keybinds";
 import { prefersReducedMotion } from "../lib/motion";
@@ -110,6 +111,7 @@ export function Sidebar({
 
   /** The press that has not yet traveled far enough to be a drag. */
   const press = useRef<{ held: Held; x: number; y: number } | null>(null);
+  const [pressed, setPressed] = useState(false);
   const [drag, setDrag] = useState<Drag | null>(null);
   /**
    * Where the pointer is, and the thing that follows it.
@@ -209,6 +211,15 @@ export function Sidebar({
   // the handler that has been tracking the pointer had nothing to move.
   useLayoutEffect(place, [place, drag?.held.id]);
 
+  useDismiss(
+    () => {
+      press.current = null;
+      setPressed(false);
+      setDrag(null);
+    },
+    pressed || drag !== null,
+  );
+
   /**
    * The rest of a drag, once one has started.
    *
@@ -231,6 +242,7 @@ export function Sidebar({
         // dragged, and a press it could still see would start a second drag on
         // top of this one and lose whatever the pointer had reached.
         press.current = null;
+        setPressed(false);
         point.current = { x: event.clientX, y: event.clientY };
         setDrag({ held: held.held, over: null });
         return;
@@ -260,6 +272,7 @@ export function Sidebar({
     const release = () => {
       const finished = drag;
       press.current = null;
+      setPressed(false);
       setDrag(null);
       if (!finished?.over) return;
       if (finished.held.kind === "agent") void dropAgent(finished.held.id, finished.over);
@@ -268,22 +281,17 @@ export function Sidebar({
 
     const cancel = () => {
       press.current = null;
+      setPressed(false);
       setDrag(null);
-    };
-
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") cancel();
     };
 
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", release);
     window.addEventListener("pointercancel", cancel);
-    window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", release);
       window.removeEventListener("pointercancel", cancel);
-      window.removeEventListener("keydown", onKey);
     };
     // Rebound when the drag starts, ends, or reaches a different target: a
     // handful of times per drag. The pointer's own position is deliberately not
@@ -298,6 +306,7 @@ export function Sidebar({
   const grab = (held: Held, event: React.PointerEvent) => {
     if (event.button !== 0 || event.pointerType === "touch") return;
     press.current = { held, x: event.clientX, y: event.clientY };
+    setPressed(true);
   };
 
   /**
