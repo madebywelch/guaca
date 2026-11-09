@@ -262,7 +262,249 @@ pub struct Store {
     pool: Pool<SqliteConnectionManager>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceState {
+    Created,
+    Adopted,
+    Released,
+    Gone,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ResourceEvent {
+    Release,
+    ConfirmGone,
+}
+
+impl ResourceState {
+    pub fn transition(self, event: ResourceEvent) -> Option<Self> {
+        match (self, event) {
+            (Self::Created, ResourceEvent::Release) => Some(Self::Released),
+            (Self::Created | Self::Adopted | Self::Released, ResourceEvent::ConfirmGone) => {
+                Some(Self::Gone)
+            }
+            _ => None,
+        }
+    }
+}
+
 impl Store {
+    /// Copies retain this identity and the ledger as it stood at the copy.
+    /// A pre-copy resource released by one copy can still be in use by the
+    /// other, which observes a provider 404 rather than a separate ownership.
+    pub fn workspace_identity(&self) -> Result<String, StoreError> {
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT OR IGNORE INTO workspace_identity (singleton, id) VALUES (1, ?1)",
+            [uuid::Uuid::new_v4().to_string()],
+        )?;
+        Ok(conn.query_row("SELECT id FROM workspace_identity WHERE singleton=1", [], |row| {
+            row.get(0)
+        })?)
+    }
+
+    pub fn resource_state(
+        &self,
+        provider: &str,
+        resource: &str,
+    ) -> Result<Option<ResourceState>, StoreError> {
+        let conn = self.conn()?;
+        let row: Option<(String, Option<i64>, Option<i64>)> = conn.query_row(
+            "SELECT origin, released_at, gone_at FROM resource_ledger WHERE provider=?1 AND resource_id=?2",
+            params![provider, resource], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).optional()?;
+        row.map(|(origin, released, gone)| match (origin.as_str(), released, gone) {
+            (_, _, Some(_)) => Ok(ResourceState::Gone),
+            ("created", Some(_), None) => Ok(ResourceState::Released),
+            ("created", None, None) => Ok(ResourceState::Created),
+            ("adopted", None, None) => Ok(ResourceState::Adopted),
+            _ => Err(StoreError::Corrupt("invalid resource ledger state".into())),
+        })
+        .transpose()
+    }
+
+    pub fn record_resource(
+        &self,
+        provider: &str,
+        resource: &str,
+        adopted: bool,
+    ) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT OR IGNORE INTO resource_ledger (provider, resource_id, origin, created_at) VALUES (?1, ?2, ?3, ?4)",
+            params![provider, resource, if adopted { "adopted" } else { "created" }, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    pub fn record_created_profile(
+        &self,
+        profile: &str,
+        provider_id: Option<&str>,
+    ) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        conn.execute("INSERT INTO resource_ledger (provider, resource_id, origin, provider_id, created_at) VALUES ('kernel-profile', ?1, 'created', ?2, ?3) ON CONFLICT(provider, resource_id) DO UPDATE SET origin='created', provider_id=excluded.provider_id, created_at=excluded.created_at, released_at=NULL, gone_at=NULL", params![profile, provider_id, now_ms()])?;
+        Ok(())
+    }
+
+    pub fn created_profile_id(&self, profile: &str) -> Result<Option<String>, StoreError> {
+        let conn = self.conn()?;
+        Ok(conn.query_row("SELECT provider_id FROM resource_ledger WHERE provider='kernel-profile' AND resource_id=?1 AND origin='created' AND gone_at IS NULL", [profile], |row| row.get::<_, Option<String>>(0)).optional()?.flatten())
+    }
+
+    pub fn record_adopted_profile(
+        &self,
+        profile: &str,
+        provider_id: Option<&str>,
+    ) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO resource_ledger (provider, resource_id, origin, provider_id, created_at) VALUES ('kernel-profile', ?1, 'adopted', ?2, ?3) ON CONFLICT(provider, resource_id) DO UPDATE SET origin=CASE WHEN resource_ledger.origin='created' AND resource_ledger.gone_at IS NULL AND resource_ledger.provider_id IS NOT NULL AND resource_ledger.provider_id=excluded.provider_id THEN 'created' ELSE 'adopted' END, provider_id=excluded.provider_id, released_at=NULL, gone_at=NULL",
+            params![profile, provider_id, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    pub fn resource_snapshot(
+        &self,
+        provider: &str,
+    ) -> Result<HashMap<String, ResourceState>, StoreError> {
+        let conn = self.conn()?;
+        let mut statement = conn.prepare("SELECT resource_id, origin, released_at, gone_at FROM resource_ledger WHERE provider=?1")?;
+        let rows = statement.query_map([provider], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+                row.get::<_, Option<i64>>(3)?,
+            ))
+        })?;
+        let mut result = HashMap::new();
+        for row in rows {
+            let (id, origin, released, gone) = row?;
+            let state = match (origin.as_str(), released, gone) {
+                (_, _, Some(_)) => ResourceState::Gone,
+                ("created", Some(_), None) => ResourceState::Released,
+                ("created", None, None) => ResourceState::Created,
+                ("adopted", None, None) => ResourceState::Adopted,
+                _ => return Err(StoreError::Corrupt("invalid resource ledger state".into())),
+            };
+            result.insert(id, state);
+        }
+        Ok(result)
+    }
+
+    pub fn mark_resource_gone(&self, provider: &str, resource: &str) -> Result<(), StoreError> {
+        if !self
+            .resource_state(provider, resource)?
+            .is_some_and(|state| state.transition(ResourceEvent::ConfirmGone).is_some())
+        {
+            return Ok(());
+        }
+        let conn = self.conn()?;
+        conn.execute(
+            "UPDATE resource_ledger SET released_at=coalesce(released_at, ?3), gone_at=coalesce(gone_at, ?3) WHERE provider=?1 AND resource_id=?2",
+            params![provider, resource, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    pub fn mark_resource_released(&self, provider: &str, resource: &str) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        let changed = conn.execute("UPDATE resource_ledger SET released_at=coalesce(released_at, ?3) WHERE provider=?1 AND resource_id=?2 AND origin='created' AND gone_at IS NULL", params![provider, resource, now_ms()])?;
+        if changed == 0 {
+            return Err(StoreError::Corrupt(
+                "resource is not owned or has already been released".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn record_created_sandbox(
+        &self,
+        id: AgentId,
+        sandbox: (&str, &str, &str),
+    ) -> Result<(), StoreError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO resource_ledger (provider, resource_id, origin, created_at) VALUES ('e2b', ?1, 'created', ?2)",
+            params![sandbox.0, now_ms()],
+        )?;
+        let changed = tx.execute(
+            "UPDATE agents SET sandbox_id=?2, sandbox_envd_token=?3, sandbox_traffic_token=?4 WHERE id=?1",
+            params![id.to_string(), sandbox.0, sandbox.1, sandbox.2],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::AgentNotFound(id));
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn sandbox_resume_pending(&self, sandbox: &str) -> Result<bool, StoreError> {
+        let conn = self.conn()?;
+        Ok(conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pending_sandbox_resume WHERE resource_id=?1)",
+            [sandbox],
+            |row| row.get(0),
+        )?)
+    }
+
+    pub fn begin_sandbox_resume(&self, sandbox: &str) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT OR IGNORE INTO pending_sandbox_resume(resource_id) VALUES (?1)",
+            [sandbox],
+        )?;
+        Ok(())
+    }
+
+    pub fn finish_sandbox_resume(
+        &self,
+        id: AgentId,
+        sandbox: (&str, &str, &str),
+    ) -> Result<(), StoreError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let changed = tx.execute("UPDATE agents SET sandbox_id=?2, sandbox_envd_token=?3, sandbox_traffic_token=?4 WHERE id=?1", params![id.to_string(), sandbox.0, sandbox.1, sandbox.2])?;
+        if changed == 0 {
+            return Err(StoreError::AgentNotFound(id));
+        }
+        tx.execute("DELETE FROM pending_sandbox_resume WHERE resource_id=?1", [sandbox.0])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn clear_sandbox_resume(&self, sandbox: &str) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        conn.execute("DELETE FROM pending_sandbox_resume WHERE resource_id=?1", [sandbox])?;
+        Ok(())
+    }
+
+    pub fn record_browser(
+        &self,
+        id: AgentId,
+        browser: &str,
+        adopted: bool,
+    ) -> Result<(), StoreError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT OR IGNORE INTO resource_ledger (provider, resource_id, origin, created_at) VALUES ('kernel', ?1, ?2, ?3)",
+            params![browser, if adopted { "adopted" } else { "created" }, now_ms()],
+        )?;
+        let changed = tx.execute(
+            "UPDATE agents SET browser_id=?2 WHERE id=?1",
+            params![id.to_string(), browser],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::AgentNotFound(id));
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn open(path: &Path) -> Result<Self, StoreError> {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -674,6 +916,15 @@ impl Store {
         Ok(())
     }
 
+    pub fn clear_agent_sandbox_if(&self, id: AgentId, sandbox: &str) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        conn.execute(
+            "UPDATE agents SET sandbox_id=NULL, sandbox_envd_token=NULL, sandbox_traffic_token=NULL WHERE id=?1 AND sandbox_id=?2",
+            params![id.to_string(), sandbox],
+        )?;
+        Ok(())
+    }
+
     /// Records which hosted browser is this agent's browser.
     ///
     /// Separate from `set_agent_sandbox` rather than one call taking both,
@@ -691,6 +942,15 @@ impl Store {
         if changed == 0 {
             return Err(StoreError::AgentNotFound(id));
         }
+        Ok(())
+    }
+
+    pub fn clear_agent_browser_if(&self, id: AgentId, browser: &str) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        conn.execute(
+            "UPDATE agents SET browser_id=NULL WHERE id=?1 AND browser_id=?2",
+            params![id.to_string(), browser],
+        )?;
         Ok(())
     }
 
@@ -4542,6 +4802,62 @@ mod tests {
     use crate::domain::plugin::HeaderPair;
     use crate::domain::routine::Cadence;
 
+    #[test]
+    fn resource_transitions_preserve_adopted_and_confirmed_gone() {
+        use ResourceEvent::{ConfirmGone, Release};
+        use ResourceState::{Adopted, Created, Gone, Released};
+        for (state, release, gone) in [
+            (Created, Some(Released), Some(Gone)),
+            (Adopted, None, Some(Gone)),
+            (Released, None, Some(Gone)),
+            (Gone, None, None),
+        ] {
+            assert_eq!(state.transition(Release), release);
+            assert_eq!(state.transition(ConfirmGone), gone);
+        }
+    }
+
+    #[test]
+    fn a_profile_name_conflict_never_reclaims_the_old_owner() {
+        let f = fixture();
+        f.store.record_resource("kernel-profile", "guac-agent", false).unwrap();
+        f.store.record_adopted_profile("guac-agent", None).unwrap();
+        assert_eq!(
+            f.store.resource_state("kernel-profile", "guac-agent").unwrap(),
+            Some(ResourceState::Adopted)
+        );
+        assert!(f.store.mark_resource_released("kernel-profile", "guac-agent").is_err());
+    }
+
+    #[test]
+    fn profile_ownership_survives_only_a_matching_provider_id() {
+        let f = fixture();
+        f.store.record_created_profile("profile", Some("old-id")).unwrap();
+        f.store.record_adopted_profile("profile", Some("old-id")).unwrap();
+        assert_eq!(
+            f.store.resource_state("kernel-profile", "profile").unwrap(),
+            Some(ResourceState::Created)
+        );
+        f.store.record_adopted_profile("profile", Some("new-id")).unwrap();
+        assert_eq!(
+            f.store.resource_state("kernel-profile", "profile").unwrap(),
+            Some(ResourceState::Adopted)
+        );
+        assert_eq!(f.store.created_profile_id("profile").unwrap(), None);
+    }
+
+    #[test]
+    fn release_does_not_succeed_if_the_ledger_transition_did_not_land() {
+        let f = fixture();
+        f.store.record_resource("kernel-profile", "profile", false).unwrap();
+        f.store.conn().unwrap().execute_batch("CREATE TRIGGER interrupt_release BEFORE UPDATE OF released_at ON resource_ledger BEGIN SELECT RAISE(IGNORE); END;").unwrap();
+        assert!(f.store.mark_resource_released("kernel-profile", "profile").is_err());
+        assert_eq!(
+            f.store.resource_state("kernel-profile", "profile").unwrap(),
+            Some(ResourceState::Created)
+        );
+    }
+
     /// A trigger on the clock, which is what most of these are about.
     fn clock(cadence: Cadence) -> Trigger {
         Trigger::Clock(cadence)
@@ -4877,7 +5193,8 @@ mod tests {
         // 59's and 62's drop the tables they add, 64's drops the column it
         // adds to groups, which no migration since 51 rebuilds, and 65's needs
         // none: what it drops, 54, 59 and 62 make again on the way back up.
-        conn.execute_batch("DROP TABLE approval_policies; ALTER TABLE groups DROP COLUMN rail_order; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
+        // 67 adds the workspace identity, resource ledger and resume marker.
+        conn.execute_batch("DROP TABLE pending_sandbox_resume; DROP TABLE resource_ledger; DROP TABLE workspace_identity; DROP TABLE approval_policies; ALTER TABLE groups DROP COLUMN rail_order; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
         migrations::run(&mut conn).unwrap();
         drop(conn);
         assert_eq!(f.store.connector_env(mine.id).unwrap()["TOKEN"], "private-token");

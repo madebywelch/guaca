@@ -188,6 +188,8 @@ pub enum E2bError {
     Api { status: u16, message: String },
     #[error("the sandbox replied in a form this build does not understand: {0}")]
     Protocol(String),
+    #[error("Guaca could not use its own records: {0}")]
+    Local(String),
 }
 
 /// What the UI needs to show an agent's computer.
@@ -365,13 +367,30 @@ impl E2bClient {
     /// public URLs. Left open, an agent's desktop is reachable by anyone who
     /// learns its id, and these desktops are meant to hold logged-in sessions.
     pub async fn create(&self, agent: &str, idle_seconds: u32) -> Result<Sandbox, E2bError> {
-        let row: SandboxRow = self
-            .control(
-                self.http
-                    .post(format!("{}/sandboxes", self.base))
-                    .json(&create_body(agent, idle_seconds)),
-            )
-            .await?;
+        self.create_with_workspace(agent, idle_seconds, None).await
+    }
+
+    pub async fn create_for_workspace(
+        &self,
+        agent: &str,
+        idle_seconds: u32,
+        workspace: &str,
+    ) -> Result<Sandbox, E2bError> {
+        self.create_with_workspace(agent, idle_seconds, Some(workspace)).await
+    }
+
+    async fn create_with_workspace(
+        &self,
+        agent: &str,
+        idle_seconds: u32,
+        workspace: Option<&str>,
+    ) -> Result<Sandbox, E2bError> {
+        let mut body = create_body(agent, idle_seconds);
+        if let Some(workspace) = workspace {
+            body["metadata"]["guac-workspace"] = serde_json::json!(workspace);
+        }
+        let row: SandboxRow =
+            self.control(self.http.post(format!("{}/sandboxes", self.base)).json(&body)).await?;
         Ok(Sandbox {
             id: row.sandbox_id,
             envd_token: row.envd_token.unwrap_or_default(),
@@ -393,20 +412,25 @@ impl E2bClient {
             .await
             .map_err(|e| E2bError::Transport(e.to_string()))?;
 
-        if response.status().as_u16() == 404 {
+        let status = response.status();
+        if status.as_u16() == 404 {
             return Ok(SandboxState::Gone);
         }
-        let body = response.text().await.unwrap_or_default();
-        let state = serde_json::from_str::<serde_json::Value>(&body)
-            .ok()
-            .and_then(|v| v["state"].as_str().map(str::to_string))
-            .unwrap_or_default();
-
-        Ok(match state.as_str() {
-            "running" => SandboxState::Running,
-            "paused" => SandboxState::Paused,
-            _ => SandboxState::Gone,
-        })
+        let body = response.text().await.map_err(|e| E2bError::Transport(e.to_string()))?;
+        if !status.is_success() {
+            let message = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v["message"].as_str().or(v["error"].as_str()).map(str::to_string))
+                .unwrap_or_else(|| body.chars().take(200).collect());
+            return Err(E2bError::Api { status: status.as_u16(), message });
+        }
+        let value: serde_json::Value = serde_json::from_str(&body)
+            .map_err(|e| E2bError::Protocol(format!("could not read E2B's reply: {e}")))?;
+        match value.get("state").and_then(|state| state.as_str()) {
+            Some("running") => Ok(SandboxState::Running),
+            Some("paused") => Ok(SandboxState::Paused),
+            _ => Err(E2bError::Protocol("unrecognized sandbox state".into())),
+        }
     }
 
     /// Puts the machine to sleep. The disk is kept; the bill is not.
@@ -485,6 +509,24 @@ impl E2bClient {
             .into_iter()
             .filter(|r| r.metadata.get("guac").map(String::as_str) == Some("true"))
             .map(|r| r.sandbox_id)
+            .collect())
+    }
+
+    pub async fn list_for_workspace(
+        &self,
+        workspace: &str,
+    ) -> Result<Vec<(String, bool)>, E2bError> {
+        let rows: Vec<SandboxRow> =
+            self.control(self.http.get(format!("{}/v2/sandboxes", self.base))).await?;
+        Ok(rows
+            .into_iter()
+            .filter(|row| row.metadata.get("guac").map(String::as_str) == Some("true"))
+            .map(|row| {
+                (
+                    row.sandbox_id,
+                    row.metadata.get("guac-workspace").map(String::as_str) == Some(workspace),
+                )
+            })
             .collect())
     }
 
@@ -1468,6 +1510,78 @@ pub fn decode_bytes(raw: &str) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn state_server(response: Option<String>) -> E2bClient {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0; 1024];
+            let _ = stream.read(&mut request).await;
+            if let Some(response) = response {
+                stream.write_all(response.as_bytes()).await.unwrap();
+            } else {
+                std::future::pending::<()>().await;
+            }
+        });
+        let mut client = E2bClient::new("test").unwrap();
+        client.base = format!("http://{address}");
+        client.http =
+            reqwest::Client::builder().timeout(Duration::from_millis(100)).build().unwrap();
+        client
+    }
+
+    #[tokio::test]
+    async fn state_server_error_is_not_gone() {
+        let client = state_server(Some(
+            "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n".into(),
+        ))
+        .await;
+        assert!(matches!(client.state("test").await, Err(E2bError::Api { status: 500, .. })));
+    }
+
+    #[tokio::test]
+    async fn state_malformed_reply_is_not_gone() {
+        for body in ["{}", "{\"state\":\"unexpected\"}", "not json"] {
+            let response =
+                format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+            let client = state_server(Some(response)).await;
+            assert!(matches!(client.state("test").await, Err(E2bError::Protocol(_))), "{body}");
+        }
+    }
+
+    #[test]
+    fn a_provider_reply_error_keeps_its_provider_prefix() {
+        assert_eq!(E2bError::Protocol("unrecognized sandbox state".into()).to_string(), "the sandbox replied in a form this build does not understand: unrecognized sandbox state");
+    }
+
+    #[tokio::test]
+    async fn state_not_found_is_gone() {
+        let client =
+            state_server(Some("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".into())).await;
+        assert_eq!(client.state("test").await.unwrap(), SandboxState::Gone);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn state_timeout_is_not_gone() {
+        let client = state_server(None).await;
+        assert!(matches!(client.state("test").await, Err(E2bError::Transport(_))));
+    }
+
+    #[tokio::test]
+    async fn state_known_values_are_preserved() {
+        for (body, expected) in [
+            ("{\"state\":\"running\"}", SandboxState::Running),
+            ("{\"state\":\"paused\"}", SandboxState::Paused),
+        ] {
+            let response =
+                format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+            let client = state_server(Some(response)).await;
+            assert_eq!(client.state("test").await.unwrap(), expected);
+        }
+    }
 
     #[test]
     fn a_computer_scrubs_output_and_error_trailers() {

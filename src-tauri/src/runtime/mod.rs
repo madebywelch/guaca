@@ -747,6 +747,8 @@ struct Inner {
     /// desktop are the same word there and not the same thing to go and look
     /// at.
     on_machine: Mutex<HashMap<AgentId, Surface>>,
+    resource_locks: Mutex<HashMap<AgentId, Arc<tokio::sync::Mutex<()>>>>,
+    resource_sweep: tokio::sync::RwLock<()>,
     /// Where each plugin's MCP server is, when it is not where it usually is.
     ///
     /// Keyed by slug rather than by kind, so a server the operator added can be
@@ -883,6 +885,8 @@ impl Runtime {
                 viewer_port: AtomicU16::new(0),
                 webhook_port: AtomicU16::new(0),
                 on_machine: Mutex::new(HashMap::new()),
+                resource_locks: Mutex::new(HashMap::new()),
+                resource_sweep: tokio::sync::RwLock::new(()),
                 plugin_endpoints: std::sync::OnceLock::new(),
                 account: std::sync::OnceLock::new(),
                 modalities: modality::Registry::new(),
@@ -1262,6 +1266,9 @@ impl Runtime {
     /// agent still in the compost that has already lost its memory.
     pub async fn purge_agent(&self, card: &AgentCard) -> Result<(), RuntimeError> {
         let id = card.id;
+        let _sweep_guard = self.inner.resource_sweep.read().await;
+        let lock = self.resource_lock(id);
+        let _guard = lock.lock().await;
         // The machine goes first. A deleted agent cannot be asked to tidy up
         // after itself, and a sandbox nobody holds a reference to keeps
         // billing.
@@ -1271,8 +1278,42 @@ impl Runtime {
         if let (Some(sandbox), Some(client)) =
             (card.sandbox_id.as_ref(), crate::e2b::E2bClient::new(&self.config().e2b.api_key))
         {
-            if let Err(err) = client.kill(sandbox).await {
-                tracing::warn!(%err, %sandbox, "could not destroy the agent's computer");
+            let ownership = self.inner.store.workspace_identity().and_then(|workspace| {
+                self.inner.store.resource_state("e2b", sandbox).map(|state| (workspace, state))
+            });
+            if let Ok((
+                workspace,
+                Some(
+                    crate::db::store::ResourceState::Created
+                    | crate::db::store::ResourceState::Released,
+                ),
+            )) = ownership
+            {
+                match client.list_for_workspace(&workspace).await {
+                    Ok(rows) if rows.iter().any(|(id, tagged)| id == sandbox && *tagged) => {
+                        if let Err(err) = self.inner.store.mark_resource_released("e2b", sandbox) {
+                            tracing::warn!(%err, %sandbox, "could not record the sandbox release");
+                        } else {
+                            match client.kill(sandbox).await {
+                                Ok(()) => {
+                                    if let Err(err) =
+                                        self.inner.store.mark_resource_gone("e2b", sandbox)
+                                    {
+                                        tracing::warn!(%err, %sandbox, "could not record the released sandbox");
+                                    }
+                                }
+                                Err(err) => {
+                                    tracing::warn!(%err, %sandbox, "could not destroy the agent's computer")
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        tracing::warn!(%sandbox, "leaving a sandbox without a matching ownership tag")
+                    }
+                }
+            } else {
+                tracing::warn!(%sandbox, "leaving an unowned sandbox");
             }
         }
         // And its browser, which is a second provider with a second bill. The
@@ -1282,15 +1323,79 @@ impl Runtime {
         // not inherit its sessions.
         if let Some(client) = crate::kernel::KernelClient::new(&self.config().kernel.api_key) {
             if let Some(browser) = card.browser_id.as_ref() {
-                if let Err(err) = client.delete(browser).await {
-                    tracing::warn!(%err, %browser, "could not destroy the agent's browser");
+                let ownership = self.inner.store.workspace_identity().and_then(|workspace| {
+                    self.inner
+                        .store
+                        .resource_state("kernel", browser)
+                        .map(|state| (workspace, state))
+                });
+                if let Ok((
+                    workspace,
+                    Some(
+                        crate::db::store::ResourceState::Created
+                        | crate::db::store::ResourceState::Released,
+                    ),
+                )) = ownership
+                {
+                    match client.list_workspace(&workspace, None).await {
+                        Ok(rows) if rows.contains(browser) => {
+                            if let Err(err) =
+                                self.inner.store.mark_resource_released("kernel", browser)
+                            {
+                                tracing::warn!(%err, %browser, "could not record the browser release");
+                            } else {
+                                match client.delete(browser).await {
+                                    Ok(()) => {
+                                        if let Err(err) =
+                                            self.inner.store.mark_resource_gone("kernel", browser)
+                                        {
+                                            tracing::warn!(%err, %browser, "could not record the released browser");
+                                        }
+                                    }
+                                    Err(err) => {
+                                        tracing::warn!(%err, %browser, "could not destroy the agent's browser")
+                                    }
+                                }
+                            }
+                        }
+                        _ => {
+                            tracing::warn!(%browser, "leaving a browser without a matching ownership tag")
+                        }
+                    }
+                } else {
+                    tracing::warn!(%browser, "leaving an unowned browser");
                 }
             }
             // Attempted whether or not a browser was live, because the profile
             // outlives every browser made against it and is the thing holding
             // the cookies.
-            if let Err(err) = client.delete_profile(&id.to_string()).await {
-                tracing::warn!(%err, agent = %id, "could not destroy the agent's browser profile");
+            let profile = format!("guac-{id}");
+            let stored_id = self.inner.store.created_profile_id(&profile).ok().flatten();
+            let current_id = client.profile_id(&profile).await.ok().flatten();
+            if stored_id.is_some() && stored_id == current_id {
+                if let Err(err) =
+                    self.inner.store.mark_resource_released("kernel-profile", &profile)
+                {
+                    tracing::warn!(%err, %profile, "could not record the profile release");
+                } else {
+                    match client
+                        .delete_profile_named(stored_id.as_deref().unwrap_or_default())
+                        .await
+                    {
+                        Ok(()) => {
+                            if let Err(err) =
+                                self.inner.store.mark_resource_gone("kernel-profile", &profile)
+                            {
+                                tracing::warn!(%err, %profile, "could not record the released browser profile");
+                            }
+                        }
+                        Err(err) => {
+                            tracing::warn!(%err, agent = %id, "could not destroy the agent's browser profile")
+                        }
+                    }
+                }
+            } else {
+                tracing::warn!(%profile, "leaving an unowned browser profile");
             }
         }
 
@@ -5876,6 +5981,10 @@ impl Runtime {
 
     // ---- lookups ---------------------------------------------------------
 
+    fn resource_lock(&self, id: AgentId) -> Arc<tokio::sync::Mutex<()>> {
+        self.inner.resource_locks.lock().entry(id).or_default().clone()
+    }
+
     /// The peers one agent can see: its own group, discoverable, not itself.
     ///
     /// The group filter is the isolation boundary, not a display convenience.
@@ -5905,7 +6014,15 @@ impl Runtime {
         if !card.has_computer {
             return Err(E2bError::NotGiven);
         }
-        let held = self.held(card);
+        let _sweep_guard = self.inner.resource_sweep.read().await;
+        let lock = self.resource_lock(card.id);
+        let _guard = lock.lock().await;
+        let held = self
+            .inner
+            .store
+            .get_agent(card.id)
+            .map_err(|err| E2bError::Local(format!("could not read the agent's computer: {err}")))?
+            .ok_or_else(|| E2bError::Local("the agent is no longer available".into()))?;
         let config = self.config();
         // The one place a sandbox is provisioned is the one place that knows
         // which agent it is for, so it is where the group's credentials are
@@ -5915,20 +6032,24 @@ impl Runtime {
             self.inner
                 .store
                 .connector_env(card.id)
-                .map_err(|error| E2bError::Transport(format!("Could not load Secrets: {error}")))?,
+                .map_err(|error| E2bError::Local(format!("Could not load Secrets: {error}")))?,
         );
         let idle = config.e2b.idle_minutes.max(1) * 60;
 
-        // A sandbox recorded without its tokens predates them and cannot be
-        // reached, so it counts as absent rather than as something to retry.
         let known = match (&held.sandbox_id, &held.sandbox_envd_token) {
             (Some(id), Some(envd)) => Some((id.clone(), envd.clone())),
+            (Some(_), None) => {
+                return Err(E2bError::Local("the stored sandbox has no access token".into()));
+            }
             _ => None,
         };
 
         if let Some((id, envd)) = known {
-            match client.state(&id).await.unwrap_or(SandboxState::Gone) {
-                SandboxState::Running => {
+            let pending = self.inner.store.sandbox_resume_pending(&id).map_err(|err| {
+                E2bError::Local(format!("could not read the sandbox resume state: {err}"))
+            })?;
+            match client.state(&id).await? {
+                SandboxState::Running if !pending => {
                     // Every use pushes the sleep deadline back, which is what
                     // makes the timeout idle time rather than a lifetime.
                     client.keep_awake(&id, idle).await;
@@ -5941,27 +6062,54 @@ impl Runtime {
                         },
                     ));
                 }
-                SandboxState::Paused => {
+                state @ (SandboxState::Paused | SandboxState::Running) => {
                     // Woken rather than replaced. The disk is the point: a
                     // browser that was signed in still is.
+                    self.inner.store.begin_sandbox_resume(&id).map_err(|err| {
+                        E2bError::Local(format!("could not record the sandbox resume: {err}"))
+                    })?;
+                    if state == SandboxState::Running {
+                        client.pause(&id).await?;
+                    }
                     let woken = client.resume(&id, idle).await?;
+                    if woken.id != id {
+                        return Err(E2bError::Protocol(
+                            "the resumed sandbox did not match its recorded id".into(),
+                        ));
+                    }
                     // Both tokens are reissued on waking, so the stored ones are
                     // now wrong. Keeping them is a machine that is running and
                     // unreachable, which looks exactly like a broken one.
-                    if let Err(err) = self.inner.store.set_agent_sandbox(
-                        card.id,
-                        Some((&woken.id, &woken.envd_token, &woken.traffic_token)),
-                    ) {
-                        tracing::error!(%err, "could not record the woken machine's tokens");
-                    }
+                    self.inner
+                        .store
+                        .finish_sandbox_resume(
+                            card.id,
+                            (&woken.id, &woken.envd_token, &woken.traffic_token),
+                        )
+                        .map_err(|err| {
+                            E2bError::Local(format!(
+                                "could not record the woken machine's tokens: {err}"
+                            ))
+                        })?;
                     self.inner.events.emit(UiEvent::AgentsChanged);
                     return Ok((client, woken));
                 }
-                SandboxState::Gone => {}
+                SandboxState::Gone => {
+                    self.inner.store.mark_resource_gone("e2b", &id).map_err(|err| {
+                        E2bError::Local(format!("could not record the missing sandbox: {err}"))
+                    })?;
+                    self.inner.store.clear_sandbox_resume(&id).map_err(|err| {
+                        E2bError::Local(format!("could not clear the sandbox resume: {err}"))
+                    })?;
+                }
             }
         }
 
-        let fresh = client.create(&card.name, idle).await?;
+        let workspace =
+            self.inner.store.workspace_identity().map_err(|err| {
+                E2bError::Local(format!("could not read workspace identity: {err}"))
+            })?;
+        let fresh = client.create_for_workspace(&card.name, idle, &workspace).await?;
 
         // A sandbox that cannot be written down is a sandbox nobody can reach
         // and nobody will stop paying for, so it is killed rather than left.
@@ -5969,11 +6117,16 @@ impl Runtime {
         if let Err(err) = self
             .inner
             .store
-            .set_agent_sandbox(card.id, Some((&fresh.id, &fresh.envd_token, &fresh.traffic_token)))
+            .record_created_sandbox(card.id, (&fresh.id, &fresh.envd_token, &fresh.traffic_token))
         {
             tracing::error!(%err, sandbox = %fresh.id, "could not record a sandbox; killing it");
-            let _ = client.kill(&fresh.id).await;
-            return Err(E2bError::Protocol(format!(
+            if let Err(cleanup) = client.kill(&fresh.id).await {
+                tracing::error!(%cleanup, provider = "e2b", resource = %fresh.id, "created resource could not be recorded or released");
+                return Err(E2bError::Local(format!(
+                    "the sandbox could not be recorded or released ({err})"
+                )));
+            }
+            return Err(E2bError::Local(format!(
                 "the sandbox could not be recorded and was released ({err})"
             )));
         }
@@ -6013,22 +6166,6 @@ impl Runtime {
         self.configured().given_to(card)
     }
 
-    /// What this agent is holding *now*, rather than when its turn started.
-    ///
-    /// A turn carries one `AgentCard`, read once in `run_turn` and passed
-    /// through every round. That is right for everything the operator decides
-    /// and wrong for the two things a turn changes about itself: a machine or a
-    /// browser provisioned by one tool call is written to the row and not to
-    /// that snapshot, so the next call sees an agent holding nothing and
-    /// provisions again. It cost a duplicate sandbox, billing until the sweep
-    /// found it, and a second browser Kernel refused by name, which left an
-    /// agent's `browse` failing for the rest of a turn after its first page
-    /// had loaded.
-    ///
-    /// The card stays the authority on what an agent was *given*. This is only
-    /// what it now holds, and a row that cannot be read falls back to the card
-    /// rather than to nothing: provisioning again is the expensive answer,
-    /// refusing a turn its machine because the store hiccupped is the wrong one.
     /// How many working notes an agent is holding, for the line handed back
     /// after one is written.
     ///
@@ -6038,10 +6175,6 @@ impl Runtime {
     /// has twenty notes in a store that keeps sixteen.
     fn note_count(&self, agent: AgentId) -> usize {
         self.inner.store.working_notes(agent).map(|notes| notes.len()).unwrap_or(0)
-    }
-
-    fn held(&self, card: &AgentCard) -> AgentCard {
-        self.inner.store.get_agent(card.id).ok().flatten().unwrap_or_else(|| card.clone())
     }
 
     /// The agent's browser, made or replaced if there is not a live one.
@@ -6062,37 +6195,104 @@ impl Runtime {
         card: &AgentCard,
     ) -> Result<(crate::kernel::KernelClient, crate::kernel::Session), crate::kernel::KernelError>
     {
-        use crate::kernel::{KernelClient, KernelError};
+        use crate::kernel::{BrowserCreation, KernelClient, KernelError, ProfileCreation};
 
         // The same gate `ensure_computer` carries, in the same place and for
         // the same reason: this is the only function that makes a browser.
         if !card.has_browser {
             return Err(KernelError::NotGiven);
         }
+        let _sweep_guard = self.inner.resource_sweep.read().await;
+        let lock = self.resource_lock(card.id);
+        let _guard = lock.lock().await;
         let config = self.config();
         let client = KernelClient::new(&config.kernel.api_key).ok_or(KernelError::NoKey)?;
         let idle = config.kernel.idle_minutes.max(1) * 60;
 
-        if let Some(id) = self.held(card).browser_id {
+        let held = self
+            .inner
+            .store
+            .get_agent(card.id)
+            .map_err(|err| {
+                KernelError::Local(format!("could not read the agent's browser: {err}"))
+            })?
+            .ok_or_else(|| KernelError::Local("the agent is no longer available".into()))?;
+        if let Some(id) = held.browser_id {
             // Asked rather than assumed, and the socket is taken from the
             // answer. A stored socket outlives the browser it addressed, and
             // connecting to one is a hang rather than an error.
             if let Some(live) = client.get(&id).await? {
                 return Ok((client, live));
             }
+            self.inner.store.mark_resource_gone("kernel", &id).map_err(|err| {
+                KernelError::Local(format!("could not record the missing browser: {err}"))
+            })?;
         }
 
-        let fresh = client.create(&card.id.to_string(), idle, config.kernel.stealth).await?;
+        let workspace = self.inner.store.workspace_identity().map_err(|err| {
+            KernelError::Local(format!("could not read workspace identity: {err}"))
+        })?;
+        let agent = card.id.to_string();
+        let (profile, profile_id, adopted_profile) = match client.create_profile(&agent).await? {
+            ProfileCreation::Created { id, name } => {
+                let provider_id = (id != name).then_some(id);
+                (name, provider_id, false)
+            }
+            ProfileCreation::Existing { name } => {
+                let provider_id = match client.profile_id(&name).await {
+                    Ok(id) => id,
+                    Err(err) => {
+                        tracing::warn!(%err, %name, "could not confirm profile identity");
+                        None
+                    }
+                };
+                (name, provider_id, true)
+            }
+        };
+        let recorded = if adopted_profile {
+            self.inner.store.record_adopted_profile(&profile, profile_id.as_deref())
+        } else {
+            self.inner.store.record_created_profile(&profile, profile_id.as_deref())
+        };
+        if let Err(err) = recorded {
+            if !adopted_profile {
+                if let Err(cleanup) = client.delete_profile_named(&profile).await {
+                    tracing::error!(%cleanup, provider = "kernel-profile", resource = %profile, "created resource could not be recorded or released");
+                }
+            }
+            return Err(KernelError::Local(format!(
+                "the browser profile could not be recorded ({err})"
+            )));
+        }
+        let (fresh, adopted) = match client
+            .create_for_workspace(&agent, &profile, idle, config.kernel.stealth, &workspace)
+            .await?
+        {
+            BrowserCreation::Created(session) => (session, false),
+            BrowserCreation::Conflict { candidates } => {
+                let candidate = candidates.into_iter().next().ok_or_else(|| {
+                    KernelError::Protocol("the conflicting browser could not be found".into())
+                })?;
+                let session = client.get(&candidate.id).await?.ok_or_else(|| {
+                    KernelError::Protocol("the conflicting browser is no longer available".into())
+                })?;
+                (session, true)
+            }
+        };
 
         // A browser that cannot be written down is a browser nobody can reach
         // and nobody will stop paying for. The computer learned this the hard
         // way: failing to read a create reply once orphaned three sandboxes.
-        if let Err(err) = self.inner.store.set_agent_browser(card.id, Some(&fresh.id)) {
-            tracing::error!(%err, browser = %fresh.id, "could not record a browser; releasing it");
-            let _ = client.delete(&fresh.id).await;
-            return Err(KernelError::Protocol(format!(
-                "the browser could not be recorded and was released ({err})"
-            )));
+        if let Err(err) = self.inner.store.record_browser(card.id, &fresh.id, adopted) {
+            if !adopted {
+                if let Err(cleanup) = client.delete(&fresh.id).await {
+                    tracing::error!(%cleanup, provider = "kernel", resource = %fresh.id, "created resource could not be recorded or released");
+                    return Err(KernelError::Local(format!(
+                        "the browser could not be recorded or released ({err})"
+                    )));
+                }
+            }
+            return Err(KernelError::Local(format!("the browser could not be recorded ({err})")));
         }
 
         self.inner.events.emit(UiEvent::AgentsChanged);
@@ -6150,20 +6350,63 @@ impl Runtime {
     /// while its machine was up, leaves something running that nothing in the
     /// app can see. Only sandboxes labeled by Guac are touched.
     pub async fn sweep_computers(&self) -> Result<usize, crate::e2b::E2bError> {
+        let _sweep_guard = self.inner.resource_sweep.write().await;
         let config = self.config();
         let Some(client) = crate::e2b::E2bClient::new(&config.e2b.api_key) else {
             return Ok(0);
         };
 
-        let known = claimed_sandboxes(&self.inner.store.list_agents().unwrap_or_default());
+        let known = claimed_sandboxes(&self.inner.store.list_agents().map_err(|err| {
+            crate::e2b::E2bError::Local(format!("could not read resource ownership: {err}"))
+        })?);
+        let workspace = self.inner.store.workspace_identity().map_err(|err| {
+            crate::e2b::E2bError::Local(format!("could not read workspace identity: {err}"))
+        })?;
+        let ledger = self.inner.store.resource_snapshot("e2b").map_err(|err| {
+            crate::e2b::E2bError::Local(format!("could not read resource ownership: {err}"))
+        })?;
 
+        let inventory = client.list_for_workspace(&workspace).await?;
+        let present: std::collections::HashSet<_> =
+            inventory.iter().map(|(id, _)| id.clone()).collect();
+        for (sandbox, state) in &ledger {
+            if *state == crate::db::store::ResourceState::Gone {
+                continue;
+            }
+            if !present.contains(sandbox)
+                && matches!(client.state(sandbox).await, Ok(crate::e2b::SandboxState::Gone))
+            {
+                self.inner.store.mark_resource_gone("e2b", sandbox).map_err(|err| {
+                    crate::e2b::E2bError::Local(format!(
+                        "could not record the missing sandbox: {err}"
+                    ))
+                })?;
+            }
+        }
         let mut swept = 0;
-        for sandbox in client.list_ours().await? {
+        for (sandbox, tagged) in inventory {
             if known.contains(&sandbox) {
+                continue;
+            }
+            if !tagged
+                || !matches!(
+                    ledger.get(&sandbox),
+                    Some(
+                        crate::db::store::ResourceState::Created
+                            | crate::db::store::ResourceState::Released
+                    )
+                )
+            {
+                tracing::warn!(%sandbox, "leaving an unowned sandbox");
                 continue;
             }
             tracing::info!(%sandbox, "releasing a sandbox no agent refers to");
             if client.kill(&sandbox).await.is_ok() {
+                self.inner.store.mark_resource_gone("e2b", &sandbox).map_err(|err| {
+                    crate::e2b::E2bError::Local(format!(
+                        "could not record the released sandbox: {err}"
+                    ))
+                })?;
                 swept += 1;
             }
         }
@@ -6179,6 +6422,7 @@ impl Runtime {
     /// browsers this app tagged are touched, because the account may be doing
     /// other work.
     pub async fn sweep_browsers(&self) -> Result<usize, crate::kernel::KernelError> {
+        let _sweep_guard = self.inner.resource_sweep.write().await;
         let config = self.config();
         let Some(client) = crate::kernel::KernelClient::new(&config.kernel.api_key) else {
             return Ok(0);
@@ -6188,21 +6432,62 @@ impl Runtime {
             .inner
             .store
             .list_agents()
-            .unwrap_or_default()
+            .map_err(|err| {
+                crate::kernel::KernelError::Local(format!(
+                    "could not read resource ownership: {err}"
+                ))
+            })?
             .into_iter()
-            // A terminated agent's browser is destroyed with it, so its id must
-            // not shield a live browser from the sweep.
-            .filter(|card| card.lifecycle != Lifecycle::Terminated)
+            .filter(|card| card.lifecycle != Lifecycle::Terminated || card.discarded())
             .filter_map(|card| card.browser_id)
             .collect();
 
+        let workspace = self.inner.store.workspace_identity().map_err(|err| {
+            crate::kernel::KernelError::Local(format!("could not read workspace identity: {err}"))
+        })?;
+        let ledger = self.inner.store.resource_snapshot("kernel").map_err(|err| {
+            crate::kernel::KernelError::Local(format!("could not read resource ownership: {err}"))
+        })?;
+        let tagged: std::collections::HashSet<_> =
+            client.list_workspace(&workspace, None).await?.into_iter().collect();
+        let inventory = client.list_ours().await?;
+        let present: std::collections::HashSet<_> = inventory.iter().cloned().collect();
+        for (browser, state) in &ledger {
+            if *state != crate::db::store::ResourceState::Gone
+                && !present.contains(browser)
+                && matches!(client.get(browser).await, Ok(None))
+            {
+                self.inner.store.mark_resource_gone("kernel", browser).map_err(|err| {
+                    crate::kernel::KernelError::Local(format!(
+                        "could not record the missing browser: {err}"
+                    ))
+                })?;
+            }
+        }
         let mut swept = 0;
-        for browser in client.list_ours().await? {
+        for browser in inventory {
             if known.contains(&browser) {
+                continue;
+            }
+            if !tagged.contains(&browser)
+                || !matches!(
+                    ledger.get(&browser),
+                    Some(
+                        crate::db::store::ResourceState::Created
+                            | crate::db::store::ResourceState::Released
+                    )
+                )
+            {
+                tracing::warn!(%browser, "leaving an unowned browser");
                 continue;
             }
             tracing::info!(%browser, "releasing a browser no agent refers to");
             if client.delete(&browser).await.is_ok() {
+                self.inner.store.mark_resource_gone("kernel", &browser).map_err(|err| {
+                    crate::kernel::KernelError::Local(format!(
+                        "could not record the released browser: {err}"
+                    ))
+                })?;
                 swept += 1;
             }
         }

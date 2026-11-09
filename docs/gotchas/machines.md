@@ -45,14 +45,14 @@ Chrome that is asked rather than looked at. `docs/MACHINES.md` and
   row and not on that snapshot. Read from the snapshot, the second call of a
   turn provisions again: a duplicate sandbox that bills until the sweep finds
   it, and a second browser Kernel refuses by name, which is a `browse` tool that
-  fails for the rest of the turn after the first page loads. `Runtime::held` is
-  the read, and the card stays the authority on `has_computer` and `has_browser`.
-- **A 409 from Kernel's create is an orphan to adopt, not a failure to
-  report.** The name is one per agent, so a conflict is this agent's own
-  browser, alive and unrecorded: a crash between creating one and writing it
-  down. It is found by its `guac-agent` tag rather than by the name the conflict
-  was about, and asked for by id, because a list row is not documented to carry
-  a socket and a session without one names a browser nothing can talk to.
+  fails for the rest of the turn after the first page loads. Both provisioning
+  paths read the row and fail closed if it cannot be read; the card stays the
+  authority on `has_computer` and `has_browser`.
+- **A 409 may adopt a browser, but does not prove ownership.** A candidate is
+  found by its `guac-agent` tag and asked for by id because a list row need not
+  carry a socket. A newly adopted browser is recorded as adopted and is never
+  automatically deleted. A previously recorded created browser keeps its
+  ownership when found again.
 - **Taking a computer back leaves `sandbox_id` where it is.** The machine sleeps
   and its disk stays, because that disk is where the operator's sign-ins live.
   A revoke that destroyed it would make giving the computer back mean signing
