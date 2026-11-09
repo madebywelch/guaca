@@ -181,6 +181,52 @@ describe("the plus", () => {
 });
 
 describe("arranging the rail", () => {
+  it("starts at the slop boundary and cancels without a drop", () => {
+    draw([group("everyone")], [agent("Manager"), agent("Cook", { railOrder: 1 })]);
+    fireEvent.pointerDown(row("Manager"), { button: 0, clientX: 100, clientY: 200 });
+    fireEvent.pointerMove(window, { clientX: 102, clientY: 202 });
+    expect(row("Manager").dataset.held).toBeUndefined();
+    fireEvent.pointerMove(window, { clientX: 103, clientY: 202 });
+    expect(row("Manager").dataset.held).toBe("true");
+    fireEvent.pointerEnter(row("Cook"));
+    fireEvent.pointerCancel(window);
+    fireEvent.pointerUp(window);
+    expect(row("Manager").dataset.held).toBeUndefined();
+    expect(moveAgent).not.toHaveBeenCalled();
+  });
+
+  it("does not persist a drag released without a target", () => {
+    draw([group("everyone")], [agent("Manager")]);
+    fireEvent.pointerDown(row("Manager"), { button: 0, clientX: 100, clientY: 200 });
+    fireEvent.pointerMove(window, { clientX: 100, clientY: 210 });
+    fireEvent.pointerUp(window);
+    expect(row("Manager").dataset.held).toBeUndefined();
+    expect(moveAgent).not.toHaveBeenCalled();
+  });
+
+  it("ends the gesture before a failed drop settles", async () => {
+    let rejectDrop!: (reason: Error) => void;
+    const pending = new Promise<void>((_, reject) => {
+      rejectDrop = reject;
+    });
+    void pending.catch(() => {});
+    const original = useStore.getState().dropAgent;
+    const drop = vi.fn(() => pending);
+    useStore.setState({ dropAgent: drop });
+    try {
+      draw([group("everyone")], [agent("Manager"), agent("Cook", { railOrder: 1 })]);
+      fireEvent.pointerDown(row("Manager"), { button: 0, clientX: 100, clientY: 200 });
+      fireEvent.pointerMove(window, { clientX: 100, clientY: 210 });
+      fireEvent.pointerEnter(row("Cook"));
+      fireEvent.pointerUp(window);
+      expect(drop).toHaveBeenCalledOnce();
+      expect(row("Manager").dataset.held).toBeUndefined();
+      await act(async () => rejectDrop(new Error("drop failed")));
+      expect(row("Manager").dataset.held).toBeUndefined();
+    } finally {
+      useStore.setState({ dropAgent: original });
+    }
+  });
   it("drops a row in front of the one it stopped on coming up", async () => {
     draw(
       [group("everyone")],
