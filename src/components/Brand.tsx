@@ -42,6 +42,11 @@ export function Brand({ waiting }: { waiting: boolean }) {
   const scene = brandAt(t, { hoverAt, waiting, still: prefersReducedMotion() });
 
   useEffect(() => {
+    const media = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    media?.addEventListener("change", beat);
+    return () => media?.removeEventListener("change", beat);
+  }, []);
+  useEffect(() => {
     if (!Number.isFinite(scene.next)) return;
     const id = window.setTimeout(beat, Math.max(0, (scene.next - t) * 1000));
     return () => window.clearTimeout(id);

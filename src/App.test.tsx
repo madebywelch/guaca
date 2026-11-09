@@ -94,6 +94,7 @@ vi.mock("./lib/ipc", () => ({
     agentRoutines: () => agentRoutines(),
     agentComputer: async () => null,
     agentMemory: async () => "",
+    agentMemoryVersioned: async () => ({ content: "", version: "version" }),
     agentSignins: async () => [],
     agentGrants: async () => [],
     setAgentPinned: (id: string, pinned: boolean) => setAgentPinned(id, pinned),

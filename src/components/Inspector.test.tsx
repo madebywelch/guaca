@@ -16,6 +16,10 @@ vi.mock("../lib/ipc", () => ({
     agentBrowser: (id: string) => agentBrowser(id),
     agentRoutines: () => agentRoutines(),
     agentMemory: (id: string) => agentMemory(id),
+    agentMemoryVersioned: async (id: string) => ({
+      content: await agentMemory(id),
+      version: "version",
+    }),
     agentWorkingNotes: async () => [],
     agentNotebook: async () => [],
     agentTerminal: async () => ({ path: "/var/lib/guaca/data/terminals/a1" }),

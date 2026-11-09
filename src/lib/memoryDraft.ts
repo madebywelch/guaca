@@ -9,6 +9,8 @@ export interface Held {
    * applied. Null when nothing has.
    */
   incoming: string | null;
+  version?: string;
+  incomingVersion?: string;
 }
 
 /**
@@ -23,11 +25,13 @@ export interface Held {
  * A draft typed back to what is on disk is not an edit, and holding it as one
  * would leave the panel on a page the agent has since replaced.
  */
-export function arrived(held: Held | null, content: string): Held {
-  if (held === null || held.draft === null || held.draft === held.stored) {
-    return { stored: content, draft: null, incoming: null };
+export function arrived(held: Held | null, content: string, version?: string): Held {
+  if (held === null || held.draft === null || held.draft === (held.incoming ?? held.stored)) {
+    return { stored: content, draft: null, incoming: null, ...(version && { version }) };
   }
-  return { ...held, incoming: content };
+  if (content === held.stored)
+    return { ...held, version, incoming: null, incomingVersion: undefined };
+  return { ...held, incoming: content, incomingVersion: version };
 }
 
 type Page = { held: Held; error: string | null; cut: boolean };
@@ -38,14 +42,16 @@ export type MemoryState =
   | ({ phase: "saving"; sent: string } & Page);
 
 export type MemoryAction =
-  | { type: "read"; content: string }
+  | { type: "read"; content: string; version?: string }
   | { type: "readFailed"; error: string }
   | { type: "edit" }
   | { type: "change"; value: string }
   | { type: "cancel" }
   | { type: "save"; sent: string }
   | { type: "saved"; saved: string }
-  | { type: "saveFailed"; error: string };
+  | { type: "version"; content: string; version: string }
+  | { type: "saveFailed"; error: string }
+  | { type: "conflict"; current: string; version: string };
 
 export function memoryReducer(state: MemoryState, action: MemoryAction): MemoryState {
   switch (action.type) {
@@ -53,15 +59,19 @@ export function memoryReducer(state: MemoryState, action: MemoryAction): MemoryS
       if (state.phase === "loading" || state.phase === "failed") {
         return {
           phase: state.phase === "loading" && state.editing ? "editing" : "view",
-          held: arrived(null, action.content),
+          held: arrived(null, action.content, action.version),
           error: null,
           cut: false,
         };
       }
       if (state.phase === "saving" && state.held.draft !== state.sent) {
-        return { ...state, held: { ...state.held, incoming: action.content }, error: null };
+        return {
+          ...state,
+          held: { ...state.held, incoming: action.content, incomingVersion: action.version },
+          error: null,
+        };
       }
-      return { ...state, held: arrived(state.held, action.content), error: null };
+      return { ...state, held: arrived(state.held, action.content, action.version), error: null };
     case "readFailed":
       if (state.phase === "loading" || state.phase === "failed")
         return { phase: "failed", error: action.error };
@@ -78,7 +88,12 @@ export function memoryReducer(state: MemoryState, action: MemoryAction): MemoryS
       return {
         ...state,
         phase: "view",
-        held: { stored: state.held.incoming ?? state.held.stored, draft: null, incoming: null },
+        held: {
+          stored: state.held.incoming ?? state.held.stored,
+          draft: null,
+          incoming: null,
+          version: state.held.incoming !== null ? state.held.incomingVersion : state.held.version,
+        },
         cut: false,
       };
     case "save":
@@ -89,7 +104,7 @@ export function memoryReducer(state: MemoryState, action: MemoryAction): MemoryS
       const draft = state.held.draft === state.sent ? null : state.held.draft;
       return {
         phase: draft === null ? "view" : "editing",
-        held: { stored: action.saved, draft, incoming: null },
+        held: { stored: action.saved, draft, incoming: null, version: state.held.version },
         error: null,
         cut: action.saved !== state.sent.trim(),
       };
@@ -97,6 +112,17 @@ export function memoryReducer(state: MemoryState, action: MemoryAction): MemoryS
     case "saveFailed":
       if (state.phase !== "saving") return state;
       return { ...state, phase: "editing", error: action.error };
+    case "version":
+      if (!("held" in state) || state.held.stored !== action.content) return state;
+      return { ...state, held: { ...state.held, version: action.version } };
+    case "conflict":
+      if (state.phase !== "saving") return state;
+      return {
+        ...state,
+        phase: "editing",
+        held: { ...state.held, incoming: action.current, incomingVersion: action.version },
+        error: null,
+      };
   }
 }
 
@@ -128,7 +154,7 @@ export function memoryDraft(agentId: string): Draft {
         state.phase === "saving" ||
         (state.phase === "editing" &&
           state.held.draft !== null &&
-          state.held.draft !== state.held.stored)
+          state.held.draft !== (state.held.incoming ?? state.held.stored))
       ) {
         drafts.set(agentId, draft);
       } else if (drafts.get(agentId) === draft) {

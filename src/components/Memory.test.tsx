@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -9,12 +10,15 @@ import { useStore } from "../lib/store";
 import { arrived, CAP, crowding, Memory, type MemoryState, memoryReducer } from "./Memory";
 
 const agentMemory = vi.fn<(id: string) => Promise<string>>();
-const setAgentMemory = vi.fn<(id: string, content: string) => Promise<string>>();
+const agentMemoryVersioned = vi.fn<(id: string) => Promise<{ content: string; version: string }>>();
+const setAgentMemory = vi.fn<(id: string, content: string, expected?: string) => Promise<string>>();
 
 vi.mock("../lib/ipc", () => ({
   api: {
     agentMemory: (id: string) => agentMemory(id),
-    setAgentMemory: (id: string, content: string) => setAgentMemory(id, content),
+    agentMemoryVersioned: (id: string) => agentMemoryVersioned(id),
+    setAgentMemory: (id: string, content: string, expected?: string) =>
+      setAgentMemory(id, content, expected),
   },
 }));
 
@@ -40,8 +44,83 @@ describe("Memory", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     agentMemory.mockResolvedValue("");
+    agentMemoryVersioned.mockImplementation(async (id) => {
+      const content = await agentMemory(id);
+      return { content, version: createHash("sha256").update(content).digest("hex") };
+    });
     setAgentMemory.mockImplementation(async (_id, content) => content.trim());
     useStore.setState({ memoryVersion: {} });
+  });
+
+  it.each(["Save", "Cancel"] as const)(
+    "keeps both versions after a concurrent rewrite and resolves with %s",
+    async (choice) => {
+      let disk = "original";
+      const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+      agentMemory.mockImplementation(async () => disk);
+      setAgentMemory.mockImplementation(async (_id, content, expected) => {
+        if (expected !== hash(disk)) {
+          throw {
+            kind: "memoryConflict",
+            message: "changed",
+            detail: JSON.stringify({ current: disk, draft: content, version: hash(disk) }),
+          };
+        }
+        disk = content;
+        return content;
+      });
+      const { unmount } = render(<Memory agentId="a1" />);
+      await screen.findByText("original");
+      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+      type("operator draft");
+      unmount();
+      render(<Memory agentId="a1" />);
+      expect(box().value).toBe("operator draft");
+      await waitFor(() => expect(agentMemory).toHaveBeenCalledTimes(2));
+      disk = "agent rewrite";
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await screen.findByText(/rewrote this while you were typing/);
+      expect(box().value).toBe("operator draft");
+      expect(setAgentMemory).toHaveBeenCalledWith("a1", "operator draft", hash("original"));
+      fireEvent.click(screen.getByRole("button", { name: choice }));
+      const wanted = choice === "Save" ? "operator draft" : "agent rewrite";
+      expect(await screen.findByText(wanted)).toBeTruthy();
+      expect(disk).toBe(wanted);
+    },
+  );
+
+  it("falls back to unversioned saves when the host lacks versioned reads", async () => {
+    agentMemoryVersioned.mockRejectedValue({ kind: "unknownCommand", message: "unknown" });
+    agentMemory.mockResolvedValue("old");
+    render(<Memory agentId="a1" />);
+    await screen.findByText("old");
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    type("new");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("new");
+    expect(setAgentMemory).toHaveBeenCalledWith("a1", "new", undefined);
+  });
+
+  it("uses the new stored version on a later edit", async () => {
+    let disk = "original";
+    agentMemory.mockImplementation(async () => disk);
+    setAgentMemory.mockImplementation(async (_id, content, expected) => {
+      expect(expected).toBe(createHash("sha256").update(disk).digest("hex"));
+      disk = content;
+      return content;
+    });
+    render(<Memory agentId="a1" />);
+    await screen.findByText("original");
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    type("first");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("first");
+    await waitFor(() => expect(agentMemory).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    type("second");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("second");
+    expect(disk).toBe("second");
   });
 
   it("preserves text typed while a save is pending", async () => {
@@ -227,7 +306,11 @@ describe("Memory", () => {
 
     await waitFor(() => expect(screen.getByText("Smith handles verification.")).toBeTruthy());
     expect(screen.queryByRole("textbox", { name: "Memory" })).toBeNull();
-    expect(setAgentMemory).toHaveBeenCalledWith("a1", "  Smith handles verification.\n\n");
+    expect(setAgentMemory).toHaveBeenCalledWith(
+      "a1",
+      "  Smith handles verification.\n\n",
+      expect.any(String),
+    );
     // Trimming is not a cut, and reporting it as one would cry wolf on every
     // save that ended with a newline.
     expect(screen.queryByText(/end was cut/)).toBeNull();
@@ -320,7 +403,9 @@ describe("Memory", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
-    await waitFor(() => expect(setAgentMemory).toHaveBeenCalledWith("a1", "mine"));
+    await waitFor(() =>
+      expect(setAgentMemory).toHaveBeenCalledWith("a1", "mine", expect.any(String)),
+    );
     expect(screen.getByText("mine")).toBeTruthy();
     expect(screen.queryByText(/rewrote this while you were typing/)).toBeNull();
   });
