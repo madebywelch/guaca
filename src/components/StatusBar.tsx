@@ -49,7 +49,7 @@ export function StatusBar({ onOpen, onMessage }: Props) {
   const host = useHostState();
   const look = useBarLook();
   const [editing, setEditing] = useState(false);
-  const [running, setRunning] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const actions = settings?.quickActions ?? [];
   const widgets = settings?.widgets ?? [];
@@ -80,13 +80,13 @@ export function StatusBar({ onOpen, onMessage }: Props) {
       onOpen(action.does.place);
       return;
     }
-    setRunning(action.id);
+    setRunning(true);
     try {
       await onMessage(action.does.agentId, action.does.text);
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
-      setRunning(null);
+      setRunning(false);
     }
   };
 
@@ -147,7 +147,7 @@ export function StatusBar({ onOpen, onMessage }: Props) {
               type="button"
               className="statusbar__button"
               title={quickTitle(action, nameOf)}
-              disabled={running !== null}
+              disabled={running}
               onClick={() => void run(action)}
             >
               {action.label}

@@ -268,6 +268,19 @@ describe("App", () => {
     expect(await screen.findByRole("dialog", { name: /cafeteria/i })).toBeTruthy();
   });
 
+  it.fails("keeps the cafeteria open when settings is opened and dismissed above it", async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /open the cafeteria/i }));
+    const cafeteria = await screen.findByRole("dialog", { name: /cafeteria/i });
+    fireEvent.keyDown(window, { key: ",", ctrlKey: true });
+    const settings = await screen.findByRole("dialog", { name: /settings/i });
+    expect(cafeteria.isConnected).toBe(true);
+    expect(document.activeElement).toBe(settings);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: /settings/i })).toBeNull();
+    expect(cafeteria.isConnected).toBe(true);
+  });
+
   it("lists agents and opens a channel", async () => {
     listAgents.mockResolvedValue([agent("Manager"), agent("Chef")]);
     render(<App />);
