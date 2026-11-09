@@ -123,6 +123,8 @@ pub enum StoreError {
     PluginToolNotFound(PluginId, String),
     #[error("{plugin} does not offer a tool called {tool}. Use one of the {plugin} tools in your tool list.")]
     PluginToolNotOffered { plugin: String, tool: String },
+    #[error("Guaca could not use its own records: the {plugin} tool list is unreadable. Ask the operator to reconnect {plugin}.")]
+    PluginToolListUnreadable { plugin: String },
     #[error("no permission request with id {0}")]
     ApprovalNotFound(ApprovalId),
     #[error("that request was already answered ({})", state.as_str())]
@@ -2704,8 +2706,10 @@ impl Store {
         else {
             return Ok(PluginReach::NotConnected);
         };
-        let tools: Vec<PluginTool> = serde_json::from_str(&tools)
-            .map_err(|e| StoreError::Corrupt(format!("bad tool list for {kind:?}: {e}")))?;
+        let tools: Vec<PluginTool> = serde_json::from_str(&tools).map_err(|err| {
+            tracing::warn!(%err, plugin = %kind.slug(), "could not read stored plugin tool list");
+            StoreError::PluginToolListUnreadable { plugin: kind.label().to_string() }
+        })?;
         let Some(held) = tools.into_iter().find(|held| held.name == tool) else {
             return Err(StoreError::PluginToolNotOffered {
                 plugin: kind.label().to_string(),
@@ -8748,7 +8752,12 @@ mod tests {
             .unwrap()
             .execute("UPDATE plugins SET tools='not json' WHERE id=?1", [plugin.id.to_string()])
             .unwrap();
-        assert!(f.store.plugin_reach(group, first.id, &PluginKind::Neon, "disabled").is_err());
+        let error =
+            f.store.plugin_reach(group, first.id, &PluginKind::Neon, "disabled").unwrap_err();
+        assert_eq!(
+            crate::plugins::PluginError::from(error).to_string(),
+            "Guaca could not use its own records: the Neon tool list is unreadable. Ask the operator to reconnect Neon."
+        );
     }
 
     #[test]
