@@ -6,6 +6,34 @@ const file = (digest: string) => ({ digest, name: `${digest}.txt`, mime: "text/p
 describe("draft ownership", () => {
   beforeEach(() => sessionStorage.clear());
 
+  it("persists the operation key and preserves a later draft during retry", () => {
+    const initial = reduceDraft(readDraftState("keyed"), { type: "text", text: "first" });
+    const sending = reduceDraft(initial, { type: "send", key: "operation" });
+    const later = reduceDraft(sending, { type: "text", text: "later" });
+    saveDraftState("keyed", later);
+    const restored = readDraftState("keyed");
+    expect(restored.delivery).toEqual({
+      kind: "unknown",
+      payload: initial.draft,
+      key: "operation",
+      restored: false,
+    });
+    const retry = reduceDraft(restored, { type: "retry" });
+    expect(retry.draft).toEqual(later.draft);
+    expect(retry.delivery).toEqual({ kind: "sending", payload: initial.draft, key: "operation" });
+  });
+
+  it("clears only the restored payload on retry, preserving subsequent edits", () => {
+    const initial = reduceDraft(readDraftState("retry"), { type: "text", text: "first" });
+    const sending = reduceDraft(initial, { type: "send", key: "operation" });
+    const unknown = reduceDraft(sending, { type: "unknown" });
+    const retry = reduceDraft(unknown, { type: "retry" });
+    expect(retry.draft).toEqual({ text: "", files: [] });
+    expect(reduceDraft(retry, { type: "unknown" }).draft).toEqual(initial.draft);
+    const edited = reduceDraft(unknown, { type: "text", text: "changed" });
+    expect(reduceDraft(edited, { type: "retry" }).draft.text).toBe("changed");
+  });
+
   it("reads the previous draft format", () => {
     sessionStorage.setItem("old", JSON.stringify({ text: "old text", files: [] }));
     expect(readDraftState("old")).toEqual({

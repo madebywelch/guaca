@@ -97,13 +97,43 @@ fn read_rows(
 
 fn clean_address(value: &mut Value) {
     if let Some(text) = value.as_str() {
-        if let Ok(mut url) = reqwest::Url::parse(text) {
+        if let Some(mut url) = reqwest::Url::parse(text)
+            .ok()
+            .filter(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
+        {
             let _ = url.set_username("");
             let _ = url.set_password(None);
             url.set_query(None);
             url.set_fragment(None);
             *value = url.to_string().into();
+        } else {
+            *value = Value::Null;
         }
+    }
+}
+
+fn clean_reconnect(item: &mut Reconnect) {
+    match item.kind.as_str() {
+        "plugin" => {
+            item.details.retain(|key, _| matches!(key.as_str(), "kind" | "endpoint" | "access"));
+            if let Some(endpoint) = item.details.get_mut("endpoint") {
+                if let Some(command) = endpoint.as_str().filter(|s| s.starts_with("stdio:")) {
+                    let program = crate::domain::plugin::command_line(command)
+                        .and_then(|words| words.into_iter().next())
+                        .and_then(|word| word.rsplit(['/', '\\']).next().map(str::to_owned))
+                        .unwrap_or_default();
+                    *endpoint = format!("stdio:{program}").into();
+                    item.details
+                        .insert("note".into(), "Re-enter the full command and environment.".into());
+                } else {
+                    clean_address(endpoint);
+                }
+            }
+        }
+        "credential" => item
+            .details
+            .retain(|key, _| matches!(key.as_str(), "service" | "account" | "env_var" | "note")),
+        _ => item.details.clear(),
     }
 }
 
@@ -160,15 +190,9 @@ pub fn export(
                 .unwrap_or(kind)
                 .to_string();
             details.remove("id");
-            if let Some(value) = details.get_mut("endpoint") {
-                clean_address(value);
-            }
-            archive.reconnect.push(Reconnect {
-                kind: kind.into(),
-                name,
-                details,
-                agents: Vec::new(),
-            });
+            let mut item = Reconnect { kind: kind.into(), name, details, agents: Vec::new() };
+            clean_reconnect(&mut item);
+            archive.reconnect.push(item);
         }
     }
     if !columns(&tx, "group_imports")?.is_empty() {
@@ -180,6 +204,9 @@ pub fn export(
                 .reconnect
                 .extend(serde_json::from_str::<Vec<Reconnect>>(&value).map_err(|e| e.to_string())?);
         }
+    }
+    for item in &mut archive.reconnect {
+        clean_reconnect(item);
     }
     let mut digests = HashSet::new();
     for row in &archive.tables["messages"] {
@@ -324,6 +351,17 @@ pub fn import(
     workspace: &Workspace,
     files: &FileStore,
 ) -> Result<GroupId> {
+    for item in &mut archive.reconnect {
+        clean_reconnect(item);
+    }
+    if let Some(url) = archive
+        .tables
+        .get_mut("groups")
+        .and_then(|rows| rows.first_mut())
+        .and_then(|row| row.get_mut("base_url"))
+    {
+        clean_address(url);
+    }
     if archive.format != "guaca-group" || archive.version != 1 {
         return Err("This group file needs a different version of Guaca.".into());
     }
