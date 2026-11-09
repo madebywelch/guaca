@@ -164,11 +164,8 @@ impl Runtime {
 
         let mut runs = self.inner.runs.lock();
         for envelope in booked {
-            if let Some(count) = runs.outstanding.get_mut(&envelope.run_id) {
-                *count = count.saturating_sub(1);
-                if *count == 0 {
-                    runs.outstanding.remove(&envelope.run_id);
-                }
+            if Self::release_bookings(&mut runs, envelope.run_id, 1) {
+                self.inner.guard.lock().unpin(envelope.run_id);
             }
         }
         runs.put_down.extend(touched.iter().copied());
@@ -326,6 +323,12 @@ impl Runtime {
     pub fn pick_up(&self, recovered: Recovered) {
         let Recovered { resumed, steps, .. } = recovered;
         let conversations = steps.len();
+        {
+            let mut runs = self.inner.runs.lock();
+            for put in &resumed {
+                self.book(&mut runs, put.envelope.run_id);
+            }
+        }
         for (run, spent) in &steps {
             let card = resumed.iter().find(|put| put.envelope.run_id == *run).and_then(|put| {
                 match put.envelope.to {
@@ -343,7 +346,6 @@ impl Runtime {
             if !put.records.is_empty() {
                 self.inner.resuming.lock().insert(put.envelope.id, put.records);
             }
-            *self.inner.runs.lock().outstanding.entry(put.envelope.run_id).or_insert(0) += 1;
             self.queue(put.envelope);
         }
         if messages > 0 {

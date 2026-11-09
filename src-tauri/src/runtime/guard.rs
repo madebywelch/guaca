@@ -455,22 +455,38 @@ impl RunState {
     }
 }
 
-/// All live runs.
-///
-/// Runs are reaped on a time and count basis rather than on completion,
-/// because "complete" is not observable: an agent may still be mid-inference
-/// when its last peer goes quiet. Holding state a little too long is cheap;
-/// dropping it early re-arms every limit mid-cascade.
+/// Run guards retained after settlement and pinned while work is booked.
 #[derive(Debug, Default)]
 pub struct GuardRegistry {
     runs: HashMap<RunId, RunState>,
+    pinned: HashSet<RunId>,
+    warned_live: bool,
     max_retained: usize,
     retain_for_ms: i64,
 }
 
 impl GuardRegistry {
     pub fn new() -> Self {
-        Self { runs: HashMap::new(), max_retained: 256, retain_for_ms: 60 * 60 * 1000 }
+        Self {
+            runs: HashMap::new(),
+            pinned: HashSet::new(),
+            warned_live: false,
+            max_retained: 256,
+            retain_for_ms: 60 * 60 * 1000,
+        }
+    }
+
+    pub fn pin(&mut self, id: RunId) {
+        self.pinned.insert(id);
+        if self.pinned.len() > 1024 && !self.warned_live {
+            tracing::warn!(count = self.pinned.len(), "live guard count exceeds 1024");
+            self.warned_live = true;
+        }
+    }
+
+    pub fn unpin(&mut self, id: RunId) {
+        self.pinned.remove(&id);
+        self.reap(None);
     }
 
     /// Gets or creates the state for a run, on the limits of the group it is
@@ -484,8 +500,10 @@ impl GuardRegistry {
     /// fixed for the life of the run: a limit edited mid-cascade must not move
     /// the ceiling a conversation is already being measured against.
     pub fn run_within(&mut self, id: RunId, limits: GuardLimits) -> &mut RunState {
-        self.reap();
-        self.runs.entry(id).or_insert_with(|| RunState::new(limits))
+        self.reap(None);
+        self.runs.entry(id).or_insert_with(|| RunState::new(limits));
+        self.reap(Some(id));
+        self.runs.get_mut(&id).expect("the requested guard is retained")
     }
 
     pub fn peek(&self, id: RunId) -> Option<&RunState> {
@@ -496,16 +514,24 @@ impl GuardRegistry {
         self.runs.len()
     }
 
-    fn reap(&mut self) {
+    fn reap(&mut self, protected: Option<RunId>) {
         let cutoff = now_ms() - self.retain_for_ms;
-        self.runs.retain(|_, state| state.last_touched >= cutoff);
+        self.runs.retain(|id, state| {
+            Some(*id) == protected || self.pinned.contains(id) || state.last_touched >= cutoff
+        });
 
-        // Bound memory even if every run is recent: drop the oldest first.
-        if self.runs.len() > self.max_retained {
-            let mut by_age: Vec<(RunId, i64)> =
-                self.runs.iter().map(|(id, s)| (*id, s.last_touched)).collect();
+        // Live runs keep their budgets even under retention pressure.
+        let settled =
+            self.runs.len() - self.runs.keys().filter(|id| self.pinned.contains(id)).count();
+        if settled > self.max_retained {
+            let mut by_age: Vec<(RunId, i64)> = self
+                .runs
+                .iter()
+                .filter(|(id, _)| Some(**id) != protected && !self.pinned.contains(id))
+                .map(|(id, s)| (*id, s.last_touched))
+                .collect();
             by_age.sort_by_key(|(_, touched)| *touched);
-            let excess = self.runs.len() - self.max_retained;
+            let excess = settled - self.max_retained;
             for (id, _) in by_age.into_iter().take(excess) {
                 self.runs.remove(&id);
             }
@@ -874,6 +900,54 @@ mod tests {
         reg.runs.get_mut(&old).unwrap().last_touched = now_ms() - (2 * 60 * 60 * 1000);
         reg.run_within(RunId::new(), GuardLimits::default());
         assert!(reg.peek(old).is_none(), "stale run should have been reaped");
+    }
+
+    #[test]
+    fn booked_run_keeps_its_limits_under_more_than_256_live_guards() {
+        let mut reg = GuardRegistry::new();
+        let limits = GuardLimits { max_steps_per_run: 2, max_sends_per_pair: 2, ..permissive() };
+        let first = RunId::new();
+        let (from, to) = (AgentId::new(), AgentId::new());
+        reg.pin(first);
+        assert!(matches!(
+            reg.run_within(first, limits).evaluate(&req(from, to, "work", 0)),
+            Verdict::Allow { .. }
+        ));
+        assert!(reg.run_within(first, limits).reserve_step());
+        for _ in 0..300 {
+            let run = RunId::new();
+            reg.pin(run);
+            reg.run_within(run, limits).reserve_step();
+        }
+        assert!(reg.run_within(first, limits).has_written(from, to));
+        assert!(matches!(
+            reg.run_within(first, limits).evaluate(&req(from, to, "work", 0)),
+            Verdict::Refuse(Refusal::DuplicateContent { .. })
+        ));
+        assert!(matches!(
+            reg.run_within(first, limits).evaluate(&req(from, to, "more", 0)),
+            Verdict::Allow { .. }
+        ));
+        assert!(matches!(
+            reg.run_within(first, limits).evaluate(&req(from, to, "third", 0)),
+            Verdict::Refuse(Refusal::PairLimit { .. })
+        ));
+        assert!(reg.run_within(first, limits).reserve_step());
+        assert!(!reg.run_within(first, limits).reserve_step());
+    }
+
+    #[test]
+    fn booked_run_survives_age_expiry_until_it_settles() {
+        let mut reg = GuardRegistry::new();
+        let run = RunId::new();
+        reg.pin(run);
+        reg.run_within(run, permissive()).reserve_step();
+        reg.runs.get_mut(&run).unwrap().last_touched = now_ms() - 2 * 60 * 60 * 1000;
+        reg.run_within(RunId::new(), permissive());
+        assert_eq!(reg.peek(run).unwrap().steps_used(), 1);
+        reg.unpin(run);
+        reg.run_within(RunId::new(), permissive());
+        assert!(reg.peek(run).is_none());
     }
 
     #[test]
