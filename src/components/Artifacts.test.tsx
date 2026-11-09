@@ -420,30 +420,63 @@ describe("a click on a kept page", () => {
     const frame = await screen.findByTitle("Pipeline by stage");
     act(() => frame.focus());
     await pageSends({ move: "Hooli", to: "Won" });
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(screen.getByText('{"move":"Hooli","to":"Won"}')).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Send to Rae" }));
     await waitFor(() => expect(sendMessage).toHaveBeenCalled());
     const [to, text] = sendMessage.mock.calls[0]!;
     expect(to).toBe("rae");
+    expect(text).toBe(
+      'I confirmed a value from "Pipeline by stage" (artifact artifact-1, version 2). The page sent this:\n\n```json\n{"move":"Hooli","to":"Won"}\n```',
+    );
     expect(text).toContain('"Pipeline by stage" (artifact artifact-1, version 2)');
     expect(text).toContain('{"move":"Hooli","to":"Won"}');
     expect(await screen.findByText(/Sent to Rae/)).toBeTruthy();
   });
 
-  it("sends nothing the operator did not click", async () => {
-    // Focus is somewhere else: this is a page sending by itself.
+  it("requires confirmation for focused timers, repeated proposals and blur", async () => {
     await openOne();
+    const frame = await screen.findByTitle("Pipeline by stage");
+    act(() => frame.focus());
     await pageSends({ move: "Hooli" });
-    expect(await screen.findByText(/without a click, so nothing was sent/)).toBeTruthy();
+    await pageSends({ move: "Other" });
+    act(() => frame.blur());
+    expect(screen.getByText('{"move":"Hooli"}')).toBeTruthy();
+    expect(screen.queryByText('{"move":"Other"}')).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(sendMessage).not.toHaveBeenCalled();
+    await pageSends({ move: "Other" });
+    expect(screen.getByText('{"move":"Other"}')).toBeTruthy();
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("sends one at a time, and not while the owner is still working", async () => {
     await openOne();
-    useStore.setState({ activity: { rae: { state: "thinking" } } });
+    act(() => useStore.setState({ activity: { rae: { state: "thinking" } } }));
     const frame = await screen.findByTitle("Pipeline by stage");
     act(() => frame.focus());
     await pageSends({ move: "Hooli" });
     expect(await screen.findByText(/Rae is still working/)).toBeTruthy();
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("allows only one send while a confirmed send is in flight", async () => {
+    let finish!: (value: string) => void;
+    sendMessage.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    await openOne();
+    await pageSends({ move: "Hooli" });
+    const button = screen.getByRole("button", { name: "Send to Rae" });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await pageSends({ move: "Other" });
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    await act(async () => finish("run"));
+    expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 });
 
