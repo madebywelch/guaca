@@ -192,7 +192,11 @@ export function HostChoice({
       const connection = await localHost.connect(name);
       await probe(connection);
       preflightReload();
-      saveConnection(connection, "existing");
+      try {
+        saveConnection(connection, "existing");
+      } catch {
+        throw new Error("Guaca could not save this choice. Nothing changed.");
+      }
       if (onConnected) {
         adoptRemote(connection);
         onConnected();
@@ -235,7 +239,11 @@ export function HostChoice({
       }
       await probe(connection);
       preflightReload();
-      saveConnection(connection, mode);
+      try {
+        saveConnection(connection, mode);
+      } catch {
+        throw new Error("Guaca could not save this choice. Nothing changed.");
+      }
       if (onConnected) {
         adoptRemote(connection);
         onConnected();

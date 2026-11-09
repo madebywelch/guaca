@@ -691,7 +691,9 @@ export function HostUpdatePanel() {
       )}
       {unknown && accepted && (
         <div className="field">
-          <p role="status">The update outcome is unknown. Check again.</p>
+          <p role="status">
+            Guaca lost the Host's reply, so it can't tell whether the update started.
+          </p>
           <button
             className="btn"
             type="button"
@@ -789,14 +791,16 @@ export function HostUpdatePanel() {
         </button>
       )}
       <div className="access__row">
-        <button
-          className="btn btn--small"
-          disabled={checking || updating}
-          type="button"
-          onClick={() => void refresh(true)}
-        >
-          {checking && !updating ? "Checking…" : "Check for updates"}
-        </button>
+        {!(unknown && accepted) && (
+          <button
+            className="btn btn--small"
+            disabled={checking || updating}
+            type="button"
+            onClick={() => void refresh(true)}
+          >
+            {checking && !updating ? "Checking…" : "Check for updates"}
+          </button>
+        )}
         {!boxed && (
           <button
             className="btn btn--small"

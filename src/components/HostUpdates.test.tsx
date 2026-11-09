@@ -383,7 +383,10 @@ describe("a box that updates itself", () => {
     serve(() => Promise.reject(new TypeError("connection dropped")));
     mount();
     fireEvent.click(await screen.findByRole("button", { name: "Back up and update host" }));
-    await screen.findByText("The update outcome is unknown. Check again.");
+    await screen.findByText(
+      "Guaca lost the Host's reply, so it can't tell whether the update started.",
+    );
+    expect(screen.queryByRole("button", { name: "Check for updates" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Back up and update host" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Check again" }));
     await waitFor(() =>
@@ -391,7 +394,9 @@ describe("a box that updates itself", () => {
     );
     cleanup();
     mount();
-    await screen.findByText("The update outcome is unknown. Check again.");
+    await screen.findByText(
+      "Guaca lost the Host's reply, so it can't tell whether the update started.",
+    );
     expect(screen.queryByRole("button", { name: "Back up and update host" })).toBeNull();
     expect(fetched.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
   });
@@ -416,7 +421,9 @@ describe("a box that updates itself", () => {
       },
     };
     await poke();
-    await screen.findByText("The update outcome is unknown. Check again.");
+    await screen.findByText(
+      "Guaca lost the Host's reply, so it can't tell whether the update started.",
+    );
     expect(screen.queryByText("Host updated to Guaca 0.2.0.")).toBeNull();
   });
 
