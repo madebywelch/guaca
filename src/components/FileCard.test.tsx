@@ -303,7 +303,9 @@ describe("FileCard", () => {
     const { container } = render(<FileCard file={file("retry.md", "text/markdown")} />);
 
     const retry = await screen.findByRole("button", { name: "Try again" });
+    expect(retry.closest("button button")).toBeNull();
     fireEvent.click(retry);
+    expect(screen.queryByRole("dialog")).toBeNull();
 
     await waitFor(() =>
       expect(container.querySelector(".file__doc")?.textContent).toContain("first line"),

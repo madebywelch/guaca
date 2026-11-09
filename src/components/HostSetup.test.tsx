@@ -321,7 +321,8 @@ describe("desktop host setup", () => {
     });
     fireEvent.change(screen.getByLabelText("Access key"), { target: { value: "private" } });
     fireEvent.click(screen.getByRole("button", { name: "Connect to host" }));
-    await screen.findByText("Storage is unavailable.");
+    await screen.findByText("Guaca could not save this choice. Nothing changed.");
+    expect(screen.queryByText("Storage is unavailable.")).toBeNull();
     expect(restart).not.toHaveBeenCalled();
   });
   it("keeps the form for a saved remote host the workspace is not open on", async () => {

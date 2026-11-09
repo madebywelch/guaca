@@ -35,14 +35,23 @@ export function FileCard({ file }: { file: Attachment }) {
     <>
       <div className="file" data-kind={kind}>
         {kind !== "none" && (
-          <button
-            type="button"
-            className="file__view"
-            aria-label={`Open ${file.name}`}
-            onClick={() => setOpen(true)}
-          >
-            <Thumbnail file={file} />
-          </button>
+          <div className="file__view" style={{ position: "relative" }}>
+            <button
+              type="button"
+              aria-label={`Open ${file.name}`}
+              onClick={() => setOpen(true)}
+              style={{
+                position: "absolute",
+                inset: 0,
+                width: "100%",
+                background: "transparent",
+                border: 0,
+              }}
+            />
+            <div style={{ position: "relative", pointerEvents: "none" }}>
+              <Thumbnail file={file} />
+            </div>
+          </div>
         )}
         <div className="file__foot">
           <button
@@ -186,7 +195,7 @@ function Unreadable({
   onRetry: () => void;
 }) {
   return (
-    <div className="file__failed">
+    <div className="file__failed" style={{ pointerEvents: "auto" }}>
       <p className="hint">Could not read this file: {why}.</p>
       <div className="file__failed-actions">
         <button
