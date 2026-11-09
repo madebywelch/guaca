@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useEffect, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const frameArtifact = vi.fn(async () => ({ port: 9999, id: "a".repeat(64) }));
@@ -9,12 +10,16 @@ vi.mock("../lib/ipc", () => ({
   api: {
     frameArtifact: () => frameArtifact(),
     sendMessage: (agentId: string, text: string) => sendMessage(agentId, text),
+    search: async () => ({ messages: [], files: [], links: [], routines: [], artifacts: [] }),
+    claudeProgram: async () => ({ installed: false }),
   },
   openExternal: vi.fn(),
 }));
 
 const { Markdown } = await import("./Markdown");
 const { Answering, answerMessage } = await import("./HtmlArtifact");
+const { Search } = await import("./Search");
+const { SettingsDialog } = await import("./SettingsDialog");
 
 const fence = (language: string, body: unknown) =>
   `\`\`\`${language}\n${typeof body === "string" ? body : JSON.stringify(body)}\n\`\`\``;
@@ -26,6 +31,35 @@ const BARS = JSON.stringify({
   labels: ["Q1", "Q2"],
   series: [{ name: "2026", data: [12, 18] }],
 });
+
+function Workspace({ page }: { page: string }) {
+  const [overlay, setOverlay] = useState<"search" | "settings" | null>(null);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.ctrlKey && event.key === "k") setOverlay("search");
+      if (event.ctrlKey && event.key === ",") setOverlay("settings");
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  return (
+    <>
+      <Markdown>{fence("html", page)}</Markdown>
+      {overlay === "search" && (
+        <Search
+          onClose={() => setOverlay(null)}
+          onEditAgent={() => {}}
+          onEditGroup={() => {}}
+          onNewAgent={() => {}}
+          onNewGroup={() => {}}
+          onOpenCafeteria={() => {}}
+          onOpenSettings={() => {}}
+        />
+      )}
+      {overlay === "settings" && <SettingsDialog onClose={() => setOverlay(null)} />}
+    </>
+  );
+}
 
 describe("a chart in a message", () => {
   it("draws instead of printing the JSON", () => {
@@ -138,6 +172,44 @@ describe("a chart that will not draw", () => {
 describe("a page in a message", () => {
   const PAGE =
     "<!doctype html><html><body><h1>Plan</h1><p>Something worth framing.</p></body></html>";
+
+  it("keeps the figure and expanded page when its parent rerenders", async () => {
+    const view = render(<Markdown>{fence("html", PAGE)}</Markdown>);
+    await screen.findByTitle("Page");
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    const figure = view.container.querySelector(".figure");
+    const dialog = screen.getByRole("dialog", { name: "Page" });
+    const frame = screen.getByTitle("Page");
+    view.rerender(<Markdown>{fence("html", PAGE)}</Markdown>);
+    expect(view.container.querySelector(".figure")).toBe(figure);
+    expect(screen.getByRole("dialog", { name: "Page" })).toBe(dialog);
+    expect(screen.getByTitle("Page")).toBe(frame);
+  });
+
+  it.each([
+    ["Search", "k"],
+    ["Settings", ","],
+  ])("dismisses %s above an expanded page and restores focus", async (name, key) => {
+    render(<Workspace page={PAGE} />);
+    await waitFor(() => expect(screen.getByTitle("Page")).toBeTruthy());
+    const open = screen.getByRole("button", { name: "Open" });
+    open.focus();
+    fireEvent.click(open);
+    const page = screen.getByRole("dialog", { name: "Page" });
+    const close = within(page).getByRole("button", { name: "Close" });
+    close.focus();
+    fireEvent.keyDown(window, { key, ctrlKey: true });
+    const overlay = await screen.findByRole("dialog", { name });
+    expect(page.isConnected).toBe(true);
+    expect(overlay.contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(overlay.isConnected).toBe(false);
+    expect(page.isConnected).toBe(true);
+    expect(document.activeElement).toBe(close);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(page.isConnected).toBe(false);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Open" }));
+  });
 
   it.each(["Escape", "Close"])("returns focus to Open after %s", async (how) => {
     render(<Markdown>{fence("html", PAGE)}</Markdown>);

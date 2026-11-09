@@ -1,4 +1,4 @@
-import { createContext, type ReactNode, useContext, useMemo } from "react";
+import { type ComponentProps, createContext, type ReactNode, useContext, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -40,59 +40,60 @@ export const Roster = createContext<string[]>([]);
 export function Markdown({ children, live = false }: { children: string; live?: boolean }) {
   const names = useContext(Roster);
   const plugins = useMemo(() => [remarkGfm, remarkCallouts, remarkMentions(names)], [names]);
+  const components = useMemo<NonNullable<ComponentProps<typeof ReactMarkdown>["components"]>>(
+    () => ({
+      a: ({ href, children }) => (
+        <a
+          href={href}
+          onClick={(event) => {
+            // Following a link inside the webview navigates away from the
+            // app with no way back.
+            event.preventDefault();
+            if (href) void openExternal(href);
+          }}
+        >
+          {children}
+        </a>
+      ),
+      // Remote images cannot load under the app's content policy, so a
+      // plain image would render as a broken box. A link says what it is.
+      img: ({ src, alt }) => (
+        <a
+          href={typeof src === "string" ? src : undefined}
+          onClick={(event) => {
+            event.preventDefault();
+            if (typeof src === "string") void openExternal(src);
+          }}
+        >
+          {alt || "image"}
+        </a>
+      ),
+      // Intercepted at the `pre` rather than at the `code` inside it: a
+      // figure is a block, and a block returned from the `code` slot lands
+      // inside a `<pre>` that react-markdown has already opened, which is
+      // markup no browser agrees on how to lay out.
+      pre: ({ children }) => {
+        const fenced = asFence(children);
+        if (fenced) {
+          const figure = readFigure(fenced.language, fenced.source, live);
+          if (figure.kind !== "source") {
+            return <Figure figure={figure} source={fenced.source} />;
+          }
+        }
+        return <pre className="md__pre">{children}</pre>;
+      },
+      table: ({ children }) => (
+        <div className="md__scroll">
+          <table>{children}</table>
+        </div>
+      ),
+    }),
+    [live],
+  );
 
   return (
     <div className="md">
-      <ReactMarkdown
-        remarkPlugins={plugins}
-        components={{
-          a: ({ href, children }) => (
-            <a
-              href={href}
-              onClick={(event) => {
-                // Following a link inside the webview navigates away from the
-                // app with no way back.
-                event.preventDefault();
-                if (href) void openExternal(href);
-              }}
-            >
-              {children}
-            </a>
-          ),
-          // Remote images cannot load under the app's content policy, so a
-          // plain image would render as a broken box. A link says what it is.
-          img: ({ src, alt }) => (
-            <a
-              href={typeof src === "string" ? src : undefined}
-              onClick={(event) => {
-                event.preventDefault();
-                if (typeof src === "string") void openExternal(src);
-              }}
-            >
-              {alt || "image"}
-            </a>
-          ),
-          // Intercepted at the `pre` rather than at the `code` inside it: a
-          // figure is a block, and a block returned from the `code` slot lands
-          // inside a `<pre>` that react-markdown has already opened, which is
-          // markup no browser agrees on how to lay out.
-          pre: ({ children }) => {
-            const fenced = asFence(children);
-            if (fenced) {
-              const figure = readFigure(fenced.language, fenced.source, live);
-              if (figure.kind !== "source") {
-                return <Figure figure={figure} source={fenced.source} />;
-              }
-            }
-            return <pre className="md__pre">{children}</pre>;
-          },
-          table: ({ children }) => (
-            <div className="md__scroll">
-              <table>{children}</table>
-            </div>
-          ),
-        }}
-      >
+      <ReactMarkdown remarkPlugins={plugins} components={components}>
         {children}
       </ReactMarkdown>
     </div>
