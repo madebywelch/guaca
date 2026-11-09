@@ -137,6 +137,37 @@ describe("StatusBar", () => {
     expect(screen.getByRole("button", { name: "Calendar" }).title).toBe("Opens the calendar");
   });
 
+  it("keeps editing independent while a message runs and permits another after failure", async () => {
+    seed([brief, calendar]);
+    let reject!: (reason: Error) => void;
+    onMessage.mockReturnValueOnce(
+      new Promise<void>((_, fail) => {
+        reject = fail;
+      }),
+    );
+    render(<StatusBar onOpen={onOpen} onMessage={onMessage} />);
+    fireEvent.click(screen.getByRole("button", { name: "Morning brief" }));
+    expect(
+      (screen.getByRole("button", { name: "Morning brief" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect((screen.getByRole("button", { name: "Calendar" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("button", { name: "Remove Morning brief" })).toBeTruthy();
+    await act(async () => reject(new Error("Send failed")));
+    expect(screen.getByRole("alert").textContent).toContain("Send failed");
+    fireEvent.click(screen.getByRole("button", { name: "Morning brief" }));
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "Morning brief" }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    expect(onMessage).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+  });
+
   it("names which host it is, and flags an app older than it", () => {
     // It said "Host 0.1.0": a version, which is the least useful half of what
     // the bar knows, and clickable, so it was a status somebody was meant to
