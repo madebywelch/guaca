@@ -84,6 +84,33 @@ afterEach(() => {
 });
 
 describe("what it asks for", () => {
+  it("shows the empty state and error when a read fails, then clears it on refresh", async () => {
+    open([]);
+    await waitFor(() => expect(calendar).toHaveBeenCalledTimes(1));
+    calendar.mockRejectedValueOnce(new Error("Calendar unavailable"));
+    fireEvent.click(screen.getByRole("button", { name: /next month/i }));
+    expect(await screen.findByText("Calendar unavailable")).toBeTruthy();
+    expect(screen.getByText(/nothing on this calendar/i)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /^today$/i }));
+    await waitFor(() => expect(screen.queryByText("Calendar unavailable")).toBeNull());
+  });
+
+  it("keeps the previous data while a month read is in flight", async () => {
+    open([occasion()]);
+    expect(await screen.findByText("Board call")).toBeTruthy();
+    let finish!: (occasions: Occasion[]) => void;
+    calendar.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /next month/i }));
+    expect(screen.queryByText(/loading/i)).toBeNull();
+    await act(async () => finish([]));
+    expect(screen.getByText(/nothing on this calendar/i)).toBeTruthy();
+  });
+
   it("opens on this month and the rest of the next", async () => {
     // A calendar opened on the 29th and showing only the calendar month is a
     // calendar showing two days.

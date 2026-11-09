@@ -115,6 +115,36 @@ describe("RoutineList", () => {
     expect(await screen.findByText(/Nothing standing/)).toBeTruthy();
   });
 
+  it("shows the empty state with a failed read and clears the error on refresh", async () => {
+    agentRoutines.mockRejectedValueOnce(new Error("Read failed"));
+    render(<RoutineList agentId="a1" onOpen={vi.fn()} />);
+
+    expect(await screen.findByText("Read failed")).toBeTruthy();
+    expect(screen.getByText("Nothing standing.")).toBeTruthy();
+
+    agentRoutines.mockResolvedValueOnce([routine()]);
+    act(() => useStore.getState().applyEvent({ type: "routinesChanged", agentId: "a1" }));
+    expect(await screen.findByText("Boss commitment nudge")).toBeTruthy();
+    expect(screen.queryByText("Read failed")).toBeNull();
+  });
+
+  it("keeps the previous rows while a refresh is in flight", async () => {
+    agentRoutines.mockResolvedValueOnce([routine()]);
+    render(<RoutineList agentId="a1" onOpen={vi.fn()} />);
+    expect(await screen.findByText("Boss commitment nudge")).toBeTruthy();
+
+    let finish!: (routines: Routine[]) => void;
+    agentRoutines.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    act(() => useStore.getState().applyEvent({ type: "routinesChanged", agentId: "a1" }));
+    expect(screen.getByText("Boss commitment nudge")).toBeTruthy();
+    await act(async () => finish([]));
+    expect(screen.getByText("Nothing standing.")).toBeTruthy();
+  });
+
   it("reads itself again when the agent it belongs to changes its own schedule", async () => {
     // An agent sets a routine for itself mid-turn, with the operator looking at
     // this panel. Until the runtime said so, the list stayed as it was drawn and

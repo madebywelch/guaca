@@ -37,6 +37,11 @@ interface Props {
   onOpen: (routine: RoutineId | "new") => void;
 }
 
+type RoutineRead =
+  | { status: "loading" }
+  | { status: "loaded"; routines: Routine[] }
+  | { status: "failed" };
+
 /**
  * An agent's schedule, as one line per standing commitment.
  *
@@ -50,7 +55,8 @@ interface Props {
  * list that showed it was one routine tall.
  */
 export function RoutineList({ agentId, onOpen }: Props) {
-  const [routines, setRoutines] = useState<Routine[] | null>(null);
+  const [read, setRead] = useState<RoutineRead>({ status: "loading" });
+  const routines = read.status === "loading" ? null : read.status === "loaded" ? read.routines : [];
   const [error, setError] = useState<string | null>(null);
   const now = useNow(30_000);
   // A routine set, retimed, canceled or fired since this was drawn. The
@@ -61,11 +67,11 @@ export function RoutineList({ agentId, onOpen }: Props) {
 
   const load = useCallback(async () => {
     try {
-      setRoutines(await api.agentRoutines(agentId));
+      setRead({ status: "loaded", routines: await api.agentRoutines(agentId) });
       setError(null);
     } catch (caught) {
       setError(errorMessage(caught));
-      setRoutines([]);
+      setRead({ status: "failed" });
     }
   }, [agentId]);
 
