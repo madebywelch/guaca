@@ -38,7 +38,7 @@ vi.mock("./HostUpdates", () => ({
 }));
 vi.mock("../lib/build", () => ({ VERSION: "0.1.0", COMMIT: "aaaaaaa" }));
 
-import { StatusBar } from "./StatusBar";
+import { refusalRead, StatusBar } from "./StatusBar";
 
 function card(id: string, name: string): AgentCard {
   return {
@@ -277,7 +277,7 @@ describe("a pinned page", () => {
       page: "<b id=n></b>",
     });
     artifactData.mockResolvedValue(reads);
-    render(<StatusBar onOpen={onOpen} onMessage={onMessage} />);
+    const { unmount } = render(<StatusBar onOpen={onOpen} onMessage={onMessage} />);
     await waitFor(() => expect(artifactData).toHaveBeenCalledTimes(1));
 
     await act(async () => vi.advanceTimersByTime(5 * 60_000));
@@ -288,6 +288,12 @@ describe("a pinned page", () => {
     expect(artifactData).toHaveBeenCalledTimes(2);
     hidden.mockReturnValue("visible");
     await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+    expect(artifactData).toHaveBeenCalledTimes(3);
+    unmount();
+    await act(async () => {
+      vi.advanceTimersByTime(5 * 60_000);
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
     expect(artifactData).toHaveBeenCalledTimes(3);
     hidden.mockRestore();
   });
@@ -305,6 +311,68 @@ describe("a pinned page", () => {
     await waitFor(() => expect(artifactData).toHaveBeenCalledTimes(1));
     await act(async () => vi.advanceTimersByTime(60 * 60_000));
     expect(artifactData).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers one refusal when a hidden unapproved widget becomes visible", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    seed([], [pin()]);
+    artifactCondensed.mockResolvedValue({
+      artifact: page({
+        sources: [{ name: "prs", tool: "github__list_pull_requests", arguments: {} }],
+      }),
+      page: "<b></b>",
+    });
+    const refusal = [{ name: "prs", data: null, text: null, error: "not allowed" }];
+    artifactData.mockResolvedValue(refusal);
+    const { container, unmount } = render(<StatusBar onOpen={onOpen} onMessage={onMessage} />);
+    const frame = await waitFor(() => {
+      const found = container.querySelector("iframe.widget__frame") as HTMLIFrameElement | null;
+      if (!found) throw new Error("no frame yet");
+      return found;
+    });
+    const post = vi.spyOn(frame.contentWindow as Window, "postMessage");
+    fireEvent.load(frame);
+    expect(artifactData).not.toHaveBeenCalled();
+    visibility.mockReturnValue("visible");
+    await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+    expect(artifactData).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledWith(
+      { guaca: "artifact-data", data: { prs: { data: null, text: null, error: "not allowed" } } },
+      "*",
+    );
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      vi.advanceTimersByTime(60 * 60_000);
+    });
+    expect(artifactData).toHaveBeenCalledTimes(1);
+    unmount();
+    visibility.mockRestore();
+  });
+
+  it("transitions refusal reads only once and never revives a disposed read", () => {
+    for (const kind of ["waiting", "sent", "disposed"] as const) {
+      expect(refusalRead({ kind }, "visible").kind).toBe(kind === "waiting" ? "sent" : kind);
+      expect(refusalRead({ kind }, "dispose").kind).toBe("disposed");
+    }
+  });
+
+  it("removes a hidden widget's visibility retry on unmount", async () => {
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    seed([], [pin()]);
+    artifactCondensed.mockResolvedValue({
+      artifact: page({
+        sources: [{ name: "prs", tool: "github__list_pull_requests", arguments: {} }],
+      }),
+      page: null,
+    });
+    const { unmount } = render(<StatusBar onOpen={onOpen} onMessage={onMessage} />);
+    await screen.findByText("Open PRs");
+    unmount();
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(artifactData).not.toHaveBeenCalled();
+    visibility.mockRestore();
   });
 
   it("holds its place with its title when this version has no condensed view", async () => {
