@@ -299,6 +299,7 @@ export function HostUpdateNotice({ onReview }: { onReview: () => void }) {
 /** An update a box accepted: what it was asked for, and what to call it. */
 interface Accepted {
   at: number;
+  attemptId: string;
   version: string;
   /** The image, on main, where every build carries the same version. */
   image?: string;
@@ -310,13 +311,11 @@ function outcome(manager: Manager, asked: Accepted): { result: string } | { fail
   // The journal holds the last update that ran. One that never began leaves
   // it holding an earlier one, whose outcome is not this one's.
   const ran = manager.operation;
-  const op = (asked.image ? ran?.targetImage === asked.image : ran?.targetVersion === asked.version)
-    ? ran
-    : null;
+  const op =
+    (ran as typeof ran & { attemptId?: string })?.attemptId === asked.attemptId ? ran : null;
   if (!op)
     return {
-      failure:
-        manager.error ?? "The host did not start the update. Check for updates and try again.",
+      failure: "The update outcome is unknown. Check again.",
     };
   if (op.stage === "Host updated")
     return {
@@ -441,10 +440,29 @@ export function HostUpdatePanel() {
   const [failure, setFailure] = useState("");
   const [instructions, setInstructions] = useState(false);
   /** An update a box accepted from this panel, until it reports it finished. */
-  const [accepted, setAccepted] = useState<Accepted | null>(null);
+  const [accepted, setAccepted] = useState<Accepted | null>(() => {
+    try {
+      const saved = JSON.parse(
+        sessionStorage.getItem(`guaca.update.${workspaceOrigin()}`) ?? "null",
+      );
+      return saved && typeof saved.attemptId === "string" && typeof saved.at === "number"
+        ? saved
+        : null;
+    } catch {
+      return null;
+    }
+  });
+  const [unknown, setUnknown] = useState(!!accepted);
+  useEffect(() => {
+    try {
+      const key = `guaca.update.${workspaceOrigin()}`;
+      if (accepted) sessionStorage.setItem(key, JSON.stringify(accepted));
+      else sessionStorage.removeItem(key);
+    } catch {}
+  }, [accepted]);
   const activity = useStore((s) => s.activity);
   const checkProgress = state?.refresh;
-  const boxBusy = !!accepted || !!state?.manager?.updating;
+  const boxBusy = (!!accepted && !unknown) || !!state?.manager?.updating;
   const updating = busy || !!state?.docker?.updating || boxBusy;
   useEffect(() => {
     if (!updating || !checkProgress) return;
@@ -459,6 +477,10 @@ export function HostUpdatePanel() {
     // that is answering again: the one before the click also says "not updating".
     if (!accepted || !manager || manager.updating || managerAt <= accepted.at || !answered) return;
     const said = outcome(manager, accepted);
+    if ("failure" in said && said.failure === "The update outcome is unknown. Check again.") {
+      setUnknown(true);
+      return;
+    }
     if ("result" in said) setResult(said.result);
     else setFailure(said.failure);
     setAccepted(null);
@@ -521,32 +543,48 @@ export function HostUpdatePanel() {
     setBusy(true);
     setFailure("");
     setResult("");
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+    bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    const attempt: Accepted = {
+      at: Date.now(),
+      attemptId: `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`,
+      version: latest.version,
+      image: onMain ? latest.image : undefined,
+      name: target ?? `Guaca ${latest.version}`,
+    };
+    try {
+      sessionStorage.setItem(`guaca.update.${workspaceOrigin()}`, JSON.stringify(attempt));
+    } catch {}
+    setAccepted(attempt);
+    setUnknown(false);
     try {
       const response = await fetch(`${workspaceOrigin()}/v1/host/update`, {
         method: "POST",
         cache: "no-store",
         headers: { "content-type": "application/json", ...bearer() },
         body: JSON.stringify(
-          onMain ? { version: latest.version, commit: latest.commit } : { version: latest.version },
+          onMain
+            ? { version: latest.version, commit: latest.commit, attemptId: attempt.attemptId }
+            : { version: latest.version, attemptId: attempt.attemptId },
         ),
         signal: AbortSignal.timeout(45000),
       });
       const body: unknown = await response.json().catch(() => null);
-      if (!response.ok)
-        throw new Error(
-          (body as { err?: { message?: string } } | null)?.err?.message ??
-            "The host did not accept the update. Try again.",
-        );
+      if (!response.ok) {
+        const message = (body as { err?: { message?: string } } | null)?.err?.message;
+        if (response.status === 409 && message?.startsWith("The latest release is Guaca ")) {
+          setAccepted(null);
+          setFailure(message);
+          return;
+        }
+        throw new Error("The update outcome is unknown.");
+      }
       const report = parseManager(body);
       if (report) state.adoptManager(report);
-      setAccepted({
-        at: Date.now(),
-        version: latest.version,
-        image: onMain ? latest.image : undefined,
-        name: target ?? `Guaca ${latest.version}`,
-      });
-    } catch (cause) {
-      setFailure(errorMessage(cause));
+    } catch {
+      setUnknown(true);
     } finally {
       setBusy(false);
     }
@@ -555,7 +593,6 @@ export function HostUpdatePanel() {
     (a) => a.state === "thinking" || a.state === "awaitingApproval",
   ).length;
   const operation = docker?.operation ?? manager?.operation ?? null;
-  // While a box restarts its host, not answering is the update working.
   const restarting = boxBusy && !answered;
   // The journal of the update running now, and what it installs: on a box
   // the updater's, and on this Mac this app's.
@@ -574,7 +611,7 @@ export function HostUpdatePanel() {
       <p className="field__hint">{workspaceOrigin()}</p>
       <p role="status">
         {restarting
-          ? "The host is restarting on its new version."
+          ? "The host is not answering."
           : !health
             ? checking
               ? "Checking host…"
@@ -652,6 +689,19 @@ export function HostUpdatePanel() {
           {onMain ? "The commit" : "Release notes"}
         </a>
       )}
+      {unknown && accepted && (
+        <div className="field">
+          <p role="status">The update outcome is unknown. Check again.</p>
+          <button
+            className="btn"
+            type="button"
+            disabled={checking}
+            onClick={() => void refresh(true)}
+          >
+            Check again
+          </button>
+        </div>
+      )}
       {updating ? (
         <UpdateProgress
           progress={underway}
@@ -662,6 +712,7 @@ export function HostUpdatePanel() {
           }
         />
       ) : (
+        !accepted &&
         ((canUpdate && match !== "clientOld") || canUpdateBox) && (
           <div className="field">
             <p>

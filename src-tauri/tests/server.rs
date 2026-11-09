@@ -1085,7 +1085,10 @@ async fn a_box_relays_its_updater_and_only_for_the_token() {
         .unwrap();
     assert_eq!(accepted.status(), 200);
     assert_eq!(accepted.json::<Value>().await.unwrap()["updating"], true);
-    assert_eq!(heard.recv().await.unwrap(), json!({ "ask": "update", "version": "0.3.0" }));
+    let request = heard.recv().await.unwrap();
+    assert_eq!(request["ask"], "update");
+    assert_eq!(request["version"], "0.3.0");
+    uuid::Uuid::parse_str(request["attemptId"].as_str().unwrap()).unwrap();
 
     let stale = http
         .post(format!("http://{addr}/v1/host/update"))
@@ -1101,6 +1104,34 @@ async fn a_box_relays_its_updater_and_only_for_the_token() {
 }
 
 // --- Session cookie auth ---
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_box_relays_the_callers_attempt_id_unchanged() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let sockets = tempfile::tempdir().unwrap();
+    let path = sockets.path().join("updater.sock");
+    let listener = tokio::net::UnixListener::bind(&path).unwrap();
+    let updater = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let (read, mut write) = stream.into_split();
+        let mut line = String::new();
+        BufReader::new(read).read_line(&mut line).await.unwrap();
+        write.write_all(b"{\"ok\":{\"updating\":true}}\n").await.unwrap();
+        serde_json::from_str::<Value>(&line).unwrap()
+    });
+    let (addr, _dir) = workspace_beside(Some(path)).await;
+    let id = uuid::Uuid::new_v4().to_string();
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/host/update"))
+        .bearer_auth(TOKEN)
+        .json(&json!({ "version": "0.3.0", "attemptId": id }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(updater.await.unwrap()["attemptId"], id);
+}
 
 /// Exchanges the workspace token for the HttpOnly session cookie.
 async fn session_cookie(addr: SocketAddr) -> String {

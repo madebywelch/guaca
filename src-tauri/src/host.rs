@@ -148,6 +148,8 @@ impl<'de> Deserialize<'de> for Stage {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Operation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
     pub stage: Stage,
     pub backup: Option<String>,
     pub previous_image: String,
@@ -603,6 +605,15 @@ impl LocalHost {
         target: &Target,
         expected_origin: Option<&str>,
     ) -> Result<Connection, String> {
+        self.update_attempt(target, expected_origin, uuid::Uuid::new_v4().to_string()).await
+    }
+
+    pub async fn update_attempt(
+        &self,
+        target: &Target,
+        expected_origin: Option<&str>,
+        attempt_id: String,
+    ) -> Result<Connection, String> {
         let _lock = self
             .lock
             .try_lock()
@@ -610,6 +621,7 @@ impl LocalHost {
         let _process_lock = self.process_lock()?;
         self.settle().await?;
         let mut op = Operation {
+            attempt_id: Some(attempt_id),
             stage: Stage::Downloading,
             backup: None,
             previous_image: String::new(),
@@ -1444,6 +1456,7 @@ pub(crate) mod tests {
     #[cfg(unix)]
     fn interrupted(host: &LocalHost, stage: Stage, port: u16) -> Operation {
         let op = Operation {
+            attempt_id: None,
             stage,
             backup: Some("fixture-host-backup-1".into()),
             previous_image: "fixture:old".into(),
@@ -1547,6 +1560,7 @@ pub(crate) mod tests {
         std::fs::write(&path, "broken JSON").unwrap();
         assert!(host.stuck().is_err());
         host.record(&Operation {
+            attempt_id: None,
             stage: Stage::RecoveryNeeded,
             backup: Some("saved-volume".into()),
             previous_image: "old".into(),
