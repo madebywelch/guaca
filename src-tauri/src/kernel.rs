@@ -129,6 +129,8 @@ pub enum KernelError {
     Api { status: u16, message: String },
     #[error("Kernel replied in a form this build does not understand: {0}")]
     Protocol(String),
+    #[error("Guaca could not use its own records: {0}")]
+    Local(String),
     #[error(transparent)]
     Cdp(#[from] CdpError),
 }
@@ -385,7 +387,7 @@ impl KernelClient {
         workspace: &str,
     ) -> Result<BrowserCreation, KernelError> {
         if workspace.trim().is_empty() {
-            return Err(KernelError::Protocol("workspace identity is empty".into()));
+            return Err(KernelError::Local("workspace identity is empty".into()));
         }
         let mut body = create_body(agent, profile, idle_seconds, stealth);
         body["tags"][WORKSPACE_TAG] = json!(workspace);
@@ -444,7 +446,7 @@ impl KernelClient {
         agent: Option<&str>,
     ) -> Result<Vec<String>, KernelError> {
         if workspace.trim().is_empty() {
-            return Err(KernelError::Protocol("workspace identity is empty".into()));
+            return Err(KernelError::Local("workspace identity is empty".into()));
         }
         let mut result = Vec::new();
         let mut seen = std::collections::HashSet::new();
@@ -491,7 +493,7 @@ impl KernelClient {
         workspace: &str,
     ) -> Result<Option<Session>, KernelError> {
         if workspace.trim().is_empty() {
-            return Err(KernelError::Protocol("workspace identity is empty".into()));
+            return Err(KernelError::Local("workspace identity is empty".into()));
         }
         match self.call::<BrowserRow>(self.http.get(format!("{}/browsers/{id}", self.base))).await {
             Ok(row)
@@ -943,6 +945,25 @@ mod tests {
     use tokio_tungstenite::tungstenite::Message;
 
     use super::*;
+
+    #[tokio::test]
+    async fn an_empty_workspace_identity_is_a_local_error() {
+        let client = KernelClient::new("test").unwrap();
+        let error =
+            client.create_for_workspace("agent", "profile", 60, false, "").await.unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Guaca could not use its own records: workspace identity is empty"
+        );
+    }
+
+    #[test]
+    fn a_browser_provider_reply_error_keeps_its_provider_prefix() {
+        assert_eq!(
+            KernelError::Protocol("Kernel repeated a browser in its inventory".into()).to_string(),
+            "Kernel replied in a form this build does not understand: Kernel repeated a browser in its inventory"
+        );
+    }
 
     /// One CSP entry, built from the same constants the runtime check uses.
     fn live_view_origin(scheme: &str, host: &str) -> String {

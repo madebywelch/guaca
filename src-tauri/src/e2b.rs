@@ -188,6 +188,8 @@ pub enum E2bError {
     Api { status: u16, message: String },
     #[error("the sandbox replied in a form this build does not understand: {0}")]
     Protocol(String),
+    #[error("Guaca could not use its own records: {0}")]
+    Local(String),
 }
 
 /// What the UI needs to show an agent's computer.
@@ -1548,6 +1550,11 @@ mod tests {
             let client = state_server(Some(response)).await;
             assert!(matches!(client.state("test").await, Err(E2bError::Protocol(_))), "{body}");
         }
+    }
+
+    #[test]
+    fn a_provider_reply_error_keeps_its_provider_prefix() {
+        assert_eq!(E2bError::Protocol("unrecognized sandbox state".into()).to_string(), "the sandbox replied in a form this build does not understand: unrecognized sandbox state");
     }
 
     #[tokio::test]

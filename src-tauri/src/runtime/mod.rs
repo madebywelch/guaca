@@ -6021,10 +6021,8 @@ impl Runtime {
             .inner
             .store
             .get_agent(card.id)
-            .map_err(|err| {
-                E2bError::Protocol(format!("could not read the agent's computer: {err}"))
-            })?
-            .ok_or_else(|| E2bError::Protocol("the agent is no longer available".into()))?;
+            .map_err(|err| E2bError::Local(format!("could not read the agent's computer: {err}")))?
+            .ok_or_else(|| E2bError::Local("the agent is no longer available".into()))?;
         let config = self.config();
         // The one place a sandbox is provisioned is the one place that knows
         // which agent it is for, so it is where the group's credentials are
@@ -6034,21 +6032,21 @@ impl Runtime {
             self.inner
                 .store
                 .connector_env(card.id)
-                .map_err(|error| E2bError::Transport(format!("Could not load Secrets: {error}")))?,
+                .map_err(|error| E2bError::Local(format!("Could not load Secrets: {error}")))?,
         );
         let idle = config.e2b.idle_minutes.max(1) * 60;
 
         let known = match (&held.sandbox_id, &held.sandbox_envd_token) {
             (Some(id), Some(envd)) => Some((id.clone(), envd.clone())),
             (Some(_), None) => {
-                return Err(E2bError::Protocol("the stored sandbox has no access token".into()));
+                return Err(E2bError::Local("the stored sandbox has no access token".into()));
             }
             _ => None,
         };
 
         if let Some((id, envd)) = known {
             let pending = self.inner.store.sandbox_resume_pending(&id).map_err(|err| {
-                E2bError::Protocol(format!("could not read the sandbox resume state: {err}"))
+                E2bError::Local(format!("could not read the sandbox resume state: {err}"))
             })?;
             match client.state(&id).await? {
                 SandboxState::Running if !pending => {
@@ -6068,7 +6066,7 @@ impl Runtime {
                     // Woken rather than replaced. The disk is the point: a
                     // browser that was signed in still is.
                     self.inner.store.begin_sandbox_resume(&id).map_err(|err| {
-                        E2bError::Protocol(format!("could not record the sandbox resume: {err}"))
+                        E2bError::Local(format!("could not record the sandbox resume: {err}"))
                     })?;
                     if state == SandboxState::Running {
                         client.pause(&id).await?;
@@ -6089,7 +6087,7 @@ impl Runtime {
                             (&woken.id, &woken.envd_token, &woken.traffic_token),
                         )
                         .map_err(|err| {
-                            E2bError::Protocol(format!(
+                            E2bError::Local(format!(
                                 "could not record the woken machine's tokens: {err}"
                             ))
                         })?;
@@ -6098,18 +6096,19 @@ impl Runtime {
                 }
                 SandboxState::Gone => {
                     self.inner.store.mark_resource_gone("e2b", &id).map_err(|err| {
-                        E2bError::Protocol(format!("could not record the missing sandbox: {err}"))
+                        E2bError::Local(format!("could not record the missing sandbox: {err}"))
                     })?;
                     self.inner.store.clear_sandbox_resume(&id).map_err(|err| {
-                        E2bError::Protocol(format!("could not clear the sandbox resume: {err}"))
+                        E2bError::Local(format!("could not clear the sandbox resume: {err}"))
                     })?;
                 }
             }
         }
 
-        let workspace = self.inner.store.workspace_identity().map_err(|err| {
-            E2bError::Protocol(format!("could not read workspace identity: {err}"))
-        })?;
+        let workspace =
+            self.inner.store.workspace_identity().map_err(|err| {
+                E2bError::Local(format!("could not read workspace identity: {err}"))
+            })?;
         let fresh = client.create_for_workspace(&card.name, idle, &workspace).await?;
 
         // A sandbox that cannot be written down is a sandbox nobody can reach
@@ -6123,11 +6122,11 @@ impl Runtime {
             tracing::error!(%err, sandbox = %fresh.id, "could not record a sandbox; killing it");
             if let Err(cleanup) = client.kill(&fresh.id).await {
                 tracing::error!(%cleanup, provider = "e2b", resource = %fresh.id, "created resource could not be recorded or released");
-                return Err(E2bError::Protocol(format!(
+                return Err(E2bError::Local(format!(
                     "the sandbox could not be recorded or released ({err})"
                 )));
             }
-            return Err(E2bError::Protocol(format!(
+            return Err(E2bError::Local(format!(
                 "the sandbox could not be recorded and was released ({err})"
             )));
         }
@@ -6215,9 +6214,9 @@ impl Runtime {
             .store
             .get_agent(card.id)
             .map_err(|err| {
-                KernelError::Protocol(format!("could not read the agent's browser: {err}"))
+                KernelError::Local(format!("could not read the agent's browser: {err}"))
             })?
-            .ok_or_else(|| KernelError::Protocol("the agent is no longer available".into()))?;
+            .ok_or_else(|| KernelError::Local("the agent is no longer available".into()))?;
         if let Some(id) = held.browser_id {
             // Asked rather than assumed, and the socket is taken from the
             // answer. A stored socket outlives the browser it addressed, and
@@ -6226,12 +6225,12 @@ impl Runtime {
                 return Ok((client, live));
             }
             self.inner.store.mark_resource_gone("kernel", &id).map_err(|err| {
-                KernelError::Protocol(format!("could not record the missing browser: {err}"))
+                KernelError::Local(format!("could not record the missing browser: {err}"))
             })?;
         }
 
         let workspace = self.inner.store.workspace_identity().map_err(|err| {
-            KernelError::Protocol(format!("could not read workspace identity: {err}"))
+            KernelError::Local(format!("could not read workspace identity: {err}"))
         })?;
         let agent = card.id.to_string();
         let (profile, profile_id, adopted_profile) = match client.create_profile(&agent).await? {
@@ -6261,7 +6260,7 @@ impl Runtime {
                     tracing::error!(%cleanup, provider = "kernel-profile", resource = %profile, "created resource could not be recorded or released");
                 }
             }
-            return Err(KernelError::Protocol(format!(
+            return Err(KernelError::Local(format!(
                 "the browser profile could not be recorded ({err})"
             )));
         }
@@ -6288,14 +6287,12 @@ impl Runtime {
             if !adopted {
                 if let Err(cleanup) = client.delete(&fresh.id).await {
                     tracing::error!(%cleanup, provider = "kernel", resource = %fresh.id, "created resource could not be recorded or released");
-                    return Err(KernelError::Protocol(format!(
+                    return Err(KernelError::Local(format!(
                         "the browser could not be recorded or released ({err})"
                     )));
                 }
             }
-            return Err(KernelError::Protocol(format!(
-                "the browser could not be recorded ({err})"
-            )));
+            return Err(KernelError::Local(format!("the browser could not be recorded ({err})")));
         }
 
         self.inner.events.emit(UiEvent::AgentsChanged);
@@ -6360,13 +6357,13 @@ impl Runtime {
         };
 
         let known = claimed_sandboxes(&self.inner.store.list_agents().map_err(|err| {
-            crate::e2b::E2bError::Protocol(format!("could not read resource ownership: {err}"))
+            crate::e2b::E2bError::Local(format!("could not read resource ownership: {err}"))
         })?);
         let workspace = self.inner.store.workspace_identity().map_err(|err| {
-            crate::e2b::E2bError::Protocol(format!("could not read workspace identity: {err}"))
+            crate::e2b::E2bError::Local(format!("could not read workspace identity: {err}"))
         })?;
         let ledger = self.inner.store.resource_snapshot("e2b").map_err(|err| {
-            crate::e2b::E2bError::Protocol(format!("could not read resource ownership: {err}"))
+            crate::e2b::E2bError::Local(format!("could not read resource ownership: {err}"))
         })?;
 
         let inventory = client.list_for_workspace(&workspace).await?;
@@ -6380,7 +6377,7 @@ impl Runtime {
                 && matches!(client.state(sandbox).await, Ok(crate::e2b::SandboxState::Gone))
             {
                 self.inner.store.mark_resource_gone("e2b", sandbox).map_err(|err| {
-                    crate::e2b::E2bError::Protocol(format!(
+                    crate::e2b::E2bError::Local(format!(
                         "could not record the missing sandbox: {err}"
                     ))
                 })?;
@@ -6406,7 +6403,7 @@ impl Runtime {
             tracing::info!(%sandbox, "releasing a sandbox no agent refers to");
             if client.kill(&sandbox).await.is_ok() {
                 self.inner.store.mark_resource_gone("e2b", &sandbox).map_err(|err| {
-                    crate::e2b::E2bError::Protocol(format!(
+                    crate::e2b::E2bError::Local(format!(
                         "could not record the released sandbox: {err}"
                     ))
                 })?;
@@ -6436,7 +6433,7 @@ impl Runtime {
             .store
             .list_agents()
             .map_err(|err| {
-                crate::kernel::KernelError::Protocol(format!(
+                crate::kernel::KernelError::Local(format!(
                     "could not read resource ownership: {err}"
                 ))
             })?
@@ -6446,14 +6443,10 @@ impl Runtime {
             .collect();
 
         let workspace = self.inner.store.workspace_identity().map_err(|err| {
-            crate::kernel::KernelError::Protocol(format!(
-                "could not read workspace identity: {err}"
-            ))
+            crate::kernel::KernelError::Local(format!("could not read workspace identity: {err}"))
         })?;
         let ledger = self.inner.store.resource_snapshot("kernel").map_err(|err| {
-            crate::kernel::KernelError::Protocol(format!(
-                "could not read resource ownership: {err}"
-            ))
+            crate::kernel::KernelError::Local(format!("could not read resource ownership: {err}"))
         })?;
         let tagged: std::collections::HashSet<_> =
             client.list_workspace(&workspace, None).await?.into_iter().collect();
@@ -6465,7 +6458,7 @@ impl Runtime {
                 && matches!(client.get(browser).await, Ok(None))
             {
                 self.inner.store.mark_resource_gone("kernel", browser).map_err(|err| {
-                    crate::kernel::KernelError::Protocol(format!(
+                    crate::kernel::KernelError::Local(format!(
                         "could not record the missing browser: {err}"
                     ))
                 })?;
@@ -6491,7 +6484,7 @@ impl Runtime {
             tracing::info!(%browser, "releasing a browser no agent refers to");
             if client.delete(&browser).await.is_ok() {
                 self.inner.store.mark_resource_gone("kernel", &browser).map_err(|err| {
-                    crate::kernel::KernelError::Protocol(format!(
+                    crate::kernel::KernelError::Local(format!(
                         "could not record the released browser: {err}"
                     ))
                 })?;

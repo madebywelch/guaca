@@ -311,6 +311,7 @@ async fn computer_preserves_the_reference_on_unknown_state_and_resume_write_fail
     connection.execute_batch("CREATE TRIGGER fail_resume BEFORE UPDATE OF sandbox_envd_token ON agents BEGIN SELECT RAISE(ABORT, 'write failed'); END;").unwrap();
     phase.store(1, Ordering::SeqCst);
     let resumed = h.runtime.ensure_computer(&card).await;
+    let resume_error = resumed.as_ref().err().unwrap().to_string();
     let retained = h.agent_named("Worker").unwrap().sandbox_id;
     assert!(h.runtime.store().sandbox_resume_pending("original").unwrap());
     connection.execute_batch("DROP TRIGGER fail_resume").unwrap();
@@ -320,6 +321,12 @@ async fn computer_preserves_the_reference_on_unknown_state_and_resume_write_fail
 
     assert!(unknown.is_err() && unknown_reference.as_deref() == Some("original") && made == 0 && resumed.is_err() && retained.as_deref() == Some("original") && recovered.is_ok() && !pending && pauses.load(Ordering::SeqCst) == 1,
         "unknown returned error: {}; reference: {unknown_reference:?}; creates: {made}; resume write failure returned error: {}; reference: {retained:?}; recovered: {}; pending: {pending}; pauses: {}", unknown.is_err(), resumed.is_err(), recovered.is_ok(), pauses.load(Ordering::SeqCst));
+    assert!(
+        resume_error.starts_with(
+            "Guaca could not use its own records: could not record the woken machine's tokens: "
+        ),
+        "{resume_error}"
+    );
 }
 
 #[tokio::test]
@@ -357,8 +364,17 @@ async fn failed_ledger_write_compensates_only_the_newly_created_resource() {
     fail_delete.store(1, Ordering::SeqCst);
     let second = h.runtime.ensure_computer(&card).await;
     let second_reference = h.agent_named("Worker").unwrap().sandbox_id;
+    let first_error = first.as_ref().err().unwrap().to_string();
+    let second_error = second.as_ref().err().unwrap().to_string();
     assert!(first.is_err() && second.is_err() && first_reference.is_none() && second_reference.is_none() && first_deletes == 1 && deletes.load(Ordering::SeqCst) == 2,
         "first error: {}, first reference: {first_reference:?}, first deletes: {first_deletes}, second error: {}, second reference: {second_reference:?}, total deletes: {}", first.is_err(), second.is_err(), deletes.load(Ordering::SeqCst));
+    assert!(first_error.starts_with("Guaca could not use its own records: the sandbox could not be recorded and was released ("), "{first_error}");
+    assert!(
+        second_error.starts_with(
+            "Guaca could not use its own records: the sandbox could not be recorded or released ("
+        ),
+        "{second_error}"
+    );
 }
 
 #[tokio::test]
