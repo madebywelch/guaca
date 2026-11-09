@@ -1017,7 +1017,7 @@ mod account_backed {
         .await
         .unwrap();
 
-        match store.plugin_reach(group, agent, &PluginKind::Google, "gmail_search").unwrap() {
+        match store.plugin_reach(group, agent, &PluginKind::Google, "run_sql").unwrap() {
             guac_lib::db::store::PluginReach::Granted(reached) => {
                 assert!(
                     reached.grant.is_none(),

@@ -753,10 +753,10 @@ looked at.
 every agent the plugin itself reaches, which is what every plugin connected
 before this existed offers. It is the same reading `access` takes with
 `everyone`, and for the same reason: the default has to cover what nobody has
-seen yet. A vendor ships a tool between one connection and the next, and an
-allow-list over tools would leave that tool switched off with nothing on screen
-saying a decision had been made about it. Connecting again keeps the narrowings
-and switches the new tool on.
+seen yet. A vendor ships a tool between one connection and the next, and
+connecting again keeps the narrowings and switches the newly discovered tool on.
+Until then, a name absent from the stored discovery list is refused before
+policy is checked, including a name removed on reconnection.
 
 **Inside a narrowed tool it is the other way round, and that is not an
 inconsistency.** The named agents are stored and everybody else is refused. The
@@ -820,9 +820,9 @@ refused in turn is the failure this exists to prevent, not one to commit.
 
 The rule is read twice, like the one above it, but not from one SQL fragment.
 The tool list is a JSON column, so `Store::plugin_tools` partitions it in Rust
-and `Store::plugin_reach` asks in SQL. Both compare the server's own unprefixed
-name to the same stored string, and store tests drive both refusals through both
-queries so that the two cannot drift.
+and `Store::plugin_reach` checks membership in Rust before asking policy in SQL.
+Both compare the server's own unprefixed name to the same stored string, and
+store tests drive both refusals through both queries so that the two cannot drift.
 
 **A name on a tool the plugin does not reach grants nothing, and is kept.** The
 two controls are set in either order, so a tool ticked for an agent before the
@@ -911,12 +911,11 @@ reads.
 
 ### What is deliberately not implemented
 
-The 2024-11-05 HTTP+SSE transport, deprecated since `2025-03-26` and scheduled
-for removal: a client that falls back to it keeps servers alive that should be
-migrating. Resources, prompts, `subscriptions/listen`, and the server-to-client
-input requests a modern server can embed in a result: an agent here is offered
-tools and nothing else, and a half-implemented capability is worse than an
-absent one.
+The 2024-11-05 HTTP+SSE transport for catalog servers: only added servers use
+the fallback described above. Resources, prompts, `subscriptions/listen`, and
+the server-to-client input requests a modern server can embed in a result: an
+agent here is offered tools and nothing else, and a half-implemented capability
+is worse than an absent one.
 
 Client ID Metadata Documents are the other one, and the only one with a date on
 it. The `2026-07-28` authorization spec makes them a **SHOULD** and demotes
