@@ -1627,8 +1627,12 @@ impl Runtime {
         }
     }
 
-    fn queue_activity(&self, id: AgentId, depth: usize) {
+    fn queue_activity(&self, id: AgentId, depth: &AtomicUsize) {
         let mut map = self.inner.activity.lock();
+        let depth = depth.load(Ordering::SeqCst);
+        if depth == 0 {
+            return;
+        }
         if matches!(
             map.get(&id),
             Some(Activity::Thinking | Activity::AwaitingApproval | Activity::Paused)
@@ -1651,6 +1655,14 @@ impl Runtime {
     /// the moment it is sent, even if the recipient is busy for the next
     /// thirty seconds.
     fn deliver(&self, envelope: Envelope) -> Result<(), RuntimeError> {
+        self.deliver_with_expectation(envelope, None)
+    }
+
+    fn deliver_with_expectation(
+        &self,
+        envelope: Envelope,
+        limits: Option<GuardLimits>,
+    ) -> Result<(), RuntimeError> {
         if matches!(envelope.to, Participant::Agent { .. }) {
             let steps = self.steps_of(envelope.run_id);
             // Serialize acceptance with settlement: a finishing turn cannot
@@ -1679,8 +1691,31 @@ impl Runtime {
         } else {
             self.inner.store.append(&envelope)?;
         }
+        if let (Some(limits), Participant::Agent { id: from }, Participant::Agent { id: to }) =
+            (limits, envelope.from, envelope.to)
+        {
+            self.inner.guard.lock().run_within(envelope.run_id, limits).note_sent(
+                from,
+                to,
+                envelope.expects_reply,
+            );
+        }
         self.enqueue_delivery(envelope);
         Ok(())
+    }
+
+    fn deliver_from_peer(
+        &self,
+        envelope: Envelope,
+        from: AgentId,
+        to: AgentId,
+        limits: GuardLimits,
+        generation: Option<u32>,
+    ) -> Result<(), RuntimeError> {
+        let run = envelope.run_id;
+        let result = self.deliver_with_expectation(envelope, Some(limits));
+        self.inner.guard.lock().run_within(run, limits).retire_reply(from, to, generation);
+        result
     }
 
     /// Enqueue a delivery whose persistence and run booking have committed.
@@ -1711,9 +1746,9 @@ impl Runtime {
                 let inboxes = self.inner.inboxes.lock();
                 match inboxes.get(&id) {
                     Some(inbox) => {
-                        let depth = inbox.depth.fetch_add(1, Ordering::SeqCst) + 1;
+                        inbox.depth.fetch_add(1, Ordering::SeqCst);
                         match inbox.tx.send(envelope) {
-                            Ok(()) => Some(depth),
+                            Ok(()) => Some(inbox.depth.clone()),
                             Err(_) => {
                                 inbox.depth.fetch_sub(1, Ordering::SeqCst);
                                 None
@@ -1726,7 +1761,7 @@ impl Runtime {
 
             match queued {
                 Some(depth) => {
-                    self.queue_activity(id, depth);
+                    self.queue_activity(id, &depth);
                 }
                 // The agent was stopped between whatever check found it and
                 // this send. Nobody will ever read this, so it stops counting
@@ -2399,10 +2434,9 @@ impl Runtime {
     /// latency. Working alone made an agent sit through peers that had already
     /// answered and were finishing their own notes.
     ///
-    /// The race this cannot lose: a peer's answer is delivered before its turn
-    /// ends, and its expectation is cleared before the answer is delivered, so
-    /// by the time the ower reads as idle either the answer is in this agent's
-    /// inbox, where the gather's next pass takes it, or it was never sent.
+    /// A delivered answer clears its expectation only after it is queued. The
+    /// gather checks the inbox again after this returns false, since delivery
+    /// can finish between its first inbox check and this one.
     ///
     /// A peek, so asking cannot be what creates a run's state. The limits that
     /// state is created on belong to the asking agent's group, and this is the
@@ -4020,6 +4054,7 @@ impl Runtime {
         // reach the guard, exactly as an answer to the operator does not: it
         // adds no hop, spends no pair budget, and is addressed to the one
         // participant that cannot reply into a cascade.
+        let mut reply_generation = None;
         if mode == ReplyMode::ToPeer && !commentary && !report && delivers {
             if let Some(Participant::Agent { id: peer }) = reply_target {
                 // An automatic reply still travels a hop and still counts
@@ -4036,7 +4071,10 @@ impl Runtime {
 
                 let limits = self.limits_for(card);
                 let verdict = {
-                    self.inner.guard.lock().run_within(run_id, limits).evaluate(&SendRequest {
+                    let mut guard = self.inner.guard.lock();
+                    let state = guard.run_within(run_id, limits);
+                    reply_generation = state.reply_generation(card.id, peer);
+                    state.evaluate_pending(&SendRequest {
                         from: card.id,
                         to: peer,
                         to_name: peer_name.clone(),
@@ -4163,7 +4201,17 @@ impl Runtime {
             created_at: now_ms(),
         };
 
-        if let Err(err) = self.deliver(envelope) {
+        let delivered = match to {
+            Participant::Agent { id: peer } => self.deliver_from_peer(
+                envelope,
+                card.id,
+                peer,
+                self.limits_for(card),
+                reply_generation,
+            ),
+            _ => self.deliver(envelope),
+        };
+        if let Err(err) = delivered {
             tracing::error!(%err, "failed to deliver reply");
         }
     }
@@ -5106,7 +5154,7 @@ impl Runtime {
                     DetailField {
                         label: "Why you are being asked".to_string(),
                         value: if unknown {
-                            "Guaca could not check which sites are signed in. You must decide this action.".to_string()
+                            "Guaca could not check which sites are signed in, so it is asking you first.".to_string()
                         } else if must_ask && session.is_none() {
                             "A rule needs the site's domain, but Guaca could not determine it. You must decide this action.".to_string()
                         } else { format!(
@@ -5885,14 +5933,18 @@ impl Runtime {
                 Some(recipient) => recipient,
             };
 
-            let verdict = {
-                self.inner.guard.lock().run_within(run_id, limits).evaluate(&SendRequest {
+            let (verdict, reply_generation) = {
+                let mut guard = self.inner.guard.lock();
+                let state = guard.run_within(run_id, limits);
+                let generation = state.reply_generation(card.id, target.id);
+                let verdict = state.evaluate_pending(&SendRequest {
                     from: card.id,
                     to: target.id,
                     to_name: target.name.clone(),
                     text: text.to_string(),
                     inbound_hop,
-                })
+                });
+                (verdict, generation)
             };
 
             match verdict {
@@ -5978,15 +6030,16 @@ impl Runtime {
                         created_at: now_ms(),
                     };
 
-                    match self.deliver(envelope) {
+                    let delivered = self.deliver_from_peer(
+                        envelope,
+                        card.id,
+                        target.id,
+                        limits,
+                        reply_generation,
+                    );
+                    match delivered {
                         Ok(()) => {
                             addressed.insert(target.id);
-                            // Only a delivered ask is a debt worth waiting on.
-                            self.inner.guard.lock().run_within(run_id, limits).note_sent(
-                                card.id,
-                                target.id,
-                                expects_reply,
-                            );
                             out.push(Delivery::Queued { to: target.name.clone() })
                         }
                         Err(err) => out.push(Delivery::Refused {
@@ -8326,10 +8379,19 @@ async fn actor_loop(
                 // comes from the turn's own boundary, and a gather that sat
                 // out its window first would hold that notice, and the run's
                 // settlement, open for exactly that long.
-                if Instant::now() >= patience
-                    || runtime.stopped(run)
-                    || !runtime.awaited_still_working(run, id)
-                {
+                if Instant::now() >= patience || runtime.stopped(run) {
+                    break;
+                }
+                if !runtime.awaited_still_working(run, id) {
+                    match rx.try_recv() {
+                        Ok(next) if !next.expects_reply && next.run_id == run => {
+                            depth.fetch_sub(1, Ordering::SeqCst);
+                            batch.push(next);
+                            continue;
+                        }
+                        Ok(next) => carry.push_front(next),
+                        Err(_) => {}
+                    }
                     break;
                 }
                 tokio::time::sleep(BURST_POLL).await;
@@ -8508,6 +8570,145 @@ fn claimed_sandboxes(cards: &[AgentCard]) -> std::collections::HashSet<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_runtime() -> (tempfile::TempDir, Runtime) {
+        test_runtime_with_sink(crate::runtime::events::RecordingSink::new())
+    }
+
+    fn test_runtime_with_sink(sink: Arc<dyn EventSink>) -> (tempfile::TempDir, Runtime) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("guac.db")).unwrap();
+        let config = AppConfig {
+            version: crate::config::CURRENT_VERSION,
+            operator_name: String::new(),
+            inference: Default::default(),
+            limits: Default::default(),
+            e2b: Default::default(),
+            kernel: Default::default(),
+            webhook: Default::default(),
+            quick_actions: vec![],
+            widgets: vec![],
+        };
+        let runtime =
+            Runtime::new(store, LlmClient::new().unwrap(), config, OnDisk::under(dir.path()), sink);
+        (dir, runtime)
+    }
+
+    #[tokio::test]
+    async fn a_failed_peer_delivery_retires_the_reply_it_cannot_deliver() {
+        let (_dir, runtime) = test_runtime();
+        runtime.inner.store.conn().unwrap().execute_batch("CREATE TRIGGER reject_delivery BEFORE INSERT ON pending_runs BEGIN SELECT RAISE(ABORT,'disk failure'); END;").unwrap();
+        let (from, to, run) = (AgentId::new(), AgentId::new(), RunId::new());
+        let limits = GuardLimits::default();
+        runtime.inner.guard.lock().run_within(run, limits).note_sent(to, from, true);
+        let envelope = Envelope {
+            id: MessageId::new(),
+            run_id: run,
+            channel_id: to,
+            from: Participant::Agent { id: from },
+            to: Participant::Agent { id: to },
+            parts: vec![Part::Text { text: "answer".into() }],
+            trust: Trust::Peer,
+            hop: 1,
+            expects_reply: false,
+            intent: Intent::Courtesy,
+            cause: None,
+            created_at: now_ms(),
+        };
+        let generation = runtime.inner.guard.lock().peek(run).unwrap().reply_generation(from, to);
+        assert!(runtime.deliver_from_peer(envelope, from, to, limits, generation).is_err());
+        assert!(runtime.inner.guard.lock().peek(run).unwrap().awaited(to).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_dequeued_message_cannot_publish_stale_queued_activity() {
+        let (_dir, runtime) = test_runtime();
+        let id = AgentId::new();
+        let depth = Arc::new(AtomicUsize::new(1));
+        let ready = Arc::new(std::sync::Barrier::new(2));
+        let resume = Arc::new(std::sync::Barrier::new(2));
+        let task = {
+            let (runtime, depth, ready, resume) =
+                (runtime.clone(), depth.clone(), ready.clone(), resume.clone());
+            std::thread::spawn(move || {
+                ready.wait();
+                resume.wait();
+                runtime.queue_activity(id, &depth);
+            })
+        };
+        ready.wait();
+        depth.fetch_sub(1, Ordering::SeqCst);
+        runtime.set_activity(id, Activity::Idle);
+        resume.wait();
+        task.join().unwrap();
+        assert_eq!(runtime.activity_snapshot().get(&id), Some(&Activity::Idle));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_ask_is_awaited_before_its_recipient_can_receive_it() {
+        struct Gate {
+            arrived: std::sync::Barrier,
+            release: std::sync::Barrier,
+        }
+        impl EventSink for Gate {
+            fn emit(&self, event: UiEvent) {
+                if matches!(event, UiEvent::MessageAppended { .. }) {
+                    self.arrived.wait();
+                    self.release.wait();
+                }
+            }
+        }
+        let gate = Arc::new(Gate {
+            arrived: std::sync::Barrier::new(2),
+            release: std::sync::Barrier::new(2),
+        });
+        let (_dir, runtime) = test_runtime_with_sink(gate.clone());
+        let create = |name: &str| {
+            runtime
+                .inner
+                .store
+                .create_agent(&crate::domain::agent::CleanDraft {
+                    group_id: None,
+                    name: name.into(),
+                    avatar: "orb".into(),
+                    color: "#7fb069".into(),
+                    model: "test/model".into(),
+                    subscription_model: None,
+                    reasoning_effort: None,
+                    system_prompt: String::new(),
+                    skills: vec![],
+                })
+                .unwrap()
+                .id
+        };
+        let (from, to, run) = (create("Manager"), create("Chef"), RunId::new());
+        let limits = GuardLimits::default();
+        let envelope = Envelope {
+            id: MessageId::new(),
+            run_id: run,
+            channel_id: to,
+            from: Participant::Agent { id: from },
+            to: Participant::Agent { id: to },
+            parts: vec![Part::Text { text: "work".into() }],
+            trust: Trust::Peer,
+            hop: 1,
+            expects_reply: true,
+            intent: Intent::Work,
+            cause: None,
+            created_at: now_ms(),
+        };
+        let sender = {
+            let runtime = runtime.clone();
+            tokio::task::spawn_blocking(move || {
+                runtime.deliver_from_peer(envelope, from, to, limits, None)
+            })
+        };
+        gate.arrived.wait();
+        let awaited = runtime.inner.guard.lock().peek(run).unwrap().awaited(from);
+        gate.release.wait();
+        sender.await.unwrap().unwrap();
+        assert_eq!(awaited, HashSet::from([to]));
+    }
 
     #[test]
     fn a_browser_response_without_a_url_never_reuses_the_previous_site() {
