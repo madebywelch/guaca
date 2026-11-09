@@ -3890,7 +3890,6 @@ async fn concurrent_retries_of_one_event_claim_each_routine_only_once() {
     let stub = quiet().await;
     let h = harness(&stub, &["Clerk"], GuardLimits::default());
     let routine = dunning(&h, "Clerk", false);
-    let second = dunning(&h, "Clerk", false);
     let (base, secret) = receiver(&h).await;
     let mut tasks = Vec::new();
     for _ in 0..12 {
@@ -3914,9 +3913,8 @@ async fn concurrent_retries_of_one_event_claim_each_routine_only_once() {
     for task in tasks {
         delivered += task.await.unwrap()["delivered"].as_u64().unwrap();
     }
-    assert_eq!(delivered, 2);
+    assert_eq!(delivered, 1);
     assert_eq!(h.runtime.store().routine_runs(routine.id, 20).unwrap().len(), 1);
-    assert_eq!(h.runtime.store().routine_runs(second.id, 20).unwrap().len(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -3936,6 +3934,32 @@ async fn unkeyed_events_and_repeated_test_fires_are_independent() {
     let history = h.runtime.store().routine_runs(routine.id, 20).unwrap();
     assert_eq!(history.iter().filter(|row| row.kind == RunKind::Event).count(), 2);
     assert_eq!(history.iter().filter(|row| row.kind == RunKind::Test).count(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_same_delivery_id_is_scoped_to_each_routine() {
+    let stub = quiet().await;
+    let h = harness(&stub, &["Clerk"], GuardLimits::default());
+    let first = dunning(&h, "Clerk", false);
+    let second = dunning(&h, "Clerk", false);
+    let (base, secret) = receiver(&h).await;
+    let url = format!("{base}/events/stripe/invoice.payment_failed");
+    let client = reqwest::Client::new();
+    for _ in 0..2 {
+        assert_eq!(
+            client
+                .post(&url)
+                .bearer_auth(&secret)
+                .header("webhook-id", "delivery")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            200
+        );
+    }
+    assert_eq!(h.runtime.store().routine_runs(first.id, 20).unwrap().len(), 1);
+    assert_eq!(h.runtime.store().routine_runs(second.id, 20).unwrap().len(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

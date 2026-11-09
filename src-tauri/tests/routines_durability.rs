@@ -261,3 +261,81 @@ fn one_shot_completion_keeps_its_history_after_the_schedule_is_removed() {
     assert!(store.get_routine(once.id).unwrap().is_none());
     assert_eq!(store.routine_runs(once.id, 20).unwrap().len(), 1);
 }
+
+#[test]
+fn failed_start_rolls_back_ownership_and_recovery_still_delivers() {
+    let (_dir, store, routine, envelope) = fixture();
+    store
+        .claim_routine(
+            &routine,
+            "scheduled:1000",
+            Some(&envelope),
+            RunKind::Scheduled,
+            None,
+            1000,
+            true,
+        )
+        .unwrap();
+    store.conn().unwrap().execute_batch("CREATE TRIGGER inject BEFORE UPDATE ON routine_runs BEGIN SELECT RAISE(ABORT, 'injected'); END;").unwrap();
+    assert!(store.start_routine_deliveries(&[envelope.id], RunId::new()).is_err());
+    let state: String = store
+        .conn()
+        .unwrap()
+        .query_row("SELECT state FROM routine_occurrences", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(state, "pending");
+    assert_eq!(store.recover().unwrap().resumed.len(), 1);
+}
+
+#[test]
+fn failed_stop_and_settlement_roll_back_their_journals() {
+    let (_dir, store, routine, envelope) = fixture();
+    store
+        .claim_routine(
+            &routine,
+            "scheduled:1000",
+            Some(&envelope),
+            RunKind::Scheduled,
+            None,
+            1000,
+            true,
+        )
+        .unwrap();
+    store.conn().unwrap().execute_batch("CREATE TRIGGER inject BEFORE DELETE ON pending_runs BEGIN SELECT RAISE(ABORT, 'injected'); END;").unwrap();
+    assert!(store.stop_routine_run(envelope.run_id).is_err());
+    assert_eq!(store.recover().unwrap().resumed.len(), 1);
+    store.conn().unwrap().execute_batch("DROP TRIGGER inject").unwrap();
+    store.start_routine_deliveries(&[envelope.id], envelope.run_id).unwrap();
+    store.conn().unwrap().execute_batch("CREATE TRIGGER inject BEFORE UPDATE ON routine_occurrences BEGIN SELECT RAISE(ABORT, 'injected'); END;").unwrap();
+    assert!(store.settle_run(envelope.run_id).is_err());
+    let pending: i64 = store
+        .conn()
+        .unwrap()
+        .query_row("SELECT count(*) FROM pending_runs", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(pending, 1);
+}
+
+#[test]
+fn failed_recovery_keeps_the_entire_put_down_for_the_next_restart() {
+    let (_dir, store, routine, envelope) = fixture();
+    store
+        .claim_routine(
+            &routine,
+            "scheduled:1000",
+            Some(&envelope),
+            RunKind::Scheduled,
+            None,
+            1000,
+            true,
+        )
+        .unwrap();
+    let snapshot = RunState::new(GuardLimits::default()).snapshot();
+    store.put_down(&[(envelope.id, &[])], &[(envelope.run_id, 0, snapshot)]).unwrap();
+    store.conn().unwrap().execute_batch("CREATE TRIGGER inject BEFORE DELETE ON put_down_runs BEGIN SELECT RAISE(ABORT, 'injected'); END;").unwrap();
+    assert!(store.recover().is_err());
+    store.conn().unwrap().execute_batch("DROP TRIGGER inject").unwrap();
+    let recovered = store.recover().unwrap();
+    assert_eq!(recovered.resumed.len(), 1);
+    assert_eq!(recovered.resumed[0].envelope.id, envelope.id);
+}
