@@ -491,7 +491,7 @@ pub async fn agent_computer(state: &AppState, id: AgentId) -> Reply<Option<Compu
         // A reclaimed sandbox leaves a dangling id. Clearing it turns a dead
         // end into an offer to make a new one. A sleeping one is left alone:
         // it still holds the disk, and waking it is the operator's call.
-        state.runtime.store().set_agent_sandbox(id, None)?;
+        state.runtime.store().clear_agent_sandbox_if(id, &sandbox)?;
         return Ok(None);
     }
     Ok(Some(state.screened(client.describe(&sandbox, &envd, state.runtime.viewer_port()).await?)))
@@ -606,7 +606,7 @@ pub async fn agent_browser(state: &AppState, id: AgentId) -> Reply<Option<Browse
         None => {
             // A dangling id is a dead end in the pane. Clearing it turns that
             // back into an offer to open one.
-            state.runtime.store().set_agent_browser(id, None)?;
+            state.runtime.store().clear_agent_browser_if(id, &browser)?;
             Ok(None)
         }
     }
@@ -665,7 +665,7 @@ pub async fn take_agent_browser(state: &AppState, id: AgentId) -> Reply<()> {
                 if let Err(err) = client.delete(&browser).await {
                     tracing::warn!(%err, %browser, "could not close a browser that was taken back");
                 } else {
-                    state.runtime.store().set_agent_browser(id, None)?;
+                    state.runtime.store().clear_agent_browser_if(id, &browser)?;
                 }
             }
             Err(err) => tracing::warn!(?err, "no client to close a browser that was taken back"),

@@ -111,6 +111,70 @@ async fn operator_deletion_never_clears_a_concurrent_replacement() {
     );
 }
 
+#[tokio::test]
+async fn status_and_revocation_never_clear_a_concurrent_browser_replacement() {
+    let _guard = PROVIDER.lock().await;
+    let arrived = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let get_arrived = arrived.clone();
+    let get_release = release.clone();
+    let delete_arrived = arrived.clone();
+    let delete_release = release.clone();
+    let app = Router::new().route(
+        "/browsers/:id",
+        get(move || {
+            let arrived = get_arrived.clone();
+            let release = get_release.clone();
+            async move {
+                arrived.notify_one();
+                release.notified().await;
+                axum::http::StatusCode::NOT_FOUND
+            }
+        })
+        .delete(move || {
+            let arrived = delete_arrived.clone();
+            let release = delete_release.clone();
+            async move {
+                arrived.notify_one();
+                release.notified().await;
+                axum::http::StatusCode::NO_CONTENT
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    std::env::set_var("GUAC_KERNEL_API_BASE", format!("http://{addr}"));
+    let stub = harness::serve(|_| harness::Script::Say(String::new())).await;
+    let h = harness::harness_with_browser(&stub, &["Worker"], GuardLimits::default());
+    let id = h.id("Worker");
+
+    h.runtime.store().set_agent_browser(id, Some("old-status")).unwrap();
+    let state = command_state(&h);
+    let status = tokio::spawn(async move { guac_lib::commands::agent_browser(&state, id).await });
+    arrived.notified().await;
+    h.runtime.store().record_browser(id, "new-status", false).unwrap();
+    release.notify_one();
+    status.await.unwrap().unwrap();
+    let after_status = h.agent_named("Worker").unwrap().browser_id;
+
+    h.runtime.store().set_agent_browser(id, Some("old-revoked")).unwrap();
+    let state = command_state(&h);
+    let revoke =
+        tokio::spawn(async move { guac_lib::commands::take_agent_browser(&state, id).await });
+    arrived.notified().await;
+    h.runtime.store().record_browser(id, "new-revoked", false).unwrap();
+    release.notify_one();
+    revoke.await.unwrap().unwrap();
+    let after_revoke = h.agent_named("Worker").unwrap().browser_id;
+
+    assert!(
+        after_status.as_deref() == Some("new-status")
+            && after_revoke.as_deref() == Some("new-revoked"),
+        "status: {after_status:?}; revocation: {after_revoke:?}"
+    );
+}
+
 #[test]
 fn copied_workspace_keeps_identity_but_new_ledger_entries_do_not_cross() {
     use guac_lib::db::{store::ResourceState, Store};
