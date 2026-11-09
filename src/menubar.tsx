@@ -1,5 +1,6 @@
 import "./page";
 
+import { invoke } from "@tauri-apps/api/core";
 import React, { useEffect, useMemo, useState } from "react";
 import ReactDOM from "react-dom/client";
 
@@ -97,12 +98,14 @@ const draw = (panel: React.ReactNode) =>
 
 api
   .menubarHost()
-  .then((host) => {
+  .then(async (host) => {
     if (!host) {
       draw(<Nowhere text="Guaca is not connected to a host yet. Open it to choose one." />);
       return;
     }
     adoptRemote(host);
+    const generation = (host as typeof host & { generation: number }).generation;
+    if (!(await invoke<boolean>("report_host", { host, generation }))) return;
     draw(<Panel />);
   })
   .catch((error) => draw(<Nowhere text={`The panel could not start: ${errorMessage(error)}`} />));

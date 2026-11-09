@@ -851,3 +851,100 @@ mod tests {
         assert_eq!(place(frame(-9_000.0, -9_000.0, 10.0, 10.0), &[laptop()], 300.0), None);
     }
 }
+pub struct PanelHost<T> {
+    desired: Option<T>,
+    generation: u64,
+    adopted: Option<u64>,
+}
+
+impl<T> Default for PanelHost<T> {
+    fn default() -> Self {
+        Self { desired: None, generation: 0, adopted: None }
+    }
+}
+
+impl<T: Clone + PartialEq> PanelHost<T> {
+    pub fn request(&mut self, host: T) -> bool {
+        if self.desired.as_ref() != Some(&host) {
+            self.generation += 1;
+            self.desired = Some(host);
+            self.adopted = None;
+        }
+        self.adopted != Some(self.generation)
+    }
+
+    pub fn desired(&self) -> Option<(T, u64)> {
+        self.desired.clone().map(|host| (host, self.generation))
+    }
+
+    pub fn acknowledge(&mut self, generation: u64) -> bool {
+        if self.desired.is_none() || generation != self.generation {
+            return false;
+        }
+        self.adopted = Some(generation);
+        true
+    }
+
+    pub fn ready(&self) -> bool {
+        self.desired.is_some() && self.adopted == Some(self.generation)
+    }
+}
+
+pub fn update_icon<T: PartialEq>(
+    drawn: &mut Option<T>,
+    wanted: T,
+    wear: impl FnOnce(&T) -> bool,
+) -> bool {
+    if drawn.as_ref() == Some(&wanted) {
+        return true;
+    }
+    if wear(&wanted) {
+        *drawn = Some(wanted);
+        true
+    } else {
+        *drawn = None;
+        false
+    }
+}
+
+#[cfg(test)]
+mod panel_host_tests {
+    use super::PanelHost;
+
+    #[test]
+    fn failed_build_or_reload_retries_the_same_host() {
+        let mut panel = PanelHost::default();
+        assert!(panel.request("one"));
+        assert!(!panel.ready());
+        assert!(panel.request("one"));
+        let (_, generation) = panel.desired().unwrap();
+        assert!(panel.acknowledge(generation));
+        assert!(panel.ready());
+        assert!(!panel.request("one"));
+    }
+
+    #[test]
+    fn stale_adoption_never_enables_the_old_panel() {
+        let mut panel = PanelHost::default();
+        assert!(panel.request("one"));
+        let (_, old) = panel.desired().unwrap();
+        assert!(panel.request("two"));
+        assert!(!panel.acknowledge(old));
+        assert!(!panel.ready());
+        let (_, current) = panel.desired().unwrap();
+        assert!(panel.acknowledge(current));
+        assert!(panel.ready());
+    }
+
+    #[test]
+    fn partial_icon_failure_is_retried_even_when_presence_reverts() {
+        let mut drawn = Some("idle");
+        assert!(!super::update_icon(&mut drawn, "busy", |_| false));
+        let mut called = false;
+        assert!(super::update_icon(&mut drawn, "idle", |_| {
+            called = true;
+            true
+        }));
+        assert!(called);
+    }
+}

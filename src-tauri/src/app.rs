@@ -86,13 +86,23 @@ async fn report_presence(app: tauri::AppHandle, presence: Option<crate::menubar:
 }
 /// The window's host, which the menu bar panel is made or reloaded to show.
 #[tauri::command]
-async fn report_host(app: tauri::AppHandle, host: tray::Host) {
+async fn report_host(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    host: tray::Host,
+    generation: Option<u64>,
+) -> bool {
     if let Some(tray) = app.try_state::<Arc<Tray>>() {
+        if window.label() == "menubar" {
+            return generation.is_some_and(|generation| tray.adopted(generation));
+        }
         tray.attach(host);
+        return true;
     }
+    false
 }
 #[tauri::command]
-async fn menubar_host(app: tauri::AppHandle) -> Option<tray::Host> {
+async fn menubar_host(app: tauri::AppHandle) -> Option<tray::PanelAssignment> {
     app.try_state::<Arc<Tray>>().and_then(|tray| tray.host())
 }
 #[tauri::command]
