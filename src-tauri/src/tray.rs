@@ -297,7 +297,7 @@ impl Tray {
             // place and nothing that can be half updated.
             Some(panel) => {
                 self.put_away(&panel, false);
-                match panel.reload() {
+                match panel.eval("if (window.dispatchEvent(new Event('guaca:before-reload', { cancelable: true }))) window.location.reload()") {
                     Ok(()) => tracing::info!("the menu bar panel is reloading"),
                     Err(err) => {
                         tracing::warn!(%err, "the menu bar panel is still showing the last workspace")
