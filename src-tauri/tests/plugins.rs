@@ -711,13 +711,12 @@ async fn a_protected_server_signs_in_and_the_grant_stays_in_the_store() {
 }
 
 #[tokio::test]
-async fn a_redirect_that_does_not_match_is_refused() {
-    // Nothing else can arrive on that port with the wrong state, so this is an
-    // attack rather than a mistake, and it must not produce a usable plugin.
+async fn a_wrong_state_is_rejected_before_a_valid_plugin_callback_completes() {
     let server = serve(Rules::default()).await;
     let (_dir, store, group, _agent) = workspace();
-
-    let failed = plugins::connect(
+    let issued = server.issued.clone();
+    let (done, browser_done) = tokio::sync::oneshot::channel();
+    let plugin = plugins::connect(
         &store,
         group,
         &PluginKind::Neon,
@@ -725,13 +724,44 @@ async fn a_redirect_that_does_not_match_is_refused() {
         plugins::Credential::Discover,
         &Headers::none(),
         &Landing::Loopback,
-        browser(Outcome::WrongState),
+        move |url| {
+            let url = url.to_owned();
+            tokio::spawn(async move {
+                let client = reqwest::Client::new();
+                let parsed = reqwest::Url::parse(&url).unwrap();
+                let fields: HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+                let redirect = &fields["redirect_uri"];
+                let state = &fields["state"];
+                assert!(client.get(&url).send().await.unwrap().status().is_success());
+                let wrong = match Outcome::WrongState {
+                    Outcome::WrongState => "somebody-elses",
+                    _ => unreachable!(),
+                };
+                let rejected = client
+                    .get(redirect)
+                    .query(&[("code", "forged-code"), ("state", wrong)])
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(rejected.status(), reqwest::StatusCode::BAD_REQUEST);
+                assert!(issued.lock().is_empty(), "the forged code must not be exchanged");
+                let accepted = client
+                    .get(redirect)
+                    .query(&[("code", "the-code"), ("state", state.as_str())])
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(accepted.status(), reqwest::StatusCode::OK);
+                done.send(()).unwrap();
+            });
+            Ok(())
+        },
     )
     .await
-    .expect_err("a mismatched state cannot connect");
-
-    assert!(failed.to_string().contains("did not match"), "{failed}");
-    assert!(store.group_plugins(group).unwrap().is_empty());
+    .expect("the valid callback connects");
+    browser_done.await.unwrap();
+    assert!(plugin.signed_in);
+    assert_eq!(server.issued.lock().len(), 1);
 }
 
 #[tokio::test]
