@@ -132,11 +132,6 @@ impl Runtime {
         names
     }
 
-    /// What a run has spent, as the guard counts it.
-    pub(super) fn steps_of(&self, run: RunId) -> u32 {
-        self.inner.guard.lock().peek(run).map(|state| state.steps_used()).unwrap_or(0)
-    }
-
     /// Puts envelopes down for the next host.
     ///
     /// `booked` are still counted against their runs, and are released here
@@ -153,8 +148,19 @@ impl Runtime {
     ) {
         let touched: HashSet<RunId> =
             booked.iter().chain(absorbed).map(|envelope| envelope.run_id).collect();
-        let steps: HashMap<RunId, u32> =
-            touched.iter().map(|run| (*run, self.steps_of(*run))).collect();
+        let limits: HashMap<RunId, _> = booked
+            .iter()
+            .chain(absorbed)
+            .filter_map(|envelope| {
+                let Participant::Agent { id } = envelope.to else { return None };
+                self.inner
+                    .store
+                    .get_agent(id)
+                    .ok()
+                    .flatten()
+                    .map(|card| (envelope.run_id, self.limits_for(&card)))
+            })
+            .collect();
         let messages: Vec<(MessageId, &[MessageId])> = booked
             .iter()
             .enumerate()
@@ -164,16 +170,22 @@ impl Runtime {
 
         let mut runs = self.inner.runs.lock();
         for envelope in booked {
-            if Self::release_bookings(&mut runs, envelope.run_id, 1) {
-                self.inner.guard.lock().unpin(envelope.run_id);
-            }
+            Self::release_bookings(&mut runs, envelope.run_id, 1);
         }
         runs.put_down.extend(touched.iter().copied());
-        let whole: Vec<(RunId, u32)> = touched
+        let mut guard = self.inner.guard.lock();
+        let whole: Vec<_> = touched
             .iter()
             .filter(|run| !runs.outstanding.contains_key(run))
-            .map(|run| (*run, steps[run]))
+            .filter_map(|run| {
+                if guard.peek(*run).is_none() {
+                    guard.run_within(*run, *limits.get(run)?);
+                }
+                let state = guard.peek(*run)?;
+                Some((*run, state.steps_used(), state.snapshot()))
+            })
             .collect();
+        drop(guard);
         // Under the lock, so `whole` is still true when it is written.
         if let Err(err) = self.inner.store.put_down(&messages, &whole) {
             tracing::error!(%err, "could not put work down; the next host reports it interrupted");
@@ -186,7 +198,14 @@ impl Runtime {
     /// Called with the run lock held, by `track_inflight`, so it takes no lock
     /// of its own but the guard's.
     pub(super) fn mark_whole(&self, runs: &[RunId]) {
-        let whole: Vec<(RunId, u32)> = runs.iter().map(|run| (*run, self.steps_of(*run))).collect();
+        let guard = self.inner.guard.lock();
+        let whole: Vec<_> = runs
+            .iter()
+            .filter_map(|run| {
+                guard.peek(*run).map(|state| (*run, state.steps_used(), state.snapshot()))
+            })
+            .collect();
+        drop(guard);
         if let Err(err) = self.inner.store.put_down(&[], &whole) {
             tracing::error!(%err, "could not hand a conversation on; the next host reports it interrupted");
         }
@@ -321,15 +340,29 @@ impl Runtime {
     /// fresh one: an update every few hours must not be a way for a cascade to
     /// outlive its limits.
     pub fn pick_up(&self, recovered: Recovered) {
-        let Recovered { resumed, steps, .. } = recovered;
+        let Recovered { resumed, steps, guards, .. } = recovered;
         let conversations = steps.len();
+        let legacy = steps.len().saturating_sub(guards.len());
+        if legacy > 0 {
+            tracing::warn!(count = legacy, "legacy runs resumed with a fresh guard");
+        }
         {
             let mut runs = self.inner.runs.lock();
             for put in &resumed {
                 self.book(&mut runs, put.envelope.run_id);
             }
         }
+        let restored: HashSet<_> = guards.keys().copied().collect();
+        {
+            let mut guard = self.inner.guard.lock();
+            for (run, state) in guards {
+                guard.restore(run, state);
+            }
+        }
         for (run, spent) in &steps {
+            if restored.contains(run) {
+                continue;
+            }
             let card = resumed.iter().find(|put| put.envelope.run_id == *run).and_then(|put| {
                 match put.envelope.to {
                     Participant::Agent { id } => self.inner.store.get_agent(id).ok().flatten(),

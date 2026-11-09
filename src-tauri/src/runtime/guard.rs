@@ -250,7 +250,42 @@ pub struct RunState {
     last_touched: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GuardSnapshot {
+    version: u32,
+    limits: GuardLimits,
+    steps_used: u32,
+    fingerprints: HashSet<String>,
+    pair_counts: Vec<(AgentId, AgentId, u32)>,
+    expecting: Vec<(AgentId, AgentId, u32)>,
+}
+
 impl RunState {
+    pub fn snapshot(&self) -> GuardSnapshot {
+        GuardSnapshot {
+            version: 1,
+            limits: self.limits,
+            steps_used: self.steps_used,
+            fingerprints: self.fingerprints.clone(),
+            pair_counts: self.pair_counts.iter().map(|(&(a, b), &n)| (a, b, n)).collect(),
+            expecting: self.expecting.iter().map(|(&(a, b), &n)| (a, b, n)).collect(),
+        }
+    }
+
+    pub fn from_snapshot(snapshot: GuardSnapshot) -> Result<Self, &'static str> {
+        if snapshot.version != 1 {
+            return Err("unsupported guard snapshot version");
+        }
+        Ok(Self {
+            limits: snapshot.limits,
+            steps_used: snapshot.steps_used,
+            fingerprints: snapshot.fingerprints,
+            pair_counts: snapshot.pair_counts.into_iter().map(|(a, b, n)| ((a, b), n)).collect(),
+            expecting: snapshot.expecting.into_iter().map(|(a, b, n)| ((a, b), n)).collect(),
+            last_touched: now_ms(),
+        })
+    }
     pub fn new(limits: GuardLimits) -> Self {
         Self {
             limits: limits.sanitized(),
@@ -282,11 +317,7 @@ impl RunState {
         self.limits
     }
 
-    /// Starts a run picked up after a restart at what it had already spent.
-    ///
-    /// Only the budget is carried across, because it is the one limit that
-    /// bounds a whole cascade: every send, every hop and every reply is a model
-    /// call first. Never lowers what this process has already counted.
+    /// Restores the recorded budget for a legacy put-down.
     pub fn resume_at(&mut self, spent: u32) {
         self.steps_used = self.steps_used.max(spent);
     }
@@ -466,6 +497,9 @@ pub struct GuardRegistry {
 }
 
 impl GuardRegistry {
+    pub fn restore(&mut self, id: RunId, state: RunState) {
+        self.runs.insert(id, state);
+    }
     pub fn new() -> Self {
         Self {
             runs: HashMap::new(),
@@ -555,6 +589,33 @@ mod tests {
             max_sends_per_pair: 50,
             max_tool_rounds: 24,
         }
+    }
+
+    #[test]
+    fn snapshot_restores_limits_counts_fingerprints_and_reply_debts() {
+        let limits = GuardLimits { max_sends_per_pair: 2, ..permissive() };
+        let (from, to) = (AgentId::new(), AgentId::new());
+        let mut state = RunState::new(limits);
+        assert!(state.reserve_step());
+        assert!(matches!(state.evaluate(&req(from, to, "first", 0)), Verdict::Allow { .. }));
+        state.note_sent(from, to, true);
+        let json = serde_json::to_string(&state.snapshot()).unwrap();
+        let mut restored = RunState::from_snapshot(serde_json::from_str(&json).unwrap()).unwrap();
+        assert_eq!(restored.limits(), state.limits());
+        assert_eq!(restored.steps_used(), 1);
+        assert_eq!(restored.awaited(from), HashSet::from([to]));
+        assert!(matches!(
+            restored.evaluate(&req(from, to, "first", 0)),
+            Verdict::Refuse(Refusal::DuplicateContent { .. })
+        ));
+        assert!(matches!(restored.evaluate(&req(from, to, "second", 0)), Verdict::Allow { .. }));
+        assert!(matches!(
+            restored.evaluate(&req(from, to, "third", 0)),
+            Verdict::Refuse(Refusal::PairLimit { .. })
+        ));
+        let mut future: serde_json::Value = serde_json::from_str(&json).unwrap();
+        future["version"] = 2.into();
+        assert!(RunState::from_snapshot(serde_json::from_value(future).unwrap()).is_err());
     }
 
     #[test]

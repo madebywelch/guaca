@@ -22,6 +22,7 @@ use super::{Store, StoreError};
 use crate::domain::envelope::{Envelope, Intent, NoticeKind, Part, Participant, Trust};
 use crate::domain::ids::{MessageId, RunId};
 use crate::domain::now_ms;
+use crate::runtime::guard::{GuardSnapshot, RunState};
 
 const ENVELOPE: &str = "m.id,m.run_id,m.channel_id,m.from_kind,m.from_agent,m.to_kind,m.to_agent,\
      m.parts,m.trust,m.hop,m.expects_reply,m.intent,m.cause,m.created_at";
@@ -52,6 +53,7 @@ pub struct Recovered {
     /// What each conversation being picked up had already spent, so its budget
     /// is the one it was measured against before the restart.
     pub steps: HashMap<RunId, u32>,
+    pub guards: HashMap<RunId, RunState>,
     /// Conversations reported interrupted.
     pub interrupted: usize,
 }
@@ -72,15 +74,15 @@ impl Store {
     pub fn put_down(
         &self,
         messages: &[(MessageId, &[MessageId])],
-        whole: &[(RunId, u32)],
+        whole: &[(RunId, u32, GuardSnapshot)],
     ) -> Result<(), StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
         for (id, records) in messages {
             write_put_down(&tx, *id, records)?;
         }
-        for (run, steps) in whole {
-            mark_whole(&tx, *run, *steps)?;
+        for (run, steps, snapshot) in whole {
+            mark_whole(&tx, *run, *steps, snapshot)?;
         }
         tx.commit()?;
         Ok(())
@@ -95,7 +97,7 @@ impl Store {
     pub fn append_put_down(
         &self,
         envelope: &Envelope,
-        whole: Option<u32>,
+        whole: Option<(u32, GuardSnapshot)>,
     ) -> Result<(), StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
@@ -105,8 +107,8 @@ impl Store {
             params![envelope.run_id.to_string(), envelope.id.to_string()],
         )?;
         write_put_down(&tx, envelope.id, &[])?;
-        if let Some(steps) = whole {
-            mark_whole(&tx, envelope.run_id, steps)?;
+        if let Some((steps, snapshot)) = whole {
+            mark_whole(&tx, envelope.run_id, steps, &snapshot)?;
         }
         tx.commit()?;
         Ok(())
@@ -138,14 +140,29 @@ impl Store {
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
-        let whole: HashMap<RunId, u32> = {
-            let mut stmt = tx.prepare("SELECT run_id, steps FROM put_down_runs")?;
-            let rows =
-                stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?)))?;
+        let whole: HashMap<RunId, (u32, Option<RunState>)> = {
+            let mut stmt = tx.prepare("SELECT run_id, steps, guard_snapshot FROM put_down_runs")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, u32>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            })?;
             let mut whole = HashMap::new();
             for row in rows {
-                let (run, steps) = row?;
-                whole.insert(parse_run(&run)?, steps);
+                let (run, steps, snapshot) = row?;
+                let state = snapshot
+                    .map(|snapshot| {
+                        let snapshot: GuardSnapshot =
+                            serde_json::from_str(&snapshot).map_err(|err| {
+                                StoreError::Corrupt(format!("unreadable guard snapshot: {err}"))
+                            })?;
+                        RunState::from_snapshot(snapshot)
+                            .map_err(|err| StoreError::Corrupt(err.into()))
+                    })
+                    .transpose()?;
+                whole.insert(parse_run(&run)?, (steps, state));
             }
             whole
         };
@@ -216,8 +233,17 @@ impl Store {
 
         tx.commit()?;
 
-        let steps = whole.into_iter().filter(|(run, _)| picked.contains(run)).collect();
-        Ok(Recovered { resumed, steps, interrupted: anchors.len() })
+        let mut steps = HashMap::new();
+        let mut guards = HashMap::new();
+        for (run, (spent, state)) in whole {
+            if picked.contains(&run) {
+                steps.insert(run, spent);
+                if let Some(state) = state {
+                    guards.insert(run, state);
+                }
+            }
+        }
+        Ok(Recovered { resumed, steps, guards, interrupted: anchors.len() })
     }
 }
 
@@ -235,11 +261,17 @@ fn write_put_down(
     Ok(())
 }
 
-fn mark_whole(tx: &rusqlite::Connection, run: RunId, steps: u32) -> Result<(), StoreError> {
+fn mark_whole(
+    tx: &rusqlite::Connection,
+    run: RunId,
+    steps: u32,
+    snapshot: &GuardSnapshot,
+) -> Result<(), StoreError> {
+    let snapshot = serde_json::to_string(snapshot).expect("guard snapshot serializes");
     tx.execute(
-        "INSERT INTO put_down_runs (run_id,steps) VALUES (?1,?2)
-         ON CONFLICT(run_id) DO UPDATE SET steps=max(steps, excluded.steps)",
-        params![run.to_string(), steps],
+        "INSERT INTO put_down_runs (run_id,steps,guard_snapshot) VALUES (?1,?2,?3)
+         ON CONFLICT(run_id) DO UPDATE SET steps=excluded.steps, guard_snapshot=excluded.guard_snapshot",
+        params![run.to_string(), steps, snapshot],
     )?;
     Ok(())
 }
@@ -318,13 +350,104 @@ mod tests {
     }
 
     #[test]
+    fn legacy_whole_row_resumes_without_inventing_a_guard() {
+        let (_dir, store, agent) = fixture();
+        let run = RunId::new();
+        let original = asked(&agent, run, "legacy");
+        store.append_delivery(&original).unwrap();
+        store
+            .put_down(
+                &[(original.id, &[])],
+                &[(run, 3, RunState::new(Default::default()).snapshot())],
+            )
+            .unwrap();
+        store.conn().unwrap().execute("UPDATE put_down_runs SET guard_snapshot=NULL", []).unwrap();
+        let recovered = store.recover().unwrap();
+        assert_eq!(recovered.steps.get(&run), Some(&3));
+        assert!(!recovered.guards.contains_key(&run));
+        assert_eq!(recovered.resumed.len(), 1);
+    }
+
+    #[test]
+    fn failing_whole_marker_rolls_back_the_message_put_down() {
+        let (_dir, store, agent) = fixture();
+        let run = RunId::new();
+        let original = asked(&agent, run, "atomic");
+        store.append_delivery(&original).unwrap();
+        store.conn().unwrap().execute_batch("CREATE TRIGGER fail_whole BEFORE INSERT ON put_down_runs BEGIN SELECT RAISE(ABORT, 'crash'); END;").unwrap();
+        assert!(store
+            .put_down(
+                &[(original.id, &[])],
+                &[(run, 0, RunState::new(Default::default()).snapshot())]
+            )
+            .is_err());
+        let recovered = store.recover().unwrap();
+        assert!(recovered.resumed.is_empty());
+        assert_eq!(recovered.interrupted, 1);
+    }
+
+    #[test]
+    fn unreadable_snapshot_leaves_recovery_rows_intact() {
+        let (_dir, store, agent) = fixture();
+        let run = RunId::new();
+        let original = asked(&agent, run, "invalid");
+        store.append_delivery(&original).unwrap();
+        store
+            .put_down(
+                &[(original.id, &[])],
+                &[(run, 0, RunState::new(Default::default()).snapshot())],
+            )
+            .unwrap();
+        store.conn().unwrap().execute("UPDATE put_down_runs SET guard_snapshot='{}'", []).unwrap();
+        assert!(store.recover().is_err());
+        let conn = store.conn().unwrap();
+        let count: u32 =
+            conn.query_row("SELECT count(*) FROM put_down", [], |row| row.get(0)).unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn concurrent_whole_markers_keep_each_snapshot_with_its_steps() {
+        let (_dir, store, agent) = fixture();
+        let run = RunId::new();
+        let first = asked(&agent, run, "first");
+        let second = asked(&agent, run, "second");
+        store.append_delivery(&first).unwrap();
+        store.append_delivery(&second).unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let workers: Vec<_> = [first.id, second.id]
+            .into_iter()
+            .enumerate()
+            .map(|(index, id)| {
+                let store = store.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let steps = index as u32 + 1;
+                    let mut state = RunState::new(Default::default());
+                    state.resume_at(steps);
+                    barrier.wait();
+                    store.put_down(&[(id, &[])], &[(run, steps, state.snapshot())]).unwrap();
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        let recovered = store.recover().unwrap();
+        assert_eq!(recovered.resumed.len(), 2);
+        assert_eq!(recovered.steps[&run], recovered.guards[&run].steps_used());
+    }
+
+    #[test]
     fn a_conversation_put_down_whole_is_picked_up_with_its_records_and_its_budget() {
         let (_dir, store, agent) = fixture();
         let run = RunId::new();
         let original = asked(&agent, run, "do the work");
         store.append_delivery(&original).unwrap();
         let record = MessageId::new();
-        store.put_down(&[(original.id, &[record])], &[(run, 7)]).unwrap();
+        let mut state = RunState::new(Default::default());
+        state.resume_at(7);
+        store.put_down(&[(original.id, &[record])], &[(run, 7, state.snapshot())]).unwrap();
 
         let recovered = store.recover().unwrap();
         assert_eq!(recovered.interrupted, 0);
@@ -382,7 +505,9 @@ mod tests {
         let (_dir, store, agent) = fixture();
         let run = RunId::new();
         let late = asked(&agent, run, "sent during the update");
-        store.append_put_down(&late, Some(0)).unwrap();
+        store
+            .append_put_down(&late, Some((0, RunState::new(Default::default()).snapshot())))
+            .unwrap();
 
         let recovered = store.recover().unwrap();
         assert_eq!(recovered.interrupted, 0);

@@ -1664,7 +1664,6 @@ impl Runtime {
         limits: Option<GuardLimits>,
     ) -> Result<(), RuntimeError> {
         if matches!(envelope.to, Participant::Agent { .. }) {
-            let steps = self.steps_of(envelope.run_id);
             // Serialize acceptance with settlement: a finishing turn cannot
             // erase a new delivery's recovery point between write and booking.
             let mut runs = self.inner.runs.lock();
@@ -1675,8 +1674,48 @@ impl Runtime {
             // the process ends, and the message would end with it. Whole at
             // once unless something of its conversation is still running.
             if runs.draining && !runs.stopped.contains(&envelope.run_id) {
-                let whole = (!runs.outstanding.contains_key(&envelope.run_id)).then_some(steps);
+                if runs.outstanding.contains_key(&envelope.run_id) {
+                    self.inner.store.append_put_down(&envelope, None)?;
+                    if let (
+                        Some(limits),
+                        Participant::Agent { id: from },
+                        Participant::Agent { id: to },
+                    ) = (limits, envelope.from, envelope.to)
+                    {
+                        self.inner.guard.lock().run_within(envelope.run_id, limits).note_sent(
+                            from,
+                            to,
+                            envelope.expects_reply,
+                        );
+                    }
+                    runs.put_down.insert(envelope.run_id);
+                    drop(runs);
+                    self.inner
+                        .events
+                        .emit(UiEvent::MessageAppended { message: Box::new(envelope) });
+                    return Ok(());
+                }
+                let snapshot = self.inner.guard.lock().peek(envelope.run_id).map(|s| s.snapshot());
+                let mut state = if let Some(snapshot) = snapshot {
+                    guard::RunState::from_snapshot(snapshot)
+                        .expect("the current snapshot is supported")
+                } else {
+                    let Participant::Agent { id } = envelope.to else { unreachable!() };
+                    let card =
+                        self.inner.store.get_agent(id)?.ok_or(RuntimeError::UnknownAgent(id))?;
+                    guard::RunState::new(self.limits_for(&card))
+                };
+                if let (Some(_), Participant::Agent { id: from }, Participant::Agent { id: to }) =
+                    (limits, envelope.from, envelope.to)
+                {
+                    state.note_sent(from, to, envelope.expects_reply);
+                }
+                let whole = Some((state.steps_used(), state.snapshot()));
                 self.inner.store.append_put_down(&envelope, whole)?;
+                let mut guard = self.inner.guard.lock();
+                guard.pin(envelope.run_id);
+                guard.restore(envelope.run_id, state);
+                drop(guard);
                 runs.put_down.insert(envelope.run_id);
                 drop(runs);
                 self.inner.events.emit(UiEvent::MessageAppended { message: Box::new(envelope) });
@@ -2487,7 +2526,6 @@ impl Runtime {
                 // picks it up, and a run it picks up has not settled.
                 if runs.put_down.contains(&run) {
                     self.mark_whole(&[run]);
-                    self.inner.guard.lock().unpin(run);
                     None
                 } else {
                     if let Err(err) = self.inner.store.settle_run(run) {
@@ -3094,8 +3132,12 @@ impl Runtime {
         // Peek rather than claim: the budget is spent per model call inside the
         // loop below, but there is no point building a prompt or telling the UI
         // a message is coming if the run is already finished.
-        let limits = self.limits_for(&card);
-        let has_budget = { self.inner.guard.lock().run_within(run_id, limits).has_budget() };
+        let group_limits = self.limits_for(&card);
+        let (limits, has_budget) = {
+            let mut guard = self.inner.guard.lock();
+            let state = guard.run_within(run_id, group_limits);
+            (state.limits(), state.has_budget())
+        };
         if !has_budget {
             self.notice(
                 agent_id,
@@ -8652,6 +8694,7 @@ mod tests {
         runtime.pick_up(crate::db::Recovered {
             resumed: vec![crate::db::PutDown { envelope, records: vec![] }],
             steps: HashMap::from([(run, 7)]),
+            guards: HashMap::new(),
             interrupted: 0,
         });
         std::thread::sleep(Duration::from_millis(10));
