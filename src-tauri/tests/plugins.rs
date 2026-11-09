@@ -2183,6 +2183,14 @@ async fn replaced_grant_fences_stalled_refresh(disconnect: bool) {
     .await
     .unwrap();
     let original = store.plugin_dial(plugin.id).unwrap().unwrap().grant.unwrap();
+    let discovered = store
+        .plugin_tools(group, agent)
+        .unwrap()
+        .into_iter()
+        .find(|set| set.kind == PluginKind::Neon)
+        .unwrap()
+        .offered;
+    assert!(discovered.iter().any(|tool| tool.name == "run_sql"));
     let args = serde_json::json!({});
     let call = plugins::call(
         &store,
@@ -2208,7 +2216,15 @@ async fn replaced_grant_fences_stalled_refresh(disconnect: bool) {
             assert!(store.delete_plugin(plugin.id).unwrap());
         }
         let replacement = store
-            .save_plugin(group, &PluginKind::Neon, "", &[], Some(&original), "", &Headers::none())
+            .save_plugin(
+                group,
+                &PluginKind::Neon,
+                "",
+                &discovered,
+                Some(&original),
+                "",
+                &Headers::none(),
+            )
             .unwrap();
         pause.add_permits(1);
         replacement.id
