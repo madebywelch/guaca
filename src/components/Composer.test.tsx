@@ -110,6 +110,65 @@ describe("Composer", () => {
     staging = async (paths) => ({ attached: paths.map(stored), refused: [] });
   });
 
+  it("retries a lost response with the same key without delivering twice", async () => {
+    const delivered = new Set<string>();
+    let loseResponse = false;
+    const onSend = vi.fn(async (_text: string, _files: Attachment[], key: string) => {
+      delivered.add(key);
+      if (loseResponse) {
+        loseResponse = false;
+        throw new Error("response lost");
+      }
+      return { messageId: "message", runId: "run" };
+    });
+    render(<Composer placeholder="Message" group={CREW} draftKey="keyed" onSend={onSend} />);
+    const input = screen.getByRole("combobox");
+    fireEvent.change(input, { target: { value: "establish support" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(
+        true,
+      ),
+    );
+    loseResponse = true;
+    fireEvent.change(input, { target: { value: "deliver once" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Send again" }));
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(3));
+    expect(onSend.mock.calls[1]?.[2]).toBe(onSend.mock.calls[2]?.[2]);
+    expect(onSend.mock.calls[0]?.[2]).not.toBe(onSend.mock.calls[1]?.[2]);
+    expect(delivered.size).toBe(2);
+  });
+
+  it("requires checking the conversation when the host is unknown", async () => {
+    const onSend = vi.fn(async () => {
+      throw new Error("lost");
+    });
+    render(<Composer placeholder="Message" group={CREW} draftKey="unknown-host" onSend={onSend} />);
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "hello" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByRole("button", { name: "Conversation checked" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Send again" })).toBeNull();
+  });
+
+  it("requires checking the conversation after a legacy response", async () => {
+    const onSend = vi.fn().mockResolvedValueOnce("run").mockRejectedValueOnce(new Error("lost"));
+    render(<Composer placeholder="Message" group={CREW} draftKey="legacy-host" onSend={onSend} />);
+    const input = screen.getByRole("combobox");
+    fireEvent.change(input, { target: { value: "first" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(
+        true,
+      ),
+    );
+    fireEvent.change(input, { target: { value: "second" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByRole("button", { name: "Conversation checked" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Send again" })).toBeNull();
+  });
+
   it("groups recipients and identifies agents outside the current group", () => {
     const first = anAgent("Ines");
     const other = anAgent("Ines", ELSEWHERE);
@@ -275,7 +334,11 @@ describe("Composer", () => {
     await type("have a look");
     await click("Send");
 
-    expect(onSend).toHaveBeenCalledWith("have a look", [stored("proposal.docx")]);
+    expect(onSend).toHaveBeenCalledWith(
+      "have a look",
+      [stored("proposal.docx")],
+      expect.any(String),
+    );
   });
 
   it("lets a file be sent with nothing typed", async () => {
@@ -287,7 +350,7 @@ describe("Composer", () => {
     await drop(["/tmp/agenda.txt"]);
     await click("Send");
 
-    expect(onSend).toHaveBeenCalledWith("", [stored("agenda.txt")]);
+    expect(onSend).toHaveBeenCalledWith("", [stored("agenda.txt")], expect.any(String));
   });
 
   it("drops the attachments once they have gone", async () => {
@@ -331,7 +394,7 @@ describe("Composer", () => {
 
     expect(screen.queryByText("wrong.md")).toBeNull();
     await click("Send");
-    expect(onSend).toHaveBeenCalledWith("", [stored("right.md")]);
+    expect(onSend).toHaveBeenCalledWith("", [stored("right.md")], expect.any(String));
   });
 
   it("names the file it could not take and keeps the ones it could", async () => {
@@ -349,7 +412,7 @@ describe("Composer", () => {
     expect(screen.getByText("brief.md")).toBeTruthy();
 
     await click("Send");
-    expect(onSend).toHaveBeenCalledWith("", [stored("brief.md")]);
+    expect(onSend).toHaveBeenCalledWith("", [stored("brief.md")], expect.any(String));
   });
 
   it("says so when the drop itself failed", async () => {
@@ -393,7 +456,7 @@ describe("Composer", () => {
       expect(uploads).toHaveBeenCalledWith([chosen]);
       await waitFor(() => expect(screen.getByText("brief.pdf")).toBeTruthy());
       await click("Send");
-      expect(onSend).toHaveBeenCalledWith("", [stored("brief.pdf")]);
+      expect(onSend).toHaveBeenCalledWith("", [stored("brief.pdf")], expect.any(String));
     } finally {
       state.capabilities = { ...state.capabilities, localFiles: true };
     }
@@ -636,7 +699,7 @@ describe("the keyboard outside a composition", () => {
     const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
     fireEvent(screen.getByRole("combobox"), event);
 
-    await waitFor(() => expect(onSend).toHaveBeenCalledWith("have a look", []));
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("have a look", [], expect.any(String)));
     expect(event.defaultPrevented).toBe(true);
   });
 
