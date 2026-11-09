@@ -1,9 +1,9 @@
-import { render as baseRender, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, render as baseRender, fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../lib/store";
 import type { AgentCard, Browser, BrowserConsent } from "../lib/types";
-import { BrowserScreen } from "./BrowserScreen";
+import { BrowserScreen, browserReadReducer } from "./BrowserScreen";
 
 const agentBrowser = vi.fn<(id: string) => Promise<Browser | null>>();
 const stopAgentBrowser = vi.fn<(id: string) => Promise<void>>();
@@ -55,6 +55,24 @@ const HAS_ONE: Browser = {
   liveViewUrl: "https://prod-jfk-1.kernel.sh:8443/browser/live/tok",
   unwatchable: null,
 };
+
+describe("browser read transitions", () => {
+  it("loads, accepts a result, preserves it on failure, and resets", () => {
+    const loading = { status: "loading" } as const;
+    const empty = { status: "ready", browser: null } as const;
+    const live = { status: "ready", browser: HAS_ONE } as const;
+    expect(browserReadReducer(loading, { type: "found", browser: null })).toEqual(empty);
+    expect(browserReadReducer(loading, { type: "found", browser: HAS_ONE })).toEqual(live);
+    expect(browserReadReducer(loading, { type: "failed" })).toEqual(empty);
+    expect(browserReadReducer(empty, { type: "failed" })).toEqual(empty);
+    expect(browserReadReducer(live, { type: "failed" })).toEqual(live);
+    expect(browserReadReducer(empty, { type: "found", browser: HAS_ONE })).toEqual(live);
+    expect(browserReadReducer(live, { type: "found", browser: null })).toEqual(empty);
+    expect(browserReadReducer(live, { type: "reset" })).toEqual(loading);
+    expect(browserReadReducer(empty, { type: "reset" })).toEqual(loading);
+    expect(browserReadReducer(loading, { type: "reset" })).toEqual(loading);
+  });
+});
 
 function configure(kernelKeySet: boolean) {
   useStore.setState({
@@ -161,6 +179,184 @@ describe("BrowserScreen", () => {
     await waitFor(() => expect(screen.getByText(/Opens when it needs the web/)).toBeTruthy());
     expect(screen.getByRole("region", { name: "Scribe's browser" })).toBeTruthy();
     expect(screen.queryByTitle("Cook's browser")).toBeNull();
+  });
+
+  it("does not restore a browser from a poll started before close", async () => {
+    let settle: (value: Browser | null) => void = () => {};
+    agentBrowser.mockResolvedValueOnce(HAS_ONE).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          settle = resolve;
+        }),
+    );
+    stopAgentBrowser.mockResolvedValue(undefined);
+    vi.useFakeTimers();
+    try {
+      render(<BrowserScreen agent={card("a", "Cook")} />);
+      await act(async () => {});
+      act(() => vi.advanceTimersByTime(20000));
+      fireEvent.click(screen.getByRole("button", { name: /take over/i }));
+      fireEvent.click(screen.getByRole("button", { name: "Close" }));
+      fireEvent.click(screen.getByRole("button", { name: /Close it and save/ }));
+      await act(async () => {});
+      expect(screen.queryByTitle("Cook's browser")).toBeNull();
+      await act(async () => settle(HAS_ONE));
+      expect(screen.queryByTitle("Cook's browser")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("discards a lookup from the first visit after A to B to A", async () => {
+    let settle: (value: Browser | null) => void = () => {};
+    agentBrowser
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            settle = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null);
+    const view = render(<BrowserScreen agent={card("a", "Cook")} />);
+    view.rerender(<BrowserScreen agent={card("b", "Scribe")} />);
+    view.rerender(<BrowserScreen agent={card("a", "Cook")} />);
+    await act(async () => {});
+    await act(async () => settle(HAS_ONE));
+    expect(screen.queryByTitle("Cook's browser")).toBeNull();
+  });
+
+  it("polls every 20 seconds and stops on unmount", async () => {
+    agentBrowser.mockResolvedValue(null);
+    vi.useFakeTimers();
+    try {
+      const view = render(<BrowserScreen agent={card("a", "Cook")} />);
+      await act(async () => {});
+      expect(agentBrowser).toHaveBeenCalledTimes(1);
+      await act(async () => vi.advanceTimersByTime(19999));
+      expect(agentBrowser).toHaveBeenCalledTimes(1);
+      await act(async () => vi.advanceTimersByTime(1));
+      expect(agentBrowser).toHaveBeenCalledTimes(2);
+      view.unmount();
+      await act(async () => vi.advanceTimersByTime(40000));
+      expect(agentBrowser).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the newest poll when an older poll finishes later", async () => {
+    let settle: (value: Browser | null) => void = () => {};
+    agentBrowser
+      .mockResolvedValueOnce(null)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            settle = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(null);
+    vi.useFakeTimers();
+    try {
+      render(<BrowserScreen agent={card("a", "Cook")} />);
+      await act(async () => {});
+      await act(async () => vi.advanceTimersByTime(40000));
+      await act(async () => settle(HAS_ONE));
+      expect(screen.queryByTitle("Cook's browser")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("invalidates a poll started while close is pending", async () => {
+    let finishClose: () => void = () => {};
+    let finishPoll: (value: Browser | null) => void = () => {};
+    agentBrowser.mockResolvedValueOnce(HAS_ONE).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishPoll = resolve;
+        }),
+    );
+    stopAgentBrowser.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishClose = resolve;
+        }),
+    );
+    vi.useFakeTimers();
+    try {
+      render(<BrowserScreen agent={card("a", "Cook")} />);
+      await act(async () => {});
+      fireEvent.click(screen.getByRole("button", { name: /take over/i }));
+      fireEvent.click(screen.getByRole("button", { name: "Close" }));
+      fireEvent.click(screen.getByRole("button", { name: /Close it and save/ }));
+      act(() => vi.advanceTimersByTime(20000));
+      await act(async () => finishClose());
+      await act(async () => finishPoll(HAS_ONE));
+      expect(screen.queryByTitle("Cook's browser")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves the live browser when a poll fails and recovers on the next poll", async () => {
+    agentBrowser
+      .mockResolvedValueOnce(HAS_ONE)
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce(null);
+    vi.useFakeTimers();
+    try {
+      render(<BrowserScreen agent={card("a", "Cook")} />);
+      await act(async () => {});
+      await act(async () => vi.advanceTimersByTime(20000));
+      expect(screen.getByTitle("Cook's browser")).toBeTruthy();
+      await act(async () => vi.advanceTimersByTime(20000));
+      expect(screen.queryByTitle("Cook's browser")).toBeNull();
+      expect(screen.queryByText("offline")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows an initial lookup error rather than staying in loading", async () => {
+    agentBrowser.mockRejectedValue(new Error("offline"));
+    render(<BrowserScreen agent={card("a", "Cook")} />);
+    expect(await screen.findByText("offline")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open" })).toBeTruthy();
+  });
+
+  it("ignores an earlier visit's consent failure while a new decision is pending", async () => {
+    let rejectOld: (error: Error) => void = () => {};
+    let finishNew: () => void = () => {};
+    agentBrowser.mockResolvedValue(null);
+    setAgentBrowserConsent
+      .mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            rejectOld = reject;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishNew = () => resolve(undefined);
+          }),
+      );
+    const view = render(<BrowserScreen agent={card("a", "Cook")} />);
+    await act(async () => {});
+    fireEvent.click(screen.getByLabelText(/Ask me before it acts in my name/));
+    view.rerender(<BrowserScreen agent={card("b", "Scribe")} />);
+    view.rerender(<BrowserScreen agent={card("a", "Cook")} />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Browser" }));
+    const consent = screen.getByLabelText(/Ask me before it acts in my name/) as HTMLInputElement;
+    fireEvent.click(consent);
+    expect(consent.disabled).toBe(true);
+    await act(async () => rejectOld(new Error("old decision failed")));
+    expect(consent.disabled).toBe(true);
+    expect(screen.queryByText("old decision failed")).toBeNull();
+    await act(async () => finishNew());
+    expect(consent.disabled).toBe(false);
   });
 
   it("explains that signing the agent in is the operator's job", async () => {

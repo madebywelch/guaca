@@ -1,13 +1,15 @@
-import { render as baseRender, fireEvent, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, render as baseRender, fireEvent, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../lib/store";
 import type { AgentCard, Computer } from "../lib/types";
-import { ComputerScreen } from "./ComputerScreen";
+import { ComputerScreen, computerRead } from "./ComputerScreen";
 
 const agentComputer = vi.fn<(id: string) => Promise<Computer | null>>();
 const giveAgentComputer = vi.fn<(id: string) => Promise<unknown>>();
 const takeAgentComputer = vi.fn<(id: string) => Promise<unknown>>();
+const stopAgentComputer = vi.fn<(id: string) => Promise<Computer | null>>();
+const deleteAgentComputer = vi.fn<(id: string) => Promise<void>>();
 
 vi.mock("../lib/ipc", () => ({
   api: {
@@ -15,8 +17,8 @@ vi.mock("../lib/ipc", () => ({
     giveAgentComputer: (id: string) => giveAgentComputer(id),
     takeAgentComputer: (id: string) => takeAgentComputer(id),
     startAgentComputer: vi.fn(),
-    stopAgentComputer: vi.fn(),
-    deleteAgentComputer: vi.fn(),
+    stopAgentComputer: (id: string) => stopAgentComputer(id),
+    deleteAgentComputer: (id: string) => deleteAgentComputer(id),
   },
 }));
 
@@ -61,12 +63,15 @@ function render(ui: React.ReactElement) {
 }
 
 describe("ComputerScreen", () => {
+  afterEach(() => vi.useRealTimers());
   beforeEach(() => {
     agentComputer.mockReset();
     giveAgentComputer.mockReset();
     giveAgentComputer.mockResolvedValue(undefined);
     takeAgentComputer.mockReset();
     takeAgentComputer.mockResolvedValue(undefined);
+    stopAgentComputer.mockReset();
+    deleteAgentComputer.mockReset();
     useStore.setState({
       settings: {
         operatorName: "",
@@ -95,6 +100,100 @@ describe("ComputerScreen", () => {
         },
       },
     });
+  });
+
+  it("transitions reads without discarding a resource on failure", () => {
+    const checking = { kind: "checking" } as const;
+    const ready = { kind: "checked", computer: HAS_ONE } as const;
+    const empty = { kind: "checked", computer: null } as const;
+    expect(computerRead(ready, { type: "reset" })).toEqual(checking);
+    expect(computerRead(checking, { type: "resolved", computer: HAS_ONE })).toEqual(ready);
+    expect(computerRead(ready, { type: "resolved", computer: null })).toEqual(empty);
+    expect(computerRead(checking, { type: "failed" })).toEqual(empty);
+    expect(computerRead(ready, { type: "failed" })).toEqual(ready);
+  });
+
+  it("polls every 15 seconds and stops on unmount", async () => {
+    vi.useFakeTimers();
+    agentComputer.mockResolvedValue(null);
+    const view = render(<ComputerScreen agent={card("a", "Cook")} />);
+    await act(async () => {});
+    expect(agentComputer).toHaveBeenCalledTimes(1);
+    await act(async () => vi.advanceTimersByTime(14999));
+    expect(agentComputer).toHaveBeenCalledTimes(1);
+    await act(async () => vi.advanceTimersByTime(1));
+    expect(agentComputer).toHaveBeenCalledTimes(2);
+    view.unmount();
+    await act(async () => vi.advanceTimersByTime(15000));
+    expect(agentComputer).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the newest of overlapping reads", async () => {
+    let finishOld!: (value: Computer | null) => void;
+    vi.useFakeTimers();
+    agentComputer
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishOld = resolve;
+          }),
+      )
+      .mockResolvedValue(null);
+    render(<ComputerScreen agent={card("a", "Cook")} />);
+    await act(async () => vi.advanceTimersByTime(15000));
+    await act(async () => finishOld(HAS_ONE));
+    expect(screen.queryByTitle("Cook's computer")).toBeNull();
+    expect(screen.getByText(/Starts when it needs one/)).toBeTruthy();
+  });
+
+  it.each(["sleep", "destroy"] as const)(
+    "ignores a poll started before %s completes",
+    async (action) => {
+      let finishPoll!: (value: Computer | null) => void;
+      agentComputer.mockResolvedValueOnce(HAS_ONE).mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishPoll = resolve;
+          }),
+      );
+      stopAgentComputer.mockResolvedValue({ ...HAS_ONE, state: "asleep", vncUrl: null });
+      deleteAgentComputer.mockResolvedValue();
+      vi.useFakeTimers();
+      render(<ComputerScreen agent={card("a", "Cook")} />);
+      await act(async () => {});
+      fireEvent.click(screen.getByRole("button", { name: /take over/i }));
+      act(() => vi.advanceTimersByTime(15000));
+      fireEvent.click(
+        screen.getByRole("button", { name: action === "sleep" ? "Sleep" : "Destroy" }),
+      );
+      await act(async () =>
+        fireEvent.click(
+          screen.getByRole("button", {
+            name: action === "sleep" ? "Sleep it" : "Destroy it and its disk",
+          }),
+        ),
+      );
+      await act(async () => finishPoll(HAS_ONE));
+      expect(screen.queryByTitle("Cook's computer")).toBeNull();
+      vi.useRealTimers();
+    },
+  );
+
+  it("ignores the first agent's old read after switching away and back", async () => {
+    let finishOld!: (value: Computer | null) => void;
+    agentComputer
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishOld = resolve;
+          }),
+      )
+      .mockResolvedValue(null);
+    const view = render(<ComputerScreen agent={card("a", "Cook")} />);
+    view.rerender(<ComputerScreen agent={card("b", "Scribe")} />);
+    view.rerender(<ComputerScreen agent={card("a", "Cook")} />);
+    await act(async () => finishOld(HAS_ONE));
+    expect(screen.queryByTitle("Cook's computer")).toBeNull();
   });
 
   it("keeps an ungiven place to one expandable header", () => {
