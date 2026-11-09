@@ -576,7 +576,7 @@ pub async fn delete_agent_computer(state: &AppState, id: AgentId) -> Reply<()> {
         return Ok(());
     };
     computers(state)?.kill(&sandbox).await?;
-    state.runtime.store().set_agent_sandbox(id, None)?;
+    state.runtime.store().clear_agent_sandbox_if(id, &sandbox)?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
 }
@@ -694,7 +694,7 @@ pub async fn stop_agent_browser(state: &AppState, id: AgentId) -> Reply<()> {
         return Ok(());
     };
     browsers(state)?.delete(&browser).await?;
-    state.runtime.store().set_agent_browser(id, None)?;
+    state.runtime.store().clear_agent_browser_if(id, &browser)?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
 }

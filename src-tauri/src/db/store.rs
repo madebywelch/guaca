@@ -916,6 +916,15 @@ impl Store {
         Ok(())
     }
 
+    pub fn clear_agent_sandbox_if(&self, id: AgentId, sandbox: &str) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        conn.execute(
+            "UPDATE agents SET sandbox_id=NULL, sandbox_envd_token=NULL, sandbox_traffic_token=NULL WHERE id=?1 AND sandbox_id=?2",
+            params![id.to_string(), sandbox],
+        )?;
+        Ok(())
+    }
+
     /// Records which hosted browser is this agent's browser.
     ///
     /// Separate from `set_agent_sandbox` rather than one call taking both,
@@ -933,6 +942,15 @@ impl Store {
         if changed == 0 {
             return Err(StoreError::AgentNotFound(id));
         }
+        Ok(())
+    }
+
+    pub fn clear_agent_browser_if(&self, id: AgentId, browser: &str) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        conn.execute(
+            "UPDATE agents SET browser_id=NULL WHERE id=?1 AND browser_id=?2",
+            params![id.to_string(), browser],
+        )?;
         Ok(())
     }
 

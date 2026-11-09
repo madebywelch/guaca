@@ -11,6 +11,106 @@ use serde_json::json;
 
 static PROVIDER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+fn command_state(h: &harness::Harness) -> Arc<guac_lib::commands::AppState> {
+    use guac_lib::{
+        account::Account,
+        artifact::Artifacts,
+        commands::{AppState, Reach},
+        domain::deployment::Deployment,
+        llm::catalog::Catalog,
+        subscription::Subscription,
+    };
+    use std::sync::atomic::AtomicU16;
+    Arc::new(AppState {
+        runtime: h.runtime.clone(),
+        menubar: Arc::new(|_| {}),
+        secret: None,
+        deployment: Deployment::Desktop,
+        open_url: Arc::new(|_| Ok(())),
+        reach: Reach::Desktop,
+        config_path: h._dir.path().join("config.json"),
+        downloads: h._dir.path().to_path_buf(),
+        subscription: Arc::new(Subscription::open(h._dir.path().join("subscription.json"))),
+        claude_signin: Default::default(),
+        account: Arc::new(Account::open(h._dir.path().join("account.json"))),
+        catalog: Arc::new(Catalog::new()),
+        artifacts: Artifacts::new(),
+        artifact_port: Arc::new(AtomicU16::new(0)),
+    })
+}
+
+#[tokio::test]
+async fn operator_deletion_never_clears_a_concurrent_replacement() {
+    let _guard = PROVIDER.lock().await;
+    let arrived = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let arrived_server = arrived.clone();
+    let release_server = release.clone();
+    let delete = move || {
+        let arrived = arrived_server.clone();
+        let release = release_server.clone();
+        async move {
+            arrived.notify_one();
+            release.notified().await;
+            axum::http::StatusCode::NO_CONTENT
+        }
+    };
+    let app = Router::new()
+        .route("/sandboxes/:id", axum::routing::delete(delete.clone()))
+        .route("/browsers/:id", axum::routing::delete(delete));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    std::env::set_var("GUAC_E2B_API_BASE", format!("http://{addr}"));
+    std::env::set_var("GUAC_KERNEL_API_BASE", format!("http://{addr}"));
+    let stub = harness::serve(|_| harness::Script::Say(String::new())).await;
+
+    let computer = harness::harness_with_computer(&stub, &["Computer"], GuardLimits::default());
+    let computer_id = computer.id("Computer");
+    computer
+        .runtime
+        .store()
+        .set_agent_sandbox(computer_id, Some(("old-computer", "old", "old")))
+        .unwrap();
+    let state = command_state(&computer);
+    let deletion = tokio::spawn(async move {
+        guac_lib::commands::delete_agent_computer(&state, computer_id).await
+    });
+    arrived.notified().await;
+    computer
+        .runtime
+        .store()
+        .record_created_sandbox(computer_id, ("new-computer", "new", "new"))
+        .unwrap();
+    release.notify_one();
+    deletion.await.unwrap().unwrap();
+    let computer_after = computer.agent_named("Computer").unwrap();
+
+    let browser = harness::harness_with_browser(&stub, &["Browser"], GuardLimits::default());
+    let browser_id = browser.id("Browser");
+    browser.runtime.store().set_agent_browser(browser_id, Some("old-browser")).unwrap();
+    let state = command_state(&browser);
+    let deletion =
+        tokio::spawn(
+            async move { guac_lib::commands::stop_agent_browser(&state, browser_id).await },
+        );
+    arrived.notified().await;
+    browser.runtime.store().record_browser(browser_id, "new-browser", false).unwrap();
+    release.notify_one();
+    deletion.await.unwrap().unwrap();
+    let browser_after = browser.agent_named("Browser").unwrap();
+
+    assert!(
+        computer_after.sandbox_id.as_deref() == Some("new-computer")
+            && computer_after.sandbox_envd_token.as_deref() == Some("new")
+            && browser_after.browser_id.as_deref() == Some("new-browser"),
+        "computer: {:?}, token present: {}, browser: {:?}",
+        computer_after.sandbox_id,
+        computer_after.sandbox_envd_token.as_deref() == Some("new"),
+        browser_after.browser_id
+    );
+}
+
 #[test]
 fn copied_workspace_keeps_identity_but_new_ledger_entries_do_not_cross() {
     use guac_lib::db::{store::ResourceState, Store};
