@@ -61,6 +61,9 @@ struct Rules {
     /// True makes the first token stale on arrival, so a call has to refresh
     /// before it can be made.
     issue_expired: bool,
+    rotating: bool,
+    refresh_pause: Option<Arc<tokio::sync::Semaphore>>,
+    refresh_status: Option<Arc<AtomicUsize>>,
     /// A bearer the server accepts without ever having issued it, which is what
     /// an account-backed plugin presents: the token is the machine's Guaca
     /// account, minted somewhere this server's sign-in never ran.
@@ -108,6 +111,9 @@ impl Default for Rules {
             registers: true,
             expires_in: Some(3600),
             issue_expired: false,
+            rotating: false,
+            refresh_pause: None,
+            refresh_status: None,
             account_token: None,
             era: Era::Legacy,
             versions: Vec::new(),
@@ -281,6 +287,22 @@ async fn token(
     let grant = form.get("grant_type").map(String::as_str).unwrap_or_default();
     if grant == "refresh_token" {
         server.refreshes.fetch_add(1, Ordering::SeqCst);
+        if let Some(pause) = &server.rules.refresh_pause {
+            pause.acquire().await.unwrap().forget();
+        }
+        if let Some(status) = &server.rules.refresh_status {
+            let status = status.load(Ordering::SeqCst);
+            if status != 0 {
+                return (axum::http::StatusCode::from_u16(status as u16).unwrap(), "invalid_grant")
+                    .into_response();
+            }
+        }
+        if server.rules.rotating {
+            let expected = format!("refresh-{}", server.issued.lock().len() - 1);
+            if form.get("refresh_token") != Some(&expected) {
+                return (axum::http::StatusCode::BAD_REQUEST, "invalid_grant").into_response();
+            }
+        }
     } else {
         assert!(form.contains_key("code_verifier"), "the exchange has to prove the PKCE challenge");
         // RFC 8707. A server that issues audience-bound tokens needs it, and
@@ -294,7 +316,7 @@ async fn token(
 
     let mut issued = serde_json::json!({
         "access_token": access,
-        "refresh_token": "refresh-token",
+        "refresh_token": if server.rules.rotating { format!("refresh-{serial}") } else { "refresh-token".to_string() },
         "token_type": "Bearer",
     });
     // A first token that is already expired, so the next call has to renew it
@@ -307,7 +329,7 @@ async fn token(
     if let Some(seconds) = seconds {
         issued["expires_in"] = serde_json::json!(seconds);
     }
-    axum::Json(issued)
+    axum::Json(issued).into_response()
 }
 
 async fn rpc(
@@ -2058,6 +2080,180 @@ async fn a_call_on_an_unconnected_plugin_says_who_can_connect_it() {
     let said = failed.to_string();
     assert!(said.contains("not connected"), "{said}");
     assert!(said.contains("operator"), "{said}");
+}
+
+#[tokio::test]
+async fn parallel_stale_callers_share_one_rotating_refresh() {
+    parallel_rotating_refresh(true).await;
+}
+
+#[tokio::test]
+async fn parallel_unauthorized_callers_reuse_the_peer_refresh() {
+    parallel_rotating_refresh(false).await;
+}
+
+async fn parallel_rotating_refresh(expired: bool) {
+    let pause = Arc::new(tokio::sync::Semaphore::new(0));
+    let server = serve(Rules {
+        issue_expired: expired,
+        rotating: true,
+        refresh_pause: Some(pause.clone()),
+        ..Default::default()
+    })
+    .await;
+    let endpoint = format!("{}/mcp", server.base());
+    let (_dir, store, group, agent) = workspace();
+    plugins::connect(
+        &store,
+        group,
+        &PluginKind::Neon,
+        &endpoint,
+        plugins::Credential::Discover,
+        &Headers::none(),
+        &Landing::Loopback,
+        browser(Outcome::Allowed),
+    )
+    .await
+    .unwrap();
+    if !expired {
+        server.revoked.lock().push("access-0".into());
+    }
+    let args = serde_json::json!({});
+    let target = || plugins::Target {
+        group,
+        agent,
+        kind: &PluginKind::Neon,
+        endpoint: &endpoint,
+        account: plugins::Held::Absent,
+    };
+    let release = async {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while server.refreshes.load(Ordering::SeqCst) == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        pause.add_permits(2);
+    };
+    let (a, b, ()) = tokio::join!(
+        plugins::call(&store, target(), "run_sql", &args),
+        plugins::call(&store, target(), "run_sql", &args),
+        release
+    );
+    assert!(a.is_ok(), "{a:?}");
+    assert!(b.is_ok(), "{b:?}");
+    assert_eq!(server.refreshes.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn reconnect_with_identical_grant_fences_a_stalled_refresh() {
+    replaced_grant_fences_stalled_refresh(false).await;
+}
+
+#[tokio::test]
+async fn disconnect_and_reconnect_fences_a_stalled_refresh() {
+    replaced_grant_fences_stalled_refresh(true).await;
+}
+
+async fn replaced_grant_fences_stalled_refresh(disconnect: bool) {
+    let pause = Arc::new(tokio::sync::Semaphore::new(0));
+    let server = serve(Rules {
+        issue_expired: true,
+        refresh_pause: Some(pause.clone()),
+        ..Default::default()
+    })
+    .await;
+    let endpoint = format!("{}/mcp", server.base());
+    let (_dir, store, group, agent) = workspace();
+    let plugin = plugins::connect(
+        &store,
+        group,
+        &PluginKind::Neon,
+        &endpoint,
+        plugins::Credential::Discover,
+        &Headers::none(),
+        &Landing::Loopback,
+        browser(Outcome::Allowed),
+    )
+    .await
+    .unwrap();
+    let original = store.plugin_dial(plugin.id).unwrap().unwrap().grant.unwrap();
+    let args = serde_json::json!({});
+    let call = plugins::call(
+        &store,
+        plugins::Target {
+            group,
+            agent,
+            kind: &PluginKind::Neon,
+            endpoint: &endpoint,
+            account: plugins::Held::Absent,
+        },
+        "run_sql",
+        &args,
+    );
+    let reconnect = async {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while server.refreshes.load(Ordering::SeqCst) == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        if disconnect {
+            assert!(store.delete_plugin(plugin.id).unwrap());
+        }
+        let replacement = store
+            .save_plugin(group, &PluginKind::Neon, "", &[], Some(&original), "", &Headers::none())
+            .unwrap();
+        pause.add_permits(1);
+        replacement.id
+    };
+    let (result, replacement) = tokio::join!(call, reconnect);
+    assert!(result.is_err());
+    assert_eq!(store.plugin_dial(replacement).unwrap().unwrap().grant.unwrap(), original);
+}
+
+#[tokio::test]
+async fn failed_refresh_preserves_grant_for_later_recovery() {
+    for status in [400, 503] {
+        let failure = Arc::new(AtomicUsize::new(status));
+        let server = serve(Rules {
+            issue_expired: true,
+            refresh_status: Some(failure.clone()),
+            ..Default::default()
+        })
+        .await;
+        let endpoint = format!("{}/mcp", server.base());
+        let (_dir, store, group, agent) = workspace();
+        let plugin = plugins::connect(
+            &store,
+            group,
+            &PluginKind::Neon,
+            &endpoint,
+            plugins::Credential::Discover,
+            &Headers::none(),
+            &Landing::Loopback,
+            browser(Outcome::Allowed),
+        )
+        .await
+        .unwrap();
+        let original = store.plugin_dial(plugin.id).unwrap().unwrap().grant.unwrap();
+        let args = serde_json::json!({});
+        let target = || plugins::Target {
+            group,
+            agent,
+            kind: &PluginKind::Neon,
+            endpoint: &endpoint,
+            account: plugins::Held::Absent,
+        };
+        assert!(plugins::call(&store, target(), "run_sql", &args).await.is_err());
+        assert_eq!(store.plugin_dial(plugin.id).unwrap().unwrap().grant.unwrap(), original);
+        failure.store(0, Ordering::SeqCst);
+        assert!(plugins::call(&store, target(), "run_sql", &args).await.is_ok());
+        assert_eq!(server.refreshes.load(Ordering::SeqCst), 2);
+    }
 }
 
 #[tokio::test]

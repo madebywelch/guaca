@@ -1923,6 +1923,12 @@ CREATE TABLE pending_sandbox_resume (
 );
 "#,
     ),
+    (
+        68,
+        r#"
+ALTER TABLE plugins ADD COLUMN grant_generation INTEGER NOT NULL DEFAULT 0;
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -2052,6 +2058,33 @@ mod tests {
 
     fn memory() -> Connection {
         Connection::open_in_memory().unwrap()
+    }
+
+    #[test]
+    fn plugin_grant_generation_preserves_legacy_rows_and_queries() {
+        let mut conn = memory();
+        for (version, sql) in MIGRATIONS.iter().filter(|(v, _)| *v <= 67) {
+            conn.execute_batch(sql).unwrap();
+            conn.pragma_update(None, "user_version", *version).unwrap();
+        }
+        conn.execute("INSERT INTO plugins (id,group_id,kind,access_token,refresh_token,connected_at) VALUES ('plugin',?1,'neon','access','refresh',1)", [DEFAULT_GROUP_ID]).unwrap();
+        run(&mut conn).unwrap();
+        let row: (String, String, i64) = conn
+            .query_row(
+                "SELECT access_token,refresh_token,grant_generation FROM plugins WHERE id='plugin'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("access".into(), "refresh".into(), 0));
+        let old_query: String = conn
+            .query_row("SELECT access_token FROM plugins WHERE id='plugin'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(old_query, "access");
+        assert!(matches!(
+            apply(&mut conn, 67),
+            Err(MigrationError::FromTheFuture { found: 68, supported: 67 })
+        ));
     }
 
     #[test]
