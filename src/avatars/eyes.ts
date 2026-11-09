@@ -111,6 +111,19 @@ export interface Mass {
   vel: Point;
 }
 
+type GazeStep = { kind: "hold" } | { kind: "advance"; dt: number };
+
+function advance(mass: Mass, target: Point, step: GazeStep): void {
+  if (step.kind === "hold") return;
+  const decay = Math.exp(-OMEGA * step.dt);
+  for (const i of [0, 1] as const) {
+    const offset = mass.gaze[i] - target[i];
+    const impulse = mass.vel[i] + OMEGA * offset;
+    mass.gaze[i] = target[i] + (offset + impulse * step.dt) * decay;
+    mass.vel[i] = (mass.vel[i] - OMEGA * impulse * step.dt) * decay;
+  }
+}
+
 /**
  * One step of the look toward where it was asked to go, in place.
  *
@@ -121,13 +134,7 @@ export interface Mass {
  * a tab that was hidden for a minute is one big step, not a minute of them.
  */
 export function settle(mass: Mass, target: Point, dt: number): void {
-  for (const i of [0, 1] as const) {
-    const x = mass.gaze[i];
-    const v = mass.vel[i];
-    const accel = OMEGA * OMEGA * (target[i] - x) - 2 * OMEGA * v;
-    mass.vel[i] = v + accel * dt;
-    mass.gaze[i] = x + mass.vel[i] * dt;
-  }
+  advance(mass, target, dt <= 0 ? { kind: "hold" } : { kind: "advance", dt });
 }
 
 /**

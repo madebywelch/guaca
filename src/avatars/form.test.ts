@@ -339,6 +339,29 @@ describe("the eyes", () => {
     }
   }, 30_000);
 
+  it("keeps the eyes inside during repeated 50 ms steps in every direction", () => {
+    for (let dir = 0; dir < 16; dir++) {
+      const a = (dir / 16) * Math.PI * 2;
+      const target: [number, number] = [Math.cos(a) * 0.3, Math.sin(a) * 0.3];
+      const mass: Mass = { gaze: [0, 0], vel: [0, 0] };
+      for (let step = 0; step < 8; step++) {
+        settle(mass, target, 0.05);
+        for (const lump of CHARACTERS) {
+          for (const key of MOOD_KEYS) {
+            const mood = MOODS[key];
+            const { pts } = bodyPoints(lump, mood.shape, 0, mass.gaze);
+            for (const eye of eyesAt(lump, mood.eye, { blink: false }, still(mass.gaze))) {
+              const room = clearance(pts, eye);
+              if (!(room > 0)) {
+                expect(room, `${lump.key} ${key} direction ${dir} step ${step}`).toBeGreaterThan(0);
+              }
+            }
+          }
+        }
+      }
+    }
+  }, 30_000);
+
   // An aimed look is the one gaze that does not come out of `gazeAt`, it is the
   // furthest any of them goes, and the mood it lands on at the moment a message
   // arrives is `surprised`, which has the widest eyes on the table. So it is the
