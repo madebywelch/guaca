@@ -80,6 +80,7 @@ function signedIn(over: Partial<SubscriptionStatus> = {}): SubscriptionStatus {
 }
 
 const updateSettings = vi.fn<(patch: SettingsPatch) => Promise<Settings>>(async () => stored());
+const getSettings = vi.fn<() => Promise<Settings>>(async () => stored());
 const testConnection = vi.fn<(patch?: SettingsPatch) => Promise<string>>(async () => "Reached it.");
 const notifyOperator = vi.fn<(title: string, body: string) => Promise<boolean>>(async () => true);
 const subscriptionStatus = vi.fn<() => Promise<SubscriptionStatus>>(async () => signedOut());
@@ -156,6 +157,7 @@ vi.mock("../lib/transport", async (importOriginal) => ({
 vi.mock("../lib/ipc", () => ({
   api: {
     updateSettings: (patch: SettingsPatch) => updateSettings(patch),
+    getSettings: () => getSettings(),
     testConnection: (patch?: SettingsPatch) => testConnection(patch),
     subscriptionStatus: () => subscriptionStatus(),
     subscriptionModels: async () =>
@@ -284,6 +286,7 @@ beforeEach(() => {
   platform.desktop = true;
   localStorage.clear();
   updateSettings.mockResolvedValue(stored());
+  getSettings.mockResolvedValue(stored());
   testConnection.mockResolvedValue("Reached OpenRouter. 312 models.");
   notifyOperator.mockResolvedValue(true);
   subscriptionStatus.mockResolvedValue(signedOut());
@@ -350,6 +353,37 @@ describe("when the runtime refuses", () => {
 });
 
 describe("concurrent settings edits", () => {
+  it("retries an older host's rejected partial limits over its latest settings", async () => {
+    updateSettings
+      .mockRejectedValueOnce({
+        kind: "badArguments",
+        message:
+          "`update_settings` was called with arguments this build does not recognize (missing field `maxStepsPerRun`). Update the host.",
+      })
+      .mockResolvedValueOnce(stored({ limits: { ...HELD, maxHops: 12, maxStepsPerRun: 80 } }));
+    getSettings.mockResolvedValue(stored({ limits: { ...HELD, maxStepsPerRun: 80 } }));
+    open();
+    pane("Limits");
+    type(/^Relay depth/, "12");
+    fireEvent.click(save());
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(2));
+    expect(getSettings).toHaveBeenCalledTimes(1);
+    expect(updateSettings.mock.calls[1]?.[0]).toEqual({
+      limits: { ...HELD, maxHops: 12, maxStepsPerRun: 80 },
+    });
+  });
+
+  it("does not retry an unrelated host refusal", async () => {
+    updateSettings.mockRejectedValue({ kind: "config", message: "config.json is read-only" });
+    open();
+    pane("Limits");
+    type(/^Relay depth/, "12");
+    fireEvent.click(save());
+    await waitFor(() => expect(screen.getByText(/config\.json is read-only/i)).toBeTruthy());
+    expect(updateSettings).toHaveBeenCalledTimes(1);
+    expect(getSettings).not.toHaveBeenCalled();
+  });
+
   it("keeps distinct limit edits from two clients with stale snapshots", async () => {
     let runtime = stored();
     updateSettings.mockImplementation(async (patch) => {
