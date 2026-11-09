@@ -9,6 +9,8 @@ const {
   connect,
   probe,
   activate,
+  adopt,
+  preflight,
   persist,
   restart,
   savedMode,
@@ -25,6 +27,8 @@ const {
   update: vi.fn(),
   probe: vi.fn(),
   activate: vi.fn(),
+  adopt: vi.fn(),
+  preflight: vi.fn(),
   persist: vi.fn(),
   restart: vi.fn(),
 }));
@@ -37,7 +41,9 @@ vi.mock("../lib/transport", () => ({
   desktop: true,
   attached: current,
   activateRemote: activate,
-  setRemote: persist,
+  adoptRemote: adopt,
+  preflightReload: preflight,
+  saveConnection: persist,
   restart,
   probe,
   openExternal: vi.fn(),
@@ -131,7 +137,7 @@ describe("desktop host setup", () => {
     fireEvent.click(screen.getByRole("button", { name: "Use this Mac" }));
     await screen.findByText("Workspace mounted");
     expect(probe).toHaveBeenCalledWith({ origin: "http://127.0.0.1:54321", token: "private" });
-    expect(activate).toHaveBeenCalled();
+    expect(adopt).toHaveBeenCalled();
   });
   it("connects an existing local workspace without creating another host", async () => {
     existing.mockResolvedValue([
@@ -143,9 +149,8 @@ describe("desktop host setup", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Use My workspace/ }));
     await waitFor(() => expect(restart).toHaveBeenCalled());
     expect(connect).toHaveBeenCalledWith("existing-guacad-1");
-    expect(savedMode).toHaveBeenCalledWith("existing");
     expect(probe).toHaveBeenCalledWith(connection);
-    expect(persist).toHaveBeenCalledWith(connection);
+    expect(persist).toHaveBeenCalledWith(connection, "existing");
     expect(start).not.toHaveBeenCalled();
   });
   it("shows an existing local host as local without starting a managed container", async () => {
@@ -285,7 +290,39 @@ describe("desktop host setup", () => {
     expect(persist).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Connect to host" }));
     await waitFor(() => expect(restart).toHaveBeenCalled());
-    expect(persist).toHaveBeenCalledWith({ origin: "https://vps.example", token: "private" });
+    expect(persist).toHaveBeenCalledWith(
+      { origin: "https://vps.example", token: "private" },
+      "remote",
+    );
+  });
+  it("does not commit a remote host when reload preflight is canceled", async () => {
+    preflight.mockImplementationOnce(() => {
+      throw new Error("Wait for the current work.");
+    });
+    render(<HostChoice />);
+    fireEvent.click(screen.getByRole("button", { name: "Remote host" }));
+    fireEvent.change(screen.getByLabelText("Host address"), {
+      target: { value: "https://other.example" },
+    });
+    fireEvent.change(screen.getByLabelText("Access key"), { target: { value: "private" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect to host" }));
+    await screen.findByText("Wait for the current work.");
+    expect(persist).not.toHaveBeenCalled();
+    expect(restart).not.toHaveBeenCalled();
+  });
+  it("does not reload when saving the selected host fails", async () => {
+    persist.mockImplementationOnce(() => {
+      throw new Error("Storage is unavailable.");
+    });
+    render(<HostChoice />);
+    fireEvent.click(screen.getByRole("button", { name: "Remote host" }));
+    fireEvent.change(screen.getByLabelText("Host address"), {
+      target: { value: "https://other.example" },
+    });
+    fireEvent.change(screen.getByLabelText("Access key"), { target: { value: "private" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect to host" }));
+    await screen.findByText("Storage is unavailable.");
+    expect(restart).not.toHaveBeenCalled();
   });
   it("keeps the form for a saved remote host the workspace is not open on", async () => {
     // Onboarding and a host turned away both reach here with a remote attached,
@@ -342,7 +379,10 @@ describe("desktop host setup", () => {
     expect(screen.queryByText(/Connected to/)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Connect to host" }));
     await waitFor(() => expect(restart).toHaveBeenCalled());
-    expect(persist).toHaveBeenCalledWith({ origin: "https://other.example", token: "other" });
+    expect(persist).toHaveBeenCalledWith(
+      { origin: "https://other.example", token: "other" },
+      "remote",
+    );
   });
   it("does not offer a local host's loopback address as a remote host", async () => {
     mode.mockReturnValue("existing");

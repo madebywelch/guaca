@@ -1,6 +1,6 @@
 import { VERSION } from "./build";
 import type { Channel, Health, Skew } from "./releases";
-import { attached, desktop, invokeLocal, type Remote } from "./transport";
+import { attached, desktop, invokeLocal, type Remote, savedHostMode } from "./transport";
 
 /** One host update, as the manager that ran it recorded it. */
 export interface HostOperation {
@@ -83,14 +83,8 @@ export const thisApp = {
   source: () => invokeLocal<AppSource>("app_source"),
   rebuild: () => invokeLocal<void>("rebuild_app"),
 };
-const MODE = "guaca.workspace.hostMode";
-type HostMode = "local" | "existing" | "remote";
-export function hostMode(): HostMode {
-  const saved = localStorage.getItem(MODE);
-  return saved === "local" || saved === "existing" ? saved : "remote";
-}
-export function rememberMode(mode: HostMode) {
-  localStorage.setItem(MODE, mode);
+export function hostMode() {
+  return savedHostMode();
 }
 
 /**
@@ -109,9 +103,9 @@ export function rememberMode(mode: HostMode) {
  */
 export function unreachableHint(): string {
   if (!desktop) return "Check that the host is up, and that this address still answers from here.";
-  if (attached())
-    return "Check that the box is up, and that its address or tunnel still reaches it.";
   if (hostMode() === "existing") return "Check that the host is still running on this Mac.";
+  if (hostMode() === "remote" && attached())
+    return "Check that the box is up, and that its address or tunnel still reaches it.";
   return "Check that Docker is running: Guaca runs in a container on this Mac.";
 }
 

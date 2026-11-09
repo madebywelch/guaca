@@ -35,15 +35,58 @@ export interface Remote {
 }
 
 const REMOTE_KEY = "guaca.workspace.remote";
+const CONNECTION_KEY = "guaca.workspace.connection";
+const MODE_KEY = "guaca.workspace.hostMode";
+export type HostMode = "local" | "existing" | "remote";
+
+function connection(): (Remote & { version: 1; mode: HostMode }) | null {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(CONNECTION_KEY) || "null");
+    if (
+      parsed?.version !== 1 ||
+      !["local", "existing", "remote"].includes(parsed.mode) ||
+      typeof parsed.origin !== "string" ||
+      !parsed.origin ||
+      typeof parsed.token !== "string"
+    )
+      return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function savedHostMode(): HostMode {
+  const saved = connection()?.mode ?? window.localStorage.getItem(MODE_KEY);
+  return saved === "local" || saved === "existing" ? saved : "remote";
+}
+
+export function saveConnection(remote: Remote, mode: HostMode): void {
+  window.localStorage.setItem(CONNECTION_KEY, JSON.stringify({ version: 1, mode, ...remote }));
+  try {
+    window.localStorage.setItem(REMOTE_KEY, JSON.stringify(remote));
+    window.localStorage.setItem(MODE_KEY, mode);
+  } catch {
+    console.warn("Could not update the legacy host settings.");
+  }
+}
 
 function readRemote(): Remote | null {
   try {
+    const current = connection();
+    if (current) return { origin: current.origin.replace(/\/+$/, ""), token: current.token };
     const raw = window.localStorage.getItem(REMOTE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<Remote>;
     if (typeof parsed.origin !== "string" || typeof parsed.token !== "string") return null;
     if (!parsed.origin) return null;
-    return { origin: parsed.origin.replace(/\/+$/, ""), token: parsed.token };
+    const remote = { origin: parsed.origin.replace(/\/+$/, ""), token: parsed.token };
+    try {
+      saveConnection(remote, savedHostMode());
+    } catch {
+      // The legacy record remains usable if storage is unavailable.
+    }
+    return remote;
   } catch {
     return null;
   }
@@ -63,8 +106,8 @@ export function attached(): Remote | null {
  * place and nothing that can be half-updated.
  */
 export function activateRemote(remote: Remote): void {
-  ATTACHED = remote;
   setRemote(remote);
+  ATTACHED = remote;
 }
 
 /**
@@ -81,8 +124,11 @@ export function adoptRemote(remote: Remote): void {
 
 export function setRemote(remote: Remote | null): void {
   try {
-    if (remote) window.localStorage.setItem(REMOTE_KEY, JSON.stringify(remote));
-    else window.localStorage.removeItem(REMOTE_KEY);
+    if (remote) saveConnection(remote, savedHostMode());
+    else {
+      window.localStorage.removeItem(CONNECTION_KEY);
+      window.localStorage.removeItem(REMOTE_KEY);
+    }
   } catch {
     /* storage disabled; the next load reads nothing and shows this machine */
   }
@@ -91,10 +137,13 @@ export function setRemote(remote: Remote | null): void {
 /** Reloads the page, which is how a change of workspace takes effect. */
 export const BEFORE_RELOAD = "guaca:before-reload";
 export const RECONNECTED = "guaca:reconnected";
-export function restart(): void {
+export function preflightReload(): void {
   if (!window.dispatchEvent(new Event(BEFORE_RELOAD, { cancelable: true }))) {
     throw new Error("Your unsent draft could not be saved. Copy it before reloading Guaca.");
   }
+}
+export function restart(preflight = true): void {
+  if (preflight) preflightReload();
   window.location.reload();
 }
 
