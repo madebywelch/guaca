@@ -182,13 +182,7 @@ type Draft = {
   model: string;
   reasoningEffort: import("../lib/types").ReasoningEffort;
   subscriptionModel: string;
-  apiKey: string;
-  editingApiKey: boolean;
-  e2bKey: string;
-  editingE2bKey: boolean;
   idleMinutes: string;
-  kernelKey: string;
-  editingKernelKey: boolean;
   browserIdleMinutes: string;
   stealth: boolean;
   timeout: string;
@@ -238,13 +232,13 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
   const [subscriptionModel, setSubscriptionModel] = useState(
     initial?.subscriptionModel ?? settings?.subscriptionModel ?? "",
   );
-  const [apiKey, setApiKey] = useState(initial?.apiKey ?? "");
-  const [editingApiKey, setEditingApiKey] = useState(initial?.editingApiKey ?? false);
-  const [e2bKey, setE2bKey] = useState(initial?.e2bKey ?? "");
-  const [editingE2bKey, setEditingE2bKey] = useState(initial?.editingE2bKey ?? false);
+  const [apiKey, setApiKey] = useState("");
+  const [editingApiKey, setEditingApiKey] = useState(false);
+  const [e2bKey, setE2bKey] = useState("");
+  const [editingE2bKey, setEditingE2bKey] = useState(false);
   const [idleMinutes, setIdleMinutes] = useState(initial?.idleMinutes ?? "");
-  const [kernelKey, setKernelKey] = useState(initial?.kernelKey ?? "");
-  const [editingKernelKey, setEditingKernelKey] = useState(initial?.editingKernelKey ?? false);
+  const [kernelKey, setKernelKey] = useState("");
+  const [editingKernelKey, setEditingKernelKey] = useState(false);
   const [browserIdleMinutes, setBrowserIdleMinutes] = useState(initial?.browserIdleMinutes ?? "");
   const [stealth, setStealth] = useState(initial?.stealth ?? settings?.browserStealth ?? false);
   const [timeout, setTimeoutSecs] = useState(initial?.timeout ?? "");
@@ -525,13 +519,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
           model,
           reasoningEffort,
           subscriptionModel,
-          apiKey,
-          editingApiKey,
-          e2bKey,
-          editingE2bKey,
           idleMinutes,
-          kernelKey,
-          editingKernelKey,
           browserIdleMinutes,
           stealth,
           timeout,
@@ -539,6 +527,36 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
         }
       : null;
     onClose();
+  };
+
+  const discard = () => {
+    draft = null;
+    setOperatorName(settings?.operatorName ?? "");
+    setProvider(settings?.provider ?? "compatible");
+    setBaseUrl(settings?.baseUrl ?? "");
+    setModel(settings?.defaultModel ?? "");
+    setReasoningEffort(settings?.reasoningEffort ?? "auto");
+    setSubscriptionModel(settings?.subscriptionModel ?? "");
+    setStealth(settings?.browserStealth ?? false);
+    setLimits(
+      settings?.limits ?? {
+        maxHops: 8,
+        maxStepsPerRun: 60,
+        maxFanoutPerCall: 8,
+        maxSendsPerPair: 6,
+        maxToolRounds: 24,
+      },
+    );
+    setApiKey("");
+    setE2bKey("");
+    setKernelKey("");
+    setEditingApiKey(false);
+    setEditingE2bKey(false);
+    setEditingKernelKey(false);
+    setIdleMinutes("");
+    setBrowserIdleMinutes("");
+    setTimeoutSecs("");
+    setStatus(null);
   };
 
   useEffect(() => {
@@ -1937,6 +1955,11 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
           <button type="button" className="btn" onClick={close}>
             Close
           </button>
+          {dirty && (
+            <button type="button" className="btn" disabled={busy} onClick={discard}>
+              Discard changes
+            </button>
+          )}
           {dirty && (
             <button
               type="button"

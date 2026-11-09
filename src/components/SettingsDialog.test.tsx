@@ -466,6 +466,50 @@ describe("concurrent settings edits", () => {
     pane("Provider");
     expect(field(/^Default model/).value).toBe("remote/model");
   });
+
+  it("discards all staged edits and does not restore them on reopen", () => {
+    const view = open();
+    expect(screen.queryByRole("button", { name: "Discard changes" })).toBeNull();
+    type(/^Your name/, "Draft name");
+    pane("Limits");
+    type(/^Relay depth/, "12");
+    pane("Machines");
+    type(/^E2B API key/, "discard-me");
+    type(/^Sleep computers after/, "45");
+    fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
+    expect(screen.queryByRole("button", { name: "Discard changes" })).toBeNull();
+    expect(field(/^E2B API key/).value).toBe("");
+    expect(field(/^Sleep computers after/).value).toBe("");
+    pane("Limits");
+    expect(field(/^Relay depth/).value).toBe(String(HELD.maxHops));
+    pane("General");
+    expect(field(/^Your name/).value).toBe("Robert");
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    view.unmount();
+    open();
+    expect(field(/^Your name/).value).toBe("Robert");
+  });
+
+  it("does not retain keys or key editors in a closed draft", () => {
+    const view = open();
+    type(/^Your name/, "Draft name");
+    pane("Provider");
+    fireEvent.click(screen.getByRole("button", { name: "Change API key" }));
+    type(/^API key/, "provider-secret");
+    pane("Machines");
+    type(/^E2B API key/, "computer-secret");
+    type(/^Kernel API key/, "browser-secret");
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    view.unmount();
+    open();
+    expect(field(/^Your name/).value).toBe("Draft name");
+    pane("Provider");
+    fireEvent.click(screen.getByRole("button", { name: "Change API key" }));
+    expect(field(/^API key/).value).toBe("");
+    pane("Machines");
+    expect(field(/^E2B API key/).value).toBe("");
+    expect(field(/^Kernel API key/).value).toBe("");
+  });
 });
 
 describe("what a save sends", () => {
