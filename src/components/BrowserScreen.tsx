@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 
+import { useDismiss } from "../lib/dismiss";
 import { api } from "../lib/ipc";
 import { prefersReducedMotion } from "../lib/motion";
 import { useStore } from "../lib/store";
@@ -58,6 +59,8 @@ export function BrowserScreen({ agent }: Props) {
   const visit = useRef(0);
   const reads = useRef(0);
   const frame = useRef<HTMLIFrameElement>(null);
+  const veil = useRef<HTMLButtonElement>(null);
+  const returnFocus = useRef(false);
   const stage = useRef<HTMLDivElement>(null);
   // Where the picture was before it grew. Measured in the click, because by the
   // time anything can react to the change the stage is already in its new place.
@@ -143,19 +146,20 @@ export function BrowserScreen({ agent }: Props) {
    */
   const grow = useCallback(() => {
     cameFrom.current = stage.current?.getBoundingClientRect() ?? null;
+    returnFocus.current = true;
     setFull(true);
     grabKeyboard();
   }, [grabKeyboard]);
 
   // Escape shrinks it again. On the window rather than the frame, because the
   // live view swallows key presses once it has focus.
+  useDismiss(() => setFull(false), full);
+
   useEffect(() => {
-    if (!full) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setFull(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    if (!full && returnFocus.current) {
+      returnFocus.current = false;
+      veil.current?.focus();
+    }
   }, [full]);
 
   // FLIP: the stage is already covering the window, so it is put back over the
@@ -332,6 +336,7 @@ export function BrowserScreen({ agent }: Props) {
                   <button
                     type="button"
                     className="screen__veil"
+                    ref={veil}
                     onClick={grow}
                     title={`Open ${agent.name}'s browser and take over`}
                     aria-label={`Open ${agent.name}'s browser and take over`}

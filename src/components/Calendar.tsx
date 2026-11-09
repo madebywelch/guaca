@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-
 import {
   busyDays,
   crewsWith,
@@ -11,6 +10,7 @@ import {
   timeLabel,
   type Window,
 } from "../lib/calendar";
+import { useDismiss } from "../lib/dismiss";
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
 import { useNow } from "../lib/time";
@@ -128,17 +128,8 @@ export function Calendar({ onClose }: Props) {
     if (editorOpen) titleRef.current?.focus();
   }, [editorOpen]);
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      // The editor first, so Escape backs out of what is on top rather than
-      // closing the whole panel out from under a half-written occasion.
-      if (event.key !== "Escape") return;
-      if (editing) setEditing(null);
-      else onClose();
-    };
-    globalThis.addEventListener("keydown", onKey);
-    return () => globalThis.removeEventListener("keydown", onKey);
-  }, [onClose, editing]);
+  useDismiss(onClose);
+  useDismiss(() => setEditing(null), editorOpen);
 
   // Read unfiltered and filtered in the view. The crew chips carry a count
   // each, so the read has to cover every crew whichever one is picked; asking

@@ -114,17 +114,6 @@ export default function App() {
   const showArtifacts = useStore((state) => state.showArtifacts);
   const [showSettings, setShowSettings] = useState<Section | true | null>(null);
   const [searching, setSearching] = useState(false);
-  useEffect(() => {
-    if (!searching) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.isComposing) return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      setSearching(false);
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [searching]);
   const [showCafeteria, setShowCafeteria] = useState(false);
   const [showCalendar, setShowCalendar] = useState(false);
   // The pane inside whichever settings dialog is open, reported by the dialog.
@@ -300,25 +289,24 @@ export default function App() {
     await api.sendMessage(agentId, text);
   };
 
-  // What is on screen, most specific first: a dialog covers the desk, and the
-  // desk covers the channel.
-  const overlay: Overlay | null = showSettings
-    ? "settings"
-    : editingGroup
-      ? "crewSettings"
-      : editing
-        ? "agentEditor"
-        : searching
-          ? "search"
-          : showCafeteria
-            ? "cafeteria"
-            : showCalendar
-              ? "calendar"
-              : artifactsOpen
-                ? "artifacts"
-                : forYou
-                  ? "forYou"
-                  : null;
+  const openDialogs: Overlay[] = [
+    ...(ready && forYou ? ["forYou" as const] : []),
+    ...(editing ? ["agentEditor" as const] : []),
+    ...(editingGroup ? ["crewSettings" as const] : []),
+    ...(showCafeteria ? ["cafeteria" as const] : []),
+    ...(showCalendar ? ["calendar" as const] : []),
+    ...(artifactsOpen ? ["artifacts" as const] : []),
+    ...(showSettings ? ["settings" as const] : []),
+    ...(searching ? ["search" as const] : []),
+  ];
+  const [dialogOrder, setDialogOrder] = useState<Overlay[]>([]);
+  const orderedDialogs = [
+    ...dialogOrder.filter((dialog) => openDialogs.includes(dialog)),
+    ...openDialogs.filter((dialog) => !dialogOrder.includes(dialog)),
+  ];
+  if (orderedDialogs.join() !== dialogOrder.join()) setDialogOrder(orderedDialogs);
+
+  const overlay: Overlay | null = orderedDialogs.at(-1) ?? null;
   useReportView({
     agentId: selected ?? null,
     overlay,
@@ -474,11 +462,6 @@ export default function App() {
         />
       )}
 
-      {/* Outside `main` and after the panes, so nothing that scrolls can clip it
-          and no view change can unmount it. Before the dialogs, because a dialog
-          is modal and the one thing that should cover this. */}
-      {ready && forYou && <ForYou onClose={() => showForYou(false)} />}
-
       {menu && (
         <AgentMenu
           target={menu}
@@ -523,41 +506,66 @@ export default function App() {
         />
       )}
 
-      {editing && (
-        <AgentEditor
-          agent={editing === "new" ? undefined : editing}
-          onClose={() => setEditing(null)}
-        />
-      )}
-      {editingGroup && (
-        <GroupEditor
-          group={editingGroup === "new" ? undefined : editingGroup}
-          onClose={() => setEditingGroup(null)}
-          onSection={setOpenSection}
-        />
-      )}
-      {showCafeteria && <Cafeteria onClose={() => setShowCafeteria(false)} />}
-      {showCalendar && <Calendar onClose={() => setShowCalendar(false)} />}
-      {artifactsOpen && <Artifacts onClose={() => showArtifacts(null)} />}
-      {showSettings && (
-        <SettingsDialog
-          onClose={() => setShowSettings(null)}
-          section={showSettings === true ? undefined : showSettings}
-          onSection={setOpenSection}
-        />
-      )}
-      {searching && (
-        <Search
-          onOpenChannel={openConversation}
-          onClose={() => setSearching(false)}
-          onEditAgent={(agent) => setEditing(agent)}
-          onEditGroup={(group) => setEditingGroup(group)}
-          onNewAgent={() => setEditing("new")}
-          onNewGroup={() => setEditingGroup("new")}
-          onOpenCafeteria={() => setShowCafeteria(true)}
-          onOpenSettings={() => setShowSettings(true)}
-        />
-      )}
+      {orderedDialogs.map((dialog) => {
+        switch (dialog) {
+          case "forYou":
+            return <ForYou key={dialog} onClose={() => showForYou(false)} />;
+          case "agentEditor":
+            return (
+              editing && (
+                <AgentEditor
+                  key={dialog}
+                  agent={editing === "new" ? undefined : editing}
+                  onClose={() => setEditing(null)}
+                />
+              )
+            );
+          case "crewSettings":
+            return (
+              editingGroup && (
+                <GroupEditor
+                  key={dialog}
+                  group={editingGroup === "new" ? undefined : editingGroup}
+                  onClose={() => setEditingGroup(null)}
+                  onSection={setOpenSection}
+                />
+              )
+            );
+          case "cafeteria":
+            return <Cafeteria key={dialog} onClose={() => setShowCafeteria(false)} />;
+          case "calendar":
+            return <Calendar key={dialog} onClose={() => setShowCalendar(false)} />;
+          case "artifacts":
+            return <Artifacts key={dialog} onClose={() => showArtifacts(null)} />;
+          case "settings":
+            return (
+              showSettings && (
+                <SettingsDialog
+                  key={dialog}
+                  onClose={() => setShowSettings(null)}
+                  section={showSettings === true ? undefined : showSettings}
+                  onSection={setOpenSection}
+                />
+              )
+            );
+          case "search":
+            return (
+              <Search
+                key={dialog}
+                onOpenChannel={openConversation}
+                onClose={() => setSearching(false)}
+                onEditAgent={(agent) => setEditing(agent)}
+                onEditGroup={(group) => setEditingGroup(group)}
+                onNewAgent={() => setEditing("new")}
+                onNewGroup={() => setEditingGroup("new")}
+                onOpenCafeteria={() => setShowCafeteria(true)}
+                onOpenSettings={() => setShowSettings(true)}
+              />
+            );
+          default:
+            return null;
+        }
+      })}
     </div>
   );
 }

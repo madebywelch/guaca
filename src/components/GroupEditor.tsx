@@ -15,6 +15,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { useDismiss } from "../lib/dismiss";
 import { api } from "../lib/ipc";
 import { LIMITS } from "../lib/limits";
 import { type Provider as Preset, planLabel, providerFor } from "../lib/providers";
@@ -134,13 +135,7 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
     nameRef.current?.select();
   }, []);
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  useDismiss(onClose);
 
   // Read when the pane that shows it is opened, not on mount: a group's name is
   // what most edits here are, and a status nobody is looking at is a round trip

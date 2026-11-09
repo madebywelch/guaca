@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { decisionTime, needsAnswer, orderedDecisions } from "../lib/decisions";
+import { useDismiss } from "../lib/dismiss";
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
 import { relativeTime, useNow } from "../lib/time";
@@ -21,13 +22,10 @@ export function ForYou({ onClose }: { onClose: () => void }) {
   const panel = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<"needs" | "following" | "history">("needs");
   const [receipt, setReceipt] = useState("");
+  useDismiss(onClose);
   useEffect(() => {
-    const previous = document.activeElement;
     panel.current?.focus();
     void refresh();
-    return () => {
-      if (previous instanceof HTMLElement) previous.focus();
-    };
   }, [refresh]);
   const open = orderedDecisions(decisions.filter(needsAnswer));
   const following = decisions.filter((item) => item.status === "answered" && !item.interrupted);
@@ -49,10 +47,6 @@ export function ForYou({ onClose }: { onClose: () => void }) {
         tabIndex={-1}
         ref={panel}
         onKeyDown={(event) => {
-          if (event.key === "Escape") {
-            event.stopPropagation();
-            onClose();
-          }
           if (event.key !== "Tab") return;
           const focusable = Array.from(
             panel.current?.querySelectorAll<HTMLElement>(

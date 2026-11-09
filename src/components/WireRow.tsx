@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
+import { useDismiss } from "../lib/dismiss";
 
 import { type PeerSummary, summaryLabel, type WirePeer } from "../lib/transcript";
 import type { AgentId } from "../lib/types";
@@ -225,13 +226,7 @@ export function MessageModal({
   refusal,
   onClose,
 }: ModalProps) {
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  useDismiss(onClose);
 
   return (
     <div className="scrim">

@@ -1,9 +1,13 @@
 import { act, render as baseRender, fireEvent, screen, waitFor } from "@testing-library/react";
+import { useEffect, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { bindingFor } from "../lib/keybinds";
 import { useStore } from "../lib/store";
 import type { AgentCard, Computer } from "../lib/types";
 import { ComputerScreen, computerRead } from "./ComputerScreen";
+import { Search } from "./Search";
+import { SettingsDialog } from "./SettingsDialog";
 
 const agentComputer = vi.fn<(id: string) => Promise<Computer | null>>();
 const giveAgentComputer = vi.fn<(id: string) => Promise<unknown>>();
@@ -11,7 +15,8 @@ const takeAgentComputer = vi.fn<(id: string) => Promise<unknown>>();
 const stopAgentComputer = vi.fn<(id: string) => Promise<Computer | null>>();
 const deleteAgentComputer = vi.fn<(id: string) => Promise<void>>();
 
-vi.mock("../lib/ipc", () => ({
+vi.mock("../lib/ipc", async (original) => ({
+  ...(await original<typeof import("../lib/ipc")>()),
   api: {
     agentComputer: (id: string) => agentComputer(id),
     giveAgentComputer: (id: string) => giveAgentComputer(id),
@@ -19,8 +24,44 @@ vi.mock("../lib/ipc", () => ({
     startAgentComputer: vi.fn(),
     stopAgentComputer: (id: string) => stopAgentComputer(id),
     deleteAgentComputer: (id: string) => deleteAgentComputer(id),
+    search: async () => ({ messages: [], files: [], links: [], routines: [], artifacts: [] }),
+    claudeProgram: async () => ({ installed: false, version: null, install: "" }),
   },
 }));
+
+function ScreenWorkspace() {
+  const [upper, setUpper] = useState<"settings" | "search" | null>(null);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const binding = bindingFor(event);
+      if (binding?.id === "settings" || binding?.id === "search") {
+        event.preventDefault();
+        setUpper(binding.id);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  const close = () => setUpper(null);
+  return (
+    <>
+      <ComputerScreen agent={card("a", "Cook")} />
+      {upper === "settings" && <SettingsDialog onClose={close} />}
+      {upper === "search" && (
+        <Search
+          onClose={close}
+          onOpenChannel={vi.fn()}
+          onEditAgent={vi.fn()}
+          onEditGroup={vi.fn()}
+          onNewAgent={vi.fn()}
+          onNewGroup={vi.fn()}
+          onOpenCafeteria={vi.fn()}
+          onOpenSettings={vi.fn()}
+        />
+      )}
+    </>
+  );
+}
 
 function card(id: string, name: string, given = true): AgentCard {
   return {
@@ -273,6 +314,41 @@ describe("ComputerScreen", () => {
     const before = await screen.findByTitle("Cook's computer");
     fireEvent.click(screen.getByRole("button", { name: /take over/i }));
     expect(screen.getByTitle("Cook's computer")).toBe(before);
+  });
+
+  it.each(["Escape", "button"])("returns focus to the computer control after %s", async (how) => {
+    agentComputer.mockResolvedValue(HAS_ONE);
+    render(<ComputerScreen agent={card("has-one", "Cook")} />);
+    const veil = await screen.findByRole("button", { name: /take over/i });
+    veil.focus();
+    fireEvent.click(veil);
+    if (how === "Escape") fireEvent.keyDown(window, { key: "Escape" });
+    else fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /take over/i }));
+  });
+
+  it.each([
+    ["Settings", ","],
+    ["Search", "k"],
+  ])("keeps the expanded computer under %s and restores focus", async (name, key) => {
+    agentComputer.mockResolvedValue(HAS_ONE);
+    render(<ScreenWorkspace />);
+    const veil = await screen.findByRole("button", { name: /take over/i });
+    veil.focus();
+    fireEvent.click(veil);
+    const computer = screen.getByRole("dialog", { name: "Cook's computer" });
+    const done = screen.getByRole("button", { name: "Done" });
+    done.focus();
+    fireEvent.keyDown(window, { key, ctrlKey: true });
+    const upper = await screen.findByRole("dialog", { name });
+    await waitFor(() => expect(computer.contains(document.activeElement)).toBe(false));
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(upper.isConnected).toBe(false);
+    expect(screen.getByRole("dialog", { name: "Cook's computer" })).toBe(computer);
+    expect(document.activeElement).toBe(done);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Cook's computer" })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /take over/i }));
   });
 
   it("holds the space the screen had while it covers the window", async () => {

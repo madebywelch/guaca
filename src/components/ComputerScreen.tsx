@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 
+import { useDismiss } from "../lib/dismiss";
 import { screenUrl } from "../lib/files";
 import { api } from "../lib/ipc";
 import { prefersReducedMotion } from "../lib/motion";
@@ -80,12 +81,15 @@ export function ComputerScreen({ agent }: Props) {
 
   const stage = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
+  const veil = useRef<HTMLButtonElement>(null);
+  const returnFocus = useRef(false);
   // Where the picture was before it grew. Measured in the click, because by the
   // time anything can react to the change the stage is already in its new place.
   const cameFrom = useRef<DOMRect | null>(null);
 
   const grow = useCallback(() => {
     cameFrom.current = stage.current?.getBoundingClientRect() ?? null;
+    returnFocus.current = true;
     setFull(true);
     // Hands the keyboard to the desktop. A cross-origin frame receives key
     // events only while it holds focus, and clicking the veil focuses the veil,
@@ -154,13 +158,13 @@ export function ComputerScreen({ agent }: Props) {
   // Escape shrinks it again. On the window rather than on the frame, because
   // the desktop swallows key presses the moment it has focus, and the operator
   // should not have to find somewhere else to click first.
+  useDismiss(() => setFull(false), full);
+
   useEffect(() => {
-    if (!full) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setFull(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    if (!full && returnFocus.current) {
+      returnFocus.current = false;
+      veil.current?.focus();
+    }
   }, [full]);
 
   // FLIP: the stage is already covering the window, so it is put back over the
@@ -383,6 +387,7 @@ export function ComputerScreen({ agent }: Props) {
                   <button
                     type="button"
                     className="screen__veil"
+                    ref={veil}
                     onClick={grow}
                     title={`Open ${agent.name}'s screen and take over`}
                     aria-label={`Open ${agent.name}'s screen and take over`}

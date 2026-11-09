@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { ACCENTS, CHARACTERS, suggestAccent, suggestCharacter } from "../avatars/catalog";
+import { useDismiss } from "../lib/dismiss";
 import { api } from "../lib/ipc";
 import { onOpenRouter, providerFor } from "../lib/providers";
 import { useStore } from "../lib/store";
@@ -50,13 +51,7 @@ export function AgentEditor({ agent, onClose }: Props) {
     nameRef.current?.focus();
   }, []);
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  useDismiss(onClose);
 
   const patch = (fields: Partial<AgentDraft>) => setDraft((current) => ({ ...current, ...fields }));
 

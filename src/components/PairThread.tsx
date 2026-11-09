@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
+import { useDismiss } from "../lib/dismiss";
 import { useFollowBottom } from "../lib/follow";
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
@@ -63,13 +64,7 @@ export function PairThread({
     };
   }, [self, peer, beat, showFailure]);
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  useDismiss(onClose);
 
   // The newest is what the operator came for: this opens off a row saying
   // something just happened between these two. Only while they are still there,

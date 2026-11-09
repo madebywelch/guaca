@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { HIREABLE, type Hireable, pick, STARTER_CREW, STATIONS, toDraft } from "../lib/cafeteria";
+import { useDismiss } from "../lib/dismiss";
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
 import { errorMessage, type GroupId } from "../lib/types";
@@ -60,13 +61,7 @@ export function Cafeteria({ onClose }: Props) {
     panelRef.current?.focus();
   }, []);
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  useDismiss(onClose);
 
   // A group deleted in another window would leave the picker holding an id
   // nothing matches, and the hire would be refused by a command the operator

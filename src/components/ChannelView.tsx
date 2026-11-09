@@ -1,5 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AgentAvatar } from "../avatars/AgentAvatar";
+import { rememberDismissOpener } from "../lib/dismiss";
 import { useFollowBottom } from "../lib/follow";
 import { api } from "../lib/ipc";
 import { runsOn } from "../lib/profile";
@@ -267,6 +268,25 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
                   key={row.key}
                   data-message={stands.join(" ")}
                   data-found={focused && stands.includes(focused) ? "true" : undefined}
+                  ref={(node) => {
+                    if (!node || row.kind !== "peers") return;
+                    const peers = row.peers.filter((peer) => peer.agentId !== null);
+                    node
+                      .querySelectorAll<HTMLButtonElement>("button.footnote__send")
+                      .forEach((button, i) => {
+                        button.dataset.dismissId = JSON.stringify([
+                          channel,
+                          row.key,
+                          peers[i]?.agentId,
+                        ]);
+                      });
+                  }}
+                  onClickCapture={(event) => {
+                    if (!agent || row.kind !== "peers" || !(event.target instanceof Element))
+                      return;
+                    const button = event.target.closest<HTMLButtonElement>("button.footnote__send");
+                    if (button) rememberDismissOpener(button);
+                  }}
                 >
                   {row.kind === "peers" ? (
                     <PeerBurstRow

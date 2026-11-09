@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { expectRestart, forgetRestart } from "./lib/link";
 import { saveFirstTask } from "./lib/onboarding";
@@ -93,6 +93,8 @@ vi.mock("./lib/ipc", () => ({
     channelMessages: async () => [],
     activityFeed: async () => [],
     agentRoutines: () => agentRoutines(),
+    calendar: async () => [],
+    artifacts: async () => [],
     agentComputer: async () => null,
     agentMemory: async () => "",
     agentMemoryVersioned: async () => ({ content: "", version: "version" }),
@@ -179,6 +181,7 @@ beforeEach(() => {
     streams: {},
     pulses: [],
     banner: null,
+    artifactsOpen: null,
     link: "up",
     lastHeard: null,
   });
@@ -290,11 +293,201 @@ describe("App", () => {
     fireEvent.keyDown(window, { key: ",", ctrlKey: true });
     const settings = await screen.findByRole("dialog", { name: /settings/i });
     fireEvent.keyDown(window, { key: "k", ctrlKey: true });
-    expect(await screen.findByRole("dialog", { name: /search/i })).toBeTruthy();
+    const search = await screen.findByRole("dialog", { name: /search/i });
+    expect(settings.closest(".scrim")?.nextElementSibling).toBe(search.closest(".scrim"));
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: /search/i })).toBeNull();
     expect(settings.isConnected).toBe(true);
     expect(cafeteria.isConnected).toBe(true);
+  });
+
+  it("opens settings above search and dismisses it first", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "What would you like help with?" });
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    const search = await screen.findByRole("dialog", { name: "Search" });
+    fireEvent.keyDown(window, { key: ",", ctrlKey: true });
+    const settings = await screen.findByRole("dialog", { name: "Settings" });
+    expect(search.isConnected).toBe(true);
+    expect(search.closest(".scrim")?.nextElementSibling).toBe(settings.closest(".scrim"));
+    fireEvent.keyDown(settings, { key: "Enter" });
+    expect(search.isConnected).toBe(true);
+    expect(settings.isConnected).toBe(true);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(settings.isConnected).toBe(false);
+    expect(search.isConnected).toBe(true);
+    expect(screen.getByRole("dialog", { name: "Search" })).toBe(search);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(search.isConnected).toBe(false);
+  });
+
+  it.each(["Calendar", "Artifacts"])(
+    "keeps %s open under settings and restores focus in order",
+    async (name) => {
+      render(<App />);
+      const heading = await screen.findByRole("heading", {
+        name: "What would you like help with?",
+      });
+      await waitFor(() => expect(document.activeElement).toBe(heading));
+      const opener = screen.getByRole("button", { name: new RegExp(`^${name}`) });
+      opener.focus();
+      fireEvent.click(opener);
+      const lower = await screen.findByRole("dialog", { name });
+      await waitFor(() => expect(document.activeElement).toBe(lower));
+      fireEvent.keyDown(window, { key: ",", ctrlKey: true });
+      const settings = await screen.findByRole("dialog", { name: "Settings" });
+      await waitFor(() => expect(document.activeElement).toBe(settings));
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(settings.isConnected).toBe(false);
+      expect(lower.isConnected).toBe(true);
+      expect(document.activeElement).toBe(lower);
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(lower.isConnected).toBe(false);
+      expect(document.activeElement).toBe(opener);
+    },
+  );
+
+  it.each(["Calendar", "Artifacts"])("keeps %s open under search", async (name) => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "What would you like help with?" });
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${name}`) }));
+    const lower = await screen.findByRole("dialog", { name });
+    await waitFor(() => expect(document.activeElement).toBe(lower));
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    const search = await screen.findByRole("dialog", { name: /search/i });
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(search.isConnected).toBe(false);
+    expect(lower.isConnected).toBe(true);
+    expect(document.activeElement).toBe(lower);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(lower.isConnected).toBe(false);
+  });
+
+  it.each([
+    ["Settings", ","],
+    ["Search", "k"],
+  ])("keeps For you open under %s and restores focus", async (upperName, key) => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "What would you like help with?" });
+    const opener = within(screen.getByRole("navigation", { name: "Agents" })).getByRole("button", {
+      name: /^For you/,
+    });
+    opener.focus();
+    fireEvent.click(opener);
+    const lower = await screen.findByRole("dialog", { name: "For you" });
+    await waitFor(() => expect(document.activeElement).toBe(lower));
+    fireEvent.keyDown(window, { key, ctrlKey: true });
+    const upper = await screen.findByRole("dialog", { name: upperName });
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(upper.isConnected).toBe(false);
+    expect(lower.isConnected).toBe(true);
+    expect(document.activeElement).toBe(lower);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(lower.isConnected).toBe(false);
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it.each([
+    ["Settings", ","],
+    ["Search", "k"],
+  ])("keeps the calendar editor under %s and unwinds each layer", async (upperName, key) => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "What would you like help with?" });
+    const opener = screen.getByRole("button", { name: /^Calendar/ });
+    opener.focus();
+    fireEvent.click(opener);
+    const calendar = await screen.findByRole("dialog", { name: "Calendar" });
+    const add = screen.getByRole("button", { name: "Add" });
+    add.focus();
+    fireEvent.click(add);
+    const title = await screen.findByRole("textbox", { name: "What is happening" });
+    await waitFor(() => expect(document.activeElement).toBe(title));
+    fireEvent.keyDown(window, { key, ctrlKey: true });
+    const upper = await screen.findByRole("dialog", { name: upperName });
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(upper.isConnected).toBe(false);
+    expect(title.isConnected).toBe(true);
+    expect(document.activeElement).toBe(title);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(title.isConnected).toBe(false);
+    expect(calendar.isConnected).toBe(true);
+    expect(document.activeElement).toBe(add);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(calendar.isConnected).toBe(false);
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it.each([
+    ["Settings", ","],
+    ["Search", "k"],
+  ])("keeps an agent submenu under %s and unwinds each layer", async (upperName, key) => {
+    listAgents.mockResolvedValue([agent("Manager")]);
+    listGroups.mockResolvedValue([
+      aGroup({ agentCount: 1 }),
+      aGroup({ id: "00000000-0000-4000-8000-000000000002", name: "Other" }),
+    ]);
+    render(<App />);
+    await waitFor(() => railRow("Manager"));
+    const row = railRow("Manager").closest("button") as HTMLButtonElement;
+    row.focus();
+    fireEvent.contextMenu(row);
+    const menu = screen.getByRole("menu", { name: "Manager" });
+    const move = screen.getByRole("button", { name: "Move to another group" });
+    fireEvent.pointerEnter(move.parentElement as HTMLElement);
+    const submenu = screen.getByRole("menu", { name: "Move to another group" });
+    fireEvent.keyDown(window, { key, ctrlKey: true });
+    const upper = await screen.findByRole("dialog", { name: upperName });
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(upper.isConnected).toBe(false);
+    expect(submenu.isConnected).toBe(true);
+    expect(document.activeElement).toBe(row);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(submenu.isConnected).toBe(false);
+    expect(menu.isConnected).toBe(true);
+    expect(document.activeElement).toBe(row);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(menu.isConnected).toBe(false);
+    expect(document.activeElement).toBe(row);
+  });
+
+  it.each(["New agent", "New group"])(
+    "restores the menu opener after %s replaces the menu",
+    async (name) => {
+      render(<App />);
+      await screen.findByRole("heading", { name: "What would you like help with?" });
+      const opener = await screen.findByRole("button", { name: "Make something new" });
+      opener.focus();
+      fireEvent.click(opener);
+      const item = screen.getByRole("menuitem", { name: new RegExp(`^${name}`) });
+      item.focus();
+      fireEvent.click(item);
+      const dialog = await screen.findByRole("dialog", { name });
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(dialog.isConnected).toBe(false);
+      expect(document.activeElement).toBe(opener);
+    },
+  );
+
+  it.each([
+    ["New agent", "Settings", ","],
+    ["New agent", "Search", "k"],
+    ["New group", "Settings", ","],
+    ["New group", "Search", "k"],
+  ])("keeps %s open under %s", async (name, upperName, key) => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "What would you like help with?" });
+    fireEvent.click(screen.getByRole("button", { name: "Make something new" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: new RegExp(`^${name}`) }));
+    const lower = await screen.findByRole("dialog", { name });
+    const focused = document.activeElement;
+    fireEvent.keyDown(window, { key, ctrlKey: true });
+    const upper = await screen.findByRole("dialog", { name: upperName });
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(upper.isConnected).toBe(false);
+    expect(lower.isConnected).toBe(true);
+    expect(document.activeElement).toBe(focused);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(lower.isConnected).toBe(false);
   });
 
   it("lists agents and opens a channel", async () => {
