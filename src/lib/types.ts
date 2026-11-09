@@ -1122,7 +1122,14 @@ export type UiEvent =
       activity: Record<AgentId, Activity>;
       streams: Record<
         MessageId,
-        { channelId: AgentId; agentId: AgentId; runId: RunId; to: Participant; text: string }
+        {
+          channelId: AgentId;
+          agentId: AgentId;
+          runId: RunId;
+          to: Participant;
+          text: string;
+          truncated?: boolean;
+        }
       >;
     }
   | { type: "agentsChanged" }

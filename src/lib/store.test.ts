@@ -748,6 +748,57 @@ describe("openMessage", () => {
 });
 
 describe("reconnecting to a running workspace", () => {
+  it("waits for the persisted reply after a truncated snapshot", () => {
+    reset({ chef: [] });
+    apply({
+      type: "liveSnapshot",
+      activity: { chef: { state: "thinking" } },
+      streams: {
+        current: {
+          agentId: "chef",
+          channelId: "chef",
+          runId: "running",
+          to: { kind: "human" },
+          text: "",
+          truncated: true,
+        },
+      },
+    });
+    apply({ type: "streamDelta", messageId: "current", channelId: "chef", text: "suffix" });
+    expect(useStore.getState().streams.current?.text).toBe("");
+    expect(useStore.getState().activeRun.chef).toBe("running");
+    apply({
+      type: "messageAppended",
+      message: envelope({ id: "current", parts: [{ type: "text", text: "complete reply" }] }),
+    });
+    apply({ type: "streamEnded", messageId: "current", channelId: "chef" });
+    expect(useStore.getState().messages.chef?.find((m) => m.id === "current")?.parts).toEqual([
+      { type: "text", text: "complete reply" },
+    ]);
+    expect(useStore.getState().streams.current).toBeUndefined();
+  });
+
+  it("continues an under-limit snapshot and a legacy snapshot without a truncation field", () => {
+    for (const truncated of [false, undefined]) {
+      apply({
+        type: "liveSnapshot",
+        activity: {},
+        streams: {
+          current: {
+            agentId: "chef",
+            channelId: "chef",
+            runId: "running",
+            to: { kind: "human" },
+            text: "prefix",
+            truncated,
+          },
+        },
+      });
+      apply({ type: "streamDelta", messageId: "current", channelId: "chef", text: " suffix" });
+      expect(useStore.getState().streams.current?.text).toBe("prefix suffix");
+    }
+  });
+
   it("replaces obsolete streams and restores the run that can be stopped", () => {
     useStore.setState({
       streams: {
