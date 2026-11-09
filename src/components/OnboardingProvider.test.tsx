@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, expect, it, vi } from "vitest";
 import { useStore } from "../lib/store";
 import type { DeviceCode, Pickup, Settings, SettingsPatch, SubscriptionStatus } from "../lib/types";
-import { OnboardingProvider } from "./OnboardingProvider";
+import { OnboardingProvider, transitionRequest } from "./OnboardingProvider";
 
 const place = vi.hoisted(() => ({ hostPlace: vi.fn(() => "thisMac") }));
 vi.mock("../lib/host", async (importOriginal) => ({
@@ -140,6 +140,67 @@ function submit() {
 function chatgpt() {
   fireEvent.click(screen.getByRole("button", { name: /^ChatGPT subscription/ }));
 }
+
+it.each([
+  ["idle", "start", "running"],
+  ["running", "start", "running"],
+  ["running", "finish", "idle"],
+  ["idle", "finish", "idle"],
+] as const)("transitions request %s on %s to %s", (kind, event, expected) => {
+  expect(transitionRequest({ kind }, event)).toEqual({ kind: expected });
+});
+
+it("starts only one connection test for duplicate submissions in the same batch", async () => {
+  const pending = deferred<string>();
+  mocks.testConnection.mockReturnValue(pending.promise);
+  await draw();
+  key();
+  const button = screen.getByRole("button", { name: "Test and continue" });
+  act(() => {
+    fireEvent.click(button);
+    fireEvent.click(button);
+  });
+  expect(mocks.testConnection).toHaveBeenCalledOnce();
+});
+
+it("does not replace an in-flight connection test with a late pickup offer", async () => {
+  const pickups = deferred<Pickup[]>();
+  const pending = deferred<string>();
+  mocks.existingSignins.mockReturnValue(pickups.promise);
+  mocks.testConnection.mockReturnValue(pending.promise);
+  useStore.setState({ settings: stored({ apiKeySet: true }) });
+  await draw();
+  submit();
+  await act(async () => pickups.resolve([{ program: "claudeCode", account: "", plan: "" }]));
+  expect(screen.queryByRole("button", { name: "Use Claude Code" })).toBeNull();
+  expect(screen.getByText("Testing the connection…")).toBeTruthy();
+});
+
+it("starts only one test for duplicate pickup submissions", async () => {
+  const pending = deferred<string>();
+  mocks.existingSignins.mockResolvedValue([{ program: "claudeCode", account: "", plan: "" }]);
+  mocks.testConnection.mockReturnValue(pending.promise);
+  await draw();
+  const button = await screen.findByRole("button", { name: "Use Claude Code" });
+  act(() => {
+    fireEvent.click(button);
+    fireEvent.click(button);
+  });
+  expect(mocks.testConnection).toHaveBeenCalledOnce();
+});
+
+it("does not save a pickup after leaving while its test is pending", async () => {
+  const pending = deferred<string>();
+  mocks.existingSignins.mockResolvedValue([{ program: "claudeCode", account: "", plan: "" }]);
+  mocks.testConnection.mockReturnValue(pending.promise);
+  const { onConnected, onBack } = await draw();
+  fireEvent.click(await screen.findByRole("button", { name: "Use Claude Code" }));
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  await act(async () => pending.resolve("Connected"));
+  expect(onBack).toHaveBeenCalledOnce();
+  expect(mocks.updateSettings).not.toHaveBeenCalled();
+  expect(onConnected).not.toHaveBeenCalled();
+});
 
 it("does not save or advance when verification fails, and can retry", async () => {
   mocks.testConnection.mockRejectedValueOnce(new Error("Invalid key"));

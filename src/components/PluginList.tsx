@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
 import { api, openExternal } from "../lib/ipc";
 import { hostOf, markFor, refusalWords, reportLine, STDIO } from "../lib/plugins";
@@ -27,6 +27,27 @@ interface Props {
 
 /** A dial that was refused: the sentence for the operator, and what was under it. */
 type Failure = ReturnType<typeof refusalWords>;
+
+type PluginListState =
+  | { state: "loading" }
+  | { state: "failed" }
+  | { state: "ready"; offers: PluginOffer[]; connected: Plugin[] };
+
+type PluginListAction =
+  | { type: "loaded"; offers: PluginOffer[]; connected: Plugin[] }
+  | { type: "failed" };
+
+export function pluginListReducer(
+  _state: PluginListState,
+  action: PluginListAction,
+): PluginListState {
+  switch (action.type) {
+    case "loaded":
+      return { state: "ready", offers: action.offers, connected: action.connected };
+    case "failed":
+      return { state: "failed" };
+  }
+}
 
 /**
  * The two answers to who may use a plugin, and to who may call one of its tools.
@@ -343,8 +364,12 @@ function rows(offers: PluginOffer[], connected: Plugin[]): Row[] {
  * twice.
  */
 export function PluginList({ groupId, crew }: Props) {
-  const [offers, setOffers] = useState<PluginOffer[] | null>(null);
-  const [connected, setConnected] = useState<Plugin[] | null>(null);
+  return <GroupPluginList key={groupId} groupId={groupId} crew={crew} />;
+}
+
+function GroupPluginList({ groupId, crew }: Props) {
+  const [list, dispatchList] = useReducer(pluginListReducer, { state: "loading" });
+  const generation = useRef(0);
   // What the panel is waiting on, and what to say about it. The key is what
   // the controls compare against; the sentence is the one true thing to say
   // about *this* wait, because only one of them opens a browser window.
@@ -410,10 +435,11 @@ export function PluginList({ groupId, crew }: Props) {
   const [tested, setTested] = useState<Record<string, ServerReport>>({});
 
   const load = useCallback(async () => {
+    const request = ++generation.current;
     try {
       const [catalog, held] = await Promise.all([api.pluginCatalog(), api.groupPlugins(groupId)]);
-      setOffers(catalog);
-      setConnected(held);
+      if (request !== generation.current) return;
+      dispatchList({ type: "loaded", offers: catalog, connected: held });
       setError(null);
       // Separately, and deliberately not awaited with the two above: this one
       // goes over the network to guaca.bot, and a slow or absent service must
@@ -421,22 +447,27 @@ export function PluginList({ groupId, crew }: Props) {
       void api
         .accountConnectors()
         .then((account) => {
+          if (request !== generation.current) return;
           setConnections(account.connections);
           setAccountEmail(account.email);
         })
         .catch(() => {
+          if (request !== generation.current) return;
           setConnections([]);
           setAccountEmail("");
         });
     } catch (caught) {
+      if (request !== generation.current) return;
       setError(errorMessage(caught));
-      setOffers([]);
-      setConnected([]);
+      dispatchList({ type: "failed" });
     }
   }, [groupId]);
 
   useEffect(() => {
     void load();
+    return () => {
+      generation.current += 1;
+    };
   }, [load]);
 
   const run = async (
@@ -500,8 +531,10 @@ export function PluginList({ groupId, crew }: Props) {
     setFailed((was) => ({ ...was, [failure]: undefined }));
   };
 
-  if (offers === null || connected === null)
-    return <p className="field__hint">Loading connectors…</p>;
+  if (list.state === "loading") return <p className="field__hint">Loading connectors…</p>;
+
+  const offers = list.state === "ready" ? list.offers : [];
+  const connected = list.state === "ready" ? list.connected : [];
 
   return (
     <div className="access">

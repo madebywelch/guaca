@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
@@ -11,7 +11,7 @@ import type {
   PluginToolCard,
   ServerReport,
 } from "../lib/types";
-import { PluginList } from "./PluginList";
+import { PluginList, pluginListReducer } from "./PluginList";
 
 const pluginCatalog = vi.fn<() => Promise<PluginOffer[]>>();
 const groupPlugins = vi.fn<() => Promise<Plugin[]>>();
@@ -123,6 +123,26 @@ const OFFERS: PluginOffer[] = [
     accountBacked: false,
   },
 ];
+
+describe("plugin list load transitions", () => {
+  const states = [
+    { state: "loading" as const },
+    { state: "failed" as const },
+    { state: "ready" as const, offers: OFFERS, connected: [] },
+  ];
+
+  it.each(states)("accepts a successful load from $state", (state) => {
+    expect(pluginListReducer(state, { type: "loaded", offers: OFFERS, connected: [] })).toEqual({
+      state: "ready",
+      offers: OFFERS,
+      connected: [],
+    });
+  });
+
+  it.each(states)("accepts a failed load from $state", (state) => {
+    expect(pluginListReducer(state, { type: "failed" })).toEqual({ state: "failed" });
+  });
+});
 
 /** One tool as the server published it, for whoever the plugin is for. */
 function tool(name: string, access: PluginAccess = { mode: "everyone" }): PluginToolCard {
@@ -563,6 +583,28 @@ describe("choosing which account a crew uses", () => {
     pluginCatalog.mockResolvedValue([GOOGLE_OFFER]);
   });
 
+  it("keeps the newer account response when the previous load finishes last", async () => {
+    let finishOld!: (account: AccountConnectors) => void;
+    accountConnectors.mockReset();
+    accountConnectors.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishOld = resolve;
+      }),
+    );
+    accountConnectors.mockResolvedValueOnce({ ...one, email: "new@example.com" });
+    groupPlugins.mockResolvedValue([]);
+    connectPlugin.mockResolvedValue(plugin({ kind: "google" }));
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    await waitFor(() => expect(accountConnectors).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    expect(await screen.findByText(saying(/from your Guaca account new@example.com/))).toBeTruthy();
+
+    await act(async () => finishOld({ ...one, email: "old@example.com" }));
+    expect(screen.getByText(saying(/from your Guaca account new@example.com/))).toBeTruthy();
+    expect(screen.queryByText(saying(/old@example.com/))).toBeNull();
+  });
+
   it("opens the configured account origin or a broker handoff", async () => {
     accountConnectors.mockResolvedValue({ ...two, connections: [] });
     accountStatus.mockResolvedValue({
@@ -749,6 +791,69 @@ describe("a server the operator added", () => {
     checkPlugin.mockReset();
     pluginCatalog.mockResolvedValue(OFFERS);
     groupPlugins.mockResolvedValue([]);
+  });
+
+  it("does not replace the new group's list when the old load finishes late", async () => {
+    let finish!: (plugins: Plugin[]) => void;
+    groupPlugins.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    groupPlugins.mockResolvedValueOnce([added({ name: "new_group_server" })]);
+    const view = render(<PluginList groupId={GROUP} crew={CREW} />);
+    view.rerender(<PluginList groupId="other-group" crew={CREW} />);
+    expect(await screen.findByText("new_group_server")).toBeTruthy();
+    await act(async () => finish([added({ name: "old_group_server" })]));
+    expect(screen.queryByText("old_group_server")).toBeNull();
+    expect(screen.getByText("new_group_server")).toBeTruthy();
+  });
+
+  it("does not show a delayed address test in another group", async () => {
+    let finish!: (report: ServerReport) => void;
+    probeServer.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const view = render(<PluginList groupId={GROUP} crew={CREW} />);
+    fireEvent.click(await screen.findByText("Add a server"));
+    fireEvent.change(screen.getByPlaceholderText("https://example.com/mcp"), {
+      target: { value: "https://old.example/mcp" },
+    });
+    fireEvent.click(screen.getByText("Test"));
+    view.rerender(<PluginList groupId="other-group" crew={CREW} />);
+    fireEvent.click(await screen.findByText("Add a server"));
+    await act(async () =>
+      finish({
+        endpoint: "https://old.example/mcp",
+        transport: "HTTP",
+        protocol: "",
+        handshake: true,
+        signin: "none",
+        server: "old",
+        tools: [],
+        ms: 42,
+      }),
+    );
+    expect(screen.queryByText(/answered in 42 ms/)).toBeNull();
+  });
+
+  it("keeps existing secret headers when reconnecting without editing them", async () => {
+    groupPlugins.mockResolvedValue([added({ headers: ["x-api-key"] })]);
+    readdressPlugin.mockResolvedValue(added());
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+    fireEvent.click(await screen.findByText("Change address"));
+    fireEvent.click(screen.getByText("Save and reconnect"));
+    await waitFor(() =>
+      expect(readdressPlugin).toHaveBeenCalledWith(
+        GROUP,
+        "p2",
+        "https://ha.example.com/mcp",
+        undefined,
+        undefined,
+      ),
+    );
   });
 
   it("draws it under the name its tools are called by, not the one that was typed", async () => {

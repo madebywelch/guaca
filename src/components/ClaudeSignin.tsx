@@ -26,6 +26,31 @@ function signinError(value: unknown): string {
   return genericError;
 }
 
+type Request =
+  | { kind: "idle" }
+  | { kind: "starting" }
+  | { kind: "session"; id: string }
+  | { kind: "submitting"; id: string };
+
+type RequestEvent =
+  | { type: "start" }
+  | { type: "opened"; id: string }
+  | { type: "submit" }
+  | { type: "reset" };
+
+export function signinRequest(state: Request, event: RequestEvent): Request {
+  switch (event.type) {
+    case "start":
+      return state.kind === "idle" ? { kind: "starting" } : state;
+    case "opened":
+      return state.kind === "starting" ? { kind: "session", id: event.id } : state;
+    case "submit":
+      return state.kind === "session" ? { kind: "submitting", id: state.id } : state;
+    case "reset":
+      return state.kind === "idle" ? state : { kind: "idle" };
+  }
+}
+
 export function ClaudeSignin({
   onReady,
   row,
@@ -42,7 +67,7 @@ export function ClaudeSignin({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const generation = useRef(0);
-  const active = useRef<string | null>(null);
+  const active = useRef<Request>({ kind: "idle" });
 
   useEffect(() => {
     if (!enabled) return;
@@ -63,8 +88,8 @@ export function ClaudeSignin({
     );
     return () => {
       generation.current += 1;
-      if (active.current) void api.cancelClaudeSignin(active.current).catch(() => {});
-      active.current = null;
+      if ("id" in active.current) void api.cancelClaudeSignin(active.current.id).catch(() => {});
+      active.current = signinRequest(active.current, { type: "reset" });
     };
   }, [enabled]);
 
@@ -74,8 +99,8 @@ export function ClaudeSignin({
 
   const cancel = () => {
     generation.current += 1;
-    if (active.current) void api.cancelClaudeSignin(active.current).catch(() => {});
-    active.current = null;
+    if ("id" in active.current) void api.cancelClaudeSignin(active.current.id).catch(() => {});
+    active.current = signinRequest(active.current, { type: "reset" });
     setSession(null);
     setCode("");
     setBusy(false);
@@ -83,6 +108,9 @@ export function ClaudeSignin({
   };
 
   const begin = async () => {
+    const nextState = signinRequest(active.current, { type: "start" });
+    if (nextState === active.current) return;
+    active.current = nextState;
     const current = ++generation.current;
     setBusy(true);
     setError("");
@@ -92,17 +120,23 @@ export function ClaudeSignin({
         void api.cancelClaudeSignin(next.id).catch(() => {});
         return;
       }
-      active.current = next.id;
+      active.current = signinRequest(active.current, { type: "opened", id: next.id });
       setSession(next);
     } catch (failure) {
-      if (generation.current === current) setError(signinError(failure));
+      if (generation.current === current) {
+        active.current = signinRequest(active.current, { type: "reset" });
+        setError(signinError(failure));
+      }
     } finally {
       if (generation.current === current) setBusy(false);
     }
   };
 
   const complete = async () => {
-    if (!session || !code.trim() || busy) return;
+    if (!session || !code.trim()) return;
+    const nextState = signinRequest(active.current, { type: "submit" });
+    if (nextState === active.current) return;
+    active.current = nextState;
     const current = generation.current;
     setBusy(true);
     setError("");
@@ -110,14 +144,14 @@ export function ClaudeSignin({
       const result = await api.completeClaudeSignin(session.id, code.trim());
       if (generation.current !== current) return;
       if (!result.signedIn) throw new Error("Sign-in was not completed");
-      active.current = null;
+      active.current = signinRequest(active.current, { type: "reset" });
       setSession(null);
       setCode("");
       setSignedIn(true);
     } catch (failure) {
       if (generation.current === current) {
         void api.cancelClaudeSignin(session.id).catch(() => {});
-        active.current = null;
+        active.current = signinRequest(active.current, { type: "reset" });
         setSession(null);
         setCode("");
         setError(signinError(failure));
