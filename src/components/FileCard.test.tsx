@@ -311,15 +311,16 @@ describe("FileCard", () => {
     expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
   });
 
-  it("opens the preview when retrying a failed document thumbnail", async () => {
+  it("retries a failed document thumbnail without opening the preview", async () => {
     fetched.mockResolvedValueOnce({ ok: false, status: 404 });
     render(<FileCard file={file("retry-document.pdf", "application/pdf")} />);
 
     const retry = await screen.findByRole("button", { name: "Try again" });
     fireEvent.click(retry);
-    const dialog = screen.getByRole("dialog");
-    await waitFor(() => expect(dialog.querySelector("iframe")).toBeTruthy());
+    expect(screen.queryByRole("dialog")).toBeNull();
     await waitFor(() => expect(screen.queryByRole("button", { name: "Try again" })).toBeNull());
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.querySelector(".file__frame")).toBeTruthy();
   });
 
   it("revokes a document copy that finishes after its preview closes", async () => {
