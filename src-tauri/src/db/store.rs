@@ -1227,6 +1227,120 @@ impl Store {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn claim_routine(
+        &self,
+        routine: &Routine,
+        occurrence: &str,
+        envelope: Option<&Envelope>,
+        kind: RunKind,
+        error: Option<&str>,
+        now: i64,
+        advance: bool,
+    ) -> Result<bool, StoreError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if advance && routine.next_run_at.is_some() {
+            let current: Option<i64> = tx
+                .query_row(
+                    "SELECT next_run_at FROM routines WHERE id=?1 AND active=1",
+                    [routine.id.to_string()],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .flatten();
+            if current != routine.next_run_at {
+                return Ok(false);
+            }
+        }
+        let inserted = tx.execute(
+            "INSERT OR IGNORE INTO routine_occurrences (routine_id,occurrence,message_id,state) VALUES (?1,?2,?3,?4)",
+            params![routine.id.to_string(), occurrence, envelope.map(|e| e.id.to_string()), if envelope.is_some() { "pending" } else { "done" }],
+        )?;
+        if inserted == 0 {
+            return Ok(false);
+        }
+        if let Some(envelope) = envelope {
+            Self::insert_message(&tx, envelope)?;
+            tx.execute(
+                "INSERT INTO pending_runs (run_id,message_id) VALUES (?1,?2)",
+                params![envelope.run_id.to_string(), envelope.id.to_string()],
+            )?;
+        }
+        tx.execute(
+            "INSERT INTO routine_runs (routine_id,run_id,kind,at,error) VALUES (?1,?2,?3,?4,?5)",
+            params![
+                routine.id.to_string(),
+                envelope.map(|e| e.run_id.to_string()),
+                kind.as_str(),
+                now,
+                error
+            ],
+        )?;
+        if advance {
+            match routine.after_running(now) {
+                NextSlot::Due(next) => {
+                    tx.execute(
+                        "UPDATE routines SET next_run_at=?2,last_run_at=?3 WHERE id=?1",
+                        params![routine.id.to_string(), next, now],
+                    )?;
+                }
+                NextSlot::Waiting => {
+                    tx.execute(
+                        "UPDATE routines SET next_run_at=NULL,last_run_at=?2 WHERE id=?1",
+                        params![routine.id.to_string(), now],
+                    )?;
+                }
+                NextSlot::Done => {
+                    tx.execute("UPDATE routine_occurrences SET state='completing' WHERE routine_id=?1 AND occurrence=?2", params![routine.id.to_string(), occurrence])?;
+                    tx.execute("DELETE FROM routines WHERE id=?1", [routine.id.to_string()])?;
+                    tx.execute("UPDATE routine_occurrences SET state=?3 WHERE routine_id=?1 AND occurrence=?2", params![routine.id.to_string(), occurrence, if envelope.is_some() { "pending" } else { "done" }])?;
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(true)
+    }
+
+    pub fn start_routine_deliveries(
+        &self,
+        messages: &[MessageId],
+        owner: RunId,
+    ) -> Result<(), StoreError> {
+        if messages.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        for message in messages {
+            tx.execute(
+                "UPDATE routine_occurrences SET state='started',owner_run=?2 WHERE message_id=?1 AND state IN ('pending','started')",
+                params![message.to_string(), owner.to_string()],
+            )?;
+            tx.execute(
+                "UPDATE routine_runs SET run_id=?2 WHERE run_id=(SELECT run_id FROM messages WHERE id=?1) AND EXISTS (SELECT 1 FROM routine_occurrences WHERE message_id=?1 AND state='started')",
+                params![message.to_string(), owner.to_string()],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn fail_routine_delivery(&self, run: RunId) -> Result<(), StoreError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        tx.execute(
+            "UPDATE routine_runs SET kind='failed',error='The agent could not receive this firing' WHERE run_id=?1 AND EXISTS (SELECT 1 FROM routine_occurrences o JOIN messages m ON m.id=o.message_id WHERE m.run_id=?1 AND o.state='pending')",
+            [run.to_string()],
+        )?;
+        tx.execute(
+            "UPDATE routine_occurrences SET state='done' WHERE state='pending' AND message_id IN (SELECT id FROM messages WHERE run_id=?1)",
+            [run.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Turns a routine off, or back on.
     ///
     /// Deliberately not part of `update_routine`: switching something off is
@@ -1284,7 +1398,7 @@ impl Store {
         let mut stmt = conn.prepare(
             "SELECT r.run_id, r.kind, r.at,
                     COALESCE(SUM(u.prompt),0), COALESCE(SUM(u.completion),0),
-                    SUM(u.cost), COUNT(u.id)
+                    SUM(u.cost), COUNT(u.id), r.error
                FROM routine_runs r
                LEFT JOIN usage u ON u.run_id = r.run_id
               WHERE r.routine_id=?1
@@ -1300,14 +1414,24 @@ impl Store {
     }
 
     pub fn delete_routine(&self, id: RoutineId) -> Result<bool, StoreError> {
-        let conn = self.conn()?;
-        Ok(conn.execute("DELETE FROM routines WHERE id=?1", params![id.to_string()])? > 0)
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let deleted = tx.execute("DELETE FROM routines WHERE id=?1", params![id.to_string()])? > 0;
+        if deleted {
+            tx.execute("DELETE FROM routine_runs WHERE routine_id=?1", params![id.to_string()])?;
+        }
+        tx.commit()?;
+        Ok(deleted)
     }
 
     /// Removes an agent's schedule along with the agent.
     pub fn delete_agent_routines(&self, agent: AgentId) -> Result<usize, StoreError> {
-        let conn = self.conn()?;
-        Ok(conn.execute("DELETE FROM routines WHERE agent_id=?1", params![agent.to_string()])?)
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM routine_runs WHERE routine_id IN (SELECT id FROM routines WHERE agent_id=?1)", [agent.to_string()])?;
+        let deleted = tx.execute("DELETE FROM routines WHERE agent_id=?1", [agent.to_string()])?;
+        tx.commit()?;
+        Ok(deleted)
     }
 
     // ---- working notes ---------------------------------------------------
@@ -3506,7 +3630,28 @@ impl Store {
     }
 
     pub fn settle_run(&self, run: RunId) -> Result<(), StoreError> {
-        self.conn()?.execute("DELETE FROM pending_runs WHERE run_id=?1", [run.to_string()])?;
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM pending_runs WHERE run_id=?1", [run.to_string()])?;
+        tx.execute(
+            "UPDATE routine_occurrences SET state='done' WHERE owner_run=?1 AND state='started'",
+            [run.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn stop_routine_run(&self, run: RunId) -> Result<(), StoreError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        tx.execute("UPDATE routine_occurrences SET state='done' WHERE message_id IN (SELECT id FROM messages WHERE run_id=?1) OR owner_run=?1", [run.to_string()])?;
+        tx.execute("DELETE FROM pending_runs WHERE run_id=?1", [run.to_string()])?;
+        tx.execute(
+            "DELETE FROM put_down WHERE message_id IN (SELECT id FROM messages WHERE run_id=?1)",
+            [run.to_string()],
+        )?;
+        tx.execute("DELETE FROM put_down_runs WHERE run_id=?1", [run.to_string()])?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -4004,12 +4149,16 @@ impl Store {
 
     /// Every routine held by a group's agents.
     pub fn delete_group_routines(&self, group: GroupId) -> Result<usize, StoreError> {
-        let conn = self.conn()?;
-        Ok(conn.execute(
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM routine_runs WHERE routine_id IN (SELECT id FROM routines WHERE agent_id IN (SELECT id FROM agents WHERE group_id=?1))", [group.to_string()])?;
+        let deleted = tx.execute(
             "DELETE FROM routines
               WHERE agent_id IN (SELECT id FROM agents WHERE group_id=?1)",
             params![group.to_string()],
-        )?)
+        )?;
+        tx.commit()?;
+        Ok(deleted)
     }
 
     /// Every working note held by a group's agents.
@@ -4313,6 +4462,7 @@ fn row_to_routine_run(row: &Row<'_>) -> RowResult<RoutineRun> {
                 cost: row.get::<_, Option<f64>>(5)?,
                 calls: row.get::<_, i64>(6)? as u64,
             },
+            error: row.get(7)?,
         })
     })())
 }
@@ -5205,7 +5355,7 @@ mod tests {
         // adds to groups, which no migration since 51 rebuilds, and 65's needs
         // none: what it drops, 54, 59 and 62 make again on the way back up.
         // 67 adds the workspace identity, resource ledger and resume marker.
-        conn.execute_batch("ALTER TABLE plugins DROP COLUMN grant_generation; DROP TABLE pending_sandbox_resume; DROP TABLE resource_ledger; DROP TABLE workspace_identity; DROP TABLE approval_policies; ALTER TABLE groups DROP COLUMN rail_order; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
+        conn.execute_batch("DROP TRIGGER routine_delete_history; DROP TABLE routine_occurrences; ALTER TABLE plugins DROP COLUMN grant_generation; DROP TABLE pending_sandbox_resume; DROP TABLE resource_ledger; DROP TABLE workspace_identity; DROP TABLE approval_policies; ALTER TABLE groups DROP COLUMN rail_order; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
         migrations::run(&mut conn).unwrap();
         drop(conn);
         assert_eq!(f.store.connector_env(mine.id).unwrap()["TOKEN"], "private-token");

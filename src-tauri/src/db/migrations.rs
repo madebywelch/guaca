@@ -1930,6 +1930,39 @@ ALTER TABLE plugins ADD COLUMN grant_generation INTEGER NOT NULL DEFAULT 0;
 "#,
     ),
     (69, r#"ALTER TABLE put_down_runs ADD COLUMN guard_snapshot TEXT;"#),
+    (
+        70,
+        r#"
+ALTER TABLE put_down ADD COLUMN absorbed TEXT NOT NULL DEFAULT '[]';
+CREATE TABLE routine_runs_new (
+    id INTEGER PRIMARY KEY,
+    routine_id TEXT NOT NULL,
+    run_id TEXT,
+    kind TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    error TEXT
+);
+INSERT INTO routine_runs_new (id,routine_id,run_id,kind,at)
+SELECT id,routine_id,run_id,kind,at FROM routine_runs;
+DROP TABLE routine_runs;
+ALTER TABLE routine_runs_new RENAME TO routine_runs;
+CREATE INDEX routine_runs_routine ON routine_runs (routine_id, at DESC);
+CREATE TABLE routine_occurrences (
+    routine_id TEXT NOT NULL,
+    occurrence TEXT NOT NULL,
+    message_id TEXT,
+    owner_run TEXT,
+    state TEXT NOT NULL,
+    PRIMARY KEY (routine_id, occurrence)
+);
+CREATE INDEX routine_occurrences_message ON routine_occurrences (message_id);
+CREATE TRIGGER routine_delete_history AFTER DELETE ON routines
+WHEN NOT EXISTS (SELECT 1 FROM routine_occurrences WHERE routine_id=OLD.id AND state='completing')
+BEGIN
+    DELETE FROM routine_runs WHERE routine_id=OLD.id;
+END;
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

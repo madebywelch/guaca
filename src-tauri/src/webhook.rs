@@ -56,6 +56,25 @@ pub const ROUTE: &str = "/events/";
 /// The most a body may be. Everything under it reaches the agent whole.
 pub const MOST_BODY_BYTES: usize = 64 * 1024;
 
+pub(crate) fn delivery_id(values: [Option<&[u8]>; 3]) -> Result<String, &'static str> {
+    let Some(value) = values.into_iter().flatten().next() else {
+        return Ok(format!("generated:{}", uuid::Uuid::new_v4()));
+    };
+    let start = value.iter().position(|byte| !byte.is_ascii_whitespace()).unwrap_or(value.len());
+    let end = value.iter().rposition(|byte| !byte.is_ascii_whitespace()).map_or(start, |i| i + 1);
+    let value = &value[start..end];
+    if value.len() > 200 {
+        return Err("delivery ID must be at most 200 bytes");
+    }
+    use std::fmt::Write;
+    let mut encoded = String::with_capacity(7 + value.len() * 2);
+    encoded.push_str("header:");
+    for byte in value {
+        write!(encoded, "{byte:02x}").expect("writing to a string cannot fail");
+    }
+    Ok(encoded)
+}
+
 /// A request head longer than this is not one somebody wrote by hand.
 const HEAD_LIMIT: usize = 8 * 1024;
 
@@ -185,6 +204,7 @@ struct Head {
     path: String,
     /// The token in `Authorization: Bearer …`, when there was one.
     bearer: Option<String>,
+    delivery_ids: [Option<Vec<u8>>; 3],
     /// Bytes of body that follow. Zero is a body-less event.
     body_len: usize,
     chunked: bool,
@@ -192,7 +212,7 @@ struct Head {
     expects_continue: bool,
 }
 
-/// Reads the request line and the four headers that matter.
+/// Reads the request line and the headers that matter.
 ///
 /// Everything else in the head is ignored: this is not a web server and does
 /// not want to become one.
@@ -206,6 +226,22 @@ fn read_lines(head: &[u8]) -> Result<Head, Refusal> {
     let path = target.split('?').next().unwrap_or(target).to_string();
 
     let mut bearer = None;
+    let mut delivery_ids: [Option<Vec<u8>>; 3] = Default::default();
+    for line in head.split(|byte| *byte == b'\n') {
+        let Some(colon) = line.iter().position(|byte| *byte == b':') else { continue };
+        let name = &line[..colon];
+        let index = if name.eq_ignore_ascii_case(b"idempotency-key") {
+            0
+        } else if name.eq_ignore_ascii_case(b"webhook-id") {
+            1
+        } else if name.eq_ignore_ascii_case(b"x-github-delivery") {
+            2
+        } else {
+            continue;
+        };
+        let value = line[colon + 1..].strip_suffix(b"\r").unwrap_or(&line[colon + 1..]);
+        delivery_ids[index].get_or_insert_with(|| value.to_vec());
+    }
     let mut body_len = 0usize;
     let mut chunked = false;
     let mut expects_continue = false;
@@ -229,14 +265,14 @@ fn read_lines(head: &[u8]) -> Result<Head, Refusal> {
             _ => {}
         }
     }
-    Ok(Head { method, path, bearer, body_len, chunked, expects_continue })
+    Ok(Head { method, path, bearer, delivery_ids, body_len, chunked, expects_continue })
 }
 
 /// Whether the head is an event, and which.
 ///
 /// The token is checked before the address is read past its route, so a
 /// request with the wrong secret learns nothing about which events exist.
-fn accept(head: &Head, secret: &str) -> Result<EventTrigger, Refusal> {
+fn accept(head: &Head, secret: &str) -> Result<(EventTrigger, String), Refusal> {
     if head.method != "POST" {
         // Answered before the path so a stray GET at the right address says
         // what the address is for rather than that it does not exist.
@@ -258,7 +294,10 @@ fn accept(head: &Head, secret: &str) -> Result<EventTrigger, Refusal> {
     if head.body_len > MOST_BODY_BYTES {
         return Err(Refusal::TooBig(head.body_len));
     }
-    EventTrigger::parse(rest).ok_or_else(|| Refusal::NotAnEvent(rest.to_string()))
+    let event = EventTrigger::parse(rest).ok_or_else(|| Refusal::NotAnEvent(rest.to_string()))?;
+    let id = delivery_id(head.delivery_ids.each_ref().map(|value| value.as_deref()))
+        .map_err(Refusal::Malformed)?;
+    Ok((event, id))
 }
 
 /// Whether two secrets match, taking the same time whether or not they do.
@@ -279,8 +318,8 @@ async fn serve(mut client: TcpStream, runtime: Runtime, secret: &str) -> io::Res
         Err(refusal) => return refuse(&mut client, &refusal).await,
     };
 
-    let event = match accept(&head, secret) {
-        Ok(event) => event,
+    let (event, delivery_id) = match accept(&head, secret) {
+        Ok(accepted) => accepted,
         Err(refusal) => {
             // The body is drained before the refusal is written, when there is
             // one on its way and it is not absurd. Answered mid-send, the
@@ -304,7 +343,7 @@ async fn serve(mut client: TcpStream, runtime: Runtime, secret: &str) -> io::Res
     let payload = String::from_utf8_lossy(&body);
     let payload = (!payload.trim().is_empty()).then(|| payload.into_owned());
 
-    match runtime.deliver_event(&event, payload) {
+    match runtime.deliver_event(&event, payload, &delivery_id) {
         Ok(delivery) => answer(&mut client, &delivery, &event).await,
         Err(err) => {
             tracing::error!(%err, "an event could not be delivered");
@@ -399,12 +438,45 @@ mod tests {
     /// Both steps, as `serve` takes them.
     fn parse(raw: &[u8]) -> Result<(Head, EventTrigger), Refusal> {
         let head = read_lines(raw)?;
-        let event = accept(&head, SECRET)?;
+        let (event, _) = accept(&head, SECRET)?;
         Ok((head, event))
     }
 
     fn bearer() -> (&'static str, String) {
         ("Authorization", format!("Bearer {SECRET}"))
+    }
+
+    #[test]
+    fn delivery_ids_use_header_precedence_and_are_bounded() {
+        assert_eq!(
+            delivery_id([Some(b"  first  "), Some(b"second"), Some(b"third")]).unwrap(),
+            "header:6669727374"
+        );
+        assert_eq!(
+            delivery_id([None, Some(b"second"), Some(b"third")]).unwrap(),
+            "header:7365636f6e64"
+        );
+        assert_eq!(delivery_id([None, None, Some(b"third")]).unwrap(), "header:7468697264");
+        assert_eq!(delivery_id([Some(&[b'x'; 200]), None, None]).unwrap().len(), 407);
+        assert!(delivery_id([Some(&[b'x'; 201]), Some(b"fallback"), None]).is_err());
+        assert!(delivery_id([Some("é".repeat(101).as_bytes()), None, None]).is_err());
+        assert_eq!(delivery_id([Some(b"  "), None, None]).unwrap(), "header:");
+        assert_eq!(delivery_id([Some(b"\xff"), None, None]).unwrap(), "header:ff");
+        let first = delivery_id([None, None, None]).unwrap();
+        let second = delivery_id([None, None, None]).unwrap();
+        assert!(uuid::Uuid::parse_str(first.strip_prefix("generated:").unwrap()).is_ok());
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn delivery_id_is_checked_only_after_the_secret() {
+        let bad = "x".repeat(201);
+        let raw = head_bytes("POST", "/events/github/push", &[("Idempotency-Key", &bad)]);
+        assert_eq!(parse(&raw).unwrap_err(), Refusal::Unauthorized);
+        let (name, value) = bearer();
+        let raw =
+            head_bytes("POST", "/events/github/push", &[(name, &value), ("Idempotency-Key", &bad)]);
+        assert!(matches!(parse(&raw), Err(Refusal::Malformed(_))));
     }
 
     #[test]

@@ -62,6 +62,13 @@ The body is drained before a refusal is written, because a client still sending
 when the answer arrives reads a reset instead of the sentence that says what it
 did wrong.
 
+A sender can identify a delivery with `Idempotency-Key`, `webhook-id`, or
+`X-GitHub-Delivery`, in that order. The receiver trims the first header present
+and rejects a value over 200 bytes after authentication. The identifier is
+scoped to each routine, so retrying a keyed post does not fire the same routine
+twice. A post with none of those headers gets a fresh identifier, so its retries
+remain separate events.
+
 The `schedule` tool still reads a cadence and nothing else. An agent that
 improvised `event:...` there would hold a routine waiting on a post nobody has
 arranged, and it has no way to tell whoever might post where to post to. The

@@ -43,6 +43,7 @@ pub struct PutDown {
     /// for a message no turn had started, which is delivered as though it had
     /// just arrived.
     pub records: Vec<MessageId>,
+    pub absorbed: Vec<MessageId>,
 }
 
 /// What a restart found.
@@ -76,10 +77,19 @@ impl Store {
         messages: &[(MessageId, &[MessageId])],
         whole: &[(RunId, u32, GuardSnapshot)],
     ) -> Result<(), StoreError> {
+        self.put_down_with_absorbed(messages, whole, &[])
+    }
+
+    pub fn put_down_with_absorbed(
+        &self,
+        messages: &[(MessageId, &[MessageId])],
+        whole: &[(RunId, u32, GuardSnapshot)],
+        absorbed: &[MessageId],
+    ) -> Result<(), StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
-        for (id, records) in messages {
-            write_put_down(&tx, *id, records)?;
+        for (index, (id, records)) in messages.iter().enumerate() {
+            write_put_down(&tx, *id, records, if index == 0 { absorbed } else { &[] })?;
         }
         for (run, steps, snapshot) in whole {
             mark_whole(&tx, *run, *steps, snapshot)?;
@@ -106,7 +116,7 @@ impl Store {
             "INSERT OR IGNORE INTO pending_runs (run_id,message_id) VALUES (?1,?2)",
             params![envelope.run_id.to_string(), envelope.id.to_string()],
         )?;
-        write_put_down(&tx, envelope.id, &[])?;
+        write_put_down(&tx, envelope.id, &[], &[])?;
         if let Some((steps, snapshot)) = whole {
             mark_whole(&tx, envelope.run_id, steps, &snapshot)?;
         }
@@ -169,18 +179,22 @@ impl Store {
 
         let put: Vec<PutDown> = {
             let mut stmt = tx.prepare(&format!(
-                "SELECT {ENVELOPE}, p.records FROM messages m
+                "SELECT {ENVELOPE}, p.records, p.absorbed FROM messages m
                    JOIN put_down p ON p.message_id = m.id
                   ORDER BY m.created_at, m.id"
             ))?;
-            let rows =
-                stmt.query_map([], |row| Ok((row_to_envelope(row)?, row.get::<_, String>(14)?)))?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row_to_envelope(row)?, row.get::<_, String>(14)?, row.get::<_, String>(15)?))
+            })?;
             let mut put = Vec::new();
             for row in rows {
-                let (envelope, records) = row?;
+                let (envelope, records, absorbed) = row?;
                 let records: Vec<MessageId> = serde_json::from_str(&records)
                     .map_err(|err| StoreError::Corrupt(format!("unreadable records: {err}")))?;
-                put.push(PutDown { envelope: envelope?, records });
+                let absorbed = serde_json::from_str(&absorbed).map_err(|err| {
+                    StoreError::Corrupt(format!("unreadable absorbed messages: {err}"))
+                })?;
+                put.push(PutDown { envelope: envelope?, records, absorbed });
             }
             put
         };
@@ -199,9 +213,24 @@ impl Store {
             pending
         };
 
-        let (resumed, cut): (Vec<PutDown>, Vec<PutDown>) =
+        let (mut resumed, cut): (Vec<PutDown>, Vec<PutDown>) =
             put.into_iter().partition(|put| whole.contains_key(&put.envelope.run_id));
+        let already: HashSet<_> = resumed.iter().map(|put| put.envelope.id).collect();
+        {
+            let mut stmt = tx.prepare(&format!(
+                "SELECT {ENVELOPE} FROM messages m JOIN routine_occurrences o ON o.message_id=m.id WHERE o.state='pending' ORDER BY m.created_at,m.id"
+            ))?;
+            let rows = stmt.query_map([], row_to_envelope)?;
+            for row in rows {
+                let envelope = row??;
+                if !already.contains(&envelope.id) {
+                    resumed.push(PutDown { envelope, records: Vec::new(), absorbed: Vec::new() });
+                }
+            }
+        }
         let picked: HashSet<RunId> = resumed.iter().map(|put| put.envelope.run_id).collect();
+        let associated: HashSet<MessageId> =
+            resumed.iter().flat_map(|put| put.absorbed.iter().copied()).collect();
 
         // Where each interrupted conversation's notice goes: the message it
         // began with, which is what **Try again** sends again. A conversation
@@ -213,8 +242,34 @@ impl Store {
                 anchors.push(original.clone());
             }
         }
+        {
+            let mut stmt = tx.prepare(&format!(
+                "SELECT {ENVELOPE},o.owner_run FROM messages m JOIN routine_occurrences o ON o.message_id=m.id WHERE o.state='started'"
+            ))?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row_to_envelope(row)?, row.get::<_, Option<String>>(14)?))
+            })?;
+            for row in rows {
+                let (original, owner) = row?;
+                let original = original?;
+                let owner_picked = owner
+                    .as_deref()
+                    .and_then(|value| value.parse::<RunId>().ok())
+                    .is_some_and(|run| picked.contains(&run));
+                if !(owner_picked && associated.contains(&original.id))
+                    && !picked.contains(&original.run_id)
+                    && anchored.insert(original.run_id)
+                {
+                    anchors.push(original);
+                }
+            }
+        }
         for original in &anchors {
             Store::insert_message(&tx, &interrupted(original))?;
+        }
+
+        for original in &anchors {
+            tx.execute("UPDATE routine_occurrences SET state='done' WHERE message_id=?1 AND state='started'", [original.id.to_string()])?;
         }
 
         for put in &resumed {
@@ -251,12 +306,14 @@ fn write_put_down(
     tx: &rusqlite::Connection,
     id: MessageId,
     records: &[MessageId],
+    absorbed: &[MessageId],
 ) -> Result<(), StoreError> {
     let records = serde_json::to_string(records).expect("a list of ids serializes");
+    let absorbed = serde_json::to_string(absorbed).expect("a list of ids serializes");
     tx.execute(
-        "INSERT INTO put_down (message_id,records) VALUES (?1,?2)
-         ON CONFLICT(message_id) DO UPDATE SET records=excluded.records",
-        params![id.to_string(), records],
+        "INSERT INTO put_down (message_id,records,absorbed) VALUES (?1,?2,?3)
+         ON CONFLICT(message_id) DO UPDATE SET records=excluded.records,absorbed=excluded.absorbed",
+        params![id.to_string(), records, absorbed],
     )?;
     Ok(())
 }

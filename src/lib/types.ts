@@ -1477,7 +1477,7 @@ export interface Routine {
  * a skip is a firing the routine dropped because the agent was already working;
  * an event is a post to the receiver, which moved nothing on the clock.
  */
-export type RunKind = "scheduled" | "test" | "skipped" | "event";
+export type RunKind = "scheduled" | "test" | "skipped" | "event" | "failed";
 
 /**
  * One firing. `runId` threads back to everything it produced: the messages in
@@ -1491,6 +1491,7 @@ export interface RoutineRun {
   runId: RunId | null;
   kind: RunKind;
   at: number;
+  error?: string | null;
   /**
    * What the firing bought, summed over its model calls.
    *

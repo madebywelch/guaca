@@ -3886,6 +3886,99 @@ fn dunning(h: &Harness, who: &str, skip_if_working: bool) -> guac_lib::domain::r
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_retries_of_one_event_claim_each_routine_only_once() {
+    let stub = quiet().await;
+    let h = harness(&stub, &["Clerk"], GuardLimits::default());
+    let routine = dunning(&h, "Clerk", false);
+    let (base, secret) = receiver(&h).await;
+    let mut tasks = Vec::new();
+    for _ in 0..12 {
+        let url = format!("{base}/events/stripe/invoice.payment_failed");
+        let secret = secret.clone();
+        tasks.push(tokio::spawn(async move {
+            reqwest::Client::new()
+                .post(url)
+                .bearer_auth(secret)
+                .header("Idempotency-Key", "same delivery")
+                .body("same payload")
+                .send()
+                .await
+                .unwrap()
+                .json::<serde_json::Value>()
+                .await
+                .unwrap()
+        }));
+    }
+    let mut delivered = 0;
+    for task in tasks {
+        delivered += task.await.unwrap()["delivered"].as_u64().unwrap();
+    }
+    assert_eq!(delivered, 1);
+    assert_eq!(h.runtime.store().routine_runs(routine.id, 20).unwrap().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unkeyed_events_and_repeated_test_fires_are_independent() {
+    let stub = quiet().await;
+    let h = harness(&stub, &["Clerk"], GuardLimits::default());
+    let routine = dunning(&h, "Clerk", false);
+    let (base, secret) = receiver(&h).await;
+    let url = format!("{base}/events/stripe/invoice.payment_failed");
+    let client = reqwest::Client::new();
+    for _ in 0..2 {
+        assert_eq!(client.post(&url).bearer_auth(&secret).send().await.unwrap().status(), 200);
+    }
+    let first = h.runtime.test_routine(&routine).unwrap();
+    let second = h.runtime.test_routine(&routine).unwrap();
+    assert_ne!(first, second);
+    let history = h.runtime.store().routine_runs(routine.id, 20).unwrap();
+    assert_eq!(history.iter().filter(|row| row.kind == RunKind::Event).count(), 2);
+    assert_eq!(history.iter().filter(|row| row.kind == RunKind::Test).count(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_same_delivery_id_is_scoped_to_each_routine() {
+    let stub = quiet().await;
+    let h = harness(&stub, &["Clerk"], GuardLimits::default());
+    let first = dunning(&h, "Clerk", false);
+    let second = dunning(&h, "Clerk", false);
+    let (base, secret) = receiver(&h).await;
+    let url = format!("{base}/events/stripe/invoice.payment_failed");
+    let client = reqwest::Client::new();
+    for _ in 0..2 {
+        assert_eq!(
+            client
+                .post(&url)
+                .bearer_auth(&secret)
+                .header("webhook-id", "delivery")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            200
+        );
+    }
+    assert_eq!(h.runtime.store().routine_runs(first.id, 20).unwrap().len(), 1);
+    assert_eq!(h.runtime.store().routine_runs(second.id, 20).unwrap().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn event_arriving_after_drain_is_kept_for_the_next_host() {
+    let stub = quiet().await;
+    let h = harness(&stub, &["Clerk"], GuardLimits::default());
+    let routine = dunning(&h, "Clerk", false);
+    assert!(h.runtime.drain(Duration::from_secs(1)).await.is_complete());
+    let event = EventTrigger { service: "stripe".into(), topic: "invoice.payment_failed".into() };
+    let delivered = h.runtime.deliver_event(&event, Some("payload".into()), "delivery").unwrap();
+    assert_eq!(delivered.delivered, 1);
+    let recovered = h.runtime.store().recover().unwrap();
+    assert_eq!(recovered.resumed.len(), 1);
+    assert!(
+        matches!(&recovered.resumed[0].envelope.parts[..], [Part::Routine { routine_id, .. }] if *routine_id == routine.id)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_event_posted_to_the_receiver_fires_the_routine_standing_on_it() {
     // The whole path an event takes: a POST on the loopback port, the routine
     // standing on that service and topic, the agent's turn, and the history.
@@ -6067,6 +6160,85 @@ async fn a_turn_an_update_stops_carries_on_after_it_without_making_its_calls_aga
         _ => None,
     });
     assert_eq!(steps, Some(2));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn absorbed_routine_resumes_with_its_consuming_turn_and_records() {
+    let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let gate = release.clone();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = calls.clone();
+    let stub = serve(move |body| {
+        if picked_up(body) {
+            return Script::Say("Finished.".into());
+        }
+        match seen.fetch_add(1, Ordering::SeqCst) {
+            0 => {
+                while !gate.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Script::Progress("Original work.".into())
+            }
+            1 => Script::Progress("Routine work happened once.".into()),
+            _ => Script::Hang,
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Clerk"], GuardLimits::default());
+    let agent = h.id("Clerk");
+    let routine = dunning(&h, "Clerk", false);
+    let run = h.runtime.send_from_human(agent, "Do the original work.").unwrap();
+    h.wait_until("the first model call", |_| calls.load(Ordering::SeqCst) == 1).await;
+    h.runtime.test_routine(&routine).unwrap();
+    release.store(true, Ordering::SeqCst);
+    h.wait_until("the routine to be absorbed and acted on", |_| calls.load(Ordering::SeqCst) >= 3)
+        .await;
+    assert!(stub.transcript.lock().iter().any(|body| anyone_said(body, &routine.what)));
+    assert_eq!(h.runtime.store().routine_runs(routine.id, 20).unwrap()[0].run_id, Some(run));
+    let drained = h.runtime.drain(Duration::from_secs(5)).await;
+    assert!(drained.is_complete());
+    h.runtime.stop_agent(agent);
+    let store = Store::open(&h._dir.path().join("guac.db")).unwrap();
+    let recovered = guac_lib::boot::recover(&store).unwrap();
+    assert_eq!(recovered.resumed.len(), 1, "the absorbed routine belongs to its consuming turn");
+    store.set_lifecycle(agent, Lifecycle::Paused).unwrap();
+    let sink = RecordingSink::new();
+    let runtime = Runtime::new(
+        store,
+        LlmClient::new().unwrap(),
+        h.runtime.config(),
+        OnDisk::under(h._dir.path()),
+        sink.clone(),
+    );
+    runtime.start_all().unwrap();
+    runtime.pick_up(recovered);
+    assert!(runtime.drain(Duration::from_secs(5)).await.is_complete());
+    runtime.stop_agent(agent);
+    let store = Store::open(&h._dir.path().join("guac.db")).unwrap();
+    let recovered = guac_lib::boot::recover(&store).unwrap();
+    assert_eq!(recovered.resumed.len(), 1);
+    assert_eq!(recovered.resumed[0].absorbed.len(), 1);
+    assert!(!recovered.resumed[0].records.is_empty());
+    store.set_lifecycle(agent, Lifecycle::Active).unwrap();
+    let runtime = Runtime::new(
+        store,
+        LlmClient::new().unwrap(),
+        h.runtime.config(),
+        OnDisk::under(h._dir.path()),
+        sink.clone(),
+    );
+    runtime.start_all().unwrap();
+    runtime.pick_up(recovered);
+    let h = Harness { runtime, sink, ids: h.ids, _dir: h._dir };
+    h.settle(run).await;
+    h.wait_until("the resumed call", |_| stub.transcript.lock().iter().any(picked_up)).await;
+    h.wait_until("all resumed work to settle", |h| h.runtime.live_runs() == 0).await;
+    let transcript = stub.transcript.lock();
+    let resumed: Vec<_> = transcript.iter().filter(|body| picked_up(body)).collect();
+    assert_eq!(resumed.len(), 1, "the routine must not become a separate turn");
+    assert!(anyone_said(resumed[0], &routine.what));
+    assert!(anyone_said(resumed[0], "Routine work happened once."));
+    assert_eq!(calls.load(Ordering::SeqCst), 3, "the routine must not run again");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
