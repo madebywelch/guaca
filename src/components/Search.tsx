@@ -40,6 +40,27 @@ const DEBOUNCE_MS = 120;
 /** How many of each kind the store is asked for. */
 const LIMIT = 25;
 
+type Request =
+  | { phase: "inactive" }
+  | { phase: "debouncing" | "searching" | "settled"; generation: number };
+
+type RequestEvent =
+  | { type: "begin"; generation: number }
+  | { type: "start" | "finish" | "cancel"; generation: number };
+
+export function searchRequest(state: Request, event: RequestEvent): Request {
+  if (event.type === "begin") return { phase: "debouncing", generation: event.generation };
+  if (state.phase === "inactive" || state.generation !== event.generation) return state;
+  if (event.type === "cancel") return { phase: "inactive" };
+  if (event.type === "start" && state.phase === "debouncing") {
+    return { phase: "searching", generation: event.generation };
+  }
+  if (event.type === "finish" && state.phase === "searching") {
+    return { phase: "settled", generation: event.generation };
+  }
+  return state;
+}
+
 /**
  * The workspace search.
  *
@@ -83,17 +104,29 @@ export function Search({
   // keystrokes can arrive out of order, and the older one landing last leaves
   // the list showing results for a query the operator has already moved past.
   const issued = useRef(0);
+  const request = useRef<Request>({ phase: "inactive" });
   useEffect(() => {
     const wanted = ++issued.current;
+    request.current = searchRequest(request.current, { type: "begin", generation: wanted });
     const timer = window.setTimeout(() => {
+      request.current = searchRequest(request.current, { type: "start", generation: wanted });
       void api
         .search(query, LIMIT)
         .then((found) => {
-          if (issued.current === wanted) setHits(found);
+          const next = searchRequest(request.current, { type: "finish", generation: wanted });
+          if (next !== request.current) setHits(found);
+          request.current = next;
         })
-        .catch((error) => showFailure(error));
+        .catch((error) => {
+          const next = searchRequest(request.current, { type: "finish", generation: wanted });
+          if (next !== request.current) showFailure(error);
+          request.current = next;
+        });
     }, DEBOUNCE_MS);
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearTimeout(timer);
+      request.current = searchRequest(request.current, { type: "cancel", generation: wanted });
+    };
   }, [query, showFailure]);
 
   const results = useMemo(

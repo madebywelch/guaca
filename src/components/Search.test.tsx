@@ -1,4 +1,4 @@
-import { createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentCard, SearchHits } from "../lib/types";
@@ -30,8 +30,9 @@ vi.mock("../lib/ipc", () => ({
   openExternal: (url: string) => openExternal(url),
 }));
 
-const { Search } = await import("./Search");
+const { Search, searchRequest } = await import("./Search");
 const { useStore } = await import("../lib/store");
+const originalShowFailure = useStore.getState().showFailure;
 
 function agent(name: string, extra: Partial<AgentCard> = {}): AgentCard {
   return {
@@ -119,9 +120,96 @@ const activeScope = () => screen.getByRole("tab", { selected: true }).textConten
 beforeEach(() => {
   vi.clearAllMocks();
   search.mockResolvedValue(NOTHING);
+  useStore.setState({ showFailure: originalShowFailure });
 });
 
 describe("Search", () => {
+  it("transitions request ownership only for the current generation", () => {
+    const inactive = { phase: "inactive" } as const;
+    const debounce = searchRequest(inactive, { type: "begin", generation: 1 });
+    expect(debounce).toEqual({ phase: "debouncing", generation: 1 });
+    expect(searchRequest(debounce, { type: "finish", generation: 1 })).toBe(debounce);
+    expect(searchRequest(debounce, { type: "start", generation: 2 })).toBe(debounce);
+    const searching = searchRequest(debounce, { type: "start", generation: 1 });
+    expect(searching).toEqual({ phase: "searching", generation: 1 });
+    expect(searchRequest(searching, { type: "start", generation: 1 })).toBe(searching);
+    const settled = searchRequest(searching, { type: "finish", generation: 1 });
+    expect(settled).toEqual({ phase: "settled", generation: 1 });
+    expect(searchRequest(settled, { type: "finish", generation: 1 })).toBe(settled);
+    expect(searchRequest(settled, { type: "cancel", generation: 1 })).toEqual(inactive);
+    expect(searchRequest(inactive, { type: "cancel", generation: 1 })).toBe(inactive);
+    expect(searchRequest(searching, { type: "begin", generation: 2 })).toEqual({
+      phase: "debouncing",
+      generation: 2,
+    });
+    expect(searchRequest(searching, { type: "cancel", generation: 2 })).toBe(searching);
+  });
+
+  it("debounces and reports a current failure", async () => {
+    vi.useFakeTimers();
+    try {
+      const failure = vi.fn();
+      const error = new Error("current");
+      useStore.setState({ showFailure: failure });
+      search.mockRejectedValueOnce(error);
+      open();
+      type("current");
+      await act(async () => vi.advanceTimersByTime(119));
+      expect(search).not.toHaveBeenCalled();
+      await act(async () => vi.advanceTimersByTime(1));
+      expect(search).toHaveBeenCalledTimes(1);
+      expect(failure).toHaveBeenCalledExactlyOnceWith(error);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("ignores a failure from an older query after the current query succeeds", async () => {
+    vi.useFakeTimers();
+    try {
+      const failure = vi.fn();
+      useStore.setState({ showFailure: failure });
+      let rejectOld!: (error: Error) => void;
+      search.mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            rejectOld = reject;
+          }),
+      );
+      search.mockResolvedValueOnce(NOTHING);
+      open();
+      type("old");
+      await act(async () => vi.advanceTimersByTime(120));
+      type("new");
+      await act(async () => vi.advanceTimersByTime(120));
+      expect(search.mock.calls.map(([query]) => query)).toEqual(["old", "new"]);
+      await act(async () => rejectOld(new Error("obsolete")));
+      expect(failure).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores a failure after the palette unmounts", async () => {
+    vi.useFakeTimers();
+    try {
+      const failure = vi.fn();
+      useStore.setState({ showFailure: failure });
+      let reject!: (error: Error) => void;
+      search.mockImplementationOnce(
+        () =>
+          new Promise((_, fail) => {
+            reject = fail;
+          }),
+      );
+      const view = open();
+      await act(async () => vi.advanceTimersByTime(120));
+      view.unmount();
+      await act(async () => reject(new Error("closed")));
+      expect(failure).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("narrows as the operator types, without waiting for the store", async () => {
     // Agents are already in hand, so the list must move on the keystroke
     // itself. A palette that pauses for a round trip to filter two names is
