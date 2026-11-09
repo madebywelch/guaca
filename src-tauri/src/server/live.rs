@@ -27,8 +27,7 @@ struct Stream {
     run_id: RunId,
     to: Participant,
     text: String,
-    #[serde(skip)]
-    full: bool,
+    truncated: bool,
 }
 
 impl Default for Snapshot {
@@ -52,7 +51,7 @@ impl Snapshot {
                         run_id: *run_id,
                         to: *to,
                         text: String::new(),
-                        full: false,
+                        truncated: false,
                     },
                 );
             }
@@ -60,10 +59,11 @@ impl Snapshot {
                 if let Some(stream) = self.streams.get_mut(message_id) {
                     // A very large live reply can wait for its persisted form.
                     // The cache is bounded per active turn, not per socket.
-                    if !stream.full && stream.text.len() + text.len() <= 512 * 1024 {
+                    if !stream.truncated && stream.text.len() + text.len() <= 512 * 1024 {
                         stream.text.push_str(text);
                     } else {
-                        stream.full = true;
+                        stream.text.clear();
+                        stream.truncated = true;
                     }
                 }
             }
@@ -102,5 +102,41 @@ mod tests {
         assert!(!encoded.contains("private thought"));
         live.observe(&UiEvent::StreamEnded { message_id, channel_id: agent_id });
         assert!(live.streams.is_empty());
+    }
+
+    #[test]
+    fn a_truncated_snapshot_discloses_the_gap_and_never_replays_a_stale_prefix() {
+        let mut live = Snapshot::default();
+        let agent_id = AgentId::new();
+        let message_id = MessageId::new();
+        live.observe(&UiEvent::StreamStarted {
+            message_id,
+            agent_id,
+            channel_id: agent_id,
+            run_id: RunId::new(),
+            to: Participant::Human,
+        });
+        live.observe(&UiEvent::StreamDelta {
+            message_id,
+            channel_id: agent_id,
+            text: "a".repeat(512 * 1024),
+        });
+        let under_limit = serde_json::to_value(&live).unwrap();
+        let key = message_id.to_string();
+        assert_eq!(under_limit["streams"][&key]["text"].as_str().unwrap().len(), 512 * 1024);
+        assert_eq!(under_limit["streams"][&key]["truncated"], false);
+        live.observe(&UiEvent::StreamDelta {
+            message_id,
+            channel_id: agent_id,
+            text: "overflow".into(),
+        });
+        live.observe(&UiEvent::StreamDelta {
+            message_id,
+            channel_id: agent_id,
+            text: "later".into(),
+        });
+        let snapshot = serde_json::to_value(&live).unwrap();
+        assert_eq!(snapshot["streams"][&key]["text"], "");
+        assert_eq!(snapshot["streams"][&key]["truncated"], true);
     }
 }

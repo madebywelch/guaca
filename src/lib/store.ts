@@ -73,6 +73,7 @@ export interface StreamBuffer {
   channelId: AgentId;
   agentId: AgentId;
   text: string;
+  truncated?: boolean;
   /** Who the finished message is for. Peer-bound streams are not shown as text. */
   to: Participant;
 }
@@ -976,7 +977,12 @@ export const useStore = create<State>((set, get) => ({
       case "liveSnapshot": {
         set({
           activity: event.activity,
-          streams: event.streams,
+          streams: Object.fromEntries(
+            Object.entries(event.streams).map(([id, stream]) => [
+              id,
+              stream.truncated ? { ...stream, text: "" } : stream,
+            ]),
+          ),
           activeRun: Object.fromEntries(
             Object.values(event.streams).map((s) => [s.agentId, s.runId]),
           ),
@@ -1064,7 +1070,7 @@ export const useStore = create<State>((set, get) => ({
       case "streamDelta": {
         set((state) => {
           const current = state.streams[event.messageId];
-          if (!current) return state;
+          if (!current || current.truncated) return state;
           return {
             streams: {
               ...state.streams,
