@@ -26,6 +26,8 @@ interface Props {
   onClose: () => void;
 }
 
+const EMPTY_OCCASIONS: Occasion[] = [];
+
 /** What the editor holds while it is open. `null` is nothing being edited. */
 interface Editing {
   /** The occasion being changed, or `null` for one being written. */
@@ -102,7 +104,11 @@ export function Calendar({ onClose }: Props) {
 
   const [window, setWindow] = useState<Window>(() => openingWindow(Date.now()));
   const [crew, setCrew] = useState<GroupId | null>(null);
-  const [occasions, setOccasions] = useState<Occasion[] | null>(null);
+  const [read, setRead] = useState<
+    { status: "loading" } | { status: "loaded"; occasions: Occasion[] } | { status: "failed" }
+  >({ status: "loading" });
+  const occasions =
+    read.status === "loading" ? null : read.status === "loaded" ? read.occasions : EMPTY_OCCASIONS;
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
   const [busy, setBusy] = useState(false);
@@ -140,11 +146,11 @@ export function Calendar({ onClose }: Props) {
   // the whole set to draw the chips.
   const load = useCallback(async () => {
     try {
-      setOccasions(await api.calendar(window.from, window.until));
+      setRead({ status: "loaded", occasions: await api.calendar(window.from, window.until) });
       setError(null);
     } catch (caught) {
       setError(errorMessage(caught));
-      setOccasions([]);
+      setRead({ status: "failed" });
     }
   }, [window]);
 
