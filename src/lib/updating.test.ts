@@ -45,6 +45,12 @@ describe("the steps are the ones the programs say", () => {
 });
 
 describe("a host update", () => {
+  it("does not advance past the last reported step when the host stops answering", () => {
+    expect(hostProgress(journal("Downloading update"), target, true)).toMatchObject({
+      done: 0,
+      label: "Last reported: Downloading update",
+    });
+  });
   it("never shows the last update's ending as this one's", () => {
     for (const stage of [
       "Host updated",
@@ -101,22 +107,20 @@ describe("a host update", () => {
   });
 
   it("spans the steps a box's host is silent through, from the last one it was seen at", () => {
-    const stopping = HOST_STEPS.indexOf("Stopping host");
-    const starting = HOST_STEPS.indexOf("Starting updated host");
-    // Last seen downloading, now silent: it has at least been stopped.
+    // Last seen downloading, now silent: no later step has been reported.
     expect(hostProgress(journal("Downloading update"), target, true)).toMatchObject({
-      done: stopping,
-      now: starting - stopping + 1,
-      label: "Waiting for the host to answer",
+      done: 0,
+      now: 0,
+      label: "Last reported: Downloading update",
     });
     expect(hostProgress(journal("Backing up data"), target, true)).toMatchObject({
       done: HOST_STEPS.indexOf("Backing up data"),
-      now: 2,
+      now: 0,
     });
     // Silent again after the new host answered once: it is past starting.
     expect(hostProgress(journal("Verifying host"), target, true)).toMatchObject({
       done: HOST_STEPS.indexOf("Verifying host"),
-      now: 1,
+      now: 0,
     });
   });
 });

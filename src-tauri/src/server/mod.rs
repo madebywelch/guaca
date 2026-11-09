@@ -457,6 +457,8 @@ struct HostUpdate {
     version: String,
     #[serde(default)]
     commit: Option<String>,
+    #[serde(default, rename = "attemptId")]
+    attempt_id: Option<String>,
 }
 
 async fn host_update(
@@ -477,8 +479,15 @@ async fn host_update(
         )
             .into_response();
     };
-    relay(&socket, crate::updater::Request::Update { version: body.version, commit: body.commit })
-        .await
+    relay(
+        &socket,
+        crate::updater::Request::Update {
+            version: body.version,
+            commit: body.commit,
+            attempt_id: Some(body.attempt_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string())),
+        },
+    )
+    .await
 }
 
 async fn relay(socket: &std::path::Path, request: crate::updater::Request) -> Response {

@@ -37,6 +37,7 @@ export const HOST_STEPS = [
 export interface Target {
   image?: string;
   version?: string;
+  attemptId?: string;
 }
 
 export function hostProgress(
@@ -46,24 +47,30 @@ export function hostProgress(
   unreachable: boolean,
 ): Progress {
   const steps = HOST_STEPS;
-  if (op?.stage === "Restoring previous version")
-    return { steps, done: 0, now: steps.length, label: op.stage };
   const ours =
-    !!op && (target.image ? op.targetImage === target.image : op.targetVersion === target.version);
+    !!op &&
+    (target.attemptId
+      ? (op as HostOperation & { attemptId?: string }).attemptId === target.attemptId
+      : target.image
+        ? op.targetImage === target.image
+        : op.targetVersion === target.version);
+  if (ours && op?.stage === "Restoring previous version")
+    return { steps, done: 0, now: steps.length, label: op.stage };
   if (ours && op.stage === "Host updated")
     return { steps, done: steps.length, now: 0, label: op.stage };
   // A stage still underway can only be this update's. A finished one is the
   // last update's until the manager records this one, which it does after
   // checking the target and before anything is downloaded.
-  const at = op ? steps.indexOf(op.stage as (typeof steps)[number]) : -1;
+  const at =
+    op && (!target.attemptId || ours) ? steps.indexOf(op.stage as (typeof steps)[number]) : -1;
   if (unreachable) {
-    // A box's host that stops answering was stopped by the update, and the
-    // updater behind it says nothing until a host is answering again: it is
-    // stopping, backing up or starting, and which of the three is not
-    // something a client can know.
-    const from = Math.max(at, steps.indexOf("Stopping host"));
-    const to = Math.max(from, steps.indexOf("Starting updated host"));
-    return { steps, done: from, now: to - from + 1, label: "Waiting for the host to answer" };
+    const from = Math.max(0, at);
+    return {
+      steps,
+      done: from,
+      now: 0,
+      label: at < 0 ? "No update step reported yet" : `Last reported: ${steps[at]}`,
+    };
   }
   if (at === -1) return { steps, done: 0, now: 1, label: "Starting update" };
   return { steps, done: at, now: 1, label: steps[at]! };

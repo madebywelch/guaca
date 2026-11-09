@@ -112,6 +112,10 @@ function fact(term: string): Element {
   if (!value) throw new Error(`Nothing beside "${term}".`);
   return value;
 }
+function postedAttempt(): string {
+  const request = fetched.mock.calls.find(([, init]) => init?.method === "POST");
+  return JSON.parse(request?.[1]?.body as string).attemptId;
+}
 describe("host updates in either client", () => {
   it("checks before mounting and detects an equally old browser and backend", async () => {
     platform.desktop = false;
@@ -375,6 +379,47 @@ describe("a box that updates itself", () => {
     box = { ...idle };
   });
 
+  it("keeps a lost update reply unknown and checks without sending it again", async () => {
+    serve(() => Promise.reject(new TypeError("connection dropped")));
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Back up and update host" }));
+    await screen.findByText("The update outcome is unknown. Check again.");
+    expect(screen.queryByRole("button", { name: "Back up and update host" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await waitFor(() =>
+      expect(fetched.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1),
+    );
+    cleanup();
+    mount();
+    await screen.findByText("The update outcome is unknown. Check again.");
+    expect(screen.queryByRole("button", { name: "Back up and update host" })).toBeNull();
+    expect(fetched.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+  });
+
+  it("does not claim another attempt to the same release as this update", async () => {
+    serve(() => json({ ...idle, updating: true }));
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Back up and update host" }));
+    await waitFor(() =>
+      expect(fetched.mock.calls.some(([, init]) => init?.method === "POST")).toBe(true),
+    );
+    box = {
+      ...idle,
+      operation: {
+        stage: "Host updated",
+        attemptId: "another-attempt",
+        backup: null,
+        previousImage: "old",
+        targetImage: "new",
+        targetVersion: "0.2.0",
+        error: null,
+      },
+    };
+    await poke();
+    await screen.findByText("The update outcome is unknown. Check again.");
+    expect(screen.queryByText("Host updated to Guaca 0.2.0.")).toBeNull();
+  });
+
   it("updates on one click, to the release that was reviewed, and says when it is done", async () => {
     serve(() => json({ ...idle, updating: true }));
     mount();
@@ -385,11 +430,18 @@ describe("a box that updates itself", () => {
     await waitFor(() =>
       expect(fetched).toHaveBeenCalledWith(
         "https://host.example/v1/host/update",
-        expect.objectContaining({ method: "POST", body: JSON.stringify({ version: "0.2.0" }) }),
+        expect.objectContaining({ method: "POST" }),
       ),
     );
+    expect(
+      JSON.parse(fetched.mock.calls.find(([, init]) => init?.method === "POST")![1].body),
+    ).toEqual({
+      version: "0.2.0",
+      attemptId: postedAttempt(),
+    });
     const underway = (stage: string) => ({
       stage,
+      attemptId: postedAttempt(),
       backup: null,
       previousImage: "old",
       targetImage: "new",
@@ -403,9 +455,9 @@ describe("a box that updates itself", () => {
     // The host stops for the swap. That is the update working, not a failure.
     health.down = true;
     await poke();
-    await screen.findByText("The host is restarting on its new version.");
+    await screen.findByText("The host is not answering.");
     // Stopping, backing up or starting: the updater cannot be asked which.
-    expect(screen.getByText("Waiting for the host to answer")).toBeTruthy();
+    expect(screen.getAllByText("The host is not answering.")).toHaveLength(1);
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByText(/closing Guaca does not stop it/)).toBeTruthy();
     delete health.down;
@@ -414,6 +466,7 @@ describe("a box that updates itself", () => {
       ...idle,
       operation: {
         stage: "Host updated",
+        attemptId: postedAttempt(),
         backup: "guacad-backup-1",
         previousImage: "old",
         targetImage: "new",
@@ -436,6 +489,7 @@ describe("a box that updates itself", () => {
       ...idle,
       operation: {
         stage: "Previous version restored",
+        attemptId: postedAttempt(),
         backup: "guacad-backup-1",
         previousImage: "old",
         targetImage: "new",
@@ -624,14 +678,22 @@ describe("a box that follows main", () => {
     await waitFor(() =>
       expect(fetched).toHaveBeenCalledWith(
         "https://host.example/v1/host/update",
-        expect.objectContaining({ body: JSON.stringify({ version: "0.1.0", commit: tip }) }),
+        expect.objectContaining({ method: "POST" }),
       ),
     );
+    expect(
+      JSON.parse(fetched.mock.calls.find(([, init]) => init?.method === "POST")![1].body),
+    ).toEqual({
+      version: "0.1.0",
+      commit: tip,
+      attemptId: postedAttempt(),
+    });
     health.build = tip;
     box = {
       ...idle,
       operation: {
         stage: "Host updated",
+        attemptId: postedAttempt(),
         backup: "guacad-backup-1",
         previousImage: "old",
         targetImage: image,

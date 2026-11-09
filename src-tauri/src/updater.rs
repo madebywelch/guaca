@@ -79,6 +79,8 @@ pub enum Request {
         version: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         commit: Option<String>,
+        #[serde(default, rename = "attemptId", skip_serializing_if = "Option::is_none")]
+        attempt_id: Option<String>,
     },
 }
 
@@ -198,6 +200,15 @@ impl Updater {
         version: String,
         commit: Option<String>,
     ) -> Result<Report, String> {
+        self.update_attempt(version, commit, uuid::Uuid::new_v4().to_string()).await
+    }
+
+    async fn update_attempt(
+        self: &Arc<Self>,
+        version: String,
+        commit: Option<String>,
+        attempt_id: String,
+    ) -> Result<Report, String> {
         if self.busy.swap(true, Ordering::SeqCst) {
             return Err("An update is already running. Wait for it to finish.".into());
         }
@@ -211,7 +222,7 @@ impl Updater {
         };
         let this = self.clone();
         tokio::spawn(async move {
-            this.install(release).await;
+            this.install(release, attempt_id).await;
             this.busy.store(false, Ordering::SeqCst);
         });
         Ok(self.report().await)
@@ -253,7 +264,7 @@ impl Updater {
         Ok(release)
     }
 
-    async fn install(&self, release: crate::updates::Release) {
+    async fn install(&self, release: crate::updates::Release, attempt_id: String) {
         let commit = release.commit;
         let target = Target {
             image: release.image,
@@ -261,7 +272,7 @@ impl Updater {
             api_generation: release.api_generation,
         };
         let before = self.journaled();
-        match self.host.update(&target, None).await {
+        match self.host.update_attempt(&target, None, attempt_id).await {
             Ok(_) => {
                 tracing::info!(version = %target.version, %commit, "host updated");
                 // Before this updater replaces itself, because the one that
@@ -528,7 +539,15 @@ async fn answer(stream: tokio::net::UnixStream, updater: &Arc<Updater>) -> std::
     .map_err(|_| std::io::Error::from(std::io::ErrorKind::TimedOut))??;
     let reply = match serde_json::from_str::<Request>(&line) {
         Ok(Request::Status) => Ok(updater.report().await),
-        Ok(Request::Update { version, commit }) => updater.update(version, commit).await,
+        Ok(Request::Update { version, commit, attempt_id }) => {
+            updater
+                .update_attempt(
+                    version,
+                    commit,
+                    attempt_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+                )
+                .await
+        }
         Err(_) => Err("The updater did not understand the request. Update the host.".into()),
     };
     let value = match reply {
@@ -572,6 +591,26 @@ pub async fn ask(socket: &Path, request: &Request) -> Result<Value, String> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn previous_updater_accepts_an_attempt_id_from_a_new_host() {
+        #[derive(Deserialize)]
+        #[serde(tag = "ask", rename_all = "camelCase")]
+        enum PreviousRequest {
+            Status,
+            Update {
+                version: String,
+                #[serde(default)]
+                commit: Option<String>,
+            },
+        }
+        let request: PreviousRequest =
+            serde_json::from_str(r#"{"ask":"update","version":"0.3.0","attemptId":"abc"}"#)
+                .unwrap();
+        assert!(
+            matches!(request, PreviousRequest::Update { version, commit: None } if version == "0.3.0")
+        );
+    }
 
     fn calls(dir: &tempfile::TempDir) -> Vec<Vec<String>> {
         std::fs::read_to_string(dir.path().join("docker-calls.jsonl"))
@@ -759,6 +798,22 @@ mod tests {
         assert!(!log.iter().any(|c| c[0] == "rm" && c.contains(&UPDATER.to_string())));
     }
 
+    #[tokio::test]
+    async fn repeated_updates_to_the_same_release_keep_separate_attempts() {
+        let bx = a_box("", true).await;
+        let version = env!("CARGO_PKG_VERSION").to_string();
+        bx.updater.update_attempt(version.clone(), None, "first".into()).await.unwrap();
+        assert_eq!(
+            settled(&bx.updater).await.operation.unwrap().attempt_id.as_deref(),
+            Some("first")
+        );
+        bx.updater.update_attempt(version, None, "second".into()).await.unwrap();
+        assert_eq!(
+            settled(&bx.updater).await.operation.unwrap().attempt_id.as_deref(),
+            Some("second")
+        );
+    }
+
     #[test]
     fn the_compose_host_and_a_box_read_the_same_settings() {
         let compose = include_str!("../../docker-compose.yml");
@@ -926,9 +981,12 @@ mod tests {
         let report = ask(&path, &Request::Status).await.unwrap();
         assert_eq!(report["running"]["image"], "guacad:old");
         assert_eq!(report["updating"], false);
-        let refused = ask(&path, &Request::Update { version: "9.9.9".into(), commit: None })
-            .await
-            .unwrap_err();
+        let refused = ask(
+            &path,
+            &Request::Update { version: "9.9.9".into(), commit: None, attempt_id: None },
+        )
+        .await
+        .unwrap_err();
         assert!(refused.contains("review it again"), "{refused}");
         // A connection that never sends its line is let go, and the next is
         // answered. The clock is paused, so the runtime skips the wait.
@@ -1047,9 +1105,12 @@ mod tests {
     fn a_host_from_before_channels_still_asks_in_words_the_updater_reads() {
         let old: Request = serde_json::from_str(r#"{"ask":"update","version":"0.2.0"}"#).unwrap();
         assert!(matches!(old, Request::Update { commit: None, .. }));
-        let said =
-            serde_json::to_string(&Request::Update { version: "0.2.0".into(), commit: None })
-                .unwrap();
+        let said = serde_json::to_string(&Request::Update {
+            version: "0.2.0".into(),
+            commit: None,
+            attempt_id: None,
+        })
+        .unwrap();
         assert_eq!(said, r#"{"ask":"update","version":"0.2.0"}"#, "an older updater reads this");
         let report: Report = serde_json::from_str(
             r#"{"updating":false,"running":null,"operation":null,"error":null}"#,
