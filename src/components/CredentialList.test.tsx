@@ -191,4 +191,63 @@ describe("CredentialList", () => {
     expect(updateConnector).toHaveBeenCalledWith("c1", [], null);
     expect(screen.getByRole("button", { name: "Save changes" })).toBeTruthy();
   });
+
+  it("discards canceled secrets without serializing or logging the drafts", async () => {
+    groupConnectors.mockResolvedValue([connector()]);
+    const serialize = JSON.stringify;
+    const stringify = vi.spyOn(JSON, "stringify");
+    const logs = ["log", "warn", "error", "info", "debug"].map((method) =>
+      vi.spyOn(console, method as "log"),
+    );
+    try {
+      render(<CredentialList groupId={GROUP} />);
+      await openForm();
+      fireEvent.change(screen.getByLabelText("Secret value"), {
+        target: { value: "draft-fixture" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      await openForm();
+      expect((screen.getByLabelText("Secret value") as HTMLInputElement).value).toBe("");
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      fireEvent.click(screen.getByRole("button", { name: "Manage" }));
+      fireEvent.change(screen.getByLabelText("Replace value (optional)"), {
+        target: { value: "draft-fixture" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      fireEvent.click(screen.getByRole("button", { name: "Manage" }));
+      expect((screen.getByLabelText("Replace value (optional)") as HTMLInputElement).value).toBe(
+        "",
+      );
+      expect(
+        stringify.mock.calls.some(([value]) => serialize(value)?.includes("draft-fixture")),
+      ).toBe(false);
+      expect(
+        logs.some((spy) =>
+          spy.mock.calls.flat().some((value) => String(value).includes("draft-fixture")),
+        ),
+      ).toBe(false);
+      expect(createConnector).not.toHaveBeenCalled();
+      expect(updateConnector).not.toHaveBeenCalled();
+    } finally {
+      stringify.mockRestore();
+      for (const spy of logs) spy.mockRestore();
+    }
+  });
+
+  it("retains a failed add draft and reloads after retry", async () => {
+    createConnector.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce(connector());
+    render(<CredentialList groupId={GROUP} />);
+    await openForm();
+    fireEvent.change(screen.getByLabelText("Service"), { target: { value: "Mail" } });
+    fireEvent.change(screen.getByLabelText("Environment variable"), {
+      target: { value: "MAIL_KEY" },
+    });
+    fireEvent.change(screen.getByLabelText("Secret value"), { target: { value: "fixture" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Add$/ }));
+    expect((await screen.findByRole("alert")).textContent).toContain("offline");
+    expect((screen.getByLabelText("Secret value") as HTMLInputElement).value).toBe("fixture");
+    fireEvent.click(screen.getByRole("button", { name: /^Add$/ }));
+    await waitFor(() => expect(groupConnectors).toHaveBeenCalledTimes(2));
+    expect(screen.queryByLabelText("Secret value")).toBeNull();
+  });
 });
