@@ -2237,7 +2237,9 @@ pub async fn hire_agents(
     // Actors start only once the rows are committed. Starting them inside the
     // write would leave a live agent behind for a hire that rolled back.
     for card in &hired {
-        state.runtime.start_agent(card.id);
+        if card.lifecycle != Lifecycle::Terminated {
+            state.runtime.start_agent(card.id);
+        }
     }
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(hired)
@@ -2569,6 +2571,26 @@ pub async fn send_message(
         return Err(CommandError::new("validation", "message must not be empty"));
     }
 
+    let fingerprint = if let Some(key) = &idempotency_key {
+        if key.is_empty() || key.len() > 128 {
+            return Err(CommandError::new(
+                "validation",
+                "A message key must have between 1 and 128 characters.",
+            ));
+        }
+        use sha2::{Digest, Sha256};
+        let fingerprint =
+            format!("{:x}", Sha256::digest(format!("{agent_id}:{trimmed}:{files:?}").as_bytes()));
+        if let Some((message_id, run_id)) =
+            state.runtime.store().operator_send_receipt(key, &fingerprint)?
+        {
+            return Ok(SentMessage::Keyed { message_id, run_id });
+        }
+        Some(fingerprint)
+    } else {
+        None
+    };
+
     let mut attached = Vec::new();
     for file in &files {
         match state.runtime.files().reference(&file.digest, &file.name) {
@@ -2579,13 +2601,14 @@ pub async fn send_message(
         }
     }
     match idempotency_key {
-        Some(key) if key.is_empty() || key.len() > 128 => Err(CommandError::new(
-            "validation",
-            "A message key must have between 1 and 128 characters.",
-        )),
         Some(key) => {
-            let (message_id, run_id) =
-                state.runtime.send_from_human_keyed(agent_id, trimmed, attached, &key)?;
+            let (message_id, run_id) = state.runtime.send_from_human_keyed(
+                agent_id,
+                trimmed,
+                attached,
+                &key,
+                fingerprint.as_deref().unwrap(),
+            )?;
             Ok(SentMessage::Keyed { message_id, run_id })
         }
         None => Ok(SentMessage::Legacy(

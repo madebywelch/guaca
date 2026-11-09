@@ -319,7 +319,9 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
                 ? "Your task was sent. Open the conversation to see how it is going."
                 : draft.agentId
                   ? "Your agent is already created. If a connection failed, check the conversation before sending again."
-                  : "Start task creates this agent and sends your brief using the provider you just connected. Other services can be connected later, when needed."}
+                  : draft.key
+                    ? "Your previous start may have created this agent. Retry with the same brief to continue safely."
+                    : "Start task creates this agent and sends your brief using the provider you just connected. Other services can be connected later, when needed."}
             </p>
             {/* The last step, and the last moment to say where Guaca goes when
                 the window does. A browser has no menu bar, so it is only said

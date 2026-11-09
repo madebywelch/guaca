@@ -3721,6 +3721,31 @@ impl Store {
         Ok((envelope.id, envelope.run_id, true))
     }
 
+    pub fn operator_send_receipt(
+        &self,
+        key: &str,
+        fingerprint: &str,
+    ) -> Result<Option<(MessageId, RunId)>, StoreError> {
+        let conn = self.conn()?;
+        let stored: Option<(String, String, String)> = conn
+            .query_row(
+                "SELECT fingerprint,message_id,run_id FROM operator_sends WHERE key=?1",
+                [key],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let Some((saved, message, run)) = stored else { return Ok(None) };
+        if saved != fingerprint {
+            return Err(StoreError::Decision(
+                "This idempotency key was already used for another message.".into(),
+            ));
+        }
+        Ok(Some((
+            message.parse().map_err(|e| StoreError::Corrupt(format!("bad message id: {e}")))?,
+            run.parse().map_err(|e| StoreError::Corrupt(format!("bad run id: {e}")))?,
+        )))
+    }
+
     pub fn settle_run(&self, run: RunId) -> Result<(), StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;

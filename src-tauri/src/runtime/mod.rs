@@ -2569,11 +2569,10 @@ impl Runtime {
         text: &str,
         files: Vec<Attachment>,
         key: &str,
+        fingerprint: &str,
     ) -> Result<(MessageId, RunId), RuntimeError> {
-        use sha2::{Digest, Sha256};
         let card = self.inner.store.get_agent(to)?.ok_or(RuntimeError::UnknownAgent(to))?;
         let parts = with_files(text.trim(), files);
-        let fingerprint = format!("{:x}", Sha256::digest(format!("{to}:{parts:?}").as_bytes()));
         let envelope = Envelope {
             id: MessageId::new(),
             run_id: RunId::new(),
@@ -2591,7 +2590,7 @@ impl Runtime {
         let mut runs = self.inner.runs.lock();
         let (message, run, created) = self.inner.store.claim_operator_send(
             key,
-            &fingerprint,
+            fingerprint,
             &envelope,
             !runs.draining && card.lifecycle != Lifecycle::Terminated,
         )?;

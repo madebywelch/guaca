@@ -58,4 +58,10 @@ async fn lost_hire_and_send_replies_return_the_original_receipts() {
     let legacy =
         call("send_message", json!({"agentId": agent, "text": "A second instruction."})).await;
     assert!(legacy["ok"].is_string());
+    let legacy_hire = json!({"groupId": group, "drafts": [{
+        "name": "Legacy", "avatar": "avocado", "color": "#7ab55c", "model": "", "systemPrompt": "Help."
+    }]});
+    let one = call("hire_agents", legacy_hire.clone()).await;
+    let two = call("hire_agents", legacy_hire).await;
+    assert_ne!(one["ok"][0]["id"], two["ok"][0]["id"]);
 }

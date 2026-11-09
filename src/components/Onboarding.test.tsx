@@ -191,6 +191,7 @@ describe("guided first task", () => {
     expect(
       (screen.getByRole("textbox", { name: "Your first brief" }) as HTMLTextAreaElement).readOnly,
     ).toBe(true);
+    expect(screen.getByText(/previous start may have created this agent/i)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Start task" }));
     await waitFor(() => expect(done).toHaveBeenCalledOnce());
     expect(hire.mock.calls[1]![2]).toBe(key);
