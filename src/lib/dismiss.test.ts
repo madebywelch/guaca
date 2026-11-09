@@ -1,8 +1,55 @@
 import { fireEvent, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { useDismiss } from "./dismiss";
+import { rememberDismissOpener, useDismiss } from "./dismiss";
 
 describe("dismiss stack", () => {
+  it("restores a clicked opener even when the browser did not focus it", () => {
+    const previous = document.createElement("button");
+    const opener = document.createElement("button");
+    document.body.append(previous, opener);
+    previous.focus();
+    const layer = renderHook(({ enabled }) => useDismiss(vi.fn(), enabled), {
+      initialProps: { enabled: false },
+    });
+    fireEvent.click(opener);
+    layer.rerender({ enabled: true });
+    layer.unmount();
+    expect(document.activeElement).toBe(opener);
+    previous.remove();
+    opener.remove();
+  });
+
+  it("restores a recreated opener by its stable identifier after a microtask", async () => {
+    const opener = document.createElement("button");
+    opener.dataset.dismissId = 'row "one"';
+    document.body.append(opener);
+    rememberDismissOpener(opener);
+    opener.remove();
+    await Promise.resolve();
+    const layer = renderHook(() => useDismiss(vi.fn()));
+    const replacement = document.createElement("button");
+    replacement.dataset.dismissId = 'row "one"';
+    document.body.append(replacement);
+    layer.unmount();
+    expect(document.activeElement).toBe(replacement);
+    replacement.remove();
+  });
+
+  it("does not hand an unused opener to a later overlay", async () => {
+    const stale = document.createElement("button");
+    const opener = document.createElement("button");
+    document.body.append(stale, opener);
+    rememberDismissOpener(stale);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    opener.focus();
+    const layer = renderHook(() => useDismiss(vi.fn()));
+    document.body.focus();
+    layer.unmount();
+    expect(document.activeElement).toBe(opener);
+    stale.remove();
+    opener.remove();
+  });
+
   it("dismisses only the latest layer and restores its opener", () => {
     const opener = document.createElement("button");
     document.body.append(opener);

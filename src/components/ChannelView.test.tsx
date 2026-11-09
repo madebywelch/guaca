@@ -162,6 +162,52 @@ beforeEach(() => {
 });
 
 describe("peer traffic in a channel", () => {
+  it("returns to the exact peer opener when that peer has multiple bursts", async () => {
+    open([fromPeer("first"), envelope({}), fromPeer("second")]);
+    const openers = screen.getAllByRole("button", { name: /Message from Chef/ });
+    expect(openers).toHaveLength(2);
+    fireEvent.click(openers[1]!);
+    await screen.findByText(/view-only/);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(document.activeElement).toBe(
+      screen.getAllByRole("button", { name: /Message from Chef/ })[1],
+    );
+  });
+
+  it("gives each peer in a burst a distinct stable opener", async () => {
+    const other = "00000000-0000-4000-8000-0000000000a3";
+    open([
+      fromPeer("first"),
+      envelope({
+        from: { kind: "agent", id: other },
+        to: { kind: "agent", id: MANAGER },
+        parts: [{ type: "text", text: "second" }],
+      }),
+    ]);
+    act(() =>
+      useStore.setState({
+        agents: [card(MANAGER, "Manager"), card(CHEF, "Chef"), card(other, "Baker")],
+      }),
+    );
+    const chef = screen.getByRole("button", { name: /Message from Chef/ });
+    const baker = screen.getByRole("button", { name: /Message from Baker/ });
+    const chefId = chef.dataset.dismissId;
+    const bakerId = baker.dataset.dismissId;
+    expect(chefId).toBeTruthy();
+    expect(bakerId).toBeTruthy();
+    expect(chefId).not.toBe(bakerId);
+    fireEvent.click(baker);
+    await screen.findByText(/view-only/);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.getByRole("button", { name: /Message from Chef/ }).dataset.dismissId).toBe(
+      chefId,
+    );
+    expect(screen.getByRole("button", { name: /Message from Baker/ }).dataset.dismissId).toBe(
+      bakerId,
+    );
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /Message from Baker/ }));
+  });
+
   it.each([
     ["Search", "k"],
     ["Settings", ","],
@@ -182,7 +228,7 @@ describe("peer traffic in a channel", () => {
     expect(document.activeElement).toBe(close);
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("button", { name: "Close chat" })).toBeNull();
-    expect(screen.getByRole("button", { name: /Message from Chef/ })).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /Message from Chef/ }));
   });
   it("shows one line for a burst, not one per message", () => {
     open([
