@@ -297,6 +297,7 @@ surface! {
     artifact_page(id: crate::domain::ids::ArtifactId, version: Option<u32>) -> String,
     artifact_data(id: crate::domain::ids::ArtifactId, version: Option<u32>) -> Vec<crate::domain::artifact::Read>,
     allow_artifact_sources(id: crate::domain::ids::ArtifactId) -> crate::domain::artifact::Artifact,
+    approve_artifact_sources(id: crate::domain::ids::ArtifactId, version: u32, owner_id: Option<AgentId>, sources: Vec<crate::domain::artifact::Source>) -> crate::domain::artifact::Artifact,
     restore_artifact(id: crate::domain::ids::ArtifactId, version: u32) -> crate::domain::artifact::Artifact,
     hand_artifact(id: crate::domain::ids::ArtifactId, agent_id: AgentId) -> crate::domain::artifact::Artifact,
     delete_artifact(id: crate::domain::ids::ArtifactId) -> (),

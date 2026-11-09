@@ -1631,9 +1631,28 @@ pub async fn artifact_data(
 
 /// The operator allowing the reads the current version declares. The approval
 /// is of that exact list: a version that declares another waits again.
-pub async fn allow_artifact_sources(state: &AppState, id: ArtifactId) -> Reply<Artifact> {
-    let allowed =
-        state.runtime.store().allow_artifact_sources(id)?.ok_or_else(|| no_artifact(id))?;
+pub async fn allow_artifact_sources(_state: &AppState, _id: ArtifactId) -> Reply<Artifact> {
+    Err(CommandError::new("clientOutdated", "Update Guaca on this device to approve this page."))
+}
+
+pub async fn approve_artifact_sources(
+    state: &AppState,
+    id: ArtifactId,
+    version: u32,
+    owner_id: Option<AgentId>,
+    sources: Vec<artifact_domain::Source>,
+) -> Reply<Artifact> {
+    let store = state.runtime.store();
+    let matched = store
+        .approve_artifact_sources(id, version, owner_id, &sources)?
+        .ok_or_else(|| no_artifact(id))?;
+    if !matched {
+        return Err(CommandError::new(
+            "conflict",
+            "This page changed. Review its reads before allowing them.",
+        ));
+    }
+    let allowed = store.any_artifact(id)?.ok_or_else(|| no_artifact(id))?;
     state.runtime.emit(UiEvent::ArtifactsChanged { group_id: allowed.group_id });
     Ok(allowed)
 }
