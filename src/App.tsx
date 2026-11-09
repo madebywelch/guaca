@@ -114,6 +114,17 @@ export default function App() {
   const showArtifacts = useStore((state) => state.showArtifacts);
   const [showSettings, setShowSettings] = useState<Section | true | null>(null);
   const [searching, setSearching] = useState(false);
+  useEffect(() => {
+    if (!searching) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.isComposing) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setSearching(false);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [searching]);
   const [showCafeteria, setShowCafeteria] = useState(false);
   const [showCalendar, setShowCalendar] = useState(false);
   // The pane inside whichever settings dialog is open, reported by the dialog.

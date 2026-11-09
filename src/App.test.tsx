@@ -268,7 +268,7 @@ describe("App", () => {
     expect(await screen.findByRole("dialog", { name: /cafeteria/i })).toBeTruthy();
   });
 
-  it.fails("keeps the cafeteria open when settings is opened and dismissed above it", async () => {
+  it("keeps the cafeteria open when settings is opened and dismissed above it", async () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /open the cafeteria/i }));
     const cafeteria = await screen.findByRole("dialog", { name: /cafeteria/i });
@@ -278,6 +278,22 @@ describe("App", () => {
     expect(document.activeElement).toBe(settings);
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: /settings/i })).toBeNull();
+    expect(cafeteria.isConnected).toBe(true);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(cafeteria.isConnected).toBe(false);
+  });
+
+  it("leaves settings open when search above it is dismissed", async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /open the cafeteria/i }));
+    const cafeteria = await screen.findByRole("dialog", { name: /cafeteria/i });
+    fireEvent.keyDown(window, { key: ",", ctrlKey: true });
+    const settings = await screen.findByRole("dialog", { name: /settings/i });
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    expect(await screen.findByRole("dialog", { name: /search/i })).toBeTruthy();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: /search/i })).toBeNull();
+    expect(settings.isConnected).toBe(true);
     expect(cafeteria.isConnected).toBe(true);
   });
 
