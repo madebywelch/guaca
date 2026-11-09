@@ -349,6 +349,38 @@ describe("when the runtime refuses", () => {
   });
 });
 
+describe("concurrent settings edits", () => {
+  it("keeps distinct limit edits from two clients with stale snapshots", async () => {
+    let runtime = stored();
+    updateSettings.mockImplementation(async (patch) => {
+      runtime = { ...runtime, limits: { ...runtime.limits, ...patch.limits } };
+      return runtime;
+    });
+    const first = open(stored());
+    pane("Limits");
+    type(/^Relay depth/, "12");
+    fireEvent.click(save());
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+    first.unmount();
+
+    open(stored());
+    pane("Limits");
+    type(/^Model calls per conversation/, "80");
+    fireEvent.click(save());
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(2));
+    expect(runtime.limits).toEqual({ ...HELD, maxHops: 12, maxStepsPerRun: 80 });
+  });
+
+  it("sends only the limit edited by this client", async () => {
+    open();
+    pane("Limits");
+    type(/^Relay depth/, "12");
+    fireEvent.click(save());
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+    expect(sentPatch().limits).toEqual({ maxHops: 12 });
+  });
+});
+
 describe("what a save sends", () => {
   it("leaves a blank key, timer and timeout out of the patch entirely", async () => {
     open();
