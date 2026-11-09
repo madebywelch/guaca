@@ -190,6 +190,8 @@ pub enum E2bError {
     Protocol(String),
     #[error("Guaca could not use its own records: {0}")]
     Local(String),
+    #[error("The computer provider did not confirm the action's outcome. It may have happened, so check before doing it again.")]
+    OutcomeUnknown,
 }
 
 /// What the UI needs to show an agent's computer.

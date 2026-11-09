@@ -129,10 +129,23 @@ pub enum KernelError {
     Api { status: u16, message: String },
     #[error("Kernel replied in a form this build does not understand: {0}")]
     Protocol(String),
+    #[error("Kernel replied in a form this build does not understand: {0}")]
+    Input(String),
     #[error("Guaca could not use its own records: {0}")]
     Local(String),
+    #[error("The browser provider did not confirm the action's outcome. It may have happened, so check before doing it again.")]
+    OutcomeUnknown,
     #[error(transparent)]
     Cdp(#[from] CdpError),
+}
+
+fn uncertain_creation(err: KernelError) -> KernelError {
+    match err {
+        KernelError::Transport(_)
+        | KernelError::Protocol(_)
+        | KernelError::Api { status: 429 | 500..=599, .. } => KernelError::OutcomeUnknown,
+        other => other,
+    }
 }
 
 /// What the UI needs to show an agent's browser.
@@ -365,7 +378,7 @@ impl KernelClient {
                 })
             }
             Err(KernelError::Api { status: 409, .. }) => Ok(ProfileCreation::Existing { name }),
-            Err(err) => Err(err),
+            Err(err) => Err(uncertain_creation(err)),
         }
     }
 
@@ -399,7 +412,7 @@ impl KernelClient {
             Err(KernelError::Api { status: 409, .. }) => {
                 Ok(BrowserCreation::Conflict { candidates: self.list_candidates(agent).await? })
             }
-            Err(err) => Err(err),
+            Err(err) => Err(uncertain_creation(err)),
         }
     }
 
@@ -658,7 +671,7 @@ impl KernelClient {
             "open" => {
                 let url = args["url"].as_str().unwrap_or_default().trim().to_string();
                 if url.is_empty() {
-                    return Err(KernelError::Protocol(
+                    return Err(KernelError::Input(
                         "open needs a `url`. Give the address you want, for example \
                          `https://example.com`."
                             .into(),
@@ -730,7 +743,7 @@ impl KernelClient {
             }
 
             other => {
-                return Err(KernelError::Protocol(format!(
+                return Err(KernelError::Input(format!(
                     "`{other}` is not something a browser does. Use open, read, click, type, \
                      scroll or back."
                 )))
@@ -820,7 +833,7 @@ fn note_dialogs(described: &str, answered: &[Dialog]) -> String {
 /// The element a `click` or `type` names, refused clearly when it is missing.
 fn element(args: &Value) -> Result<i64, KernelError> {
     args["id"].as_i64().or_else(|| args["id"].as_str()?.parse().ok()).ok_or_else(|| {
-        KernelError::Protocol(
+        KernelError::Input(
             "that needs an `id`: the number `read` gave the element you mean. Read the page again \
              if you do not have one."
                 .into(),
@@ -844,7 +857,7 @@ async fn require(page: &mut Page, index: i64) -> Result<(), KernelError> {
     if held.as_bool() == Some(true) {
         return Ok(());
     }
-    Err(KernelError::Protocol(format!(
+    Err(KernelError::Input(format!(
         "element {index} is not on the page any more, because the page changed since you read it. \
          Read it again: the numbers are handed out fresh each time."
     )))
@@ -945,6 +958,46 @@ mod tests {
     use tokio_tungstenite::tungstenite::Message;
 
     use super::*;
+
+    #[test]
+    fn a_creation_failure_does_not_claim_the_resource_was_not_created() {
+        for err in [
+            KernelError::Transport("private-value".into()),
+            KernelError::Protocol("private-value".into()),
+            KernelError::Api { status: 503, message: "private-value".into() },
+        ] {
+            let error = uncertain_creation(err);
+            assert!(matches!(error, KernelError::OutcomeUnknown));
+            assert!(!error.to_string().contains("private-value"));
+        }
+        assert!(matches!(
+            uncertain_creation(KernelError::Api { status: 403, message: String::new() }),
+            KernelError::Api { status: 403, .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn browser_lookup_and_creation_report_the_same_server_failure_differently() {
+        let app = axum::Router::new()
+            .route(
+                "/browsers/:id",
+                axum::routing::get(|| async { axum::http::StatusCode::SERVICE_UNAVAILABLE }),
+            )
+            .route(
+                "/browsers",
+                axum::routing::post(|| async { axum::http::StatusCode::SERVICE_UNAVAILABLE }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut client = KernelClient::new("test").unwrap();
+        client.base = format!("http://{address}");
+        assert!(matches!(client.get("browser").await, Err(KernelError::Api { status: 503, .. })));
+        assert!(matches!(
+            client.create_for_workspace("agent", "profile", 60, false, "workspace").await,
+            Err(KernelError::OutcomeUnknown)
+        ));
+    }
 
     #[tokio::test]
     async fn an_empty_workspace_identity_is_a_local_error() {

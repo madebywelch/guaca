@@ -76,6 +76,8 @@ pub enum PluginError {
          then, tell the operator exactly what this said."
     )]
     AccountRefused { label: String, detail: String },
+    #[error("{label}'s account sign-in is no longer accepted. Ask the operator to sign in again in Settings, Account.")]
+    AccountExpired { label: String },
     #[error(
         "{label} is connected for this group, but not for you: the operator chose which agents \
          may use it. Ask a peer who has it to do that part, or ask the operator to add you in \
@@ -102,6 +104,32 @@ pub enum PluginError {
          to connect it again in the group's Connectors settings."
     )]
     SigninExpired { label: String },
+    #[error("{label} could not confirm whether its sign-in was renewed. Ask the operator to check the connection before trying again.")]
+    RenewalUnknown { label: String },
+    #[error("{label} could not be reached before the tool was called. Try again later.")]
+    Unavailable { label: String },
+    #[error("{label} did not confirm the tool's outcome. The action may have happened, so check its result before doing it again.")]
+    OutcomeUnknown { label: String },
+}
+
+impl PluginError {
+    pub fn for_agent(&self, label: &str) -> String {
+        match self {
+            Self::AccountRefused { .. } => format!(
+                "{label} could not confirm its account sign-in. Ask the operator to check it before trying again."
+            ),
+            Self::Server(McpError::Unauthorized { .. }) => format!(
+                "{label}'s sign-in is no longer accepted. Ask the operator to reconnect it."
+            ),
+            Self::Server(McpError::Status { status: 403, .. }) => format!(
+                "{label} refused access. Ask the operator to check the provider's access settings."
+            ),
+            Self::Server(_) | Self::Signin(_) => format!(
+                "{label} did not confirm the tool's outcome. The action may have happened, so check its result before doing it again."
+            ),
+            _ => self.to_string(),
+        }
+    }
 }
 
 /// What a connection is paid for with.
@@ -516,6 +544,7 @@ pub enum Held<'a> {
     Absent,
     /// A token, read fresh for this call.
     Token(AccountUse<'a>),
+    Invalid,
     /// Signed in, and the account could not produce a token, in its own words.
     Refused(String),
 }
@@ -531,6 +560,15 @@ impl<'a> Held<'a> {
         match read {
             Ok(token) => Held::Token(AccountUse { token, connection }),
             Err(AccountError::NotSignedIn) => Held::Absent,
+            Err(AccountError::Upstream { status: 400, message, .. })
+                if serde_json::from_str::<serde_json::Value>(message)
+                    .ok()
+                    .and_then(|value| value.get("error")?.as_str().map(str::to_owned))
+                    .as_deref()
+                    == Some("invalid_grant") =>
+            {
+                Held::Invalid
+            }
             Err(err) => Held::Refused(err.to_string()),
         }
     }
@@ -544,6 +582,7 @@ impl<'a> Held<'a> {
         match self {
             Held::Token(used) => Ok(used),
             Held::Absent => Err(PluginError::NoAccount { label: kind.label().to_string() }),
+            Held::Invalid => Err(PluginError::AccountExpired { label: kind.label().to_string() }),
             Held::Refused(detail) => {
                 Err(PluginError::AccountRefused { label: kind.label().to_string(), detail })
             }
@@ -631,10 +670,15 @@ pub async fn call(
     // rather than failing on the wire.
     if kind.account_backed() {
         let used = account.spend(kind)?;
-        let session =
-            mcp::open(dial(kind.is_custom(), endpoint, &headers).with_token(Some(used.token)))
-                .await?;
-        return Ok(mcp::call_tool(&session, tool, arguments, schema.as_ref()).await?);
+        return run(
+            dial(kind.is_custom(), endpoint, &headers),
+            Some(used.token),
+            tool,
+            arguments,
+            schema.as_ref(),
+            &label(),
+        )
+        .await;
     }
 
     let grant = match grant {
@@ -647,9 +691,17 @@ pub async fn call(
     };
 
     let dialed = dial(kind.is_custom(), endpoint, &headers);
-    let attempt = run(dialed, grant.as_ref(), tool, arguments, schema.as_ref()).await;
+    let attempt = run(
+        dialed,
+        grant.as_ref().map(|g| g.access_token.as_str()),
+        tool,
+        arguments,
+        schema.as_ref(),
+        &label(),
+    )
+    .await;
     match attempt {
-        Err(McpError::Unauthorized { .. }) => {
+        Err(PluginError::Server(McpError::Unauthorized { .. })) => {
             // One retry, and only for a grant there is something to renew. A
             // public server answering 401 is a server that changed its mind
             // about being public, which no refresh fixes — and so is a key the
@@ -658,21 +710,49 @@ pub async fn call(
                 return Err(PluginError::SigninExpired { label: label() });
             };
             let (renewed, _) = renew(store, id, generation, kind, endpoint, &headers).await?;
-            run(dialed, Some(&renewed), tool, arguments, schema.as_ref()).await.map_err(Into::into)
+            match run(
+                dialed,
+                Some(&renewed.access_token),
+                tool,
+                arguments,
+                schema.as_ref(),
+                &label(),
+            )
+            .await
+            {
+                Err(PluginError::Server(McpError::Unauthorized { .. })) => {
+                    Err(PluginError::SigninExpired { label: label() })
+                }
+                other => other,
+            }
         }
-        other => other.map_err(Into::into),
+        other => other,
     }
 }
 
 async fn run(
     dial: mcp::Dial<'_>,
-    grant: Option<&Grant>,
+    token: Option<&str>,
     tool: &str,
     arguments: &serde_json::Value,
     schema: Option<&serde_json::Value>,
-) -> Result<mcp::Called, McpError> {
-    let session = mcp::open(dial.with_token(grant.map(|g| g.access_token.as_str()))).await?;
-    mcp::call_tool(&session, tool, arguments, schema).await
+    label: &str,
+) -> Result<mcp::Called, PluginError> {
+    let session = mcp::open(dial.with_token(token)).await.map_err(|err| match err {
+        McpError::Transport { .. }
+        | McpError::Silent { .. }
+        | McpError::Status { status: 429 | 500..=599, .. } => {
+            PluginError::Unavailable { label: label.to_string() }
+        }
+        other => PluginError::Server(other),
+    })?;
+    mcp::call_tool(&session, tool, arguments, schema).await.map_err(|err| match err {
+        McpError::Transport { .. }
+        | McpError::Silent { .. }
+        | McpError::Status { status: 429 | 500..=599, .. }
+        | McpError::Malformed { .. } => PluginError::OutcomeUnknown { label: label.to_string() },
+        other => PluginError::Server(other),
+    })
 }
 
 /// Renews a grant and writes it back, so the next turn does not renew it again.
@@ -716,7 +796,19 @@ async fn renew(
     }
     let renewed = oauth::refresh(&grant, &oauth::Gate::on(endpoint, headers.wire()), now_ms)
         .await
-        .map_err(|_| expired())?;
+        .map_err(|error| match error {
+            OauthError::NoRefreshToken => expired(),
+            OauthError::Status { status: 400, ref body, .. }
+                if serde_json::from_str::<serde_json::Value>(body)
+                    .ok()
+                    .and_then(|value| value.get("error")?.as_str().map(str::to_owned))
+                    .as_deref()
+                    == Some("invalid_grant") =>
+            {
+                expired()
+            }
+            _ => PluginError::RenewalUnknown { label: kind.label().to_string() },
+        })?;
     if !store.refresh_plugin_grant(id, generation, &renewed)? {
         return Err(expired());
     }
@@ -726,6 +818,31 @@ async fn renew(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_errors_never_include_provider_response_bodies() {
+        let failure = PluginError::Server(McpError::Status {
+            endpoint: "https://example.invalid/private-value".into(),
+            status: 500,
+            body: "private-value".into(),
+        });
+        let said = failure.for_agent("Neon");
+        assert!(!said.contains("private-value"));
+        assert!(said.contains("may have happened"));
+    }
+
+    #[test]
+    fn an_account_invalid_grant_requires_a_new_signin() {
+        let error: Result<String, AccountError> = Err(AccountError::Upstream {
+            origin: "https://example.invalid".into(),
+            status: 400,
+            message: r#"{"error":"invalid_grant","detail":"private-value"}"#.into(),
+        });
+        let said = Held::read(&error, "").spend(&PluginKind::Google).unwrap_err().to_string();
+        assert!(said.contains("sign in again"), "{said}");
+        assert!(!said.contains("private-value"), "{said}");
+        assert!(!said.contains("try again later"), "{said}");
+    }
 
     #[test]
     fn an_unnamed_connection_stays_on_the_bare_path() {
