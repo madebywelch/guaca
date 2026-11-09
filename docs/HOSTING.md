@@ -208,7 +208,7 @@ fragment because it is the one part of a URL a browser never sends: not to the
 daemon, not to a proxy in front of it, and not to whatever logs either keeps.
 
 The exchange is a request to `/v1/auth/session`, and the daemon answers with
-`Set-Cookie: guaca_session_<port>=…; HttpOnly; SameSite=Strict; Max-Age=…;
+`Set-Cookie: guaca_session_v2_<port>=…; HttpOnly; SameSite=Strict; Max-Age=…;
 Secure` when the origin is https, which is to say when `X-Forwarded-Proto` or
 the page's `Origin` says so. The name carries the daemon's port because a
 cookie is not scoped by one: a daemon and a container beside it on the same
@@ -223,8 +223,9 @@ Sessions expire after 30 days, and rotating the workspace token invalidates
 them all. Signing out revokes only that session in the host data directory;
 other sessions remain active. A browser with a legacy bearer cookie receives
 a new session cookie on its next authenticated request. Legacy bearer cookies
-remain accepted until version 0.4.0, so a copied legacy cookie can still be
-used until then or until the workspace token is rotated. Older hosts cannot
+share one session, so signing out of it signs out every browser that upgraded
+from that bearer. Legacy bearer cookies remain accepted until version 0.4.0
+unless their shared session expires or is revoked. Older hosts cannot
 read the new session cookies, so a rollback requires signing in again.
 
 The socket authenticates by the same cookie. A WebSocket handshake is not

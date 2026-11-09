@@ -145,6 +145,7 @@ struct Serving {
     updates: Arc<crate::updates::Checker>,
     updater: Option<Arc<std::path::Path>>,
     revocations: Arc<parking_lot::Mutex<PathBuf>>,
+    revoked: broadcast::Sender<String>,
 }
 
 /// A workspace that is open and a socket that is listening, not yet serving.
@@ -231,6 +232,7 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
     });
 
     let token: Arc<str> = settings.token.into();
+    let (revoked, _) = broadcast::channel(BACKLOG);
     let serving = Serving {
         state,
         token: token.clone(),
@@ -240,6 +242,7 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
         revocations: Arc::new(parking_lot::Mutex::new(
             settings.root.join("session-revocations.json"),
         )),
+        revoked,
     };
 
     let mut app = Router::new()
@@ -904,6 +907,7 @@ async fn events_socket(
     // a page from anything else listening there would otherwise read the live
     // stream with the operator's cookie.
     let shell = app_origin(&headers);
+    let revoked = serving.revoked.subscribe();
     if !shell && !proves_same_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -925,20 +929,74 @@ async fn events_socket(
             serde_json::to_string(&*live).expect("live state serializes"),
         )
     };
-    upgrade.on_upgrade(move |socket| pump(socket, feed, snapshot))
+    let session = if shell {
+        None
+    } else {
+        match read_session(&serving, &headers) {
+            SessionState::Active { id, expires } => Some((serving, headers, id, expires, revoked)),
+            _ if authorized_by_token(&serving, &headers, ticket.token.as_deref()).is_ok() => None,
+            _ => return StatusCode::UNAUTHORIZED.into_response(),
+        }
+    };
+    upgrade.on_upgrade(move |socket| pump(socket, feed, snapshot, session))
 }
 
 /// Forwards events to one client until it goes away.
-async fn pump(mut socket: WebSocket, mut feed: broadcast::Receiver<UiEvent>, snapshot: String) {
+async fn pump(
+    mut socket: WebSocket,
+    mut feed: broadcast::Receiver<UiEvent>,
+    snapshot: String,
+    session: Option<(Serving, HeaderMap, String, u64, broadcast::Receiver<String>)>,
+) {
+    if session.as_ref().is_some_and(|(serving, headers, ..)| {
+        !matches!(read_session(serving, headers), SessionState::Active { .. })
+    }) {
+        let _ = socket.close().await;
+        return;
+    }
     if socket.send(Message::Text(snapshot)).await.is_err() {
         return;
     }
+    let (check, expiry, revocations) = match session {
+        Some((serving, headers, id, expires, receiver)) => {
+            (Some((serving, headers)), Some(expires), Some((id, receiver)))
+        }
+        None => (None, None, None),
+    };
+    let ended = async move {
+        let Some((id, mut receiver)) = revocations else {
+            return std::future::pending::<()>().await;
+        };
+        loop {
+            match receiver.recv().await {
+                Ok(revoked) if revoked != id => continue,
+                _ => return,
+            }
+        }
+    };
+    let expired = async move {
+        match expiry {
+            Some(expires) => {
+                tokio::time::sleep(std::time::Duration::from_secs(expires.saturating_sub(now())))
+                    .await
+            }
+            None => std::future::pending::<()>().await,
+        }
+    };
+    tokio::pin!(ended, expired);
     let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(20));
     let mut heard = tokio::time::Instant::now();
     loop {
         tokio::select! {
+            biased;
+            _ = &mut ended => { let _ = socket.close().await; return; },
+            _ = &mut expired => { let _ = socket.close().await; return; },
             event = feed.recv() => match event {
                 Ok(event) => {
+                    if check.as_ref().is_some_and(|(serving, headers)| !matches!(read_session(serving, headers), SessionState::Active { .. })) {
+                        let _ = socket.close().await;
+                        return;
+                    }
                     let Ok(text) = serde_json::to_string(&event) else { continue };
                     if socket.send(Message::Text(text)).await.is_err() {
                         return;
@@ -1137,22 +1195,30 @@ fn over_https(headers: &HeaderMap) -> bool {
 /// already what separates two hosts in `same_origin`, and it is the one part
 /// of an authority a cookie cannot express.
 fn cookie_name(headers: &HeaderMap) -> String {
+    named_cookie(headers, "guaca_session_v2")
+}
+
+fn named_cookie(headers: &HeaderMap, prefix: &str) -> String {
     headers
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
         .and_then(authority)
         .and_then(|(_, port)| port)
-        .map_or_else(|| SESSION_COOKIE.to_string(), |port| format!("{SESSION_COOKIE}_{port}"))
+        .map_or_else(|| prefix.to_string(), |port| format!("{prefix}_{port}"))
 }
 
 /// The `Set-Cookie` that issues this host's session, or clears it when the
 /// age is zero. One function for both, so a deletion cannot disagree with the
 /// cookie it has to match about its name or its attributes.
 fn session_cookie(headers: &HeaderMap, value: &str, max_age: u64) -> HeaderValue {
+    make_cookie(headers, &cookie_name(headers), value, max_age)
+}
+
+fn make_cookie(headers: &HeaderMap, name: &str, value: &str, max_age: u64) -> HeaderValue {
     let secure = if over_https(headers) { "; Secure" } else { "" };
     HeaderValue::from_str(&format!(
         "{}={value}; HttpOnly; SameSite=Strict; Path=/; Max-Age={max_age}{secure}",
-        cookie_name(headers)
+        name
     ))
     .expect("a session cookie is a header value")
 }
@@ -1179,15 +1245,49 @@ fn session_key(token: &str) -> ring::hmac::Key {
 }
 
 fn issue_session(token: &str, issued: u64) -> String {
+    sign_session(token, &uuid::Uuid::new_v4().simple().to_string(), issued)
+}
+
+fn sign_session(token: &str, id: &str, issued: u64) -> String {
     use base64::Engine;
-    let payload =
-        format!("{}.{}.{}", uuid::Uuid::new_v4().simple(), issued, issued + SESSION_SECONDS);
+    let payload = format!("{id}.{issued}.{}", issued + SESSION_SECONDS);
     let signature = ring::hmac::sign(&session_key(token), payload.as_bytes());
     format!(
         "{}.{}",
         payload,
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature.as_ref())
     )
+}
+
+fn legacy_session(token: &str, path: &std::path::Path, time: u64) -> Result<String, String> {
+    let tag = ring::hmac::sign(&session_key(token), b"guaca legacy session id");
+    let id = uuid::Uuid::from_slice(&tag.as_ref()[..16])
+        .map_err(|e| e.to_string())?
+        .simple()
+        .to_string();
+    let file = path.with_file_name("legacy-sessions.json");
+    let mut issued = revocations(&file)?;
+    let when = match issued.get(&id) {
+        Some(when) => *when,
+        None => {
+            issued.insert(id.clone(), time);
+            let bytes = serde_json::to_vec(&issued).map_err(|e| e.to_string())?;
+            durable_write(&file, &bytes)?;
+            time
+        }
+    };
+    Ok(sign_session(token, &id, when))
+}
+
+fn durable_write(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    let temp = path.with_extension("tmp");
+    let mut file = std::fs::File::create(&temp).map_err(|e| e.to_string())?;
+    file.write_all(bytes).and_then(|_| file.sync_all()).map_err(|e| e.to_string())?;
+    std::fs::rename(temp, path).map_err(|e| e.to_string())?;
+    std::fs::File::open(path.parent().ok_or("missing data directory")?)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|e| e.to_string())
 }
 
 fn session_state(
@@ -1232,12 +1332,21 @@ fn session_state(
     SessionState::Active { id: id.to_string(), expires }
 }
 
-fn cookie_value<'a>(headers: &'a HeaderMap) -> Option<&'a str> {
-    let wanted = cookie_name(headers);
-    headers.get(header::COOKIE)?.to_str().ok()?.split(';').find_map(|part| {
-        let (name, value) = part.trim().split_once('=')?;
-        (name.trim() == wanted).then_some(value.trim())
-    })
+fn cookie_value(headers: &HeaderMap) -> Option<&str> {
+    let cookies = headers.get(header::COOKIE)?.to_str().ok()?;
+    for wanted in [
+        cookie_name(headers),
+        named_cookie(headers, "guaca_session_legacy"),
+        named_cookie(headers, SESSION_COOKIE),
+    ] {
+        if let Some(value) = cookies.split(';').find_map(|part| {
+            let (name, value) = part.trim().split_once('=')?;
+            (name.trim() == wanted).then_some(value.trim())
+        }) {
+            return Some(value);
+        }
+    }
+    None
 }
 
 fn revocations(path: &std::path::Path) -> Result<std::collections::HashMap<String, u64>, String> {
@@ -1252,6 +1361,16 @@ fn read_session(serving: &Serving, headers: &HeaderMap) -> SessionState {
     let Some(value) = cookie_value(headers) else { return SessionState::Invalid };
     let path = serving.revocations.lock();
     let Ok(revoked) = revocations(&path) else { return SessionState::Invalid };
+    let legacy;
+    let value = if same(value, &serving.token) {
+        let Ok(session) = legacy_session(&serving.token, &path, now()) else {
+            return SessionState::Invalid;
+        };
+        legacy = session;
+        &legacy
+    } else {
+        value
+    };
     session_state(&serving.token, value, now(), &revoked)
 }
 
@@ -1261,17 +1380,37 @@ async fn upgrade_legacy_cookie(
     next: Next,
 ) -> Response {
     let headers = request.headers().clone();
-    let upgrade = request.uri().path() != "/v1/auth/logout"
-        && read_session(&serving, &headers) == SessionState::Legacy;
-    let mut response = next.run(request).await;
-    if upgrade
-        && (response.status().is_success() || response.status() == StatusCode::SWITCHING_PROTOCOLS)
+    let upgrade = if request.uri().path() != "/v1/auth/logout"
+        && request.uri().path() != "/v1/auth/session"
+        && cookie_value(&headers).is_some_and(|value| same(value, &serving.token))
     {
-        response.headers_mut().append(header::SET_COOKIE, session_cookie(&headers, "", 0));
-        response.headers_mut().append(
-            header::SET_COOKIE,
-            session_cookie(&headers, &issue_session(&serving.token, now()), SESSION_SECONDS),
-        );
+        match read_session(&serving, &headers) {
+            SessionState::Active { expires, .. } => Some(expires),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let mut response = next.run(request).await;
+    if let Some(expires) = upgrade.filter(|_| {
+        response.status().is_success() || response.status() == StatusCode::SWITCHING_PROTOCOLS
+    }) {
+        let path = serving.revocations.lock();
+        if let Ok(value) = legacy_session(&serving.token, &path, now()) {
+            response.headers_mut().append(
+                header::SET_COOKIE,
+                make_cookie(&headers, &named_cookie(&headers, SESSION_COOKIE), "", 0),
+            );
+            response.headers_mut().append(
+                header::SET_COOKIE,
+                make_cookie(
+                    &headers,
+                    &named_cookie(&headers, "guaca_session_legacy"),
+                    &value,
+                    expires.saturating_sub(now()),
+                ),
+            );
+        }
     }
     response
 }
@@ -1406,27 +1545,43 @@ async fn auth_logout(State(serving): State<Serving>, headers: HeaderMap) -> Resp
             .into_response();
     }
     let path = serving.revocations.lock();
-    let result = (|| -> Result<(), String> {
+    let result = (|| -> Result<Option<String>, String> {
         let mut revoked = revocations(&path)?;
         if let Some(value) = cookie_value(&headers) {
+            let legacy;
+            let value = if same(value, &serving.token) {
+                legacy = legacy_session(&serving.token, &path, now())?;
+                &legacy
+            } else {
+                value
+            };
             if let SessionState::Active { id, expires } =
                 session_state(&serving.token, value, now(), &revoked)
             {
                 revoked.retain(|_, expiry| *expiry > now());
-                revoked.insert(id, expires);
+                revoked.insert(id.clone(), expires);
                 let bytes = serde_json::to_vec(&revoked).map_err(|e| e.to_string())?;
-                let temp = path.with_extension("tmp");
-                std::fs::write(&temp, bytes).map_err(|e| e.to_string())?;
-                std::fs::rename(temp, &*path).map_err(|e| e.to_string())?;
+                durable_write(&path, &bytes)?;
+                return Ok(Some(id));
             }
         }
-        Ok(())
+        Ok(None)
     })();
-    if result.is_err() {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    match result {
+        Ok(Some(id)) => {
+            let _ = serving.revoked.send(id);
+        }
+        Ok(None) => {}
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
     let mut response = Json(json!({ "ok": "signed out" })).into_response();
     response.headers_mut().insert(header::SET_COOKIE, session_cookie(&headers, "", 0));
+    for prefix in ["guaca_session_legacy", SESSION_COOKIE] {
+        response.headers_mut().append(
+            header::SET_COOKIE,
+            make_cookie(&headers, &named_cookie(&headers, prefix), "", 0),
+        );
+    }
     response
 }
 
