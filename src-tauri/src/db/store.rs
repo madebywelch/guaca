@@ -1292,7 +1292,9 @@ impl Store {
                     )?;
                 }
                 NextSlot::Done => {
+                    tx.execute("UPDATE routine_occurrences SET state='completing' WHERE routine_id=?1 AND occurrence=?2", params![routine.id.to_string(), occurrence])?;
                     tx.execute("DELETE FROM routines WHERE id=?1", [routine.id.to_string()])?;
+                    tx.execute("UPDATE routine_occurrences SET state=?3 WHERE routine_id=?1 AND occurrence=?2", params![routine.id.to_string(), occurrence, if envelope.is_some() { "pending" } else { "done" }])?;
                 }
             }
         }
@@ -5353,7 +5355,7 @@ mod tests {
         // adds to groups, which no migration since 51 rebuilds, and 65's needs
         // none: what it drops, 54, 59 and 62 make again on the way back up.
         // 67 adds the workspace identity, resource ledger and resume marker.
-        conn.execute_batch("ALTER TABLE plugins DROP COLUMN grant_generation; DROP TABLE pending_sandbox_resume; DROP TABLE resource_ledger; DROP TABLE workspace_identity; DROP TABLE approval_policies; ALTER TABLE groups DROP COLUMN rail_order; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
+        conn.execute_batch("DROP TRIGGER routine_delete_history; DROP TABLE routine_occurrences; ALTER TABLE plugins DROP COLUMN grant_generation; DROP TABLE pending_sandbox_resume; DROP TABLE resource_ledger; DROP TABLE workspace_identity; DROP TABLE approval_policies; ALTER TABLE groups DROP COLUMN rail_order; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
         migrations::run(&mut conn).unwrap();
         drop(conn);
         assert_eq!(f.store.connector_env(mine.id).unwrap()["TOKEN"], "private-token");

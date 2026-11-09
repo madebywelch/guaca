@@ -247,6 +247,7 @@ fn one_shot_completion_keeps_its_history_after_the_schedule_is_removed() {
             false,
         )
         .unwrap();
+    store.record_routine_run(once.id, Some(RunId::new()), RunKind::Test, 999).unwrap();
     store
         .claim_routine(
             &once,
@@ -259,7 +260,7 @@ fn one_shot_completion_keeps_its_history_after_the_schedule_is_removed() {
         )
         .unwrap();
     assert!(store.get_routine(once.id).unwrap().is_none());
-    assert_eq!(store.routine_runs(once.id, 20).unwrap().len(), 1);
+    assert_eq!(store.routine_runs(once.id, 20).unwrap().len(), 2);
 }
 
 #[test]

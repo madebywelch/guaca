@@ -1956,6 +1956,11 @@ CREATE TABLE routine_occurrences (
     PRIMARY KEY (routine_id, occurrence)
 );
 CREATE INDEX routine_occurrences_message ON routine_occurrences (message_id);
+CREATE TRIGGER routine_delete_history AFTER DELETE ON routines
+WHEN NOT EXISTS (SELECT 1 FROM routine_occurrences WHERE routine_id=OLD.id AND state='completing')
+BEGIN
+    DELETE FROM routine_runs WHERE routine_id=OLD.id;
+END;
 "#,
     ),
 ];
