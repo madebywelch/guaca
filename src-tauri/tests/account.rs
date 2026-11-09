@@ -597,17 +597,48 @@ async fn a_refusal_in_the_browser_is_reported_rather_than_waited_out() {
 }
 
 #[tokio::test]
-async fn an_answer_that_does_not_match_the_request_is_treated_as_an_attack() {
-    // Nothing else can arrive on that port with the wrong state, so this is not
-    // a mistake to recover from.
-    let stub = serve(Script { wrong_state: true, ..Script::default() }).await;
+async fn a_wrong_state_is_rejected_before_a_valid_answer_completes_signin() {
+    let stub = serve(Script::default()).await;
     let account = Account::open_at(scratch(), &stub.origin);
-
-    assert!(matches!(
-        account.sign_in(browse, &Landing::Loopback).await,
-        Err(AccountError::StateMismatch)
-    ));
-    assert!(!account.is_signed_in());
+    let exchanges = stub.exchanges.clone();
+    let (done, browser) = tokio::sync::oneshot::channel();
+    let result = account
+        .sign_in(
+            move |url| {
+                let url = url.to_owned();
+                tokio::spawn(async move {
+                    let client = reqwest::Client::builder()
+                        .redirect(reqwest::redirect::Policy::none())
+                        .build()
+                        .unwrap();
+                    let response = client.get(url).send().await.unwrap();
+                    let valid = response.headers().get("location").unwrap().to_str().unwrap();
+                    let mut forged = reqwest::Url::parse(valid).unwrap();
+                    let query: Vec<_> = forged
+                        .query_pairs()
+                        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+                        .collect();
+                    forged.set_query(None);
+                    for (key, value) in query {
+                        forged
+                            .query_pairs_mut()
+                            .append_pair(&key, if key == "state" { "wrong" } else { &value });
+                    }
+                    let rejected = client.get(forged).send().await.unwrap();
+                    assert_eq!(rejected.status(), reqwest::StatusCode::BAD_REQUEST);
+                    assert!(exchanges.lock().is_empty(), "the forged code must not be exchanged");
+                    let accepted = client.get(valid).send().await.unwrap();
+                    assert_eq!(accepted.status(), reqwest::StatusCode::OK);
+                    done.send(()).unwrap();
+                });
+                Ok(())
+            },
+            &Landing::Loopback,
+        )
+        .await;
+    browser.await.unwrap();
+    assert!(result.unwrap().signed_in);
+    assert_eq!(stub.exchanges.lock().len(), 1);
 }
 
 #[tokio::test]
