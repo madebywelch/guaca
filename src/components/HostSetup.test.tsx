@@ -52,6 +52,26 @@ vi.mock("./GroupTransfer", () => ({ LegacyGroups: () => null }));
 
 import { HostChoice, HostSetup } from "./HostSetup";
 
+it("does not send a stale panel command after another window commits a host", async () => {
+  const transport = await vi.importActual<typeof import("../lib/transport")>("../lib/transport");
+  const a = { origin: "https://host-a.example", token: "a" };
+  const b = { origin: "https://host-b.example", token: "b" };
+  const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new Response(JSON.stringify({ ok: null }), { status: 200 }),
+  );
+  try {
+    transport.saveConnection(a, "remote");
+    transport.adoptRemote(a);
+    transport.saveConnection(b, "remote");
+    await transport.invoke("list_agents").catch(() => {});
+    expect(fetch).not.toHaveBeenCalledWith(`${a.origin}/v1/call`, expect.anything());
+  } finally {
+    fetch.mockRestore();
+    transport.adoptRemote({ origin: "", token: "" });
+    localStorage.clear();
+  }
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   mode.mockReturnValue("remote");
