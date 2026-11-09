@@ -202,6 +202,61 @@ describe("Composer", () => {
     expect((screen.getByPlaceholderText("Message") as HTMLTextAreaElement).value).toBe("My draft");
   });
 
+  it("does not move a draft into a channel with a file still staging", async () => {
+    const first = anAgent("Ines");
+    const second = anAgent("Marlow");
+    roster = [first, second];
+    const change = vi.fn();
+    let resolve!: (value: Staged) => void;
+    const pending = new Promise<Staged>((done) => {
+      resolve = done;
+    });
+    const destination = render(
+      <Composer
+        placeholder="Message"
+        group={CREW}
+        draftKey={second.id}
+        recipient={second}
+        onRecipientChange={change}
+        onSend={vi.fn()}
+      />,
+    );
+    act(() => dropped?.(pending));
+    destination.unmount();
+    const source = render(
+      <Composer
+        placeholder="Message"
+        group={CREW}
+        draftKey={first.id}
+        recipient={first}
+        onRecipientChange={change}
+        onSend={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByPlaceholderText("Message"), { target: { value: "My draft" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Recipient" }), {
+      target: { value: second.id },
+    });
+    expect(change).not.toHaveBeenCalled();
+    expect(screen.getByText(/has a file being attached/)).toBeTruthy();
+    expect((screen.getByPlaceholderText("Message") as HTMLTextAreaElement).value).toBe("My draft");
+    const file = { ...stored("destination.txt"), digest: "c".repeat(64) };
+    await act(async () => resolve({ attached: [file], refused: [] }));
+    source.unmount();
+    render(
+      <Composer
+        placeholder="Message"
+        group={CREW}
+        draftKey={second.id}
+        recipient={second}
+        onRecipientChange={change}
+        onSend={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("destination.txt")).toBeTruthy();
+    expect((screen.getByPlaceholderText("Message") as HTMLTextAreaElement).value).toBe("");
+  });
+
   async function draw(onSend = vi.fn(async () => {})) {
     render(<Composer placeholder="Message Manager" group={CREW} onSend={onSend} />);
     await waitFor(() => expect(dropped).not.toBeNull());
@@ -670,6 +725,267 @@ async function type(text: string) {
 }
 
 describe("drafts across an update reload", () => {
+  it("retains both drafts and attachments after checking an unconfirmed delivery", async () => {
+    let reject!: (error: Error) => void;
+    const pending = new Promise<void>((_, fail) => {
+      reject = fail;
+    });
+    const onSend = vi.fn(() => pending);
+    const component = () => (
+      <Composer placeholder="Message" group={CREW} draftKey="recover-both" onSend={onSend} />
+    );
+    const view = render(component());
+    const firstFile = { ...stored("first.txt"), digest: "a".repeat(64) };
+    const secondFile = { ...stored("second.txt"), digest: "b".repeat(64) };
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "first message" } });
+    await act(async () => dropped?.(Promise.resolve({ attached: [firstFile], refused: [] })));
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "second message" } });
+    await act(async () => dropped?.(Promise.resolve({ attached: [secondFile], refused: [] })));
+    await act(async () => reject(new Error("lost acknowledgment")));
+    fireEvent.click(screen.getByRole("button", { name: "Conversation checked" }));
+    view.unmount();
+    render(component());
+    expect((screen.getByRole("combobox") as HTMLTextAreaElement).value).toBe("second message");
+    expect(screen.getByText("second.txt")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Switch to saved draft 1" }));
+    expect((screen.getByRole("combobox") as HTMLTextAreaElement).value).toBe("first message");
+    expect(screen.getByText("first.txt")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Switch to saved draft 1" }));
+    expect((screen.getByRole("combobox") as HTMLTextAreaElement).value).toBe("second message");
+    expect(screen.getByText("second.txt")).toBeTruthy();
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+  it("does not send twice when two submissions arrive before rendering", async () => {
+    let resolve!: () => void;
+    const pending = new Promise<void>((done) => {
+      resolve = done;
+    });
+    const onSend = vi.fn(() => pending);
+    render(
+      <Composer placeholder="Message" group={CREW} draftKey="double-submit" onSend={onSend} />,
+    );
+    const input = screen.getByRole("combobox");
+    fireEvent.change(input, { target: { value: "once" } });
+    act(() => {
+      fireEvent.keyDown(input, { key: "Enter" });
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    expect(onSend).toHaveBeenCalledTimes(1);
+    await act(async () => resolve());
+  });
+  it("cancels reload when another channel is still staging", async () => {
+    const { BEFORE_RELOAD } = await import("../lib/transport");
+    let resolve!: (value: Staged) => void;
+    const pending = new Promise<Staged>((done) => {
+      resolve = done;
+    });
+    const view = render(
+      <Composer placeholder="Message" group={CREW} draftKey="stage-left" onSend={vi.fn()} />,
+    );
+    act(() => dropped?.(pending));
+    view.unmount();
+    render(<Composer placeholder="Message" group={CREW} draftKey="stage-right" onSend={vi.fn()} />);
+    act(() =>
+      expect(window.dispatchEvent(new Event(BEFORE_RELOAD, { cancelable: true }))).toBe(false),
+    );
+    await act(async () => resolve({ attached: [], refused: [] }));
+  });
+
+  it("cancels reload after leaving the composer during staging", async () => {
+    const { BEFORE_RELOAD } = await import("../lib/transport");
+    let resolve!: (value: Staged) => void;
+    const pending = new Promise<Staged>((done) => {
+      resolve = done;
+    });
+    const view = render(
+      <Composer placeholder="Message" group={CREW} draftKey="stage-away" onSend={vi.fn()} />,
+    );
+    act(() => dropped?.(pending));
+    view.unmount();
+    expect(window.dispatchEvent(new Event(BEFORE_RELOAD, { cancelable: true }))).toBe(false);
+    await act(async () => resolve({ attached: [], refused: [] }));
+  });
+  it("cancels reload while a dropped file is staging", async () => {
+    const { BEFORE_RELOAD } = await import("../lib/transport");
+    let resolve!: (value: Staged) => void;
+    const pending = new Promise<Staged>((done) => {
+      resolve = done;
+    });
+    render(
+      <Composer placeholder="Message" group={CREW} draftKey="reload-staging" onSend={vi.fn()} />,
+    );
+    act(() => dropped?.(pending));
+    await act(async () => {
+      expect(window.dispatchEvent(new Event(BEFORE_RELOAD, { cancelable: true }))).toBe(false);
+    });
+    await act(async () => resolve({ attached: [], refused: [] }));
+  });
+
+  it("keeps both drafts after rejection and remount", async () => {
+    let reject!: (error: Error) => void;
+    const pending = new Promise<void>((_, fail) => {
+      reject = fail;
+    });
+    const component = () => (
+      <Composer placeholder="Message" group={CREW} draftKey="both-failure" onSend={() => pending} />
+    );
+    const view = render(component());
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "first" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "second" } });
+    await act(async () => reject(new Error("lost acknowledgment")));
+    view.unmount();
+    render(component());
+    expect((screen.getByRole("combobox") as HTMLTextAreaElement).value).toBe("second");
+    expect(document.body.textContent).toContain("first");
+  });
+
+  it("does not send when the pending payload cannot be saved", () => {
+    const onSend = vi.fn(async () => {});
+    render(<Composer placeholder="Message" group={CREW} draftKey="storage-send" onSend={onSend} />);
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "keep me" } });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("Storage unavailable");
+    });
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      expect(onSend).not.toHaveBeenCalled();
+      expect((screen.getByRole("combobox") as HTMLTextAreaElement).value).toBe("keep me");
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("keeps unsaved edits across navigation when storage fails", () => {
+    const component = () => (
+      <Composer placeholder="Message" group={CREW} draftKey="storage-navigation" onSend={vi.fn()} />
+    );
+    const view = render(component());
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("Storage unavailable");
+    });
+    try {
+      fireEvent.change(screen.getByRole("combobox"), { target: { value: "unsaved" } });
+      view.unmount();
+      render(component());
+      expect((screen.getByRole("combobox") as HTMLTextAreaElement).value).toBe("unsaved");
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("does not replay an unconfirmed send after remount", async () => {
+    let reject!: (error: Error) => void;
+    const pending = new Promise<void>((_, fail) => {
+      reject = fail;
+    });
+    const onSend = vi.fn(() => pending);
+    const component = () => (
+      <Composer placeholder="Message" group={CREW} draftKey="unknown-send" onSend={onSend} />
+    );
+    const view = render(component());
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "first" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    view.unmount();
+    await act(async () => reject(new Error("connection lost")));
+    render(component());
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("alert").textContent).toContain("could not be confirmed");
+  });
+  it("keeps a later autosave when an earlier send succeeds", async () => {
+    let resolve!: () => void;
+    const pending = new Promise<void>((done) => {
+      resolve = done;
+    });
+    const view = render(
+      <Composer
+        placeholder="Message"
+        group={CREW}
+        draftKey="success-race"
+        onSend={() => pending}
+      />,
+    );
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "first" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "second" } });
+    await act(async () => resolve());
+    view.unmount();
+    render(
+      <Composer placeholder="Message" group={CREW} draftKey="success-race" onSend={vi.fn()} />,
+    );
+    expect((screen.getByRole("combobox") as HTMLTextAreaElement).value).toBe("second");
+  });
+
+  it("does not replace a later draft when a send rejects", async () => {
+    let reject!: (error: Error) => void;
+    const pending = new Promise<void>((_, fail) => {
+      reject = fail;
+    });
+    render(
+      <Composer
+        placeholder="Message"
+        group={CREW}
+        draftKey="failure-race"
+        onSend={() => pending}
+      />,
+    );
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "first" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "second" } });
+    await act(async () => reject(new Error("failed")));
+    expect((screen.getByRole("combobox") as HTMLTextAreaElement).value).toBe("second");
+  });
+
+  it("does not send while an attachment is staging", async () => {
+    let resolve!: (value: Staged) => void;
+    const pending = new Promise<Staged>((done) => {
+      resolve = done;
+    });
+    const onSend = vi.fn(async () => {});
+    render(<Composer placeholder="Message" group={CREW} draftKey="staging-race" onSend={onSend} />);
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "first" } });
+    act(() => dropped?.(pending));
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
+    expect(onSend).not.toHaveBeenCalled();
+    await act(async () => resolve({ attached: [stored("file.txt")], refused: [] }));
+  });
+
+  it("keeps the pending payload after leaving and a rejection", async () => {
+    let reject!: (error: Error) => void;
+    const pending = new Promise<void>((_, fail) => {
+      reject = fail;
+    });
+    const component = () => (
+      <Composer placeholder="Message" group={CREW} draftKey="left-send" onSend={() => pending} />
+    );
+    const view = render(component());
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "pending" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    view.unmount();
+    await act(async () => reject(new Error("failed")));
+    render(component());
+    expect(document.body.textContent).toContain("pending");
+  });
+
+  it("keeps a staged attachment with its original channel after navigation", async () => {
+    let resolve!: (value: Staged) => void;
+    const pending = new Promise<Staged>((done) => {
+      resolve = done;
+    });
+    const component = () => (
+      <Composer placeholder="Message" group={CREW} draftKey="left-stage" onSend={vi.fn()} />
+    );
+    const view = render(component());
+    act(() => dropped?.(pending));
+    view.unmount();
+    const file = { ...stored("saved.txt"), digest: "a".repeat(64) };
+    await act(async () => resolve({ attached: [file], refused: [] }));
+    render(component());
+    expect(screen.getByText("saved.txt")).toBeTruthy();
+  });
+
   it("restores text and uploaded files in the same channel", async () => {
     const { BEFORE_RELOAD } = await import("../lib/transport");
     const renderComposer = () =>
