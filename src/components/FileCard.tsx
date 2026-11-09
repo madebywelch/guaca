@@ -189,7 +189,14 @@ function Unreadable({
     <div className="file__failed">
       <p className="hint">Could not read this file: {why}.</p>
       <div className="file__failed-actions">
-        <button type="button" className="btn btn--ghost btn--small" onClick={onRetry}>
+        <button
+          type="button"
+          className="btn btn--ghost btn--small"
+          onClick={(event) => {
+            event.stopPropagation();
+            onRetry();
+          }}
+        >
           Try again
         </button>
         <SaveButton file={file} />

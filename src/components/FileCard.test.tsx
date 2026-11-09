@@ -310,4 +310,73 @@ describe("FileCard", () => {
     );
     expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
   });
+
+  it("retries a failed document thumbnail without opening the preview", async () => {
+    fetched.mockResolvedValueOnce({ ok: false, status: 404 });
+    render(<FileCard file={file("retry-document.pdf", "application/pdf")} />);
+
+    const retry = await screen.findByRole("button", { name: "Try again" });
+    fireEvent.click(retry);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Try again" })).toBeNull());
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.querySelector(".file__frame")).toBeTruthy();
+  });
+
+  it("revokes a document copy that finishes after its preview closes", async () => {
+    let finish!: (value: Response) => void;
+    fetched.mockResolvedValueOnce({ ok: true, blob: async () => new Blob(["thumbnail"]) });
+    fetched.mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    render(<FileCard file={file("late-document.pdf", "application/pdf")} />);
+    await waitFor(() => expect(made).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "Open late-document.pdf" }));
+    expect(screen.getByText("Opening…")).toBeTruthy();
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    finish({ ok: true, blob: async () => new Blob(["preview"]) } as Response);
+    await waitFor(() => expect(revoked).toContain("blob:guaca/1"));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("keeps saving independent of the open preview", async () => {
+    let finish!: (path: string) => void;
+    saveFile.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    render(<FileCard file={file("saving.zip", "application/zip")} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Save a copy" }));
+    expect(screen.getByRole("button", { name: "Saving…" }).hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "saving.zip" }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    finish("/Downloads/saving.zip");
+    await waitFor(() =>
+      expect(setBanner).toHaveBeenCalledWith({
+        tone: "ok",
+        text: "Saved to /Downloads/saving.zip",
+      }),
+    );
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
+  it("offers browser download inside the open preview", () => {
+    client.desktop = false;
+    const attachment = file("browser.zip", "application/zip");
+    render(<FileCard file={attachment} />);
+    fireEvent.click(screen.getByRole("button", { name: "browser.zip" }));
+    const link = within(screen.getByRole("dialog")).getByRole("link", { name: "Download" });
+    expect(link.getAttribute("href")).toBe(`${fileUrl(attachment)}&download=true`);
+    expect(link.getAttribute("download")).toBe(attachment.name);
+    expect(saveFile).not.toHaveBeenCalled();
+  });
 });
