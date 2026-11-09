@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { api } from "../lib/ipc";
+import { memoryDraft } from "../lib/memoryDraft";
 import { useStore } from "../lib/store";
 import { type AgentId, errorMessage } from "../lib/types";
+
+export { arrived, type MemoryState, memoryReducer } from "../lib/memoryDraft";
 
 /**
  * The cap the runtime enforces, mirrored here so the operator is warned before
@@ -54,38 +57,6 @@ export function crowding(text: string): { text: string; over: boolean } | null {
   return null;
 }
 
-/** The versions of one page this panel can be holding at once. */
-export interface Held {
-  /** What is on disk, as of the last read. */
-  stored: string;
-  /** What the operator has typed since, or null when they have not. */
-  draft: string | null;
-  /**
-   * A newer version that landed while they were typing, held rather than
-   * applied. Null when nothing has.
-   */
-  incoming: string | null;
-}
-
-/**
- * A version read off disk, against what the panel is already holding.
- *
- * The operator's unsaved text is never replaced by it. An agent rewrites this
- * file in the middle of a turn, and the operator is most likely to be editing
- * it exactly then, so a read that applied itself would take a sentence away as
- * it was being typed. It is held to one side instead and the panel says so:
- * keeping what you wrote is Save, and taking what the agent wrote is Cancel.
- *
- * A draft typed back to what is on disk is not an edit, and holding it as one
- * would leave the panel on a page the agent has since replaced.
- */
-export function arrived(held: Held | null, content: string): Held {
-  if (held === null || held.draft === null || held.draft === held.stored) {
-    return { stored: content, draft: null, incoming: null };
-  }
-  return { ...held, incoming: content };
-}
-
 interface Props {
   agentId: AgentId;
 }
@@ -104,35 +75,42 @@ interface Props {
  * A rewrite arriving under that draft is held until Save or Cancel decides it.
  */
 export function Memory({ agentId }: Props) {
-  const [held, setHeld] = useState<Held | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  /** Set when the runtime stored something other than what was sent. */
-  const [cut, setCut] = useState(false);
+  return <MemoryPage key={agentId} agentId={agentId} />;
+}
+
+function MemoryPage({ agentId }: Props) {
+  const [draft] = useState(() => memoryDraft(agentId));
+  const state = useSyncExternalStore(draft.subscribe, draft.getSnapshot);
+  const { dispatch } = draft;
   const box = useRef<HTMLTextAreaElement>(null);
   // The agent rewrote it. Same counter as the schedule's, one panel over.
   const changed = useStore((state) => state.memoryVersion[agentId] ?? 0);
 
   const load = useCallback(async () => {
+    const request = ++draft.generation;
     try {
       const content = await api.agentMemory(agentId);
-      // Through `arrived` rather than straight onto the state, so what happens
-      // to an operator mid-sentence is decided against what is held right now
-      // rather than against what was held when this read was started.
-      setHeld((current) => arrived(current, content));
-      setError(null);
+      if (request === draft.generation) dispatch({ type: "read", content });
     } catch (caught) {
-      setError(errorMessage(caught));
-      setHeld((current) => current ?? { stored: "", draft: null, incoming: null });
+      if (request === draft.generation)
+        dispatch({ type: "readFailed", error: errorMessage(caught) });
     }
-  }, [agentId]);
+  }, [agentId, draft, dispatch]);
 
   useEffect(() => {
     void load();
-  }, [load, changed]);
+    return () => {
+      draft.generation++;
+    };
+  }, [load, changed, draft]);
 
-  const loading = held === null;
+  const held = "held" in state ? state.held : null;
+  const loading = state.phase === "loading";
+  const editing =
+    state.phase === "editing" || state.phase === "saving" || (loading && state.editing);
+  const busy = state.phase === "saving";
+  const error = "error" in state ? state.error : null;
+  const cut = "cut" in state && state.cut;
   const value = held === null ? "" : (held.draft ?? held.stored);
   const shown = loading ? "Loading…" : value;
   const dirty = held !== null && held.draft !== null && held.draft !== held.stored;
@@ -150,20 +128,16 @@ export function Memory({ agentId }: Props) {
   const save = async () => {
     if (held?.draft == null) return;
     const sent = held.draft;
-    setBusy(true);
-    setError(null);
+    dispatch({ type: "save", sent });
     try {
       // What comes back is what was actually stored: the runtime trims it and
       // cuts anything over the cap, so leaving what was typed on screen would
       // show the operator a page their agent is never going to be given.
       const saved = await api.setAgentMemory(agentId, sent);
-      setHeld({ stored: saved, draft: null, incoming: null });
-      setCut(saved !== sent.trim());
-      setEditing(false);
+      draft.generation++;
+      dispatch({ type: "saved", saved });
     } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setBusy(false);
+      dispatch({ type: "saveFailed", error: errorMessage(caught) });
     }
   };
 
@@ -185,10 +159,8 @@ export function Memory({ agentId }: Props) {
           <button
             type="button"
             className="btn btn--small btn--ghost"
-            onClick={() => {
-              setCut(false);
-              setEditing(true);
-            }}
+            disabled={state.phase === "failed"}
+            onClick={() => dispatch({ type: "edit" })}
           >
             Edit
           </button>
@@ -206,11 +178,10 @@ export function Memory({ agentId }: Props) {
           placeholder="Nothing yet."
           onChange={(event) => {
             const next = event.target.value;
-            setCut(false);
-            setHeld((current) => current && { ...current, draft: next });
+            dispatch({ type: "change", value: next });
           }}
         />
-      ) : shown ? (
+      ) : state.phase === "failed" ? null : shown ? (
         <p className="memory__text memory__read">{shown}</p>
       ) : (
         <p className="detail__empty">Nothing yet.</p>
@@ -230,18 +201,7 @@ export function Memory({ agentId }: Props) {
             type="button"
             className="btn btn--small btn--ghost"
             disabled={busy}
-            onClick={() => {
-              setEditing(false);
-              setCut(false);
-              setHeld(
-                (current) =>
-                  current && {
-                    stored: current.incoming ?? current.stored,
-                    draft: null,
-                    incoming: null,
-                  },
-              );
-            }}
+            onClick={() => dispatch({ type: "cancel" })}
           >
             Cancel
           </button>
@@ -264,6 +224,11 @@ export function Memory({ agentId }: Props) {
       {error && (
         <div className="banner banner--error" style={{ margin: "0.5rem 0 0" }}>
           <span>{error}</span>
+          {state.phase === "failed" && (
+            <button type="button" className="btn btn--small btn--ghost" onClick={() => void load()}>
+              Retry
+            </button>
+          )}
         </div>
       )}
     </section>
