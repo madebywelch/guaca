@@ -1687,7 +1687,7 @@ impl Runtime {
             } else {
                 self.inner.store.append_delivery(&envelope)?;
             }
-            *runs.outstanding.entry(envelope.run_id).or_insert(0) += 1;
+            self.book(&mut runs, envelope.run_id);
         } else {
             self.inner.store.append(&envelope)?;
         }
@@ -2457,37 +2457,53 @@ impl Runtime {
         })
     }
 
+    fn book(&self, runs: &mut Runs, run: RunId) {
+        *runs.outstanding.entry(run).or_insert(0) += 1;
+        self.inner.guard.lock().pin(run);
+    }
+
+    fn release_bookings(runs: &mut Runs, run: RunId, count: usize) -> bool {
+        let Some(entry) = runs.outstanding.get_mut(&run) else { return false };
+        *entry = entry.saturating_sub(count);
+        if *entry != 0 {
+            return false;
+        }
+        runs.outstanding.remove(&run);
+        true
+    }
+
     fn track_inflight(&self, run: RunId, delta: i64) {
-        let settled = {
+        let settled_steps = {
             let mut runs = self.inner.runs.lock();
-            let entry = runs.outstanding.entry(run).or_insert(0);
             if delta >= 0 {
-                *entry += delta as usize;
-            } else {
-                *entry = entry.saturating_sub((-delta) as usize);
+                *runs.outstanding.entry(run).or_insert(0) += delta as usize;
             }
-            if *entry == 0 {
-                runs.outstanding.remove(&run);
+            runs.outstanding.entry(run).or_insert(0);
+            if Self::release_bookings(&mut runs, run, if delta < 0 { (-delta) as usize } else { 0 })
+            {
                 runs.stopped.remove(&run);
                 // Part of it is put down, so the last of it ending here is the
                 // conversation handed on whole, not finished: the next host
                 // picks it up, and a run it picks up has not settled.
                 if runs.put_down.contains(&run) {
                     self.mark_whole(&[run]);
-                    false
+                    self.inner.guard.lock().unpin(run);
+                    None
                 } else {
                     if let Err(err) = self.inner.store.settle_run(run) {
                         tracing::error!(%err, %run, "could not settle the recovery journal");
                     }
-                    true
+                    let mut guard = self.inner.guard.lock();
+                    let steps = guard.peek(run).map(|r| r.steps_used()).unwrap_or(0);
+                    guard.unpin(run);
+                    Some(steps)
                 }
             } else {
-                false
+                None
             }
         };
 
-        if settled {
-            let steps = self.inner.guard.lock().peek(run).map(|r| r.steps_used()).unwrap_or(0);
+        if let Some(steps) = settled_steps {
             self.inner.events.emit(UiEvent::RunSettled { run_id: run, steps_used: steps });
         }
     }
@@ -8592,6 +8608,123 @@ mod tests {
         let runtime =
             Runtime::new(store, LlmClient::new().unwrap(), config, OnDisk::under(dir.path()), sink);
         (dir, runtime)
+    }
+
+    #[tokio::test]
+    async fn recovered_run_keeps_its_budget_under_registry_pressure() {
+        let (_dir, runtime) = test_runtime();
+        let agent = runtime
+            .inner
+            .store
+            .create_agent(&crate::domain::agent::CleanDraft {
+                group_id: None,
+                name: "Recovery".into(),
+                avatar: "orb".into(),
+                color: "#7fb069".into(),
+                model: "test/model".into(),
+                subscription_model: None,
+                reasoning_effort: None,
+                system_prompt: String::new(),
+                skills: vec![],
+            })
+            .unwrap()
+            .id;
+        let (tx, _rx) = mpsc::unbounded_channel();
+        runtime.inner.inboxes.lock().insert(
+            agent,
+            Inbox { tx, depth: Arc::new(AtomicUsize::new(0)), resume: Arc::new(Notify::new()) },
+        );
+        let run = RunId::new();
+        let envelope = Envelope {
+            id: MessageId::new(),
+            run_id: run,
+            channel_id: agent,
+            from: Participant::Human,
+            to: Participant::Agent { id: agent },
+            parts: vec![Part::text("recover")],
+            trust: Trust::Operator,
+            hop: 0,
+            expects_reply: true,
+            intent: Intent::Work,
+            cause: None,
+            created_at: now_ms(),
+        };
+        runtime.pick_up(crate::db::Recovered {
+            resumed: vec![crate::db::PutDown { envelope, records: vec![] }],
+            steps: HashMap::from([(run, 7)]),
+            interrupted: 0,
+        });
+        std::thread::sleep(Duration::from_millis(10));
+        let mut guard = runtime.inner.guard.lock();
+        for _ in 0..300 {
+            guard.run_within(RunId::new(), GuardLimits::default());
+        }
+        assert_eq!(guard.peek(run).map(|state| state.steps_used()), Some(7));
+    }
+
+    #[tokio::test]
+    async fn queued_delivery_keeps_its_guard_under_registry_pressure() {
+        let (_dir, runtime) = test_runtime();
+        let agent = runtime
+            .inner
+            .store
+            .create_agent(&crate::domain::agent::CleanDraft {
+                group_id: None,
+                name: "Queued".into(),
+                avatar: "orb".into(),
+                color: "#7fb069".into(),
+                model: "test/model".into(),
+                subscription_model: None,
+                reasoning_effort: None,
+                system_prompt: String::new(),
+                skills: vec![],
+            })
+            .unwrap()
+            .id;
+        let (tx, _rx) = mpsc::unbounded_channel();
+        runtime.inner.inboxes.lock().insert(
+            agent,
+            Inbox { tx, depth: Arc::new(AtomicUsize::new(0)), resume: Arc::new(Notify::new()) },
+        );
+        let run = runtime.send_from_human(agent, "queued").unwrap();
+        let mut guard = runtime.inner.guard.lock();
+        guard.run_within(run, GuardLimits::default()).reserve_step();
+        std::thread::sleep(Duration::from_millis(10));
+        for _ in 0..300 {
+            guard.run_within(RunId::new(), GuardLimits::default());
+        }
+        assert_eq!(guard.peek(run).map(|state| state.steps_used()), Some(1));
+    }
+
+    #[tokio::test]
+    async fn concurrent_bookings_settlements_and_reaping_do_not_deadlock() {
+        let (_dir, runtime) = test_runtime();
+        let (done, results) = std::sync::mpsc::channel();
+        for _ in 0..4 {
+            let (runtime, done) = (runtime.clone(), done.clone());
+            std::thread::spawn(move || {
+                for _ in 0..100 {
+                    let run = RunId::new();
+                    {
+                        let mut runs = runtime.inner.runs.lock();
+                        runtime.book(&mut runs, run);
+                    }
+                    runtime
+                        .inner
+                        .guard
+                        .lock()
+                        .run_within(run, GuardLimits::default())
+                        .reserve_step();
+                    runtime.track_inflight(run, -1);
+                }
+                done.send(()).unwrap();
+            });
+        }
+        for _ in 0..4 {
+            results
+                .recv_timeout(Duration::from_secs(30))
+                .expect("booking and settlement must finish");
+        }
     }
 
     #[tokio::test]
