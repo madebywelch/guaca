@@ -218,6 +218,15 @@ daemon's origin cannot read the cookie, and a token an older build left in
 localStorage is exchanged once and deleted so nobody already signed in gets
 locked out.
 
+Each cookie contains a random session ID and a signed issue time and expiry.
+Sessions expire after 30 days, and rotating the workspace token invalidates
+them all. Signing out revokes only that session in the host data directory;
+other sessions remain active. A browser with a legacy bearer cookie receives
+a new session cookie on its next authenticated request. Legacy bearer cookies
+remain accepted until version 0.4.0, so a copied legacy cookie can still be
+used until then or until the workspace token is rotated. Older hosts cannot
+read the new session cookies, so a rollback requires signing in again.
+
 The socket authenticates by the same cookie. A WebSocket handshake is not
 subject to CORS, so it is held to the same proof as a state-changing request.
 The app's own origins are the only exception to that proof, and none to the
@@ -238,9 +247,10 @@ started. A browser too old to send it falls back to the `Origin` header, whose
 authority has to match the request's `Host` or `X-Forwarded-Host`. That is why
 a proxy in front of a box should pass the browser's `Host` through, or set
 `X-Forwarded-Host`: otherwise an older browser cannot prove where it came from.
+An omitted port means the default port for the Origin's scheme, not any port.
 A request carrying an Authorization header or a query token is not subject to
 that check, because the token itself is the proof. Signing out is a request to
-`/v1/auth/logout`, which clears the cookie on the daemon's side and is held to
+`/v1/auth/logout`, which revokes the session and clears the cookie and is held to
 the same proof so a page elsewhere cannot sign the operator out.
 
 A reload has no script-readable credential to look at, so the screen asks the

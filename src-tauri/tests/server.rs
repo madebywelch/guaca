@@ -1168,7 +1168,7 @@ async fn a_cookie_authenticates_a_call_without_a_bearer_token() {
     // same-origin. The Origin header's hostname matches the request's Host.
     let response = client
         .post(format!("http://{addr}/v1/call"))
-        .header("Origin", format!("http://{}", addr.ip()))
+        .header("Origin", format!("http://{addr}"))
         .header("Cookie", &cookie)
         .json(&json!({ "name": "list_agents", "args": {} }))
         .send()
@@ -1191,6 +1191,37 @@ async fn a_state_change_from_another_origin_is_refused_even_with_a_cookie() {
         .await
         .expect("the daemon answers");
     assert_eq!(response.status(), 403, "a cross-origin state change should be refused");
+}
+
+#[tokio::test]
+async fn fallback_origin_rejects_a_default_port_against_a_nondefault_host_port() {
+    let (addr, _dir) = workspace().await;
+    let cookie = session_cookie(addr).await;
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/call"))
+        .header("Origin", format!("http://{}", addr.ip()))
+        .header("Cookie", &cookie)
+        .json(&json!({ "name": "list_agents", "args": {} }))
+        .send()
+        .await
+        .expect("the daemon answers");
+    assert_eq!(response.status(), 403, "different effective ports are different origins");
+}
+
+#[tokio::test]
+async fn fallback_origin_accepts_same_origin_fetch_metadata_behind_a_proxy() {
+    let (addr, _dir) = workspace().await;
+    let cookie = session_cookie(addr).await;
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/call"))
+        .header("Origin", format!("http://{}", addr.ip()))
+        .header("Sec-Fetch-Site", "same-origin")
+        .header("Cookie", &cookie)
+        .json(&json!({ "name": "list_agents", "args": {} }))
+        .send()
+        .await
+        .expect("the daemon answers");
+    assert_eq!(response.status(), 200, "fetch metadata preserves proxy admission");
 }
 
 #[tokio::test]
@@ -1248,6 +1279,100 @@ async fn a_browser_signs_out_and_its_cookie_is_cleared() {
     assert!(set_cookie.starts_with("guaca_session"), "the cookie is named: {set_cookie}");
     assert!(set_cookie.contains("=;"), "the cookie is emptied: {set_cookie}");
     assert!(set_cookie.contains("Max-Age=0"), "the cookie expires: {set_cookie}");
+}
+
+#[tokio::test]
+async fn a_copied_session_cookie_cannot_be_replayed_after_logout() {
+    let (addr, _dir) = workspace().await;
+    let cookie = session_cookie(addr).await;
+    let client = reqwest::Client::new();
+    let logout = client
+        .post(format!("http://{addr}/v1/auth/logout"))
+        .header("Origin", format!("http://{addr}"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .expect("the daemon answers");
+    assert_eq!(logout.status(), 200, "logout succeeds");
+
+    let replay = client
+        .post(format!("http://{addr}/v1/call"))
+        .header("Origin", format!("http://{addr}"))
+        .header("Cookie", &cookie)
+        .json(&json!({ "name": "list_agents", "args": {} }))
+        .send()
+        .await
+        .expect("the daemon answers");
+    assert_eq!(replay.status(), 401, "logout revokes a copied session cookie");
+}
+
+#[tokio::test]
+async fn logging_out_one_session_keeps_the_other_session() {
+    let (addr, _dir) = workspace().await;
+    let first = session_cookie(addr).await;
+    let second = session_cookie(addr).await;
+    assert_ne!(first, second);
+    let client = reqwest::Client::new();
+    assert_eq!(
+        client
+            .post(format!("http://{addr}/v1/auth/logout"))
+            .header("Origin", format!("http://{addr}"))
+            .header("Cookie", first)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    assert_eq!(
+        client
+            .post(format!("http://{addr}/v1/call"))
+            .header("Origin", format!("http://{addr}"))
+            .header("Cookie", second)
+            .json(&json!({ "name": "list_agents", "args": {} }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+}
+
+#[tokio::test]
+async fn a_legacy_bearer_cookie_is_upgraded_without_reusing_the_bearer() {
+    let (addr, _dir) = workspace().await;
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("http://{addr}/v1/call"))
+        .header("Origin", format!("http://{addr}"))
+        .header("Cookie", format!("guaca_session_{}={TOKEN}", addr.port()))
+        .json(&json!({ "name": "list_agents", "args": {} }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let cookies: Vec<_> = response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|value| value.to_str().unwrap())
+        .collect();
+    assert_eq!(cookies.len(), 2);
+    assert!(cookies[0].contains("Max-Age=0"));
+    assert!(!cookies[1].contains(TOKEN));
+    let upgraded = cookies[1].split(';').next().unwrap();
+    assert_eq!(
+        client
+            .post(format!("http://{addr}/v1/call"))
+            .header("Origin", format!("http://{addr}"))
+            .header("Cookie", upgraded)
+            .json(&json!({ "name": "list_agents", "args": {} }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
 }
 
 /// The name half of a `Set-Cookie` value, which is what a browser keys a jar by.
