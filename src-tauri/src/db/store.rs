@@ -7978,6 +7978,41 @@ mod tests {
     }
 
     #[test]
+    fn every_terminal_approval_state_wins_against_every_later_settlement() {
+        let f = fixture();
+        let agent = f.store.create_agent(&draft("Manager")).unwrap();
+        let states = [
+            ApprovalState::Allow,
+            ApprovalState::AlwaysAllow,
+            ApprovalState::Deny,
+            ApprovalState::Answered,
+            ApprovalState::Expired,
+        ];
+        for first in states {
+            for second in states {
+                let request = asks(&f.store, &agent, &[]);
+                let settled = if first == ApprovalState::Answered {
+                    f.store.answer_approval(request.id, "first").unwrap()
+                } else {
+                    f.store.settle_approval(request.id, first).unwrap()
+                };
+                let result = if second == ApprovalState::Answered {
+                    f.store.answer_approval(request.id, "second")
+                } else {
+                    f.store.settle_approval(request.id, second)
+                };
+                assert!(
+                    matches!(result, Err(StoreError::ApprovalSettled { state }) if state == first)
+                );
+                let persisted = f.store.get_approval(request.id).unwrap().unwrap();
+                assert_eq!(persisted.state, first);
+                assert_eq!(persisted.answer, settled.answer);
+                assert_eq!(persisted.decided_at, settled.decided_at);
+            }
+        }
+    }
+
+    #[test]
     fn a_question_comes_back_as_a_question_with_the_choices_it_was_given() {
         let f = fixture();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
@@ -8505,6 +8540,23 @@ mod tests {
             f.store.clear_agent_escalations(manager.id, 3_000).unwrap(),
             0,
             "and there is nothing left to clear"
+        );
+    }
+
+    #[test]
+    fn expiring_approvals_leaves_escalations_open_and_clearing_them_leaves_decisions() {
+        let f = fixture();
+        let agent = f.store.create_agent(&draft("Manager")).unwrap();
+        let request = ask(&f.store, &agent);
+        let Raised::First(escalation) = stuck(&f.store, &agent, "blocked", 1_000) else {
+            panic!("first escalation");
+        };
+        assert_eq!(f.store.expire_pending_approvals().unwrap(), 1);
+        assert_eq!(f.store.open_escalation_for(agent.id).unwrap().unwrap().id, escalation.id);
+        assert!(f.store.clear_escalation(escalation.id, 2_000).unwrap());
+        assert_eq!(
+            f.store.get_approval(request.id).unwrap().unwrap().state,
+            ApprovalState::Expired
         );
     }
 
