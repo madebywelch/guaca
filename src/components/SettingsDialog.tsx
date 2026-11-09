@@ -449,16 +449,17 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
         next = await api.updateSettings(sent);
       } catch (error) {
         const refusal = error as { kind?: unknown; message?: unknown } | null;
-        const missing =
-          typeof refusal?.message === "string"
-            ? /^`update_settings` was called with arguments this build does not recognize \(missing field `([^`]+)`\)/.exec(
-                refusal.message,
-              )?.[1]
-            : undefined;
         if (
           refusal?.kind !== "badArguments" ||
           !sent.limits ||
-          !LIMITS.some(({ key }) => key === missing && sent.limits?.[key] === undefined)
+          typeof refusal.message !== "string" ||
+          !LIMITS.some(
+            ({ key }) =>
+              sent.limits?.[key] === undefined &&
+              (refusal.message as string).startsWith(
+                `\`update_settings\` was called with arguments this build does not recognize (missing field \`${key}\`)`,
+              ),
+          )
         ) {
           throw error;
         }
