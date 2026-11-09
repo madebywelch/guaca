@@ -71,7 +71,7 @@ describe("Notebook", () => {
     expect(screen.getByText("original contents")).toBeTruthy();
   });
 
-  it("shows the read that finishes last when file reads cross", async () => {
+  it("keeps the newer selection when file reads cross", async () => {
     agentNotebook.mockResolvedValue([log, { ...log, path: "other.md" }]);
     let finishFirst: (text: string) => void = () => {};
     readNotebook
@@ -86,8 +86,8 @@ describe("Notebook", () => {
     fireEvent.click(screen.getByRole("button", { name: "other.md" }));
     await screen.findByText("second contents");
     await act(async () => finishFirst("first contents"));
-    expect(screen.getByText("first contents")).toBeTruthy();
-    expect(screen.queryByText("second contents")).toBeNull();
+    expect(screen.getByText("second contents")).toBeTruthy();
+    expect(screen.queryByText("first contents")).toBeNull();
   });
 
   it("does not show a pending read after its file is removed from the list", async () => {
