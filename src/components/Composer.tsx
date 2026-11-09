@@ -433,7 +433,11 @@ export function Composer({
         const key = `${value}:${state.held.slice(0, index).filter((item) => JSON.stringify(item) === value).length}`;
         return (
           <div key={key}>
-            <p>Saved draft: {draft.text || `${draft.files.length} attached file(s)`}</p>
+            <p>
+              Saved draft:{" "}
+              {draft.text ||
+                `${draft.files.length} attached file${draft.files.length === 1 ? "" : "s"}`}
+            </p>
             <button
               type="button"
               className="btn btn--small"

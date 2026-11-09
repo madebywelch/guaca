@@ -200,6 +200,19 @@ describe("WorkingNotes", () => {
     expect(screen.getByRole("button", { name: "Working notes" })).toBeTruthy();
   });
 
+  it("retries a failed read", async () => {
+    agentWorkingNotes.mockRejectedValueOnce(new Error("database is locked"));
+    agentWorkingNotes.mockResolvedValueOnce([note(0, "back in flight")]);
+    render(<WorkingNotes agentId="a1" />);
+    fireEvent.click(screen.getByRole("button", { name: /Working notes/ }));
+    expect(
+      await screen.findByText("Could not read working notes. database is locked"),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry reading working notes" }));
+    expect(await screen.findByText("back in flight")).toBeTruthy();
+    expect(agentWorkingNotes).toHaveBeenCalledTimes(2);
+  });
+
   it("ignores a snapshot taken before a successful clear", async () => {
     const old = deferred<WorkingNote[]>();
     agentWorkingNotes.mockResolvedValueOnce([note(0, "held")]).mockReturnValueOnce(old.promise);
