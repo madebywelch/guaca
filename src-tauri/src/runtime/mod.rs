@@ -593,6 +593,38 @@ fn uncertain_computer_action(err: crate::e2b::E2bError) -> crate::e2b::E2bError 
     }
 }
 
+fn browser_failure(err: crate::kernel::KernelError) -> String {
+    use crate::kernel::KernelError;
+    match err {
+        KernelError::Transport(_) | KernelError::Api { status: 429 | 500..=599, .. } => {
+            "The browser provider is temporarily unavailable. Try again later.".to_string()
+        }
+        KernelError::Api { status: 401 | 403, .. } => {
+            "The browser provider refused access. Ask the operator to check its credentials and access.".to_string()
+        }
+        KernelError::Api { .. } | KernelError::Protocol(_) | KernelError::Cdp(_) => {
+            "The browser provider could not confirm the resource's state. Ask the operator to check it.".to_string()
+        }
+        other => other.to_string(),
+    }
+}
+
+fn computer_replacement_notice(replaced: bool) -> &'static str {
+    if replaced {
+        "The provider confirmed your previous computer was gone, so a new one was created.\n"
+    } else {
+        ""
+    }
+}
+
+fn browser_replacement_notice(replaced: bool) -> &'static str {
+    if replaced {
+        "The provider confirmed your previous browser was gone, so another was opened.\n"
+    } else {
+        ""
+    }
+}
+
 /// How long an agent will wait for answers it is owed by peers that are still
 /// working on them, before reading what it already has.
 ///
@@ -4858,11 +4890,15 @@ impl Runtime {
 
             ToolInvocation::RunCommand { command } => {
                 let used = self.credentials_named_in(card, &command);
-                let outcome = match self.ensure_computer(card).await {
-                    Ok((client, sandbox)) => client
-                        .run(&sandbox.id, &sandbox.envd_token, &command)
-                        .await
-                        .map_err(uncertain_computer_action),
+                let mut replaced = false;
+                let outcome = match self.ensure_computer_with_replacement(card).await {
+                    Ok((client, sandbox, was_replaced)) => {
+                        replaced = was_replaced;
+                        client
+                            .run(&sandbox.id, &sandbox.envd_token, &command)
+                            .await
+                            .map_err(uncertain_computer_action)
+                    }
                     Err(err) => Err(err),
                 };
                 let (rendered, outcome) = match outcome {
@@ -4883,7 +4919,10 @@ impl Runtime {
                         (format!("Error: {error}"), ToolOutcome::Failed { error })
                     }
                 };
-                (rendered, Part::tool_call(tools::RUN_COMMAND, arguments, outcome))
+                (
+                    format!("{}{rendered}", computer_replacement_notice(replaced)),
+                    Part::tool_call(tools::RUN_COMMAND, arguments, outcome),
+                )
             }
 
             ToolInvocation::Schedule { action } => {
@@ -4959,16 +4998,21 @@ impl Runtime {
                     );
                 }
 
-                let outcome = match self.ensure_browser(card).await {
-                    Ok((client, session)) => client.browse(&session, &action, &args).await.map_err(|_| {
-                        if action == "read" {
+                let mut replaced = false;
+                let outcome = match self.ensure_browser_with_replacement(card).await {
+                    Ok((client, session, was_replaced)) => {
+                        replaced = was_replaced;
+                        client.browse(&session, &action, &args).await.map_err(|err| {
+                        if matches!(err, crate::kernel::KernelError::Input(_)) {
+                            err.to_string()
+                        } else if action == "read" {
                             "The browser could not read the page. Try again later.".to_string()
                         } else {
                             "The browser did not confirm the action's outcome. It may have happened, so check before doing it again.".to_string()
                         }
-                    }),
-                    Err(err @ (crate::kernel::KernelError::NoKey | crate::kernel::KernelError::NotGiven | crate::kernel::KernelError::Local(_))) => Err(err.to_string()),
-                    Err(_) => Err("The browser provider did not confirm the resource's state. Ask the operator to check it before trying again.".to_string()),
+                    })
+                    }
+                    Err(err) => Err(browser_failure(err)),
                 };
                 let (rendered, outcome) = match outcome {
                     Ok(page) => {
@@ -4988,7 +5032,10 @@ impl Runtime {
                     }
                     Err(err) => (format!("Error: {err}"), ToolOutcome::Failed { error: err }),
                 };
-                (rendered, Part::tool_call(tools::BROWSE, arguments, outcome))
+                (
+                    format!("{}{rendered}", browser_replacement_notice(replaced)),
+                    Part::tool_call(tools::BROWSE, arguments, outcome),
+                )
             }
 
             ToolInvocation::OpenOnDesktop { command } => {
@@ -4999,11 +5046,15 @@ impl Runtime {
                 // describes a window that is not there.
                 let opened = crate::e2b::as_chrome(&command);
                 let shown = opened_on_screen(&command);
-                let outcome = match self.ensure_computer(card).await {
-                    Ok((client, sandbox)) => client
-                        .open_on_desktop(&sandbox.id, &sandbox.envd_token, &opened)
-                        .await
-                        .map_err(uncertain_computer_action),
+                let mut replaced = false;
+                let outcome = match self.ensure_computer_with_replacement(card).await {
+                    Ok((client, sandbox, was_replaced)) => {
+                        replaced = was_replaced;
+                        client
+                            .open_on_desktop(&sandbox.id, &sandbox.envd_token, &opened)
+                            .await
+                            .map_err(uncertain_computer_action)
+                    }
                     Err(err) => Err(err),
                 };
                 let (rendered, outcome) = match outcome {
@@ -5027,7 +5078,10 @@ impl Runtime {
                         (format!("Error: {error}"), ToolOutcome::Failed { error })
                     }
                 };
-                (rendered, Part::tool_call(tools::OPEN_ON_DESKTOP, arguments, outcome))
+                (
+                    format!("{}{rendered}", computer_replacement_notice(replaced)),
+                    Part::tool_call(tools::OPEN_ON_DESKTOP, arguments, outcome),
+                )
             }
 
             ToolInvocation::SendMessage { to, text, intent, files } => {
@@ -5981,7 +6035,7 @@ impl Runtime {
             )
         };
 
-        let (client, sandbox) = match self.ensure_computer(card).await {
+        let (client, sandbox, replaced) = match self.ensure_computer_with_replacement(card).await {
             Ok(pair) => pair,
             Err(err) => {
                 let error = told_to_a_model(err);
@@ -6045,7 +6099,10 @@ impl Runtime {
                     told_to_a_model(err)
                 };
                 return failed(
-                    format!("Error: {done}the screen could not be photographed. {error}"),
+                    format!(
+                        "{}Error: {done}the screen could not be photographed. {error}",
+                        computer_replacement_notice(replaced)
+                    ),
                     error,
                     arguments,
                 );
@@ -6078,7 +6135,7 @@ impl Runtime {
         };
 
         (
-            rendered,
+            format!("{}{rendered}", computer_replacement_notice(replaced)),
             Part::tool_call(tools::USE_SCREEN, arguments, ToolOutcome::Ok { summary }),
             Some(screen.image),
         )
@@ -6303,6 +6360,15 @@ impl Runtime {
         &self,
         card: &AgentCard,
     ) -> Result<(crate::e2b::E2bClient, crate::e2b::Sandbox), crate::e2b::E2bError> {
+        self.ensure_computer_with_replacement(card)
+            .await
+            .map(|(client, sandbox, _)| (client, sandbox))
+    }
+
+    async fn ensure_computer_with_replacement(
+        &self,
+        card: &AgentCard,
+    ) -> Result<(crate::e2b::E2bClient, crate::e2b::Sandbox, bool), crate::e2b::E2bError> {
         use crate::e2b::{E2bClient, E2bError, Sandbox, SandboxState};
 
         if !card.has_computer {
@@ -6338,6 +6404,7 @@ impl Runtime {
             _ => None,
         };
 
+        let mut replaced = false;
         if let Some((id, envd)) = known {
             let pending = self.inner.store.sandbox_resume_pending(&id).map_err(|err| {
                 E2bError::Local(format!("could not read the sandbox resume state: {err}"))
@@ -6354,6 +6421,7 @@ impl Runtime {
                             envd_token: envd,
                             traffic_token: held.sandbox_traffic_token.clone().unwrap_or_default(),
                         },
+                        false,
                     ));
                 }
                 state @ (SandboxState::Paused | SandboxState::Running) => {
@@ -6387,9 +6455,10 @@ impl Runtime {
                             ))
                         })?;
                     self.inner.events.emit(UiEvent::AgentsChanged);
-                    return Ok((client, woken));
+                    return Ok((client, woken, false));
                 }
                 SandboxState::Gone => {
+                    replaced = true;
                     self.inner.store.mark_resource_gone("e2b", &id).map_err(|err| {
                         E2bError::Local(format!("could not record the missing sandbox: {err}"))
                     })?;
@@ -6430,7 +6499,7 @@ impl Runtime {
         }
 
         self.inner.events.emit(UiEvent::AgentsChanged);
-        Ok((client, fresh))
+        Ok((client, fresh, replaced))
     }
 
     /// Which of the two places this workspace could hand out at all.
@@ -6493,6 +6562,18 @@ impl Runtime {
         card: &AgentCard,
     ) -> Result<(crate::kernel::KernelClient, crate::kernel::Session), crate::kernel::KernelError>
     {
+        self.ensure_browser_with_replacement(card)
+            .await
+            .map(|(client, session, _)| (client, session))
+    }
+
+    async fn ensure_browser_with_replacement(
+        &self,
+        card: &AgentCard,
+    ) -> Result<
+        (crate::kernel::KernelClient, crate::kernel::Session, bool),
+        crate::kernel::KernelError,
+    > {
         use crate::kernel::{BrowserCreation, KernelClient, KernelError, ProfileCreation};
 
         // The same gate `ensure_computer` carries, in the same place and for
@@ -6515,13 +6596,15 @@ impl Runtime {
                 KernelError::Local(format!("could not read the agent's browser: {err}"))
             })?
             .ok_or_else(|| KernelError::Local("the agent is no longer available".into()))?;
+        let mut replaced = false;
         if let Some(id) = held.browser_id {
             // Asked rather than assumed, and the socket is taken from the
             // answer. A stored socket outlives the browser it addressed, and
             // connecting to one is a hang rather than an error.
             if let Some(live) = client.get(&id).await? {
-                return Ok((client, live));
+                return Ok((client, live, false));
             }
+            replaced = true;
             self.inner.store.mark_resource_gone("kernel", &id).map_err(|err| {
                 KernelError::Local(format!("could not record the missing browser: {err}"))
             })?;
@@ -6594,7 +6677,7 @@ impl Runtime {
         }
 
         self.inner.events.emit(UiEvent::AgentsChanged);
-        Ok((client, fresh))
+        Ok((client, fresh, replaced))
     }
 
     /// Books one model call's cost and says so, immediately.
@@ -8062,7 +8145,7 @@ impl Runtime {
                     .await
                 {
                     Ok(called) => Read::answered(&source.name, called.text, called.structured),
-                    Err(err) => Read::refused(&source.name, &err.to_string()),
+                    Err(err) => Read::refused(&source.name, &err.for_agent(kind.label())),
                 }
             }
         });
@@ -9663,5 +9746,13 @@ mod tests {
         assert!(said.contains("may have happened"), "{said}");
         assert!(!said.contains("private-value"), "{said}");
         assert!(!said.contains("Try again later"), "{said}");
+    }
+
+    #[test]
+    fn confirmed_replacements_are_reported_without_changing_ordinary_results() {
+        assert!(computer_replacement_notice(true).contains("previous computer was gone"));
+        assert!(browser_replacement_notice(true).contains("previous browser was gone"));
+        assert_eq!(computer_replacement_notice(false), "");
+        assert_eq!(browser_replacement_notice(false), "");
     }
 }

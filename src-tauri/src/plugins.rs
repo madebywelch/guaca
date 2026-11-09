@@ -76,6 +76,8 @@ pub enum PluginError {
          then, tell the operator exactly what this said."
     )]
     AccountRefused { label: String, detail: String },
+    #[error("{label}'s account sign-in is no longer accepted. Ask the operator to sign in again in Settings, Account.")]
+    AccountExpired { label: String },
     #[error(
         "{label} is connected for this group, but not for you: the operator chose which agents \
          may use it. Ask a peer who has it to do that part, or ask the operator to add you in \
@@ -114,7 +116,7 @@ impl PluginError {
     pub fn for_agent(&self, label: &str) -> String {
         match self {
             Self::AccountRefused { .. } => format!(
-                "{label} could not get a credential from the account service. Try again later."
+                "{label} could not confirm its account sign-in. Ask the operator to check it before trying again."
             ),
             Self::Server(McpError::Unauthorized { .. }) => format!(
                 "{label}'s sign-in is no longer accepted. Ask the operator to reconnect it."
@@ -542,6 +544,7 @@ pub enum Held<'a> {
     Absent,
     /// A token, read fresh for this call.
     Token(AccountUse<'a>),
+    Invalid,
     /// Signed in, and the account could not produce a token, in its own words.
     Refused(String),
 }
@@ -557,6 +560,15 @@ impl<'a> Held<'a> {
         match read {
             Ok(token) => Held::Token(AccountUse { token, connection }),
             Err(AccountError::NotSignedIn) => Held::Absent,
+            Err(AccountError::Upstream { status: 400, message, .. })
+                if serde_json::from_str::<serde_json::Value>(message)
+                    .ok()
+                    .and_then(|value| value.get("error")?.as_str().map(str::to_owned))
+                    .as_deref()
+                    == Some("invalid_grant") =>
+            {
+                Held::Invalid
+            }
             Err(err) => Held::Refused(err.to_string()),
         }
     }
@@ -570,6 +582,7 @@ impl<'a> Held<'a> {
         match self {
             Held::Token(used) => Ok(used),
             Held::Absent => Err(PluginError::NoAccount { label: kind.label().to_string() }),
+            Held::Invalid => Err(PluginError::AccountExpired { label: kind.label().to_string() }),
             Held::Refused(detail) => {
                 Err(PluginError::AccountRefused { label: kind.label().to_string(), detail })
             }
@@ -816,6 +829,19 @@ mod tests {
         let said = failure.for_agent("Neon");
         assert!(!said.contains("private-value"));
         assert!(said.contains("may have happened"));
+    }
+
+    #[test]
+    fn an_account_invalid_grant_requires_a_new_signin() {
+        let error: Result<String, AccountError> = Err(AccountError::Upstream {
+            origin: "https://example.invalid".into(),
+            status: 400,
+            message: r#"{"error":"invalid_grant","detail":"private-value"}"#.into(),
+        });
+        let said = Held::read(&error, "").spend(&PluginKind::Google).unwrap_err().to_string();
+        assert!(said.contains("sign in again"), "{said}");
+        assert!(!said.contains("private-value"), "{said}");
+        assert!(!said.contains("try again later"), "{said}");
     }
 
     #[test]

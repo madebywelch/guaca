@@ -293,7 +293,10 @@ async fn token(
         if let Some(status) = &server.rules.refresh_status {
             let status = status.load(Ordering::SeqCst);
             if status != 0 {
-                return (axum::http::StatusCode::from_u16(status as u16).unwrap(), "invalid_grant")
+                return (
+                    axum::http::StatusCode::from_u16(status as u16).unwrap(),
+                    r#"{"error":"invalid_grant","detail":"private-value"}"#,
+                )
                     .into_response();
             }
         }
@@ -2252,7 +2255,11 @@ async fn failed_refresh_preserves_grant_for_later_recovery() {
             plugins::call(&store, target(), "run_sql", &args).await.unwrap_err().to_string();
         if status == 503 {
             assert!(error.contains("could not confirm whether its sign-in was renewed"), "{error}");
+            assert!(!error.contains("Try again later"), "{error}");
+        } else {
+            assert!(error.contains("connect it again"), "{error}");
         }
+        assert!(!error.contains("private-value"), "{error}");
         assert_eq!(store.plugin_dial(plugin.id).unwrap().unwrap().grant.unwrap(), original);
         failure.store(0, Ordering::SeqCst);
         assert!(plugins::call(&store, target(), "run_sql", &args).await.is_ok());
