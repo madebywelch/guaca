@@ -3,6 +3,7 @@ use guac_lib::domain::agent::CleanDraft;
 use guac_lib::domain::envelope::{Envelope, Intent, Part, Participant, Trust};
 use guac_lib::domain::ids::{MessageId, RunId};
 use guac_lib::domain::routine::{Cadence, Routine, RunKind, Trigger};
+use guac_lib::runtime::guard::{GuardLimits, RunState};
 
 fn fixture() -> (tempfile::TempDir, Store, Routine, Envelope) {
     let dir = tempfile::tempdir().unwrap();
@@ -191,6 +192,46 @@ fn completed_firing_does_not_become_a_false_interruption() {
     let recovered = store.recover().unwrap();
     assert!(recovered.resumed.is_empty());
     assert_eq!(recovered.interrupted, 0);
+}
+
+#[test]
+fn absorbed_firing_is_recovered_only_with_its_whole_owner() {
+    let (_dir, store, routine, envelope) = fixture();
+    let mut parent = envelope.clone();
+    parent.id = MessageId::new();
+    parent.run_id = RunId::new();
+    parent.from = Participant::Human;
+    parent.parts = vec![Part::text("Original work")];
+    store.append_delivery(&parent).unwrap();
+    store
+        .claim_routine(
+            &routine,
+            "scheduled:1000",
+            Some(&envelope),
+            RunKind::Scheduled,
+            None,
+            1000,
+            true,
+        )
+        .unwrap();
+    store.start_routine_deliveries(&[envelope.id], parent.run_id).unwrap();
+    store.settle_run(envelope.run_id).unwrap();
+    let snapshot = RunState::new(GuardLimits::default()).snapshot();
+    store
+        .put_down_with_absorbed(
+            &[(parent.id, &[])],
+            &[(parent.run_id, 0, snapshot)],
+            &[envelope.id],
+        )
+        .unwrap();
+    let recovered = store.recover().unwrap();
+    assert_eq!(recovered.resumed.len(), 1);
+    assert_eq!(recovered.resumed[0].envelope.id, parent.id);
+    assert_eq!(recovered.resumed[0].absorbed, [envelope.id]);
+    assert_eq!(recovered.interrupted, 0);
+    let crashed = store.recover().unwrap();
+    assert!(crashed.resumed.is_empty());
+    assert_eq!(crashed.interrupted, 2);
 }
 
 #[test]

@@ -694,6 +694,8 @@ struct Runs {
     put_down: HashSet<RunId>,
 }
 
+type ResumeRecords = (Vec<MessageId>, Vec<MessageId>);
+
 struct Inner {
     workspace_lease: Mutex<Option<std::fs::File>>,
     /// Explicit rather than relying on an ambient tokio context: Tauri's setup
@@ -778,7 +780,7 @@ struct Inner {
     /// Turns the last host put down, by the message each was answering, and
     /// the records of what each had done before it stopped. Filled once at
     /// boot by [`Runtime::pick_up`] and emptied by the turns themselves.
-    resuming: Mutex<HashMap<MessageId, Vec<MessageId>>>,
+    resuming: Mutex<HashMap<MessageId, ResumeRecords>>,
     events: Arc<dyn EventSink>,
 }
 
@@ -2163,6 +2165,15 @@ impl Runtime {
         }
     }
 
+    fn abandon_undeliverable(&self, envelope: &Envelope) {
+        if envelope.parts.iter().any(|part| matches!(part, Part::Routine { .. })) {
+            if let Err(err) = self.inner.store.fail_routine_delivery(envelope.run_id) {
+                tracing::error!(%err, "could not mark an undeliverable routine as failed");
+            }
+        }
+        self.abandon(envelope.run_id, 1);
+    }
+
     /// Delivers a routine's instruction, as though the operator had asked.
     ///
     /// Attributed to the system rather than to the operator so the transcript
@@ -3103,11 +3114,15 @@ impl Runtime {
         // Releasing rather than returning, because the batch is already off the
         // queue and its run is still counting on it.
         let Some(card) = self.inner.store.get_agent(agent_id).ok().flatten() else {
-            self.abandon(run_id, batch.len());
+            for envelope in &batch {
+                self.abandon_undeliverable(envelope);
+            }
             return;
         };
         if card.lifecycle == Lifecycle::Terminated {
-            self.abandon(run_id, batch.len());
+            for envelope in &batch {
+                self.abandon_undeliverable(envelope);
+            }
             return;
         }
 
@@ -3129,7 +3144,21 @@ impl Runtime {
         // Picked up after a restart: what this turn had already done when the
         // last host stopped it. Taken before anything can put it down again, so
         // a second restart carries the first one's record too.
-        let resumed = self.resumed(&batch);
+        let (resumed, absorbed_ids) = self.resumed(&batch);
+        let absorbed: Vec<Envelope> = match absorbed_ids
+            .iter()
+            .map(|id| self.inner.store.get_message(*id).ok().flatten())
+            .collect::<Option<Vec<_>>>()
+        {
+            Some(absorbed) => absorbed,
+            None => {
+                tracing::error!(agent = %card.name, "could not read an absorbed routine after restart");
+                self.notice(agent_id, run_id, batch.last().map(|envelope| envelope.id), NoticeKind::Interrupted,
+                    "The backend restarted during this, and what was already done could not be read back, so it did not carry on. Review any actions already taken before retrying.".into());
+                self.finish_turn(agent_id, run_id, batch.len());
+                return;
+            }
+        };
 
         // The most recent envelope that wants an answer decides where the
         // reply goes. Everything else in the batch is context.
@@ -3143,7 +3172,7 @@ impl Runtime {
         // questions, and reading the first as the second is what stopped an
         // agent mid-task: an explicit instruction to send an email arrives with
         // no reply expected, so the turn was told nothing needed doing.
-        let assigned = batch.iter().any(|e| e.intent.is_work());
+        let assigned = batch.iter().chain(&absorbed).any(|e| e.intent.is_work());
         let mut mode = match reply_target {
             Some(Participant::Human) => ReplyMode::ToOperator,
             Some(Participant::Agent { .. }) => ReplyMode::ToPeer,
@@ -3166,7 +3195,7 @@ impl Runtime {
             // The host is stopping and this never started, so it is the next
             // host's exactly as it arrived.
             if !self.called_off(run_id) {
-                self.put_down(&batch, &[], &resumed);
+                self.put_down(&batch, &absorbed, &resumed);
                 self.idle(agent_id);
                 return;
             }
@@ -3260,7 +3289,11 @@ impl Runtime {
             // The batch is rendered separately; including it twice would make
             // the model answer itself. What it had done before a restart is
             // told to it once, by the brief below, in the order it happened.
-            .filter(|e| !batch.iter().any(|b| b.id == e.id) && !resumed.contains(&e.id))
+            .filter(|e| {
+                !batch.iter().any(|b| b.id == e.id)
+                    && !resumed.contains(&e.id)
+                    && !absorbed_ids.contains(&e.id)
+            })
             .collect::<Vec<_>>();
 
         // Everything the prompt already carries, which is what stops a message
@@ -3270,7 +3303,8 @@ impl Runtime {
         // already in the history that was just read while still sitting in the
         // inbox waiting to be answered. Two operator lines typed a second apart
         // are enough.
-        let mut rendered: HashSet<MessageId> = history.iter().map(|e| e.id).collect();
+        let mut rendered: HashSet<MessageId> =
+            history.iter().map(|e| e.id).chain(absorbed_ids.iter().copied()).collect();
 
         let memory = self.inner.workspace.read(agent_id);
         // Read fresh alongside it, and a read that fails is an empty list
@@ -3432,6 +3466,14 @@ impl Runtime {
             Err(err) => tracing::warn!(%err, "could not read the agent's decisions"),
         }
         self.deliver_files(&card, &batch, modalities, &mut messages).await;
+        if !absorbed.is_empty() {
+            let lines = absorbed
+                .iter()
+                .map(|envelope| prompt::render_incoming(envelope, &names))
+                .collect::<Vec<_>>();
+            messages.push(ChatMessage::user(lines.join("\n\n")));
+            self.deliver_files(&card, &absorbed, modalities, &mut messages).await;
+        }
         if let Some(brief) = prompt::resumed(&before) {
             messages.push(ChatMessage::user(brief));
         }
@@ -3470,7 +3512,7 @@ impl Runtime {
         // What this turn took in from its inbox while it ran. Released as it
         // was read, and still this turn's to answer: a host that stops it
         // puts these down with the batch.
-        let mut taken_in: Vec<Envelope> = Vec::new();
+        let mut taken_in: Vec<Envelope> = absorbed;
         let mut failure: Option<LlmError> = None;
         let mut hit_tool_ceiling = false;
         let mut budget_exhausted = false;
@@ -4063,7 +4105,8 @@ impl Runtime {
             // boundary is where it gets its notice, and folding called-off work
             // into a live turn is the one thing a stop exists to prevent.
             let takeable = matches!(next.from, Participant::Human | Participant::System)
-                && !self.stopped(next.run_id);
+                && !self.stopped(next.run_id)
+                && !self.inner.resuming.lock().contains_key(&next.id);
             if !takeable {
                 intake.carry.push_front(next);
                 break;
@@ -8473,14 +8516,14 @@ async fn actor_loop(
             // Everything this inbox is holding dies with the agent, and the
             // run counting on it has to be told. `first` was already taken off
             // the queue; the rest would go silently when `rx` drops.
-            runtime.abandon(first.run_id, 1);
+            runtime.abandon_undeliverable(&first);
             for held in carry.drain(..) {
                 depth.fetch_sub(1, Ordering::SeqCst);
-                runtime.abandon(held.run_id, 1);
+                runtime.abandon_undeliverable(&held);
             }
             while let Ok(orphan) = rx.try_recv() {
                 depth.fetch_sub(1, Ordering::SeqCst);
-                runtime.abandon(orphan.run_id, 1);
+                runtime.abandon_undeliverable(&orphan);
             }
             break;
         }
@@ -8785,7 +8828,7 @@ mod tests {
             created_at: now_ms(),
         };
         runtime.pick_up(crate::db::Recovered {
-            resumed: vec![crate::db::PutDown { envelope, records: vec![] }],
+            resumed: vec![crate::db::PutDown { envelope, records: vec![], absorbed: vec![] }],
             steps: HashMap::from([(run, 7)]),
             guards: HashMap::new(),
             interrupted: 0,

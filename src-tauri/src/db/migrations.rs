@@ -1933,6 +1933,7 @@ ALTER TABLE plugins ADD COLUMN grant_generation INTEGER NOT NULL DEFAULT 0;
     (
         70,
         r#"
+ALTER TABLE put_down ADD COLUMN absorbed TEXT NOT NULL DEFAULT '[]';
 CREATE TABLE routine_runs_new (
     id INTEGER PRIMARY KEY,
     routine_id TEXT NOT NULL,

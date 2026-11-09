@@ -1315,6 +1315,10 @@ impl Store {
                 "UPDATE routine_occurrences SET state='started',owner_run=?2 WHERE message_id=?1 AND state IN ('pending','started')",
                 params![message.to_string(), owner.to_string()],
             )?;
+            tx.execute(
+                "UPDATE routine_runs SET run_id=?2 WHERE run_id=(SELECT run_id FROM messages WHERE id=?1) AND EXISTS (SELECT 1 FROM routine_occurrences WHERE message_id=?1 AND state='started')",
+                params![message.to_string(), owner.to_string()],
+            )?;
         }
         tx.commit()?;
         Ok(())

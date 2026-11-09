@@ -146,11 +146,23 @@ impl Runtime {
         absorbed: &[Envelope],
         records: &[MessageId],
     ) {
-        let touched: HashSet<RunId> =
-            booked.iter().chain(absorbed).map(|envelope| envelope.run_id).collect();
+        let routine_absorbed: Vec<MessageId> = absorbed
+            .iter()
+            .filter(|envelope| {
+                envelope.parts.iter().any(|part| matches!(part, Part::Routine { .. }))
+            })
+            .map(|envelope| envelope.id)
+            .collect();
+        let other_absorbed: Vec<_> =
+            absorbed.iter().filter(|envelope| !routine_absorbed.contains(&envelope.id)).collect();
+        let touched: HashSet<RunId> = booked
+            .iter()
+            .chain(other_absorbed.iter().copied())
+            .map(|envelope| envelope.run_id)
+            .collect();
         let limits: HashMap<RunId, _> = booked
             .iter()
-            .chain(absorbed)
+            .chain(other_absorbed.iter().copied())
             .filter_map(|envelope| {
                 let Participant::Agent { id } = envelope.to else { return None };
                 self.inner
@@ -165,7 +177,7 @@ impl Runtime {
             .iter()
             .enumerate()
             .map(|(at, envelope)| (envelope.id, if at == 0 { records } else { &[][..] }))
-            .chain(absorbed.iter().map(|envelope| (envelope.id, &[][..])))
+            .chain(other_absorbed.iter().map(|envelope| (envelope.id, &[][..])))
             .collect();
 
         let mut runs = self.inner.runs.lock();
@@ -187,7 +199,9 @@ impl Runtime {
             .collect();
         drop(guard);
         // Under the lock, so `whole` is still true when it is written.
-        if let Err(err) = self.inner.store.put_down(&messages, &whole) {
+        if let Err(err) =
+            self.inner.store.put_down_with_absorbed(&messages, &whole, &routine_absorbed)
+        {
             tracing::error!(%err, "could not put work down; the next host reports it interrupted");
         }
     }
@@ -250,7 +264,18 @@ impl Runtime {
             self.finish_turn(agent, envelope.run_id, 1);
         }
         if !kept.is_empty() {
-            self.put_down(&kept, &[], &[]);
+            for envelope in kept {
+                let (records, absorbed_ids) = self.resumed(std::slice::from_ref(&envelope));
+                let absorbed: Option<Vec<_>> = absorbed_ids
+                    .iter()
+                    .map(|id| self.inner.store.get_message(*id).ok().flatten())
+                    .collect();
+                let Some(absorbed) = absorbed else {
+                    tracing::error!("could not read an absorbed routine while putting work down");
+                    continue;
+                };
+                self.put_down(&[envelope], &absorbed, &records);
+            }
         }
         self.idle(agent);
     }
@@ -327,7 +352,7 @@ impl Runtime {
 
     /// The records of what a turn picked up after a restart had already done,
     /// taken so no other turn reads them.
-    pub(super) fn resumed(&self, batch: &[Envelope]) -> Vec<MessageId> {
+    pub(super) fn resumed(&self, batch: &[Envelope]) -> (Vec<MessageId>, Vec<MessageId>) {
         let mut resuming = self.inner.resuming.lock();
         batch.iter().find_map(|envelope| resuming.remove(&envelope.id)).unwrap_or_default()
     }
@@ -376,8 +401,8 @@ impl Runtime {
         }
         let messages = resumed.len();
         for put in resumed {
-            if !put.records.is_empty() {
-                self.inner.resuming.lock().insert(put.envelope.id, put.records);
+            if !put.records.is_empty() || !put.absorbed.is_empty() {
+                self.inner.resuming.lock().insert(put.envelope.id, (put.records, put.absorbed));
             }
             self.queue(put.envelope);
         }
