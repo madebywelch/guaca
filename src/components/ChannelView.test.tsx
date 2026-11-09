@@ -20,13 +20,14 @@ import { ChannelView } from "./ChannelView";
  */
 
 const pairMessages = vi.fn<() => Promise<Envelope[]>>(async () => []);
+const sendMessage = vi.fn(async (..._args: unknown[]) => ({ messageId: "message", runId: "run" }));
 
 vi.mock("../lib/ipc", () => ({
   api: {
     channelMessages: async () => [],
     conversationFlow: async () => [],
     clearChannel: async () => 0,
-    sendMessage: async () => "run",
+    sendMessage: (...args: unknown[]) => sendMessage(...args),
     agentComputer: async () => null,
     pairMessages: () => pairMessages(),
   },
@@ -118,10 +119,30 @@ function open(messages: Envelope[]) {
 }
 
 beforeEach(() => {
+  sessionStorage.clear();
+  sendMessage.mockReset();
+  sendMessage.mockResolvedValue({ messageId: "message", runId: "run" });
   pairMessages.mockClear();
   pairMessages.mockResolvedValue([]);
   // A mark left by the last test would have this one jumping somewhere.
   useStore.setState({ focused: null });
+});
+
+it("passes the composer key to the host and returns its receipt", async () => {
+  open([]);
+  const input = screen.getByPlaceholderText("Write to Manager…");
+  fireEvent.change(input, { target: { value: "first" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  await waitFor(() =>
+    expect(sendMessage).toHaveBeenCalledWith(MANAGER, "first", [], expect.any(String)),
+  );
+  sendMessage.mockRejectedValueOnce(new Error("lost"));
+  await waitFor(() =>
+    expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(true),
+  );
+  fireEvent.change(input, { target: { value: "second" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  expect(await screen.findByRole("button", { name: "Send again" })).toBeTruthy();
 });
 
 describe("peer traffic in a channel", () => {

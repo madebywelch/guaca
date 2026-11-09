@@ -5,8 +5,8 @@ export interface Draft {
 }
 export type Delivery =
   | { kind: "idle" }
-  | { kind: "sending"; payload: Draft }
-  | { kind: "unknown"; payload: Draft; restored: boolean };
+  | { kind: "sending"; payload: Draft; key?: string }
+  | { kind: "unknown"; payload: Draft; key?: string; restored: boolean };
 export interface DraftState {
   draft: Draft;
   delivery: Delivery;
@@ -18,7 +18,8 @@ export type DraftAction =
   | { type: "files"; files: Attachment[] }
   | { type: "stage" }
   | { type: "staged"; files: Attachment[] }
-  | { type: "send" }
+  | { type: "send"; key?: string }
+  | { type: "retry" }
   | { type: "success" }
   | { type: "unknown" }
   | { type: "dismiss" }
@@ -54,8 +55,22 @@ export function reduceDraft(state: DraftState, action: DraftAction): DraftState 
       return {
         ...state,
         draft: { text: "", files: [] },
-        delivery: { kind: "sending", payload: state.draft },
+        delivery: {
+          kind: "sending",
+          payload: state.draft,
+          ...(action.key ? { key: action.key } : {}),
+        },
       };
+    case "retry": {
+      if (state.delivery.kind !== "unknown" || !state.delivery.key || state.staging) return state;
+      const { payload, key, restored } = state.delivery;
+      const same = restored && JSON.stringify(state.draft) === JSON.stringify(payload);
+      return {
+        ...state,
+        draft: same ? { text: "", files: [] } : state.draft,
+        delivery: { kind: "sending", payload, key },
+      };
+    }
     case "success":
       if (state.delivery.kind !== "sending") return state;
       return { ...state, delivery: { kind: "idle" } };
@@ -110,6 +125,9 @@ export function readDraftState(key: string): DraftState {
           delivery: {
             kind: "unknown",
             payload,
+            ...(typeof value.delivery.key === "string" && value.delivery.key
+              ? { key: value.delivery.key }
+              : {}),
             restored: value.delivery.kind === "unknown" && value.delivery.restored === true,
           },
         };

@@ -323,7 +323,7 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
         group={agent?.groupId ?? null}
         disabled={!agent || agent.lifecycle === "terminated"}
         disabledReason="This agent has been deleted."
-        onSend={async (text, files) => {
+        onSend={async (text, files, key) => {
           if (!agent) return;
           // Typing into the box is a decision to be at the end of the
           // transcript, so this is the one thing besides opening a channel
@@ -332,7 +332,7 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
           // same bug in the other direction.
           pin();
           try {
-            await api.sendMessage(agent.id, text, files);
+            return await api.sendMessage(agent.id, text, files, key);
           } catch (error) {
             showFailure(error);
             throw error;

@@ -110,7 +110,7 @@ interface Props {
   group: GroupId | null;
   disabled?: boolean;
   disabledReason?: string;
-  onSend: (text: string, files: Attachment[]) => Promise<void>;
+  onSend: (text: string, files: Attachment[], key: string) => Promise<unknown>;
 }
 
 export function Composer({
@@ -245,6 +245,38 @@ export function Composer({
     });
   };
 
+  const supportKey = `guaca.keyed-send:${workspaceOrigin()}`;
+  const supportsRetry = () => {
+    try {
+      return sessionStorage.getItem(supportKey) === "yes";
+    } catch {
+      return false;
+    }
+  };
+  const send = async (payload: { text: string; files: Attachment[] }, key: string) => {
+    setRefused([]);
+    try {
+      const result = await onSend(payload.text.trim(), payload.files, key);
+      try {
+        if (
+          result &&
+          typeof result === "object" &&
+          "messageId" in result &&
+          "runId" in result &&
+          typeof result.messageId === "string" &&
+          typeof result.runId === "string"
+        )
+          sessionStorage.setItem(supportKey, "yes");
+        else sessionStorage.removeItem(supportKey);
+      } catch {}
+      owner.dispatch({ type: "success" });
+    } catch {
+      owner.dispatch({ type: "unknown" });
+    } finally {
+      ref.current?.focus();
+    }
+  };
+
   const submit = async () => {
     const current = owner.get();
     const { text, files } = current.draft;
@@ -259,21 +291,14 @@ export function Composer({
     )
       return;
     try {
-      owner.dispatch({ type: "send" }, true);
+      const key = Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
+        byte.toString(16).padStart(2, "0"),
+      ).join("");
+      owner.dispatch({ type: "send", key }, true);
+      void send({ text, files }, key);
     } catch (error) {
       setRefused([errorMessage(error)]);
       return;
-    }
-    // Clear optimistically: the message is echoed back from the runtime, and
-    // leaving the draft in place makes it look like nothing happened.
-    setRefused([]);
-    try {
-      await onSend(body, files);
-      owner.dispatch({ type: "success" });
-    } catch {
-      owner.dispatch({ type: "unknown" });
-    } finally {
-      ref.current?.focus();
     }
   };
 
@@ -409,7 +434,11 @@ export function Composer({
       )}
       {state.delivery.kind === "unknown" && (
         <div role="alert">
-          <p>Delivery could not be confirmed. Check the conversation before sending again.</p>
+          <p>
+            {state.delivery.key && supportsRetry()
+              ? "Guaca could not confirm this was delivered. Sending again will not create a duplicate."
+              : "Delivery could not be confirmed. Check the conversation before sending again."}
+          </p>
           {(state.draft.text !== state.delivery.payload.text ||
             JSON.stringify(state.draft.files) !== JSON.stringify(state.delivery.payload.files)) && (
             <>
@@ -422,9 +451,20 @@ export function Composer({
           <button
             type="button"
             className="btn btn--small"
-            onClick={() => owner.dispatch({ type: "dismiss" })}
+            disabled={disabled || stagingCount > 0}
+            onClick={() => {
+              const delivery = owner.get().delivery;
+              if (delivery.kind === "unknown" && delivery.key && supportsRetry()) {
+                try {
+                  owner.dispatch({ type: "retry" }, true);
+                  void send(delivery.payload, delivery.key);
+                } catch (error) {
+                  setRefused([errorMessage(error)]);
+                }
+              } else owner.dispatch({ type: "dismiss" });
+            }}
           >
-            Conversation checked
+            {state.delivery.key && supportsRetry() ? "Send again" : "Conversation checked"}
           </button>
         </div>
       )}
