@@ -27,10 +27,15 @@ pub struct Started {
 }
 
 struct Session {
-    code: Option<oneshot::Sender<String>>,
-    result: Option<oneshot::Receiver<Outcome>>,
+    state: Attempt,
     cancel: watch::Sender<bool>,
     task: JoinHandle<()>,
+}
+
+enum Attempt {
+    Starting { code: oneshot::Sender<String>, result: oneshot::Receiver<Outcome> },
+    AwaitingCode { code: oneshot::Sender<String>, result: oneshot::Receiver<Outcome> },
+    Completing,
 }
 
 enum Outcome {
@@ -41,9 +46,9 @@ enum Outcome {
     Expired,
 }
 
-struct Starting(Option<watch::Sender<bool>>);
+struct CancelOnDrop(Option<watch::Sender<bool>>);
 
-impl Drop for Starting {
+impl Drop for CancelOnDrop {
     fn drop(&mut self) {
         if let Some(cancel) = self.0.take() {
             let _ = cancel.send(true);
@@ -76,18 +81,32 @@ impl Signin {
             sessions.clear();
             let program = program.to_owned();
             let task = tokio::spawn(async move {
-                let outcome = run(&program, url_tx, code_rx, cancel_rx).await;
+                let outcome = run(&program, url_tx, code_rx, cancel_rx, EXPIRES).await;
                 let _ = result_tx.send(outcome);
             });
-            let starting = Starting(Some(cancel_tx.clone()));
+            let starting = CancelOnDrop(Some(cancel_tx.clone()));
             sessions.insert(
                 id.clone(),
-                Session { code: Some(code_tx), result: Some(result_rx), cancel: cancel_tx, task },
+                Session {
+                    state: Attempt::Starting { code: code_tx, result: result_rx },
+                    cancel: cancel_tx,
+                    task,
+                },
             );
             starting
         };
         match tokio::time::timeout(STARTS_WITHIN, url_rx).await {
             Ok(Ok(url)) => {
+                let mut sessions = self.sessions.lock().await;
+                if let Some(session) = sessions.get_mut(&id) {
+                    let state = std::mem::replace(&mut session.state, Attempt::Completing);
+                    session.state = match state {
+                        Attempt::Starting { code, result } => {
+                            Attempt::AwaitingCode { code, result }
+                        }
+                        other => other,
+                    };
+                }
                 starting.0 = None;
                 Ok(Started { id, url })
             }
@@ -106,16 +125,22 @@ impl Signin {
         if code.is_empty() || code.len() > 4096 || code.chars().any(char::is_control) {
             return Err("Enter the code from the Claude sign-in page.");
         }
-        let result = {
+        let (result, mut completing) = {
             let mut sessions = self.sessions.lock().await;
             let session = sessions.get_mut(id).ok_or("Claude sign-in is no longer active.")?;
-            let sender = session.code.take().ok_or("This sign-in is already being completed.")?;
-            let result = session.result.take().ok_or("This sign-in is already being completed.")?;
+            let state = std::mem::replace(&mut session.state, Attempt::Completing);
+            let (sender, result) = match state {
+                Attempt::Starting { code, result } | Attempt::AwaitingCode { code, result } => {
+                    (code, result)
+                }
+                Attempt::Completing => return Err("This sign-in is already being completed."),
+            };
             let _ = sender.send(code);
-            result
+            (result, CancelOnDrop(Some(session.cancel.clone())))
         };
         let outcome = result.await.unwrap_or(Outcome::Failed);
         self.cancel(id).await;
+        completing.0 = None;
         match outcome {
             Outcome::SignedIn => Ok(Status { signed_in: true }),
             Outcome::Cancelled => Err("Claude sign-in was cancelled."),
@@ -140,6 +165,7 @@ async fn run(
     url_tx: oneshot::Sender<String>,
     code_rx: oneshot::Receiver<String>,
     mut cancel: watch::Receiver<bool>,
+    expires: Duration,
 ) -> Outcome {
     let Ok(mut child) = tokio::process::Command::new(program)
         .args(["auth", "login", "--claudeai"])
@@ -156,7 +182,7 @@ async fn run(
         result = perform(program, &mut child, url_tx, code_rx) => if result { Outcome::SignedIn } else { Outcome::Failed },
         _ = invalid_code(stderr) => Outcome::InvalidCode,
         _ = cancel.changed() => Outcome::Cancelled,
-        _ = tokio::time::sleep(EXPIRES) => Outcome::Expired,
+        _ = tokio::time::sleep(expires) => Outcome::Expired,
     };
     if child.try_wait().ok().flatten().is_none() {
         let _ = child.kill().await;
@@ -324,5 +350,81 @@ mod tests {
             .unwrap()
             .unwrap()
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn a_second_submission_cannot_take_over_a_completing_attempt() {
+        let (dir, path) =
+            program(&format!("{PROMPTS}\nread code\necho ready > \"$0.ready\"\nexec sleep 60"));
+        let signin = Arc::new(Signin::default());
+        let started = signin.begin(&path).await.unwrap();
+        let other = signin.clone();
+        let id = started.id.clone();
+        let pending = tokio::spawn(async move { other.complete(&id, "first".into()).await });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !dir.path().join("claude.ready").exists() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(matches!(
+            signin.complete(&started.id, "second".into()).await,
+            Err("This sign-in is already being completed.")
+        ));
+        signin.cancel(&started.id).await;
+        assert!(pending.await.unwrap().is_err());
+    }
+
+    #[tokio::test]
+    async fn an_expired_attempt_returns_timeout_and_reaps_the_child() {
+        let (_dir, path) = program(&format!("{PROMPTS}\nexec sleep 60"));
+        let (url_tx, url_rx) = oneshot::channel();
+        let (_code_tx, code_rx) = oneshot::channel();
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+        let task = tokio::spawn(async move {
+            run(&path, url_tx, code_rx, cancel_rx, Duration::from_secs(1)).await
+        });
+        url_rx.await.unwrap();
+        assert!(matches!(task.await.unwrap(), Outcome::Expired));
+    }
+
+    #[tokio::test]
+    async fn abandoning_completion_stops_and_reaps_the_child() {
+        let (dir, path) =
+            program(&format!("{PROMPTS}\nread code\necho $$ > \"$0.pid\"\nexec sleep 60"));
+        let signin = Arc::new(Signin::default());
+        let started = signin.begin(&path).await.unwrap();
+        let other = signin.clone();
+        let id = started.id.clone();
+        let pending = tokio::spawn(async move { other.complete(&id, "code".into()).await });
+        let pid_path = dir.path().join("claude.pid");
+        let pid: u32 = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Ok(text) = std::fs::read_to_string(&pid_path) {
+                    if let Ok(pid) = text.trim().parse() {
+                        break pid;
+                    }
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        pending.abort();
+        let _ = pending.await;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while std::process::Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .stderr(Stdio::null())
+                .status()
+                .unwrap()
+                .success()
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the child was not reaped after completion was abandoned");
     }
 }
