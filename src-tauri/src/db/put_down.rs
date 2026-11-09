@@ -199,8 +199,21 @@ impl Store {
             pending
         };
 
-        let (resumed, cut): (Vec<PutDown>, Vec<PutDown>) =
+        let (mut resumed, cut): (Vec<PutDown>, Vec<PutDown>) =
             put.into_iter().partition(|put| whole.contains_key(&put.envelope.run_id));
+        let already: HashSet<_> = resumed.iter().map(|put| put.envelope.id).collect();
+        {
+            let mut stmt = tx.prepare(&format!(
+                "SELECT {ENVELOPE} FROM messages m JOIN routine_occurrences o ON o.message_id=m.id WHERE o.state='pending' ORDER BY m.created_at,m.id"
+            ))?;
+            let rows = stmt.query_map([], row_to_envelope)?;
+            for row in rows {
+                let envelope = row??;
+                if !already.contains(&envelope.id) {
+                    resumed.push(PutDown { envelope, records: Vec::new() });
+                }
+            }
+        }
         let picked: HashSet<RunId> = resumed.iter().map(|put| put.envelope.run_id).collect();
 
         // Where each interrupted conversation's notice goes: the message it
@@ -213,8 +226,24 @@ impl Store {
                 anchors.push(original.clone());
             }
         }
+        {
+            let mut stmt = tx.prepare(&format!(
+                "SELECT {ENVELOPE} FROM messages m JOIN routine_occurrences o ON o.message_id=m.id WHERE o.state='started'"
+            ))?;
+            let rows = stmt.query_map([], row_to_envelope)?;
+            for row in rows {
+                let original = row??;
+                if !picked.contains(&original.run_id) && anchored.insert(original.run_id) {
+                    anchors.push(original);
+                }
+            }
+        }
         for original in &anchors {
             Store::insert_message(&tx, &interrupted(original))?;
+        }
+
+        for original in &anchors {
+            tx.execute("UPDATE routine_occurrences SET state='done' WHERE message_id=?1 AND state='started'", [original.id.to_string()])?;
         }
 
         for put in &resumed {

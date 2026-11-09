@@ -441,6 +441,8 @@ pub enum RunKind {
     /// hour is the cadence, and an event firing nobody expected is whatever is
     /// posting to the receiver.
     Event,
+    /// The firing could not be delivered.
+    Failed,
 }
 
 impl RunKind {
@@ -450,6 +452,7 @@ impl RunKind {
             RunKind::Test => "test",
             RunKind::Skipped => "skipped",
             RunKind::Event => "event",
+            RunKind::Failed => "failed",
         }
     }
 
@@ -459,6 +462,7 @@ impl RunKind {
             "test" => Some(RunKind::Test),
             "skipped" => Some(RunKind::Skipped),
             "event" => Some(RunKind::Event),
+            "failed" => Some(RunKind::Failed),
             _ => None,
         }
     }
@@ -488,6 +492,7 @@ pub struct RoutineRun {
     pub kind: RunKind,
     pub at: i64,
     pub spent: super::usage::Tokens,
+    pub error: Option<String>,
 }
 
 impl Routine {
@@ -1160,6 +1165,7 @@ mod tests {
             kind: RunKind::Scheduled,
             at: 1_000,
             spent: Tokens { prompt: 900, completion: 100, cost: Some(0.002), calls: 2 },
+            error: None,
         };
         let json = serde_json::to_value(&run).unwrap();
         assert_eq!(json["kind"], serde_json::json!("scheduled"));

@@ -714,6 +714,7 @@ struct Inner {
     guard: Mutex<GuardRegistry>,
     inboxes: Mutex<HashMap<AgentId, Inbox>>,
     activity: Mutex<HashMap<AgentId, Activity>>,
+    routine_delivery: Mutex<()>,
     /// Outstanding work per run, used to decide when a cascade has settled, and
     /// which of those runs the operator has stopped.
     runs: Mutex<Runs>,
@@ -875,6 +876,7 @@ impl Runtime {
                 guard: Mutex::new(GuardRegistry::new()),
                 inboxes: Mutex::new(HashMap::new()),
                 activity: Mutex::new(HashMap::new()),
+                routine_delivery: Mutex::new(()),
                 runs: Mutex::new(Runs::default()),
                 waiting: Mutex::new(HashMap::new()),
                 workspace,
@@ -1780,6 +1782,7 @@ impl Runtime {
             // read, answered and released by a turn that finishes before the
             // booking lands, which settles the run twice.
             let run = envelope.run_id;
+            let routine = envelope.parts.iter().any(|part| matches!(part, Part::Routine { .. }));
 
             let queued = {
                 let inboxes = self.inner.inboxes.lock();
@@ -1806,6 +1809,11 @@ impl Runtime {
                 // this send. Nobody will ever read this, so it stops counting
                 // now rather than holding the run open forever.
                 None => {
+                    if routine && !self.draining() {
+                        if let Err(err) = self.inner.store.fail_routine_delivery(run) {
+                            tracing::error!(%err, %run, "could not mark an undelivered routine as failed");
+                        }
+                    }
                     if let Err(err) = self.inner.store.interrupt_decision_run(run) {
                         tracing::error!(%err, %run, "could not mark undelivered decision follow-through");
                     }
@@ -2177,10 +2185,44 @@ impl Runtime {
         routine: &Routine,
         payload: Option<String>,
     ) -> Result<RunId, RuntimeError> {
+        self.claim_routine_delivery(
+            routine,
+            payload,
+            &format!("test:{}", RunId::new()),
+            RunKind::Test,
+            false,
+        )
+        .map(|run| run.expect("a fresh test occurrence is unique"))
+    }
+
+    fn claim_routine_delivery(
+        &self,
+        routine: &Routine,
+        payload: Option<String>,
+        occurrence: &str,
+        kind: RunKind,
+        advance: bool,
+    ) -> Result<Option<RunId>, RuntimeError> {
         let to = routine.agent_id;
-        let card = self.inner.store.get_agent(to)?.ok_or(RuntimeError::UnknownAgent(to))?;
-        if card.lifecycle != Lifecycle::Active {
-            return Err(RuntimeError::AgentTerminated(card.name));
+        let card = self.inner.store.get_agent(to)?;
+        let failure = match card {
+            None => Some((RuntimeError::UnknownAgent(to), "The agent no longer exists")),
+            Some(card) if card.lifecycle != Lifecycle::Active => {
+                Some((RuntimeError::AgentTerminated(card.name), "The agent is not active"))
+            }
+            Some(_) => None,
+        };
+        if let Some((err, detail)) = failure {
+            self.inner.store.claim_routine(
+                routine,
+                occurrence,
+                None,
+                RunKind::Failed,
+                Some(detail),
+                now_ms(),
+                advance,
+            )?;
+            return Err(err);
         }
 
         let run_id = RunId::new();
@@ -2205,8 +2247,27 @@ impl Runtime {
             created_at: now_ms(),
         };
 
-        self.deliver(envelope)?;
-        Ok(run_id)
+        let mut runs = self.inner.runs.lock();
+        if !self.inner.store.claim_routine(
+            routine,
+            occurrence,
+            Some(&envelope),
+            kind,
+            None,
+            now_ms(),
+            advance,
+        )? {
+            return Ok(None);
+        }
+        if runs.draining {
+            drop(runs);
+            self.inner.events.emit(UiEvent::MessageAppended { message: Box::new(envelope) });
+            return Ok(Some(run_id));
+        }
+        self.book(&mut runs, run_id);
+        drop(runs);
+        self.enqueue_delivery(envelope);
+        Ok(Some(run_id))
     }
 
     /// Fires a routine now, without touching its schedule.
@@ -2221,9 +2282,7 @@ impl Runtime {
     /// the agent was mid-turn would answer a question nobody asked, and read
     /// as the button being broken.
     pub fn test_routine(&self, routine: &Routine) -> Result<RunId, RuntimeError> {
-        let run = self.send_from_routine(routine, None)?;
-        self.log_routine_run(routine, Some(run), RunKind::Test, now_ms());
-        Ok(run)
+        self.send_from_routine(routine, None)
     }
 
     /// An event arrived: every active routine standing on it fires now.
@@ -2251,7 +2310,9 @@ impl Runtime {
         &self,
         event: &EventTrigger,
         payload: Option<String>,
+        delivery_id: &str,
     ) -> Result<EventDelivery, StoreError> {
+        let _delivery = self.inner.routine_delivery.lock();
         let now = now_ms();
         let standing = self.inner.store.event_routines(event)?;
         let mut delivery = EventDelivery { listening: standing.len(), ..Default::default() };
@@ -2259,11 +2320,7 @@ impl Runtime {
         for routine in standing {
             let skipping = routine.skip_if_working && self.working(routine.agent_id);
 
-            if let Err(err) = self.inner.store.routine_ran(&routine, now) {
-                tracing::error!(%err, "could not record an event routine as fired; skipping it");
-                continue;
-            }
-            self.emit(UiEvent::RoutinesChanged { agent_id: routine.agent_id });
+            let occurrence = format!("event:{delivery_id}");
 
             tracing::info!(
                 agent = %routine.agent_id.short(),
@@ -2274,30 +2331,38 @@ impl Runtime {
             );
 
             if skipping {
-                self.log_routine_run(&routine, None, RunKind::Skipped, now);
-                delivery.skipped += 1;
+                if self.inner.store.claim_routine(
+                    &routine,
+                    &occurrence,
+                    None,
+                    RunKind::Skipped,
+                    None,
+                    now,
+                    true,
+                )? {
+                    delivery.skipped += 1;
+                    self.emit(UiEvent::RoutinesChanged { agent_id: routine.agent_id });
+                }
                 continue;
             }
 
-            match self.send_from_routine(&routine, payload.clone()) {
-                Ok(run) => {
-                    self.log_routine_run(&routine, Some(run), RunKind::Event, now);
+            match self.claim_routine_delivery(
+                &routine,
+                payload.clone(),
+                &occurrence,
+                RunKind::Event,
+                true,
+            ) {
+                Ok(Some(_)) => {
                     delivery.delivered += 1;
+                    self.emit(UiEvent::RoutinesChanged { agent_id: routine.agent_id });
                 }
+                Ok(None) => {}
+                Err(RuntimeError::Store(err)) => return Err(err),
                 Err(err) => tracing::warn!(%err, "an event routine could not be delivered"),
             }
         }
         Ok(delivery)
-    }
-
-    /// Files a firing against the routine that caused it.
-    ///
-    /// A history nobody can read is not worth failing a delivery over, so this
-    /// warns and carries on: the agent has already been given the work.
-    fn log_routine_run(&self, routine: &Routine, run: Option<RunId>, kind: RunKind, at: i64) {
-        if let Err(err) = self.inner.store.record_routine_run(routine.id, run, kind, at) {
-            tracing::warn!(%err, "could not record what a routine did");
-        }
     }
 
     /// Watches the clock so agents can keep their own appointments.
@@ -2338,6 +2403,7 @@ impl Runtime {
         if self.draining() {
             return;
         }
+        let _delivery = self.inner.routine_delivery.lock();
         let now = now_ms();
         let due = match self.inner.store.due_routines(now) {
             Ok(due) => due,
@@ -2358,10 +2424,8 @@ impl Runtime {
             // Recorded as run before it is run. A routine that fails on
             // delivery must not come due again on the next tick and again on
             // the one after that.
-            if let Err(err) = self.inner.store.routine_ran(&routine, now) {
-                tracing::error!(%err, "could not advance a routine; skipping it");
-                continue;
-            }
+            let occurrence =
+                format!("scheduled:{}", routine.next_run_at.expect("due routines have a slot"));
             // The row moved: to its next slot, or off the list altogether if it
             // was a one-shot. Either way the panel is showing a firing that has
             // already happened.
@@ -2381,12 +2445,23 @@ impl Runtime {
             // a firing that leaves no trace at all is indistinguishable from a
             // scheduler that has stopped working.
             if skipping {
-                self.log_routine_run(&routine, None, RunKind::Skipped, now);
+                if let Err(err) = self.inner.store.claim_routine(
+                    &routine,
+                    &occurrence,
+                    None,
+                    RunKind::Skipped,
+                    None,
+                    now,
+                    true,
+                ) {
+                    tracing::error!(%err, "could not record a skipped routine");
+                }
                 continue;
             }
 
-            match self.send_from_routine(&routine, None) {
-                Ok(run) => self.log_routine_run(&routine, Some(run), RunKind::Scheduled, now),
+            match self.claim_routine_delivery(&routine, None, &occurrence, RunKind::Scheduled, true)
+            {
+                Ok(_) => {}
                 Err(err) => tracing::warn!(%err, "a routine could not be delivered"),
             }
         }
@@ -2743,16 +2818,12 @@ impl Runtime {
                 return false;
             }
             runs.stopped.insert(run);
-            if let Err(err) = self.inner.store.settle_run(run) {
+            if let Err(err) = self.inner.store.stop_routine_run(run) {
                 tracing::error!(%err, %run, "could not mark the stopped conversation in the recovery journal");
             }
             // Called off is never picked up, including whatever of it a drain
             // had already put down for the next host.
-            if runs.put_down.remove(&run) {
-                if let Err(err) = self.inner.store.forget_put_down(run) {
-                    tracing::error!(%err, %run, "could not take a stopped conversation off the put-down list");
-                }
-            }
+            runs.put_down.remove(&run);
         }
 
         self.release_parked(run);
@@ -3036,6 +3107,19 @@ impl Runtime {
             return;
         };
         if card.lifecycle == Lifecycle::Terminated {
+            self.abandon(run_id, batch.len());
+            return;
+        }
+
+        let routines: Vec<_> = batch
+            .iter()
+            .filter(|envelope| {
+                envelope.parts.iter().any(|part| matches!(part, Part::Routine { .. }))
+            })
+            .map(|envelope| envelope.id)
+            .collect();
+        if let Err(err) = self.inner.store.start_routine_deliveries(&routines, run_id) {
+            tracing::error!(%err, "could not start a routine delivery; leaving it for recovery");
             self.abandon(run_id, batch.len());
             return;
         }
@@ -3431,7 +3515,7 @@ impl Runtime {
                 break;
             }
 
-            let arrived = self.take_in(mode, &names, &mut rendered, &mut messages, intake);
+            let arrived = self.take_in(run_id, mode, &names, &mut rendered, &mut messages, intake);
             taken_in.extend(arrived.iter().cloned());
             if !arrived.is_empty() {
                 self.deliver_files(&card, &arrived, modalities, &mut messages).await;
@@ -3950,6 +4034,7 @@ impl Runtime {
     /// outstanding and settles here.
     fn take_in(
         &self,
+        run: RunId,
         mode: ReplyMode,
         names: &NameTable,
         // What the prompt already says, by message id. An envelope in here is
@@ -3982,6 +4067,14 @@ impl Runtime {
             if !takeable {
                 intake.carry.push_front(next);
                 break;
+            }
+
+            if next.parts.iter().any(|part| matches!(part, Part::Routine { .. })) {
+                if let Err(err) = self.inner.store.start_routine_deliveries(&[next.id], run) {
+                    tracing::error!(%err, "could not start a routine delivery; leaving it queued");
+                    intake.carry.push_front(next);
+                    break;
+                }
             }
 
             intake.depth.fetch_sub(1, Ordering::SeqCst);

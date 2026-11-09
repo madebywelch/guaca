@@ -928,6 +928,53 @@ async fn main_calendar_and_webhook_commands_work_on_the_remote_backend() {
 }
 
 #[tokio::test]
+async fn hosted_webhooks_share_delivery_keys_and_authenticate_before_validation() {
+    let (addr, _dir) = workspace().await;
+    let (_, agent) = call(addr, "create_agent", json!({ "draft": {
+        "name": "Clerk", "avatar": "avocado", "color": "#7ab55c", "model": "", "systemPrompt": "Check."
+    }})).await;
+    let agent = agent["ok"]["id"].as_str().unwrap();
+    let (_, routine) = call(addr, "create_routine", json!({ "agentId": agent, "draft": {
+        "name": "Orders", "what": "Check the order", "trigger": "event:shop/order", "inSecs": null
+    }})).await;
+    let routine = routine["ok"]["id"].as_str().unwrap();
+    let (_, address) = call(addr, "webhook_address", json!({})).await;
+    let secret = address["ok"]["secret"].as_str().unwrap();
+    let url = format!("http://{addr}/events/shop/order");
+    let client = reqwest::Client::new();
+    assert_eq!(
+        client.post(&url).header("webhook-id", "x".repeat(201)).send().await.unwrap().status(),
+        401
+    );
+    assert_eq!(
+        client
+            .post(&url)
+            .bearer_auth(secret)
+            .header("webhook-id", "x".repeat(201))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        400
+    );
+    for _ in 0..2 {
+        assert_eq!(
+            client
+                .post(&url)
+                .bearer_auth(secret)
+                .header("webhook-id", "delivery")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            200
+        );
+    }
+    let (_, history) = call(addr, "routine_runs", json!({ "id": routine })).await;
+    assert_eq!(history["ok"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn groups_transfer_between_hosts_without_copying_identity() {
     let (source, _source_dir) = workspace().await;
     let (target, _target_dir) = workspace().await;

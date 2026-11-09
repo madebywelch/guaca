@@ -3886,6 +3886,75 @@ fn dunning(h: &Harness, who: &str, skip_if_working: bool) -> guac_lib::domain::r
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_retries_of_one_event_claim_each_routine_only_once() {
+    let stub = quiet().await;
+    let h = harness(&stub, &["Clerk"], GuardLimits::default());
+    let routine = dunning(&h, "Clerk", false);
+    let second = dunning(&h, "Clerk", false);
+    let (base, secret) = receiver(&h).await;
+    let mut tasks = Vec::new();
+    for _ in 0..12 {
+        let url = format!("{base}/events/stripe/invoice.payment_failed");
+        let secret = secret.clone();
+        tasks.push(tokio::spawn(async move {
+            reqwest::Client::new()
+                .post(url)
+                .bearer_auth(secret)
+                .header("Idempotency-Key", "same delivery")
+                .body("same payload")
+                .send()
+                .await
+                .unwrap()
+                .json::<serde_json::Value>()
+                .await
+                .unwrap()
+        }));
+    }
+    let mut delivered = 0;
+    for task in tasks {
+        delivered += task.await.unwrap()["delivered"].as_u64().unwrap();
+    }
+    assert_eq!(delivered, 2);
+    assert_eq!(h.runtime.store().routine_runs(routine.id, 20).unwrap().len(), 1);
+    assert_eq!(h.runtime.store().routine_runs(second.id, 20).unwrap().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unkeyed_events_and_repeated_test_fires_are_independent() {
+    let stub = quiet().await;
+    let h = harness(&stub, &["Clerk"], GuardLimits::default());
+    let routine = dunning(&h, "Clerk", false);
+    let (base, secret) = receiver(&h).await;
+    let url = format!("{base}/events/stripe/invoice.payment_failed");
+    let client = reqwest::Client::new();
+    for _ in 0..2 {
+        assert_eq!(client.post(&url).bearer_auth(&secret).send().await.unwrap().status(), 200);
+    }
+    let first = h.runtime.test_routine(&routine).unwrap();
+    let second = h.runtime.test_routine(&routine).unwrap();
+    assert_ne!(first, second);
+    let history = h.runtime.store().routine_runs(routine.id, 20).unwrap();
+    assert_eq!(history.iter().filter(|row| row.kind == RunKind::Event).count(), 2);
+    assert_eq!(history.iter().filter(|row| row.kind == RunKind::Test).count(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn event_arriving_after_drain_is_kept_for_the_next_host() {
+    let stub = quiet().await;
+    let h = harness(&stub, &["Clerk"], GuardLimits::default());
+    let routine = dunning(&h, "Clerk", false);
+    assert!(h.runtime.drain(Duration::from_secs(1)).await.is_complete());
+    let event = EventTrigger { service: "stripe".into(), topic: "invoice.payment_failed".into() };
+    let delivered = h.runtime.deliver_event(&event, Some("payload".into()), "delivery").unwrap();
+    assert_eq!(delivered.delivered, 1);
+    let recovered = h.runtime.store().recover().unwrap();
+    assert_eq!(recovered.resumed.len(), 1);
+    assert!(
+        matches!(&recovered.resumed[0].envelope.parts[..], [Part::Routine { routine_id, .. }] if *routine_id == routine.id)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_event_posted_to_the_receiver_fires_the_routine_standing_on_it() {
     // The whole path an event takes: a POST on the loopback port, the routine
     // standing on that service and topic, the agent's turn, and the history.

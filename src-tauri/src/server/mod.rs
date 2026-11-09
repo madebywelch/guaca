@@ -1126,9 +1126,20 @@ async fn routine_event(
     else {
         return StatusCode::BAD_REQUEST.into_response();
     };
+    let delivery_id = match crate::webhook::delivery_id([
+        headers.get("idempotency-key").map(|value| value.as_bytes()),
+        headers.get("webhook-id").map(|value| value.as_bytes()),
+        headers.get("x-github-delivery").map(|value| value.as_bytes()),
+    ]) {
+        Ok(id) => id,
+        Err(message) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({"error": message}))).into_response()
+        }
+    };
     match serving.state.runtime.deliver_event(
         &event,
         (!body.is_empty()).then(|| String::from_utf8_lossy(&body).into_owned()),
+        &delivery_id,
     ) {
         Ok(delivery) => {
             let status =

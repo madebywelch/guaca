@@ -600,7 +600,11 @@ function History({ runs, now }: { runs: RoutineRun[] | null; now: number }) {
               {/* Recorded because the alternative is a gap, and a gap in this
                   list is what a scheduler that has stopped working looks
                   like. */}
-              {entry.kind === "skipped" ? (
+              {entry.kind === "failed" ? (
+                <span className="history__quiet">
+                  Failed{entry.error ? `: ${entry.error}` : ""}
+                </span>
+              ) : entry.kind === "skipped" ? (
                 <span
                   className="history__quiet"
                   title="This routine skips a firing that lands while the agent is already working, so nothing was delivered"
