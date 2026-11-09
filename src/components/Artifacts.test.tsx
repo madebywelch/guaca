@@ -339,6 +339,36 @@ describe("a page that reads live data", () => {
     sources: [{ name: "issues", tool: "linear__list_issues", arguments: { team: "ENG" } }],
   });
 
+  it.each(["success", "failure"])(
+    "ignores an older detail %s after a newer permission state",
+    async (outcome) => {
+      let resolveOld: (value: ArtifactDetail) => void = () => {};
+      let rejectOld: (reason: Error) => void = () => {};
+      artifactDetail.mockImplementationOnce(
+        () =>
+          new Promise((resolve, reject) => {
+            resolveOld = resolve;
+            rejectOld = reject;
+          }),
+      );
+      const allowed = { ...board, version: 3, sourcesAllowed: true };
+      artifactDetail.mockResolvedValue({ ...detail, artifact: allowed });
+      open(DEFAULT_GROUP, [board]);
+      fireEvent.click(await screen.findByRole("button", { name: /Pipeline by stage/ }));
+      await waitFor(() => expect(artifactDetail).toHaveBeenCalledTimes(1));
+      act(() => useStore.setState((state) => ({ artifactsVersion: state.artifactsVersion + 1 })));
+      await waitFor(() => expect(artifactDetail).toHaveBeenCalledTimes(2));
+      await screen.findByTitle("Pipeline by stage");
+      await act(async () => {
+        if (outcome === "success") resolveOld({ ...detail, artifact: board });
+        else rejectOld(new Error("Old request failed"));
+      });
+      expect(screen.queryByRole("button", { name: "Allow these reads" })).toBeNull();
+      expect(screen.queryByText("Old request failed")).toBeNull();
+      expect(screen.getByText(/v3/)).toBeTruthy();
+    },
+  );
+
   it("asks for its reads in full, and allows exactly those", async () => {
     // A permission, so every call and its arguments are on screen. The
     // arguments are the part the page can never change.
@@ -380,6 +410,35 @@ describe("a page that reads live data", () => {
     expect(await screen.findByText("linear · list_projects")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Allow these reads" })).toBeTruthy();
   });
+
+  it.each(["success", "failure"])(
+    "does not reload after closing during an approval %s",
+    async (outcome) => {
+      let resolveApproval: (value: Artifact) => void = () => {};
+      let rejectApproval: (reason: Error) => void = () => {};
+      artifactDetail.mockResolvedValue({ ...detail, artifact: board });
+      allowArtifactSources.mockImplementationOnce(
+        () =>
+          new Promise((resolve, reject) => {
+            resolveApproval = resolve;
+            rejectApproval = reject;
+          }),
+      );
+      open(DEFAULT_GROUP, [board]);
+      fireEvent.click(await screen.findByRole("button", { name: /Pipeline by stage/ }));
+      fireEvent.click(await screen.findByRole("button", { name: "Allow these reads" }));
+      expect(
+        screen.getByRole("button", { name: "Allow these reads" }).hasAttribute("disabled"),
+      ).toBe(true);
+      fireEvent.click(screen.getByRole("button", { name: "‹ All artifacts" }));
+      await act(async () => {
+        if (outcome === "success") resolveApproval({ ...board, sourcesAllowed: true });
+        else rejectApproval(new Error("Old approval failed"));
+      });
+      expect(artifactDetail).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText("Old approval failed")).toBeNull();
+    },
+  );
 
   it("reads the version on screen, and reads again on Refresh", async () => {
     const allowed = { ...board, sourcesAllowed: true };

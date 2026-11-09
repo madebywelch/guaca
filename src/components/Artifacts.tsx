@@ -256,12 +256,26 @@ function ArtifactView({
   } | null>(null);
   const proposalRef = useRef(false);
   const [sending, setSending] = useState(false);
+  const detailRequest = useRef({ generation: 0, mounted: true });
+
+  useEffect(() => {
+    detailRequest.current.mounted = true;
+    return () => {
+      detailRequest.current.mounted = false;
+      detailRequest.current.generation += 1;
+    };
+  }, []);
 
   const load = useCallback(async () => {
+    if (!detailRequest.current.mounted) return;
+    const generation = ++detailRequest.current.generation;
     try {
-      setDetail(await api.artifactDetail(id));
+      const next = await api.artifactDetail(id);
+      if (!detailRequest.current.mounted || generation !== detailRequest.current.generation) return;
+      setDetail(next);
       setError(null);
     } catch (caught) {
+      if (!detailRequest.current.mounted || generation !== detailRequest.current.generation) return;
       setError(errorMessage(caught));
     }
   }, [id]);
