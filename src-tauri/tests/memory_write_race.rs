@@ -62,3 +62,17 @@ fn unchanged_save_keeps_the_same_content() {
     assert!(matches!(saved, WriteResult::Stored(_)));
     assert_eq!(workspace.read(id), "same");
 }
+
+#[test]
+fn versioned_read_matches_the_save_for_unicode_content() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = Workspace::new(dir.path().to_path_buf());
+    let id = AgentId::new();
+    workspace.write(id, "Agent", "café 🥑").unwrap();
+    let snapshot = workspace.read_versioned(id);
+    assert_eq!(snapshot.content, "café 🥑");
+    assert!(matches!(
+        workspace.write_versioned(id, "Agent", "updated", Some(&snapshot.version)).unwrap(),
+        WriteResult::Stored(_)
+    ));
+}

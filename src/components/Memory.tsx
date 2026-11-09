@@ -89,8 +89,20 @@ function MemoryPage({ agentId }: Props) {
   const load = useCallback(async () => {
     const request = ++draft.generation;
     try {
-      const content = await api.agentMemory(agentId);
-      if (request === draft.generation) dispatch({ type: "read", content });
+      let page: { content: string; version?: string };
+      try {
+        page = await api.agentMemoryVersioned(agentId);
+      } catch (caught) {
+        if (
+          typeof caught !== "object" ||
+          caught === null ||
+          !("kind" in caught) ||
+          caught.kind !== "unknownCommand"
+        )
+          throw caught;
+        page = { content: await api.agentMemory(agentId) };
+      }
+      if (request === draft.generation) dispatch({ type: "read", ...page });
     } catch (caught) {
       if (request === draft.generation)
         dispatch({ type: "readFailed", error: errorMessage(caught) });
@@ -113,7 +125,8 @@ function MemoryPage({ agentId }: Props) {
   const cut = "cut" in state && state.cut;
   const value = held === null ? "" : (held.draft ?? held.stored);
   const shown = loading ? "Loading…" : value;
-  const dirty = held !== null && held.draft !== null && held.draft !== held.stored;
+  const dirty =
+    held !== null && held.draft !== null && held.draft !== (held.incoming ?? held.stored);
   const overwritten = held?.incoming != null;
   const room = crowding(value);
 
@@ -133,10 +146,43 @@ function MemoryPage({ agentId }: Props) {
       // What comes back is what was actually stored: the runtime trims it and
       // cuts anything over the cap, so leaving what was typed on screen would
       // show the operator a page their agent is never going to be given.
-      const saved = await api.setAgentMemory(agentId, sent);
+      const expected = held.incoming !== null ? held.incomingVersion : held.version;
+      const saved = await api.setAgentMemory(agentId, sent, expected);
       draft.generation++;
       dispatch({ type: "saved", saved });
+      if (expected !== undefined) {
+        void api.agentMemoryVersioned(agentId).then(
+          (page) => dispatch({ type: "version", ...page }),
+          () => {},
+        );
+      }
     } catch (caught) {
+      if (
+        typeof caught === "object" &&
+        caught !== null &&
+        "kind" in caught &&
+        caught.kind === "memoryConflict" &&
+        "detail" in caught &&
+        typeof caught.detail === "string"
+      ) {
+        try {
+          const detail: unknown = JSON.parse(caught.detail);
+          if (
+            typeof detail === "object" &&
+            detail !== null &&
+            "current" in detail &&
+            typeof detail.current === "string" &&
+            "version" in detail &&
+            typeof detail.version === "string" &&
+            "draft" in detail &&
+            detail.draft === sent
+          ) {
+            draft.generation++;
+            dispatch({ type: "conflict", current: detail.current, version: detail.version });
+            return;
+          }
+        } catch {}
+      }
       dispatch({ type: "saveFailed", error: errorMessage(caught) });
     }
   };

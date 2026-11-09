@@ -545,6 +545,8 @@ export const api = {
 
   /** An agent's memory: a small markdown file it maintains for itself. */
   agentMemory: (id: AgentId) => invoke<string>("agent_memory", { id }),
+  agentMemoryVersioned: (id: AgentId) =>
+    invoke<{ content: string; version: string }>("agent_memory_versioned", { id }),
 
   /** Lets the operator seed or correct an agent's memory by hand. */
   setAgentMemory: (id: AgentId, content: string, expected?: string) =>
