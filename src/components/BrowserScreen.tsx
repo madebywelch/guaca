@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 
 import { api } from "../lib/ipc";
 import { prefersReducedMotion } from "../lib/motion";
@@ -8,6 +8,23 @@ import { Grant } from "./Grant";
 
 interface Props {
   agent: AgentCard;
+}
+
+type BrowserRead = { status: "loading" } | { status: "ready"; browser: Browser | null };
+type BrowserReadAction =
+  | { type: "reset" }
+  | { type: "found"; browser: Browser | null }
+  | { type: "failed" };
+
+export function browserReadReducer(state: BrowserRead, action: BrowserReadAction): BrowserRead {
+  switch (action.type) {
+    case "reset":
+      return { status: "loading" };
+    case "found":
+      return { status: "ready", browser: action.browser };
+    case "failed":
+      return state.status === "ready" ? state : { status: "ready", browser: null };
+  }
 }
 
 /**
@@ -31,17 +48,15 @@ interface Props {
  */
 export function BrowserScreen({ agent }: Props) {
   const settings = useStore((s) => s.settings);
-  const [browser, setBrowser] = useState<Browser | null>(null);
+  const [readState, dispatchRead] = useReducer(browserReadReducer, { status: "loading" });
+  const browser = readState.status === "ready" ? readState.browser : null;
   const [full, setFull] = useState(false);
   const [busy, setBusy] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [checked, setChecked] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  // Which agent the panel is currently about. A lookup started for one agent
-  // landing after the operator switched would paint the previous agent's
-  // browser into the new panel.
-  const showing = useRef(agent.id);
+  const visit = useRef(0);
+  const reads = useRef(0);
   const frame = useRef<HTMLIFrameElement>(null);
   const stage = useRef<HTMLDivElement>(null);
   // Where the picture was before it grew. Measured in the click, because by the
@@ -61,30 +76,34 @@ export function BrowserScreen({ agent }: Props) {
 
   const look = useCallback(async () => {
     const asked = agent.id;
+    const currentVisit = visit.current;
+    const read = ++reads.current;
+    const current = () => visit.current === currentVisit && reads.current === read;
     try {
       const found = await api.agentBrowser(asked);
-      if (showing.current !== asked) return;
-      setBrowser(found);
+      if (!current()) return;
+      dispatchRead({ type: "found", browser: found });
       setError(null);
     } catch (caught) {
-      if (showing.current !== asked) return;
+      if (!current()) return;
+      dispatchRead({ type: "failed" });
       setError(errorMessage(caught));
-    } finally {
-      if (showing.current === asked) setChecked(true);
     }
   }, [agent.id]);
 
   useEffect(() => {
-    showing.current = agent.id;
-    setBrowser(null);
-    setChecked(false);
+    visit.current += 1;
+    dispatchRead({ type: "reset" });
     setFull(false);
     setBusy(false);
     setExpanded(false);
     setError(null);
     setConfirming(false);
     if (configured && given) void look();
-    else setChecked(true);
+    else dispatchRead({ type: "found", browser: null });
+    return () => {
+      visit.current += 1;
+    };
   }, [agent.id, look, configured, given]);
 
   // A browser that has timed out leaves a live view URL that is no longer
@@ -176,32 +195,33 @@ export function BrowserScreen({ agent }: Props) {
    * what sends the effect above to look again.
    */
   const decide = async (run: () => Promise<unknown>) => {
-    const asked = agent.id;
+    const currentVisit = visit.current;
     setBusy(true);
     setError(null);
     try {
       await run();
     } catch (caught) {
-      if (showing.current === asked) setError(errorMessage(caught));
+      if (visit.current === currentVisit) setError(errorMessage(caught));
     } finally {
-      if (showing.current === asked) setBusy(false);
+      if (visit.current === currentVisit) setBusy(false);
     }
   };
 
   const act = async (run: () => Promise<Browser | null>) => {
-    const asked = agent.id;
+    const currentVisit = visit.current;
     setBusy(true);
     setError(null);
     try {
       const next = await run();
-      if (showing.current !== asked) return;
-      setBrowser(next);
+      if (visit.current !== currentVisit) return;
+      reads.current += 1;
+      dispatchRead({ type: "found", browser: next });
       setConfirming(false);
       setFull(false);
     } catch (caught) {
-      if (showing.current === asked) setError(errorMessage(caught));
+      if (visit.current === currentVisit) setError(errorMessage(caught));
     } finally {
-      if (showing.current === asked) setBusy(false);
+      if (visit.current === currentVisit) setBusy(false);
     }
   };
 
@@ -234,7 +254,7 @@ export function BrowserScreen({ agent }: Props) {
         }
       />
 
-      {given && checked && (live || expanded || full) && (
+      {given && readState.status === "ready" && (live || expanded || full) && (
         // Two elements, one connection. The outer one stays in the panel and
         // holds the space the pane had; the inner one is what covers the
         // window. The frame inside that is the same element in both sizes,

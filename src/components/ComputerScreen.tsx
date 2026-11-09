@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 
 import { screenUrl } from "../lib/files";
 import { api } from "../lib/ipc";
@@ -10,6 +10,23 @@ import { Grant } from "./Grant";
 
 interface Props {
   agent: AgentCard;
+}
+
+type ReadState = { kind: "checking" } | { kind: "checked"; computer: Computer | null };
+type ReadEvent =
+  | { type: "reset" }
+  | { type: "resolved"; computer: Computer | null }
+  | { type: "failed" };
+
+export function computerRead(state: ReadState, event: ReadEvent): ReadState {
+  switch (event.type) {
+    case "reset":
+      return { kind: "checking" };
+    case "resolved":
+      return { kind: "checked", computer: event.computer };
+    case "failed":
+      return state.kind === "checked" ? state : { kind: "checked", computer: null };
+  }
 }
 
 /**
@@ -42,12 +59,13 @@ interface Props {
  */
 export function ComputerScreen({ agent }: Props) {
   const settings = useStore((s) => s.settings);
-  const [computer, setComputer] = useState<Computer | null>(null);
+  const [read, dispatchRead] = useReducer(computerRead, { kind: "checking" });
+  const computer = read.kind === "checked" ? read.computer : null;
+  const checked = read.kind === "checked";
   const [full, setFull] = useState(false);
   const [busy, setBusy] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [checked, setChecked] = useState(false);
   // Sleep sits beside Destroy and Destroy throws work away, so neither happens
   // on one click. Held here rather than in each button so switching agent or
   // finishing an action always clears a half-pressed one.
@@ -57,6 +75,8 @@ export function ComputerScreen({ agent }: Props) {
   // agent's machine into the new panel, so an agent with no computer showed
   // the previous one's screen.
   const showing = useRef(agent.id);
+  const generation = useRef(0);
+  const requests = useRef(0);
 
   const stage = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
@@ -89,25 +109,26 @@ export function ComputerScreen({ agent }: Props) {
 
   const look = useCallback(async () => {
     const asked = agent.id;
+    const epoch = generation.current;
+    const request = ++requests.current;
     try {
       const found = await api.agentComputer(asked);
-      if (showing.current !== asked) return;
-      setComputer(found);
+      if (generation.current !== epoch || requests.current !== request) return;
+      dispatchRead({ type: "resolved", computer: found });
       setError(null);
     } catch (caught) {
-      if (showing.current !== asked) return;
+      if (generation.current !== epoch || requests.current !== request) return;
       // A missing key is not a failure worth a red banner: it means the feature
       // was never set up, and the panel says so instead.
       setError(errorMessage(caught));
-    } finally {
-      if (showing.current === asked) setChecked(true);
+      dispatchRead({ type: "failed" });
     }
   }, [agent.id]);
 
   useEffect(() => {
     showing.current = agent.id;
-    setComputer(null);
-    setChecked(false);
+    generation.current++;
+    dispatchRead({ type: "reset" });
     setFull(false);
     // Reset too. A call still in flight when the operator switched agents left
     // this true for the new panel, which disabled its only button permanently.
@@ -116,7 +137,10 @@ export function ComputerScreen({ agent }: Props) {
     setError(null);
     setConfirming(null);
     if (configured && given) void look();
-    else setChecked(true);
+    else dispatchRead({ type: "resolved", computer: null });
+    return () => {
+      generation.current++;
+    };
   }, [agent.id, look, configured, given]);
 
   // Sandboxes expire on their own, so a panel left open goes stale: it kept
@@ -185,30 +209,33 @@ export function ComputerScreen({ agent }: Props) {
    */
   const decide = async (run: () => Promise<unknown>) => {
     const asked = agent.id;
+    const epoch = generation.current;
     setBusy(true);
     setError(null);
     try {
       await run();
     } catch (caught) {
-      if (showing.current === asked) setError(errorMessage(caught));
+      if (showing.current === asked && generation.current === epoch) setError(errorMessage(caught));
     } finally {
-      if (showing.current === asked) setBusy(false);
+      if (showing.current === asked && generation.current === epoch) setBusy(false);
     }
   };
 
   const act = async (run: () => Promise<Computer | null>) => {
     const asked = agent.id;
+    const epoch = generation.current;
     setBusy(true);
     setError(null);
     try {
       const next = await run();
-      if (showing.current !== asked) return;
-      setComputer(next);
+      if (showing.current !== asked || generation.current !== epoch) return;
+      requests.current++;
+      dispatchRead({ type: "resolved", computer: next });
       setConfirming(null);
     } catch (caught) {
-      if (showing.current === asked) setError(errorMessage(caught));
+      if (showing.current === asked && generation.current === epoch) setError(errorMessage(caught));
     } finally {
-      if (showing.current === asked) setBusy(false);
+      if (showing.current === asked && generation.current === epoch) setBusy(false);
     }
   };
 
