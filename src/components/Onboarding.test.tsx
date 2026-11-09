@@ -167,10 +167,52 @@ describe("guided first task", () => {
     expect(send).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Start task" }));
     await waitFor(() => expect(done).toHaveBeenCalledOnce());
-    expect(hire).toHaveBeenCalledWith(aGroup().id, [toDraft(preset)]);
-    expect(send).toHaveBeenCalledExactlyOnceWith(agent.id, "Plan our launch next month.");
+    const key = hire.mock.calls[0]![2];
+    expect(key).toMatch(/^[0-9a-f-]{36}$/);
+    expect(hire).toHaveBeenCalledWith(aGroup().id, [toDraft(preset)], key);
+    expect(send).toHaveBeenCalledExactlyOnceWith(agent.id, "Plan our launch next month.", [], key);
     expect(select).toHaveBeenCalledWith(agent.id);
     expect(readFirstTask().brief).toBe("");
+  });
+
+  it("persists the key before a lost hire response and reuses it after reload", async () => {
+    hire.mockImplementationOnce(async (_group, _drafts, key) => {
+      expect(readFirstTask().key).toBe(key);
+      throw new Error("Hire response lost");
+    });
+    const view = mount();
+    toReview();
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    await screen.findByRole("alert");
+    const key = readFirstTask().key;
+    expect(key).toBeTruthy();
+    view.unmount();
+    mount();
+    expect(
+      (screen.getByRole("textbox", { name: "Your first brief" }) as HTMLTextAreaElement).readOnly,
+    ).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    await waitFor(() => expect(done).toHaveBeenCalledOnce());
+    expect(hire.mock.calls[1]![2]).toBe(key);
+    expect(send).toHaveBeenCalledWith(agent.id, "Plan our launch next month.", [], key);
+  });
+
+  it("reuses the key after a lost send response and reload", async () => {
+    send.mockRejectedValueOnce(new Error("Send response lost"));
+    const view = mount();
+    toReview();
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    await screen.findByRole("alert");
+    const key = readFirstTask().key;
+    expect(key).toBeTruthy();
+    view.unmount();
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "Send brief again" }));
+    await waitFor(() => expect(done).toHaveBeenCalledOnce());
+    expect(hire).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send.mock.calls[0]![3]).toBe(key);
+    expect(send.mock.calls[1]![3]).toBe(key);
   });
 
   it("keeps the created agent and brief when sending fails, without hiring twice", async () => {

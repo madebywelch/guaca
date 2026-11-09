@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::commands::{
     self, AppState, ArtifactAddress, ClaudeProgram, CommandError, FileRef, GroupReset,
-    RoutineDraft, SettingsPatch, Staged,
+    RoutineDraft, SentMessage, SettingsPatch, Staged,
 };
 use crate::config::RedactedConfig;
 use crate::domain::agent::{AgentCard, AgentDraft};
@@ -386,7 +386,7 @@ surface! {
     set_agent_pinned(id: AgentId, pinned: bool) -> AgentCard,
     move_agent(id: AgentId, group_id: GroupId, before: Option<AgentId>) -> AgentCard,
     duplicate_agent(id: AgentId) -> AgentCard,
-    hire_agents(group_id: GroupId, drafts: Vec<AgentDraft>) -> Vec<AgentCard>,
+    hire_agents(group_id: GroupId, drafts: Vec<AgentDraft>, idempotency_key: Option<String>) -> Vec<AgentCard>,
     agent_activity() -> HashMap<AgentId, Activity>,
     agent_memory(id: AgentId) -> String,
     agent_memory_versioned(id: AgentId) -> crate::workspace::MemorySnapshot,
@@ -401,7 +401,7 @@ surface! {
     pair_messages(a: AgentId, b: AgentId, limit: Option<u32>) -> Vec<Envelope>,
     conversation_flow(group: GroupId, limit: Option<u32>) -> Vec<Envelope>,
     search(query: String, limit: Option<u32>) -> SearchHits,
-    send_message(agent_id: AgentId, text: String, files: Option<Vec<FileRef>>) -> RunId,
+    send_message(agent_id: AgentId, text: String, files: Option<Vec<FileRef>>, idempotency_key: Option<String>) -> SentMessage,
     save_file(digest: String, name: String) -> String,
     frame_artifact(html: String) -> ArtifactAddress,
     retry_turn(agent_id: AgentId, message_id: MessageId) -> RunId,

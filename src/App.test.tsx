@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { expectRestart, forgetRestart } from "./lib/link";
+import { saveFirstTask } from "./lib/onboarding";
 import type { AgentCard, Routine, Settings } from "./lib/types";
 import { aGroup } from "./test-fixtures";
 
@@ -348,6 +349,24 @@ describe("App", () => {
     // asking for two prompts for the same key on one screen.
     expect(await screen.findByText(/What would you like help with/i)).toBeTruthy();
     expect(screen.queryByText(/Add an API key/i)).toBeNull();
+  });
+
+  it("resumes a keyed first task when a lost hire response left an agent in the workspace", async () => {
+    saveFirstTask({
+      task: "plan",
+      brief: "Plan our launch",
+      agentId: null,
+      sent: false,
+      key: "request-key",
+    });
+    listAgents.mockResolvedValue([agent("Product Manager")]);
+    try {
+      render(<App />);
+      expect(await screen.findByRole("heading", { name: "Ready when you are." })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Start task" })).toBeTruthy();
+    } finally {
+      saveFirstTask(null);
+    }
   });
 
   it.each([

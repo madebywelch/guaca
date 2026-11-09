@@ -1963,6 +1963,22 @@ BEGIN
 END;
 "#,
     ),
+    (
+        71,
+        r#"
+CREATE TABLE onboarding_hires (
+    key TEXT PRIMARY KEY,
+    fingerprint TEXT NOT NULL,
+    agent_id TEXT NOT NULL
+);
+CREATE TABLE operator_sends (
+    key TEXT PRIMARY KEY,
+    fingerprint TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    run_id TEXT NOT NULL
+);
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

@@ -579,6 +579,44 @@ impl Store {
         Ok(card)
     }
 
+    pub fn create_onboarding_agent(
+        &self,
+        key: &str,
+        fingerprint: &str,
+        draft: &CleanDraft,
+    ) -> Result<(AgentCard, bool), StoreError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existing: Option<(String, String)> = tx
+            .query_row(
+                "SELECT fingerprint,agent_id FROM onboarding_hires WHERE key=?1",
+                [key],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((stored, id)) = existing {
+            if stored != fingerprint {
+                return Err(StoreError::Decision(
+                    "This idempotency key was already used for another hire.".into(),
+                ));
+            }
+            let card = tx.query_row(
+                &format!("SELECT {AGENT_COLUMNS} FROM agents WHERE id=?1"),
+                [id],
+                row_to_card,
+            )??;
+            return Ok((card, false));
+        }
+        let card = new_card(draft, bottom_of_rail(&tx)?, fallback_group(&tx, None)?);
+        insert_agent(&tx, &card)?;
+        tx.execute(
+            "INSERT INTO onboarding_hires (key,fingerprint,agent_id) VALUES (?1,?2,?3)",
+            params![key, fingerprint, card.id.to_string()],
+        )?;
+        tx.commit()?;
+        Ok((card, true))
+    }
+
     /// Creates a whole crew, or none of it.
     ///
     /// Written in one transaction because the alternative fails halfway. Names
@@ -3637,6 +3675,52 @@ impl Store {
         Ok(())
     }
 
+    pub fn claim_operator_send(
+        &self,
+        key: &str,
+        fingerprint: &str,
+        envelope: &Envelope,
+        accepting: bool,
+    ) -> Result<(MessageId, RunId, bool), StoreError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existing: Option<(String, String, String)> = tx
+            .query_row(
+                "SELECT fingerprint,message_id,run_id FROM operator_sends WHERE key=?1",
+                [key],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        if let Some((stored, message, run)) = existing {
+            if stored != fingerprint {
+                return Err(StoreError::Decision(
+                    "This idempotency key was already used for another message.".into(),
+                ));
+            }
+            return Ok((
+                message.parse().map_err(|e| StoreError::Corrupt(format!("bad message id: {e}")))?,
+                run.parse().map_err(|e| StoreError::Corrupt(format!("bad run id: {e}")))?,
+                false,
+            ));
+        }
+        if !accepting {
+            return Err(StoreError::Decision(
+                "The host is stopping. Try again when it is available.".into(),
+            ));
+        }
+        Self::insert_message(&tx, envelope)?;
+        tx.execute(
+            "INSERT INTO pending_runs (run_id,message_id) VALUES (?1,?2)",
+            params![envelope.run_id.to_string(), envelope.id.to_string()],
+        )?;
+        tx.execute(
+            "INSERT INTO operator_sends (key,fingerprint,message_id,run_id) VALUES (?1,?2,?3,?4)",
+            params![key, fingerprint, envelope.id.to_string(), envelope.run_id.to_string()],
+        )?;
+        tx.commit()?;
+        Ok((envelope.id, envelope.run_id, true))
+    }
+
     pub fn settle_run(&self, run: RunId) -> Result<(), StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
@@ -5085,6 +5169,54 @@ mod tests {
             cause: None,
             created_at: now_ms(),
         }
+    }
+
+    #[test]
+    fn onboarding_hire_survives_lost_reply_and_reopen() {
+        let f = fixture();
+        let (first, created) =
+            f.store.create_onboarding_agent("hire", "same", &draft("Worker")).unwrap();
+        assert!(created);
+        let reopened = Store::open(&f._dir.path().join("guac.db")).unwrap();
+        let (again, created) =
+            reopened.create_onboarding_agent("hire", "same", &draft("Worker 2")).unwrap();
+        assert!(!created);
+        assert_eq!(first.id, again.id);
+        assert_eq!(reopened.list_agents().unwrap().len(), 1);
+        assert!(reopened.create_onboarding_agent("hire", "different", &draft("Other")).is_err());
+    }
+
+    #[test]
+    fn keyed_send_is_atomic_and_survives_lost_reply_and_reopen() {
+        let f = fixture();
+        let agent = f.store.create_agent(&draft("Worker")).unwrap();
+        let first = envelope(
+            Participant::Human,
+            Participant::Agent { id: agent.id },
+            "do work",
+            RunId::new(),
+        );
+        f.store.conn().unwrap().execute_batch("CREATE TRIGGER fail_claim BEFORE INSERT ON operator_sends BEGIN SELECT RAISE(ABORT, 'fail'); END;").unwrap();
+        assert!(f.store.claim_operator_send("send", "same", &first, true).is_err());
+        assert!(f.store.channel_messages(agent.id, 20).unwrap().is_empty());
+        f.store.conn().unwrap().execute_batch("DROP TRIGGER fail_claim;").unwrap();
+        assert_eq!(
+            f.store.claim_operator_send("send", "same", &first, true).unwrap(),
+            (first.id, first.run_id, true)
+        );
+        let reopened = Store::open(&f._dir.path().join("guac.db")).unwrap();
+        let retry = envelope(
+            Participant::Human,
+            Participant::Agent { id: agent.id },
+            "do work",
+            RunId::new(),
+        );
+        assert_eq!(
+            reopened.claim_operator_send("send", "same", &retry, false).unwrap(),
+            (first.id, first.run_id, false)
+        );
+        assert!(reopened.claim_operator_send("send", "different", &retry, true).is_err());
+        assert_eq!(reopened.channel_messages(agent.id, 20).unwrap().len(), 1);
     }
 
     #[test]
