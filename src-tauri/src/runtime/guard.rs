@@ -240,13 +240,13 @@ pub struct RunState {
     /// has not been answered: `(asker, ower)`.
     ///
     /// Written by [`Self::note_sent`] when the runtime delivers an expectant
-    /// message, and cleared by [`Self::evaluate`] the moment anything travels
+    /// message, and cleared after delivery the moment anything travels
     /// the other way, because any message from the ower is the reply the asker
     /// was owed. Derived from `pair_counts` before work could re-arm the reply
     /// path, which broke the moment it could: "has ever written to me" and
     /// "owes me an answer" are different questions, and a peer that answered
     /// an earlier round still owes one for the instruction sent after it.
-    expecting: HashSet<(AgentId, AgentId)>,
+    expecting: HashMap<(AgentId, AgentId), u32>,
     last_touched: i64,
 }
 
@@ -257,7 +257,7 @@ impl RunState {
             steps_used: 0,
             fingerprints: HashSet::new(),
             pair_counts: HashMap::new(),
-            expecting: HashSet::new(),
+            expecting: HashMap::new(),
             last_touched: now_ms(),
         }
     }
@@ -347,6 +347,15 @@ impl RunState {
     /// this cannot be split into a pure check plus a separate commit without
     /// opening a race between two agents sending concurrently.
     pub fn evaluate(&mut self, req: &SendRequest) -> Verdict {
+        let generation = self.reply_generation(req.from, req.to);
+        let verdict = self.evaluate_pending(req);
+        if matches!(verdict, Verdict::Allow { .. }) {
+            self.retire_reply(req.from, req.to, generation);
+        }
+        verdict
+    }
+
+    pub fn evaluate_pending(&mut self, req: &SendRequest) -> Verdict {
         self.last_touched = now_ms();
 
         if req.from == req.to {
@@ -385,10 +394,17 @@ impl RunState {
         }
 
         self.pair_counts.insert(pair, sent + 1);
-        // Whatever this message is, it reaches someone who may have been owed
-        // it: an answer, a report, or new work all settle the sender's debt.
-        self.expecting.remove(&(req.to, req.from));
         Verdict::Allow { hop }
+    }
+
+    pub fn reply_generation(&self, from: AgentId, to: AgentId) -> Option<u32> {
+        self.expecting.get(&(to, from)).copied()
+    }
+
+    pub fn retire_reply(&mut self, from: AgentId, to: AgentId, generation: Option<u32>) {
+        if generation.is_some() && self.reply_generation(from, to) == generation {
+            self.expecting.remove(&(to, from));
+        }
     }
 
     /// Records whether a send the runtime went on to deliver asked its
@@ -400,7 +416,8 @@ impl RunState {
     /// creates a debt: a refused one reached nobody.
     pub fn note_sent(&mut self, from: AgentId, to: AgentId, expects_reply: bool) {
         if expects_reply {
-            self.expecting.insert((from, to));
+            let generation = self.pair_counts.get(&(from, to)).copied().unwrap_or(0);
+            self.expecting.insert((from, to), generation);
         }
     }
 
@@ -413,7 +430,7 @@ impl RunState {
     /// be instructed twice, because a peer that answered round one still owes
     /// the answer to round two.
     pub fn awaited(&self, me: AgentId) -> HashSet<AgentId> {
-        self.expecting.iter().filter(|(from, _)| *from == me).map(|(_, to)| *to).collect()
+        self.expecting.keys().filter(|(from, _)| *from == me).map(|(_, to)| *to).collect()
     }
 
     /// Whether `from` has written to `to` at any point in this run.
@@ -875,6 +892,81 @@ mod tests {
         // itself to be: the asker wanted to hear back, and it has.
         assert!(matches!(state.evaluate(&req(chef, manager, "done", 1)), Verdict::Allow { .. }));
         assert!(state.awaited(manager).is_empty());
+    }
+
+    #[test]
+    fn an_in_flight_reply_remains_owed_until_delivery_finishes_or_fails() {
+        let mut state = RunState::new(permissive());
+        let (manager, chef) = (AgentId::new(), AgentId::new());
+        state.note_sent(manager, chef, true);
+        assert!(matches!(
+            state.evaluate_pending(&req(chef, manager, "done", 1)),
+            Verdict::Allow { .. }
+        ));
+        assert_eq!(state.awaited(manager), HashSet::from([chef]));
+        state.retire_reply(chef, manager, state.reply_generation(chef, manager));
+        assert!(state.awaited(manager).is_empty());
+
+        state.note_sent(manager, chef, true);
+        assert!(matches!(
+            state.evaluate_pending(&req(chef, manager, "failed delivery", 1)),
+            Verdict::Allow { .. }
+        ));
+        state.retire_reply(chef, manager, state.reply_generation(chef, manager));
+        assert!(state.awaited(manager).is_empty());
+    }
+
+    #[test]
+    fn an_older_delivery_cannot_retire_a_new_instruction() {
+        let mut state = RunState::new(permissive());
+        let (manager, chef) = (AgentId::new(), AgentId::new());
+        assert!(matches!(
+            state.evaluate_pending(&req(manager, chef, "first", 0)),
+            Verdict::Allow { .. }
+        ));
+        state.note_sent(manager, chef, true);
+        let old = state.reply_generation(chef, manager);
+        assert!(matches!(
+            state.evaluate_pending(&req(manager, chef, "second", 0)),
+            Verdict::Allow { .. }
+        ));
+        state.note_sent(manager, chef, true);
+        state.retire_reply(chef, manager, old);
+        assert_eq!(state.awaited(manager), HashSet::from([chef]));
+    }
+
+    #[test]
+    fn a_reply_blocked_before_delivery_is_still_awaited() {
+        use std::sync::{Arc, Barrier, Mutex};
+
+        let (manager, chef) = (AgentId::new(), AgentId::new());
+        let state = Arc::new(Mutex::new(RunState::new(permissive())));
+        state.lock().unwrap().note_sent(manager, chef, true);
+        let paused = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let sender = {
+            let (state, paused, release) = (state.clone(), paused.clone(), release.clone());
+            std::thread::spawn(move || {
+                let generation = {
+                    let mut state = state.lock().unwrap();
+                    let generation = state.reply_generation(chef, manager);
+                    assert!(matches!(
+                        state.evaluate_pending(&req(chef, manager, "done", 1)),
+                        Verdict::Allow { .. }
+                    ));
+                    generation
+                };
+                paused.wait();
+                release.wait();
+                state.lock().unwrap().retire_reply(chef, manager, generation);
+            })
+        };
+        paused.wait();
+        let awaited = state.lock().unwrap().awaited(manager);
+        release.wait();
+        sender.join().unwrap();
+        assert_eq!(awaited, HashSet::from([chef]));
+        assert!(state.lock().unwrap().awaited(manager).is_empty());
     }
 
     #[test]

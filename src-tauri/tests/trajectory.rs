@@ -114,10 +114,26 @@ async fn a_fan_out_has_every_peer_working_at_the_same_moment() {
     // that was not busy; four turns open at one point in the ledger is the
     // thing itself.
     let peers = ["Chef", "Host", "Barista", "Sommelier"];
+    let together = Arc::new((std::sync::Mutex::new(0), std::sync::Condvar::new()));
+    let manager_arrived = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stub = serve(move |body| {
+        let wait_for_peers = || {
+            let (count, ready) = &*together;
+            let mut count = count.lock().unwrap();
+            *count += 1;
+            ready.notify_all();
+            let (count, timeout) = ready
+                .wait_timeout_while(count, Duration::from_secs(10), |count| *count < 5)
+                .unwrap();
+            assert!(!timeout.timed_out(), "all five turns must reach the model together");
+            drop(count);
+        };
         let who = speaker(body);
         if who == "Manager" {
             if has_tool_result(body) {
+                if !manager_arrived.swap(true, Ordering::SeqCst) {
+                    wait_for_peers();
+                }
                 Script::Say("All four are on it.".into())
             } else {
                 Script::SendTo {
@@ -126,9 +142,7 @@ async fn a_fan_out_has_every_peer_working_at_the_same_moment() {
                 }
             }
         } else {
-            // Long enough that a serial runtime could not have every peer
-            // mid-call at once, short enough not to slow the suite down.
-            std::thread::sleep(Duration::from_millis(200));
+            wait_for_peers();
             Script::Say(format!("{who} is ready."))
         }
     })
