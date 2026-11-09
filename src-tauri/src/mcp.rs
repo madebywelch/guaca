@@ -523,21 +523,39 @@ async fn request_mirroring(
         return stdio::request(process, method, params, timeout).await;
     }
     let http = client()?;
-    if session.sse() {
+    let result = if session.sse() {
         // Mirroring is a modern-server rule and a modern server is never on
         // this transport, so there is nothing here to drop.
         let answered =
-            sse_exchange(&http, dial_for(session), Some((method, params)), timeout).await?;
+            sse_exchange(&http, dial_for(session), Some((method, params)), timeout).await;
         // What this endpoint is remembered as, kept in step with what its last
         // handshake actually settled on. A session on this transport has
         // nowhere of its own to hold the answer, so a report built without this
         // would name the revision Guaca asked for rather than the one agreed.
-        settled(&session.endpoint, &answered.negotiated);
-        return Ok(answered.result);
+        answered.map(|answered| {
+            settled(&session.endpoint, &answered.negotiated);
+            answered.result
+        })
+    } else {
+        let mut wire = Wire::of(session);
+        wire.headers = mirrored;
+        post(&http, wire, method, name, params, timeout).await.map(|(result, _)| result)
+    };
+    if matches!(
+        &result,
+        Err(McpError::Status { status: 400 | 404 | 405 | 406 | 415, .. }
+            | McpError::NoSharedVersion { .. }
+            | McpError::NotAStream { .. })
+    ) {
+        if let Ok(mut map) = eras().lock() {
+            if map.get(&session.endpoint).is_some_and(|spoken| {
+                spoken.era == session.era && spoken.transport == session.transport
+            }) {
+                map.remove(&session.endpoint);
+            }
+        }
     }
-    let mut wire = Wire::of(session);
-    wire.headers = mirrored;
-    post(&http, wire, method, name, params, timeout).await.map(|(result, _)| result)
+    result
 }
 
 /// Everything this server offers, once.
@@ -549,25 +567,40 @@ async fn request_mirroring(
 /// legacy one the annotation means nothing, and dropping the tool would take a
 /// working capability away over a field nobody reads.
 pub async fn list_tools(session: &Session) -> Result<Vec<ToolDescriptor>, McpError> {
-    let value =
-        request(session, "tools/list", None, serde_json::json!({}), CONNECT_TIMEOUT).await?;
-
     #[derive(Deserialize)]
     struct Listed {
         #[serde(default)]
         tools: Vec<ToolDescriptor>,
+        #[serde(rename = "nextCursor")]
+        next_cursor: Option<String>,
     }
 
-    let listed = serde_json::from_value::<Listed>(value).map_err(|err| McpError::Malformed {
-        endpoint: session.endpoint.clone(),
-        detail: format!("its tool list did not parse: {err}"),
-    })?;
+    let mut page = DiscoveryPage::First;
+    let mut seen = std::collections::HashSet::new();
+    let mut tools = Vec::new();
+    while !matches!(page, DiscoveryPage::Complete) {
+        let params = match &page {
+            DiscoveryPage::First => serde_json::json!({}),
+            DiscoveryPage::Next(cursor) => serde_json::json!({"cursor": cursor}),
+            DiscoveryPage::Complete => unreachable!(),
+        };
+        let value = request(session, "tools/list", None, params, CONNECT_TIMEOUT).await?;
+        let listed =
+            serde_json::from_value::<Listed>(value).map_err(|err| McpError::Malformed {
+                endpoint: session.endpoint.clone(),
+                detail: format!("its tool list did not parse: {err}"),
+            })?;
+        tools.extend(listed.tools);
+        page = page.advance(listed.next_cursor, &mut seen).map_err(|()| McpError::Malformed {
+            endpoint: session.endpoint.clone(),
+            detail: "its tool list has an invalid or repeated cursor".to_string(),
+        })?;
+    }
 
     if !session.modern() {
-        return Ok(listed.tools);
+        return Ok(tools);
     }
-    Ok(listed
-        .tools
+    Ok(tools
         .into_iter()
         .filter(|tool| {
             let schema = tool.input_schema.as_ref();
@@ -584,6 +617,34 @@ pub async fn list_tools(session: &Session) -> Result<Vec<ToolDescriptor>, McpErr
             }
         })
         .collect())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum DiscoveryPage {
+    First,
+    Next(String),
+    Complete,
+}
+
+impl DiscoveryPage {
+    fn advance(
+        self,
+        cursor: Option<String>,
+        seen: &mut std::collections::HashSet<String>,
+    ) -> Result<Self, ()> {
+        if matches!(self, Self::Complete) {
+            return Err(());
+        }
+        match cursor {
+            None => Ok(Self::Complete),
+            Some(cursor)
+                if !cursor.is_empty() && seen.len() < 100 && seen.insert(cursor.clone()) =>
+            {
+                Ok(Self::Next(cursor))
+            }
+            Some(_) => Err(()),
+        }
+    }
 }
 
 /// Runs one tool and renders its answer as the text an agent reads.
@@ -1711,6 +1772,22 @@ fn decode(content_type: &str, body: &str) -> Option<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovery_page_transitions_are_bounded() {
+        let mut seen = std::collections::HashSet::new();
+        let first = DiscoveryPage::First.advance(Some("a".into()), &mut seen).unwrap();
+        assert_eq!(first, DiscoveryPage::Next("a".into()));
+        let second = first.advance(Some("b".into()), &mut seen).unwrap();
+        assert_eq!(second, DiscoveryPage::Next("b".into()));
+        assert_eq!(second.advance(None, &mut seen), Ok(DiscoveryPage::Complete));
+        assert_eq!(DiscoveryPage::First.advance(None, &mut seen), Ok(DiscoveryPage::Complete));
+        assert!(DiscoveryPage::Complete.advance(None, &mut seen).is_err());
+        assert!(DiscoveryPage::First.advance(Some("a".into()), &mut seen).is_err());
+        assert!(DiscoveryPage::First.advance(Some(String::new()), &mut seen).is_err());
+        seen.extend((0..98).map(|n| n.to_string()));
+        assert!(DiscoveryPage::First.advance(Some("overflow".into()), &mut seen).is_err());
+    }
 
     #[test]
     fn an_event_carries_its_name_as_well_as_its_data() {
