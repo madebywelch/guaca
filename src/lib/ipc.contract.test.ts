@@ -62,6 +62,17 @@ function definedCommands(): Set<string> {
 }
 
 describe("IPC contract", () => {
+  it("allows older clients to save memory without an expected version", () => {
+    expect(read("src-tauri/src/ipc.rs")).toMatch(
+      /set_agent_memory\(id: AgentId, content: String, expected: Option<String>\)/,
+    );
+    expect(read("src/lib/ipc.ts")).toMatch(
+      /setAgentMemory: \(id: AgentId, content: string, expected\?: string\)/,
+    );
+    expect(read("src-tauri/src/commands.rs")).toContain(
+      "Older clients do not send a version and retain unconditional saves.",
+    );
+  });
   it("requires the displayed artifact version and sources to approve reads", () => {
     const surface = read("src-tauri/src/ipc.rs");
     expect(surface).toMatch(

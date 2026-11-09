@@ -2236,18 +2236,30 @@ pub async fn agent_memory(state: &AppState, id: AgentId) -> Reply<String> {
 }
 
 /// Lets the operator seed or correct an agent's memory by hand.
-pub async fn set_agent_memory(state: &AppState, id: AgentId, content: String) -> Reply<String> {
+pub async fn set_agent_memory(
+    state: &AppState,
+    id: AgentId,
+    content: String,
+    expected: Option<String>,
+) -> Reply<String> {
     let card = state
         .runtime
         .store()
         .get_agent(id)?
         .ok_or_else(|| CommandError::new("notFound", format!("no agent with id {id}")))?;
-    state
+    // Older clients do not send a version and retain unconditional saves.
+    let result = state
         .runtime
         .workspace()
-        .write(id, &card.name, &content)
+        .write_versioned(id, &card.name, &content, expected.as_deref())
         .map_err(|err| CommandError::new("storage", err.to_string()))?;
-    Ok(state.runtime.workspace().read(id))
+    match result {
+        crate::workspace::WriteResult::Stored(stored) => Ok(stored.content),
+        crate::workspace::WriteResult::Conflict { current, draft } => {
+            Err(CommandError::new("memoryConflict", "Memory changed while you were editing it.")
+                .with_detail(serde_json::json!({ "current": current, "draft": draft }).to_string()))
+        }
+    }
 }
 
 /// What an agent is in the middle of: the other half of what it carries.
