@@ -2,10 +2,11 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { memoryDraft } from "../lib/memoryDraft";
 import { useStore } from "../lib/store";
-import { arrived, CAP, crowding, Memory } from "./Memory";
+import { arrived, CAP, crowding, Memory, type MemoryState, memoryReducer } from "./Memory";
 
 const agentMemory = vi.fn<(id: string) => Promise<string>>();
 const setAgentMemory = vi.fn<(id: string, content: string) => Promise<string>>();
@@ -19,7 +20,7 @@ vi.mock("../lib/ipc", () => ({
 
 /** The box, addressed the way a screen reader would. */
 function box(): HTMLTextAreaElement {
-  return screen.getByLabelText("Memory") as HTMLTextAreaElement;
+  return screen.getByRole("textbox", { name: "Memory" }) as HTMLTextAreaElement;
 }
 
 function type(text: string) {
@@ -27,11 +28,129 @@ function type(text: string) {
 }
 
 describe("Memory", () => {
+  afterEach(() => {
+    act(() => {
+      for (const id of ["a1", "a2"]) {
+        const draft = memoryDraft(id);
+        draft.dispatch({ type: "saveFailed", error: "test cleanup" });
+        draft.dispatch({ type: "cancel" });
+      }
+    });
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     agentMemory.mockResolvedValue("");
     setAgentMemory.mockImplementation(async (_id, content) => content.trim());
     useStore.setState({ memoryVersion: {} });
+  });
+
+  it("preserves text typed while a save is pending", async () => {
+    let finish!: (value: string) => void;
+    setAgentMemory.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    render(<Memory agentId="a1" />);
+    await screen.findByText("Nothing yet.");
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    type("first");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    type("first and more");
+    await act(async () => finish("first"));
+    expect(box().value).toBe("first and more");
+  });
+
+  it("ignores an older read that finishes after a newer read", async () => {
+    let finish!: (value: string) => void;
+    agentMemory
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+      )
+      .mockResolvedValueOnce("new");
+    render(<Memory agentId="a1" />);
+    act(() => useStore.getState().applyEvent({ type: "memoryChanged", agentId: "a1" }));
+    await screen.findByText("new");
+    await act(async () => finish("old"));
+    expect(screen.getByText("new")).toBeTruthy();
+  });
+
+  it("does not present a failed initial read as empty memory", async () => {
+    agentMemory.mockRejectedValue(new Error("read failed"));
+    render(<Memory agentId="a1" />);
+    await screen.findByText(/read failed/);
+    expect(screen.queryByText("Nothing yet.")).toBeNull();
+    expect((screen.getByRole("button", { name: "Edit" }) as HTMLButtonElement).disabled).toBe(true);
+    agentMemory.mockResolvedValue("restored");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("restored")).toBeTruthy();
+  });
+
+  it("does not apply a prior agent's delayed read or save to the next agent", async () => {
+    let finish!: (value: string) => void;
+    agentMemory.mockImplementation(async (id) => (id === "a1" ? "first agent" : "second agent"));
+    setAgentMemory.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const { rerender } = render(<Memory key="a1" agentId="a1" />);
+    await screen.findByText("first agent");
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    type("first edit");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    rerender(<Memory key="a2" agentId="a2" />);
+    await screen.findByText("second agent");
+    await act(async () => finish("first edit"));
+    expect(screen.getByText("second agent")).toBeTruthy();
+  });
+
+  it("retains edits made during a save when switching away and back", async () => {
+    let finish!: (value: string) => void;
+    agentMemory.mockImplementation(async (id) => (id === "a1" ? "first agent" : "second agent"));
+    setAgentMemory.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const { rerender } = render(<Memory key="a1" agentId="a1" />);
+    await screen.findByText("first agent");
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    type("sent");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    type("sent and more");
+    rerender(<Memory key="a2" agentId="a2" />);
+    await screen.findByText("second agent");
+    await act(async () => finish("sent"));
+    await act(async () => rerender(<Memory key="a1" agentId="a1" />));
+    expect(box().value).toBe("sent and more");
+  });
+
+  it("restores a pending save after unmount and settles it on the remounted panel", async () => {
+    let finish!: (value: string) => void;
+    agentMemory.mockResolvedValue("old");
+    setAgentMemory.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const { unmount } = render(<Memory agentId="a1" />);
+    await screen.findByText("old");
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    type("sent");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    type("later");
+    unmount();
+    render(<Memory agentId="a1" />);
+    expect(box().value).toBe("later");
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => finish("sent"));
+    expect(box().value).toBe("later");
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
   });
 
   it("reads without a textarea and Cancel restores the stored page", async () => {
@@ -214,6 +333,61 @@ describe("Memory", () => {
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
 
     expect(await screen.findByText(/could not access the workspace/)).toBeTruthy();
+  });
+});
+
+describe("memoryReducer", () => {
+  it("transitions through loading, editing, conflict, save, and cancel", () => {
+    let state: MemoryState = { phase: "loading", editing: false };
+    state = memoryReducer(state, { type: "edit" });
+    state = memoryReducer(state, { type: "read", content: "original" });
+    expect(state.phase).toBe("editing");
+    state = memoryReducer(state, { type: "change", value: "mine" });
+    state = memoryReducer(state, { type: "read", content: "theirs" });
+    expect("held" in state && state.held.incoming).toBe("theirs");
+    const canceled = memoryReducer(state, { type: "cancel" });
+    expect(canceled).toMatchObject({ phase: "view", held: { stored: "theirs", draft: null } });
+    state = memoryReducer(state, { type: "save", sent: "mine" });
+    state = memoryReducer(state, { type: "change", value: "more" });
+    state = memoryReducer(state, { type: "saved", saved: "mine" });
+    expect(state).toMatchObject({ phase: "editing", held: { stored: "mine", draft: "more" } });
+    state = memoryReducer(state, { type: "save", sent: "more" });
+    state = memoryReducer(state, { type: "saved", saved: "more" });
+    expect(state).toMatchObject({ phase: "view", held: { stored: "more", draft: null } });
+  });
+
+  it("retains drafts on save failure and distinguishes read failure", () => {
+    let state: MemoryState = { phase: "loading", editing: false };
+    state = memoryReducer(state, { type: "readFailed", error: "offline" });
+    expect(state).toEqual({ phase: "failed", error: "offline" });
+    state = memoryReducer(state, { type: "read", content: "" });
+    state = memoryReducer(state, { type: "edit" });
+    state = memoryReducer(state, { type: "change", value: "mine" });
+    state = memoryReducer(state, { type: "save", sent: "mine" });
+    state = memoryReducer(state, { type: "saveFailed", error: "offline" });
+    expect(state).toMatchObject({ phase: "editing", held: { draft: "mine" }, error: "offline" });
+    state = memoryReducer(state, { type: "readFailed", error: "read failed" });
+    expect(state).toMatchObject({
+      phase: "editing",
+      held: { draft: "mine" },
+      error: "read failed",
+    });
+  });
+
+  it("holds a rewrite while a pending save's draft is typed back to the old value", () => {
+    let state: MemoryState = {
+      phase: "view",
+      held: { stored: "old", draft: null, incoming: null },
+      error: null,
+      cut: false,
+    };
+    state = memoryReducer(state, { type: "edit" });
+    state = memoryReducer(state, { type: "change", value: "sent" });
+    state = memoryReducer(state, { type: "save", sent: "sent" });
+    state = memoryReducer(state, { type: "change", value: "old" });
+    state = memoryReducer(state, { type: "read", content: "agent" });
+    state = memoryReducer(state, { type: "saved", saved: "sent" });
+    expect(state).toMatchObject({ phase: "editing", held: { stored: "sent", draft: "old" } });
   });
 });
 

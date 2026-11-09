@@ -1,7 +1,21 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
-import { readDraft, saveDraft } from "../lib/draft";
+import {
+  type DraftAction,
+  readDraftState,
+  reduceDraft,
+  saveDraft,
+  saveDraftState,
+} from "../lib/draft";
 import { fileUrl, previewKind, readableSize } from "../lib/files";
 import { api, onFileDrop } from "../lib/ipc";
 import { FIND_KEY } from "../lib/keybinds";
@@ -10,6 +24,71 @@ import { useLiveAgents, useStore } from "../lib/store";
 import { BEFORE_RELOAD, workspaceOrigin } from "../lib/transport";
 import { type Attachment, errorMessage, type GroupId, type Staged } from "../lib/types";
 import "./Composer.css";
+
+const owners = new Map<string, ReturnType<typeof createOwner>>();
+
+function createOwner(key: string, persistent: boolean) {
+  let state = persistent
+    ? readDraftState(key)
+    : { draft: { text: "", files: [] }, delivery: { kind: "idle" as const }, staging: 0, held: [] };
+  const listeners = new Set<() => void>();
+  let saved = true;
+  const owner = {
+    get: () => state,
+    preserve: () => saveDraftState(key, state),
+    subscribe: (listener: () => void) => {
+      owners.set(key, owner);
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+        if (!listeners.size && saved && state.delivery.kind !== "sending" && !state.staging)
+          owners.delete(key);
+      };
+    },
+    dispatch: (action: DraftAction, required = false) => {
+      const next = reduceDraft(state, action);
+      try {
+        if (persistent) saveDraftState(key, next);
+        saved = true;
+      } catch (error) {
+        saved = false;
+        if (required) throw error;
+      }
+      state = next;
+      listeners.forEach((listener) => {
+        listener();
+      });
+      if (!listeners.size && saved && state.delivery.kind !== "sending" && !state.staging)
+        owners.delete(key);
+    },
+  };
+  return owner;
+}
+
+function ownerFor(key: string, persistent: boolean) {
+  let owner = owners.get(key);
+  if (!owner) {
+    owner = createOwner(key, persistent);
+    owners.set(key, owner);
+  }
+  return owner;
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener(BEFORE_RELOAD, (event) => {
+    try {
+      for (const owner of owners.values()) {
+        if (owner.get().delivery.kind === "sending" || owner.get().staging) {
+          event.preventDefault();
+          return;
+        }
+        owner.preserve();
+      }
+    } catch {
+      event.preventDefault();
+    }
+  });
+}
 
 interface Props {
   placeholder: string;
@@ -46,31 +125,33 @@ export function Composer({
   onRecipientChange,
 }: Props) {
   const storageKey = `guaca.draft:${workspaceOrigin()}:${draftKey ?? group ?? "composer"}`;
-  const [initial] = useState(() => readDraft(storageKey));
-  const [text, setText] = useState(initial.text);
-  const [sending, setSending] = useState(false);
-  const [stagingCount, setStagingCount] = useState(0);
+  const owner = useMemo(() => ownerFor(storageKey, !!draftKey), [storageKey, draftKey]);
+  const state = useSyncExternalStore(owner.subscribe, owner.get);
+  const { text, files } = state.draft;
+  const sending = state.delivery.kind === "sending";
+  const stagingCount = state.staging;
+  const setText = (value: string) => owner.dispatch({ type: "text", text: value });
+  const setFiles = (value: Attachment[] | ((held: Attachment[]) => Attachment[])) =>
+    owner.dispatch({
+      type: "files",
+      files: typeof value === "function" ? value(owner.get().draft.files) : value,
+    });
   const [caret, setCaret] = useState(0);
   const [highlighted, setHighlighted] = useState(0);
   const [dismissed, setDismissed] = useState(false);
-  const [files, setFiles] = useState<Attachment[]>(initial.files);
   /** What was dropped and could not be taken, in the words the runtime used. */
   const [refused, setRefused] = useState<string[]>([]);
   const [dragging, setDragging] = useState(false);
   useEffect(() => {
-    if (!draftKey) return;
-    try {
-      saveDraft(storageKey, { text, files });
-    } catch {
-      return;
-    }
-  }, [draftKey, storageKey, text, files]);
-  useEffect(() => {
     const preserve = (event: Event) => {
       try {
-        if (sending)
+        if (
+          [...owners.values()].some(
+            (entry) => entry.get().delivery.kind === "sending" || entry.get().staging,
+          )
+        )
           throw new Error("A message is being sent. Wait for it to finish before reloading.");
-        saveDraft(storageKey, { text, files });
+        for (const entry of owners.values()) entry.preserve();
       } catch (error) {
         event.preventDefault();
         setRefused([errorMessage(error)]);
@@ -78,7 +159,7 @@ export function Composer({
     };
     window.addEventListener(BEFORE_RELOAD, preserve);
     return () => window.removeEventListener(BEFORE_RELOAD, preserve);
-  }, [storageKey, text, files, sending]);
+  }, [storageKey, owner, sending, stagingCount]);
 
   const ref = useRef<HTMLTextAreaElement>(null);
   const mirror = useRef<HTMLDivElement>(null);
@@ -90,22 +171,24 @@ export function Composer({
   const localFiles = useStore((s) => s.capabilities.localFiles);
 
   /** What a drop or a pick became, folded into what is already attached. */
-  const take = useCallback((staging: Promise<Staged>) => {
-    setStagingCount((count) => count + 1);
-    void staging
-      .then((staged) => {
-        // The same file twice is one attachment, by content rather than by
-        // path: a second drop is a person making sure, and one document
-        // saved in two places is still one document.
-        setFiles((held) => [
-          ...held,
-          ...staged.attached.filter((file) => !held.some((have) => have.digest === file.digest)),
-        ]);
-        setRefused(staged.refused);
-      })
-      .catch((error) => setRefused([errorMessage(error)]))
-      .finally(() => setStagingCount((count) => count - 1));
-  }, []);
+  const take = useCallback(
+    (staging: Promise<Staged>) => {
+      owner.dispatch({ type: "stage" });
+      void staging
+        .then((staged) => {
+          // The same file twice is one attachment, by content rather than by
+          // path: a second drop is a person making sure, and one document
+          // saved in two places is still one document.
+          owner.dispatch({ type: "staged", files: staged.attached });
+          setRefused(staged.refused);
+        })
+        .catch((error) => {
+          owner.dispatch({ type: "staged", files: [] });
+          setRefused([errorMessage(error)]);
+        });
+    },
+    [owner],
+  );
 
   // Dropping anywhere on the window attaches to whatever channel is open,
   // because the alternative is a small target the operator has to aim at while
@@ -163,28 +246,33 @@ export function Composer({
   };
 
   const submit = async () => {
+    const current = owner.get();
+    const { text, files } = current.draft;
     const body = text.trim();
     // A file on its own is a message. "Read this" with nothing typed is how
     // people actually hand over a document.
-    if ((!body && files.length === 0) || sending || disabled) return;
-    setSending(true);
+    if (
+      (!body && files.length === 0) ||
+      current.delivery.kind !== "idle" ||
+      current.staging ||
+      disabled
+    )
+      return;
+    try {
+      owner.dispatch({ type: "send" }, true);
+    } catch (error) {
+      setRefused([errorMessage(error)]);
+      return;
+    }
     // Clear optimistically: the message is echoed back from the runtime, and
     // leaving the draft in place makes it look like nothing happened.
-    setText("");
-    setFiles([]);
     setRefused([]);
     try {
       await onSend(body, files);
-      try {
-        sessionStorage.removeItem(storageKey);
-      } catch {
-        /* The message was sent. */
-      }
+      owner.dispatch({ type: "success" });
     } catch {
-      setText(body);
-      setFiles(files);
+      owner.dispatch({ type: "unknown" });
     } finally {
-      setSending(false);
       ref.current?.focus();
     }
   };
@@ -240,14 +328,26 @@ export function Composer({
           <select
             aria-label="Recipient"
             value={recipient.id}
-            disabled={sending || stagingCount > 0}
+            disabled={state.delivery.kind !== "idle" || stagingCount > 0 || state.held.length > 0}
             onChange={(event) => {
               const id = event.target.value;
               if (id === recipient.id) return;
               const destination = `guaca.draft:${workspaceOrigin()}:${id}`;
               try {
-                const held = readDraft(destination);
-                if (held.text || held.files.length) {
+                sessionStorage.getItem(destination);
+                const held = owners.get(destination)?.get() ?? readDraftState(destination);
+                if (held.staging) {
+                  setRefused([
+                    "That channel has a file being attached. Wait for it to finish before moving this draft.",
+                  ]);
+                  return;
+                }
+                if (
+                  held.draft.text ||
+                  held.draft.files.length ||
+                  held.delivery.kind !== "idle" ||
+                  held.held.length
+                ) {
                   setRefused([
                     "That channel already has a saved draft. Open it before moving this draft.",
                   ]);
@@ -307,6 +407,45 @@ export function Composer({
           ))}
         </ul>
       )}
+      {state.delivery.kind === "unknown" && (
+        <div role="alert">
+          <p>Delivery could not be confirmed. Check the conversation before sending again.</p>
+          {(state.draft.text !== state.delivery.payload.text ||
+            JSON.stringify(state.draft.files) !== JSON.stringify(state.delivery.payload.files)) && (
+            <>
+              <p>{state.delivery.payload.text}</p>
+              {state.delivery.payload.files.map((file) => (
+                <span key={file.digest}>{file.name}</span>
+              ))}
+            </>
+          )}
+          <button
+            type="button"
+            className="btn btn--small"
+            onClick={() => owner.dispatch({ type: "dismiss" })}
+          >
+            Conversation checked
+          </button>
+        </div>
+      )}
+      {state.held.map((draft, index) => {
+        const value = JSON.stringify(draft);
+        const key = `${value}:${state.held.slice(0, index).filter((item) => JSON.stringify(item) === value).length}`;
+        return (
+          <div key={key}>
+            <p>Saved draft: {draft.text || `${draft.files.length} attached file(s)`}</p>
+            <button
+              type="button"
+              className="btn btn--small"
+              aria-label={`Switch to saved draft ${index + 1}`}
+              disabled={state.delivery.kind !== "idle" || stagingCount > 0}
+              onClick={() => owner.dispatch({ type: "switch", index })}
+            >
+              Switch drafts
+            </button>
+          </div>
+        );
+      })}
       {refused.length > 0 && (
         // Said where the attachments are, not as a banner over the app: the
         // operator is looking at what they just dropped, and the one that did
@@ -446,7 +585,12 @@ export function Composer({
           aria-label="Send"
           title="Send"
           onClick={() => void submit()}
-          disabled={disabled || sending || (text.trim().length === 0 && files.length === 0)}
+          disabled={
+            disabled ||
+            state.delivery.kind !== "idle" ||
+            stagingCount > 0 ||
+            (text.trim().length === 0 && files.length === 0)
+          }
         >
           <span>Send</span>
           <span aria-hidden="true">↑</span>

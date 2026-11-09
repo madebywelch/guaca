@@ -20,6 +20,14 @@ interface Props {
   onBack: () => void;
 }
 
+type Request = { kind: "idle" } | { kind: "running" };
+type RequestEvent = "start" | "finish";
+
+export function transitionRequest(state: Request, event: RequestEvent): Request {
+  if (event === "finish") return { kind: "idle" };
+  return state.kind === "idle" ? { kind: "running" } : state;
+}
+
 function endpoint(value: string): string {
   return value
     .trim()
@@ -56,6 +64,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
   const [advanced, setAdvanced] = useState(false);
   const blockedHint = useId();
   const attempt = useRef(0);
+  const request = useRef<Request>({ kind: "idle" });
 
   useEffect(() => {
     let live = true;
@@ -170,6 +179,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
 
   const abandon = () => {
     attempt.current += 1;
+    request.current = transitionRequest(request.current, "finish");
     setPendingCode(null);
     setBusy(null);
     setError("");
@@ -211,7 +221,8 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
    * opened, through Guaca's own sign-in.
    */
   const accept = async (pickup: Pickup) => {
-    if (busy || !settings) return;
+    if (request.current.kind === "running" || !settings) return;
+    request.current = transitionRequest(request.current, "start");
     const current = ++attempt.current;
     const live = () => attempt.current === current;
     setError("");
@@ -246,6 +257,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
       }
     } finally {
       if (live()) {
+        request.current = transitionRequest(request.current, "finish");
         setPendingCode(null);
         setBusy(null);
       }
@@ -253,12 +265,13 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
   };
 
   const connect = async () => {
-    if (busy || !settings) return;
+    if (request.current.kind === "running" || !settings) return;
     if (provider === "claude" && (!claudeReady || !claudeSignedIn)) return;
     if (provider === "compatible" && (needsKey || !baseUrl.trim() || !model.trim())) {
       setError("Enter an endpoint, a model, and the key for that provider, then try again.");
       return;
     }
+    request.current = transitionRequest(request.current, "start");
     const current = ++attempt.current;
     const live = () => attempt.current === current;
     setError("");
@@ -306,6 +319,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
         );
     } finally {
       if (live()) {
+        request.current = transitionRequest(request.current, "finish");
         setPendingCode(null);
         setBusy(null);
       }

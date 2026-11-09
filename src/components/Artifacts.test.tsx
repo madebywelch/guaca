@@ -6,6 +6,7 @@ import type {
   Artifact,
   ArtifactDetail,
   ArtifactRead,
+  ArtifactSource,
   Settings,
   WidgetWidth,
 } from "../lib/types";
@@ -31,7 +32,15 @@ const deleteArtifact = vi.fn<(id: string) => Promise<void>>(async () => {});
 const artifactData = vi.fn<(id: string, version?: number | null) => Promise<ArtifactRead[]>>(
   async () => [],
 );
-const allowArtifactSources = vi.fn<(id: string) => Promise<Artifact>>();
+const allowArtifactSources =
+  vi.fn<
+    (
+      id: string,
+      version: number,
+      ownerId: string | null,
+      sources: ArtifactSource[],
+    ) => Promise<Artifact>
+  >();
 const sendMessage = vi.fn<(agentId: string, text: string) => Promise<string>>(async () => "run");
 const pinArtifact = vi.fn<(id: string, width: WidgetWidth) => Promise<Settings>>();
 const unpinArtifact = vi.fn<(id: string) => Promise<Settings>>();
@@ -45,7 +54,12 @@ vi.mock("../lib/ipc", () => ({
     handArtifact: (id: string, agentId: string) => handArtifact(id, agentId),
     deleteArtifact: (id: string) => deleteArtifact(id),
     artifactData: (id: string, version?: number | null) => artifactData(id, version),
-    allowArtifactSources: (id: string) => allowArtifactSources(id),
+    allowArtifactSources: (
+      id: string,
+      version: number,
+      ownerId: string | null,
+      sources: ArtifactSource[],
+    ) => allowArtifactSources(id, version, ownerId, sources),
     sendMessage: (agentId: string, text: string) => sendMessage(agentId, text),
     pinArtifact: (id: string, width: WidgetWidth) => pinArtifact(id, width),
     unpinArtifact: (id: string) => unpinArtifact(id),
@@ -334,7 +348,37 @@ describe("a page that reads live data", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Pipeline by stage/ }));
     expect(await screen.findByText('linear · list_issues {"team":"ENG"}')).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Allow these reads" }));
-    await waitFor(() => expect(allowArtifactSources).toHaveBeenCalledWith("artifact-1"));
+    await waitFor(() =>
+      expect(allowArtifactSources).toHaveBeenCalledWith(
+        "artifact-1",
+        board.version,
+        board.owner?.id,
+        board.sources,
+      ),
+    );
+  });
+
+  it("reloads a changed list after a stale approval", async () => {
+    const changed = {
+      ...board,
+      version: board.version + 1,
+      sources: [{ name: "projects", tool: "linear__list_projects", arguments: {} }],
+    };
+    artifactDetail
+      .mockResolvedValueOnce({ ...detail, artifact: board })
+      .mockResolvedValue({ ...detail, artifact: changed });
+    allowArtifactSources.mockRejectedValueOnce({
+      kind: "conflict",
+      message: "This page changed. Review its reads before allowing them.",
+    });
+    open(DEFAULT_GROUP, [board]);
+    fireEvent.click(await screen.findByRole("button", { name: /Pipeline by stage/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Allow these reads" }));
+    expect(
+      await screen.findByText("This page changed. Review its reads before allowing them."),
+    ).toBeTruthy();
+    expect(await screen.findByText("linear · list_projects")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Allow these reads" })).toBeTruthy();
   });
 
   it("reads the version on screen, and reads again on Refresh", async () => {

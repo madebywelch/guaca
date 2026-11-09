@@ -321,6 +321,58 @@ pub struct Connectors {
     pub connections: Vec<AccountConnection>,
 }
 
+enum Credential {
+    Absent,
+    Present(Stored),
+}
+
+struct AccountState {
+    generation: u64,
+    attempt: u64,
+    credential: Credential,
+}
+
+enum Transition {
+    Begin,
+    SignIn(u64, Stored),
+    Refresh(u64, Stored),
+    SignOut,
+}
+
+impl AccountState {
+    fn transition(&mut self, event: Transition) -> bool {
+        match event {
+            Transition::Begin => self.attempt = self.attempt.wrapping_add(1),
+            Transition::SignIn(attempt, stored) => {
+                if attempt != self.attempt {
+                    return false;
+                }
+                self.generation = self.generation.wrapping_add(1);
+                self.credential = Credential::Present(stored);
+            }
+            Transition::Refresh(generation, stored) => {
+                if generation != self.generation {
+                    return false;
+                }
+                self.credential = Credential::Present(stored);
+            }
+            Transition::SignOut => {
+                self.generation = self.generation.wrapping_add(1);
+                self.attempt = self.attempt.wrapping_add(1);
+                self.credential = Credential::Absent;
+            }
+        }
+        true
+    }
+
+    fn stored(&self) -> Option<&Stored> {
+        match &self.credential {
+            Credential::Absent => None,
+            Credential::Present(stored) => Some(stored),
+        }
+    }
+}
+
 /// A signed-in Guaca account, and the file it lives in.
 ///
 /// Cheap to clone behind the `Arc` its owner holds. The mutex is held only to
@@ -330,7 +382,7 @@ pub struct Account {
     origin: String,
     http: reqwest::Client,
     broker_http: reqwest::Client,
-    tokens: Mutex<Option<Stored>>,
+    tokens: Mutex<AccountState>,
     broker: Option<String>,
     origin_override: bool,
     /// Held across a refresh, so a crew that all reach for the account at once
@@ -396,7 +448,11 @@ impl Account {
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .expect("could not build account HTTP client"),
-            tokens: Mutex::new(tokens),
+            tokens: Mutex::new(AccountState {
+                generation: 0,
+                attempt: 0,
+                credential: tokens.map_or(Credential::Absent, Credential::Present),
+            }),
             broker: None,
             origin_override: true,
             renewing: tokio::sync::Mutex::new(()),
@@ -479,7 +535,7 @@ impl Account {
     }
 
     pub fn status(&self) -> Status {
-        match &*self.tokens.lock() {
+        match self.tokens.lock().stored() {
             Some(stored) => Status {
                 signed_in: true,
                 email: stored.email.clone(),
@@ -496,7 +552,7 @@ impl Account {
     }
 
     pub fn is_signed_in(&self) -> bool {
-        self.tokens.lock().is_some()
+        self.tokens.lock().stored().is_some()
     }
 
     /// The whole sign-in, from discovery to a stored token.
@@ -510,6 +566,11 @@ impl Account {
         open: impl FnOnce(&str) -> Result<(), String>,
         landing: &oauth::Landing,
     ) -> Result<Status, AccountError> {
+        let attempt = {
+            let mut state = self.tokens.lock();
+            state.transition(Transition::Begin);
+            state.attempt
+        };
         let server = self.discover().await?;
 
         let verifier = oauth::secret();
@@ -577,7 +638,7 @@ impl Account {
         // sign-in that reports success one that actually works. It is also where
         // the email comes from, so there is no second call to make.
         let held = self.fetch_connectors(&stored.access_token).await?;
-        self.store(Stored { email: held.email, ..stored })
+        self.store(true, attempt, Stored { email: held.email, ..stored })
     }
 
     /// Forgets the sign-in on this machine.
@@ -590,7 +651,8 @@ impl Account {
         if self.has_broker() {
             return Err(AccountError::BrokerConfigured);
         }
-        *self.tokens.lock() = None;
+        let mut state = self.tokens.lock();
+        state.transition(Transition::SignOut);
         match fs::remove_file(&self.path) {
             Ok(()) => Ok(()),
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -617,7 +679,7 @@ impl Account {
         if self.has_broker() {
             return Ok(self.broker_token()?.to_owned());
         }
-        let stored = self.tokens.lock().clone().ok_or(AccountError::NotSignedIn)?;
+        let stored = self.tokens.lock().stored().cloned().ok_or(AccountError::NotSignedIn)?;
         if !stored.expiring() {
             return Ok(stored.access_token);
         }
@@ -631,7 +693,10 @@ impl Account {
         // gate has already stored a fresh token, and taking theirs is what
         // makes this a shared refresh rather than a second one presenting a
         // refresh token they have just retired.
-        let stored = self.tokens.lock().clone().ok_or(AccountError::NotSignedIn)?;
+        let (stored, generation) = {
+            let state = self.tokens.lock();
+            (state.stored().cloned().ok_or(AccountError::NotSignedIn)?, state.generation)
+        };
         if !stored.expiring() {
             return Ok(stored.access_token);
         }
@@ -642,7 +707,7 @@ impl Account {
             return Ok(stored.access_token);
         };
 
-        match self.refresh(&stored, &refresh_token).await {
+        match self.refresh(&stored, &refresh_token, generation).await {
             Ok(fresh) => Ok(fresh),
             Err(err @ AccountError::Transport { .. }) => {
                 tracing::warn!(
@@ -663,7 +728,12 @@ impl Account {
         }
     }
 
-    async fn refresh(&self, stored: &Stored, refresh_token: &str) -> Result<String, AccountError> {
+    async fn refresh(
+        &self,
+        stored: &Stored,
+        refresh_token: &str,
+        generation: u64,
+    ) -> Result<String, AccountError> {
         let issued = oauth::post_token(
             &oauth::http()?,
             &stored.token_endpoint,
@@ -677,17 +747,21 @@ impl Account {
         .await?;
 
         let access_token = issued.access_token.clone();
-        self.store(Stored {
-            access_token: issued.access_token,
-            // A rotation that issues a new refresh token says so; one that does
-            // not expects the old one to keep working. Storing nothing here
-            // would end the sign-in at the next renewal.
-            refresh_token: issued.refresh_token.or_else(|| Some(refresh_token.to_string())),
-            expires_at: issued.expires_in.map(|secs| now_ms() + secs * 1000),
-            email: stored.email.clone(),
-            token_endpoint: stored.token_endpoint.clone(),
-            origin: self.origin.clone(),
-        })?;
+        self.store(
+            false,
+            generation,
+            Stored {
+                access_token: issued.access_token,
+                // A rotation that issues a new refresh token says so; one that does
+                // not expects the old one to keep working. Storing nothing here
+                // would end the sign-in at the next renewal.
+                refresh_token: issued.refresh_token.or_else(|| Some(refresh_token.to_string())),
+                expires_at: issued.expires_in.map(|secs| now_ms() + secs * 1000),
+                email: stored.email.clone(),
+                token_endpoint: stored.token_endpoint.clone(),
+                origin: self.origin.clone(),
+            },
+        )?;
         Ok(access_token)
     }
 
@@ -807,7 +881,21 @@ impl Account {
         })
     }
 
-    fn store(&self, stored: Stored) -> Result<Status, AccountError> {
+    fn store(
+        &self,
+        sign_in: bool,
+        generation: u64,
+        stored: Stored,
+    ) -> Result<Status, AccountError> {
+        let mut state = self.tokens.lock();
+        if generation != if sign_in { state.attempt } else { state.generation } {
+            return Ok(Status {
+                signed_in: state.stored().is_some(),
+                email: state.stored().map_or_else(String::new, |s| s.email.clone()),
+                origin: self.origin.clone(),
+                broker: false,
+            });
+        }
         let status = Status {
             signed_in: true,
             email: stored.email.clone(),
@@ -815,7 +903,11 @@ impl Account {
             broker: false,
         };
         self.write(&stored)?;
-        *self.tokens.lock() = Some(stored);
+        state.transition(if sign_in {
+            Transition::SignIn(generation, stored)
+        } else {
+            Transition::Refresh(generation, stored)
+        });
         Ok(status)
     }
 
@@ -873,6 +965,25 @@ fn restrict(_path: &std::path::Path) -> Result<(), AccountError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn credential_transitions_reject_obsolete_commits() {
+        use super::{AccountState, Credential, Stored, Transition};
+        let mut state = AccountState { generation: 0, attempt: 0, credential: Credential::Absent };
+        assert!(state.stored().is_none());
+        assert!(state.transition(Transition::Begin));
+        assert!(state.transition(Transition::SignIn(1, Stored::default())));
+        assert!(state.stored().is_some());
+        assert!(state.transition(Transition::Begin));
+        assert!(!state.transition(Transition::SignIn(1, Stored::default())));
+        assert!(state.stored().is_some());
+        assert!(state.transition(Transition::Refresh(1, Stored::default())));
+        assert!(state.transition(Transition::SignOut));
+        assert!(state.stored().is_none());
+        assert!(!state.transition(Transition::SignIn(2, Stored::default())));
+        assert!(!state.transition(Transition::Refresh(1, Stored::default())));
+        assert!(state.transition(Transition::SignOut));
+        assert!(state.stored().is_none());
+    }
     use super::*;
 
     fn account(origin: &str) -> Account {

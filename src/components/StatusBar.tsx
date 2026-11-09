@@ -206,6 +206,13 @@ function useBarLook(): BarLook {
   );
 }
 
+type RefusalRead = { kind: "waiting" } | { kind: "sent" } | { kind: "disposed" };
+
+export function refusalRead(state: RefusalRead, event: "visible" | "dispose"): RefusalRead {
+  if (event === "dispose") return { kind: "disposed" };
+  return state.kind === "waiting" ? { kind: "sent" } : state;
+}
+
 /**
  * One pinned page, drawn from its condensed view.
  *
@@ -279,14 +286,32 @@ function PinnedPage({
         .then((found) => live && setReads(found))
         .catch(() => {});
     };
-    read();
     // Reads the operator has not allowed come back refused, once, so the page
     // can say so. Asking again on a clock would only say it again.
     if (!allowed) {
+      let state: RefusalRead = { kind: "waiting" };
+      const onVisible = () => {
+        if (document.visibilityState !== "visible") return;
+        const next = refusalRead(state, "visible");
+        if (state.kind === "waiting" && next.kind === "sent") {
+          read();
+          document.removeEventListener("visibilitychange", onVisible);
+        }
+        state = next;
+      };
+      if (document.visibilityState === "hidden") {
+        document.addEventListener("visibilitychange", onVisible);
+      } else {
+        read();
+        state = refusalRead(state, "visible");
+      }
       return () => {
+        state = refusalRead(state, "dispose");
         live = false;
+        document.removeEventListener("visibilitychange", onVisible);
       };
     }
+    read();
     const timer = window.setInterval(read, every);
     const onVisible = () => {
       if (document.visibilityState === "visible" && Date.now() - last >= every) read();

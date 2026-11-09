@@ -16,6 +16,7 @@ vi.mock("../lib/ipc", () => ({
     agentBrowser: (id: string) => agentBrowser(id),
     agentRoutines: () => agentRoutines(),
     agentMemory: (id: string) => agentMemory(id),
+    agentWorkingNotes: async () => [],
     agentNotebook: async () => [],
     agentTerminal: async () => ({ path: "/var/lib/guaca/data/terminals/a1" }),
     codingHarnesses: async () => [],
@@ -133,6 +134,11 @@ describe("Inspector", () => {
     // that reads as deliberate in a diff is invisible in every other test.
     render(<Inspector agent={card("a1", "Cook")} onEditProfile={vi.fn()} />);
     await screen.findByRole("heading", { name: "Routines" });
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: /Working notes/ }).textContent).toBe(
+        "Working notes · 0",
+      ),
+    );
 
     const order = screen
       .getAllByRole("heading", { level: 3 })

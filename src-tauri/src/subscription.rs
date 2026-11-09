@@ -205,6 +205,7 @@ pub struct Subscription {
     backend: String,
     http: reqwest::Client,
     tokens: Mutex<Option<Stored>>,
+    lifecycle: Mutex<Lifecycle>,
     /// Held across a refresh, so a crew that all discover a dead token at once
     /// spends one.
     ///
@@ -216,6 +217,61 @@ pub struct Subscription {
     /// because it is held across an await, which is the one thing the other
     /// lock here is careful never to be.
     renewing: tokio::sync::Mutex<()>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Credential {
+    Absent(u64),
+    Present(u64),
+}
+
+impl Credential {
+    fn next(self, present: bool) -> Self {
+        let generation = match self {
+            Self::Absent(n) | Self::Present(n) => n + 1,
+        };
+        if present {
+            Self::Present(generation)
+        } else {
+            Self::Absent(generation)
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Attempt {
+    Idle,
+    Starting(u64),
+    Waiting(u64, String),
+}
+
+enum AttemptEvent {
+    Start(u64),
+    Issued(u64, String),
+    Clear,
+}
+
+impl Attempt {
+    fn transition(&mut self, event: AttemptEvent) -> bool {
+        match event {
+            AttemptEvent::Start(id) => *self = Self::Starting(id),
+            AttemptEvent::Issued(id, device) => {
+                if !matches!(self, Self::Starting(current) if *current == id) {
+                    return false;
+                }
+                *self = Self::Waiting(id, device);
+            }
+            AttemptEvent::Clear => *self = Self::Idle,
+        }
+        true
+    }
+}
+
+#[derive(Debug)]
+struct Lifecycle {
+    credential: Credential,
+    attempt: Attempt,
+    next_attempt: u64,
 }
 
 impl Subscription {
@@ -252,6 +308,8 @@ impl Subscription {
             }
         };
 
+        let credential =
+            if tokens.is_some() { Credential::Present(0) } else { Credential::Absent(0) };
         Self {
             path,
             issuer: issuer.into(),
@@ -263,6 +321,11 @@ impl Subscription {
                 .build()
                 .unwrap_or_default(),
             tokens: Mutex::new(tokens),
+            lifecycle: Mutex::new(Lifecycle {
+                credential,
+                attempt: Attempt::Idle,
+                next_attempt: 0,
+            }),
             renewing: tokio::sync::Mutex::new(()),
         }
     }
@@ -290,6 +353,13 @@ impl Subscription {
 
     /// Asks for a code the operator can carry to a browser.
     pub async fn begin(&self) -> Result<DeviceCode, SigninError> {
+        let attempt = {
+            let mut state = self.lifecycle.lock();
+            state.next_attempt += 1;
+            let attempt = state.next_attempt;
+            state.attempt.transition(AttemptEvent::Start(attempt));
+            attempt
+        };
         let base = self.issuer.trim_end_matches('/');
         let url = format!("{base}/api/accounts/deviceauth/usercode");
 
@@ -315,6 +385,10 @@ impl Subscription {
             SigninError::Malformed(format!("could not read the device code: {err}"))
         })?;
 
+        let mut state = self.lifecycle.lock();
+        if !state.attempt.transition(AttemptEvent::Issued(attempt, issued.device_auth_id.clone())) {
+            return Err(SigninError::NotSignedIn);
+        }
         Ok(DeviceCode {
             // The page the operator opens, which is not the API they were just
             // issued a code by.
@@ -332,6 +406,10 @@ impl Subscription {
     /// awaits, so a sign-in that is abandoned costs one parked call and no
     /// state.
     pub async fn complete(&self, code: &DeviceCode) -> Result<Status, SigninError> {
+        let attempt = match &self.lifecycle.lock().attempt {
+            Attempt::Waiting(id, device) if *device == code.device_auth_id => *id,
+            _ => return Err(SigninError::NotSignedIn),
+        };
         let base = self.issuer.trim_end_matches('/');
         let url = format!("{base}/api/accounts/deviceauth/token");
         let interval = Duration::from_secs(code.interval_secs).max(MIN_INTERVAL);
@@ -389,7 +467,15 @@ impl Subscription {
             )
             .await?;
 
-        self.store(tokens)
+        let mut state = self.lifecycle.lock();
+        if !matches!(&state.attempt, Attempt::Waiting(id, device) if *id == attempt && *device == code.device_auth_id)
+        {
+            return Err(SigninError::NotSignedIn);
+        }
+        let status = self.store(tokens)?;
+        state.credential = state.credential.next(true);
+        state.attempt.transition(AttemptEvent::Clear);
+        Ok(status)
     }
 
     /// Forgets the sign-in on this machine.
@@ -398,6 +484,13 @@ impl Subscription {
     /// operator's other Codex clients are signed in with their own and revoking
     /// centrally would sign them out of something Guaca does not own.
     pub fn sign_out(&self) -> Result<(), SigninError> {
+        let mut state = self.lifecycle.lock();
+        state.credential = state.credential.next(false);
+        state.attempt.transition(AttemptEvent::Clear);
+        self.remove_credential()
+    }
+
+    fn remove_credential(&self) -> Result<(), SigninError> {
         *self.tokens.lock() = None;
         match fs::remove_file(&self.path) {
             Ok(()) => Ok(()),
@@ -413,7 +506,10 @@ impl Subscription {
     /// place that decides a token is too old, and it decides it before spending
     /// anything.
     pub async fn access(&self) -> Result<Access, SigninError> {
-        let stored = self.tokens.lock().clone();
+        let (generation, stored) = {
+            let state = self.lifecycle.lock();
+            (state.credential, self.tokens.lock().clone())
+        };
         let Some(stored) = stored else {
             return Err(SigninError::NotSignedIn);
         };
@@ -430,6 +526,9 @@ impl Subscription {
         match self.renew(&stored.access_token).await {
             Ok(access) => Ok(access),
             Err(err @ SigninError::Transport { .. }) => {
+                if self.lifecycle.lock().credential != generation {
+                    return Err(SigninError::NotSignedIn);
+                }
                 tracing::warn!(%err, "using the stored token: its refresh could not be reached");
                 Ok(Access { token: stored.access_token, account_id: stored.account_id })
             }
@@ -455,8 +554,12 @@ impl Subscription {
     pub async fn renew(&self, refused: &str) -> Result<Access, SigninError> {
         let _gate = self.renewing.lock().await;
 
-        let Some(held) = self.tokens.lock().clone() else {
-            return Err(SigninError::NotSignedIn);
+        let (generation, held) = {
+            let state = self.lifecycle.lock();
+            let Some(held) = self.tokens.lock().clone() else {
+                return Err(SigninError::NotSignedIn);
+            };
+            (state.credential, held)
         };
         if held.access_token != refused {
             return Ok(Access { token: held.access_token, account_id: held.account_id });
@@ -470,21 +573,27 @@ impl Subscription {
                 // already been told was dead. Forgetting it is what makes "sign
                 // in again" a thing the operator can actually do.
                 if is_terminal(&err) {
-                    if let Err(gone) = self.sign_out() {
-                        tracing::warn!(%gone, "could not remove a sign-in the service refused");
+                    let mut state = self.lifecycle.lock();
+                    if state.credential == generation {
+                        state.credential = state.credential.next(false);
+                        if let Err(gone) = self.remove_credential() {
+                            tracing::warn!(%gone, "could not remove a sign-in the service refused");
+                        }
                     }
                 }
                 return Err(err);
             }
         };
 
+        let mut state = self.lifecycle.lock();
+        if state.credential != generation {
+            return Err(SigninError::NotSignedIn);
+        }
         let status = self.store(fresh)?;
+        state.credential = state.credential.next(true);
         debug_assert!(status.signed_in);
         match self.tokens.lock().clone() {
             Some(held) => Ok(Access { token: held.access_token, account_id: held.account_id }),
-            // Signed out from Settings while this refresh was in flight. The
-            // operator's click wins: a token stored back over it would sign
-            // them silently back in.
             None => Err(SigninError::NotSignedIn),
         }
     }
@@ -863,15 +972,20 @@ mod tests {
         /// Whether a refresh re-issues the id token. Real services do not
         /// promise to, and the claims have to survive one that does not.
         refresh_omits_id_token: Arc<AtomicUsize>,
+        refresh_gate: Option<Arc<tokio::sync::Barrier>>,
+        exchange_gate: Option<Arc<tokio::sync::Barrier>>,
+        exchanges: Arc<AtomicUsize>,
+        begins: Arc<AtomicUsize>,
     }
 
     async fn serve(stub: Stub) -> String {
         let app = Router::new()
             .route(
                 "/api/accounts/deviceauth/usercode",
-                post(|| async {
+                post(|State(stub): State<Stub>| async move {
+                    let nth = stub.begins.fetch_add(1, Ordering::SeqCst);
                     axum::Json(serde_json::json!({
-                        "device_auth_id": "dev-1",
+                        "device_auth_id": format!("dev-{}", nth + 1),
                         "user_code": "ABCD-EFGH",
                         // A string, as the service sends it.
                         "interval": "1",
@@ -902,17 +1016,26 @@ mod tests {
                     // thing most worth pinning: form for the code exchange,
                     // JSON for the refresh.
                     if body.contains("grant_type=authorization_code") {
+                        let nth = stub.exchanges.fetch_add(1, Ordering::SeqCst);
+                        if let Some(gate) = stub.exchange_gate.as_ref().filter(|_| nth == 0) {
+                            gate.wait().await;
+                            gate.wait().await;
+                        }
                         assert!(body.contains("code_verifier=verifier-1"), "verifier not sent");
                         assert!(body.contains("deviceauth%2Fcallback"), "redirect not sent");
                         return axum::Json(serde_json::json!({
                             "access_token": access_token(hour_ahead(), 0),
                             "refresh_token": "refresh-1",
-                            "id_token": id_token("pro", "acct-1", "a@example.com"),
+                            "id_token": id_token(if nth == 0 { "pro" } else { "plus" }, "acct-1", "a@example.com"),
                         }))
                         .into_response();
                     }
 
                     let nth = stub.refreshes.fetch_add(1, Ordering::SeqCst) + 1;
+                    if let Some(gate) = &stub.refresh_gate {
+                        gate.wait().await;
+                        gate.wait().await;
+                    }
                     let status = stub.refresh_status.load(Ordering::SeqCst);
                     if status != 0 {
                         return (
@@ -949,6 +1072,136 @@ mod tests {
             issuer,
             crate::llm::codex::DEFAULT_BASE_URL,
         )
+    }
+
+    #[test]
+    fn credential_transitions_advance_the_generation() {
+        assert_eq!(Credential::Absent(0).next(true), Credential::Present(1));
+        assert_eq!(Credential::Absent(0).next(false), Credential::Absent(1));
+        assert_eq!(Credential::Present(0).next(true), Credential::Present(1));
+        assert_eq!(Credential::Present(0).next(false), Credential::Absent(1));
+    }
+
+    #[test]
+    fn attempt_transitions_reject_a_stale_issuance() {
+        let mut attempt = Attempt::Idle;
+        assert!(attempt.transition(AttemptEvent::Start(1)));
+        assert!(!attempt.transition(AttemptEvent::Issued(2, "old".into())));
+        assert_eq!(attempt, Attempt::Starting(1));
+        assert!(attempt.transition(AttemptEvent::Issued(1, "device".into())));
+        assert_eq!(attempt, Attempt::Waiting(1, "device".into()));
+        assert!(!attempt.transition(AttemptEvent::Issued(1, "again".into())));
+        assert!(attempt.transition(AttemptEvent::Start(2)));
+        assert!(attempt.transition(AttemptEvent::Clear));
+        assert_eq!(attempt, Attempt::Idle);
+        assert!(!attempt.transition(AttemptEvent::Issued(2, "late".into())));
+    }
+
+    #[tokio::test]
+    async fn sign_out_invalidates_a_device_code_before_polling() {
+        let base = serve(Stub::default()).await;
+        let dir = tempfile::tempdir().unwrap();
+        let subscription = store(&dir, &base);
+        let code = subscription.begin().await.unwrap();
+        subscription.sign_out().unwrap();
+        assert!(subscription.complete(&code).await.is_err());
+        assert!(!store(&dir, &base).is_signed_in());
+    }
+
+    #[tokio::test]
+    async fn stale_refresh_cannot_restore_a_signed_out_credential() {
+        let gate = Arc::new(tokio::sync::Barrier::new(2));
+        let base = serve(Stub { refresh_gate: Some(gate.clone()), ..Default::default() }).await;
+        let dir = tempfile::tempdir().unwrap();
+        let subscription = Arc::new(store(&dir, &base));
+        let code = subscription.begin().await.unwrap();
+        subscription.complete(&code).await.unwrap();
+        let token = subscription.access().await.unwrap().token;
+        let task = {
+            let subscription = subscription.clone();
+            tokio::spawn(async move { subscription.renew(&token).await })
+        };
+        gate.wait().await;
+        subscription.sign_out().unwrap();
+        gate.wait().await;
+        let _ = task.await.unwrap();
+        assert!(!subscription.is_signed_in());
+        assert!(!store(&dir, &base).is_signed_in());
+    }
+
+    #[tokio::test]
+    async fn stale_device_exchange_cannot_restore_a_signed_out_credential() {
+        let gate = Arc::new(tokio::sync::Barrier::new(2));
+        let base = serve(Stub { exchange_gate: Some(gate.clone()), ..Default::default() }).await;
+        let dir = tempfile::tempdir().unwrap();
+        let subscription = Arc::new(store(&dir, &base));
+        let code = subscription.begin().await.unwrap();
+        let task = {
+            let subscription = subscription.clone();
+            tokio::spawn(async move { subscription.complete(&code).await })
+        };
+        gate.wait().await;
+        subscription.sign_out().unwrap();
+        gate.wait().await;
+        let _ = task.await.unwrap();
+        assert!(!subscription.is_signed_in());
+        assert!(!store(&dir, &base).is_signed_in());
+    }
+
+    #[tokio::test]
+    async fn stale_device_exchange_cannot_replace_a_new_login() {
+        let gate = Arc::new(tokio::sync::Barrier::new(2));
+        let base = serve(Stub { exchange_gate: Some(gate.clone()), ..Default::default() }).await;
+        let dir = tempfile::tempdir().unwrap();
+        let subscription = Arc::new(store(&dir, &base));
+        let old = subscription.begin().await.unwrap();
+        let task = {
+            let subscription = subscription.clone();
+            tokio::spawn(async move { subscription.complete(&old).await })
+        };
+        gate.wait().await;
+        let new = subscription.begin().await.unwrap();
+        subscription.complete(&new).await.unwrap();
+        gate.wait().await;
+        let _ = task.await.unwrap();
+        assert_eq!(subscription.status().plan, "plus");
+        assert_eq!(store(&dir, &base).status().plan, "plus");
+    }
+
+    async fn stale_refresh_cannot_change_a_new_login(status: usize) {
+        let gate = Arc::new(tokio::sync::Barrier::new(2));
+        let stub = Stub {
+            refresh_gate: Some(gate.clone()),
+            refresh_status: Arc::new(AtomicUsize::new(status)),
+            ..Default::default()
+        };
+        let base = serve(stub).await;
+        let dir = tempfile::tempdir().unwrap();
+        let subscription = Arc::new(store(&dir, &base));
+        let code = subscription.begin().await.unwrap();
+        subscription.complete(&code).await.unwrap();
+        let token = subscription.access().await.unwrap().token;
+        let task = {
+            let subscription = subscription.clone();
+            tokio::spawn(async move { subscription.renew(&token).await })
+        };
+        gate.wait().await;
+        let code = subscription.begin().await.unwrap();
+        subscription.complete(&code).await.unwrap();
+        gate.wait().await;
+        let _ = task.await.unwrap();
+        assert_eq!(subscription.status().plan, "plus", "refresh status {status}");
+        assert_eq!(store(&dir, &base).status().plan, "plus", "refresh status {status}");
+    }
+
+    #[tokio::test]
+    async fn stale_refresh_cannot_replace_a_new_login() {
+        stale_refresh_cannot_change_a_new_login(0).await;
+    }
+
+    #[tokio::test]
+    async fn stale_terminal_failure_cannot_retire_a_new_login() {
+        stale_refresh_cannot_change_a_new_login(400).await;
     }
 
     #[tokio::test]

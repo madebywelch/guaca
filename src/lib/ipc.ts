@@ -40,6 +40,7 @@ import type {
   ArtifactDetail,
   ArtifactId,
   ArtifactRead,
+  ArtifactSource,
   Attachment,
   Browser,
   BrowserConsent,
@@ -409,7 +410,12 @@ export const api = {
   artifactData: (id: ArtifactId, version?: number | null) =>
     invoke<ArtifactRead[]>("artifact_data", { id, version: version ?? null }),
   /** Allows the reads the current version declares, exactly that list. */
-  allowArtifactSources: (id: ArtifactId) => invoke<Artifact>("allow_artifact_sources", { id }),
+  allowArtifactSources: (
+    id: ArtifactId,
+    version: number,
+    ownerId: AgentId | null,
+    sources: ArtifactSource[],
+  ) => invoke<Artifact>("approve_artifact_sources", { id, version, ownerId, sources }),
   /** Puts an earlier version back as a new one. The one it replaces is kept. */
   restoreArtifact: (id: ArtifactId, version: number) =>
     invoke<Artifact>("restore_artifact", { id, version }),
@@ -541,8 +547,8 @@ export const api = {
   agentMemory: (id: AgentId) => invoke<string>("agent_memory", { id }),
 
   /** Lets the operator seed or correct an agent's memory by hand. */
-  setAgentMemory: (id: AgentId, content: string) =>
-    invoke<string>("set_agent_memory", { id, content }),
+  setAgentMemory: (id: AgentId, content: string, expected?: string) =>
+    invoke<string>("set_agent_memory", { id, content, expected }),
 
   /** What an agent is in the middle of, oldest first. */
   agentNotebook: (id: AgentId) => invoke<NotebookEntry[]>("agent_notebook", { id }),

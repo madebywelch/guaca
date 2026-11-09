@@ -40,8 +40,17 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+use sha2::{Digest, Sha256};
 
 use crate::domain::ids::AgentId;
+
+static MEMORY_LOCK: Mutex<()> = Mutex::new(());
+
+pub fn version(content: &str) -> String {
+    format!("{:x}", Sha256::digest(content.as_bytes()))
+}
 
 /// Memory longer than this is cut. Four pages: enough for a persona, standing
 /// preferences, durable facts, and pointers to the documents worth reopening.
@@ -144,6 +153,11 @@ impl Workspace {
 
     /// An agent's memory, or an empty string if it has never written any.
     pub fn read(&self, id: AgentId) -> String {
+        let _guard = MEMORY_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.read_unlocked(id)
+    }
+
+    fn read_unlocked(&self, id: AgentId) -> String {
         self.existing_path(id).and_then(|path| fs::read_to_string(path).ok()).unwrap_or_default()
     }
 
@@ -161,6 +175,24 @@ impl Workspace {
     /// the operator by hand, so anything that reads the file afterward is
     /// reading somebody else's write.
     pub fn write(&self, id: AgentId, name: &str, content: &str) -> Result<Stored, WorkspaceError> {
+        match self.write_versioned(id, name, content, None)? {
+            WriteResult::Stored(stored) => Ok(stored),
+            WriteResult::Conflict { .. } => unreachable!(),
+        }
+    }
+
+    pub fn write_versioned(
+        &self,
+        id: AgentId,
+        name: &str,
+        content: &str,
+        expected: Option<&str>,
+    ) -> Result<WriteResult, WorkspaceError> {
+        let _guard = MEMORY_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = self.read_unlocked(id);
+        if expected.is_some_and(|expected| expected != version(&before)) {
+            return Ok(WriteResult::Conflict { current: before, draft: content.to_string() });
+        }
         fs::create_dir_all(&self.root)
             .map_err(|source| WorkspaceError::Io { path: self.root.clone(), source })?;
 
@@ -180,8 +212,6 @@ impl Workspace {
 
         let target = self.preferred_path(id, name);
         let current = self.existing_path(id);
-        let before =
-            current.as_ref().and_then(|path| fs::read_to_string(path).ok()).unwrap_or_default();
         // Renaming is cosmetic: lookup is by id, so a failure here is harmless.
         if let Some(current) = current {
             if current != target {
@@ -192,11 +222,18 @@ impl Workspace {
         fs::write(&target, &body)
             .map_err(|source| WorkspaceError::Io { path: target.clone(), source })?;
 
-        Ok(Stored { before, characters: body.chars().count(), truncated, path: target })
+        Ok(WriteResult::Stored(Stored {
+            before,
+            characters: body.chars().count(),
+            content: body,
+            truncated,
+            path: target,
+        }))
     }
 
     /// Deletes an agent's memory. Called when the agent is deleted.
     pub fn remove(&self, id: AgentId) {
+        let _guard = MEMORY_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(path) = self.existing_path(id) {
             let _ = fs::remove_file(path);
         }
@@ -207,9 +244,16 @@ impl Workspace {
 pub struct Stored {
     /// The version this write replaced, empty where there was none.
     pub before: String,
+    pub content: String,
     pub characters: usize,
     pub truncated: bool,
     pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum WriteResult {
+    Stored(Stored),
+    Conflict { current: String, draft: String },
 }
 
 #[cfg(test)]

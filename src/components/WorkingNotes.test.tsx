@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../lib/store";
 import type { WorkingNote } from "../lib/types";
-import { ago, WorkingNotes } from "./WorkingNotes";
+import { ago, notesTransition, WorkingNotes } from "./WorkingNotes";
 
 const agentWorkingNotes = vi.fn<(id: string) => Promise<WorkingNote[]>>();
 const clearAgentWorkingNotes = vi.fn<(id: string) => Promise<void>>();
@@ -20,6 +20,14 @@ const DAY = 24 * HOUR;
 
 function note(agoMs: number, body: string): WorkingNote {
   return { at: Date.now() - agoMs, body };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 describe("WorkingNotes", () => {
@@ -188,6 +196,57 @@ describe("WorkingNotes", () => {
     fireEvent.click(screen.getByRole("button", { name: /Working notes/ }));
 
     expect(await screen.findByText(/database is locked/)).toBeTruthy();
+    expect(screen.queryByText(/Nothing in flight/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Working notes" })).toBeTruthy();
+  });
+
+  it("ignores a snapshot taken before a successful clear", async () => {
+    const old = deferred<WorkingNote[]>();
+    agentWorkingNotes.mockResolvedValueOnce([note(0, "held")]).mockReturnValueOnce(old.promise);
+    render(<WorkingNotes agentId="a1" />);
+    fireEvent.click(screen.getByRole("button", { name: /Working notes/ }));
+    await screen.findByText("held");
+    act(() => useStore.getState().applyEvent({ type: "workingNotesChanged", agentId: "a1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    await screen.findByText(/Nothing in flight/);
+    await act(async () => old.resolve([note(0, "obsolete")]));
+    expect(screen.queryByText("obsolete")).toBeNull();
+  });
+
+  it("keeps the latest overlapping read", async () => {
+    const old = deferred<WorkingNote[]>();
+    const recent = deferred<WorkingNote[]>();
+    agentWorkingNotes.mockReturnValueOnce(old.promise).mockReturnValueOnce(recent.promise);
+    render(<WorkingNotes agentId="a1" />);
+    fireEvent.click(screen.getByRole("button", { name: /Working notes/ }));
+    act(() => useStore.getState().applyEvent({ type: "workingNotesChanged", agentId: "a1" }));
+    await act(async () => recent.resolve([note(0, "new")]));
+    await act(async () => old.resolve([note(0, "old")]));
+    expect(screen.getByText("new")).toBeTruthy();
+    expect(screen.queryByText("old")).toBeNull();
+  });
+
+  it("retains notes if clear fails", async () => {
+    agentWorkingNotes.mockResolvedValueOnce([note(0, "held")]);
+    clearAgentWorkingNotes.mockRejectedValueOnce(new Error("clear failed"));
+    render(<WorkingNotes agentId="a1" />);
+    fireEvent.click(screen.getByRole("button", { name: /Working notes/ }));
+    await screen.findByText("held");
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    await screen.findByText("clear failed");
+    expect(screen.getByText("held")).toBeTruthy();
+  });
+
+  it("ignores a late read from the previous agent", async () => {
+    const old = deferred<WorkingNote[]>();
+    agentWorkingNotes.mockReturnValueOnce(old.promise).mockResolvedValueOnce([note(0, "second")]);
+    const view = render(<WorkingNotes agentId="a1" />);
+    fireEvent.click(screen.getByRole("button", { name: /Working notes/ }));
+    view.rerender(<WorkingNotes agentId="a2" />);
+    await screen.findByText("second");
+    await act(async () => old.resolve([note(0, "first")]));
+    expect(screen.getByText("second")).toBeTruthy();
+    expect(screen.queryByText("first")).toBeNull();
   });
 });
 
@@ -205,5 +264,71 @@ describe("ago", () => {
     // Two clocks, or a note written either side of a system time change.
     // "-1d ago" is worse than slightly wrong.
     expect(ago(now + 60_000, now)).toBe("just now");
+  });
+});
+
+describe("notesTransition", () => {
+  it("covers reads, clear, failures, stale responses and agent changes", () => {
+    const initial = {
+      agentId: "a1",
+      generation: 0,
+      read: { kind: "loading" as const },
+      busy: false,
+    };
+    const loading = notesTransition(initial, { type: "load", agentId: "a1", generation: 1 });
+    const failure = notesTransition(loading, {
+      type: "readFailed",
+      agentId: "a1",
+      generation: 1,
+      error: "read",
+    });
+    expect(failure.read).toEqual({ kind: "failed", error: "read" });
+    const ready = notesTransition(loading, {
+      type: "loaded",
+      agentId: "a1",
+      generation: 1,
+      notes: [note(0, "held")],
+    });
+    expect(ready.read.kind).toBe("ready");
+    expect(
+      notesTransition(ready, { type: "loaded", agentId: "a1", generation: 0, notes: [] }),
+    ).toBe(ready);
+    expect(
+      notesTransition(ready, { type: "readFailed", agentId: "a1", generation: 0, error: "old" }),
+    ).toBe(ready);
+    const failedRefresh = notesTransition(ready, {
+      type: "readFailed",
+      agentId: "a1",
+      generation: 1,
+      error: "read",
+    });
+    expect(failedRefresh.read).toMatchObject({ kind: "ready", error: "read" });
+    const clearing = notesTransition(failedRefresh, { type: "clear", agentId: "a1" });
+    expect(clearing).toMatchObject({ busy: true, read: { error: null } });
+    const clearFailed = notesTransition(clearing, {
+      type: "clearFailed",
+      agentId: "a1",
+      error: "clear",
+    });
+    expect(clearFailed).toMatchObject({ busy: false, read: { kind: "ready", error: "clear" } });
+    expect(
+      notesTransition(initial, { type: "clearFailed", agentId: "a1", error: "clear" }).read,
+    ).toEqual({ kind: "failed", error: "clear" });
+    const cleared = notesTransition(clearing, { type: "cleared", agentId: "a1", generation: 2 });
+    expect(cleared).toMatchObject({
+      generation: 2,
+      busy: false,
+      read: { kind: "ready", notes: [], error: null },
+    });
+    const switched = notesTransition(cleared, { type: "load", agentId: "a2", generation: 3 });
+    expect(switched).toEqual({
+      agentId: "a2",
+      generation: 3,
+      read: { kind: "loading" },
+      busy: false,
+    });
+    expect(notesTransition(switched, { type: "cleared", agentId: "a1", generation: 4 })).toBe(
+      switched,
+    );
   });
 });

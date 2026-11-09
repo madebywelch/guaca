@@ -462,7 +462,22 @@ function ArtifactView({
                 type="button"
                 className="btn btn--primary btn--small"
                 disabled={busy}
-                onClick={() => void act(() => api.allowArtifactSources(artifact.id).then(load))}
+                onClick={() =>
+                  void act(async () => {
+                    try {
+                      await api.allowArtifactSources(
+                        artifact.id,
+                        artifact.version,
+                        artifact.owner?.id ?? null,
+                        artifact.sources,
+                      );
+                    } catch (caught) {
+                      await load();
+                      throw caught;
+                    }
+                    await load();
+                  })
+                }
               >
                 Allow these reads
               </button>

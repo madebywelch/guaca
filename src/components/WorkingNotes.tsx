@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
@@ -55,6 +55,71 @@ interface Props {
   agentId: AgentId;
 }
 
+type Read =
+  | { kind: "loading" }
+  | { kind: "failed"; error: string }
+  | { kind: "ready"; notes: WorkingNote[]; error: string | null };
+
+type State = { agentId: AgentId; generation: number; read: Read; busy: boolean };
+type Action =
+  | { type: "load"; agentId: AgentId; generation: number }
+  | { type: "loaded"; agentId: AgentId; generation: number; notes: WorkingNote[] }
+  | { type: "readFailed"; agentId: AgentId; generation: number; error: string }
+  | { type: "clear"; agentId: AgentId }
+  | { type: "cleared"; agentId: AgentId; generation: number }
+  | { type: "clearFailed"; agentId: AgentId; error: string };
+
+export function notesTransition(state: State, action: Action): State {
+  if (action.type === "load") {
+    return action.agentId === state.agentId
+      ? { ...state, generation: action.generation }
+      : {
+          agentId: action.agentId,
+          generation: action.generation,
+          read: { kind: "loading" },
+          busy: false,
+        };
+  }
+  if (action.agentId !== state.agentId) return state;
+  switch (action.type) {
+    case "loaded":
+      return action.generation === state.generation
+        ? { ...state, read: { kind: "ready", notes: action.notes, error: null } }
+        : state;
+    case "readFailed":
+      if (action.generation !== state.generation) return state;
+      return {
+        ...state,
+        read:
+          state.read.kind === "ready"
+            ? { ...state.read, error: action.error }
+            : { kind: "failed", error: action.error },
+      };
+    case "clear":
+      return {
+        ...state,
+        busy: true,
+        read: state.read.kind === "ready" ? { ...state.read, error: null } : state.read,
+      };
+    case "cleared":
+      return {
+        ...state,
+        generation: action.generation,
+        busy: false,
+        read: { kind: "ready", notes: [], error: null },
+      };
+    case "clearFailed":
+      return {
+        ...state,
+        busy: false,
+        read:
+          state.read.kind === "ready"
+            ? { ...state.read, error: action.error }
+            : { kind: "failed", error: action.error },
+      };
+  }
+}
+
 /**
  * What an agent is in the middle of, over what it knows.
  *
@@ -71,9 +136,19 @@ interface Props {
  * trust, and the agent cannot see the edit as anything but its own past self.
  */
 export function WorkingNotes({ agentId }: Props) {
-  const [notes, setNotes] = useState<WorkingNote[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [state, dispatch] = useReducer(notesTransition, {
+    agentId,
+    generation: 0,
+    read: { kind: "loading" },
+    busy: false,
+  });
+  const generation = useRef(0);
+  const currentAgent = useRef({ agentId });
+  if (currentAgent.current.agentId !== agentId) currentAgent.current = { agentId };
+  const read = state.agentId === agentId ? state.read : { kind: "loading" as const };
+  const notes = read.kind === "ready" ? read.notes : null;
+  const error = read.kind === "loading" ? null : read.error;
+  const busy = state.agentId === agentId && state.busy;
   // One choice across agents, like the inspector itself. The panel remounts
   // on an agent switch, but the operator's preferred density does not.
   const [all, setAll] = useState(false);
@@ -89,30 +164,30 @@ export function WorkingNotes({ agentId }: Props) {
   // than memory does and sharing one would refetch a page that has not changed.
   const changed = useStore((state) => state.workingNotesVersion[agentId] ?? 0);
 
-  const load = useCallback(async () => {
-    try {
-      setNotes(await api.agentWorkingNotes(agentId));
-      setError(null);
-    } catch (caught) {
-      setError(errorMessage(caught));
-      setNotes((current) => current ?? []);
-    }
-  }, [agentId]);
-
   useEffect(() => {
-    void load();
-  }, [load, changed]);
+    const request = ++generation.current;
+    dispatch({ type: "load", agentId, generation: request });
+    void (async () => {
+      try {
+        const notes = await api.agentWorkingNotes(agentId);
+        dispatch({ type: "loaded", agentId, generation: request, notes });
+      } catch (caught) {
+        dispatch({ type: "readFailed", agentId, generation: request, error: errorMessage(caught) });
+      }
+    })();
+  }, [agentId, changed]);
 
   const clear = async () => {
-    setBusy(true);
-    setError(null);
+    const owner = currentAgent.current;
+    dispatch({ type: "clear", agentId });
     try {
       await api.clearAgentWorkingNotes(agentId);
-      setNotes([]);
+      if (currentAgent.current === owner) {
+        dispatch({ type: "cleared", agentId, generation: ++generation.current });
+      }
     } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setBusy(false);
+      if (currentAgent.current === owner)
+        dispatch({ type: "clearFailed", agentId, error: errorMessage(caught) });
     }
   };
 
@@ -141,7 +216,7 @@ export function WorkingNotes({ agentId }: Props) {
             onClick={() => setExpanded((open) => !open)}
           >
             Working notes
-            <span className="detail__count">{` · ${notes?.length ?? 0}`}</span>
+            {notes !== null && <span className="detail__count">{` · ${notes.length}`}</span>}
             {notes?.length ? (
               <span className="detail__count">
                 {` · newest ${ago(notes[notes.length - 1]!.at, now)}`}
@@ -162,7 +237,7 @@ export function WorkingNotes({ agentId }: Props) {
       </div>
 
       {expanded &&
-        (notes === null ? (
+        (read.kind === "failed" ? null : notes === null ? (
           <p className="detail__empty">Loading…</p>
         ) : notes.length === 0 ? (
           <p className="detail__empty">Nothing in flight.</p>

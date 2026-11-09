@@ -1631,9 +1631,28 @@ pub async fn artifact_data(
 
 /// The operator allowing the reads the current version declares. The approval
 /// is of that exact list: a version that declares another waits again.
-pub async fn allow_artifact_sources(state: &AppState, id: ArtifactId) -> Reply<Artifact> {
-    let allowed =
-        state.runtime.store().allow_artifact_sources(id)?.ok_or_else(|| no_artifact(id))?;
+pub async fn allow_artifact_sources(_state: &AppState, _id: ArtifactId) -> Reply<Artifact> {
+    Err(CommandError::new("clientOutdated", "Update Guaca on this device to approve this page."))
+}
+
+pub async fn approve_artifact_sources(
+    state: &AppState,
+    id: ArtifactId,
+    version: u32,
+    owner_id: Option<AgentId>,
+    sources: Vec<artifact_domain::Source>,
+) -> Reply<Artifact> {
+    let store = state.runtime.store();
+    let matched = store
+        .approve_artifact_sources(id, version, owner_id, &sources)?
+        .ok_or_else(|| no_artifact(id))?;
+    if !matched {
+        return Err(CommandError::new(
+            "conflict",
+            "This page changed. Review its reads before allowing them.",
+        ));
+    }
+    let allowed = store.any_artifact(id)?.ok_or_else(|| no_artifact(id))?;
     state.runtime.emit(UiEvent::ArtifactsChanged { group_id: allowed.group_id });
     Ok(allowed)
 }
@@ -2217,18 +2236,30 @@ pub async fn agent_memory(state: &AppState, id: AgentId) -> Reply<String> {
 }
 
 /// Lets the operator seed or correct an agent's memory by hand.
-pub async fn set_agent_memory(state: &AppState, id: AgentId, content: String) -> Reply<String> {
+pub async fn set_agent_memory(
+    state: &AppState,
+    id: AgentId,
+    content: String,
+    expected: Option<String>,
+) -> Reply<String> {
     let card = state
         .runtime
         .store()
         .get_agent(id)?
         .ok_or_else(|| CommandError::new("notFound", format!("no agent with id {id}")))?;
-    state
+    // Older clients do not send a version and retain unconditional saves.
+    let result = state
         .runtime
         .workspace()
-        .write(id, &card.name, &content)
+        .write_versioned(id, &card.name, &content, expected.as_deref())
         .map_err(|err| CommandError::new("storage", err.to_string()))?;
-    Ok(state.runtime.workspace().read(id))
+    match result {
+        crate::workspace::WriteResult::Stored(stored) => Ok(stored.content),
+        crate::workspace::WriteResult::Conflict { current, draft } => {
+            Err(CommandError::new("memoryConflict", "Memory changed while you were editing it.")
+                .with_detail(serde_json::json!({ "current": current, "draft": draft }).to_string()))
+        }
+    }
 }
 
 /// What an agent is in the middle of: the other half of what it carries.

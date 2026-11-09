@@ -436,12 +436,16 @@ impl Opened {
                         return Err(OauthError::TimedOut);
                     };
                     match read_answer(&fields, state, issuer) {
-                        Some(read) => {
+                        Callback::Complete(read) => {
                             let _ = reply.send(page_for(&read));
                             return read;
                         }
-                        None => {
+                        Callback::Unrelated => {
                             let _ = reply.send((404, NOT_THE_SIGNIN));
+                        }
+                        Callback::Rejected => {
+                            tracing::warn!("rejected OAuth callback with mismatched state");
+                            let _ = reply.send(page_for(&Err(OauthError::StateMismatch)));
                         }
                     }
                 }
@@ -463,14 +467,20 @@ fn page_for(read: &Result<String, OauthError>) -> (u16, &'static str) {
 
 /// Reads one redirect's query against the state and issuer that were sent.
 ///
-/// `None` is a request that is not the sign-in at all: no code and no error,
-/// which is a browser asking for `/favicon.ico` while it shows the page. The
-/// loopback listener keeps waiting on those and the served waiter does too.
-fn read_answer(
-    fields: &[(String, String)],
-    state: &str,
-    issuer: &str,
-) -> Option<Result<String, OauthError>> {
+enum Callback {
+    Unrelated,
+    Rejected,
+    Complete(Result<String, OauthError>),
+}
+
+fn read_answer(fields: &[(String, String)], state: &str, issuer: &str) -> Callback {
+    let has_answer = fields.iter().any(|(k, _)| k == "code" || k == "error");
+    if !has_answer {
+        return Callback::Unrelated;
+    }
+    if fields.iter().find(|(k, _)| k == "state").map(|(_, v)| v.as_str()) != Some(state) {
+        return Callback::Rejected;
+    }
     // Before anything in the answer is read, error included. RFC 9207 is
     // explicit that a mismatched `iss` means the client must not act on or
     // display `error`, `error_description` or `error_uri` either: those are
@@ -482,7 +492,7 @@ fn read_answer(
     let named = fields.iter().find(|(k, _)| k == "iss").map(|(_, v)| v.as_str());
     if let Some(named) = named {
         if named != issuer {
-            return Some(Err(OauthError::IssuerMismatch {
+            return Callback::Complete(Err(OauthError::IssuerMismatch {
                 expected: issuer.to_string(),
                 named: named.to_string(),
             }));
@@ -492,17 +502,11 @@ fn read_answer(
     if let Some(error) = fields.iter().find(|(k, _)| k == "error").map(|(_, v)| v.clone()) {
         let description =
             fields.iter().find(|(k, _)| k == "error_description").map(|(_, v)| v.clone());
-        return Some(Err(OauthError::Refused { error, description }));
+        return Callback::Complete(Err(OauthError::Refused { error, description }));
     }
 
-    let code = fields.iter().find(|(k, _)| k == "code").map(|(_, v)| v.clone())?;
-
-    // Checked before the page is written, so a mismatched redirect is never
-    // told it succeeded.
-    if fields.iter().find(|(k, _)| k == "state").map(|(_, v)| v.as_str()) != Some(state) {
-        return Some(Err(OauthError::StateMismatch));
-    }
-    Some(Ok(code))
+    let code = fields.iter().find(|(k, _)| k == "code").map(|(_, v)| v.clone()).unwrap();
+    Callback::Complete(Ok(code))
 }
 
 /// Trades a refresh token for a fresh grant.
@@ -912,41 +916,44 @@ pub(crate) async fn wait_for_redirect(
     state: &str,
     issuer: &str,
 ) -> Result<String, OauthError> {
-    let deadline = tokio::time::sleep(WAIT_FOR_OPERATOR);
-    tokio::pin!(deadline);
+    tokio::time::timeout(WAIT_FOR_OPERATOR, async {
+        loop {
+            let accepted = listener.accept().await;
+            let Ok((mut socket, _)) = accepted else { continue };
 
-    loop {
-        let accepted = tokio::select! {
-            _ = &mut deadline => return Err(OauthError::TimedOut),
-            accepted = listener.accept() => accepted,
-        };
-        let Ok((mut socket, _)) = accepted else { continue };
+            let mut buffer = [0u8; 8192];
+            let Ok(read) = socket.read(&mut buffer).await else { continue };
+            let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+            let Some(target) = request.split_whitespace().nth(1) else {
+                let _ = socket.shutdown().await;
+                continue;
+            };
 
-        let mut buffer = [0u8; 8192];
-        let Ok(read) = socket.read(&mut buffer).await else { continue };
-        let request = String::from_utf8_lossy(&buffer[..read]).to_string();
-        let Some(target) = request.split_whitespace().nth(1) else {
-            let _ = socket.shutdown().await;
-            continue;
-        };
-
-        let Some(query) = target.split_once('?').map(|(_, q)| q) else {
-            let _ = reply(&mut socket, 404, NOT_THE_SIGNIN).await;
-            continue;
-        };
-
-        match read_answer(&parse_query(query), state, issuer) {
-            Some(read) => {
-                let (status, page) = page_for(&read);
-                let _ = reply(&mut socket, status, page).await;
-                return read;
-            }
-            None => {
+            let Some(query) = target.split_once('?').map(|(_, q)| q) else {
                 let _ = reply(&mut socket, 404, NOT_THE_SIGNIN).await;
                 continue;
+            };
+
+            match read_answer(&parse_query(query), state, issuer) {
+                Callback::Complete(read) => {
+                    let (status, page) = page_for(&read);
+                    let _ = reply(&mut socket, status, page).await;
+                    return read;
+                }
+                Callback::Unrelated => {
+                    let _ = reply(&mut socket, 404, NOT_THE_SIGNIN).await;
+                    continue;
+                }
+                Callback::Rejected => {
+                    tracing::warn!("rejected OAuth callback with mismatched state");
+                    let (status, page) = page_for(&Err(OauthError::StateMismatch));
+                    let _ = reply(&mut socket, status, page).await;
+                }
             }
         }
-    }
+    })
+    .await
+    .unwrap_or(Err(OauthError::TimedOut))
 }
 
 async fn reply(
@@ -1164,6 +1171,87 @@ fn decode(raw: &str) -> String {
 #[cfg(test)]
 mod landing_tests {
     use super::*;
+
+    #[test]
+    fn unrelated_error_does_not_end_the_signin() {
+        for query in ["error=denied", "error=denied&state=wrong"] {
+            assert!(
+                matches!(
+                    read_answer(&parse_query(query), "expected", "issuer"),
+                    Callback::Rejected
+                ),
+                "{query}"
+            );
+        }
+    }
+
+    #[test]
+    fn callback_transitions_validate_state_before_code_error_and_issuer() {
+        for answer in ["code=ok", "error=denied"] {
+            for state in ["", "&state=wrong"] {
+                let query = format!("{answer}{state}&iss=other");
+                assert!(
+                    matches!(
+                        read_answer(&parse_query(&query), "expected", "issuer"),
+                        Callback::Rejected
+                    ),
+                    "{query}"
+                );
+            }
+        }
+        assert!(matches!(
+            read_answer(&parse_query("favicon=1"), "expected", "issuer"),
+            Callback::Unrelated
+        ));
+        assert!(
+            matches!(read_answer(&parse_query("code=ok&state=expected"), "expected", "issuer"), Callback::Complete(Ok(code)) if code == "ok")
+        );
+        assert!(matches!(
+            read_answer(&parse_query("error=denied&state=expected"), "expected", "issuer"),
+            Callback::Complete(Err(OauthError::Refused { .. }))
+        ));
+        for answer in ["code=ok", "error=denied"] {
+            let query = format!("{answer}&state=expected&iss=other");
+            assert!(matches!(
+                read_answer(&parse_query(&query), "expected", "issuer"),
+                Callback::Complete(Err(OauthError::IssuerMismatch { .. }))
+            ));
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn idle_loopback_client_cannot_outlive_the_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let client = tokio::net::TcpStream::connect(address).await.unwrap();
+        let task = tokio::spawn(wait_for_redirect(listener, "expected", "issuer"));
+        tokio::task::yield_now().await;
+        tokio::time::advance(WAIT_FOR_OPERATOR).await;
+        tokio::task::yield_now().await;
+        let finished = task.is_finished();
+        if !finished {
+            task.abort();
+            panic!("idle socket held the sign-in beyond its deadline");
+        }
+        assert!(matches!(task.await.unwrap(), Err(OauthError::TimedOut)));
+        drop(client);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn unrelated_requests_do_not_restart_the_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(wait_for_redirect(listener, "expected", "issuer"));
+        tokio::task::yield_now().await;
+        tokio::time::advance(WAIT_FOR_OPERATOR / 2).await;
+        let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
+        client.write_all(b"GET /favicon.ico HTTP/1.1\r\n\r\n").await.unwrap();
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).await.unwrap();
+        assert!(response.starts_with(b"HTTP/1.1 404"));
+        tokio::time::advance(WAIT_FOR_OPERATOR / 2).await;
+        assert!(matches!(task.await.unwrap(), Err(OauthError::TimedOut)));
+    }
 
     #[tokio::test]
     async fn local_hosted_callbacks_use_a_loopback_ip_for_native_oauth() {
