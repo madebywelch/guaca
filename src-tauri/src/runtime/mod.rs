@@ -1620,16 +1620,24 @@ impl Runtime {
     }
 
     fn set_activity(&self, id: AgentId, activity: Activity) {
-        let changed = {
-            let mut map = self.inner.activity.lock();
-            if map.get(&id) == Some(&activity) {
-                false
-            } else {
-                map.insert(id, activity);
-                true
-            }
-        };
-        if changed {
+        let mut map = self.inner.activity.lock();
+        if map.get(&id) != Some(&activity) {
+            map.insert(id, activity);
+            self.inner.events.emit(UiEvent::ActivityChanged { agent_id: id, activity });
+        }
+    }
+
+    fn queue_activity(&self, id: AgentId, depth: usize) {
+        let mut map = self.inner.activity.lock();
+        if matches!(
+            map.get(&id),
+            Some(Activity::Thinking | Activity::AwaitingApproval | Activity::Paused)
+        ) {
+            return;
+        }
+        let activity = Activity::Queued { depth };
+        if map.get(&id) != Some(&activity) {
+            map.insert(id, activity);
             self.inner.events.emit(UiEvent::ActivityChanged { agent_id: id, activity });
         }
     }
@@ -1718,13 +1726,7 @@ impl Runtime {
 
             match queued {
                 Some(depth) => {
-                    // An agent mid-inference keeps its Thinking badge; the queue
-                    // depth is only interesting when it is not already working.
-                    let thinking =
-                        { self.inner.activity.lock().get(&id) == Some(&Activity::Thinking) };
-                    if !thinking {
-                        self.set_activity(id, Activity::Queued { depth });
-                    }
+                    self.queue_activity(id, depth);
                 }
                 // The agent was stopped between whatever check found it and
                 // this send. Nobody will ever read this, so it stops counting

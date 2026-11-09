@@ -35,6 +35,53 @@ use harness::*;
 
 // ---- tests ---------------------------------------------------------------
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn queued_work_preserves_approval_activity_until_the_request_is_answered() {
+    let requested = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stub = serve(move |_body| {
+        if !requested.swap(true, Ordering::SeqCst) {
+            Script::Settings(serde_json::json!({
+                "action": "update", "changes": { "limits": { "maxHops": 12 } },
+            }))
+        } else {
+            Script::Say("Done.".into())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Helper"], GuardLimits::default());
+    let id = h.id("Helper");
+    let first = h.runtime.send_from_human(id, "Change the limit.").unwrap();
+    let request = h.awaited_request().await;
+    let checkpoint = h.sink.snapshot().len();
+    let second = h.runtime.send_from_human(id, "Another task.").unwrap();
+    assert_eq!(h.runtime.activity_snapshot().get(&id), Some(&Activity::AwaitingApproval));
+    assert_eq!(
+        h.runtime.store().get_approval(request).unwrap().unwrap().state,
+        ApprovalState::Pending
+    );
+    assert!(!h.sink.snapshot().iter().skip(checkpoint).any(|event| matches!(event,
+        UiEvent::ActivityChanged { agent_id, activity: Activity::Queued { .. } } if *agent_id == id)));
+    h.runtime.decide_approval(request, Decision::Allow).unwrap();
+    h.settle(first).await;
+    h.settle(second).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn queued_work_preserves_paused_activity_until_resume() {
+    let stub = quiet().await;
+    let h = harness(&stub, &["Writer"], GuardLimits::default());
+    let id = h.id("Writer");
+    let first = h.park("Writer", "First task.").await;
+    let checkpoint = h.sink.snapshot().len();
+    let second = h.runtime.send_from_human(id, "Second task.").unwrap();
+    assert_eq!(h.runtime.activity_snapshot().get(&id), Some(&Activity::Paused));
+    assert!(!h.sink.snapshot().iter().skip(checkpoint).any(|event| matches!(event,
+        UiEvent::ActivityChanged { agent_id, activity: Activity::Queued { .. } } if *agent_id == id)));
+    h.resume("Writer");
+    h.settle(first).await;
+    h.settle(second).await;
+}
+
 #[tokio::test]
 async fn a_peer_remembers_the_answer_it_sent_on_its_previous_turn() {
     let remembered = Arc::new(std::sync::atomic::AtomicBool::new(false));
