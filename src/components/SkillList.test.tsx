@@ -108,4 +108,14 @@ describe("SkillList", () => {
     await screen.findByRole("alert");
     expect((screen.getByLabelText(/^Name/) as HTMLInputElement).value).toBe("guaca");
   });
+
+  it("keeps the current skills when a refresh fails", async () => {
+    listSkills.mockResolvedValueOnce([skill("deploy", CREW)]);
+    render(<SkillList scope={CREW} />);
+    await screen.findByText("deploy");
+    listSkills.mockRejectedValueOnce(new Error("refresh failed"));
+    act(() => useStore.getState().applyEvent({ type: "skillsChanged", scope: CREW }));
+    expect((await screen.findByRole("alert")).textContent).toContain("refresh failed");
+    expect(screen.getByText("deploy")).toBeTruthy();
+  });
 });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
@@ -21,6 +21,7 @@ export function Notebook({ agentId }: Props) {
   const [entries, setEntries] = useState<NotebookEntry[] | null>(null);
   const [open, setOpen] = useState<{ path: string; text: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const latestRead = useRef(0);
   const changed = useStore((state) => state.notebookVersion[agentId] ?? 0);
 
   const load = useCallback(async () => {
@@ -38,12 +39,14 @@ export function Notebook({ agentId }: Props) {
   }, [load, changed]);
 
   const read = async (path: string) => {
+    const ticket = ++latestRead.current;
     if (open?.path === path) {
       setOpen(null);
       return;
     }
     try {
-      setOpen({ path, text: await api.readNotebook(agentId, path) });
+      const text = await api.readNotebook(agentId, path);
+      if (ticket === latestRead.current) setOpen({ path, text });
     } catch (caught) {
       setError(errorMessage(caught));
     }

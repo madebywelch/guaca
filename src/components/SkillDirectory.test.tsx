@@ -200,4 +200,25 @@ describe("SkillDirectory", () => {
     expect(screen.queryByText("stale")).toBeNull();
     expect(screen.getByText("trending")).toBeTruthy();
   });
+
+  it("disables a second install while the first is pending and after it succeeds", async () => {
+    previewDirectorySkill.mockResolvedValue(opened("anthropics/skills/pdf"));
+    let finish: (skill: Skill) => void = () => {};
+    addDirectorySkill.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    render(<SkillDirectory scope={WORKSPACE} taken={new Set()} onAdded={() => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Read" }));
+    const add = await screen.findByRole("button", { name: "Add to all groups" });
+    fireEvent.click(add);
+    expect(add.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(add);
+    expect(addDirectorySkill).toHaveBeenCalledTimes(1);
+    finish({ name: "pdf", description: "d", scope: WORKSPACE, body: "", updatedAt: 1, files: [] });
+    expect((await screen.findByRole("button", { name: "Added" })).hasAttribute("disabled")).toBe(
+      true,
+    );
+  });
 });

@@ -48,4 +48,62 @@ describe("Notebook", () => {
     act(() => useStore.getState().applyEvent({ type: "notebookChanged", agentId: "a1" }));
     expect(await screen.findByRole("button", { name: "log.md" })).toBeTruthy();
   });
+
+  it("keeps the existing list when a refresh fails and reports the failure", async () => {
+    render(<Notebook agentId="a1" />);
+    await screen.findByRole("button", { name: "log.md" });
+    agentNotebook.mockRejectedValueOnce(new Error("refresh failed"));
+    act(() => useStore.getState().applyEvent({ type: "notebookChanged", agentId: "a1" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("refresh failed");
+    expect(screen.getByRole("button", { name: "log.md" })).toBeTruthy();
+  });
+
+  it("keeps the selected file open when another read fails", async () => {
+    agentNotebook.mockResolvedValue([log, { ...log, path: "other.md" }]);
+    readNotebook
+      .mockResolvedValueOnce("original contents")
+      .mockRejectedValueOnce(new Error("read failed"));
+    render(<Notebook agentId="a1" />);
+    fireEvent.click(await screen.findByRole("button", { name: "log.md" }));
+    await screen.findByText("original contents");
+    fireEvent.click(screen.getByRole("button", { name: "other.md" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("read failed");
+    expect(screen.getByText("original contents")).toBeTruthy();
+  });
+
+  it("keeps the newer selection when file reads cross", async () => {
+    agentNotebook.mockResolvedValue([log, { ...log, path: "other.md" }]);
+    let finishFirst: (text: string) => void = () => {};
+    readNotebook
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          finishFirst = resolve;
+        }),
+      )
+      .mockResolvedValueOnce("second contents");
+    render(<Notebook agentId="a1" />);
+    fireEvent.click(await screen.findByRole("button", { name: "log.md" }));
+    fireEvent.click(screen.getByRole("button", { name: "other.md" }));
+    await screen.findByText("second contents");
+    await act(async () => finishFirst("first contents"));
+    expect(screen.getByText("second contents")).toBeTruthy();
+    expect(screen.queryByText("first contents")).toBeNull();
+  });
+
+  it("does not show a pending read after its file is removed from the list", async () => {
+    let finishRead: (text: string) => void = () => {};
+    readNotebook.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishRead = resolve;
+      }),
+    );
+    deleteNotebookFile.mockResolvedValue(true);
+    render(<Notebook agentId="a1" />);
+    fireEvent.click(await screen.findByRole("button", { name: "log.md" }));
+    agentNotebook.mockResolvedValue([]);
+    fireEvent.click(screen.getByRole("button", { name: "Delete log.md" }));
+    await screen.findByText("Empty.");
+    await act(async () => finishRead("late contents"));
+    expect(screen.queryByText("late contents")).toBeNull();
+  });
 });
