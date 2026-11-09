@@ -111,11 +111,20 @@ export function memoryReducer(state: MemoryState, action: MemoryAction): MemoryS
   switch (action.type) {
     case "read":
       if (state.phase === "loading" || state.phase === "failed") {
-        return { phase: state.phase === "loading" && state.editing ? "editing" : "view", held: arrived(null, action.content), error: null, cut: false };
+        return {
+          phase: state.phase === "loading" && state.editing ? "editing" : "view",
+          held: arrived(null, action.content),
+          error: null,
+          cut: false,
+        };
+      }
+      if (state.phase === "saving" && state.held.draft !== state.sent) {
+        return { ...state, held: { ...state.held, incoming: action.content }, error: null };
       }
       return { ...state, held: arrived(state.held, action.content), error: null };
     case "readFailed":
-      if (state.phase === "loading" || state.phase === "failed") return { phase: "failed", error: action.error };
+      if (state.phase === "loading" || state.phase === "failed")
+        return { phase: "failed", error: action.error };
       return { ...state, error: action.error };
     case "edit":
       if (state.phase === "loading") return { ...state, editing: true };
@@ -126,14 +135,24 @@ export function memoryReducer(state: MemoryState, action: MemoryAction): MemoryS
       return { ...state, held: { ...state.held, draft: action.value }, cut: false };
     case "cancel":
       if (state.phase !== "editing") return state;
-      return { ...state, phase: "view", held: { stored: state.held.incoming ?? state.held.stored, draft: null, incoming: null }, cut: false };
+      return {
+        ...state,
+        phase: "view",
+        held: { stored: state.held.incoming ?? state.held.stored, draft: null, incoming: null },
+        cut: false,
+      };
     case "save":
       if (state.phase !== "editing") return state;
       return { ...state, phase: "saving", sent: action.sent, error: null };
     case "saved": {
       if (state.phase !== "saving") return state;
       const draft = state.held.draft === state.sent ? null : state.held.draft;
-      return { phase: draft === null ? "view" : "editing", held: { stored: action.saved, draft, incoming: null }, error: null, cut: action.saved !== state.sent.trim() };
+      return {
+        phase: draft === null ? "view" : "editing",
+        held: { stored: action.saved, draft, incoming: null },
+        error: null,
+        cut: action.saved !== state.sent.trim(),
+      };
     }
     case "saveFailed":
       if (state.phase !== "saving") return state;
@@ -171,18 +190,22 @@ function MemoryPage({ agentId }: Props) {
       const content = await api.agentMemory(agentId);
       if (request === generation.current) dispatch({ type: "read", content });
     } catch (caught) {
-      if (request === generation.current) dispatch({ type: "readFailed", error: errorMessage(caught) });
+      if (request === generation.current)
+        dispatch({ type: "readFailed", error: errorMessage(caught) });
     }
   }, [agentId]);
 
   useEffect(() => {
     void load();
-    return () => { generation.current++; };
+    return () => {
+      generation.current++;
+    };
   }, [load, changed]);
 
   const held = "held" in state ? state.held : null;
   const loading = state.phase === "loading";
-  const editing = state.phase === "editing" || state.phase === "saving" || (loading && state.editing);
+  const editing =
+    state.phase === "editing" || state.phase === "saving" || (loading && state.editing);
   const busy = state.phase === "saving";
   const error = "error" in state ? state.error : null;
   const cut = "cut" in state && state.cut;
@@ -299,6 +322,11 @@ function MemoryPage({ agentId }: Props) {
       {error && (
         <div className="banner banner--error" style={{ margin: "0.5rem 0 0" }}>
           <span>{error}</span>
+          {state.phase === "failed" && (
+            <button type="button" className="btn btn--small btn--ghost" onClick={() => void load()}>
+              Retry
+            </button>
+          )}
         </div>
       )}
     </section>
