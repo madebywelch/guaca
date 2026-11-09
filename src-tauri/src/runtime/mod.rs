@@ -574,7 +574,22 @@ fn told_to_a_model(err: crate::e2b::E2bError) -> String {
         crate::e2b::E2bError::NotGiven => {
             "you have not been given a computer, so there is no filesystem here at all".to_string()
         }
+        crate::e2b::E2bError::Transport(_) => "The computer provider could not be reached. Try again later.".to_string(),
+        crate::e2b::E2bError::Api { status: 401 | 403, .. } => "The computer provider refused access. Ask the operator to check its credentials and access.".to_string(),
+        crate::e2b::E2bError::Api { status: 429 | 500..=599, .. } => "The computer provider is temporarily unavailable. Try again later.".to_string(),
+        crate::e2b::E2bError::Api { .. } | crate::e2b::E2bError::Protocol(_) => "The computer provider could not confirm the resource's state. Ask the operator to check it.".to_string(),
         other => other.to_string(),
+    }
+}
+
+fn uncertain_computer_action(err: crate::e2b::E2bError) -> crate::e2b::E2bError {
+    match err {
+        crate::e2b::E2bError::Transport(_)
+        | crate::e2b::E2bError::Protocol(_)
+        | crate::e2b::E2bError::Api { status: 429 | 500..=599, .. } => {
+            crate::e2b::E2bError::OutcomeUnknown
+        }
+        other => other,
     }
 }
 
@@ -2089,7 +2104,7 @@ impl Runtime {
         let sized = client
             .run(&sandbox.id, &sandbox.envd_token, &format!("test -f '{path}' && wc -c < '{path}'"))
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(told_to_a_model)?;
         if sized.exit_code != 0 {
             return Err(format!("there is no file at {path} on your computer"));
         }
@@ -2105,7 +2120,7 @@ impl Runtime {
         let read = client
             .run(&sandbox.id, &sandbox.envd_token, &format!("base64 -w0 '{path}'"))
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(told_to_a_model)?;
         if read.exit_code != 0 {
             return Err(format!("{path} could not be read: {}", read.stderr.trim()));
         }
@@ -2146,7 +2161,7 @@ impl Runtime {
             client
                 .run(&sandbox.id, &sandbox.envd_token, &command)
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| told_to_a_model(uncertain_computer_action(e)))?;
             first = false;
         }
         Ok(path)
@@ -4844,9 +4859,10 @@ impl Runtime {
             ToolInvocation::RunCommand { command } => {
                 let used = self.credentials_named_in(card, &command);
                 let outcome = match self.ensure_computer(card).await {
-                    Ok((client, sandbox)) => {
-                        client.run(&sandbox.id, &sandbox.envd_token, &command).await
-                    }
+                    Ok((client, sandbox)) => client
+                        .run(&sandbox.id, &sandbox.envd_token, &command)
+                        .await
+                        .map_err(uncertain_computer_action),
                     Err(err) => Err(err),
                 };
                 let (rendered, outcome) = match outcome {
@@ -4862,10 +4878,10 @@ impl Runtime {
                     // Reported to the model rather than raised: a machine that
                     // will not start is something the agent has to work around
                     // and tell the operator about, not a dead turn.
-                    Err(err) => (
-                        format!("Error: your computer is not available ({err})."),
-                        ToolOutcome::Failed { error: err.to_string() },
-                    ),
+                    Err(err) => {
+                        let error = told_to_a_model(err);
+                        (format!("Error: {error}"), ToolOutcome::Failed { error })
+                    }
                 };
                 (rendered, Part::tool_call(tools::RUN_COMMAND, arguments, outcome))
             }
@@ -4944,8 +4960,15 @@ impl Runtime {
                 }
 
                 let outcome = match self.ensure_browser(card).await {
-                    Ok((client, session)) => client.browse(&session, &action, &args).await,
-                    Err(err) => Err(err),
+                    Ok((client, session)) => client.browse(&session, &action, &args).await.map_err(|_| {
+                        if action == "read" {
+                            "The browser could not read the page. Try again later.".to_string()
+                        } else {
+                            "The browser did not confirm the action's outcome. It may have happened, so check before doing it again.".to_string()
+                        }
+                    }),
+                    Err(err @ (crate::kernel::KernelError::NoKey | crate::kernel::KernelError::NotGiven | crate::kernel::KernelError::Local(_))) => Err(err.to_string()),
+                    Err(_) => Err("The browser provider did not confirm the resource's state. Ask the operator to check it before trying again.".to_string()),
                 };
                 let (rendered, outcome) = match outcome {
                     Ok(page) => {
@@ -4963,9 +4986,7 @@ impl Runtime {
                         let summary = format!("{action} in the browser");
                         (render_page(&page), ToolOutcome::Ok { summary })
                     }
-                    Err(err) => {
-                        (format!("Error: {err}"), ToolOutcome::Failed { error: err.to_string() })
-                    }
+                    Err(err) => (format!("Error: {err}"), ToolOutcome::Failed { error: err }),
                 };
                 (rendered, Part::tool_call(tools::BROWSE, arguments, outcome))
             }
@@ -4979,9 +5000,10 @@ impl Runtime {
                 let opened = crate::e2b::as_chrome(&command);
                 let shown = opened_on_screen(&command);
                 let outcome = match self.ensure_computer(card).await {
-                    Ok((client, sandbox)) => {
-                        client.open_on_desktop(&sandbox.id, &sandbox.envd_token, &opened).await
-                    }
+                    Ok((client, sandbox)) => client
+                        .open_on_desktop(&sandbox.id, &sandbox.envd_token, &opened)
+                        .await
+                        .map_err(uncertain_computer_action),
                     Err(err) => Err(err),
                 };
                 let (rendered, outcome) = match outcome {
@@ -5000,10 +5022,10 @@ impl Runtime {
                         ),
                         ToolOutcome::Ok { summary: format!("opened {shown}") },
                     ),
-                    Err(err) => (
-                        format!("Error: could not open that on your screen ({err})."),
-                        ToolOutcome::Failed { error: err.to_string() },
-                    ),
+                    Err(err) => {
+                        let error = told_to_a_model(err);
+                        (format!("Error: {error}"), ToolOutcome::Failed { error })
+                    }
                 };
                 (rendered, Part::tool_call(tools::OPEN_ON_DESKTOP, arguments, outcome))
             }
@@ -5193,7 +5215,8 @@ impl Runtime {
                     // not connected is something the agent has to tell the
                     // operator about, not a dead turn.
                     Err(err) => {
-                        (format!("Error: {err}"), ToolOutcome::Failed { error: err.to_string() })
+                        let error = err.for_agent(kind.label());
+                        (format!("Error: {error}"), ToolOutcome::Failed { error })
                     }
                 };
                 (rendered, Part::tool_call(name, arguments, outcome))
@@ -5961,11 +5984,8 @@ impl Runtime {
         let (client, sandbox) = match self.ensure_computer(card).await {
             Ok(pair) => pair,
             Err(err) => {
-                return failed(
-                    format!("Error: your screen is not available ({err})."),
-                    err.to_string(),
-                    arguments,
-                )
+                let error = told_to_a_model(err);
+                return failed(format!("Error: {error}"), error, arguments);
             }
         };
 
@@ -6019,9 +6039,14 @@ impl Runtime {
                     .as_ref()
                     .map(|(_, said)| format!("You may have {said}, but "))
                     .unwrap_or_default();
+                let error = if described.is_some() {
+                    told_to_a_model(uncertain_computer_action(err))
+                } else {
+                    told_to_a_model(err)
+                };
                 return failed(
-                    format!("Error: {done}the screen could not be photographed ({err})."),
-                    err.to_string(),
+                    format!("Error: {done}the screen could not be photographed. {error}"),
+                    error,
                     arguments,
                 );
             }
@@ -6338,9 +6363,10 @@ impl Runtime {
                         E2bError::Local(format!("could not record the sandbox resume: {err}"))
                     })?;
                     if state == SandboxState::Running {
-                        client.pause(&id).await?;
+                        client.pause(&id).await.map_err(uncertain_computer_action)?;
                     }
-                    let woken = client.resume(&id, idle).await?;
+                    let woken =
+                        client.resume(&id, idle).await.map_err(uncertain_computer_action)?;
                     if woken.id != id {
                         return Err(E2bError::Protocol(
                             "the resumed sandbox did not match its recorded id".into(),
@@ -6378,7 +6404,10 @@ impl Runtime {
             self.inner.store.workspace_identity().map_err(|err| {
                 E2bError::Local(format!("could not read workspace identity: {err}"))
             })?;
-        let fresh = client.create_for_workspace(&card.name, idle, &workspace).await?;
+        let fresh = client
+            .create_for_workspace(&card.name, idle, &workspace)
+            .await
+            .map_err(uncertain_computer_action)?;
 
         // A sandbox that cannot be written down is a sandbox nobody can reach
         // and nobody will stop paying for, so it is killed rather than left.
@@ -9625,5 +9654,14 @@ mod tests {
         // Every other variant is a machine that failed, which is the agent's
         // own problem and is reported as itself.
         assert!(!told_to_a_model(crate::e2b::E2bError::NoKey).is_empty());
+    }
+
+    #[test]
+    fn a_computer_action_with_an_unknown_outcome_is_not_safe_to_repeat() {
+        let err = crate::e2b::E2bError::Api { status: 503, message: "private-value".into() };
+        let said = told_to_a_model(uncertain_computer_action(err));
+        assert!(said.contains("may have happened"), "{said}");
+        assert!(!said.contains("private-value"), "{said}");
+        assert!(!said.contains("Try again later"), "{said}");
     }
 }

@@ -2248,7 +2248,11 @@ async fn failed_refresh_preserves_grant_for_later_recovery() {
             endpoint: &endpoint,
             account: plugins::Held::Absent,
         };
-        assert!(plugins::call(&store, target(), "run_sql", &args).await.is_err());
+        let error =
+            plugins::call(&store, target(), "run_sql", &args).await.unwrap_err().to_string();
+        if status == 503 {
+            assert!(error.contains("could not confirm whether its sign-in was renewed"), "{error}");
+        }
         assert_eq!(store.plugin_dial(plugin.id).unwrap().unwrap().grant.unwrap(), original);
         failure.store(0, Ordering::SeqCst);
         assert!(plugins::call(&store, target(), "run_sql", &args).await.is_ok());
