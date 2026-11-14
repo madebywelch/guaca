@@ -338,6 +338,27 @@ describe("Finished", () => {
     ).toEqual(["Ops", "Research"]);
   });
 
+  // A notification click or the panel's "And N more in For you" asks For you
+  // to open while it may already be open on another view. The ask is about
+  // what Needs you draws, so that is where it lands.
+  it("goes back to Needs you when asked to open while open on another view", async () => {
+    hostHas([outcome("run-1")]);
+    useStore.setState({ forYou: true });
+    await act(async () => {
+      render(<ForYou onClose={() => {}} />);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "History" }));
+    expect(screen.queryByRole("region", { name: "Finished" })).toBeNull();
+
+    await act(async () => {
+      useStore.getState().showForYou(true);
+    });
+    expect(screen.getByRole("button", { name: "Needs you" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(screen.getByRole("region", { name: "Finished" })).toBeTruthy();
+  });
+
   it("keeps what was seen this week one click away under Earlier", async () => {
     hostHas([
       outcome("run-1", { seenAt: NOW - HOUR, headline: "Booked the venue." }),

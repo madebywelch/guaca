@@ -38,6 +38,16 @@ export function ForYou({ onClose }: { onClose: () => void }) {
   const now = useNow(30_000);
   const panel = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<"needs" | "following" | "history">("needs");
+  // Asked to open while already open, from a notification or the menu bar
+  // panel, For you goes back to Needs you: that is where what the ask is about
+  // is drawn, Finished included. Set during render rather than in an effect,
+  // so the other view is never painted once more first.
+  const asked = useStore((state) => state.forYouAsked);
+  const [answered, setAnswered] = useState(asked);
+  if (asked !== answered) {
+    setAnswered(asked);
+    setView("needs");
+  }
   const [receipt, setReceipt] = useState("");
   const [recent, setRecent] = useState<Outcome[]>([]);
   useDismiss(onClose);
