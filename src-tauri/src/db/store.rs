@@ -3811,7 +3811,14 @@ impl Store {
     ) -> Result<Option<Outcome>, StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
-        let outcome = super::outcomes::record(&tx, run, settled, steps, now_ms())?;
+        // A run whose outcome cannot be read is still finished. Failing the
+        // settle over it would keep the recovery point, and the next start
+        // would report a conversation that ended as one that was cut off.
+        let outcome =
+            super::outcomes::record(&tx, run, settled, steps, now_ms()).unwrap_or_else(|err| {
+                tracing::error!(%err, %run, "could not record what a run ended in");
+                None
+            });
         tx.execute("DELETE FROM pending_runs WHERE run_id=?1", [run.to_string()])?;
         tx.execute(
             "UPDATE routine_occurrences SET state='done' WHERE owner_run=?1 AND state='started'",

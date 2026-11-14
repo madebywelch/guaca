@@ -265,12 +265,16 @@ impl Store {
             }
         }
         // Each one reported is a run that ended here, so it ends in an outcome
-        // like any other, written in the commit that reports it.
+        // like any other, written in the commit that reports it. One that
+        // cannot be written is logged and passed over: a host that would not
+        // start over a report is worse than a report with a line missing.
         let now = now_ms();
         for original in &anchors {
             let notice = interrupted(original);
             Store::insert_message(&tx, &notice)?;
-            super::outcomes::record_interrupted(&tx, original, &notice, now)?;
+            if let Err(err) = super::outcomes::record_interrupted(&tx, original, &notice, now) {
+                tracing::error!(%err, run = %original.run_id, "could not record an interrupted run");
+            }
         }
 
         for original in &anchors {

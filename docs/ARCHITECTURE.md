@@ -477,7 +477,10 @@ came of it was spread over every channel it had reached.
 the run's `pending_runs` row. One commit, because the two are the same fact read
 from two sides: a crash between them would leave a run that is neither owed nor
 finished. `domain/outcome.rs` holds the type and the pure parts; `db/outcomes.rs`
-reads the facts. Every fact is one the store already holds:
+reads the facts. An outcome that cannot be written is logged and the run settles
+anyway: a finished run kept owed would be reported cut off on the next start,
+which is a worse lie than a missing line. Every fact is one the store already
+holds:
 
 - **The owner** is the agent the run's first message went to. A delegation is
   one outcome, the coordinator's: the agents it asked work inside its run and
