@@ -106,12 +106,19 @@ pub enum ProtectedAction {
 impl ProtectedAction {
     /// Whether a yes can be made standing, so the agent is not asked again.
     ///
-    /// Not for a settings change. "Always" is scoped to an agent and an action,
-    /// and this action is "any setting, to any value", so a standing yes would
-    /// cover a limit raised to its ceiling as readily as the timeout it was
-    /// given for. Enforced where a verdict is recorded, not only in the UI.
+    /// Only for creating an agent. "Always" is scoped to an agent and an
+    /// action, and for the other two the action is too wide for one answer to
+    /// cover. A settings change is "any setting, to any value", so a standing
+    /// yes would cover a limit raised to its ceiling as readily as the timeout
+    /// it was given for. Acting in the operator's name is every future send,
+    /// submission and purchase, and it is also what a press on a signed-in
+    /// site asks as, so a standing yes would switch the browser's consent gate
+    /// off for good, on the strength of one answer given before any page that
+    /// gate exists for had been read. Enforced where a verdict is recorded and
+    /// where a grant is read, not only in the UI, because any client can send
+    /// "always" and an older build recorded it.
     pub fn stands(self) -> bool {
-        !matches!(self, ProtectedAction::ChangeSettings)
+        matches!(self, ProtectedAction::CreateAgent)
     }
 
     /// The stored form. Identical to the serialized form on purpose: two

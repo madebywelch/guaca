@@ -27,7 +27,10 @@
 //! gates and the same places, and every call it makes is drawn in the agent's
 //! own trail. What it does not share is state a turn keeps for itself (what it
 //! has read, what it has attached), which each errand keeps apart and hands
-//! back.
+//! back. What it has read starts from what the turn had read when it sent the
+//! errand, because a gate that a page closed on the turn has to stay closed on
+//! the turn's errands, and a page an errand reads comes back to close it on
+//! the turn.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -72,16 +75,31 @@ pub(super) struct Sender<'a> {
     pub named: &'a [PluginKind],
 }
 
+/// The computer and the browser, as the errands of one call hand them on.
+struct Place {
+    /// Where the browser was left. See `Reading::url`.
+    url: Option<String>,
+    /// Whether any errand took them at all.
+    used: bool,
+}
+
 impl Runtime {
     /// Sends the errands one call asked for and waits for all of them.
     ///
     /// Returns the call's result for the sending turn and, separately, every
     /// call the errands made, which belong in that turn's trail before the
     /// errand call itself: they are what it did.
+    ///
+    /// `reading` is the sending turn's, and it goes both ways. Each errand
+    /// starts from a copy of it, so a page the turn read still gates what an
+    /// errand does; when they are all back, it takes in what any of them read,
+    /// so a page an errand read still gates what the turn does next. Between
+    /// the errands themselves nothing is shared but where the browser was left.
     pub(super) async fn send_errands(
         &self,
         from: &Sender<'_>,
         call: &ToolCall,
+        reading: &mut Reading,
         attached: &mut Vec<Attachment>,
     ) -> (ToolResult, Vec<Part>) {
         let arguments = call.parsed_arguments().unwrap_or(serde_json::Value::Null);
@@ -113,17 +131,30 @@ impl Runtime {
                 // browser, for as long as that errand lasts. Each of the two
                 // is one thing, and two errands working one page at once each
                 // undo what the other did.
-                let places = Arc::new(tokio::sync::Mutex::new(()));
+                //
+                // What it guards is where the browser was left, which is the
+                // one part of a reading that belongs to the browser rather than
+                // to whoever read: an errand that takes the browser after
+                // another has used it presses on the page that one left, not
+                // on the page the turn last saw.
+                let places = Arc::new(tokio::sync::Mutex::new(Place {
+                    url: reading.url.clone(),
+                    used: false,
+                }));
+                let sent: &Reading = reading;
                 let ran = futures_util::future::join_all(briefs.iter().enumerate().map(
-                    |(index, brief)| self.run_errand(from, &offered, &places, call, index, brief),
+                    |(index, brief)| {
+                        self.run_errand(from, &offered, &places, sent, call, index, brief)
+                    },
                 ))
                 .await;
 
                 let mut errands = Vec::with_capacity(ran.len());
                 let mut trail = Vec::new();
-                for (done, parts, files) in ran {
+                for (done, parts, files, read) in ran {
                     errands.push(done);
                     trail.extend(parts);
+                    reading.ingested |= read;
                     // Handed on to the answer the sending turn is composing,
                     // which is where a document an errand made belongs: the
                     // errand has no answer of its own that anybody reads.
@@ -133,6 +164,16 @@ impl Runtime {
                         }
                     }
                 }
+                // An errand that used the computer or the browser may have read
+                // something anywhere and left the browser somewhere else, so
+                // the turn's yes for one site does not survive it, and the
+                // turn's next press is judged where the browser now is.
+                let place = places.lock().await;
+                if place.used {
+                    reading.allowed = None;
+                    reading.url = place.url.clone();
+                }
+                drop(place);
                 tracing::info!(
                     agent = %from.card.name,
                     run = %from.run_id,
@@ -176,15 +217,20 @@ impl Runtime {
     /// The round loop of `run_turn` with everything a turn does for the
     /// operator taken out: no placeholder, no intake, no reply. What is left is
     /// the budget, the stop and the tools, each exactly as the turn has them.
+    ///
+    /// Hands back, beside its answer, whether it has read a page or a screen,
+    /// counting what the turn had read before it was sent.
+    #[allow(clippy::too_many_arguments)]
     async fn run_errand(
         &self,
         from: &Sender<'_>,
         offered: &[ToolSpec],
-        places: &Arc<tokio::sync::Mutex<()>>,
+        places: &Arc<tokio::sync::Mutex<Place>>,
+        sent: &Reading,
         call: &ToolCall,
         index: usize,
         brief: &str,
-    ) -> (Errand, Vec<Part>, Vec<Attachment>) {
+    ) -> (Errand, Vec<Part>, Vec<Attachment>, bool) {
         let card = from.card;
         let rounds = errand::ROUNDS.min(from.limits.max_tool_rounds);
         let mut messages = vec![
@@ -195,15 +241,17 @@ impl Runtime {
         // A turn's own state, one of each per errand. Sharing `reading` would
         // let a page one errand read gate a click another errand chose for
         // reasons of its own; sharing `attached` would hand one errand's file
-        // to another's answer.
-        let mut reading = Reading::default();
+        // to another's answer. `reading` starts from the turn's rather than
+        // from nothing, because what the turn read before it wrote the brief
+        // is part of every errand's reasons.
+        let mut reading = sent.for_errand();
         let mut addressed = HashSet::new();
         let mut attached: Vec<Attachment> = Vec::new();
 
         let mut trail: Vec<Part> = Vec::new();
         let mut said = String::new();
         let mut model_calls = 0u32;
-        let mut holding: Option<tokio::sync::OwnedMutexGuard<()>> = None;
+        let mut holding: Option<tokio::sync::OwnedMutexGuard<Place>> = None;
         let mut ending = Ending::OutOfRounds { rounds };
 
         'rounds: for _ in 0..rounds {
@@ -310,7 +358,11 @@ impl Runtime {
                                 .until_stopped(from.run_id, card.id, places.clone().lock_owned())
                                 .await
                             {
-                                Some(guard) => holding = Some(guard),
+                                Some(mut place) => {
+                                    place.used = true;
+                                    reading.url = place.url.clone();
+                                    holding = Some(place);
+                                }
                                 None => {
                                     ending = Ending::Stopped;
                                     break 'rounds;
@@ -355,13 +407,16 @@ impl Runtime {
                 }
             }
         }
-        drop(holding);
+        if let Some(mut place) = holding {
+            place.url = reading.url.clone();
+        }
 
         let calls = trail.len();
         (
             Errand { brief: brief.to_string(), ending, answer: said, calls, model_calls },
             trail,
             attached,
+            reading.ingested,
         )
     }
 
