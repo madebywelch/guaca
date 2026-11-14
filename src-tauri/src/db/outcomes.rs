@@ -49,7 +49,7 @@ pub(super) fn record(
     let Some(start) = first(tx, "1=1", "ASC", params![run.to_string()])? else {
         return Ok(None);
     };
-    let Some((owner, group, trigger, trigger_ref)) = owned(tx, &start)? else {
+    let Some(Owner { agent: owner, group, trigger, trigger_ref }) = owned(tx, &start)? else {
         return Ok(None);
     };
 
@@ -113,7 +113,9 @@ pub(super) fn record_interrupted(
     notice: &Envelope,
     now: i64,
 ) -> Result<(), StoreError> {
-    let Some((owner, group, trigger, trigger_ref)) = owned(tx, original)? else { return Ok(()) };
+    let Some(Owner { agent: owner, group, trigger, trigger_ref }) = owned(tx, original)? else {
+        return Ok(());
+    };
     let run = original.run_id.to_string();
     let steps: u32 = tx.query_row(
         &format!(
@@ -144,12 +146,17 @@ pub(super) fn record_interrupted(
     Ok(())
 }
 
-/// The owner of a run that began with `start`, its group, and what started it.
-/// None for an owner that no longer exists or has been deleted.
-fn owned(
-    tx: &Connection,
-    start: &Envelope,
-) -> Result<Option<(AgentId, GroupId, Trigger, Option<String>)>, StoreError> {
+/// Who a run belongs to, and what started it.
+struct Owner {
+    agent: AgentId,
+    group: GroupId,
+    trigger: Trigger,
+    trigger_ref: Option<String>,
+}
+
+/// The owner of a run that began with `start`. None for an owner that no
+/// longer exists or has been deleted.
+fn owned(tx: &Connection, start: &Envelope) -> Result<Option<Owner>, StoreError> {
     let Participant::Agent { id: owner } = start.to else { return Ok(None) };
     let Some((trigger, trigger_ref)) = Trigger::of(start) else { return Ok(None) };
     let group: Option<String> = tx
@@ -161,7 +168,7 @@ fn owned(
         .optional()?;
     let Some(group) = group else { return Ok(None) };
     let group = group.parse().map_err(|e| StoreError::Corrupt(format!("bad group id: {e}")))?;
-    Ok(Some((owner, group, trigger, trigger_ref)))
+    Ok(Some(Owner { agent: owner, group, trigger, trigger_ref }))
 }
 
 /// The first message of a run that matches `filter`, in `order`: the oldest
