@@ -258,8 +258,6 @@ mod tests {
 /// it is handed and what it prints are only observable from outside it.
 #[cfg(all(test, unix))]
 mod shells {
-    use std::io::Write;
-    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
     use super::*;
@@ -271,10 +269,7 @@ mod shells {
     /// Writes an executable stand-in shell and answers with its path.
     fn stand_in(name: &str, script: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!("guac-shell-{name}-{}", std::process::id()));
-        let mut file = std::fs::File::create(&path).unwrap();
-        file.write_all(script.as_bytes()).unwrap();
-        file.flush().unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::testing::write_executable(&path, script);
         path
     }
 

@@ -176,7 +176,6 @@ struct ClaudeStatus {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
 
     /// A stand-in program that prints one line and exits with a code.
     ///
@@ -187,8 +186,10 @@ mod tests {
         assert!(!text.contains('\''), "the fixture writes its text in single quotes");
         let dir = tempfile::tempdir().unwrap();
         let at = dir.path().join("program");
-        std::fs::write(&at, format!("#!/bin/sh\nprintf '%s' '{text}'\nexit {exit}\n")).unwrap();
-        std::fs::set_permissions(&at, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::testing::write_executable(
+            &at,
+            &format!("#!/bin/sh\nprintf '%s' '{text}'\nexit {exit}\n"),
+        );
         let path = at.to_string_lossy().into_owned();
         (dir, path)
     }
@@ -258,9 +259,10 @@ mod tests {
     async fn a_codex_cli_that_writes_its_login_to_stderr_is_offered() {
         let dir = tempfile::tempdir().unwrap();
         let at = dir.path().join("codex");
-        std::fs::write(&at, "#!/bin/sh\nprintf 'Logged in using ChatGPT\\n' >&2\nexit 0\n")
-            .unwrap();
-        std::fs::set_permissions(&at, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::testing::write_executable(
+            &at,
+            "#!/bin/sh\nprintf 'Logged in using ChatGPT\\n' >&2\nexit 0\n",
+        );
         let found = from_codex(at.to_str().unwrap()).await.expect("a ChatGPT login is a pickup");
         assert_eq!(found.program, Program::Codex);
         assert_eq!(found.account, "");

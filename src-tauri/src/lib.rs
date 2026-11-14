@@ -36,6 +36,8 @@ pub mod server;
 pub mod skills;
 pub mod skills_sh;
 pub mod subscription;
+#[cfg(all(test, unix))]
+mod testing;
 pub mod trajectory;
 pub mod transfer;
 /// The other one.
