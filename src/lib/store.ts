@@ -226,6 +226,13 @@ export interface State {
    */
   seeOutcomes: (target: { runIds?: RunId[]; before?: number }) => Promise<void>;
   forYou: boolean;
+  /**
+   * How many times For you has been asked to open, whether or not it already
+   * was. A notification click or the panel's "And N more in For you" asks while
+   * For you may be open on another view, and `forYou` is already true then, so
+   * this is what lets For you see the ask and go back to Needs you.
+   */
+  forYouAsked: number;
   showForYou: (open: boolean) => void;
   /**
    * The Artifacts dialog: closed, open on the list, or open on one artifact.
@@ -627,7 +634,11 @@ export const useStore = create<State>((set, get) => ({
     }
   },
   forYou: false,
-  showForYou: (open) => set({ forYou: open }),
+  forYouAsked: 0,
+  showForYou: (open) =>
+    set((state) =>
+      open ? { forYou: true, forYouAsked: state.forYouAsked + 1 } : { forYou: false },
+    ),
   artifactsOpen: null,
   showArtifacts: (open) => set({ artifactsOpen: open }),
   async refreshDecisions(valid = () => true) {
