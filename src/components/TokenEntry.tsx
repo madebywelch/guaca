@@ -23,7 +23,7 @@
  * form is what a refusal draws, never what the first paint guesses.
  */
 
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { api } from "../lib/ipc";
 import {
@@ -137,8 +137,11 @@ export function TokenEntry({ children }: { children: ReactNode }) {
   }, []);
 
   // Remembered for the listener below, which cannot see the render that
-  // admitted this browser.
-  useEffect(() => {
+  // admitted this browser. A layout effect, so it holds from the commit that
+  // draws the workspace: a passive one ran after the workspace's own effects,
+  // and a refusal raised by anything they started read a browser that had
+  // been let in as a first visitor.
+  useLayoutEffect(() => {
     if (admitted) wasAdmitted.current = true;
   }, [admitted]);
 
