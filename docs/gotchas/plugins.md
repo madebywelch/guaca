@@ -254,8 +254,9 @@ and `account.rs`.
   modern server sees no handshake failed once in a full gate. A scratch test
   forcing the reuse failed it every time, and the reverse (a legacy server on a
   modern test's port) fails its own assertion the same way. `listen` in
-  `tests/plugins.rs` holds any port it has handed out before and binds again,
-  so no two servers there ever share an address.
+  `tests/plugins.rs` and in `tests/mcp_lifecycle.rs` holds any port it has
+  handed out before and binds again, so no two servers in either suite ever
+  share an address. A new suite that starts MCP servers needs the same.
 - **What later requests declare is what was negotiated, not what was asked
   for.** A legacy server that only knows `2025-06-18` says so in its handshake
   reply, and a header carrying the constant instead contradicts it.

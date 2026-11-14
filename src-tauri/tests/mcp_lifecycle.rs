@@ -1,6 +1,7 @@
+use std::collections::BTreeSet;
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 
 use axum::{
@@ -72,10 +73,31 @@ async fn server(mode: usize) -> (String, Server) {
         probes: Arc::new(AtomicUsize::new(0)),
     };
     let app = Router::new().route("/mcp", post(handle)).with_state(state.clone());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = listen().await;
     let address = format!("http://{}/mcp", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     (address, state)
+}
+
+/// A loopback listener on a port no other server in this process has had.
+///
+/// `mcp` remembers which era an endpoint speaks for the life of the process,
+/// keyed by its address, and every test in this file is one process. The kernel
+/// hands a port out again as soon as a finished test's runtime closes it, so a
+/// server could start with an era an earlier test's server left behind, and a
+/// test counting this server's probes would count none. A port seen before is
+/// held, so the kernel offers a different one, until it offers one nobody here
+/// has used. `tests/plugins.rs` has the same helper for the same reason.
+async fn listen() -> tokio::net::TcpListener {
+    static USED: Mutex<BTreeSet<u16>> = Mutex::new(BTreeSet::new());
+    let mut held = Vec::new();
+    loop {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        if USED.lock().unwrap().insert(listener.local_addr().unwrap().port()) {
+            return listener;
+        }
+        held.push(listener);
+    }
 }
 
 #[tokio::test]
