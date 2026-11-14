@@ -1091,6 +1091,35 @@ input[type="file"]::file-selector-button {
   padding: var(--space-2) 0;
 }
 
+/* Finished work, between the requests and the list of who is doing what, on
+   the list's own ground: it is news, not a request. */
+.menubar__finished {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--rail-edge);
+}
+.menubar__finished h3 {
+  padding: var(--space-2) var(--space-5);
+  font-size: var(--type-meta);
+  font-weight: 600;
+  color: var(--rail-muted);
+}
+.menubar .finished-line {
+  padding: var(--space-2) var(--space-5) var(--space-2) var(--space-4);
+  font-size: var(--type-aside);
+}
+.menubar .finished-line:hover {
+  background: var(--rail-raised);
+}
+.menubar .finished-line__who,
+.menubar .finished-line__meta {
+  color: var(--rail-muted);
+}
+.menubar__finished .menubar__more {
+  margin: var(--space-2) var(--space-5);
+}
+
 /* Only when there is another crew to tell it from, and quieter than the name
    it follows, which is what the operator is looking for. */
 .menubar__crew {
@@ -1990,6 +2019,13 @@ input[type="file"]::file-selector-button {
 
 .agent-row__meta[data-state="thinking"] {
   color: var(--system);
+}
+
+/* An agent that finished something the operator has not read. The row's own
+   ink rather than its muted gray, so it reads as news on a second look and
+   never as a request on the first: no fill, no attention color. */
+.agent-row__meta[data-state="finished"] {
+  color: var(--rail-text);
 }
 
 /* Louder than thinking, because it is the only rail state that is asking for
@@ -9695,6 +9731,64 @@ button.artifacts__version[aria-pressed="true"] {
 
 .for-you__body > .for-you__receipt {
   padding: var(--space-5) var(--space-7);
+}
+
+/* Finished work, under the requests. Lines rather than cards and nothing in
+   the attention color, because it is read when there is time and must never
+   look like one more thing to answer. */
+.for-you__finished {
+  padding: var(--space-7);
+  border-bottom: 1px solid var(--rule);
+}
+.for-you__finished-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
+}
+.for-you__finished h3 {
+  font-size: var(--type-body);
+  font-weight: 600;
+}
+.for-you__shelf h4 {
+  margin-top: var(--space-5);
+  font-size: var(--type-small);
+  font-weight: 500;
+  color: var(--muted);
+}
+.for-you__later .for-you__shelf:first-of-type h4 {
+  margin-top: var(--space-4);
+}
+.finished-line {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1.5rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  color: inherit;
+}
+.finished-line:hover .finished-line__text {
+  text-decoration: underline;
+}
+.finished-line__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.finished-line__who,
+.finished-line__meta {
+  color: var(--muted);
+}
+.finished-line__meta {
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  white-space: nowrap;
 }
 
 /* A phone shows one workspace pane at a time. Keep the transcript mounted so

@@ -12,7 +12,7 @@ import {
   workingCount,
 } from "./menubar";
 import { type StreamBuffer, useStore } from "./store";
-import type { AgentCard, Envelope, Part, Participant } from "./types";
+import type { AgentCard, Envelope, Outcome, Part, Participant } from "./types";
 
 describe("presence reports", () => {
   it("retries a failed report and sends the latest value after a delayed report", async () => {
@@ -107,6 +107,35 @@ describe("presenceOf", () => {
       ],
     });
     expect(presence.decisions.map((item) => item.id)).toEqual(["pending", "interrupted"]);
+  });
+
+  it("counts finished work the operator has not seen, and only work that is news", () => {
+    const finished = (runId: string, over: Partial<Outcome>): Outcome => ({
+      runId,
+      agentId: "id-Chef",
+      groupId: "00000000-0000-4000-8000-000000000001",
+      trigger: "routine",
+      triggerRef: null,
+      status: "done",
+      headline: "Done.",
+      noteId: null,
+      needs: [],
+      steps: 1,
+      startedAt: 0,
+      finishedAt: 1,
+      seenAt: null,
+      ...over,
+    });
+    const presence = presenceOf({
+      ...useStore.getState(),
+      outcomes: [
+        finished("done", {}),
+        finished("failed", { status: "failed" }),
+        finished("seen", { seenAt: 2 }),
+        finished("quiet", { status: "nothingNew" }),
+      ],
+    });
+    expect(presence.finished).toBe(2);
   });
 
   it("knows when nothing the icon draws has moved", () => {

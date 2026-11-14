@@ -20,6 +20,7 @@ let rosterRead = 0;
 let usageRead = 0;
 let approvalRead = 0;
 let escalationRead = 0;
+let outcomeRead = 0;
 const channelReads = new Map<string, number>();
 
 /** A desktop's answer, which is every capability there is. */
@@ -30,6 +31,7 @@ const EVERYTHING: Capabilities = {
   borrowedSignins: true,
 };
 
+import { UNSEEN_LIMIT } from "./outcomes";
 import { keepThought } from "./reasoning";
 import type { LiveCall } from "./trail";
 import type {
@@ -49,6 +51,7 @@ import type {
   GroupId,
   GroupUsage,
   MessageId,
+  Outcome,
   Participant,
   RoutineId,
   RunId,
@@ -206,7 +209,30 @@ export interface State {
   stuck: Escalation[];
   decisions: WorkDecision[];
   decisionError: string | null;
+  /**
+   * Every finished run the operator has not seen, newest first.
+   *
+   * Held as the host last said, like the desk's queues, and for the same
+   * reason: seeing happens on the host, from any window or from opening a
+   * channel, so a list kept by events here would drift from the one the other
+   * windows draw. `outcomeRecorded` re-reads it; `outcomesSeen` drops the runs
+   * it names at once and re-reads it too.
+   */
+  outcomes: Outcome[];
+  refreshOutcomes: (valid?: () => boolean) => Promise<void>;
+  /**
+   * Marks finished runs seen, by name or through a time, and drops what the
+   * host says it marked. A refusal is shown and the list is left as it was.
+   */
+  seeOutcomes: (target: { runIds?: RunId[]; before?: number }) => Promise<void>;
   forYou: boolean;
+  /**
+   * How many times For you has been asked to open, whether or not it already
+   * was. A notification click or the panel's "And N more in For you" asks while
+   * For you may be open on another view, and `forYou` is already true then, so
+   * this is what lets For you see the ask and go back to Needs you.
+   */
+  forYouAsked: number;
   showForYou: (open: boolean) => void;
   /**
    * The Artifacts dialog: closed, open on the list, or open on one artifact.
@@ -585,8 +611,34 @@ export const useStore = create<State>((set, get) => ({
   stuck: [],
   decisions: [],
   decisionError: null,
+  outcomes: [],
+  async refreshOutcomes(valid = () => true) {
+    const read = ++outcomeRead;
+    try {
+      const outcomes = await api.listOutcomes({ unseenOnly: true, limit: UNSEEN_LIMIT });
+      if (valid() && read === outcomeRead) set({ outcomes });
+    } catch (error) {
+      // Finished work is something to read when there is time, so a read that
+      // failed keeps the last list rather than taking the window down with it.
+      // A host too old to know the command is the likely one, and every other
+      // read of the bootstrap reports a link that is really down.
+      console.warn(`Finished work could not be read: ${errorMessage(error)}`);
+    }
+  },
+  async seeOutcomes(target) {
+    try {
+      const marked = new Set(await api.markOutcomesSeen(target));
+      set((state) => ({ outcomes: state.outcomes.filter((one) => !marked.has(one.runId)) }));
+    } catch (error) {
+      get().showFailure(error);
+    }
+  },
   forYou: false,
-  showForYou: (open) => set({ forYou: open }),
+  forYouAsked: 0,
+  showForYou: (open) =>
+    set((state) =>
+      open ? { forYou: true, forYouAsked: state.forYouAsked + 1 } : { forYou: false },
+    ),
   artifactsOpen: null,
   showArtifacts: (open) => set({ artifactsOpen: open }),
   async refreshDecisions(valid = () => true) {
@@ -662,6 +714,7 @@ export const useStore = create<State>((set, get) => ({
       // whether the operator ever sees it.
       api.openEscalations(),
       api.listDecisions(),
+      get().refreshOutcomes(valid),
     ]);
     if (!valid()) return;
     set({
@@ -971,7 +1024,22 @@ export const useStore = create<State>((set, get) => ({
       case "agentsChanged": {
         void get().refreshAgents(valid);
         void get().refreshDecisions(valid);
+        // A deleted agent takes its outcomes with it.
+        void get().refreshOutcomes(valid);
         break;
+      }
+
+      case "outcomeRecorded":
+        void get().refreshOutcomes(valid);
+        return;
+
+      case "outcomesSeen": {
+        const seen = new Set(event.runIds);
+        set((state) => ({ outcomes: state.outcomes.filter((one) => !seen.has(one.runId)) }));
+        // And read again, because a read already in flight began before these
+        // were seen and would put them back. The newer read wins it.
+        void get().refreshOutcomes(valid);
+        return;
       }
 
       case "liveSnapshot": {

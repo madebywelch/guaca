@@ -35,6 +35,27 @@ a preference: an agent can file a meeting-time choice and finish the rest of an
 email sweep. Ordinary completions, routine firings and chat updates do not
 become decision cards.
 
+They are not lost either. Every finished run leaves one outcome (*A run ends in
+an outcome* in docs/ARCHITECTURE.md), and **Finished**, under the requests in
+Needs you, lists the ones the operator has not seen: one line each, newest
+first, under a heading per group when the lines come from more than one. A line
+is the agent's face and name, the first line of the closing note, a word when
+the run ended some other way than finishing (failed, interrupted, stopped,
+needs you) and its age. Clicking it opens that note in its channel and marks
+the run seen, as opening the channel any other way does. A run with no note, or
+whose note was cleared, opens the channel at its end. **Mark all seen** marks
+everything up to the newest line drawn, so a run that finishes while the list is
+open stays. Runs seen in the last seven days stay one click away under
+**Earlier**. A recurring check that found nothing is not listed anywhere.
+
+Finished is read when there is time, so it never competes with what needs an
+answer. It is not in For you's count, on the rail's For you entry or on the menu
+bar icon, nothing in it uses the attention color, and the sentence under the
+title names it only when nothing needs the operator. When it is the only thing
+there it is the first thing For you shows, which is where a banner gathering
+several finished runs leads. `lib/outcomes.ts` decides the order, the headings
+and the words, and the suite beside it is where they are argued.
+
 A decision states the question, relevant context, recommendation, up to six
 choices, a source reference and an optional real deadline. Source references
 are plain text, never executable links. A custom answer is available even when

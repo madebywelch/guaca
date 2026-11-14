@@ -6,7 +6,7 @@ import { bindingFor } from "../lib/keybinds";
 import type { WirePeer } from "../lib/transcript";
 import { Search } from "./Search";
 import { SettingsDialog } from "./SettingsDialog";
-import { PeerBurstRow, RefusedRow, WritingRow, why } from "./WireRow";
+import { NoticeRow, PeerBurstRow, RefusedRow, WritingRow, why } from "./WireRow";
 
 vi.mock("../lib/ipc", async (original) => {
   const actual = await original<typeof import("../lib/ipc")>();
@@ -41,6 +41,22 @@ describe("why", () => {
   it("survives a reason that is one sentence, or none of the expected shape", () => {
     expect(why("Refused: no agent named Ghost exists")).toBe("no agent named Ghost exists");
     expect(why("something went wrong")).toBe("something went wrong");
+  });
+});
+
+describe("a system notice", () => {
+  it("keeps its paragraphs apart rather than running the second onto the first", () => {
+    // The runtime writes a failure and then what the turn had already done as
+    // two paragraphs. Wrapped as normal text the break between them was gone
+    // and the two read as one sentence: "...exploded It had already made 2".
+    const text =
+      "Analyst could not reply: upstream exploded\n\nIt had already made 2 calls in this turn, listed above.";
+    const { container } = render(<NoticeRow kind="upstreamError" text={text} />);
+    const words = [...container.querySelectorAll<HTMLElement>(".chip span")].find((span) =>
+      span.textContent?.startsWith("Analyst"),
+    );
+    expect(words?.textContent).toBe(text);
+    expect(words?.style.whiteSpace).toBe("pre-line");
   });
 });
 
