@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -63,6 +64,14 @@ function open() {
       <p>the workspace</p>
     </TokenEntry>,
   );
+}
+
+/** A workspace whose first call is turned away as it mounts. */
+function RefusedOnArrival() {
+  useEffect(() => {
+    window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+  }, []);
+  return <p>the workspace</p>;
 }
 
 beforeEach(async () => {
@@ -274,6 +283,20 @@ describe("TokenEntry", () => {
 
     await waitFor(() => expect(screen.getByLabelText("Host token")).toBeTruthy());
     expect(screen.queryByText("the workspace")).toBeNull();
+    expect(screen.getByRole("alert").textContent).toContain("stopped accepting");
+  });
+
+  it("counts the browser as let in from the moment the workspace is drawn", async () => {
+    // The earliest a refusal can come is from something the workspace starts
+    // as it mounts. By then the browser has been let in, so the form has to
+    // say the session stopped rather than greet a first visitor.
+    render(
+      <TokenEntry>
+        <RefusedOnArrival />
+      </TokenEntry>,
+    );
+
+    await waitFor(() => expect(screen.getByLabelText("Host token")).toBeTruthy());
     expect(screen.getByRole("alert").textContent).toContain("stopped accepting");
   });
 });

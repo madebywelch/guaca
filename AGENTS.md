@@ -155,6 +155,8 @@ src-tauri/src/
   config.rs           Operator settings, and the API key the webview never sees.
   programs.rs         The PATH the `claude` program is found on, which is not
                       the one a double-clicked app is started with.
+  testing.rs          What the unit tests share: a stand-in program written so
+                      that no fork in the test process can hold it open.
   pickup.rs           A sign-in this machine already has: the `claude` program
                       and the Codex CLI, asked about themselves and never read.
                       Detection only, and the Codex token is not imported.

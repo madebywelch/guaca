@@ -46,6 +46,14 @@ const MAX_LINE: usize = 16 * 1024 * 1024;
 /// needs it: a program that died or never answered usually said why there.
 const STDERR_TAIL: usize = 2_000;
 
+/// How long a program that has stopped answering is given to finish saying
+/// why.
+///
+/// Its output closing is the exit, and the reason is usually its last line on
+/// stderr, which arrives with the exit. The bound is for a program that left a
+/// child of its own holding stderr open after it had gone.
+const LAST_WORDS: Duration = Duration::from_secs(2);
+
 /// What a program inherits from the host, when the host has it.
 const BASELINE: [&str; 9] =
     ["PATH", "HOME", "USER", "LANG", "LC_ALL", "TMPDIR", "SHELL", "TERM", "XDG_CACHE_HOME"];
@@ -58,6 +66,9 @@ pub(crate) struct Process {
     /// Held for `kill_on_drop`, which is the whole of how a process ends.
     _child: std::sync::Mutex<Child>,
     stderr: Arc<std::sync::Mutex<String>>,
+    /// The task reading stderr into `stderr`, until it closes. Taken by the
+    /// first failure that has to quote it.
+    reading_stderr: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     next: AtomicU64,
 }
 
@@ -102,7 +113,7 @@ pub(super) async fn open(dial: Dial<'_>) -> Result<Session, McpError> {
     let stdin = child.stdin.take().ok_or_else(|| failed(endpoint, "no stdin"))?;
     let stdout = child.stdout.take().ok_or_else(|| failed(endpoint, "no stdout"))?;
     let stderr = Arc::new(std::sync::Mutex::new(String::new()));
-    if let Some(mut pipe) = child.stderr.take() {
+    let reading_stderr = child.stderr.take().map(|mut pipe| {
         let tail = stderr.clone();
         tokio::spawn(async move {
             let mut chunk = [0u8; 4096];
@@ -118,8 +129,8 @@ pub(super) async fn open(dial: Dial<'_>) -> Result<Session, McpError> {
                     held.drain(..cut);
                 }
             }
-        });
-    }
+        })
+    });
 
     let process = Arc::new(Process {
         endpoint: endpoint.to_string(),
@@ -127,6 +138,7 @@ pub(super) async fn open(dial: Dial<'_>) -> Result<Session, McpError> {
         stdout: tokio::sync::Mutex::new(BufReader::new(stdout)),
         _child: std::sync::Mutex::new(child),
         stderr,
+        reading_stderr: std::sync::Mutex::new(reading_stderr),
         next: AtomicU64::new(1),
     });
 
@@ -183,17 +195,20 @@ pub(super) async fn request(
     let id = process.next.fetch_add(1, Ordering::SeqCst);
     let message =
         serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
-    send(process, &message).await?;
+    if let Err(err) = send(process, &message).await {
+        // A program that has already exited cannot be written to either, and
+        // the write fails before its exit can be read. Which sentence it got
+        // was then a matter of how fast it died, so a failed write looks for
+        // the exit before it says the program stopped reading.
+        return Err(if output_closed(process).await { exited(process, method).await } else { err });
+    }
 
     let answer = tokio::time::timeout(timeout, async {
         let mut stdout = process.stdout.lock().await;
         loop {
             let line = read_line(&process.endpoint, &mut stdout).await?;
             let Some(line) = line else {
-                return Err(failed(
-                    &process.endpoint,
-                    format!("it exited before answering {method}{}", said(process)),
-                ));
+                return Err(exited(process, method).await);
             };
             let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
                 // A banner or a log line on stdout. Not MCP, and not fatal:
@@ -266,6 +281,38 @@ async fn read_line(
     Ok(Some(String::from_utf8_lossy(&buf).trim().to_string()))
 }
 
+/// A program that went before answering, in its own words where it left any.
+///
+/// Its stderr is read by a task of its own, and its stdout closing can reach
+/// this one first: the sentence was sometimes missing the reason, which is the
+/// half that says what to fix. So it waits for stderr to close too.
+async fn exited(process: &Process, method: &str) -> McpError {
+    let reading = process.reading_stderr.lock().unwrap_or_else(|held| held.into_inner()).take();
+    if let Some(reading) = reading {
+        let _ = tokio::time::timeout(LAST_WORDS, reading).await;
+    }
+    failed(&process.endpoint, format!("it exited before answering {method}{}", said(process)))
+}
+
+/// Whether the program's output has reached its end, read through anything it
+/// printed on the way.
+///
+/// The one way to tell a program that stopped reading from one that has gone:
+/// a program closes everything when it exits, and its output with the rest.
+async fn output_closed(process: &Process) -> bool {
+    let mut stdout = process.stdout.lock().await;
+    let to_the_end = async {
+        loop {
+            match read_line(&process.endpoint, &mut stdout).await {
+                Ok(Some(_)) => continue,
+                Ok(None) => return true,
+                Err(_) => return false,
+            }
+        }
+    };
+    tokio::time::timeout(LAST_WORDS, to_the_end).await.unwrap_or(false)
+}
+
 /// What the program last said on stderr, as the end of a sentence.
 fn said(process: &Process) -> String {
     let tail = process.stderr.lock().map(|held| held.trim().to_string()).unwrap_or_default();
@@ -328,5 +375,27 @@ mod tests {
         let err = open(Dial::to(&dies)).await.unwrap_err().to_string();
         assert!(err.contains("exited before answering initialize"), "{err}");
         assert!(err.contains("cannot find its configuration"), "the stderr tail is quoted: {err}");
+    }
+
+    #[tokio::test]
+    async fn a_program_that_closes_its_output_before_saying_why_is_still_quoted() {
+        let err = open(Dial::to(&fixture("closes-first"))).await.unwrap_err().to_string();
+        assert!(err.contains("exited before answering initialize"), "{err}");
+        assert!(err.contains("lost its configuration on the way out"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_program_already_gone_when_it_is_asked_says_it_exited() {
+        let session = open(Dial::to(&fixture("once"))).await.expect("it shakes hands");
+        let process = session.process.clone().expect("a program has a process");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while process._child.lock().unwrap().try_wait().unwrap().is_none() {
+            assert!(std::time::Instant::now() < deadline, "the fixture never exited");
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let err = list_tools(&session).await.unwrap_err().to_string();
+        assert!(err.contains("exited before answering tools/list"), "{err}");
+        assert!(err.contains("gone after one answer"), "{err}");
     }
 }
