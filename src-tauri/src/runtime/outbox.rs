@@ -91,7 +91,9 @@ impl Runtime {
                     }
                     Verdict::Hold { until } => store.hold_delivery(&row.id, until),
                     Verdict::Gather => store.gather_delivery(&row.id, now).map(drop),
-                    Verdict::Suppress(why) => store.suppress_deliveries(&[row.id.clone()], why),
+                    Verdict::Suppress(why) => {
+                        store.suppress_deliveries(std::slice::from_ref(&row.id), why)
+                    }
                 };
             if let Err(err) = applied {
                 tracing::warn!(%err, id = %row.id, "could not act on a delivery");
@@ -113,7 +115,9 @@ impl Runtime {
         let mut kept: Vec<Due> = Vec::new();
         for row in store.gathering(batch)? {
             match decide(row.kind, row.agent_id, row.ended, Look::Closing, attention, presence) {
-                Verdict::Suppress(why) => store.suppress_deliveries(&[row.id.clone()], why)?,
+                Verdict::Suppress(why) => {
+                    store.suppress_deliveries(std::slice::from_ref(&row.id), why)?
+                }
                 _ => kept.push(row),
             }
         }
