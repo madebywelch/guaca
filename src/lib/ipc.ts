@@ -73,6 +73,7 @@ import type {
   OccasionDraft,
   OccasionId,
   OperatorView,
+  Outcome,
   PermissionRule,
   PermissionRuleDraft,
   Pickup,
@@ -353,6 +354,32 @@ export const api = {
   approvalAnswers: () => invoke<Record<ApprovalId, string>>("approval_answers"),
   /** Every request still waiting on the operator, oldest first. */
   listDecisions: () => invoke<WorkDecision[]>("list_decisions"),
+  /**
+   * What finished runs ended in, newest first: since a moment, in one group,
+   * or only what nobody has seen. `limit` is required; the host caps it.
+   */
+  listOutcomes: (query: {
+    since?: number;
+    groupId?: GroupId;
+    unseenOnly?: boolean;
+    limit: number;
+  }) =>
+    invoke<Outcome[]>("list_outcomes", {
+      since: query.since ?? null,
+      groupId: query.groupId ?? null,
+      unseenOnly: query.unseenOnly ?? null,
+      limit: query.limit,
+    }),
+  /**
+   * Marks outcomes seen: the runs named, the ones finished by `before`, or the
+   * runs named that finished by then. One of the two is required. Resolves to
+   * the runs it marked, and every window hears `outcomesSeen` with them.
+   */
+  markOutcomesSeen: (target: { runIds?: RunId[]; before?: number }) =>
+    invoke<RunId[]>("mark_outcomes_seen", {
+      runIds: target.runIds ?? null,
+      before: target.before ?? null,
+    }),
   answerDecision: (id: string, answer: string, updatedAt: number) =>
     invoke<WorkDecision>("answer_decision", { id, answer, updatedAt }),
   resumeDecision: (id: string) => invoke<WorkDecision>("resume_decision", { id }),

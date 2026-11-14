@@ -26,6 +26,7 @@ use crate::domain::ids::{
 };
 use crate::domain::now_ms;
 use crate::domain::occasion::{Clean as CleanOccasion, Occasion};
+use crate::domain::outcome::{Outcome, Settled};
 use crate::domain::plugin::{
     Headers, Plugin, PluginAccess, PluginKind, PluginTool, PluginToolCard, PluginToolset,
 };
@@ -3788,16 +3789,36 @@ impl Store {
         )))
     }
 
+    /// Ends a run that finished on its own, with no count of what it spent.
+    /// What a caller with no runtime behind it settles; the runtime says how a
+    /// run ended through [`Self::settle_run_as`].
     pub fn settle_run(&self, run: RunId) -> Result<(), StoreError> {
+        self.settle_run_as(run, Settled::Finished, 0).map(drop)
+    }
+
+    /// Ends a run: its recovery point goes, and its outcome is written, in one
+    /// commit. Two commits would leave a window in which a crash loses the run
+    /// from both places that could say it finished.
+    ///
+    /// `settled` and `steps` are what only the runtime knows: which runs a
+    /// turn took in, which ones the operator stopped, and what each spent.
+    /// The new outcome, if there is one, is for the caller to announce.
+    pub fn settle_run_as(
+        &self,
+        run: RunId,
+        settled: Settled,
+        steps: u32,
+    ) -> Result<Option<Outcome>, StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
+        let outcome = super::outcomes::record(&tx, run, settled, steps, now_ms())?;
         tx.execute("DELETE FROM pending_runs WHERE run_id=?1", [run.to_string()])?;
         tx.execute(
             "UPDATE routine_occurrences SET state='done' WHERE owner_run=?1 AND state='started'",
             [run.to_string()],
         )?;
         tx.commit()?;
-        Ok(())
+        Ok(outcome)
     }
 
     pub fn stop_routine_run(&self, run: RunId) -> Result<(), StoreError> {

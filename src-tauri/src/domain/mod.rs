@@ -12,6 +12,7 @@ pub mod escalation;
 pub mod group;
 pub mod ids;
 pub mod occasion;
+pub mod outcome;
 pub mod plugin;
 pub mod policy;
 pub mod promise;

@@ -115,6 +115,19 @@ impl Store {
         Ok(result)
     }
 
+    /// Records the run that filed a decision, so that run's outcome can say it
+    /// left one open. The first run to file a topic keeps it, as the first
+    /// raise of an escalation does: a later run that restates a question still
+    /// pending did not leave anything new on the desk.
+    pub fn mark_filed(&self, agent: AgentId, topic: &str, run: RunId) -> Result<(), StoreError> {
+        self.conn()?.execute(
+            "UPDATE decisions SET filed_run=?3
+              WHERE agent_id=?1 AND topic=?2 AND status='pending' AND filed_run IS NULL",
+            params![agent.to_string(), topic.trim(), run.to_string()],
+        )?;
+        Ok(())
+    }
+
     /// The answer, its transcript envelope and recovery point are one commit.
     /// The caller holds the runtime's run lock through booking, then enqueues.
     pub fn answer_decision(

@@ -264,8 +264,13 @@ impl Store {
                 }
             }
         }
+        // Each one reported is a run that ended here, so it ends in an outcome
+        // like any other, written in the commit that reports it.
+        let now = now_ms();
         for original in &anchors {
-            Store::insert_message(&tx, &interrupted(original))?;
+            let notice = interrupted(original);
+            Store::insert_message(&tx, &notice)?;
+            super::outcomes::record_interrupted(&tx, original, &notice, now)?;
         }
 
         for original in &anchors {

@@ -1979,6 +1979,42 @@ CREATE TABLE operator_sends (
 );
 "#,
     ),
+    (
+        72,
+        r#"
+-- One row per finished run, written in the commit that settles it. See
+-- domain/outcome.rs. No foreign key on group_id: the row says where the run
+-- happened, and a group deleted later keeps nothing that would refuse it.
+-- note_id is a pointer into messages and may outlive a cleared channel.
+CREATE TABLE outcomes (
+    run_id      TEXT    PRIMARY KEY,
+    agent_id    TEXT    NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    group_id    TEXT    NOT NULL,
+    trigger     TEXT    NOT NULL
+        CHECK (trigger IN ('operator','routine','event','decision','retry')),
+    trigger_ref TEXT,
+    status      TEXT    NOT NULL
+        CHECK (status IN ('done','nothing_new','needs_you','failed','stopped','interrupted')),
+    headline    TEXT    NOT NULL,
+    note_id     TEXT,
+    needs       TEXT,
+    steps       INTEGER NOT NULL DEFAULT 0,
+    started_at  INTEGER NOT NULL,
+    finished_at INTEGER NOT NULL,
+    seen_at     INTEGER
+);
+-- What For you lists: unseen, newest first. Partial, so it stays the size of
+-- what the operator has not read rather than of every run ever finished.
+CREATE INDEX outcomes_unseen ON outcomes (finished_at) WHERE seen_at IS NULL;
+-- What a time window reads, seen or not.
+CREATE INDEX outcomes_finished ON outcomes (finished_at);
+-- What marking a channel seen reads.
+CREATE INDEX outcomes_agent ON outcomes (agent_id) WHERE seen_at IS NULL;
+-- The run that filed a decision, so the outcome of that run can say it left
+-- one open. Null on every decision filed before this.
+ALTER TABLE decisions ADD COLUMN filed_run TEXT;
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
