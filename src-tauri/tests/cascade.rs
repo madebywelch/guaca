@@ -2054,7 +2054,7 @@ async fn a_settings_change_happens_only_when_the_operator_allows_it() {
     let h = harness(&stub, &["Helper"], GuardLimits::default());
     let before = h.runtime.config().limits;
 
-    h.runtime.send_from_human(h.id("Helper"), "Let the crew relay further.").unwrap();
+    let run = h.runtime.send_from_human(h.id("Helper"), "Let the crew relay further.").unwrap();
     let request = h.awaited_request().await;
     assert_eq!(h.runtime.config().limits.max_hops, before.max_hops, "nothing moves while asked");
     let asked = h.runtime.store().get_approval(request).unwrap().unwrap();
@@ -2074,6 +2074,9 @@ async fn a_settings_change_happens_only_when_the_operator_allows_it() {
         .store()
         .has_standing_grant(h.id("Helper"), ProtectedAction::ChangeSettings)
         .unwrap());
+    // The change lands inside the turn, before the model is told about it, so
+    // what the model was told is only there once the turn has finished.
+    h.settle(run).await;
     let results = tool_results(&stub).join("\n");
     assert!(results.contains("The operator allowed it: changed Relay depth"), "{results}");
 }
