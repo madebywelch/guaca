@@ -1775,11 +1775,7 @@ impl Runtime {
                 }
                 let whole = Some((state.steps_used(), state.snapshot()));
                 self.inner.store.append_put_down(&envelope, whole)?;
-                let mut guard = self.inner.guard.lock();
-                guard.pin(envelope.run_id);
-                guard.restore(envelope.run_id, state);
-                drop(guard);
-                runs.put_down.insert(envelope.run_id);
+                self.hand_on(&mut runs, envelope.run_id, state);
                 drop(runs);
                 self.inner.events.emit(UiEvent::MessageAppended { message: Box::new(envelope) });
                 return Ok(());
@@ -1804,6 +1800,16 @@ impl Runtime {
         }
         self.enqueue_delivery(envelope);
         Ok(())
+    }
+
+    /// Keeps a conversation that began while the host is stopping, and was put
+    /// down whole as it arrived, at the budget it was written down with.
+    fn hand_on(&self, runs: &mut Runs, run: RunId, state: guard::RunState) {
+        let mut guard = self.inner.guard.lock();
+        guard.pin(run);
+        guard.restore(run, state);
+        drop(guard);
+        runs.put_down.insert(run);
     }
 
     fn deliver_from_peer(
@@ -2617,17 +2623,39 @@ impl Runtime {
             cause: None,
             created_at: now_ms(),
         };
+        let accepting = card.lifecycle != Lifecycle::Terminated;
         let mut runs = self.inner.runs.lock();
-        let (message, run, created) = self.inner.store.claim_operator_send(
-            key,
-            fingerprint,
-            &envelope,
-            !runs.draining && card.lifecycle != Lifecycle::Terminated,
-        )?;
-        if created {
-            self.book(&mut runs, run);
-            drop(runs);
-            self.enqueue_delivery(envelope);
+        // A host that is stopping takes the send and puts it down for the next
+        // one in the commit that accepts it, as `deliver` does with a send
+        // that has no key. Refusing it turned away the operator's typing for
+        // an update they did not start, while a quick action with the same
+        // words went through.
+        let held =
+            (runs.draining && accepting).then(|| guard::RunState::new(self.limits_for(&card)));
+        let (message, run, created) = match &held {
+            Some(state) => self.inner.store.claim_operator_send_put_down(
+                key,
+                fingerprint,
+                &envelope,
+                state.steps_used(),
+                &state.snapshot(),
+            )?,
+            None => self.inner.store.claim_operator_send(key, fingerprint, &envelope, accepting)?,
+        };
+        if !created {
+            return Ok((message, run));
+        }
+        match held {
+            Some(state) => {
+                self.hand_on(&mut runs, run, state);
+                drop(runs);
+                self.inner.events.emit(UiEvent::MessageAppended { message: Box::new(envelope) });
+            }
+            None => {
+                self.book(&mut runs, run);
+                drop(runs);
+                self.enqueue_delivery(envelope);
+            }
         }
         Ok((message, run))
     }
@@ -3271,7 +3299,7 @@ impl Runtime {
                 tracing::error!(agent = %card.name, "could not read an absorbed routine after restart");
                 self.notice(agent_id, run_id, batch.last().map(|envelope| envelope.id), NoticeKind::Interrupted,
                     "The backend restarted during this, and what was already done could not be read back, so it did not carry on. Review any actions already taken before retrying.".into());
-                self.finish_turn(agent_id, run_id, batch.len());
+                self.finish_turn(agent_id, run_id, batch.len(), &[]);
                 return;
             }
         };
@@ -3311,7 +3339,7 @@ impl Runtime {
             // The host is stopping and this never started, so it is the next
             // host's exactly as it arrived.
             if !self.called_off(run_id) {
-                self.put_down(&batch, &absorbed, &resumed);
+                self.put_down(&batch, &absorbed, &[], &resumed);
                 self.idle(agent_id);
                 return;
             }
@@ -3326,7 +3354,7 @@ impl Runtime {
                     card.name
                 ),
             );
-            self.finish_turn(agent_id, run_id, batch.len());
+            self.finish_turn(agent_id, run_id, batch.len(), &[]);
             return;
         }
 
@@ -3353,7 +3381,7 @@ impl Runtime {
                      retrying."
                         .into(),
                 );
-                self.finish_turn(agent_id, run_id, batch.len());
+                self.finish_turn(agent_id, run_id, batch.len(), &[]);
                 return;
             }
         };
@@ -3379,7 +3407,7 @@ impl Runtime {
                     card.name, limits.max_steps_per_run
                 ),
             );
-            self.finish_turn(agent_id, run_id, batch.len());
+            self.finish_turn(agent_id, run_id, batch.len(), &[]);
             return;
         }
 
@@ -3625,10 +3653,11 @@ impl Runtime {
         // belong on the message the agent is still composing: a file delivered
         // the moment it was named would sit above the sentence explaining it.
         let mut attached: Vec<Attachment> = Vec::new();
-        // What this turn took in from its inbox while it ran. Released as it
-        // was read, and still this turn's to answer: a host that stops it
-        // puts these down with the batch.
-        let mut taken_in: Vec<Envelope> = absorbed;
+        // What this turn took in from its inbox while it ran. Still booked, and
+        // released when the turn ends: a host that stops it puts these down
+        // with the batch. Apart from `absorbed`, which a turn on the last host
+        // took in and released, so nothing here counts them.
+        let mut taken_in: Vec<Envelope> = Vec::new();
         let mut failure: Option<LlmError> = None;
         let mut hit_tool_ceiling = false;
         let mut budget_exhausted = false;
@@ -3911,6 +3940,7 @@ impl Runtime {
                 inbound_hop,
                 cause,
                 &batch,
+                &absorbed,
                 &taken_in,
                 collected_text,
                 tool_parts,
@@ -4017,7 +4047,7 @@ impl Runtime {
             );
         }
 
-        self.finish_turn(agent_id, run_id, batch.len());
+        self.finish_turn(agent_id, run_id, batch.len(), &taken_in);
     }
 
     /// One model call, attempted more than once when the failure is the kind
@@ -4210,10 +4240,13 @@ impl Runtime {
     /// message is a hop with a reply owed, and answering it as a footnote to
     /// somebody else's turn is not an answer. It waits, exactly as it does now.
     ///
-    /// Each envelope is released against its own run as it is taken, rather
-    /// than at the end of the turn with the batch. This turn is what consumed
-    /// it and no other turn is coming for it, so its run has nothing further
-    /// outstanding and settles here.
+    /// Each envelope stays booked against its own run until this turn ends, and
+    /// is released with the batch in `finish_turn`. Reading a message is not
+    /// answering it: the answer is whatever this turn goes on to write, and
+    /// until then the run's recovery point is the only record that anything
+    /// is owed. Released here, a process that died before the turn ended would
+    /// leave the operator's message in the transcript with no answer and no
+    /// notice, and its run would have said it had finished while it had not.
     fn take_in(
         &self,
         run: RunId,
@@ -4261,7 +4294,6 @@ impl Runtime {
             }
 
             intake.depth.fetch_sub(1, Ordering::SeqCst);
-            self.absorb(next.run_id);
             taken.push(next);
         }
 
@@ -4282,18 +4314,17 @@ impl Runtime {
         taken
     }
 
-    /// Releases an envelope a running turn took in, against the run that booked
-    /// it.
+    /// Ends a turn: releases the `consumed` envelopes it was started on, and
+    /// every envelope it took in while it ran against the run that booked it.
     ///
-    /// The same arithmetic as [`Self::abandon`] and deliberately not the same
-    /// word. Abandoning is work that will not happen; this is work that just
-    /// did, inside somebody else's turn.
-    fn absorb(&self, run: RunId) {
-        self.track_inflight(run, -1);
-    }
-
-    fn finish_turn(&self, agent_id: AgentId, run_id: RunId, consumed: usize) {
+    /// What was taken in is released here and not as it was read, because this
+    /// is when it has been answered. Its runs go before the turn's own, so a
+    /// conversation that settles here does so after everything it answered.
+    fn finish_turn(&self, agent_id: AgentId, run_id: RunId, consumed: usize, taken: &[Envelope]) {
         self.idle(agent_id);
+        for envelope in taken {
+            self.track_inflight(envelope.run_id, -1);
+        }
         self.track_inflight(run_id, -(consumed as i64));
     }
 
@@ -8712,7 +8743,7 @@ async fn actor_loop(
                                         card.name, card.name
                                     ),
                                 );
-                                runtime.finish_turn(id, queued.run_id, 1);
+                                runtime.finish_turn(id, queued.run_id, 1, &[]);
                             } else {
                                 carry.push_back(queued);
                             }
@@ -8734,7 +8765,7 @@ async fn actor_loop(
             // queue that is now empty outlives the run for the rest of the
             // session. The row still reads as paused, which is a lifecycle and
             // not an activity.
-            runtime.finish_turn(id, first.run_id, 1);
+            runtime.finish_turn(id, first.run_id, 1, &[]);
             continue;
         }
         if abandoned {

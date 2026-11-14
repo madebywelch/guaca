@@ -36,6 +36,7 @@ use crate::domain::search::{
 use crate::domain::signin::{Signin, Surface};
 use crate::domain::usage::{Tokens, UsageEntry};
 use crate::domain::worknote::{Appended, WorkingNote, KEPT};
+use crate::runtime::guard::GuardSnapshot;
 
 pub type Conn = PooledConnection<SqliteConnectionManager>;
 
@@ -3682,6 +3683,33 @@ impl Store {
         envelope: &Envelope,
         accepting: bool,
     ) -> Result<(MessageId, RunId, bool), StoreError> {
+        self.claim_send(key, fingerprint, envelope, accepting, None)
+    }
+
+    /// The same, while the host is stopping: a new send is accepted and put
+    /// down for the next host, whole at `steps` and `snapshot`, in the commit
+    /// that accepts it. The rows are the ones `append_put_down` writes for a
+    /// send with no key, so a message sent in the last seconds is neither lost
+    /// nor reported interrupted when it never began.
+    pub fn claim_operator_send_put_down(
+        &self,
+        key: &str,
+        fingerprint: &str,
+        envelope: &Envelope,
+        steps: u32,
+        snapshot: &GuardSnapshot,
+    ) -> Result<(MessageId, RunId, bool), StoreError> {
+        self.claim_send(key, fingerprint, envelope, true, Some((steps, snapshot)))
+    }
+
+    fn claim_send(
+        &self,
+        key: &str,
+        fingerprint: &str,
+        envelope: &Envelope,
+        accepting: bool,
+        put_down: Option<(u32, &GuardSnapshot)>,
+    ) -> Result<(MessageId, RunId, bool), StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let existing: Option<(String, String, String)> = tx
@@ -3717,6 +3745,20 @@ impl Store {
             "INSERT INTO operator_sends (key,fingerprint,message_id,run_id) VALUES (?1,?2,?3,?4)",
             params![key, fingerprint, envelope.id.to_string(), envelope.run_id.to_string()],
         )?;
+        if let Some((steps, snapshot)) = put_down {
+            tx.execute(
+                "INSERT INTO put_down (message_id,records,absorbed) VALUES (?1,'[]','[]')",
+                [envelope.id.to_string()],
+            )?;
+            tx.execute(
+                "INSERT INTO put_down_runs (run_id,steps,guard_snapshot) VALUES (?1,?2,?3)",
+                params![
+                    envelope.run_id.to_string(),
+                    steps,
+                    serde_json::to_string(snapshot).expect("guard snapshot serializes")
+                ],
+            )?;
+        }
         tx.commit()?;
         Ok((envelope.id, envelope.run_id, true))
     }

@@ -136,25 +136,42 @@ impl Runtime {
     ///
     /// `booked` are still counted against their runs, and are released here
     /// without settling them: a run whose last booking is put down is handed on
-    /// whole, not finished, and emits nothing. `absorbed` were taken into a
-    /// running turn and released when it read them, so only their rows are
-    /// written. `records` go with the first of `booked`, which is the message
-    /// the turn was answering.
+    /// whole, not finished, and emits nothing. `taken` were taken into the
+    /// running turn and are still counted against their own runs until it
+    /// ends, so they are released here too. `absorbed` were taken into a turn
+    /// on the last host, which released them, so only their rows are written.
+    /// `records` go with the first of `booked`, which is the message the turn
+    /// was answering.
+    ///
+    /// A routine firing that was taken in travels with that first message and
+    /// is redone, or reported, as part of it: its occurrence names the turn's
+    /// run as its owner. Its own run has nothing left to hand on, so it settles
+    /// here, before the rest is written. Handed on as well, it would be
+    /// reported interrupted beside the turn that carries it on.
     pub(super) fn put_down(
         &self,
         booked: &[Envelope],
         absorbed: &[Envelope],
+        taken: &[Envelope],
         records: &[MessageId],
     ) {
+        let routine = |envelope: &Envelope| {
+            envelope.parts.iter().any(|part| matches!(part, Part::Routine { .. }))
+        };
+        for envelope in taken.iter().filter(|envelope| routine(envelope)) {
+            self.track_inflight(envelope.run_id, -1);
+        }
+        let absorbed: Vec<&Envelope> = absorbed.iter().chain(taken).collect();
         let routine_absorbed: Vec<MessageId> = absorbed
             .iter()
-            .filter(|envelope| {
-                envelope.parts.iter().any(|part| matches!(part, Part::Routine { .. }))
-            })
+            .filter(|envelope| routine(envelope))
             .map(|envelope| envelope.id)
             .collect();
-        let other_absorbed: Vec<_> =
-            absorbed.iter().filter(|envelope| !routine_absorbed.contains(&envelope.id)).collect();
+        let other_absorbed: Vec<_> = absorbed
+            .iter()
+            .copied()
+            .filter(|envelope| !routine_absorbed.contains(&envelope.id))
+            .collect();
         let touched: HashSet<RunId> = booked
             .iter()
             .chain(other_absorbed.iter().copied())
@@ -181,7 +198,7 @@ impl Runtime {
             .collect();
 
         let mut runs = self.inner.runs.lock();
-        for envelope in booked {
+        for envelope in booked.iter().chain(taken.iter().filter(|envelope| !routine(envelope))) {
             Self::release_bookings(&mut runs, envelope.run_id, 1);
         }
         runs.put_down.extend(touched.iter().copied());
@@ -261,7 +278,7 @@ impl Runtime {
                     self.agent_name(agent)
                 ),
             );
-            self.finish_turn(agent, envelope.run_id, 1);
+            self.finish_turn(agent, envelope.run_id, 1, &[]);
         }
         if !kept.is_empty() {
             for envelope in kept {
@@ -274,7 +291,7 @@ impl Runtime {
                     tracing::error!("could not read an absorbed routine while putting work down");
                     continue;
                 };
-                self.put_down(&[envelope], &absorbed, &records);
+                self.put_down(&[envelope], &absorbed, &[], &records);
             }
         }
         self.idle(agent);
@@ -296,6 +313,7 @@ impl Runtime {
         hop: u16,
         cause: Option<MessageId>,
         batch: &[Envelope],
+        absorbed: &[Envelope],
         taken_in: &[Envelope],
         text: String,
         mut parts: Vec<Part>,
@@ -346,7 +364,7 @@ impl Runtime {
             }
             Err(err) => tracing::warn!(%err, "could not note a stopped turn in its channel"),
         }
-        self.put_down(batch, taken_in, &records);
+        self.put_down(batch, absorbed, taken_in, &records);
         self.idle(card.id);
     }
 
