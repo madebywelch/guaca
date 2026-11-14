@@ -1228,7 +1228,7 @@ mod tests {
         assert_eq!(url_hint("https://ntfy.sh/abcdefgh"), "https://ntfy.sh/...efgh");
         assert_eq!(url_hint("http://user:pw@10.0.0.2:8080/hook?k=v"), "http://10.0.0.2:8080/...?k=v");
         assert_eq!(url_hint("https://ntfy.example/"), "https://ntfy.example/");
-        assert_eq!(url_hint("not a url at all"), "...all");
+        assert_eq!(url_hint("not-a-url"), "...-url");
     }
 
     #[test]
