@@ -58,8 +58,8 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/theme.ts        A theme as four choices, and every color solved from them.
   lib/color.ts        Contrast, OKLCH and colorblind distance. The arithmetic only.
   lib/follow.ts       Whether a transcript may move under the operator.
-  lib/notify.ts       When an interruption is warranted. Mostly when it is not.
-  lib/announce.ts     What that interruption would say. One event in, one line out.
+  lib/notify.ts       What a window does with what the Host offers: claim it,
+                      and show it only if the claim won.
   lib/keybinds.ts     Every key the app answers to, in one list, and how
                       this machine writes the one the rail and the box draw.
   lib/limits.ts       The five bounds a conversation runs inside, in words.

@@ -900,30 +900,105 @@ export async function openExternal(url: string): Promise<void> {
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
+/** The one prompt in flight, so a burst of offers asks once. */
+let asking: Promise<boolean> | null = null;
+
 /**
- * Raises a notification, if the operator has allowed one.
+ * Whether this page may raise a notification, asking the first time.
  *
- * Both hosts can, and the gates in `notify.ts` decide whether one is warranted
- * long before this is reached. Returns whether it was actually raised, because
- * a caller that believes it interrupted somebody and did not is how a parked
- * turn waits ten minutes in silence.
+ * Asked before a delivery is claimed rather than after: a page that claims an
+ * offer and then cannot show it has taken the only copy away from every window
+ * that could. In a browser the question is a prompt, and one that may not be
+ * answered at all without a click, so a page left at "not decided" claims
+ * nothing and leaves the offer to another window. Concurrent askers share one
+ * prompt. On desktop the plugin answers yes without asking.
  */
-export async function notify(title: string, body: string): Promise<boolean> {
+export function mayNotify(): Promise<boolean> {
+  asking ??= permitted().finally(() => {
+    asking = null;
+  });
+  return asking;
+}
+
+async function permitted(): Promise<boolean> {
   try {
     if (desktop) {
       const plugin = await import("@tauri-apps/plugin-notification");
-      const granted =
-        (await plugin.isPermissionGranted()) || (await plugin.requestPermission()) === "granted";
-      if (!granted) return false;
-      plugin.sendNotification({ title, body });
-      return true;
+      return (
+        (await plugin.isPermissionGranted()) || (await plugin.requestPermission()) === "granted"
+      );
     }
     if (typeof Notification === "undefined") return false;
-    const granted =
+    return (
       Notification.permission === "granted" ||
-      (await Notification.requestPermission()) === "granted";
-    if (!granted) return false;
-    new Notification(title, { body });
+      (await Notification.requestPermission()) === "granted"
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * What a click on each desktop notification this page raised should do, by the
+ * id it was raised with. The plugin reports a click as the notification's
+ * payload and nothing else, so the id is the only way back to the delivery.
+ * Bounded, because a notification nobody clicks is never reported closed on
+ * macOS, and the ids start somewhere random so a click on one raised before a
+ * reload cannot land on a different delivery that reused its number.
+ */
+const clicks = new Map<number, () => void>();
+const CLICKS_KEPT = 64;
+let nextClick = Math.floor(Math.random() * 2 ** 30);
+let listening: Promise<unknown> | null = null;
+
+/**
+ * Raises a notification, if the operator has allowed one.
+ *
+ * Whether one is warranted was decided on the Host long before this is
+ * reached. Returns whether it was actually raised, because a caller that
+ * believes it interrupted somebody and did not is how a parked turn waits ten
+ * minutes in silence. `onClick` runs when the operator clicks it; in a browser
+ * the tab is brought forward first, and on desktop bringing the window forward
+ * is the caller's, since only the app can raise its own window.
+ */
+export async function notify(title: string, body: string, onClick?: () => void): Promise<boolean> {
+  if (!(await mayNotify())) return false;
+  try {
+    if (desktop) {
+      const plugin = await import("@tauri-apps/plugin-notification");
+      if (!onClick) {
+        plugin.sendNotification({ title, body });
+        return true;
+      }
+      // Before the notification, or its click is never reported: the plugin
+      // only tracks what it raised while a listener existed.
+      listening ??= plugin
+        .onAction((action) => {
+          const id = action.notification?.id;
+          const go = id === undefined ? undefined : clicks.get(id);
+          if (action.actionId !== "tap" || id === undefined || !go) return;
+          clicks.delete(id);
+          go();
+        })
+        .catch(() => {});
+      await listening;
+      const id = nextClick++ % 2 ** 31;
+      clicks.set(id, onClick);
+      for (const oldest of clicks.keys()) {
+        if (clicks.size <= CLICKS_KEPT) break;
+        clicks.delete(oldest);
+      }
+      plugin.sendNotification({ id, title, body });
+      return true;
+    }
+    const shown = new Notification(title, { body });
+    if (onClick) {
+      shown.onclick = () => {
+        window.focus();
+        shown.close();
+        onClick();
+      };
+    }
     return true;
   } catch {
     return false;

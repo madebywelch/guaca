@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capabilities for the single Guac window. Guac talks to the network only from Rust, so the webview gets no HTTP or filesystem access. Opening a link in the operating system browser needs both the command and the url scope: the command alone is granted and then refuses every url. Raising an operating system notification is granted as three named commands rather than the plugin's default set, because the default also carries the mobile channel and batch surface, which this app has no use for and should not be able to reach.",
+  "description": "Capabilities for the single Guac window. Guac talks to the network only from Rust, so the webview gets no HTTP or filesystem access. Opening a link in the operating system browser needs both the command and the url scope: the command alone is granted and then refuses every url. Raising an operating system notification is granted as named commands rather than the plugin's default set, because the default also carries the mobile channel and batch surface, which this app has no use for and should not be able to reach. The two listener commands are how a click on a notification comes back to the window: the plugin reports a click only for a notification raised while a listener existed.",
   "windows": [
     "main"
   ],
@@ -13,6 +13,8 @@
     "opener:allow-default-urls",
     "notification:allow-is-permission-granted",
     "notification:allow-request-permission",
-    "notification:allow-notify"
+    "notification:allow-notify",
+    "notification:allow-register-listener",
+    "notification:allow-remove-listener"
   ]
 }
