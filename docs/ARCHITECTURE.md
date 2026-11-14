@@ -239,12 +239,15 @@ already carries and intake renders against it, so such an envelope is still
 consumed, still released and still answered by this turn — it is only not
 repeated.
 
-**Each envelope is released against its own run as it is taken.** `Runtime::absorb`,
-which is `abandon`'s arithmetic under a different name because it is not the same
-fact: abandoning is work that will not happen, and this is work that just did
-inside somebody else's turn. The run that booked it has nothing further
-outstanding and settles there, which is what keeps `track_inflight` from
-reporting a run finished twice.
+**Each envelope stays booked against its own run until the turn that took it in
+ends.** `finish_turn` releases what the turn took in before its own batch.
+Reading a message is not answering it, and the run's recovery point is the only
+record that something is still owed: released as it was read, a process that
+died before the turn ended left the message unanswered with no notice.
+
+The run that booked it is remembered as taken in, and it settles with no outcome
+of its own. Its answer is whatever the turn that read it went on to write, so it
+is that run's outcome that says what came of it. See *A run ends in an outcome*.
 
 **Nobody else's harness has this problem, and the reason is instructive.**
 Omnigent, which orchestrates Claude Code, Codex, Cursor and Pi behind one
@@ -461,6 +464,64 @@ woken, because the turn reads its verdict back off the row. And a stop of a run
 that has already finished returns false and writes nothing: a line in the
 transcript saying a conversation was stopped, in a conversation that ended on its
 own, describes something that did not happen.
+
+## A run ends in an outcome
+
+A run settles when its last booked envelope is released. Until outcomes
+existed, settling said a run id and a count of model calls to whichever window
+was listening, and was gone. What a person could learn about a conversation that
+ended while they were away was the input that started it or a number, and what
+came of it was spread over every channel it had reached.
+
+`Store::settle_run_as` writes one row to `outcomes` in the commit that deletes
+the run's `pending_runs` row. One commit, because the two are the same fact read
+from two sides: a crash between them would leave a run that is neither owed nor
+finished. `domain/outcome.rs` holds the type and the pure parts; `db/outcomes.rs`
+reads the facts. Every fact is one the store already holds:
+
+- **The owner** is the agent the run's first message went to. A delegation is
+  one outcome, the coordinator's: the agents it asked work inside its run and
+  have none of their own.
+- **What started it** is read off that first message: the operator, a routine,
+  an event, a decision's answer, or Try again (a copy of the original with a
+  `cause`, so it is checked first).
+- **The status** is decided without a model. Stopped when the operator stopped
+  it. Failed when the run's last word is a failed model call: a notice newer
+  than the owner's newest note, so a run that recovered from a failure and
+  closed with a note is done, not failed. Needs you when a decision the run
+  filed is still pending or an escalation it raised is still open. Done
+  otherwise. `nothing_new` exists for the check that found nothing, and nothing
+  writes it until the prompt lets an agent say so.
+- **The headline** is the first line with words in it of the owner's newest note
+  to the operator, its Markdown taken off and cut on a word at 160 characters.
+  A failure takes the first sentence of its notice instead. No model call
+  writes it: the agent already wrote the line, and paying again to summarize it
+  doubles the cost of every finished conversation.
+
+Only the runtime knows two things the row needs, so it hands them over:
+whether the run was stopped, and whether its message was taken into another
+run's turn. A taken-in run settles when that turn ends, possibly before the run
+that answered it, and writes nothing. Steps come from the guard, as `RunSettled`
+reports them.
+
+Two places end a run without the runtime's settle. **Recovery** reports a run
+interrupted in the commit that writes its notice, and writes its outcome there
+too, pointing at the notice where Try again is; its steps are what the store
+kept, a usage row per call that answered and a notice per call that failed. **A
+drain** writes nothing: a run put down is not finished, and the next host
+settles it like any other.
+
+The filing run of a decision is written beside the decision by the turn that
+filed it (`decisions.filed_run`), a second commit after the decision's own. A
+process that dies between the two loses only the "needs you" on a run that is
+itself reported interrupted.
+
+`UiEvent::OutcomeRecorded` follows the run's `RunSettled`. An outcome is
+seen when the focused window reports the owner's channel with nothing open over
+it, or when `markOutcomesSeen` names it or a moment it finished by; either way
+`UiEvent::OutcomesSeen` carries the run ids, so every window drops the same rows.
+Naming neither is refused: a list on screen is a moment, and a run that finished
+after it was drawn has not been seen.
 
 ## A subscription is a second provider, not a second endpoint
 

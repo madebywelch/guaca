@@ -223,6 +223,30 @@ pub fn headline(note: &str) -> Option<String> {
     None
 }
 
+/// The headline of a note as it was sent: its words, or, for a note that is
+/// only a file, what it sent. An answer that is a document is still an answer,
+/// and "finished without a note" would say the one thing it is not.
+pub fn headline_of(note: &Envelope) -> Option<String> {
+    if let Some(words) = headline(&note.plain_text()) {
+        return Some(words);
+    }
+    let names: Vec<&str> = note
+        .parts
+        .iter()
+        .filter_map(|part| match part {
+            Part::File(file) => Some(file.name.as_str()),
+            _ => None,
+        })
+        .collect();
+    let first = names.first()?;
+    let line = match names.len() {
+        1 => format!("Sent {first}."),
+        2 => format!("Sent {first} and 1 other file."),
+        n => format!("Sent {first} and {} other files.", n - 1),
+    };
+    Some(cut_to(&line, HEADLINE_MAX).0)
+}
+
 /// The first sentence of a notice, for a run whose last word was one: a
 /// failure says what failed in its first sentence and what to do about it in
 /// the rest.
@@ -477,6 +501,30 @@ mod tests {
         let cut = headline(&line).unwrap();
         assert_eq!(cut.chars().count(), HEADLINE_MAX);
         assert!(line.starts_with(&cut));
+    }
+
+    #[test]
+    fn a_note_that_is_only_a_file_says_what_it_sent() {
+        let file = |name: &str| {
+            Part::File(crate::domain::attachment::Attachment {
+                digest: "0".repeat(64),
+                name: name.into(),
+                mime: "application/pdf".into(),
+                bytes: 1,
+            })
+        };
+        let note = |parts| envelope(Participant::Agent { id: AgentId::new() }, parts);
+        assert_eq!(headline_of(&note(vec![file("brief.pdf")])).as_deref(), Some("Sent brief.pdf."));
+        assert_eq!(
+            headline_of(&note(vec![file("a.pdf"), file("b.pdf"), file("c.pdf")])).as_deref(),
+            Some("Sent a.pdf and 2 other files.")
+        );
+        assert_eq!(
+            headline_of(&note(vec![Part::text("Here is the brief."), file("brief.pdf")]))
+                .as_deref(),
+            Some("Here is the brief.")
+        );
+        assert_eq!(headline_of(&note(vec![])), None);
     }
 
     #[test]

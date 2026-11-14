@@ -14,7 +14,7 @@ use super::{Store, StoreError};
 use crate::domain::envelope::{Envelope, NoticeKind, Part, Participant};
 use crate::domain::ids::{AgentId, GroupId, RunId};
 use crate::domain::outcome::{
-    first_sentence, headline, Need, Outcome, Settled, Status, Trigger, NO_NOTE, STOPPED,
+    first_sentence, headline_of, Need, Outcome, Settled, Status, Trigger, NO_NOTE, STOPPED,
 };
 
 const ENVELOPE: &str = "m.id,m.run_id,m.channel_id,m.from_kind,m.from_agent,m.to_kind,m.to_agent,\
@@ -66,7 +66,7 @@ pub(super) fn record(
         .filter(|failure| note.as_ref().is_none_or(|note| failure.created_at > note.created_at));
     let needs = left_open(tx, run)?;
 
-    let quoted = note.as_ref().and_then(|note| headline(&note.plain_text()));
+    let quoted = note.as_ref().and_then(headline_of);
     let (status, headline, note_id) = match (settled, failure) {
         (Settled::Stopped, _) => {
             (Status::Stopped, quoted.unwrap_or_else(|| STOPPED.into()), note.as_ref().map(|n| n.id))
