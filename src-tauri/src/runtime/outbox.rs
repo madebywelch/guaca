@@ -227,7 +227,8 @@ impl Runtime {
                 Some(&delivery.token),
                 Some(&delivery.link_base),
             );
-            let next = push::next(send(&delivery.url, request).await, attempts + 1, push.created_at, now);
+            let next =
+                push::next(send(&delivery.url, request).await, attempts + 1, push.created_at, now);
             match &next {
                 Next::Sent => sent += 1,
                 // The words are the status's, never the address's.

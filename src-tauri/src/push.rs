@@ -236,10 +236,15 @@ pub enum Unreachable {
 pub enum Next {
     Sent,
     /// Try again at `at`. `error` is what the operator is shown meanwhile.
-    Again { at: i64, error: String },
+    Again {
+        at: i64,
+        error: String,
+    },
     /// Stop: the address refused in a way trying again will not change, or a
     /// day has gone by.
-    Failed { error: String },
+    Failed {
+        error: String,
+    },
 }
 
 /// Decides what follows an attempt. `attempts` counts this one.

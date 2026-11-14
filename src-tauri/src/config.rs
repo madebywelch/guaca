@@ -547,7 +547,8 @@ pub fn url_hint(url: &str) -> String {
     };
     let host = parsed.host_str().unwrap_or_default();
     let port = parsed.port().map(|port| format!(":{port}")).unwrap_or_default();
-    let rest = format!("{}{}", parsed.path(), parsed.query().map(|q| format!("?{q}")).unwrap_or_default());
+    let rest =
+        format!("{}{}", parsed.path(), parsed.query().map(|q| format!("?{q}")).unwrap_or_default());
     let rest = rest.trim_matches('/');
     let shown = if rest.is_empty() { String::new() } else { hint_for(rest) };
     format!("{}://{host}{port}/{shown}", parsed.scheme())
@@ -1195,9 +1196,14 @@ mod tests {
         let patch = |value: serde_json::Value| -> SettingsPatch {
             serde_json::from_value(serde_json::json!({ "delivery": value })).unwrap()
         };
-        config.apply(patch(serde_json::json!({ "url": " https://ntfy.example/t ", "token": "tk_a" }))).unwrap();
+        config
+            .apply(patch(serde_json::json!({ "url": " https://ntfy.example/t ", "token": "tk_a" })))
+            .unwrap();
         config.apply(patch(serde_json::json!({ "content": "generic" }))).unwrap();
-        assert_eq!(config.delivery.url, "https://ntfy.example/t", "a patch that names it not keeps it");
+        assert_eq!(
+            config.delivery.url, "https://ntfy.example/t",
+            "a patch that names it not keeps it"
+        );
         assert_eq!(config.delivery.token, "tk_a");
 
         let refused = config.apply(patch(serde_json::json!({ "url": "ntfy.sh/my-private-topic" })));
@@ -1205,7 +1211,10 @@ mod tests {
         assert!(!said.contains("my-private-topic"), "a refusal does not repeat the topic: {said}");
         assert!(said.contains("http"), "{said}");
         assert!(config.apply(patch(serde_json::json!({ "linkBase": "ftp://box" }))).is_err());
-        assert_eq!(config.delivery.url, "https://ntfy.example/t", "a refused patch changes nothing");
+        assert_eq!(
+            config.delivery.url, "https://ntfy.example/t",
+            "a refused patch changes nothing"
+        );
 
         config.apply(patch(serde_json::json!({ "url": "", "token": "" }))).unwrap();
         assert!(!config.delivery.is_on());
@@ -1226,7 +1235,10 @@ mod tests {
     fn an_address_hint_names_the_server_and_never_the_path() {
         assert_eq!(url_hint(""), "");
         assert_eq!(url_hint("https://ntfy.sh/abcdefgh"), "https://ntfy.sh/...efgh");
-        assert_eq!(url_hint("http://user:pw@10.0.0.2:8080/hook?k=v"), "http://10.0.0.2:8080/...?k=v");
+        assert_eq!(
+            url_hint("http://user:pw@10.0.0.2:8080/hook?k=v"),
+            "http://10.0.0.2:8080/...?k=v"
+        );
         assert_eq!(url_hint("https://ntfy.example/"), "https://ntfy.example/");
         assert_eq!(url_hint("not-a-url"), "...-url");
     }

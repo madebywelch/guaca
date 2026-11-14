@@ -2072,7 +2072,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                         if (!line) return null;
                         return (
                           <p
-                            className="push-status"
+                            className="field__hint push-status"
                             role="status"
                             data-tone={line.tone}
                             style={{
