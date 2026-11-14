@@ -1820,23 +1820,39 @@ impl Runtime {
     /// the message: a pickup after a restart delivers envelopes the transcript
     /// already holds, and announcing them would draw each one twice.
     fn queue(&self, envelope: Envelope) {
-        if let Participant::Agent { id } = envelope.to {
-            // Booked here rather than by the sender, because this is the only
-            // place that knows whether anybody took it. A run settles when
-            // nothing is outstanding, and the turn that reads an envelope is
-            // what releases it, so an envelope counted but never queued leaves
-            // its run waiting on a turn that cannot happen.
-            //
-            // Before the send, never after: an envelope queued first can be
-            // read, answered and released by a turn that finishes before the
-            // booking lands, which settles the run twice.
-            let run = envelope.run_id;
-            let routine = envelope.parts.iter().any(|part| matches!(part, Part::Routine { .. }));
+        self.queue_all(vec![envelope]);
+    }
 
-            let queued = {
-                let inboxes = self.inner.inboxes.lock();
-                match inboxes.get(&id) {
-                    Some(inbox) => {
+    /// Hands booked envelopes to their recipients' actors, every one of them
+    /// before any actor can start a turn on one.
+    ///
+    /// The sends share one hold of the inbox lock, and an actor takes that
+    /// lock once after it is handed an envelope (`actor_loop`). That matters
+    /// for a pickup, which hands an agent everything the last host put down
+    /// for it: an actor that started on the first before the rest had arrived
+    /// would find nothing to take in, answer the first alone and the rest in
+    /// turns of their own, where the host that put them down would have taken
+    /// the operator's later messages into the turn it was running.
+    fn queue_all(&self, envelopes: Vec<Envelope>) {
+        // Booked here rather than by the sender, because this is the only
+        // place that knows whether anybody took it. A run settles when
+        // nothing is outstanding, and the turn that reads an envelope is
+        // what releases it, so an envelope counted but never queued leaves
+        // its run waiting on a turn that cannot happen.
+        //
+        // Before the send, never after: an envelope queued first can be
+        // read, answered and released by a turn that finishes before the
+        // booking lands, which settles the run twice.
+        let sent: Vec<_> = {
+            let inboxes = self.inner.inboxes.lock();
+            envelopes
+                .into_iter()
+                .filter_map(|envelope| {
+                    let Participant::Agent { id } = envelope.to else { return None };
+                    let run = envelope.run_id;
+                    let routine =
+                        envelope.parts.iter().any(|part| matches!(part, Part::Routine { .. }));
+                    let queued = inboxes.get(&id).and_then(|inbox| {
                         inbox.depth.fetch_add(1, Ordering::SeqCst);
                         match inbox.tx.send(envelope) {
                             Ok(()) => Some(inbox.depth.clone()),
@@ -1845,11 +1861,13 @@ impl Runtime {
                                 None
                             }
                         }
-                    }
-                    None => None,
-                }
-            };
+                    });
+                    Some((id, run, routine, queued))
+                })
+                .collect()
+        };
 
+        for (id, run, routine, queued) in sent {
             match queued {
                 Some(depth) => {
                     self.queue_activity(id, &depth);
@@ -8536,6 +8554,11 @@ async fn actor_loop(
             },
         };
         depth.fetch_sub(1, Ordering::SeqCst);
+        // Whoever sent this may be sending more under the inbox lock: a
+        // pickup hands an agent all of its put-down work in one hold. Waiting
+        // for that hold to end is what puts the rest in the inbox before this
+        // turn looks there, rather than in the next turn's.
+        drop(runtime.inner.inboxes.lock());
 
         // The host is stopping, so nothing starts: what this actor is holding
         // is the next host's. Reached by anything that was already queued when

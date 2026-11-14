@@ -400,12 +400,16 @@ impl Runtime {
             }
         }
         let messages = resumed.len();
+        let mut envelopes = Vec::with_capacity(messages);
         for put in resumed {
             if !put.records.is_empty() || !put.absorbed.is_empty() {
                 self.inner.resuming.lock().insert(put.envelope.id, (put.records, put.absorbed));
             }
-            self.queue(put.envelope);
+            envelopes.push(put.envelope);
         }
+        // All at once, because the actors are already running: one handed its
+        // first message alone would start on it before the rest arrived.
+        self.queue_all(envelopes);
         if messages > 0 {
             tracing::info!(messages, conversations, "picked up the work the last host put down");
         }
