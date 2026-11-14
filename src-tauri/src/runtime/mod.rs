@@ -91,6 +91,18 @@ impl Reading {
         self.took_in(url.clone());
         self.url = url;
     }
+
+    /// What an errand this turn sends starts from.
+    ///
+    /// An errand is this turn working, so a page the turn has read is a page
+    /// its errands have read: a brief written after one can carry what the
+    /// page asked for, and the errand's press is the turn's press. The grant
+    /// is left behind. The operator gave it for a browser they could watch,
+    /// and errands run side by side, so another errand may have moved that
+    /// browser before this one presses anything.
+    fn for_errand(&self) -> Reading {
+        Reading { ingested: self.ingested, url: self.url.clone(), allowed: None }
+    }
 }
 
 /// The session an action would spend, if it needs the operator's say-so first.
@@ -3807,7 +3819,8 @@ impl Runtime {
                         offered: &offered,
                         named: &named,
                     };
-                    let (outcome, done) = self.send_errands(&from, call, &mut attached).await;
+                    let (outcome, done) =
+                        self.send_errands(&from, call, &mut reading, &mut attached).await;
                     // What the errands did goes on this turn's record ahead
                     // of the call that sent them, because it happened first
                     // and because it is this agent's work: an errand has no
@@ -5420,9 +5433,10 @@ impl Runtime {
     /// turn takes in a page from anywhere else, so the next turn asks again and
     /// so does the first press after the agent has been somewhere new.
     ///
-    /// Deliberately still not "always allow": `ActOnBehalf` has no standing yes,
-    /// nothing here reaches the `grants` table, and a page that could earn one
-    /// once would earn it for every page after. An operator who does not want
+    /// Deliberately still not "always allow": `ActOnBehalf` does not stand (see
+    /// `ProtectedAction::stands`), so `ask_permission` never reads a grant for
+    /// it, including one an older build recorded, and a page that could earn
+    /// one once would earn it for every page after. An operator who does not want
     /// to be asked says so about the agent, in advance, where nothing a page
     /// wrote is in the room.
     async fn may_act_on(

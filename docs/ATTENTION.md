@@ -102,7 +102,10 @@ The operator can write allow and block rules for a workspace or a group, optiona
 agents. A block wins over an allow and a standing grant; a missing or invalid fact required by
 an applicable block makes the turn ask even if a grant exists. Rules never allow settings changes
 or an action after the turn has read a page or screenshot. The browser's existing consent switch
-still decides its normal question; a site block is checked before that switch.
+still decides its normal question; a site block is checked before that switch. A page an errand
+read counts as read by the turn that sent it, and a page that turn read counts for its errands,
+while acting in the operator's name has no standing yes at all: an "always" for it is recorded as
+a single allow, and one an older build recorded is never consulted.
 
 `request_permission` supplies the facts for rules about acting in the operator's name. These are
 the agent's declarations, not a guarantee about the later action. Connector calls are not gated

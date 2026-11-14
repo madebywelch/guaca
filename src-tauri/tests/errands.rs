@@ -442,7 +442,8 @@ fn scripted_browser() {
                         async move { Json(reply) }
                     }));
                 let api = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-                std::env::set_var("GUAC_KERNEL_API_BASE", format!("http://{}", api.local_addr().unwrap()));
+                let base = format!("http://{}", api.local_addr().unwrap());
+                std::env::set_var("GUAC_KERNEL_API_BASE", base);
                 tokio::spawn(async move { axum::serve(api, kernel).await.unwrap() });
 
                 ready.send(()).expect("the test thread is waiting on this");
