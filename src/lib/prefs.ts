@@ -5,9 +5,13 @@
  * the webview as `Settings`, because the runtime acts on it: an endpoint, a
  * key, a limit. None of what is here means anything to an agent. How large the
  * interface draws, whether the reading column is paper or ink, what colors and
- * faces it is drawn in, how the agents are drawn, which of four things is worth
- * interrupting you for: the runtime would carry these across IPC only to hand
- * them straight back.
+ * faces it is drawn in, how the agents are drawn: the runtime would carry these
+ * across IPC only to hand them straight back.
+ *
+ * What is worth interrupting you for used to be here too, and is not any more.
+ * The Host decides that once for every window, so its switches are the Host's
+ * (`Settings.attention`), and a blob an older build wrote with a `notify`
+ * block in it loses that block on the next write.
  *
  * So they stay on this side, in `localStorage`, the way the inspector's
  * open-or-closed already does. That is a deliberate exception to "the frontend
@@ -35,37 +39,6 @@ import {
 } from "./theme";
 
 export type SurfaceMode = "light" | "dark" | "system";
-
-/**
- * What an agent doing something can interrupt you for.
- *
- * Five kinds rather than one switch, because they are not the same question.
- * A permission request is blocking and stays blocking until you answer it. An
- * agent that has stopped is blocking and has no clock on it at all. A routine
- * fires in a channel you were never looking at. A conversation finishing is
- * only interesting if you were waiting for it.
- *
- * The first two are close enough to look like one switch and are not: an
- * operator who turns off permission prompts because a crew asks too often has
- * not said they want to stop hearing that an agent has stopped dead, and one
- * switch would take that decision for them.
- */
-export type NotifyKind = "decision" | "approval" | "stuck" | "routine" | "settled" | "failed";
-
-export const NOTIFY_KINDS: readonly NotifyKind[] = [
-  "decision",
-  "approval",
-  "stuck",
-  "routine",
-  "settled",
-  "failed",
-];
-
-export interface NotifyPrefs {
-  /** The master switch. Off means no kind fires, whatever the kinds say. */
-  on: boolean;
-  kinds: Record<NotifyKind, boolean>;
-}
 
 /**
  * The scales offered, as percentages.
@@ -135,7 +108,6 @@ export interface Prefs extends Theme {
   readingSize: ReadingSize;
   cast: Cast;
   showReasoning: boolean;
-  notify: NotifyPrefs;
 }
 
 /**
@@ -157,17 +129,6 @@ export const DEFAULT_PREFS: Prefs = Object.freeze({
   readingSize: 16,
   cast: "drawn",
   showReasoning: false,
-  notify: Object.freeze({
-    on: true,
-    kinds: Object.freeze({
-      decision: true,
-      approval: true,
-      stuck: true,
-      routine: true,
-      settled: true,
-      failed: true,
-    }),
-  }),
 }) as Prefs;
 
 const KEY = "guac.prefs";
@@ -206,14 +167,6 @@ export function readPrefs(raw: unknown): Prefs {
   if (typeof raw !== "object" || raw === null) return DEFAULT_PREFS;
 
   const stored = raw as Partial<Prefs>;
-  const kinds = { ...DEFAULT_PREFS.notify.kinds };
-  const storedKinds = stored.notify?.kinds;
-  if (typeof storedKinds === "object" && storedKinds !== null) {
-    for (const kind of NOTIFY_KINDS) {
-      const value = (storedKinds as Record<string, unknown>)[kind];
-      if (typeof value === "boolean") kinds[kind] = value;
-    }
-  }
 
   const pick = <T extends string | number>(
     options: readonly T[],
@@ -236,10 +189,6 @@ export function readPrefs(raw: unknown): Prefs {
       typeof stored.showReasoning === "boolean"
         ? stored.showReasoning
         : DEFAULT_PREFS.showReasoning,
-    notify: {
-      on: typeof stored.notify?.on === "boolean" ? stored.notify.on : DEFAULT_PREFS.notify.on,
-      kinds,
-    },
   };
 }
 

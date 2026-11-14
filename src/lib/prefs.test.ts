@@ -7,9 +7,8 @@
  * left half a string, and a curious operator edited it by hand. What is under
  * test here is that each of those costs exactly the fields it got wrong and
  * never the window. A scale that is not one of the offered scales becomes a CSS
- * length no button can turn back off; a notify flag that was coerced rather
- * than checked is either an interruption the operator never switched off or one
- * they asked for and will not get.
+ * length no button can turn back off; a flag that was coerced rather than
+ * checked is a preference the operator never set.
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,7 +17,6 @@ import {
   CASTS,
   DEFAULT_PREFS,
   loadPrefs,
-  NOTIFY_KINDS,
   type Prefs,
   READING_SIZES,
   READINGS,
@@ -41,10 +39,8 @@ const KEY = "guac.prefs";
 /**
  * The defaults, written out independently of the module's own constant.
  *
- * Signal and the system surface are the first look a new operator gets. Every
- * notification is on because a blob that cannot be read must not be able to
- * switch interruptions off. Asserting against the module constant would pass
- * whatever it said.
+ * Signal and the system surface are the first look a new operator gets.
+ * Asserting against the module constant would pass whatever it said.
  */
 const DEFAULTS: Prefs = {
   uiScale: 100,
@@ -58,17 +54,6 @@ const DEFAULTS: Prefs = {
   readingSize: 16,
   cast: "drawn",
   showReasoning: false,
-  notify: {
-    on: true,
-    kinds: {
-      decision: true,
-      approval: true,
-      stuck: true,
-      routine: true,
-      settled: true,
-      failed: true,
-    },
-  },
 };
 
 /** Runs `body` against a storage that behaves the way a hardened webview does. */
@@ -131,10 +116,10 @@ describe("a blob that cannot be trusted", () => {
   });
 
   it("defaults every field whose type is wrong and keeps the ones that are not", () => {
-    // The hand-edited case. A `Boolean(value)` check would read the 0 as an
-    // operator switching the blocking approval prompts off, and the quoted 110
-    // would reach `styles.css` as a length; a flag copied through unchecked puts
-    // a string where every reader of the record expects a boolean.
+    // The hand-edited case. The quoted 110 would reach `styles.css` as a
+    // length, and a value copied through unchecked puts a string where every
+    // reader of the record expects one of a closed set. The notify block is an
+    // older build's, and goes whatever it holds.
     expect(
       readPrefs({
         uiScale: "110",
@@ -148,29 +133,7 @@ describe("a blob that cannot be trusted", () => {
         cast: true,
         notify: { on: false, kinds: { approval: 0, settled: "yes", routine: false } },
       }),
-    ).toEqual({
-      ...DEFAULTS,
-      notify: {
-        on: false,
-        kinds: {
-          decision: true,
-          approval: true,
-          stuck: true,
-          routine: false,
-          settled: true,
-          failed: true,
-        },
-      },
-    });
-  });
-
-  it("defaults the whole notify block when the block itself is not an object", () => {
-    // A valid field beside a ruined one survives: the blob is not all or nothing.
-    expect(readPrefs({ uiScale: 125, notify: "off" })).toEqual({ ...DEFAULTS, uiScale: 125 });
-    expect(readPrefs({ notify: [] })).toEqual(DEFAULTS);
-    expect(readPrefs({ notify: null })).toEqual(DEFAULTS);
-    // A switch and a kinds record that are both present and both unreadable.
-    expect(readPrefs({ notify: { on: 0, kinds: "all" } })).toEqual(DEFAULTS);
+    ).toEqual(DEFAULTS);
   });
 
   it("refuses a scale that is a number nobody offers", () => {
@@ -182,29 +145,22 @@ describe("a blob that cannot be trusted", () => {
     }
   });
 
-  it("ignores a notify kind this build has never heard of", () => {
-    // A blob from a newer build carries kinds this one cannot draw a row for.
-    // Copied through, they persist on the next write forever, and a stale value
-    // under a name a later build reuses is a preference nobody set.
-    const prefs = readPrefs({ notify: { kinds: { approval: false, chatter: false } } });
-    expect(prefs.notify.kinds.approval).toBe(false);
-    expect(Object.keys(prefs.notify.kinds)).toEqual([...NOTIFY_KINDS]);
-  });
-
   it("fills in what an older build never wrote and keeps what it did", () => {
     expect(readPrefs({ surface: "dark" })).toEqual({ ...DEFAULTS, surface: "dark" });
-    expect(readPrefs({ notify: { kinds: { failed: false } } })).toEqual({
-      ...DEFAULTS,
-      notify: { on: true, kinds: { ...DEFAULTS.notify.kinds, failed: false } },
-    });
+    // What an older build wrote about notifications is the one thing it wrote
+    // that is not kept: those switches are the Host's now.
+    expect(readPrefs({ notify: { kinds: { failed: false } } })).toEqual(DEFAULTS);
   });
 
-  it("leaves the defaults it fell back on alone for the next read", () => {
-    // The kinds record is copied before anything is written into it. Writing
-    // into `DEFAULT_PREFS.notify.kinds` instead would work once and then hand
-    // every later read in the process the last blob's answer.
-    expect(readPrefs({ notify: { kinds: { approval: false } } }).notify.kinds.approval).toBe(false);
-    expect(readPrefs({}).notify.kinds.approval).toBe(true);
+  it("drops the notify block an older build wrote, whatever shape it is in", () => {
+    // Kept, it would be written back on every save forever, as switches no
+    // pane draws and nothing reads. The fields beside it survive.
+    for (const notify of ["off", [], null, { on: 0, kinds: "all" }, { on: false, kinds: {} }]) {
+      expect(readPrefs({ uiScale: 125, notify })).toEqual({ ...DEFAULTS, uiScale: 125 });
+    }
+    localStorage.setItem(KEY, JSON.stringify({ surface: "dark", notify: { on: false } }));
+    savePrefs(loadPrefs());
+    expect(JSON.parse(localStorage.getItem(KEY) ?? "{}")).toEqual({ ...DEFAULTS, surface: "dark" });
     expect(DEFAULT_PREFS).toEqual(DEFAULTS);
   });
 });
@@ -263,17 +219,6 @@ describe("a preference that outlives the window", () => {
       readingSize: 20,
       cast: "cut",
       showReasoning: true,
-      notify: {
-        on: false,
-        kinds: {
-          decision: true,
-          approval: true,
-          stuck: true,
-          routine: false,
-          settled: false,
-          failed: true,
-        },
-      },
     };
     savePrefs(chosen);
     expect(loadPrefs()).toEqual(chosen);

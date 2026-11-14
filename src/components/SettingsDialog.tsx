@@ -38,8 +38,6 @@ import { LIMITS } from "../lib/limits";
 import {
   CASTS,
   type Cast,
-  NOTIFY_KINDS,
-  type NotifyKind,
   type Prefs,
   READING_SIZES,
   READINGS,
@@ -69,6 +67,7 @@ import { attached, desktop } from "../lib/transport";
 import {
   type AccountConnectors,
   type AccountStatus,
+  type Attention,
   type DeviceCode,
   errorMessage,
   type GuardLimits,
@@ -133,38 +132,28 @@ const CAST_SAMPLE = [
   color: ACCENTS.find((accent) => accent.name === one.color)?.value ?? DEFAULT_ACCENT,
 }));
 
-/** The label is the row; the title is read on hover by whoever wonders. */
-const NOTIFY_COPY: Record<NotifyKind, { label: string; title: string }> = {
-  decision: {
-    label: "Decisions and follow-through",
-    title:
-      "Batched reminders at 9 AM and 4 PM in this host's timezone, and earlier for approaching deadlines. Decisions remain in For you until answered or withdrawn.",
+/**
+ * The Host's three switches, in the order the pane draws them. The label is
+ * the row and the hint says what is in it, since "needs you" covers four
+ * different requests and none of them is obvious from the name.
+ */
+const ATTENTION_ROWS: { key: keyof Attention; label: string; hint: string }[] = [
+  {
+    key: "needsYou",
+    label: "Things that need you",
+    hint: "A permission request, a question, an agent that is stuck, and reminders about decisions in For you.",
   },
-  approval: {
-    label: "An agent needs permission",
-    title:
-      "The only one that blocks: the turn that asked is parked until you answer, and gives up after ten minutes. Reaches you even while Guaca is open, if the request is in a channel you are not looking at.",
+  {
+    key: "failures",
+    label: "Failures",
+    hint: "A conversation that failed, or was cut off when the Host restarted.",
   },
-  stuck: {
-    label: "An agent is stuck on you",
-    title:
-      "It could not go on without you and said so on its way out of a turn. Nothing is parked and nothing expires, so it stays in For you until you clear it. Only for a channel you are not looking at.",
+  {
+    key: "finished",
+    label: "Finished work while you are away",
+    hint: "Collected into one notification each time you step away. Nothing is sent while you are at a window.",
   },
-  routine: {
-    label: "A routine fired",
-    title:
-      "Work that starts on a schedule rather than because you asked. It lands in whichever channel it was pointed at, which is usually not the one on screen.",
-  },
-  settled: {
-    label: "A conversation finished",
-    title:
-      "Every agent it reached has gone quiet. Only for the channel you were last looking at, so a busy runtime does not announce work you never opened.",
-  },
-  failed: {
-    label: "A turn could not finish",
-    title: "The model call failed after its retries. Only for a channel you are not looking at.",
-  },
-};
+];
 
 /**
  * A duration box, which is blank while it is inheriting what is stored.
@@ -257,6 +246,8 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
     null,
   );
   const [busy, setBusy] = useState(false);
+  // The switch being written, so a second click on it waits for the first.
+  const [attending, setAttending] = useState<keyof Attention | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const pending = useRef<SettingsPatch | null>(null);
 
@@ -431,6 +422,25 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
       ),
     );
     return sent as SettingsPatch;
+  };
+
+  /**
+   * Flips one of the Host's attention switches at once, like the rest of the
+   * Notifications pane. A patch of the one key, so a switch flipped in another
+   * window a moment ago is not written back.
+   */
+  const toggleAttention = async (key: keyof Attention) => {
+    const now = settings?.attention;
+    if (!now) return;
+    setAttending(key);
+    setStatus(null);
+    try {
+      setSettings(await api.updateSettings({ attention: { [key]: !now[key] } }));
+    } catch (error) {
+      setStatus({ tone: "error", text: errorMessage(error) });
+    } finally {
+      setAttending(null);
+    }
   };
 
   const save = async () => {
@@ -1746,64 +1756,37 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
               <>
                 <h3 className="settings__title">Notifications</h3>
                 <p className="settings__lede">
-                  Guaca keeps working while you are elsewhere, which is the only time any of these
-                  fire. Nothing interrupts you for something already on screen in front of you.
+                  The Host decides what reaches you, the same way for every window on it, and one
+                  window shows each notification. Nothing interrupts you about the channel you are
+                  reading.
                 </p>
 
-                <div
-                  className="switch-row"
-                  title="Off means none of the below, whatever they say. The first notification asks the operating system for permission."
-                >
-                  <span className="switch-row__text">
-                    <span className="switch-row__label">Notify me at all</span>
-                  </span>
-                  <button
-                    type="button"
-                    className="choice"
-                    role="switch"
-                    aria-checked={prefs.notify.on}
-                    aria-label="Notify me at all"
-                    onClick={() => setPrefs({ notify: { ...prefs.notify, on: !prefs.notify.on } })}
-                  >
-                    {prefs.notify.on ? "On" : "Off"}
-                  </button>
-                </div>
+                {settings && !settings.attention && (
+                  <p className="hint">
+                    This Host is older than these switches. Update it to choose what notifies you.
+                  </p>
+                )}
 
-                {NOTIFY_KINDS.map((kind) => (
-                  <div
-                    className="switch-row"
-                    key={kind}
-                    data-off={prefs.notify.on ? undefined : "true"}
-                    title={NOTIFY_COPY[kind].title}
-                  >
-                    <span className="switch-row__text">
-                      <span className="switch-row__label">{NOTIFY_COPY[kind].label}</span>
-                    </span>
-                    <button
-                      type="button"
-                      className="choice"
-                      role="switch"
-                      disabled={!prefs.notify.on}
-                      // The kind's own setting, not the master switch and the
-                      // kind together: the row is already disabled, and what it
-                      // has to report is what will apply when the master goes
-                      // back on. Reading them together had the label say On
-                      // while the control reported itself unchecked.
-                      aria-checked={prefs.notify.kinds[kind]}
-                      aria-label={NOTIFY_COPY[kind].label}
-                      onClick={() =>
-                        setPrefs({
-                          notify: {
-                            ...prefs.notify,
-                            kinds: { ...prefs.notify.kinds, [kind]: !prefs.notify.kinds[kind] },
-                          },
-                        })
-                      }
-                    >
-                      {prefs.notify.kinds[kind] ? "On" : "Off"}
-                    </button>
-                  </div>
-                ))}
+                {settings?.attention &&
+                  ATTENTION_ROWS.map((row) => (
+                    <div className="switch-row" key={row.key}>
+                      <span className="switch-row__text">
+                        <span className="switch-row__label">{row.label}</span>
+                        <span className="switch-row__hint">{row.hint}</span>
+                      </span>
+                      <button
+                        type="button"
+                        className="choice"
+                        role="switch"
+                        disabled={attending === row.key}
+                        aria-checked={settings.attention?.[row.key]}
+                        aria-label={row.label}
+                        onClick={() => void toggleAttention(row.key)}
+                      >
+                        {settings.attention?.[row.key] ? "On" : "Off"}
+                      </button>
+                    </div>
+                  ))}
 
                 <div style={{ marginTop: "1rem" }}>
                   <button
@@ -1838,6 +1821,9 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   </button>
                   <p className="hint" style={{ marginTop: "0.4rem" }}>
                     The only way to find out whether this machine will show them.
+                    {/* A browser may refuse to ask without a click, and until
+                        it is answered this window claims nothing. */}
+                    {!desktop && " In a browser, this is also where it asks for permission."}
                   </p>
                 </div>
               </>
