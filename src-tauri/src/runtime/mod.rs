@@ -3945,6 +3945,21 @@ impl Runtime {
 
         if let Some(err) = failure {
             tracing::warn!(agent = %card.name, error = %err, "inference failed");
+            // What ran before the failure ran for real: a send was delivered, a
+            // file was written, a connector was called. The operator about to
+            // press Try again has to see that first, so the turn's record is
+            // written as a finished turn writes it. Its words are kept as a note
+            // on that record and sent to nobody, because a reply would answer
+            // with half a turn.
+            let calls =
+                tool_parts.iter().filter(|part| matches!(part, Part::ToolCall { .. })).count();
+            let text = collected_text.trim().to_string();
+            if !text.is_empty() {
+                tool_parts.push(Part::Text { text });
+            }
+            if !tool_parts.is_empty() {
+                self.record_activity(&card, run_id, inbound_hop, cause, tool_parts);
+            }
             let mut said = format!("{} could not reply: {}", card.name, err);
             // The vendor's sentence names the model and not where the name came
             // from. An operator who found a model on the agent itself read it
@@ -3956,6 +3971,14 @@ impl Runtime {
                     "\n\nThat model is {name}'s own setting, not its group's. Choose one its \
                      group's provider runs in {name}'s settings, or use the group default.",
                     name = card.name
+                ));
+            }
+            if calls > 0 {
+                said.push_str(&format!(
+                    "\n\nIt had already made {calls} {} in this turn, listed above. Check them \
+                     before you send this again: a message, a file or a connector call may \
+                     already have happened.",
+                    if calls == 1 { "call" } else { "calls" }
                 ));
             }
             self.notice(agent_id, run_id, cause, NoticeKind::UpstreamError, said);
@@ -4273,6 +4296,36 @@ impl Runtime {
         );
     }
 
+    /// Files what an agent did on a turn in its own channel, addressed to
+    /// nobody. One shape for a turn that answered and a turn whose model call
+    /// failed, so the transcript folds both the same way.
+    fn record_activity(
+        &self,
+        card: &AgentCard,
+        run_id: RunId,
+        hop: u16,
+        cause: Option<MessageId>,
+        parts: Vec<Part>,
+    ) {
+        let record = Envelope {
+            id: MessageId::new(),
+            run_id,
+            channel_id: card.id,
+            from: Participant::Agent { id: card.id },
+            to: Participant::System,
+            parts,
+            trust: Trust::System,
+            hop,
+            expects_reply: false,
+            intent: Intent::Courtesy,
+            cause,
+            created_at: now_ms(),
+        };
+        if let Err(err) = self.deliver(record) {
+            tracing::error!(%err, "failed to record agent activity");
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn emit_reply(
         &self,
@@ -4445,23 +4498,7 @@ impl Runtime {
         // transcript, so opening one agent's channel showed you every other
         // agent's tool calls.
         if !tool_parts.is_empty() {
-            let record = Envelope {
-                id: MessageId::new(),
-                run_id,
-                channel_id: card.id,
-                from: me,
-                to: Participant::System,
-                parts: tool_parts,
-                trust: Trust::System,
-                hop: inbound_hop,
-                expects_reply: false,
-                intent: Intent::Courtesy,
-                cause,
-                created_at: now_ms(),
-            };
-            if let Err(err) = self.deliver(record) {
-                tracing::error!(%err, "failed to record agent activity");
-            }
+            self.record_activity(card, run_id, inbound_hop, cause, tool_parts);
         }
 
         // Already written down, and there is nobody left to send it to.

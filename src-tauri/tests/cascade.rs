@@ -5345,6 +5345,113 @@ async fn a_call_that_keeps_failing_is_reported_with_the_message_to_send_again() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_call_that_fails_after_tool_calls_keeps_the_record_of_them() {
+    // The calls before the failure happened. A notice with nothing above it
+    // reads as a turn that did nothing, and Try again would send Chef the
+    // same message a second time without anyone being told it went once.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let manager_calls = Arc::new(AtomicUsize::new(0));
+    let counter = manager_calls.clone();
+    tokio::spawn(async move {
+        let app = Router::new().route(
+            "/v1/chat/completions",
+            post(move |body: axum::extract::Json<serde_json::Value>| {
+                let counter = counter.clone();
+                async move {
+                    // Chef takes the message and says nothing back, so the only
+                    // turn Manager runs is the one that fails.
+                    if speaker(&body.0) == "Chef" {
+                        let said = render(&Script::Say(String::new()));
+                        return ([("content-type", "text/event-stream")], said).into_response();
+                    }
+                    let script = match counter.fetch_add(1, Ordering::SeqCst) {
+                        0 => Script::Narrate {
+                            text: "Noting where this stands first.".into(),
+                            then: Box::new(Script::Progress("menu quote requested".into())),
+                        },
+                        1 => Script::SendTo {
+                            recipients: vec!["Chef".into()],
+                            text: "Quote the menu.".into(),
+                        },
+                        _ => {
+                            return (
+                                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                                "upstream exploded",
+                            )
+                                .into_response()
+                        }
+                    };
+                    ([("content-type", "text/event-stream")], render(&script)).into_response()
+                }
+            }),
+        );
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let stub = Stub {
+        base_url: format!("http://{addr}/v1"),
+        calls: Arc::new(AtomicUsize::new(0)),
+        transcript: Arc::new(parking_lot::Mutex::new(Vec::new())),
+    };
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Get a quote.").unwrap();
+    h.settle(run).await;
+
+    let manager = Participant::Agent { id: h.id("Manager") };
+    let channel = h.runtime.store().channel_messages(h.id("Manager"), 50).unwrap();
+    let records: Vec<usize> = channel
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.from == manager && m.to == Participant::System)
+        .map(|(at, _)| at)
+        .collect();
+    assert_eq!(records.len(), 1, "one record of the turn:\n{}", h.transcript());
+    let record = &channel[records[0]];
+    let called: Vec<&str> = record
+        .parts
+        .iter()
+        .filter_map(|part| match part {
+            Part::ToolCall { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(called, ["note_progress", "send_message"], "{:?}", record.parts);
+    assert!(
+        record.parts.iter().any(|part| matches!(part,
+            Part::Text { text } if text.contains("Noting where this stands"))),
+        "the words written before the failure are kept on the record: {:?}",
+        record.parts
+    );
+    assert!(
+        !channel.iter().any(|m| m.from == manager && m.to == Participant::Human),
+        "half a turn is not a reply:\n{}",
+        h.transcript()
+    );
+
+    let notices: Vec<(usize, &str)> = channel
+        .iter()
+        .enumerate()
+        .flat_map(|(at, m)| {
+            m.parts.iter().filter_map(move |part| match part {
+                Part::Notice {
+                    kind: guac_lib::domain::envelope::NoticeKind::UpstreamError,
+                    text,
+                } => Some((at, text.as_str())),
+                _ => None,
+            })
+        })
+        .collect();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    let (at, said) = notices[0];
+    assert!(at > records[0], "the notice follows the calls it warns about");
+    assert!(said.contains("already made 2 calls"), "{said}");
+    assert!(said.contains("Check them before you send this again"), "{said}");
+
+    assert_eq!(h.messaged_by("Manager"), vec![("Chef".to_string(), 1)]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn retrying_delivers_the_same_message_again_under_a_fresh_budget() {
     let stub = serve(|_body| Script::Say("Answered.".into())).await;
     let h = harness(&stub, &["Manager"], GuardLimits::default());
