@@ -1,6 +1,7 @@
-use super::{AgentCard, Runtime, RuntimeError, UiEvent};
+use super::guard::RunState;
+use super::{AgentCard, Runs, Runtime, RuntimeError, UiEvent};
 use crate::domain::decision::{self, DecisionAction, DecisionStatus, WorkDecision};
-use crate::domain::envelope::{Part, ToolOutcome};
+use crate::domain::envelope::{Envelope, Part, Participant, ToolOutcome};
 use crate::domain::ids::DecisionId;
 use crate::domain::now_ms;
 use crate::llm::tools;
@@ -13,22 +14,44 @@ impl Runtime {
         resume: bool,
         expected_updated_at: Option<i64>,
     ) -> Result<WorkDecision, RuntimeError> {
-        let (decision, envelope) = {
-            let mut runs = self.inner.runs.lock();
-            let (decision, envelope) = self.inner.store.answer_decision(
-                id,
-                answer,
-                resume,
-                expected_updated_at,
-                now_ms(),
-            )?;
-            *runs.outstanding.entry(envelope.run_id).or_insert(0) += 1;
-            (decision, envelope)
-        };
-        self.enqueue_delivery(envelope);
+        let mut runs = self.inner.runs.lock();
+        let (decision, envelope) =
+            self.inner.store.answer_decision(id, answer, resume, expected_updated_at, now_ms())?;
+        if runs.draining {
+            // Nothing on this host starts another turn, so the answer is the
+            // next host's from the start, as `deliver` treats a message. Put
+            // down here rather than queued, because the actor it would wait
+            // behind may still be inside a tool call when the process ends.
+            //
+            // A second commit, after the one that recorded the answer: the
+            // decision's own rows are written elsewhere. A process that ends
+            // between the two reports the follow-through interrupted, and For
+            // you offers to resume it.
+            if let Err(err) = self.put_down_answer(&mut runs, &envelope) {
+                tracing::error!(%err, decision = %id, "could not put a decision answer down; the next host reports it interrupted");
+            }
+            drop(runs);
+            self.emit(UiEvent::MessageAppended { message: Box::new(envelope) });
+        } else {
+            self.book(&mut runs, envelope.run_id);
+            drop(runs);
+            self.enqueue_delivery(envelope);
+        }
         self.emit(UiEvent::DecisionsChanged);
         tracing::info!(decision = %id, resume, "decision answer accepted and queued");
         Ok(decision)
+    }
+
+    fn put_down_answer(&self, runs: &mut Runs, envelope: &Envelope) -> Result<(), RuntimeError> {
+        let Participant::Agent { id } = envelope.to else { return Ok(()) };
+        let card = self.inner.store.get_agent(id)?.ok_or(RuntimeError::UnknownAgent(id))?;
+        let state = RunState::new(self.limits_for(&card));
+        self.inner.store.put_down(
+            &[(envelope.id, &[])],
+            &[(envelope.run_id, state.steps_used(), state.snapshot())],
+        )?;
+        self.hand_on(runs, envelope.run_id, state);
+        Ok(())
     }
 
     pub fn snooze_decision(&self, id: DecisionId, until: i64) -> Result<(), RuntimeError> {

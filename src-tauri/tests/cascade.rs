@@ -6444,3 +6444,193 @@ async fn a_paused_agents_held_work_waits_for_it_on_the_next_host() {
     h.settle(run).await;
     assert_eq!(h.channel_texts("Researcher").last().unwrap(), "Done as asked.");
 }
+
+use guac_lib::domain::ids::RunId;
+
+/// An operator message taken into a turn that is working, held there: the first
+/// model call waits for `gate` so the second message is in the inbox before the
+/// round that takes it in, and the call after that is the one in the air.
+async fn taken_in_mid_turn(
+    h: &Harness,
+    stub: &Stub,
+    gate: &std::sync::atomic::AtomicBool,
+    calls: &AtomicUsize,
+) -> (RunId, RunId) {
+    let researcher = h.id("Researcher");
+    let first = h.runtime.send_from_human(researcher, "Find the vendor's hours.").unwrap();
+    h.wait_until("the first model call", |_| calls.load(Ordering::SeqCst) == 1).await;
+    let second = h.runtime.send_from_human(researcher, "And their phone number.").unwrap();
+    h.wait_until("the second to queue", |h| h.runtime.inbox_depth(researcher) == 1).await;
+    gate.store(true, Ordering::SeqCst);
+    h.wait_until("the second to be taken into the running turn", |_| {
+        stub.transcript.lock().iter().any(|body| anyone_said(body, "And their phone number."))
+    })
+    .await;
+    (first, second)
+}
+
+fn settled_on(sink: &RecordingSink, run: RunId) -> bool {
+    sink.snapshot()
+        .iter()
+        .any(|event| matches!(event, UiEvent::RunSettled { run_id, .. } if *run_id == run))
+}
+
+/// The first call waits for the gate and makes a call, so the turn goes round
+/// again; every call after it hangs, and a call that reads as picked up after
+/// a restart answers.
+async fn gated_researcher(
+    gate: Arc<std::sync::atomic::AtomicBool>,
+    calls: Arc<AtomicUsize>,
+) -> Stub {
+    serve(move |body| {
+        if picked_up(body) {
+            return Script::Say("Hours and number found.".into());
+        }
+        match calls.fetch_add(1, Ordering::SeqCst) {
+            0 => {
+                while !gate.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Script::Progress("Looking up the vendor.".into())
+            }
+            _ => Script::Hang,
+        }
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_message_taken_into_a_turn_the_process_dies_in_is_reported_with_it() {
+    // The operator's second message was read by the turn that was working, and
+    // that turn is the only thing that would ever answer it. The process ends
+    // before the turn does, with no drain. The second message has to come back
+    // as interrupted beside the first: had its run settled when it was read,
+    // nothing would be left to say it was never answered.
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let stub = gated_researcher(gate.clone(), calls.clone()).await;
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let researcher = h.id("Researcher");
+    let (first, second) = taken_in_mid_turn(&h, &stub, &gate, &calls).await;
+    let settled_while_read = settled_on(&h.sink, second);
+
+    h.runtime.stop_agent(researcher);
+    let store = Store::open(&h._dir.path().join("guac.db")).unwrap();
+    let recovered = guac_lib::boot::recover(&store).unwrap();
+    assert_eq!(recovered.interrupted, 2, "both messages the dead turn held are reported");
+    let reported: std::collections::HashSet<RunId> = store
+        .channel_messages(researcher, 50)
+        .unwrap()
+        .into_iter()
+        .filter(|m| {
+            matches!(m.parts.first(), Some(Part::Notice { kind: NoticeKind::Interrupted, .. }))
+        })
+        .map(|m| m.run_id)
+        .collect();
+    assert_eq!(reported, [first, second].into_iter().collect());
+    assert!(!settled_while_read, "read is not answered: the turn that read it was still working");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_message_taken_into_a_turn_an_update_stops_is_handed_on_not_settled() {
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let stub = gated_researcher(gate.clone(), calls.clone()).await;
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let (first, second) = taken_in_mid_turn(&h, &stub, &gate, &calls).await;
+
+    // The turn is stopped at its boundary, and the message it read goes down
+    // with it for the next host. Handed on, not finished: the host that stops
+    // never says it settled.
+    let stopping = h.sink.clone();
+    let (h, drained) = h.restart(Duration::from_secs(5)).await;
+    assert!(drained.is_complete(), "{drained:?}");
+    assert!(
+        !settled_on(&stopping, second),
+        "the host that stopped settled a message its turn had read and not answered"
+    );
+    h.settle(first).await;
+    h.settle(second).await;
+    assert_eq!(h.channel_texts("Researcher").last().unwrap(), "Hours and number found.");
+    assert!(notices_of(&h, "Researcher", NoticeKind::Interrupted).is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_decision_answered_while_the_host_is_stopping_is_followed_through_by_the_next_one() {
+    use guac_lib::domain::decision::DecisionRequest;
+
+    let stub = serve(|body| {
+        if anyone_said(body, "11 AM") {
+            Script::Say("Booked for 11 AM.".into())
+        } else {
+            Script::Say("Nothing to do.".into())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Assistant"], GuardLimits::default());
+    let agent = h.runtime.store().get_agent(h.id("Assistant")).unwrap().unwrap();
+    let decision = h
+        .runtime
+        .store()
+        .request_decision(
+            agent.id,
+            agent.group_id,
+            "thread/time",
+            DecisionRequest {
+                question: "10 AM or 11 AM?".into(),
+                context: String::new(),
+                recommendation: String::new(),
+                source: String::new(),
+                options: vec!["10 AM".into(), "11 AM".into()],
+            },
+            None,
+            now_ms(),
+        )
+        .unwrap();
+
+    assert!(h.runtime.drain(Duration::from_secs(5)).await.is_complete());
+    // Nothing on this host reads the agent's inbox again. That is what an
+    // answer queued here would wait behind when the agent's turn is still
+    // inside a tool call as the process ends, and an answer that waits for an
+    // actor is reported interrupted although nothing ever started on it.
+    h.runtime.stop_agent(agent.id);
+    let answered = h.runtime.answer_decision(decision.id, "11 AM", false, None).unwrap();
+    let run = answered.delivery_run.unwrap();
+    assert_eq!(stub.calls.load(Ordering::SeqCst), 0, "nothing starts on a host that is stopping");
+
+    let (h, _) = h.restart(Duration::from_secs(5)).await;
+    h.settle(run).await;
+    assert_eq!(h.channel_texts("Assistant").last().unwrap(), "Booked for 11 AM.");
+    assert!(notices_of(&h, "Assistant", NoticeKind::Interrupted).is_empty());
+    assert!(!h.runtime.store().decisions(None).unwrap()[0].interrupted);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_keyed_message_sent_while_the_host_is_stopping_is_answered_by_the_next_one() {
+    // The composer's send carries a key so a retry after a lost reply is the
+    // same message. It is put down for the next host exactly as a send
+    // without one is, rather than refused because the host is stopping.
+    let stub = serve(|_| Script::Say("Here.".into())).await;
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let researcher = h.id("Researcher");
+
+    assert!(h.runtime.drain(Duration::from_secs(5)).await.is_complete());
+    let (message, run) = h
+        .runtime
+        .send_from_human_keyed(researcher, "Are you there?", Vec::new(), "send-1", "print")
+        .unwrap();
+    assert_eq!(
+        h.runtime
+            .send_from_human_keyed(researcher, "Are you there?", Vec::new(), "send-1", "print")
+            .unwrap(),
+        (message, run),
+        "a retry of the same send is the same message"
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(stub.calls.load(Ordering::SeqCst), 0, "nothing starts on a host that is stopping");
+
+    let (h, _) = h.restart(Duration::from_secs(5)).await;
+    h.settle(run).await;
+    assert_eq!(h.channel_texts("Researcher"), ["Are you there?", "Here."]);
+    assert!(notices_of(&h, "Researcher", NoticeKind::Interrupted).is_empty());
+}
