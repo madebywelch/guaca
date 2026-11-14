@@ -191,6 +191,13 @@ pub struct Status {
     pub target_image: String,
     pub target_version: String,
     pub operation: Option<Operation>,
+    /// The zone the container keeps its clock in, when there is a container.
+    pub host_zone: Option<String>,
+    /// The zone this Mac is on, which is the one a container is made with.
+    pub mac_zone: Option<String>,
+    /// Whether the two are different zones, which replacing the container
+    /// fixes. Decided here so the pane never compares names itself.
+    pub zone_differs: bool,
 }
 
 /// The container that is running, as the updater reports it.
@@ -216,6 +223,44 @@ pub struct LocalHost {
     lock: Mutex<()>,
     journal: Option<PathBuf>,
     binary: PathBuf,
+    /// The IANA zone a container is made with, as `TZ`. Routines, the
+    /// briefings and an agent's "today" all read the host's local clock, and
+    /// a container is given no environment of its own, so without this a
+    /// host on this Mac keeps UTC and fires everything at UTC hours. A box
+    /// gets its zone from its own environment instead, so it has none here.
+    zone: Option<String>,
+}
+
+/// The IANA zone this process is in: `TZ` when it is set, as a container
+/// is given it, else what the system is configured with.
+pub fn zone() -> Option<String> {
+    std::env::var("TZ")
+        .ok()
+        .map(|tz| tz.trim().trim_start_matches(':').to_string())
+        .filter(|tz| !tz.is_empty())
+        .or_else(|| iana_time_zone::get_timezone().ok())
+}
+
+/// The zone a container keeps. One made without `TZ` keeps the image's,
+/// which is UTC.
+fn container_zone(value: &Value) -> String {
+    value["Config"]["Env"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.as_str()?.strip_prefix("TZ="))
+        .map(|tz| tz.trim_start_matches(':').to_string())
+        .find(|tz| !tz.is_empty())
+        .unwrap_or_else(|| "UTC".into())
+}
+
+/// Whether two zone names keep different clocks. UTC goes by several names,
+/// and a Mac set to one of them is not behind a host on another.
+fn different_zones(a: &str, b: &str) -> bool {
+    let utc = |z: &str| {
+        matches!(z, "UTC" | "Etc/UTC" | "Etc/Universal" | "Universal" | "Zulu" | "Etc/Zulu")
+    };
+    a != b && !(utc(a) && utc(b))
 }
 
 struct ProcessLock(std::fs::File);
@@ -274,18 +319,21 @@ impl LocalHost {
         let name: String =
             identifier.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
         let name = format!("{name}-host");
-        Self::with_spec(
-            Spec {
-                volume: format!("{name}-data"),
-                name,
-                owner: "bot.guaca.desktop",
-                port: None,
-                env: &[],
-                socket: None,
-                reach: Reach::Published,
-            },
-            image,
-        )
+        Self {
+            zone: zone(),
+            ..Self::with_spec(
+                Spec {
+                    volume: format!("{name}-data"),
+                    name,
+                    owner: "bot.guaca.desktop",
+                    port: None,
+                    env: &[],
+                    socket: None,
+                    reach: Reach::Published,
+                },
+                image,
+            )
+        }
     }
 
     pub fn with_spec(spec: Spec, image: &str) -> Self {
@@ -295,7 +343,14 @@ impl LocalHost {
             lock: Mutex::new(()),
             journal: None,
             binary: docker_binary(),
+            zone: None,
         }
+    }
+
+    /// Whether the container keeps a different zone from the one it would be
+    /// made with now.
+    fn zone_differs(&self, value: &Value) -> bool {
+        self.zone.as_deref().is_some_and(|zone| different_zones(&container_zone(value), zone))
     }
 
     /// The update a desktop installs: the host built with it.
@@ -508,6 +563,9 @@ impl LocalHost {
             target_image: self.image.clone(),
             target_version: env!("CARGO_PKG_VERSION").into(),
             operation: self.operation().ok().flatten(),
+            host_zone: None,
+            mac_zone: self.zone.clone(),
+            zone_differs: false,
         };
         if let Err(message) = self.available().await {
             status.state =
@@ -518,6 +576,8 @@ impl LocalHost {
         match self.inspect().await {
             Ok(Some(value)) => {
                 let running = value["State"]["Running"] == true;
+                status.host_zone = Some(container_zone(&value));
+                status.zone_differs = self.zone_differs(&value);
                 status.state = if running { "running" } else { "stopped" };
                 status.message = if running {
                     "Docker is running. Your local host is available."
@@ -693,7 +753,9 @@ impl LocalHost {
                 target.version
             ));
         }
-        if op.previous_image == target.image {
+        // The same image is put in again only to give the host this Mac's
+        // zone, through the same backup and checks as any replacement.
+        if op.previous_image == target.image && !self.zone_differs(&old) {
             return Err(format!("This host already runs Guaca {}.", target.version));
         }
         Ok(port)
@@ -979,6 +1041,12 @@ impl LocalHost {
                 args.extend(["--env", *name]);
             }
         }
+        // A zone name is not a secret, so it is given by value: the desktop's
+        // own environment rarely has `TZ`, and the zone is what it is set to.
+        let zone = self.zone.as_ref().map(|zone| format!("TZ={zone}"));
+        if let Some(zone) = &zone {
+            args.extend(["--env", zone]);
+        }
         let socket = self
             .spec
             .socket
@@ -1158,6 +1226,7 @@ fn bridge_address(value: &Value) -> Result<String, String> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use serde_json::json;
     async fn docker(args: &[&str], seconds: u64) -> Result<String, String> {
         run_docker(&docker_binary(), args, seconds).await
     }
@@ -1182,6 +1251,10 @@ pub(crate) mod tests {
         let mut host =
             LocalHost::new("fixture", "fixture:new").with_journal(dir.path().join("update.json"));
         host.binary = fixture(&dir);
+        // The fixture keeps no environment, so a zone would make every
+        // container look like it needs replacing on a machine not on UTC.
+        // The tests about the zone set one.
+        host.zone = None;
         let value = serde_json::json!({
             "failure":failure, "exists":true, "image_version": env!("CARGO_PKG_VERSION"),
             "container": {"Mounts":[{"Destination":"/var/lib/guaca", "Type":"volume", "Name":format!("{}-data", host.spec.name)}], "Config":{"Image":"fixture:old", "Labels":{"bot.guaca.desktop":host.spec.name}},
@@ -1420,6 +1493,57 @@ pub(crate) mod tests {
         let record =
             LocalHost::new("fixture", "fixture:new").with_journal(dir.path().join("update.json"));
         assert_eq!(record.operation().unwrap().unwrap().backup, op.backup);
+        let again = host.update(&host.bundled(), Some(&origin)).await.err().unwrap();
+        assert!(again.contains("already runs"), "{again}");
+        task.abort();
+    }
+    #[test]
+    fn a_host_made_on_this_mac_is_given_its_zone_and_a_box_is_not() {
+        assert_eq!(LocalHost::new("fixture", "fixture:new").zone, zone());
+        let spec = LocalHost::new("fixture", "fixture:new").spec;
+        assert_eq!(LocalHost::with_spec(spec, "fixture:new").zone, None);
+    }
+    #[test]
+    fn utc_by_any_of_its_names_is_one_zone() {
+        assert!(!different_zones("UTC", "Etc/UTC"));
+        assert!(!different_zones("America/New_York", "America/New_York"));
+        assert!(different_zones("UTC", "America/New_York"));
+        let made = |env: Value| json!({"Config": {"Env": env}});
+        assert_eq!(container_zone(&made(json!(["PATH=/bin"]))), "UTC");
+        assert_eq!(container_zone(&made(json!(["TZ=Europe/Paris"]))), "Europe/Paris");
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_desktop_container_is_made_with_the_zone_of_this_mac() {
+        let (mut host, dir, task, _) = simulated("", env!("CARGO_PKG_VERSION")).await;
+        host.zone = Some("America/New_York".into());
+        edit(&dir, |v| v["exists"] = json!(false));
+        host.start().await.unwrap();
+        let made = calls(&dir).into_iter().find(|c| c[0] == "run").unwrap();
+        let at = made.iter().position(|a| a == "TZ=America/New_York").expect("no TZ");
+        assert_eq!(made[at - 1], "--env");
+        task.abort();
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_host_on_another_zone_is_put_in_again_with_this_one_and_only_then() {
+        let (mut host, dir, task, origin) = simulated("", env!("CARGO_PKG_VERSION")).await;
+        host.zone = Some("America/New_York".into());
+        edit(&dir, |v| v["container"]["Config"]["Image"] = json!("fixture:new"));
+        let status = host.status().await;
+        assert_eq!(status.host_zone.as_deref(), Some("UTC"));
+        assert_eq!(status.mac_zone.as_deref(), Some("America/New_York"));
+        assert!(status.zone_differs && !status.update_available);
+
+        host.update(&host.bundled(), Some(&origin)).await.unwrap();
+        let log = calls(&dir);
+        let made = log.iter().find(|c| c[0] == "run" && c.contains(&"--detach".into())).unwrap();
+        assert!(made.contains(&"TZ=America/New_York".into()), "{made:?}");
+        let backup = log.iter().position(|c| c[0] == "run" && c.contains(&"cp".into()));
+        assert!(backup.is_some(), "the same backup as any replacement");
+
+        edit(&dir, |v| v["container"]["Config"]["Env"] = json!(["TZ=America/New_York"]));
+        assert!(!host.status().await.zone_differs);
         let again = host.update(&host.bundled(), Some(&origin)).await.err().unwrap();
         assert!(again.contains("already runs"), "{again}");
         task.abort();

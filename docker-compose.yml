@@ -23,6 +23,9 @@ services:
       GUACA_UPDATE_CHECKS: ${GUACA_UPDATE_CHECKS:-on}
       GUACA_ACCOUNT_ORIGIN: ${GUACA_ACCOUNT_ORIGIN:-}
       GUACA_BROKER_BEARER: ${GUACA_BROKER_BEARER:-}
+      # The zone routines, the 9:00 and 16:00 reminders and an agent's date
+      # keep, by its IANA name (America/New_York). Unset, the host keeps UTC.
+      TZ: ${TZ:-UTC}
       # Read by the `claude` program, separately from the model key in
       # Settings. Set, it bills the API instead of the plan it is signed in to.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}

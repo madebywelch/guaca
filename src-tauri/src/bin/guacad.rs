@@ -30,6 +30,15 @@ fn main() {
         )
         .init();
 
+    // Every schedule and the date an agent is told run on this zone, and a
+    // container keeps UTC unless it is given `TZ`. Said once, where an
+    // operator whose briefings arrive at odd hours looks first.
+    tracing::info!(
+        zone = guac_lib::host::zone().as_deref().unwrap_or("unknown"),
+        offset = %chrono::Local::now().offset(),
+        "keeping local time"
+    );
+
     let root =
         PathBuf::from(std::env::var("GUACA_ROOT").unwrap_or_else(|_| "/var/lib/guaca".to_string()));
     let bind = std::env::var("GUACA_BIND").unwrap_or_else(|_| "127.0.0.1:8787".to_string());
