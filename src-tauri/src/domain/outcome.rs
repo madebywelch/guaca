@@ -121,8 +121,8 @@ impl Trigger {
 pub enum Status {
     /// Finished, and nothing it filed is waiting on the operator.
     Done,
-    /// A recurring check that found nothing. Nothing writes this yet: the
-    /// prompt that lets an agent say so is a later change.
+    /// A recurring check that found nothing. Its agent was allowed to finish
+    /// without a note, and said nothing, so the runtime says what it did.
     NothingNew,
     /// Finished, and left a decision or an escalation open.
     NeedsYou,
@@ -205,6 +205,16 @@ pub struct Outcome {
 /// Inside a fence is skipped rather than quoted: a chart's spec or a command
 /// is not a sentence saying what finished, and the line after it usually is.
 pub fn headline(note: &str) -> Option<String> {
+    first_line(note).map(|words| cut_to(&words, HEADLINE_MAX).0)
+}
+
+/// What [`headline`] quotes, before it is cut: the first line of a note with
+/// any text in it, as the words a person reads.
+///
+/// Apart from the headline because the length is a fact worth measuring. An
+/// agent is asked to keep this line under [`HEADLINE_MAX`], and whether it did
+/// cannot be read off a line that has already been cut to fit.
+pub fn first_line(note: &str) -> Option<String> {
     let mut fenced = false;
     for line in note.lines() {
         let trimmed = line.trim();
@@ -217,7 +227,7 @@ pub fn headline(note: &str) -> Option<String> {
         }
         let words = plain(trimmed);
         if !words.is_empty() {
-            return Some(cut_to(&words, HEADLINE_MAX).0);
+            return Some(words);
         }
     }
     None
@@ -413,6 +423,18 @@ mod tests {
             headline("Sent the digest to 12 people.\n\nDetails below.").as_deref(),
             Some("Sent the digest to 12 people.")
         );
+    }
+
+    #[test]
+    fn the_first_line_is_what_the_headline_cuts_and_is_never_cut_itself() {
+        // What an eval measures an agent's line by. A line already cut to fit
+        // would always look as if the agent had kept to the limit.
+        let long = format!("**Done:** {}", "every feed checked and nothing missed, ".repeat(6));
+        let line = first_line(&format!("\n> [!NOTE]\n> {long}\n\nDetail.")).unwrap();
+        assert!(line.starts_with("Done: every feed checked"), "{line}");
+        assert!(line.chars().count() > HEADLINE_MAX, "{}", line.chars().count());
+        assert_eq!(headline(&long).unwrap(), cut_to(&line, HEADLINE_MAX).0);
+        assert_eq!(first_line("```\nonly code\n```"), None);
     }
 
     #[test]

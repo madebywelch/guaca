@@ -12,8 +12,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::domain::envelope::{Envelope, Participant};
-use crate::domain::ids::AgentId;
+use crate::domain::envelope::{Envelope, Part, Participant};
+use crate::domain::ids::{AgentId, RunId};
+use crate::domain::outcome::{first_line, HEADLINE_MAX};
 use crate::domain::promise;
 
 /// What one run's traffic looked like.
@@ -101,6 +102,16 @@ pub enum Fault {
     /// A peer was written to more than twice in one run without asking for
     /// anything. Politeness with a rhythm.
     Nagged { from: String, to: String, times: usize },
+    /// The line a background run ended on is longer than the list of
+    /// finished work shows, so the operator reads it cut. See [`Background`].
+    OutcomeLineTooLong { agent: String, chars: usize },
+    /// A delegation the operator or a routine started, whose owner never wrote
+    /// a line after the last answer came back.
+    ///
+    /// The run is finished, and the only thing its owner said is what it said
+    /// before anybody had answered: a line about work being handed out rather
+    /// than about what came of it.
+    DelegatedAndNeverClosed { agent: String },
 }
 
 impl Fault {
@@ -128,6 +139,13 @@ impl Fault {
             }
             Fault::Nagged { from, to, times } => {
                 format!("{from} wrote to {to} {times} times without asking for anything")
+            }
+            Fault::OutcomeLineTooLong { agent, chars } => format!(
+                "{agent} ended a background run on a line of {chars} characters, and the list of \
+                 finished work shows {HEADLINE_MAX}"
+            ),
+            Fault::DelegatedAndNeverClosed { agent } => {
+                format!("{agent} handed work out and never said what came of it once it was back")
             }
         }
     }
@@ -326,6 +344,103 @@ pub fn faults(messages: &[Envelope], name_of: &dyn Fn(AgentId) -> String) -> Vec
         last_wanted.insert((from, to), envelope.expects_reply);
     }
 
+    faults.extend(outcome_faults(messages, name_of));
+    faults
+}
+
+/// What started a run that ended with nobody watching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Started {
+    Operator,
+    Routine,
+    Decision,
+}
+
+/// A run that ended with nobody watching, and the line it ended on.
+///
+/// One a routine or a decision answer started, or an operator's conversation
+/// from the moment an answer to work its owner handed out came back: the turn
+/// that answered the operator is not one, and the turn that reads the answers
+/// is. Its owner is whoever the run's first message went to, as it is for the
+/// outcome the runtime records, and the first line of that owner's closing note
+/// is the outcome a person who was away is shown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Background {
+    pub run: RunId,
+    pub owner: AgentId,
+    pub started: Started,
+    /// The owner handed work out in this run and an answer came back.
+    pub delegated: bool,
+    /// The first line of the owner's closing note, uncut. None when it wrote
+    /// nothing after the last answer came back, since a note written before
+    /// then is about work being handed out rather than what came of it.
+    pub line: Option<String>,
+}
+
+/// Every background run in `messages`, in the order each began.
+pub fn background(messages: &[Envelope]) -> Vec<Background> {
+    let mut runs: Vec<RunId> = Vec::new();
+    for envelope in messages {
+        if !runs.contains(&envelope.run_id) {
+            runs.push(envelope.run_id);
+        }
+    }
+
+    let mut out = Vec::new();
+    for id in runs {
+        let run: Vec<&Envelope> = messages.iter().filter(|e| e.run_id == id).collect();
+        let start = run[0];
+        let Participant::Agent { id: owner } = start.to else { continue };
+        let me = Participant::Agent { id: owner };
+        let started = if start.parts.iter().any(|part| matches!(part, Part::Routine { .. })) {
+            Started::Routine
+        } else if start.parts.iter().any(|part| matches!(part, Part::Decision { .. })) {
+            Started::Decision
+        } else if start.from == Participant::Human {
+            Started::Operator
+        } else {
+            continue;
+        };
+        let handed_out = run.iter().any(|e| {
+            e.from == me
+                && matches!(e.to, Participant::Agent { id } if id != owner)
+                && e.intent.is_work()
+        });
+        let answered = run.iter().rposition(|e| {
+            e.to == me && matches!(e.from, Participant::Agent { id } if id != owner)
+        });
+        let delegated = handed_out && answered.is_some();
+        if started == Started::Operator && !delegated {
+            continue;
+        }
+        let closed = run.iter().rposition(|e| {
+            e.from == me && e.to == Participant::Human && !e.plain_text().trim().is_empty()
+        });
+        let line = match (closed, answered) {
+            (Some(note), Some(answer)) if note < answer => None,
+            (note, _) => note.and_then(|note| first_line(&run[note].plain_text())),
+        };
+        out.push(Background { run: id, owner, started, delegated, line });
+    }
+    out
+}
+
+fn outcome_faults(messages: &[Envelope], name_of: &dyn Fn(AgentId) -> String) -> Vec<Fault> {
+    let mut faults = Vec::new();
+    for run in background(messages) {
+        match &run.line {
+            Some(line) if line.chars().count() > HEADLINE_MAX => {
+                faults.push(Fault::OutcomeLineTooLong {
+                    agent: name_of(run.owner),
+                    chars: line.chars().count(),
+                });
+            }
+            None if run.delegated && run.started != Started::Decision => {
+                faults.push(Fault::DelegatedAndNeverClosed { agent: name_of(run.owner) });
+            }
+            _ => {}
+        }
+    }
     faults
 }
 
@@ -769,6 +884,116 @@ mod tests {
             ),
         ];
         assert!(faults(&run, &named(a, b)).contains(&Fault::Silent));
+    }
+
+    /// The same messages as one conversation, which is what an outcome is
+    /// read from.
+    fn one_run(messages: Vec<Envelope>) -> Vec<Envelope> {
+        let run = RunId::new();
+        messages.into_iter().map(|e| Envelope { run_id: run, ..e }).collect()
+    }
+
+    /// Work handed out the way `send_message` hands it out: an answer is owed.
+    fn ask(from: Participant, to: Participant, text: &str) -> Envelope {
+        Envelope { expects_reply: true, ..assign(from, to, text, 1) }
+    }
+
+    fn fired(to: AgentId) -> Envelope {
+        Envelope {
+            parts: vec![Part::Routine {
+                routine_id: crate::domain::ids::RoutineId::new(),
+                name: "Morning digest".into(),
+                what: "Send the digest.".into(),
+                payload: None,
+            }],
+            intent: Intent::Work,
+            ..msg(Participant::System, Participant::Agent { id: to }, "", 0, false)
+        }
+    }
+
+    #[test]
+    fn a_background_run_that_ends_on_a_line_the_list_would_cut_is_a_fault() {
+        let (a, b) = agents();
+        let long = format!("Sent the digest {}", "to everybody on the list again ".repeat(6));
+        let note = format!("{long}\n\nDetail.");
+        let run = one_run(vec![
+            fired(a),
+            msg(Participant::Agent { id: a }, Participant::Human, &note, 0, false),
+        ]);
+        let chars = long.trim().chars().count();
+        assert_eq!(
+            faults(&run, &named(a, b)),
+            vec![Fault::OutcomeLineTooLong { agent: "Manager".into(), chars }]
+        );
+
+        // The same line said to an operator who asked is an answer, not an
+        // outcome nobody was watching for.
+        let asked = one_run(vec![
+            msg(Participant::Human, Participant::Agent { id: a }, "send the digest", 0, true),
+            msg(Participant::Agent { id: a }, Participant::Human, &long, 0, false),
+        ]);
+        assert_eq!(faults(&asked, &named(a, b)), vec![]);
+
+        // And a first line inside the limit, with the detail after it, is the
+        // shape asked for.
+        let kept = format!("Sent the digest.\n\n{long}");
+        let kept = one_run(vec![
+            fired(a),
+            msg(Participant::Agent { id: a }, Participant::Human, &kept, 0, false),
+        ]);
+        assert_eq!(faults(&kept, &named(a, b)), vec![]);
+    }
+
+    #[test]
+    fn a_delegation_whose_answer_comes_back_to_nothing_is_a_fault() {
+        // The coordinator's note went out before anybody answered, so the run's
+        // outcome is a line about handing work out.
+        let (a, b) = agents();
+        let mut run = vec![
+            msg(Participant::Human, Participant::Agent { id: a }, "book the room", 0, true),
+            ask(Participant::Agent { id: a }, Participant::Agent { id: b }, "book it"),
+            msg(Participant::Agent { id: a }, Participant::Human, "Chef is booking it.", 0, false),
+            msg(
+                Participant::Agent { id: b },
+                Participant::Agent { id: a },
+                "Booked for 10.",
+                2,
+                false,
+            ),
+        ];
+        assert_eq!(
+            faults(&one_run(run.clone()), &named(a, b)),
+            vec![Fault::DelegatedAndNeverClosed { agent: "Manager".into() }]
+        );
+
+        let closed = "Chef booked the room for 10.";
+        run.push(msg(Participant::Agent { id: a }, Participant::Human, closed, 0, false));
+        assert_eq!(faults(&one_run(run), &named(a, b)), vec![]);
+
+        // A routine's delegation is held to the same, since nobody at all was
+        // watching that one.
+        let quiet = one_run(vec![
+            fired(a),
+            ask(Participant::Agent { id: a }, Participant::Agent { id: b }, "gather it"),
+            msg(Participant::Agent { id: b }, Participant::Agent { id: a }, "Gathered.", 2, false),
+        ]);
+        assert_eq!(
+            faults(&quiet, &named(a, b)),
+            vec![Fault::DelegatedAndNeverClosed { agent: "Manager".into() }]
+        );
+    }
+
+    #[test]
+    fn an_exchange_of_courtesies_is_not_a_delegation_left_open() {
+        let (a, b) = agents();
+        let run = one_run(vec![
+            msg(Participant::Human, Participant::Agent { id: a }, "introduce yourself", 0, true),
+            msg(Participant::Agent { id: a }, Participant::Human, "Introduced myself.", 0, false),
+            msg(Participant::Agent { id: a }, Participant::Agent { id: b }, "hello", 1, true),
+            msg(Participant::Agent { id: b }, Participant::Agent { id: a }, "hi back", 2, false),
+        ]);
+        assert_eq!(faults(&run, &named(a, b)), vec![]);
+        assert_eq!(background(&run), vec![]);
     }
 
     #[test]
