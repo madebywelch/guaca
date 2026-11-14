@@ -3810,7 +3810,11 @@ impl Store {
         steps: u32,
     ) -> Result<Option<Outcome>, StoreError> {
         let mut conn = self.conn()?;
-        let tx = conn.transaction()?;
+        // Immediate, because the outcome is read before anything is written.
+        // A deferred transaction would take its write lock at the insert, and
+        // two runs settling at once would have the second refused with a
+        // snapshot that is already stale, which no busy wait can fix.
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // A run whose outcome cannot be read is still finished. Failing the
         // settle over it would keep the recovery point, and the next start
         // would report a conversation that ended as one that was cut off.
