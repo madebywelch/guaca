@@ -1078,6 +1078,18 @@ does not depend on color alone. That marker uses the system color, not the
 attention color reserved for requests that need the operator. Group names are
 set in the interface face.
 
+The activity beside a name falls back to how long ago the agent last did
+anything, and when that agent finished a run the operator has not seen, it says
+so instead: "done 5h", or "failed 5h", "interrupted" or "stopped", with the first
+line of the closing note on hover. In the row's own ink rather than its muted
+gray, and never in the attention color, because it is news and not a request.
+Everything live outranks it: "needs you", "stuck", typing, queued and paused are
+happening now, and this will keep until it is looked at. A run that left a
+decision says "done" here, since on the rail "needs you" means a parked turn and
+the decision is already counted in For you. Opening the channel, or the line in
+For you, is what clears it. `lib/doing.ts` holds the order, for the rail and for
+the panel under the menu bar icon alike.
+
 The four places at the bottom are back matter: one line each, the name at the
 left and whatever the app can say about it at the right — For you's count,
 today's weekday, and nothing for Artifacts or Settings, which have no count to
@@ -2506,8 +2518,12 @@ a corner of the screen.
   bar width is shared with every other app on the machine. A number that is
   always there becomes furniture and stops being read; one that appears only
   when something is waiting is information. The spend is deliberately not here.
-- **The tooltip** is one line on hover: what is happening, and what the session
-  has cost. The glance that costs no click and no width.
+- **The tooltip** is one line on hover: what is happening, how many finished
+  runs are unseen in For you, and what the session has cost. The glance that
+  costs no click and no width. Finished work is said here and only here on the
+  icon: "1 needs you, 4 finished in For you" beside something waiting, and
+  "nothing running, 4 finished in For you" without. The glyph and the title stay
+  what is waiting on you, because a finished run is not.
 - **The panel** is a left click. What is waiting, answerable where it is seen;
   who is doing what; and a line to any one of them without bringing the window
   back. The right click is a two-item menu, Open Guaca and Quit, for the times
@@ -2545,7 +2561,10 @@ menu bar is a fact about the window: the desktop app showing a box still has
 one, and a browser showing anything does not.
 
 **What it shows is the window's, smaller.** The desk from For you, card for card,
-with "Open channel" bringing the window back at that channel. The rail's rows,
+with "Open channel" bringing the window back at that channel. Under it, For
+you's Finished lines, five of them and then one line that says how many more and
+opens For you; a line brings the window back at its agent's channel and marks the
+run seen. The rail's rows,
 ordered for the question the panel is opened to answer: whoever is working,
 then whoever spoke last, then the paused. A group named on a row only when there
 is another group to tell it from, which is the rule the groups' column is drawn

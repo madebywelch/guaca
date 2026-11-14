@@ -12,7 +12,8 @@
 //!                 else. Menu bar width is shared with every other app, so a
 //!                 number that is always there is noise; one that appears only
 //!                 when something is waiting is information.
-//!   the tooltip   one line, on hover. The glance that costs no click.
+//!   the tooltip   one line, on hover. The glance that costs no click, and
+//!                 the only one of the three that mentions finished work.
 //!
 //! A click opens the panel, which is the frontend again in a window of its own:
 //! `src/components/MenubarPanel.tsx`. It replaced a native menu that could list
@@ -107,6 +108,10 @@ pub struct Presence {
     pub session: Tokens,
     /// Conversations in flight.
     pub running: usize,
+    /// Finished runs in For you the operator has not seen. Said in the
+    /// tooltip and nowhere else on the icon: the glyph and the title are what
+    /// is waiting on the operator, and finished work is not.
+    pub finished: usize,
 }
 
 impl Presence {
@@ -223,6 +228,17 @@ impl Presence {
                 [only] => format!("{count} in {}", only.name),
                 several => format!("{count} in {} groups", several.len()),
             }
+        };
+
+        // Finished work after whatever else is said, so it never stands in for
+        // it. Beside something waiting, the two are counts in one sentence,
+        // because naming who is waiting and then counting what finished reads
+        // as two tooltips run together.
+        let state = match (waiting, self.finished) {
+            (_, 0) => state,
+            (0, finished) => format!("{state}, {finished} finished in For you"),
+            (1, finished) => format!("1 needs you, {finished} finished in For you"),
+            (waiting, finished) => format!("{waiting} need you, {finished} finished in For you"),
         };
 
         // Named, because a tooltip in the menu bar is one of a dozen and the
@@ -446,6 +462,7 @@ mod tests {
             decisions: Vec::new(),
             session: Tokens { prompt: 3, completion: 2, cost: None, calls: 1 },
             running: 1,
+            finished: 4,
         };
         let json = serde_json::to_value(&presence).unwrap();
         assert_eq!(json["activity"][agent.to_string()]["state"], "queued");
@@ -454,6 +471,7 @@ mod tests {
         assert_eq!(back.crews[0].name, "Kitchen");
         assert_eq!(back.activity[&agent], Activity::Queued { depth: 2 });
         assert_eq!(back.running, 1);
+        assert_eq!(back.finished, 4);
     }
 
     /// The presence in the shape `presenceOf` in `src/lib/menubar.ts` writes
@@ -474,6 +492,7 @@ mod tests {
             "decisions": [],
             "session": { "prompt": 3, "completion": 2, "cost": null, "calls": 1 },
             "running": 1,
+            "finished": 0,
         });
         let presence: Presence = serde_json::from_value(json).expect("the window's presence");
         assert_eq!(presence.look().glyph, Glyph::Working);
@@ -631,6 +650,49 @@ mod tests {
         presence.waiting.push(approval(scout, ProtectedAction::CreateAgent, "Scout wants to"));
 
         assert_eq!(presence.look().glyph, Glyph::Attention);
+    }
+
+    // ---- finished work ------------------------------------------------------
+
+    #[test]
+    fn finished_work_is_said_on_hover_and_never_on_the_icon() {
+        // Start quiet: a run that finished is something to read when there is
+        // time, so it does not color the glyph or take width in the menu bar.
+        let (mut presence, _) = quiet();
+        presence.finished = 4;
+
+        let look = presence.look();
+        assert_eq!(look.glyph, Glyph::Idle);
+        assert_eq!(look.title, None, "finished work takes no width in the menu bar");
+        assert_eq!(look.tooltip, "Guaca · nothing running, 4 finished in For you");
+    }
+
+    #[test]
+    fn finished_work_follows_what_is_happening_rather_than_replacing_it() {
+        let (mut presence, scout) = quiet();
+        presence.activity.insert(scout, Activity::Thinking);
+        presence.finished = 1;
+
+        let look = presence.look();
+        assert_eq!(look.glyph, Glyph::Working);
+        assert_eq!(look.tooltip, "Guaca · 1 agent working, 1 finished in For you");
+    }
+
+    #[test]
+    fn what_needs_the_operator_and_what_finished_are_two_counts_in_one_line() {
+        let (mut presence, scout) = quiet();
+        presence.activity.insert(scout, Activity::AwaitingApproval);
+        presence.waiting.push(approval(scout, ProtectedAction::CreateAgent, "Scout wants to"));
+        presence.finished = 4;
+
+        let look = presence.look();
+        assert_eq!(look.glyph, Glyph::Attention);
+        assert_eq!(look.title.as_deref(), Some("1"), "the count is still requests only");
+        assert_eq!(look.tooltip, "Guaca · 1 needs you, 4 finished in For you");
+
+        presence.stuck.push(escalation(scout, "no key", 1));
+        assert_eq!(presence.look().tooltip, "Guaca · 2 need you, 4 finished in For you");
+        assert_eq!(presence.look().title.as_deref(), Some("2"));
     }
 
     #[test]

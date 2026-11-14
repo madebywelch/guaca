@@ -1,11 +1,23 @@
 import { useEffect, useRef, useState } from "react";
 
+import { AgentAvatar } from "../avatars/AgentAvatar";
 import { decisionTime, needsAnswer, orderedDecisions } from "../lib/decisions";
 import { useDismiss } from "../lib/dismiss";
 import { api } from "../lib/ipc";
+import {
+  drawnThrough,
+  EARLIER_LIMIT,
+  EARLIER_MS,
+  earlier,
+  finished,
+  forYouSummary,
+  type Shelf,
+  shelves,
+  statusWord,
+} from "../lib/outcomes";
 import { useStore } from "../lib/store";
 import { relativeTime, useNow } from "../lib/time";
-import { errorMessage, type WorkDecision } from "../lib/types";
+import { type AgentCard, errorMessage, type Outcome, type WorkDecision } from "../lib/types";
 import { Desk } from "./Desk";
 
 export function ForYou({ onClose }: { onClose: () => void }) {
@@ -16,17 +28,57 @@ export function ForYou({ onClose }: { onClose: () => void }) {
   const pending = useStore((state) => state.pending);
   const stuck = useStore((state) => state.stuck);
   const agents = useStore((state) => state.agents);
+  const groups = useStore((state) => state.groups);
   const lastActive = useStore((state) => state.lastActive);
   const select = useStore((state) => state.select);
+  const openMessage = useStore((state) => state.openMessage);
+  const outcomes = useStore((state) => state.outcomes);
+  const refreshOutcomes = useStore((state) => state.refreshOutcomes);
+  const seeOutcomes = useStore((state) => state.seeOutcomes);
   const now = useNow(30_000);
   const panel = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<"needs" | "following" | "history">("needs");
   const [receipt, setReceipt] = useState("");
+  const [recent, setRecent] = useState<Outcome[]>([]);
   useDismiss(onClose);
   useEffect(() => {
     panel.current?.focus();
     void refresh();
-  }, [refresh]);
+    void refreshOutcomes();
+  }, [refresh, refreshOutcomes]);
+  // Earlier is read here rather than kept in the store: nothing else draws it,
+  // and it changes only when something is seen or finishes, which is when the
+  // unseen list this follows changes. `outcomes` is the trigger, not an input.
+  useEffect(() => {
+    let current = true;
+    void (async () => {
+      try {
+        const rows = await api.listOutcomes({
+          since: Date.now() - EARLIER_MS,
+          limit: EARLIER_LIMIT,
+        });
+        if (current) setRecent(rows);
+      } catch (error) {
+        // Earlier is a convenience under everything else, so a host that
+        // cannot answer it leaves it out rather than taking For you down.
+        console.warn(`Earlier could not be read: ${errorMessage(error)}`);
+      }
+    })();
+    return () => {
+      current = false;
+    };
+  }, [outcomes]);
+  const news = finished(outcomes);
+  const past = earlier(recent, now);
+  // A line opens the note it came from, in its channel. A run with no note, or
+  // one whose note was cleared since, opens the channel at its end: the host
+  // reads a channel's newest messages when the one asked for is gone.
+  const openOutcome = (outcome: Outcome) => {
+    if (outcome.seenAt === null) void seeOutcomes({ runIds: [outcome.runId] });
+    if (outcome.noteId) void openMessage(outcome.agentId, outcome.noteId);
+    else void select(outcome.agentId);
+    onClose();
+  };
   const open = orderedDecisions(decisions.filter(needsAnswer));
   const following = decisions.filter((item) => item.status === "answered" && !item.interrupted);
   const history = decisions
@@ -77,9 +129,7 @@ export function ForYou({ onClose }: { onClose: () => void }) {
             </button>
           </div>
           <p>
-            {count === 0
-              ? "Nothing needs your answer right now."
-              : `${count} ${count === 1 ? "item needs" : "items need"} your attention.`}{" "}
+            {forYouSummary(count, news.length)}{" "}
             {following.length > 0 ? `${following.length} awaiting follow-through.` : ""}
           </p>
           <nav className="for-you__tabs" aria-label="Decision views">
@@ -179,6 +229,30 @@ export function ForYou({ onClose }: { onClose: () => void }) {
                 : "No answered decisions awaiting action."}
             </p>
           )}
+          {view === "needs" && news.length > 0 && (
+            <section className="for-you__finished" aria-labelledby="for-you-finished">
+              <header className="for-you__finished-head">
+                <h3 id="for-you-finished">Finished</h3>
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--small"
+                  onClick={() => {
+                    const through = drawnThrough(news);
+                    if (through !== null) void seeOutcomes({ before: through });
+                  }}
+                >
+                  Mark all seen
+                </button>
+              </header>
+              <FinishedShelves shelves={shelves(news, groups)} now={now} onOpen={openOutcome} />
+            </section>
+          )}
+          {view === "needs" && past.length > 0 && (
+            <details className="for-you__later">
+              <summary>Earlier · {past.length}</summary>
+              <FinishedShelves shelves={shelves(past, groups)} now={now} onOpen={openOutcome} />
+            </details>
+          )}
           {view === "needs" && (
             <details className="for-you__later">
               <summary>Team activity</summary>
@@ -205,6 +279,73 @@ export function ForYou({ onClose }: { onClose: () => void }) {
         </footer>
       </div>
     </div>
+  );
+}
+
+/** A list of finished runs, under a heading per group when there is more than one. */
+function FinishedShelves({
+  shelves,
+  now,
+  onOpen,
+}: {
+  shelves: Shelf[];
+  now: number;
+  onOpen: (outcome: Outcome) => void;
+}) {
+  const agents = useStore((state) => state.agents);
+  return shelves.map((shelf) => (
+    <div key={shelf.group?.id ?? "all"} className="for-you__shelf">
+      {shelf.group && <h4>{shelf.group.name}</h4>}
+      {shelf.outcomes.map((outcome) => (
+        <FinishedLine
+          key={outcome.runId}
+          outcome={outcome}
+          agent={agents.find((agent) => agent.id === outcome.agentId)}
+          now={now}
+          onOpen={() => onOpen(outcome)}
+        />
+      ))}
+    </div>
+  ));
+}
+
+/**
+ * One finished run, as a line: who, what its closing note said first, how it
+ * ended when that was not a plain finish, and how long ago.
+ *
+ * Drawn here and in the panel under the menu bar icon, which is why it takes
+ * where a click goes rather than deciding. It is a line and not a card, and
+ * nothing on it is in the attention color: it sits under what needs the
+ * operator and must never read as one more of those.
+ */
+export function FinishedLine({
+  outcome,
+  agent,
+  now,
+  onOpen,
+}: {
+  outcome: Outcome;
+  agent: AgentCard | undefined;
+  now: number;
+  onOpen: () => void;
+}) {
+  const word = statusWord(outcome.status);
+  const age = relativeTime(outcome.finishedAt, now);
+  return (
+    <button type="button" className="finished-line" title={outcome.headline} onClick={onOpen}>
+      <AgentAvatar
+        avatar={agent?.avatar ?? "blank"}
+        color={agent?.color ?? "#8aa0a6"}
+        size="xs"
+        lifecycle={agent?.lifecycle}
+        seed={agent?.id ?? outcome.runId}
+      />
+      <span className="finished-line__text">
+        <span className="finished-line__who">{agent?.name ?? "A deleted agent"}</span>{" "}
+        {outcome.headline}
+      </span>
+      <span className="finished-line__meta">{word ? `${word} ${age}` : age}</span>
+    </button>
   );
 }
 

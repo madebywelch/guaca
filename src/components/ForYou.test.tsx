@@ -1,8 +1,8 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useStore } from "../lib/store";
-import type { WorkDecision } from "../lib/types";
-import { aDecision } from "../test-fixtures";
+import type { Outcome, RunId, WorkDecision } from "../lib/types";
+import { aDecision, aGroup } from "../test-fixtures";
 import { ForYou } from "./ForYou";
 
 const mocks = vi.hoisted(() => ({
@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   answer: vi.fn(),
   snooze: vi.fn(),
   resume: vi.fn(),
+  outcomes: vi.fn<(query: { unseenOnly?: boolean }) => Promise<Outcome[]>>(),
+  seen: vi.fn<(target: { runIds?: RunId[]; before?: number }) => Promise<RunId[]>>(),
 }));
 vi.mock("../lib/ipc", () => ({
   api: {
@@ -17,12 +19,46 @@ vi.mock("../lib/ipc", () => ({
     answerDecision: mocks.answer,
     snoozeDecision: mocks.snooze,
     resumeDecision: mocks.resume,
+    listOutcomes: mocks.outcomes,
+    markOutcomesSeen: mocks.seen,
   },
 }));
+
+const NOW = Date.now();
+const HOUR = 3_600_000;
+
+function outcome(runId: string, over: Partial<Outcome> = {}): Outcome {
+  return {
+    runId,
+    agentId: "agent-1",
+    groupId: "group-1",
+    trigger: "routine",
+    triggerRef: null,
+    status: "done",
+    headline: "Sent the digest to 12 people.",
+    noteId: "note-1",
+    needs: [],
+    steps: 1,
+    startedAt: NOW - 3 * HOUR,
+    finishedAt: NOW - 2 * HOUR,
+    seenAt: null,
+    ...over,
+  };
+}
+
+/** The host's answer: the unseen ones when asked for those, everything otherwise. */
+function hostHas(rows: Outcome[]) {
+  useStore.setState({ outcomes: rows.filter((one) => one.seenAt === null) });
+  mocks.outcomes.mockImplementation(async (query) =>
+    query.unseenOnly ? rows.filter((one) => one.seenAt === null) : rows,
+  );
+}
 
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.list.mockResolvedValue([aDecision()]);
+  mocks.outcomes.mockResolvedValue([]);
+  mocks.seen.mockImplementation(async (target) => target.runIds ?? []);
   useStore.setState({
     decisions: [aDecision()],
     decisionError: null,
@@ -32,6 +68,7 @@ beforeEach(() => {
     agents: [],
     groups: [],
     lastActive: {},
+    outcomes: [],
   });
 });
 
@@ -170,4 +207,148 @@ it("opens a request's channel behind For you and gets out of the way", async () 
   fireEvent.click(screen.getByRole("button", { name: "Open channel" }));
   expect(select).toHaveBeenCalledWith("agent-1");
   expect(close).toHaveBeenCalled();
+});
+
+describe("Finished", () => {
+  const waiting = {
+    id: "req-1",
+    agentId: "agent-2",
+    groupId: "group-1",
+    runId: "run-9",
+    request: { kind: "permission" as const, action: "createAgent" as const },
+    summary: "Wants to hire a scribe",
+    detail: [],
+    state: "pending" as const,
+    answer: null,
+    createdAt: 0,
+    decidedAt: null,
+  };
+
+  beforeEach(() => {
+    mocks.list.mockResolvedValue([]);
+    useStore.setState({
+      decisions: [],
+      agents: [],
+      groups: [aGroup({ id: "group-1", name: "Research" })],
+    });
+  });
+
+  it("keeps the empty sentence when nothing needs you and nothing is unseen", async () => {
+    await act(async () => {
+      render(<ForYou onClose={() => {}} />);
+    });
+    expect(screen.getByText("Nothing needs your answer right now.")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Finished" })).toBeNull();
+  });
+
+  // A gathered banner opens For you, so finished work alone has to be the first
+  // thing there, on the view For you opens on.
+  it("opens on Finished when it is the only thing there", async () => {
+    hostHas([outcome("run-1")]);
+    await act(async () => {
+      render(<ForYou onClose={() => {}} />);
+    });
+    expect(
+      screen.getByText("Nothing needs your answer. 1 finished since you last looked."),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Needs you" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    const finished = screen.getByRole("region", { name: "Finished" });
+    expect(document.querySelector(".for-you__body")?.firstElementChild).toBe(finished);
+    expect(within(finished).getByText("Sent the digest to 12 people.")).toBeTruthy();
+  });
+
+  it("sits under the requests and leaves the count to them", async () => {
+    hostHas([outcome("run-1"), outcome("run-2", { finishedAt: NOW - HOUR })]);
+    useStore.setState({ pending: [waiting] });
+    await act(async () => {
+      render(<ForYou onClose={() => {}} />);
+    });
+    const requests = screen.getByRole("region", { name: "Waiting on you" });
+    const finished = screen.getByRole("region", { name: "Finished" });
+    expect(
+      requests.compareDocumentPosition(finished) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("For you 1");
+    expect(screen.getByText("1 item needs your attention.")).toBeTruthy();
+  });
+
+  it("opens the closing note in its channel and marks the run seen", async () => {
+    const openMessage = vi.fn(async () => {});
+    const close = vi.fn();
+    useStore.setState({ openMessage });
+    hostHas([outcome("run-1", { status: "failed", headline: "Analyst could not reply." })]);
+    await act(async () => {
+      render(<ForYou onClose={close} />);
+    });
+    const line = screen.getByRole("button", { name: /Analyst could not reply\./ });
+    expect(within(line).getByText("failed 2h")).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(line);
+    });
+    expect(mocks.seen).toHaveBeenCalledWith({ runIds: ["run-1"] });
+    expect(openMessage).toHaveBeenCalledWith("agent-1", "note-1");
+    expect(close).toHaveBeenCalled();
+    expect(useStore.getState().outcomes).toEqual([]);
+  });
+
+  it("opens the channel itself for a run that left no note", async () => {
+    const select = vi.fn(async () => {});
+    const openMessage = vi.fn(async () => {});
+    useStore.setState({ select, openMessage });
+    hostHas([outcome("run-1", { noteId: null, headline: "Finished without a note." })]);
+    await act(async () => {
+      render(<ForYou onClose={() => {}} />);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Finished without a note\./ }));
+    });
+    expect(select).toHaveBeenCalledWith("agent-1");
+    expect(openMessage).not.toHaveBeenCalled();
+  });
+
+  it("marks everything it drew seen, bounded by the newest line", async () => {
+    hostHas([
+      outcome("run-1", { finishedAt: NOW - 5 * HOUR }),
+      outcome("run-2", { finishedAt: NOW - HOUR }),
+    ]);
+    await act(async () => {
+      render(<ForYou onClose={() => {}} />);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Mark all seen" }));
+    });
+    expect(mocks.seen).toHaveBeenCalledWith({ before: NOW - HOUR });
+  });
+
+  it("heads each group when the lines span more than one", async () => {
+    useStore.setState({
+      groups: [aGroup({ id: "group-1", name: "Research" }), aGroup({ id: "group-2", name: "Ops" })],
+    });
+    hostHas([outcome("run-1"), outcome("run-2", { groupId: "group-2", finishedAt: NOW - HOUR })]);
+    await act(async () => {
+      render(<ForYou onClose={() => {}} />);
+    });
+    const finished = screen.getByRole("region", { name: "Finished" });
+    expect(
+      within(finished)
+        .getAllByRole("heading", { level: 4 })
+        .map((h) => h.textContent),
+    ).toEqual(["Ops", "Research"]);
+  });
+
+  it("keeps what was seen this week one click away under Earlier", async () => {
+    hostHas([
+      outcome("run-1", { seenAt: NOW - HOUR, headline: "Booked the venue." }),
+      outcome("run-2", { seenAt: NOW, finishedAt: NOW - 8 * 24 * HOUR, headline: "Too old." }),
+    ]);
+    await act(async () => {
+      render(<ForYou onClose={() => {}} />);
+    });
+    await waitFor(() => expect(screen.getByText("Earlier · 1")).toBeTruthy());
+    expect(screen.getByText("Booked the venue.")).toBeTruthy();
+    expect(screen.queryByText("Too old.")).toBeNull();
+    expect(screen.getByText("Nothing needs your answer right now.")).toBeTruthy();
+  });
 });

@@ -39,7 +39,9 @@ is the host itself, and `host.docker.internal` reaches the Mac from a container.
   (group, model, skills, with Edit), then its routines, working notes, memory
   and notebook, and its computer or browser when it has one.
 - **For You**: the desk. Decisions, permission requests, questions and
-  escalations waiting on the operator, across every group.
+  escalations waiting on the operator, across every group. Under them,
+  **Finished** lists one line for each conversation that ended since the
+  operator last looked: the first line of the closing note it ended with.
 - **Artifacts**: from the bottom of the rail. The pages groups keep, with each
   one's owner, version and history. Inside a group it lists that group's; with
   every group in the rail it lists all of them.

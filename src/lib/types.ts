@@ -1618,6 +1618,7 @@ export interface Presence {
   /** Spent since this window opened. */
   session: Tokens;
   running: number;
+  finished: number;
 }
 
 /** Structured error from a command. `kind` is safe to branch on. */
