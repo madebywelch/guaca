@@ -3417,6 +3417,7 @@ async fn a_group_can_pin_a_model_without_touching_the_other_group() {
         quick_actions: Vec::new(),
         widgets: Vec::new(),
         attention: Default::default(),
+        delivery: Default::default(),
     };
     let sink = RecordingSink::new();
     let runtime = Runtime::new(
@@ -3512,6 +3513,7 @@ async fn a_group_runs_on_its_own_budget_and_leaves_the_next_group_alone() {
         quick_actions: Vec::new(),
         widgets: Vec::new(),
         attention: Default::default(),
+        delivery: Default::default(),
     };
     let sink = RecordingSink::new();
     let runtime = Runtime::new(

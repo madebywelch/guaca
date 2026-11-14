@@ -9123,6 +9123,7 @@ mod tests {
             quick_actions: vec![],
             widgets: vec![],
             attention: Default::default(),
+            delivery: Default::default(),
         };
         let runtime =
             Runtime::new(store, LlmClient::new().unwrap(), config, OnDisk::under(dir.path()), sink);
@@ -9537,6 +9538,7 @@ mod tests {
             quick_actions: vec![],
             widgets: vec![],
             attention: Default::default(),
+            delivery: Default::default(),
         };
         let runtime = Runtime::new(
             store,
