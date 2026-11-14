@@ -408,7 +408,10 @@ export function NoticeRow({
     <div className="wire wire--notice">
       <span className={kind === "upstreamError" ? "chip chip--error" : "chip chip--guard"}>
         <span aria-hidden="true">{kind === "upstreamError" ? "!" : "◆"}</span>
-        <span style={{ whiteSpace: "normal" }}>{text}</span>
+        {/* Line breaks kept, because a notice can be two paragraphs: what
+            failed, then what the turn had already done before it failed.
+            Wrapping as normal ran the second onto the end of the first. */}
+        <span style={{ whiteSpace: "pre-line" }}>{text}</span>
         {onRetry && (
           <button
             type="button"
