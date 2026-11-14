@@ -2,7 +2,7 @@ use super::guard::RunState;
 use super::{AgentCard, Runs, Runtime, RuntimeError, UiEvent};
 use crate::domain::decision::{self, DecisionAction, DecisionStatus, WorkDecision};
 use crate::domain::envelope::{Envelope, Part, Participant, ToolOutcome};
-use crate::domain::ids::DecisionId;
+use crate::domain::ids::{DecisionId, RunId};
 use crate::domain::now_ms;
 use crate::llm::tools;
 
@@ -60,6 +60,11 @@ impl Runtime {
         Ok(())
     }
 
+    /// Claims the reminders that are due. The claim writes the outbox row
+    /// that delivers them, so a batch nobody is connected for waits there
+    /// rather than being spent. `DecisionReminder` is still said, for the
+    /// windows that raise their own banner from it until they claim
+    /// deliveries instead.
     pub fn sweep_decisions(&self, now: i64) {
         match self.inner.store.decision_reminders(now) {
             Ok(0) => {}
@@ -73,9 +78,12 @@ impl Runtime {
         }
     }
 
+    /// The `decision` tool. `run` is the run whose turn called it, written on
+    /// a decision it files so that run's outcome can say it left one open.
     pub(super) fn use_decision(
         &self,
         card: &AgentCard,
+        run: RunId,
         action: DecisionAction,
         arguments: serde_json::Value,
     ) -> (String, Part) {
@@ -84,12 +92,13 @@ impl Runtime {
                 DecisionAction::Request { topic, request, due_at } => {
                     let due = decision::deadline(due_at.as_deref())
                         .map_err(crate::db::StoreError::Decision)?;
-                    let row = self.inner.store.request_decision(
+                    let row = self.inner.store.file_decision(
                         card.id,
                         card.group_id,
                         &topic,
                         request,
                         due,
+                        Some(run),
                         now_ms(),
                     )?;
                     serde_json::to_string(&row)

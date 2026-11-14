@@ -2015,6 +2015,47 @@ CREATE INDEX outcomes_agent ON outcomes (agent_id) WHERE seen_at IS NULL;
 ALTER TABLE decisions ADD COLUMN filed_run TEXT;
 "#,
     ),
+    (
+        73,
+        r#"
+-- What to deliver to a person, one row per destination, written in the commit
+-- of the thing it is about. See domain/outbox.rs. destination admits
+-- 'endpoint' already, so an address the operator configures later is a value
+-- rather than a migration. kind has no CHECK on purpose: it is the list most
+-- likely to grow, and the reader refuses a value it does not know.
+-- offered_at is when the windows were first offered a row; a claim takes only
+-- an offered row. batch_id names the row that carries a gathered item, and is
+-- set on that row and on every row it carries.
+CREATE TABLE outbox (
+    id              TEXT    PRIMARY KEY,
+    kind            TEXT    NOT NULL,
+    destination     TEXT    NOT NULL CHECK (destination IN ('clients','endpoint')),
+    dedup_key       TEXT    NOT NULL,
+    group_id        TEXT,
+    agent_id        TEXT    REFERENCES agents(id) ON DELETE CASCADE,
+    run_id          TEXT,
+    ref_id          TEXT,
+    title           TEXT    NOT NULL,
+    body            TEXT    NOT NULL,
+    target          TEXT    NOT NULL,
+    status          TEXT    NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending','delivered','suppressed','expired','failed')),
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at INTEGER NOT NULL,
+    last_error      TEXT,
+    offered_at      INTEGER,
+    batch_id        TEXT,
+    created_at      INTEGER NOT NULL,
+    delivered_at    INTEGER,
+    UNIQUE (dedup_key, destination)
+);
+-- What the dispatcher reads: pending rows, by when they are next due.
+CREATE INDEX outbox_due ON outbox (next_attempt_at) WHERE status='pending';
+-- What answering a request, clearing an escalation or seeing a run withdraws.
+CREATE INDEX outbox_ref ON outbox (ref_id) WHERE status='pending';
+CREATE INDEX outbox_run ON outbox (run_id) WHERE status='pending';
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

@@ -1903,8 +1903,17 @@ fn quick_targets_exist(
 
 /// What the window with focus is showing, for an agent asked about "this".
 /// Every host answers it the same way; the page only reports while focused.
-pub async fn report_view(state: &AppState, view: crate::domain::view::OperatorView) -> Reply<()> {
-    state.runtime.report_view(view);
+///
+/// A window that also says whether it has focus, and names itself, reports
+/// when it loses focus as well, which is how the Host knows nobody is there.
+/// A page that says neither reports only while focused, as every page did.
+pub async fn report_view(
+    state: &AppState,
+    view: crate::domain::view::OperatorView,
+    focused: Option<bool>,
+    client: Option<String>,
+) -> Reply<()> {
+    state.runtime.report_window(view, focused.unwrap_or(true), client);
     Ok(())
 }
 
@@ -3221,6 +3230,21 @@ pub async fn mark_outcomes_seen(
         ));
     }
     Ok(state.runtime.mark_outcomes_seen(run_ids.as_deref(), before)?)
+}
+
+// ---- deliveries ------------------------------------------------------------
+
+/// What the Host has offered every window and nobody has claimed, oldest
+/// first. A window asks on connecting, because an offer goes to whoever is
+/// listening when it is made, which may have been nobody.
+pub async fn pending_deliveries(state: &AppState) -> Reply<Vec<crate::domain::outbox::Delivery>> {
+    Ok(state.runtime.pending_deliveries()?)
+}
+
+/// Claims one delivery for the window asking. True means show it; false
+/// means another window has, or what it was about has been answered or seen.
+pub async fn claim_delivery(state: &AppState, id: String) -> Reply<bool> {
+    Ok(state.runtime.claim_delivery(&id)?)
 }
 pub async fn answer_decision(
     state: &AppState,

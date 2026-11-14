@@ -107,6 +107,8 @@ src-tauri/src/
                       cannot move and only the operator can.
     outcome.rs        What a finished run ended in, in one line its owner
                       wrote, and the status no model is asked for.
+    outbox.rs         What reaches a person, and the one rule that decides
+                      it. Start quiet: most of what happens does not.
     group.rs          A group's wall, and the settings its agents run on.
     plugin.rs         The servers a group can sign in to, what it got, and
                       which of its agents may spend it.
@@ -119,6 +121,8 @@ src-tauri/src/
                       run, its budget and its stop.
     drain.rs          A host stopping without ending the work on it, and the
                       next one picking that work up.
+    outbox.rs         The dispatcher: offers what the rule lets through to
+                      every window, and the first window to claim it shows it.
     prompt.rs         Prompt assembly, including the trust boundary.
     events.rs         Events pushed to the UI.
   llm/                OpenAI-compatible client, SSE decoding, tool definitions.
@@ -213,6 +217,7 @@ repo: the frontend renders state and forwards intent.
 | A host stopping or restarting: the drain, what is put down, what the next host picks up and what it reports interrupted | *A stopping host puts its work down, and the next one picks it up* in `docs/HOSTING.md`, then `runtime/drain.rs` and `db/put_down.rs`, and run the scenarios under *a host that stops* in `tests/cascade.rs` |
 | The status bar, a page pinned to it, its condensed view, quick actions | *The status bar holds pages the groups keep, and a click on one is the bar's* in `docs/WORKSPACE.md`, then `domain/widget.rs`, `src/lib/widget.ts` and `src/components/StatusBar.tsx`, and `widget.test.ts`, which holds the widths the `artifact` tool states |
 | An agent reading the settings or asking to change them, the operator's current view | *An agent can read the settings, and what the operator is looking at* in `docs/WORKSPACE.md` and *A settings change is a permission with its own diff* in `docs/ATTENTION.md`, then `config::agent_patch` and `Runtime::use_settings` |
+| What interrupts the operator: the outbox, its rule, presence, the dispatcher, `pendingDeliveries` and `claimDelivery`, the `attention` settings | *What interrupts the operator* and *Reminders* in `docs/ATTENTION.md`, then `domain/outbox.rs`, `runtime/outbox.rs` and `db/outbox.rs`, and run `tests/outbox.rs` |
 | Permission prompts, parked turns, acting in the operator's name | *A protected action parks the turn that asked for it* |
 | Approval allow and block rules | `docs/ATTENTION.md`, then `domain/policy.rs` and `db/policy.rs` |
 | A program that is installed and reported missing: `claude` | *A double-clicked app does not have the operator's `PATH`* below, then `src-tauri/src/programs.rs` |

@@ -253,6 +253,12 @@ pub struct AppConfig {
     /// in the order they are drawn. A setting for the quick actions' reason.
     #[serde(default)]
     pub widgets: Vec<crate::domain::widget::Widget>,
+    /// What may interrupt the operator. On the Host rather than in each
+    /// browser, because the Host now decides it, once, for every window.
+    /// Only the operator sets it: it is not in [`AGENT_WRITABLE`], and an
+    /// agent's own settings read does not show it.
+    #[serde(default)]
+    pub attention: crate::domain::outbox::Attention,
 }
 
 /// Where an event is posted to fire a routine, and what the post has to carry.
@@ -414,6 +420,9 @@ pub struct RedactedConfig {
     /// An artifact id and a width. The page itself is read when it is drawn.
     #[serde(default)]
     pub widgets: Vec<crate::domain::widget::Widget>,
+    /// What may interrupt the operator, for every window on this Host.
+    #[serde(default)]
+    pub attention: crate::domain::outbox::Attention,
 }
 
 impl AppConfig {
@@ -439,6 +448,7 @@ impl AppConfig {
             subscription_models: vec![crate::llm::codex::DEFAULT_MODEL.to_string()],
             quick_actions: self.quick_actions.clone(),
             widgets: self.widgets.clone(),
+            attention: self.attention,
         }
     }
 }
@@ -525,6 +535,17 @@ pub struct SettingsPatch {
     pub kernel_api_key: Option<String>,
     pub browser_idle_minutes: Option<u32>,
     pub browser_stealth: Option<bool>,
+    pub attention: Option<AttentionPatch>,
+}
+
+/// The switches the operator changed. Absent ones keep their value, so a
+/// window that knows two of them cannot turn off a third it has never drawn.
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AttentionPatch {
+    pub needs_you: Option<bool>,
+    pub failures: Option<bool>,
+    pub finished: Option<bool>,
 }
 
 impl AppConfig {
@@ -563,6 +584,12 @@ impl AppConfig {
         }
         if let Some(stealth) = patch.browser_stealth {
             self.kernel.stealth = stealth;
+        }
+        if let Some(attention) = patch.attention {
+            let now = &mut self.attention;
+            now.needs_you = attention.needs_you.unwrap_or(now.needs_you);
+            now.failures = attention.failures.unwrap_or(now.failures);
+            now.finished = attention.finished.unwrap_or(now.finished);
         }
         if let Some(api_key) = patch.api_key {
             self.inference.api_key = api_key.trim().to_string();
@@ -868,6 +895,33 @@ mod tests {
         let refused =
             agent_patch(&serde_json::json!({ "limits": { "maxEverything": 1 } }), &current);
         assert!(refused.unwrap_err().contains("maxHops"));
+    }
+
+    #[test]
+    fn what_interrupts_the_operator_is_theirs_alone_to_set() {
+        // Not writable by an agent, even asking, even with approval: an agent
+        // that could turn off the operator's interruptions could do anything
+        // else unannounced.
+        let current = AppConfig::default();
+        for asked in [
+            serde_json::json!({ "attention": { "needsYou": false } }),
+            serde_json::json!({ "attention": { "failures": false, "finished": false } }),
+            serde_json::json!({ "limits": { "maxHops": 12 }, "attention": { "needsYou": false } }),
+        ] {
+            let refused = agent_patch(&asked, &current).unwrap_err();
+            assert!(refused.contains("attention"), "{refused}");
+        }
+        assert!(!AGENT_WRITABLE.contains(&"attention"));
+
+        // The operator's own patch sets only what it names.
+        let mut config = AppConfig::default();
+        let patch: SettingsPatch =
+            serde_json::from_value(serde_json::json!({ "attention": { "finished": false } }))
+                .unwrap();
+        config.apply(patch).unwrap();
+        assert!(!config.attention.finished);
+        assert!(config.attention.needs_you && config.attention.failures);
+        assert_eq!(config.redacted().attention, config.attention, "every window reads it back");
     }
 
     #[test]

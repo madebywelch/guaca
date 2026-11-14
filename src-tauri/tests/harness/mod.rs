@@ -768,6 +768,7 @@ fn build(
         webhook: Default::default(),
         quick_actions: Vec::new(),
         widgets: Vec::new(),
+        attention: Default::default(),
     };
 
     let sink = RecordingSink::new();

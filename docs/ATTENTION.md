@@ -174,19 +174,67 @@ questions survive without a time limit; completed receipts remain completed.
 
 ## Reminders
 
-The Rust scheduler claims one reminder batch in an immediate transaction and
-persists the next reminder before emitting `decisionReminder`. Default cadence
-is 9 AM and 4 PM in the runtime host's local timezone, plus one hour before a
-known deadline. A newly filed decision due within an hour is immediately
-eligible. A decision past its deadline stays answerable and joins the next
-briefing rather than disappearing.
+The Rust scheduler claims one reminder batch in an immediate transaction. The
+same commit moves each decision to its next reminder and writes one outbox row
+for the batch, so a batch is never claimed without something left to announce
+it. Default cadence is 9 AM and 4 PM in the host's time zone, plus one hour
+before a known deadline. A newly filed decision due within an hour is
+immediately eligible. A decision past its deadline stays answerable and joins
+the next briefing rather than disappearing.
 
-The UI sends one generic notification for the batch, without source content.
-Notification preferences, launch quiet time and burst suppression still apply.
-The one-hour snooze changes the next reminder, survives restart and is preserved
-across rescans. A reconnect always restores the rows even if the notification
-event was missed. Delivery while every client is closed, remote push channels,
-and configurable briefing times are not implemented here.
+The row says how many decisions need a review and nothing an agent wrote. It
+waits in the outbox until a window claims it, so a batch due while every window
+is closed, including one due the moment the host boots, is shown when a window
+next connects rather than spent on nobody. The one-hour snooze changes the next
+reminder, survives restart and is preserved across rescans.
+`decisionReminder` is still emitted after the claim, for windows that raise
+their own banner from it; it stops mattering once windows draw deliveries.
+Push to a phone and configurable briefing times are not implemented here.
+
+## What interrupts the operator
+
+Every interruption is decided on the host, once, by `domain::outbox::decide`.
+A producer writes an outbox row in the commit of the thing it is about: an
+outcome (`outcomes::record`, and `record_interrupted` after a restart), a
+permission request or question (`create_approval`), an escalation (first raise
+and at most once a day after), and a reminder batch. Each row has a dedup key,
+`outcome:<run>`, `approval:<id>`, `escalation:<id>:<day>` or
+`reminder:<remind_at>`, so settling twice or raising twice in a day writes
+nothing more.
+
+The dispatcher (`runtime/outbox.rs`) starts at boot after the pickup. It wakes
+when a commit writes a row and when a held row comes due, and decides each row
+from its kind, the run's ending, the operator's three switches and whether
+anybody is there:
+
+| Row | Away | Here, elsewhere | Here, its channel on screen |
+|---|---|---|---|
+| Permission request, question, stuck agent | Deliver | Deliver | Suppress |
+| Decision reminder | Deliver | Deliver | Deliver |
+| Run failed or interrupted | Deliver | Deliver | Suppress |
+| Run done, or done leaving something open | Gather for 10 minutes, then deliver as one item | Hold until they would count as away: gather if they left, suppress if still here | Suppress |
+| Run stopped by the operator, or a check that found nothing | No row is written | No row is written | No row is written |
+
+**Away** means no window has had focus for two minutes. A window reports focus
+when it gets it and while it keeps it, and reports when it loses it; the host
+keeps the last report of each window in memory and never shows it to an agent.
+**On screen** means the window with focus shows that agent's channel with
+nothing open over it. A switch that is off suppresses its kind whatever the
+presence: `needsYou` covers requests, stuck agents and reminders, `failures`
+covers failed and interrupted runs, and `finished` covers finished work.
+
+The switches live in the host's settings as `attention`, one setting for every
+window. Only the operator can change them: they are not in
+`config::AGENT_WRITABLE`, and an agent's settings read does not include them.
+
+A delivered row is offered, not sent. Every window hears `delivery`; one that
+connects later asks `pendingDeliveries`. A window shows the banner only when
+`claimDelivery` answers true, which it does for exactly one window. Gathered
+work is one item, titled with how many finished and listing a line for each,
+claimed with every row it carries. Answering a request, clearing an
+escalation, or seeing a run withdraws whatever was waiting to announce it, in
+the same commit. An item nobody claims in 24 hours expires; what it said is
+still in For you and in its channel.
 
 ## What an escalation is, and what it deliberately is not
 

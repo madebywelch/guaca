@@ -306,7 +306,7 @@ surface! {
     unpin_artifact(id: crate::domain::ids::ArtifactId) -> RedactedConfig,
     webhook_address() -> crate::commands::WebhookAddress,
 
-    report_view(view: crate::domain::view::OperatorView) -> (),
+    report_view(view: crate::domain::view::OperatorView, focused: Option<bool>, client: Option<String>) -> (),
     builtin_tools() -> Vec<crate::llm::tools::ToolSummary>,
     add_quick_action(label: String, does: crate::domain::quick::Does) -> RedactedConfig,
     remove_quick_action(id: String) -> RedactedConfig,
@@ -358,6 +358,8 @@ surface! {
     list_decisions() -> Vec<WorkDecision>,
     list_outcomes(since: Option<i64>, group_id: Option<GroupId>, unseen_only: Option<bool>, limit: u32) -> Vec<crate::domain::outcome::Outcome>,
     mark_outcomes_seen(run_ids: Option<Vec<RunId>>, before: Option<i64>) -> Vec<RunId>,
+    pending_deliveries() -> Vec<crate::domain::outbox::Delivery>,
+    claim_delivery(id: String) -> bool,
     answer_decision(id: DecisionId, answer: String, updated_at: i64) -> WorkDecision,
     resume_decision(id: DecisionId) -> WorkDecision,
     snooze_decision(id: DecisionId, until: i64) -> (),
