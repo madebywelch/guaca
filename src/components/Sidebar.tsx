@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { AgentAvatar, type Look } from "../avatars/AgentAvatar";
 import { FLIGHT_MS, roleOf, usePulseChoreography } from "../lib/choreography";
@@ -6,6 +6,7 @@ import { useDismiss } from "../lib/dismiss";
 import { doing } from "../lib/doing";
 import { FIND_KEY, IS_MAC } from "../lib/keybinds";
 import { prefersReducedMotion } from "../lib/motion";
+import { newestByAgent } from "../lib/outcomes";
 import { type DropTarget, railOrder } from "../lib/rail";
 import { useLiveAgents, useStore } from "../lib/store";
 import { useNow } from "../lib/time";
@@ -92,6 +93,8 @@ export function Sidebar({
   const trail = useStore((s) => s.trail);
   const finishedAt = useStore((s) => s.finishedAt);
   const lastActive = useStore((s) => s.lastActive);
+  const outcomes = useStore((s) => s.outcomes);
+  const finished = useMemo(() => newestByAgent(outcomes), [outcomes]);
   const selected = useStore((s) => s.selected);
   const select = useStore((s) => s.select);
   const pulses = useStore((s) => s.pulses);
@@ -353,7 +356,7 @@ export function Sidebar({
   /** One agent row. Shared by every section and both views. */
   const row = (agent: AgentCard) => {
     const role = roleOf(staged, agent.id);
-    const label = doing(agent.id, { activity, stuck, trail, lastActive }, now);
+    const label = doing(agent.id, { activity, stuck, trail, lastActive, finished }, now);
     const target: DropTarget = { kind: "row", id: agent.id };
 
     return (
@@ -365,6 +368,7 @@ export function Sidebar({
           else rowRefs.current.delete(agent.id);
         }}
         className="agent-row"
+        title={label.title}
         aria-current={selected === agent.id}
         data-lifecycle={agent.lifecycle}
         data-held={dragging === agent.id ? "true" : undefined}

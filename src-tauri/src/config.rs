@@ -259,6 +259,50 @@ pub struct AppConfig {
     /// agent's own settings read does not show it.
     #[serde(default)]
     pub attention: crate::domain::outbox::Attention,
+    /// Where to reach the operator with every window closed. Only the operator
+    /// sets it, for the reason [`attention`] is theirs, and more: the address
+    /// and the token are credentials, so an agent's settings read never shows
+    /// them and the webview only ever gets a hint.
+    #[serde(default)]
+    pub delivery: DeliveryConfig,
+}
+
+/// An address the Host sends a push to while the operator is away: an ntfy
+/// topic or any receiver of a JSON POST. See `push.rs`.
+///
+/// `url` and `token` are secrets. A topic on a public ntfy server is readable
+/// by anyone who knows it, so it is redacted like a key, and `Debug` is
+/// written out by hand so that printing a config cannot print either.
+#[derive(Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DeliveryConfig {
+    /// Empty means nothing is sent anywhere, which is the default.
+    pub url: String,
+    /// Sent as `Authorization: Bearer`, unless it already names a scheme.
+    pub token: String,
+    pub format: crate::push::Format,
+    pub content: crate::push::Content,
+    /// Where a tap on a push opens: the address of this Host as a phone can
+    /// reach it. Empty means a push opens nothing.
+    pub link_base: String,
+}
+
+impl DeliveryConfig {
+    pub fn is_on(&self) -> bool {
+        !self.url.trim().is_empty()
+    }
+}
+
+impl std::fmt::Debug for DeliveryConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeliveryConfig")
+            .field("url", &url_hint(&self.url))
+            .field("token", &hint_for(&self.token))
+            .field("format", &self.format)
+            .field("content", &self.content)
+            .field("link_base", &self.link_base)
+            .finish()
+    }
 }
 
 /// Where an event is posted to fire a routine, and what the post has to carry.
@@ -423,6 +467,23 @@ pub struct RedactedConfig {
     /// What may interrupt the operator, for every window on this Host.
     #[serde(default)]
     pub attention: crate::domain::outbox::Attention,
+    /// The address pushes go to, as hints only.
+    #[serde(default)]
+    pub delivery: RedactedDelivery,
+}
+
+/// What the webview may know about the push address: whether there is one and
+/// enough of it to recognize, never the topic or the token.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RedactedDelivery {
+    pub url_set: bool,
+    pub url_hint: String,
+    pub token_set: bool,
+    pub token_hint: String,
+    pub format: crate::push::Format,
+    pub content: crate::push::Content,
+    pub link_base: String,
 }
 
 impl AppConfig {
@@ -449,6 +510,15 @@ impl AppConfig {
             quick_actions: self.quick_actions.clone(),
             widgets: self.widgets.clone(),
             attention: self.attention,
+            delivery: RedactedDelivery {
+                url_set: self.delivery.is_on(),
+                url_hint: url_hint(&self.delivery.url),
+                token_set: !self.delivery.token.trim().is_empty(),
+                token_hint: hint_for(&self.delivery.token),
+                format: self.delivery.format,
+                content: self.delivery.content,
+                link_base: self.delivery.link_base.clone(),
+            },
         }
     }
 }
@@ -462,6 +532,38 @@ pub fn hint_for(key: &str) -> String {
     }
     let tail: String = key.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
     format!("...{tail}")
+}
+
+/// An address shown the way a key is: its scheme and host, which say which
+/// server it is, and the last four characters of the rest, which tell two
+/// topics apart. Never the path, which on ntfy is the topic and so the secret.
+pub fn url_hint(url: &str) -> String {
+    let url = url.trim();
+    if url.is_empty() {
+        return String::new();
+    }
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return hint_for(url);
+    };
+    let host = parsed.host_str().unwrap_or_default();
+    let port = parsed.port().map(|port| format!(":{port}")).unwrap_or_default();
+    let rest =
+        format!("{}{}", parsed.path(), parsed.query().map(|q| format!("?{q}")).unwrap_or_default());
+    let rest = rest.trim_matches('/');
+    let shown = if rest.is_empty() { String::new() } else { hint_for(rest) };
+    format!("{}://{host}{port}/{shown}", parsed.scheme())
+}
+
+/// Checks an address the Host is to send to or open: http or https, with a
+/// host. Refused without repeating what was typed, since what was typed may be
+/// a topic nobody else should read in an error.
+fn web_address(input: &str, field: &'static str) -> Result<String, ConfigError> {
+    let trimmed = input.trim();
+    let parsed = reqwest::Url::parse(trimmed).map_err(|_| ConfigError::BadAddress { field })?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err(ConfigError::BadAddress { field });
+    }
+    Ok(trimmed.to_string())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -486,6 +588,8 @@ pub enum ConfigError {
     Quick(#[from] crate::domain::quick::QuickError),
     #[error(transparent)]
     Widget(#[from] crate::domain::widget::WidgetError),
+    #[error("{field} must be an http:// or https:// address with a host")]
+    BadAddress { field: &'static str },
 }
 
 /// Normalizes and validates an operator-supplied base URL.
@@ -536,6 +640,20 @@ pub struct SettingsPatch {
     pub browser_idle_minutes: Option<u32>,
     pub browser_stealth: Option<bool>,
     pub attention: Option<AttentionPatch>,
+    pub delivery: Option<DeliveryPatch>,
+}
+
+/// The parts of the push address the operator changed. A blank `url` or
+/// `token` removes it, and an absent one keeps it, as with the API key, which
+/// is what lets the pane show a hint without ever holding the secret.
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DeliveryPatch {
+    pub url: Option<String>,
+    pub token: Option<String>,
+    pub format: Option<crate::push::Format>,
+    pub content: Option<crate::push::Content>,
+    pub link_base: Option<String>,
 }
 
 /// The switches the operator changed. Absent ones keep their value, so a
@@ -590,6 +708,26 @@ impl AppConfig {
             now.needs_you = attention.needs_you.unwrap_or(now.needs_you);
             now.failures = attention.failures.unwrap_or(now.failures);
             now.finished = attention.finished.unwrap_or(now.finished);
+        }
+        if let Some(delivery) = patch.delivery {
+            let now = &mut self.delivery;
+            if let Some(url) = delivery.url {
+                now.url = match url.trim() {
+                    "" => String::new(),
+                    url => web_address(url, "the address to send to")?,
+                };
+            }
+            if let Some(token) = delivery.token {
+                now.token = token.trim().to_string();
+            }
+            now.format = delivery.format.unwrap_or(now.format);
+            now.content = delivery.content.unwrap_or(now.content);
+            if let Some(link) = delivery.link_base {
+                now.link_base = match link.trim() {
+                    "" => String::new(),
+                    link => web_address(link, "the address a push opens")?,
+                };
+            }
         }
         if let Some(api_key) = patch.api_key {
             self.inference.api_key = api_key.trim().to_string();
@@ -1020,6 +1158,89 @@ mod tests {
         let r = cfg.redacted();
         assert!(!r.api_key_set);
         assert_eq!(r.api_key_hint, "");
+    }
+
+    #[test]
+    fn the_push_address_and_token_reach_the_webview_only_as_hints() {
+        let mut config = AppConfig::default();
+        let patch: SettingsPatch = serde_json::from_value(serde_json::json!({
+            "delivery": {
+                "url": "https://ntfy.sh/guaca-secret-topic-7f3a",
+                "token": "tk_supersecrettoken1234",
+                "format": "json",
+                "content": "generic",
+                "linkBase": "https://box.example",
+            }
+        }))
+        .unwrap();
+        config.apply(patch).unwrap();
+        assert_eq!(config.delivery.url, "https://ntfy.sh/guaca-secret-topic-7f3a");
+        assert_eq!(config.delivery.format, crate::push::Format::Json);
+
+        let redacted = config.redacted();
+        let json = serde_json::to_string(&redacted).unwrap();
+        assert!(!json.contains("secret-topic"), "{json}");
+        assert!(!json.contains("supersecret"), "{json}");
+        assert_eq!(redacted.delivery.url_hint, "https://ntfy.sh/...7f3a");
+        assert_eq!(redacted.delivery.token_hint, "...1234");
+        assert!(redacted.delivery.url_set && redacted.delivery.token_set);
+        assert_eq!(redacted.delivery.link_base, "https://box.example");
+
+        let printed = format!("{config:?}");
+        assert!(!printed.contains("secret-topic") && !printed.contains("supersecret"), "{printed}");
+    }
+
+    #[test]
+    fn a_push_address_is_kept_until_it_is_replaced_or_blanked() {
+        let mut config = AppConfig::default();
+        let patch = |value: serde_json::Value| -> SettingsPatch {
+            serde_json::from_value(serde_json::json!({ "delivery": value })).unwrap()
+        };
+        config
+            .apply(patch(serde_json::json!({ "url": " https://ntfy.example/t ", "token": "tk_a" })))
+            .unwrap();
+        config.apply(patch(serde_json::json!({ "content": "generic" }))).unwrap();
+        assert_eq!(
+            config.delivery.url, "https://ntfy.example/t",
+            "a patch that names it not keeps it"
+        );
+        assert_eq!(config.delivery.token, "tk_a");
+
+        let refused = config.apply(patch(serde_json::json!({ "url": "ntfy.sh/my-private-topic" })));
+        let said = refused.unwrap_err().to_string();
+        assert!(!said.contains("my-private-topic"), "a refusal does not repeat the topic: {said}");
+        assert!(said.contains("http"), "{said}");
+        assert!(config.apply(patch(serde_json::json!({ "linkBase": "ftp://box" }))).is_err());
+        assert_eq!(
+            config.delivery.url, "https://ntfy.example/t",
+            "a refused patch changes nothing"
+        );
+
+        config.apply(patch(serde_json::json!({ "url": "", "token": "" }))).unwrap();
+        assert!(!config.delivery.is_on());
+        assert!(config.delivery.token.is_empty());
+        assert_eq!(config.redacted().delivery.url_hint, "");
+    }
+
+    #[test]
+    fn no_agent_can_ask_for_the_push_address() {
+        let current = AppConfig::default();
+        let asked = serde_json::json!({ "delivery": { "url": "https://attacker.example/topic" } });
+        let refused = agent_patch(&asked, &current).unwrap_err();
+        assert!(refused.contains("delivery"), "{refused}");
+        assert!(!AGENT_WRITABLE.contains(&"delivery"));
+    }
+
+    #[test]
+    fn an_address_hint_names_the_server_and_never_the_path() {
+        assert_eq!(url_hint(""), "");
+        assert_eq!(url_hint("https://ntfy.sh/abcdefgh"), "https://ntfy.sh/...efgh");
+        assert_eq!(
+            url_hint("http://user:pw@10.0.0.2:8080/hook?k=v"),
+            "http://10.0.0.2:8080/...?k=v"
+        );
+        assert_eq!(url_hint("https://ntfy.example/"), "https://ntfy.example/");
+        assert_eq!(url_hint("not-a-url"), "...-url");
     }
 
     #[test]

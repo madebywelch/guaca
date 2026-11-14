@@ -18,8 +18,12 @@ window shut* in `docs/WORKSPACE.md`, then `menubar.rs`, `tray.rs`, `app.rs` and
   be a second copy to keep in step, which is the thing the host already does
   for both of them.
 - **Only the window notifies, and only the window reports to the icon.** The
-  panel runs the same store and sees the same events, so either of those in
-  the panel is every interruption twice and two reports racing for one icon.
+  panel is offered every delivery the window is, since both are clients of
+  the Host. A claim made in the panel would take the banner away from the
+  window, so the panel never imports `lib/notify.ts`, and its capability
+  grants no notification command to show one with. It also never reports
+  focus, so it neither keeps the operator present nor puts a channel on
+  screen. Two reports racing for one icon is the other half.
 - **The panel is told its host by the tray, not by storage.** The window
   writes its host to `localStorage` and the panel could read it there, but the
   panel would then decide for itself when that value is current. The tray makes

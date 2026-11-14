@@ -960,6 +960,51 @@ export interface Settings {
   /** What may interrupt the operator, for every window on this host. Absent
    *  from a host older than it. */
   attention?: Attention;
+  /** Where the host pushes to while you are away, as hints only. Absent from
+   *  a host older than it. */
+  delivery?: DeliverySettings;
+}
+
+/** The two shapes a push takes: ntfy's plain text with headers, or one JSON object. */
+export type PushFormat = "ntfy" | "json";
+
+/** How much a push says: the agent's own line, or only that something finished. */
+export type PushContent = "outcome" | "generic";
+
+/**
+ * The push address as the window may know it. The address is a credential
+ * (a topic on a public ntfy server is readable by anyone who knows it), so
+ * like a key it arrives as whether it is set and enough to recognize it.
+ */
+export interface DeliverySettings {
+  urlSet: boolean;
+  /** Scheme and host, and the last four characters of the rest. */
+  urlHint: string;
+  tokenSet: boolean;
+  tokenHint: string;
+  format: PushFormat;
+  content: PushContent;
+  /** Where a tap opens. Not a secret: it is the box's own address. */
+  linkBase: string;
+}
+
+/** Absent fields are left unchanged. An empty `url` or `token` removes it. */
+export interface DeliveryPatch {
+  url?: string;
+  token?: string;
+  format?: PushFormat;
+  content?: PushContent;
+  linkBase?: string;
+}
+
+/** When a push last went out, and how the last attempt ended. */
+export interface PushReport {
+  lastSentAt: number | null;
+  lastAttemptAt: number | null;
+  /** Built from the status code alone, never from the address. */
+  lastError: string | null;
+  /** When a failed push is tried again; null once it is given up on. */
+  retryAt: number | null;
 }
 
 /**
@@ -1036,6 +1081,7 @@ export interface SettingsPatch {
   limits?: Partial<GuardLimits>;
   /** Only the switches named change. */
   attention?: Partial<Attention>;
+  delivery?: DeliveryPatch;
 }
 
 /**
@@ -1618,6 +1664,7 @@ export interface Presence {
   /** Spent since this window opened. */
   session: Tokens;
   running: number;
+  finished: number;
 }
 
 /** Structured error from a command. `kind` is safe to branch on. */

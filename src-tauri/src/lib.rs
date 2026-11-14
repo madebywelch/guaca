@@ -25,6 +25,7 @@ pub mod pickup;
 pub mod plugins;
 pub mod programs;
 pub mod proxy;
+pub mod push;
 /// A source build rebuilding itself. Only a window has an app to replace.
 #[cfg(feature = "desktop")]
 pub mod rebuild;

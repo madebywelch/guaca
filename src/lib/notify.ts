@@ -1,146 +1,106 @@
 /**
- * Telling the operator something happened while they were not looking.
+ * Showing what the Host decided to say, in exactly one window.
  *
- * The hard part is not raising a notification, it is refusing to. Guaca runs
- * unattended: routines fire on a schedule, an agent parks on a permission
- * request and waits ten minutes for an answer, a cascade settles long after the
- * message that started it. All of that is worth knowing about when you are
- * elsewhere and none of it is worth a badge when you are watching it happen.
+ * Nothing here decides whether to interrupt anyone. The Host does that once,
+ * for every window, from its attention settings and from where the operator
+ * is (`domain/outbox.rs`), and offers each delivery to every window it has.
+ * This file is what a window does with an offer: claim it, and show it only if
+ * the claim won. Two windows open on one Host are two offers and one banner,
+ * because `claimDelivery` answers true once.
  *
- * So a notification has to pass three gates, and they are not the same gate:
+ * Claim first, then show, and ask whether this page may show anything before
+ * either. A page that claims what it cannot show has taken the only copy away
+ * from a window that could.
  *
- *   the kind      is this something you asked to hear about
- *   the moment    are you actually elsewhere, and elsewhere from what
- *   the burst     has this already been said in the last second
+ * A page that was not connected when something was offered asks for what is
+ * still waiting when it connects. More than three of those is one banner,
+ * "While you were away", which opens For you: a pile of banners at once is
+ * the thing that gets notifications switched off.
  *
- * The second is where the judgment is. "Away" is not one condition, because a
- * permission request and a finished conversation are not the same news:
- *
- *   attention   an agent is blocked on you, whether or not its turn is parked.
- *               Reaches you when the window is not in front of you, and also
- *               when it is but the request belongs to a channel you are not
- *               looking at. Nobody finds a parked turn by noticing a row change
- *               color three screens up the rail, and nobody finds an agent that
- *               gave up four turns ago by reading its channel.
- *   ambient     nothing was addressed to you and no channel is implied. A
- *               routine fires wherever it was pointed. Reaches you whenever you
- *               are away, with no channel to match against.
- *   completion  the end of something you started. Reaches you only when you are
- *               away AND it is the channel you were last looking at, because a
- *               busy runtime settles runs in channels you have never opened and
- *               one badge each would make the whole mechanism worth turning off.
+ * Only the window does this. The menu bar panel is a second client of the
+ * same Host and is offered everything too, but it never imports this file and
+ * its capability grants no notification command (docs/gotchas/menubar.md).
  */
 
-import type { NotifyKind, NotifyPrefs } from "./prefs";
+import { api } from "./ipc";
+import { desktop, mayNotify, notify } from "./transport";
+import type { Delivery, DeliveryId, DeliveryTarget, Reveal } from "./types";
 
-export type NotifyClass = "attention" | "ambient" | "completion";
+/** How many waiting deliveries are shown one by one before they are folded. */
+export const FOLD_AFTER = 3;
 
-export function classOf(kind: NotifyKind): NotifyClass {
-  switch (kind) {
-    case "decision":
-    case "approval":
-    // An escalation is the same class from the other end: nothing is parked on
-    // it, so nothing lapses, and it has to reach the operator anyway because
-    // the agent that raised it has already carried on without them.
-    case "stuck":
-      return "attention";
-    case "routine":
-      return "ambient";
-    default:
-      return "completion";
-  }
-}
+export const AWAY_TITLE = "While you were away";
 
-/** Where the operator is, at the instant something happened. */
-export interface Moment {
-  /** The window is not the thing in front of the operator. */
-  away: boolean;
-  /**
-   * The channel this concerns is the one on screen. Meaningless for `ambient`,
-   * which has no channel to be about.
-   */
-  onScreen: boolean;
-  /** Inside the quiet window that follows a launch. */
-  quiet: boolean;
-}
-
-export function shouldNotify(kind: NotifyKind, prefs: NotifyPrefs, moment: Moment): boolean {
-  if (!prefs.on || !prefs.kinds[kind]) return false;
-  if (moment.quiet) return false;
-
-  switch (classOf(kind)) {
-    case "attention":
-      return moment.away || !moment.onScreen;
-    case "ambient":
-      return moment.away;
-    case "completion":
-      return moment.away && moment.onScreen;
-  }
+/**
+ * Shows one delivery the Host just offered, if this window wins it.
+ *
+ * Returns whether a notification was raised, which is false both when another
+ * window claimed it and when this page may not notify.
+ */
+export async function deliver(delivery: Delivery, open: (target: DeliveryTarget) => void) {
+  if (!(await mayNotify())) return false;
+  if (!(await claim(delivery.id))) return false;
+  return notify(delivery.title, delivery.body, () => open(delivery.target));
 }
 
 /**
- * True when the window is not the thing the operator is looking at.
- *
- * `document.hidden` alone is not enough: it flips when the window is minimized
- * or fully covered, and a window sitting behind a browser on the same screen is
- * visible-but-unfocused, which is exactly the case worth notifying for.
+ * Shows what was offered while this page was not connected, on connect and on
+ * every reconnect. Returns how many deliveries this window took.
  */
-export function away(): boolean {
-  if (document.hidden) return true;
-  return typeof document.hasFocus === "function" && !document.hasFocus();
-}
-
-/**
- * How long after a launch nothing may interrupt.
- *
- * A routine whose slot passed while the app was closed reaches the scheduler
- * overdue and fires on the first tick, which is correct: the work is owed. But
- * it did not just happen, and launching after a weekend away should not
- * announce a weekend of schedule at once. The transcript and the rail show all
- * of it immediately; only the interruption waits.
- */
-export const QUIET_MS = 4000;
-
-let quietUntil = 0;
-
-/** Opens the quiet window. Called once, when the first read of state lands. */
-export function markQuiet(now = Date.now()): void {
-  quietUntil = now + QUIET_MS;
-}
-
-export function quiet(now = Date.now()): boolean {
-  return now < quietUntil;
-}
-
-/** Only tests need this: the window is process-wide and outlives a render. */
-export function resetQuiet(): void {
-  quietUntil = 0;
-}
-
-const BURST_MS = 1000;
-
-const spoken = new Map<string, number>();
-
-/**
- * True when this has already been said in the last second.
- *
- * Keyed on kind and channel, so two agents failing at once are two
- * notifications and one agent failing twice is one. The map prunes on every
- * call rather than on a timer, which is what keeps it from being a leak: an
- * entry older than the window is dropped by the next thing that asks.
- */
-export function burst(key: string, now = Date.now()): boolean {
-  for (const [seen, at] of spoken) {
-    if (now - at >= BURST_MS) spoken.delete(seen);
+export async function catchUp(open: (target: DeliveryTarget) => void): Promise<number> {
+  if (!(await mayNotify())) return 0;
+  let waiting: Delivery[];
+  try {
+    waiting = await api.pendingDeliveries();
+  } catch {
+    return 0;
   }
 
-  if (spoken.has(key)) return true;
+  const won: Delivery[] = [];
+  for (const delivery of waiting) {
+    if (await claim(delivery.id)) won.push(delivery);
+  }
 
-  spoken.set(key, now);
-  return false;
+  if (won.length > FOLD_AFTER) {
+    const shown = won.slice(0, FOLD_AFTER).map((delivery) => delivery.title);
+    const rest = won.length - shown.length;
+    await notify(AWAY_TITLE, [...shown, `And ${rest} more in For you.`].join("\n"), () =>
+      open({ kind: "forYou" }),
+    );
+  } else {
+    for (const delivery of won) {
+      await notify(delivery.title, delivery.body, () => open(delivery.target));
+    }
+  }
+  return won.length;
 }
 
-/** Only tests need this, for the same reason as `resetQuiet`. */
-export function resetBurst(): void {
-  spoken.clear();
+/**
+ * Where a click on a delivery lands.
+ *
+ * On desktop through the app, which is the only thing that can raise its own
+ * window: `openWindow` shows and focuses it and hands the target back as the
+ * same reveal the menu bar's panel sends, so both arrive at one handler. In a
+ * browser the tab is already in front by the time this runs.
+ */
+export function land(target: DeliveryTarget, reveal: (target: Reveal) => void): void {
+  const where: Reveal =
+    target.kind === "forYou" ? { kind: "forYou" } : { kind: "agent", id: target.agentId };
+  if (!desktop) {
+    reveal(where);
+    return;
+  }
+  api.openWindow(where).catch((error: unknown) => {
+    console.warn("Could not bring the window forward for a notification", error);
+    reveal(where);
+  });
+}
+
+/** A refused or failed claim is a lost one: another window may still show it. */
+async function claim(id: DeliveryId): Promise<boolean> {
+  try {
+    return (await api.claimDelivery(id)) === true;
+  } catch {
+    return false;
+  }
 }

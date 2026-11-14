@@ -166,6 +166,15 @@ a Claude.ai login flow. Configure the CLI on the backend, as described under
 workspace; offering consumer subscription routing as a managed service is a
 separate product and policy question.
 
+A push to the operator's phone is sent by the backend as well (Settings →
+Notifications, and *Reaching the operator with every window closed* in
+docs/ATTENTION.md), so the box is what has to reach the address: an ntfy server
+on the same private network works as well as ntfy.sh. Set the link to the
+address the browser opens the box at, and tapping a push opens Guaca there;
+leave it empty when the phone cannot reach the box. With no browser open on a
+box nobody is at a window, so everything that would notify the operator is
+pushed until a window has focus again.
+
 This client-local capability remains unavailable:
 
 - **A path on the operator's disk.** Attachments named by path, and a saved

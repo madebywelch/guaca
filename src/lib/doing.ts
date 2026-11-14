@@ -7,14 +7,17 @@
  * where the rail said "typing" would be two stories about one agent.
  */
 
+import { railMeta } from "./outcomes";
 import { relativeTime } from "./time";
 import { type LiveCall, machineInUse } from "./trail";
-import type { Activity, AgentId, Escalation } from "./types";
+import type { Activity, AgentId, Escalation, Outcome } from "./types";
 
 /** The line, and which of the rail's states it is drawn as. */
 export interface Doing {
   text: string;
-  kind: "thinking" | "queued" | "asking" | "paused" | undefined;
+  kind: "thinking" | "queued" | "asking" | "paused" | "finished" | undefined;
+  /** What a hover says: the headline, for a row that has news. */
+  title?: string;
 }
 
 /** Everything the line is read from, as the store holds it. */
@@ -23,6 +26,8 @@ export interface DoingInputs {
   stuck: Escalation[];
   trail: Record<AgentId, LiveCall[] | undefined>;
   lastActive: Record<AgentId, number>;
+  /** Each agent's newest finished run the operator has not seen. */
+  finished: Record<AgentId, Outcome | undefined>;
 }
 
 export function doing(id: AgentId, inputs: DoingInputs, now: number): Doing {
@@ -67,6 +72,12 @@ export function doing(id: AgentId, inputs: DoingInputs, now: number): Doing {
     case "paused":
       return { text: "paused", kind: "paused" };
     default: {
+      // News, when there is some: the time alone says when an agent last did
+      // anything, and "done 5h" says it finished something the operator has
+      // not read. Below every live state, because those are happening now and
+      // this will keep until it is looked at.
+      const news = inputs.finished[id];
+      if (news) return { text: railMeta(news, now), kind: "finished", title: news.headline };
       // Falling back to a last-active time keeps the column occupied. An
       // empty slot the instant an agent stops typing reads as the row
       // breaking rather than the agent finishing.

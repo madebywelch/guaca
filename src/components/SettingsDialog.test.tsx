@@ -7,8 +7,10 @@ import type {
   AccountConnectors,
   AccountStatus,
   ClaudeProgram,
+  DeliverySettings,
   DeviceCode,
   GuardLimits,
+  PushReport,
   Settings,
   SettingsPatch,
   SubscriptionStatus,
@@ -83,6 +85,12 @@ const updateSettings = vi.fn<(patch: SettingsPatch) => Promise<Settings>>(async 
 const getSettings = vi.fn<() => Promise<Settings>>(async () => stored());
 const testConnection = vi.fn<(patch?: SettingsPatch) => Promise<string>>(async () => "Reached it.");
 const notifyOperator = vi.fn<(title: string, body: string) => Promise<boolean>>(async () => true);
+const pushReport = vi.fn<() => Promise<PushReport>>(async () => nothingSent());
+const testPush = vi.fn<() => Promise<string>>(async () => "Sent, and the address took it.");
+
+function nothingSent(): PushReport {
+  return { lastSentAt: null, lastAttemptAt: null, lastError: null, retryAt: null };
+}
 const subscriptionStatus = vi.fn<() => Promise<SubscriptionStatus>>(async () => signedOut());
 const beginSubscriptionSignin = vi.fn<() => Promise<DeviceCode>>(async () => ({
   verificationUrl: "https://auth.openai.com/codex/device",
@@ -180,15 +188,17 @@ vi.mock("../lib/ipc", () => ({
     claudeSigninStatus: () => claudeSigninStatus(),
     beginClaudeSignin: () => beginClaudeSignin(),
     cancelClaudeSignin: async () => {},
+    pushReport: () => pushReport(),
+    testPush: () => testPush(),
   },
   notifyOperator: (title: string, body: string) => notifyOperator(title, body),
   openExternal: (url: string) => openExternal(url),
 }));
 
-const { SettingsDialog } = await import("./SettingsDialog");
+const { SettingsDialog, pushLine } = await import("./SettingsDialog");
 const { useStore } = await import("../lib/store");
 const transport = await import("../lib/transport");
-const { DEFAULT_PREFS, loadPrefs, NOTIFY_KINDS } = await import("../lib/prefs");
+const { DEFAULT_PREFS, loadPrefs } = await import("../lib/prefs");
 const { BINDINGS, SURFACES } = await import("../lib/keybinds");
 const { PROVIDERS } = await import("../lib/providers");
 const { themeCss, themeTokens } = await import("../lib/theme");
@@ -266,15 +276,6 @@ function switchOn(label: string): HTMLButtonElement {
   return control as HTMLButtonElement;
 }
 
-/** Every kind's switch, in the order the pane lists them. The master is first. */
-function kindSwitches(): HTMLButtonElement[] {
-  return [...document.querySelectorAll(".switch-row")].slice(1).map((row) => {
-    const control = row.querySelector("button");
-    if (!control) throw new Error("a switch row with no switch in it");
-    return control as HTMLButtonElement;
-  });
-}
-
 beforeEach(() => {
   vi.clearAllMocks();
   claudeSigninStatus.mockResolvedValue({ signedIn: false });
@@ -287,6 +288,8 @@ beforeEach(() => {
   localStorage.clear();
   updateSettings.mockResolvedValue(stored());
   getSettings.mockResolvedValue(stored());
+  pushReport.mockResolvedValue(nothingSent());
+  testPush.mockResolvedValue("Sent, and the address took it.");
   testConnection.mockResolvedValue("Reached OpenRouter. 312 models.");
   notifyOperator.mockResolvedValue(true);
   subscriptionStatus.mockResolvedValue(signedOut());
@@ -749,15 +752,18 @@ describe("the Save in the foot", () => {
     expect(saveButton()).toBeTruthy();
   });
 
-  it("offers nothing on the panes that write as they are clicked", () => {
+  it("offers nothing on the panes that write as they are clicked", async () => {
     // Appearance and Notifications are kept the moment they are pressed, and a
     // Save under them said the opposite about settings that were already saved.
-    open(stored(), DEFAULT_PREFS, "appearance");
+    const attention = { needsYou: true, failures: true, finished: true };
+    updateSettings.mockResolvedValueOnce(stored({ attention: { ...attention, failures: false } }));
+    open(stored({ attention }), DEFAULT_PREFS, "appearance");
     fireEvent.click(screen.getByRole("button", { name: "Reading surface: Dark" }));
     expect(saveButton()).toBeNull();
 
     pane("Notifications");
-    fireEvent.click(switchOn("Notify me at all"));
+    await act(async () => fireEvent.click(switchOn("Failures")));
+    expect(switchOn("Failures").textContent).toBe("Off");
     expect(saveButton()).toBeNull();
   });
 
@@ -1988,43 +1994,61 @@ describe("appearance", () => {
 });
 
 describe("notifications", () => {
-  const ROUTINE = "A routine fired";
+  const FAILURES = "Failures";
+  const everything = { needsYou: true, failures: true, finished: true };
 
-  it("disables every kind while the master switch is off", () => {
-    open();
+  it("draws the Host's three switches, and nothing an older build kept in this window", () => {
+    open(stored({ attention: everything }));
     pane("Notifications");
-    fireEvent.click(switchOn("Notify me at all"));
 
-    expect(useStore.getState().prefs.notify.on).toBe(false);
-    expect(kindSwitches()).toHaveLength(NOTIFY_KINDS.length);
-    // Off means none of the below, whatever they say, and a switch that can
-    // still be flipped says the opposite. What each one REPORTS, though, is its
-    // own setting rather than its setting and the master together: the row is
-    // already unreachable, and what it has to say is what will apply when the
-    // master goes back on. Reading them together had the label say On while the
-    // control reported itself unchecked, which is a disagreement a sighted
-    // operator and a screen reader would resolve differently.
-    for (const control of kindSwitches()) {
-      expect(control.disabled).toBe(true);
-      expect(control.getAttribute("aria-checked")).toBe("true");
+    const rows = [...document.querySelectorAll(".switch-row")];
+    expect(rows.map((row) => row.querySelector(".switch-row__label")?.textContent)).toEqual([
+      "Things that need you",
+      FAILURES,
+      "Finished work while you are away",
+    ]);
+    for (const row of rows) {
+      expect(row.querySelector("button")?.getAttribute("aria-checked")).toBe("true");
     }
+    expect(screen.queryByText("Notify me at all")).toBeNull();
+    expect(screen.queryByText("A routine fired")).toBeNull();
   });
 
-  it("toggles one kind and leaves the others alone", () => {
-    open();
+  it("toggles one kind and leaves the others alone", async () => {
+    updateSettings.mockResolvedValueOnce(stored({ attention: { ...everything, failures: false } }));
+    open(stored({ attention: everything }));
     pane("Notifications");
-    fireEvent.click(switchOn(ROUTINE));
+    await act(async () => fireEvent.click(switchOn(FAILURES)));
 
-    expect(useStore.getState().prefs.notify.kinds).toEqual({
-      decision: true,
-      approval: true,
-      stuck: true,
-      routine: false,
-      settled: true,
-      failed: true,
-    });
-    expect(useStore.getState().prefs.notify.on).toBe(true);
-    expect(switchOn(ROUTINE).textContent).toBe("Off");
+    // The one key, as a patch, so a switch another window flipped a moment ago
+    // is not written back over by this one.
+    expect(switchOn(FAILURES).textContent).toBe("Off");
+    expect(updateSettings.mock.calls).toEqual([[{ attention: { failures: false } }]]);
+    expect(useStore.getState().settings?.attention).toEqual({ ...everything, failures: false });
+    expect(switchOn("Things that need you").textContent).toBe("On");
+    // The Host's, not this window's: nothing about it is kept in local prefs.
+    expect(useStore.getState().prefs).toEqual(DEFAULT_PREFS);
+  });
+
+  it("leaves a switch as it was when the Host refuses, and says why", async () => {
+    updateSettings.mockRejectedValueOnce({ kind: "io", message: "The host could not save." });
+    open(stored({ attention: everything }));
+    pane("Notifications");
+    fireEvent.click(switchOn(FAILURES));
+
+    await waitFor(() => expect(screen.getByText(/could not save/)).toBeTruthy());
+    expect(banner().className).toContain("banner--error");
+    expect(switchOn(FAILURES).textContent).toBe("On");
+    expect(switchOn(FAILURES).disabled).toBe(false);
+  });
+
+  it("says so when the Host is older than the switches, and still offers the test", () => {
+    open(stored());
+    pane("Notifications");
+
+    expect(screen.getByText(/older than these switches/)).toBeTruthy();
+    expect(document.querySelectorAll(".switch-row")).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Send a test notification" })).toBeTruthy();
   });
 
   it("says so when the machine refuses a test notification", async () => {
@@ -2056,6 +2080,187 @@ describe("notifications", () => {
     expect(banner().className).not.toContain("banner--ok");
     expect(banner().className).not.toContain("banner--error");
     expect(screen.getByText(/Handed to the operating system/)).toBeTruthy();
+  });
+});
+
+describe("sending to a phone", () => {
+  const everything = { needsYou: true, failures: true, finished: true };
+  const NONE: DeliverySettings = {
+    urlSet: false,
+    urlHint: "",
+    tokenSet: false,
+    tokenHint: "",
+    format: "ntfy",
+    content: "outcome",
+    linkBase: "",
+  };
+  const SAVED: DeliverySettings = {
+    ...NONE,
+    urlSet: true,
+    urlHint: "https://ntfy.sh/...7f3a",
+    tokenSet: true,
+    tokenHint: "...1234",
+  };
+  const withPush = (delivery: DeliverySettings) => stored({ attention: everything, delivery });
+  const status = () => document.querySelector(".push-status");
+
+  it("is not drawn for a Host older than it", () => {
+    open(stored({ attention: everything }));
+    pane("Notifications");
+    expect(screen.queryByText("Send to your phone or another service")).toBeNull();
+  });
+
+  it("sends only what was typed, and draws neither the address nor the token back", async () => {
+    updateSettings.mockResolvedValueOnce(withPush(SAVED));
+    open(withPush(NONE));
+    pane("Notifications");
+    expect(screen.getByRole("button", { name: "Send a test" })).toHaveProperty("disabled", true);
+    type(/^Address/, "  https://ntfy.sh/guaca-secret-topic-7f3a ");
+    type(/^Token/, "tk_supersecrettoken1234");
+
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Save address" })));
+    expect(updateSettings.mock.calls).toEqual([
+      [
+        {
+          delivery: {
+            url: "https://ntfy.sh/guaca-secret-topic-7f3a",
+            token: "tk_supersecrettoken1234",
+          },
+        },
+      ],
+    ]);
+    expect(field(/^Address/).value).toBe("");
+    expect(field(/^Token/).value).toBe("");
+    expect(screen.getByText("https://ntfy.sh/...7f3a")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("secret");
+    // Kept by its own button, so the Save in the foot says nothing about it.
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+  });
+
+  it("keeps a typed address across a glance at another section", () => {
+    open(withPush(NONE));
+    pane("Notifications");
+    type(/^Address/, "https://ntfy.example/topic");
+    pane("Limits");
+    pane("Notifications");
+    expect(field(/^Address/).value).toBe("https://ntfy.example/topic");
+  });
+
+  it("stops sending by removing the address and the token together", async () => {
+    updateSettings.mockResolvedValueOnce(withPush(NONE));
+    open(withPush(SAVED));
+    pane("Notifications");
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Stop sending" })));
+    expect(updateSettings.mock.calls).toEqual([[{ delivery: { url: "", token: "" } }]]);
+  });
+
+  it("writes the format and how much a push says at once, one key each", async () => {
+    updateSettings.mockResolvedValueOnce(withPush({ ...SAVED, format: "json" }));
+    updateSettings.mockResolvedValueOnce(
+      withPush({ ...SAVED, format: "json", content: "generic" }),
+    );
+    open(withPush(SAVED));
+    pane("Notifications");
+    await act(async () =>
+      fireEvent.click(screen.getByRole("button", { name: "Format: JSON webhook" })),
+    );
+    await act(async () =>
+      fireEvent.click(screen.getByRole("button", { name: "Only say that something finished" })),
+    );
+    expect(updateSettings.mock.calls).toEqual([
+      [{ delivery: { format: "json" } }],
+      [{ delivery: { content: "generic" } }],
+    ]);
+    expect(
+      screen
+        .getByRole("button", { name: "Only say that something finished" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+  });
+
+  it("says how the last attempt failed, in the Host's words", async () => {
+    pushReport.mockResolvedValue({
+      ...nothingSent(),
+      lastAttemptAt: Date.now(),
+      lastError: "401 Unauthorized. Check the token.",
+    });
+    open(withPush(SAVED));
+    pane("Notifications");
+    await waitFor(() =>
+      expect(status()?.textContent).toBe("Last attempt failed: 401 Unauthorized. Check the token."),
+    );
+    expect(status()?.getAttribute("data-tone")).toBe("error");
+  });
+
+  it("says when a push last went out", async () => {
+    const at = new Date();
+    at.setHours(9, 2, 0, 0);
+    pushReport.mockResolvedValue({
+      ...nothingSent(),
+      lastSentAt: at.getTime(),
+      lastAttemptAt: at.getTime(),
+    });
+    open(withPush(SAVED));
+    pane("Notifications");
+    await waitFor(() => expect(status()?.textContent).toMatch(/^Last sent today 9:02/));
+    expect(status()?.getAttribute("data-tone")).toBe("info");
+  });
+
+  it("says what a test got back, and what refused it", async () => {
+    open(withPush(SAVED));
+    pane("Notifications");
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Send a test" })));
+    expect(testPush).toHaveBeenCalledTimes(1);
+    expect(status()?.textContent).toBe("Sent, and the address took it.");
+    expect(status()?.getAttribute("data-tone")).toBe("ok");
+
+    testPush.mockRejectedValueOnce({
+      kind: "delivery",
+      message: "401 Unauthorized. Check the token.",
+    });
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Send a test" })));
+    expect(status()?.textContent).toBe("The test failed: 401 Unauthorized. Check the token.");
+    expect(status()?.getAttribute("data-tone")).toBe("error");
+  });
+
+  it("says nothing about the address that a person reads with an em dash", () => {
+    open(withPush(SAVED));
+    pane("Notifications");
+    expect(document.body.textContent).not.toContain("\u2014");
+  });
+});
+
+describe("the push status line", () => {
+  const now = new Date(2026, 10, 14, 12, 0).getTime();
+  const at = new Date(2026, 10, 14, 9, 12).getTime();
+
+  it("says when a failed push is tried again", () => {
+    const line = pushLine(
+      { lastSentAt: null, lastAttemptAt: at, lastError: "503 Service Unavailable.", retryAt: at },
+      null,
+      now,
+    );
+    expect(line?.tone).toBe("error");
+    expect(line?.text).toMatch(
+      /^Last attempt failed: 503 Service Unavailable\. Trying again today 9:12/,
+    );
+  });
+
+  it("puts a test just pressed ahead of the record", () => {
+    const line = pushLine(
+      { lastSentAt: at, lastAttemptAt: at, lastError: null, retryAt: null },
+      { ok: false, text: "The test failed: 404 Not Found. Check the address." },
+      now,
+    );
+    expect(line).toEqual({
+      tone: "error",
+      text: "The test failed: 404 Not Found. Check the address.",
+    });
+    expect(pushLine(null, null, now)).toBeNull();
+    expect(
+      pushLine({ lastSentAt: null, lastAttemptAt: null, lastError: null, retryAt: null }, null, now)
+        ?.text,
+    ).toBe("Nothing sent yet.");
   });
 });
 

@@ -38,8 +38,6 @@ import { LIMITS } from "../lib/limits";
 import {
   CASTS,
   type Cast,
-  NOTIFY_KINDS,
-  type NotifyKind,
   type Prefs,
   READING_SIZES,
   READINGS,
@@ -65,14 +63,20 @@ import {
   THEME_PRESETS,
   themeTokens,
 } from "../lib/theme";
+import { whenLabel } from "../lib/time";
 import { attached, desktop } from "../lib/transport";
 import {
   type AccountConnectors,
   type AccountStatus,
+  type Attention,
+  type DeliveryPatch,
   type DeviceCode,
   errorMessage,
   type GuardLimits,
   type Provider as ProviderKind,
+  type PushContent,
+  type PushFormat,
+  type PushReport,
   type Settings,
   type SettingsPatch,
   type SubscriptionStatus,
@@ -133,38 +137,69 @@ const CAST_SAMPLE = [
   color: ACCENTS.find((accent) => accent.name === one.color)?.value ?? DEFAULT_ACCENT,
 }));
 
-/** The label is the row; the title is read on hover by whoever wonders. */
-const NOTIFY_COPY: Record<NotifyKind, { label: string; title: string }> = {
-  decision: {
-    label: "Decisions and follow-through",
-    title:
-      "Batched reminders at 9 AM and 4 PM in this host's timezone, and earlier for approaching deadlines. Decisions remain in For you until answered or withdrawn.",
+/**
+ * The Host's three switches, in the order the pane draws them. The label is
+ * the row and the hint says what is in it, since "needs you" covers four
+ * different requests and none of them is obvious from the name.
+ */
+const ATTENTION_ROWS: { key: keyof Attention; label: string; hint: string }[] = [
+  {
+    key: "needsYou",
+    label: "Things that need you",
+    hint: "A permission request, a question, an agent that is stuck, and reminders about decisions in For you.",
   },
-  approval: {
-    label: "An agent needs permission",
-    title:
-      "The only one that blocks: the turn that asked is parked until you answer, and gives up after ten minutes. Reaches you even while Guaca is open, if the request is in a channel you are not looking at.",
+  {
+    key: "failures",
+    label: "Failures",
+    hint: "A conversation that failed, or was cut off when the Host restarted.",
   },
-  stuck: {
-    label: "An agent is stuck on you",
-    title:
-      "It could not go on without you and said so on its way out of a turn. Nothing is parked and nothing expires, so it stays in For you until you clear it. Only for a channel you are not looking at.",
+  {
+    key: "finished",
+    label: "Finished work while you are away",
+    hint: "Collected into one notification each time you step away. Nothing is sent while you are at a window.",
   },
-  routine: {
-    label: "A routine fired",
-    title:
-      "Work that starts on a schedule rather than because you asked. It lands in whichever channel it was pointed at, which is usually not the one on screen.",
-  },
-  settled: {
-    label: "A conversation finished",
-    title:
-      "Every agent it reached has gone quiet. Only for the channel you were last looking at, so a busy runtime does not announce work you never opened.",
-  },
-  failed: {
-    label: "A turn could not finish",
-    title: "The model call failed after its retries. Only for a channel you are not looking at.",
-  },
-};
+];
+
+/** The two shapes a push takes, as the pane names them. */
+const PUSH_FORMATS: { value: PushFormat; label: string }[] = [
+  { value: "ntfy", label: "ntfy" },
+  { value: "json", label: "JSON webhook" },
+];
+
+/** How much a push says (D3). The line is the default; the other is one press away. */
+const PUSH_CONTENTS: { value: PushContent; label: string }[] = [
+  { value: "outcome", label: "Include what finished" },
+  { value: "generic", label: "Only say that something finished" },
+];
+
+/** A time in a sentence: "today 9:02 AM", "Tuesday 9:02 AM". */
+function said(at: number, now: number): string {
+  return whenLabel(at, now).replace(/^(Today|Yesterday)/, (day) => day.toLowerCase());
+}
+
+/**
+ * The status line under the push address. A test just pressed is newest, so it
+ * is said first; otherwise it is the Host's record of the last real attempt.
+ * Every failure is in the Host's words, which are built from the status code
+ * and never repeat the address.
+ */
+export function pushLine(
+  report: PushReport | null,
+  test: { ok: boolean; text: string } | null,
+  now: number,
+): { tone: "ok" | "error" | "info"; text: string } | null {
+  if (test) return { tone: test.ok ? "ok" : "error", text: test.text };
+  if (!report) return null;
+  if (report.lastError && report.retryAt !== null)
+    return {
+      tone: "error",
+      text: `Last attempt failed: ${report.lastError} Trying again ${said(report.retryAt, now)}.`,
+    };
+  if (report.lastError) return { tone: "error", text: `Last attempt failed: ${report.lastError}` };
+  if (report.lastSentAt !== null)
+    return { tone: "info", text: `Last sent ${said(report.lastSentAt, now)}` };
+  return { tone: "info", text: "Nothing sent yet." };
+}
 
 /**
  * A duration box, which is blank while it is inheriting what is stored.
@@ -257,6 +292,18 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
     null,
   );
   const [busy, setBusy] = useState(false);
+  // The switch being written, so a second click on it waits for the first.
+  const [attending, setAttending] = useState<keyof Attention | null>(null);
+  // The push address, held here like every other field so that an address
+  // typed and left for a glance at another section is still there. Blank
+  // means keep what is saved, as with a key: the address is never read back.
+  // The link is null until it is touched, and then it is what is on screen.
+  const [pushUrl, setPushUrl] = useState("");
+  const [pushToken, setPushToken] = useState("");
+  const [pushLink, setPushLink] = useState<string | null>(null);
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushReport, setPushReport] = useState<PushReport | null>(null);
+  const [pushTest, setPushTest] = useState<{ ok: boolean; text: string } | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const pending = useRef<SettingsPatch | null>(null);
 
@@ -431,6 +478,86 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
       ),
     );
     return sent as SettingsPatch;
+  };
+
+  // What the Host last did with the address, read when the pane is opened on
+  // one and after every change to it, rather than kept up to date: nothing
+  // else in the window needs it.
+  const pushSaved = settings?.delivery?.urlSet ?? false;
+  useEffect(() => {
+    if (section !== "notifications" || !pushSaved) return;
+    let live = true;
+    api.pushReport().then(
+      (report) => live && setPushReport(report),
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [section, pushSaved, settings?.delivery]);
+
+  /** One change to the push address, kept at once. True when the Host kept it. */
+  const writePush = async (delivery: DeliveryPatch) => {
+    setPushBusy(true);
+    setStatus(null);
+    try {
+      setSettings(await api.updateSettings({ delivery }));
+      setPushTest(null);
+      return true;
+    } catch (error) {
+      setStatus({ tone: "error", text: errorMessage(error) });
+      return false;
+    } finally {
+      setPushBusy(false);
+    }
+  };
+
+  /** Only what was typed: a blank box keeps what is saved. */
+  const pushTyped = (): DeliveryPatch => {
+    const delivery: DeliveryPatch = {};
+    if (pushUrl.trim()) delivery.url = pushUrl.trim();
+    if (pushToken.trim()) delivery.token = pushToken.trim();
+    if (pushLink !== null && pushLink.trim() !== (settings?.delivery?.linkBase ?? ""))
+      delivery.linkBase = pushLink.trim();
+    return delivery;
+  };
+
+  const savePush = async () => {
+    if (!(await writePush(pushTyped()))) return;
+    setPushUrl("");
+    setPushToken("");
+    setPushLink(null);
+  };
+
+  const testPush = async () => {
+    setPushBusy(true);
+    setPushTest(null);
+    try {
+      setPushTest({ ok: true, text: await api.testPush() });
+    } catch (error) {
+      setPushTest({ ok: false, text: `The test failed: ${errorMessage(error)}` });
+    } finally {
+      setPushBusy(false);
+    }
+  };
+
+  /**
+   * Flips one of the Host's attention switches at once, like the rest of the
+   * Notifications pane. A patch of the one key, so a switch flipped in another
+   * window a moment ago is not written back.
+   */
+  const toggleAttention = async (key: keyof Attention) => {
+    const now = settings?.attention;
+    if (!now) return;
+    setAttending(key);
+    setStatus(null);
+    try {
+      setSettings(await api.updateSettings({ attention: { [key]: !now[key] } }));
+    } catch (error) {
+      setStatus({ tone: "error", text: errorMessage(error) });
+    } finally {
+      setAttending(null);
+    }
   };
 
   const save = async () => {
@@ -1746,64 +1873,37 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
               <>
                 <h3 className="settings__title">Notifications</h3>
                 <p className="settings__lede">
-                  Guaca keeps working while you are elsewhere, which is the only time any of these
-                  fire. Nothing interrupts you for something already on screen in front of you.
+                  The Host decides what reaches you, the same way for every window on it, and one
+                  window shows each notification. Nothing interrupts you about the channel you are
+                  reading.
                 </p>
 
-                <div
-                  className="switch-row"
-                  title="Off means none of the below, whatever they say. The first notification asks the operating system for permission."
-                >
-                  <span className="switch-row__text">
-                    <span className="switch-row__label">Notify me at all</span>
-                  </span>
-                  <button
-                    type="button"
-                    className="choice"
-                    role="switch"
-                    aria-checked={prefs.notify.on}
-                    aria-label="Notify me at all"
-                    onClick={() => setPrefs({ notify: { ...prefs.notify, on: !prefs.notify.on } })}
-                  >
-                    {prefs.notify.on ? "On" : "Off"}
-                  </button>
-                </div>
+                {settings && !settings.attention && (
+                  <p className="hint">
+                    This Host is older than these switches. Update it to choose what notifies you.
+                  </p>
+                )}
 
-                {NOTIFY_KINDS.map((kind) => (
-                  <div
-                    className="switch-row"
-                    key={kind}
-                    data-off={prefs.notify.on ? undefined : "true"}
-                    title={NOTIFY_COPY[kind].title}
-                  >
-                    <span className="switch-row__text">
-                      <span className="switch-row__label">{NOTIFY_COPY[kind].label}</span>
-                    </span>
-                    <button
-                      type="button"
-                      className="choice"
-                      role="switch"
-                      disabled={!prefs.notify.on}
-                      // The kind's own setting, not the master switch and the
-                      // kind together: the row is already disabled, and what it
-                      // has to report is what will apply when the master goes
-                      // back on. Reading them together had the label say On
-                      // while the control reported itself unchecked.
-                      aria-checked={prefs.notify.kinds[kind]}
-                      aria-label={NOTIFY_COPY[kind].label}
-                      onClick={() =>
-                        setPrefs({
-                          notify: {
-                            ...prefs.notify,
-                            kinds: { ...prefs.notify.kinds, [kind]: !prefs.notify.kinds[kind] },
-                          },
-                        })
-                      }
-                    >
-                      {prefs.notify.kinds[kind] ? "On" : "Off"}
-                    </button>
-                  </div>
-                ))}
+                {settings?.attention &&
+                  ATTENTION_ROWS.map((row) => (
+                    <div className="switch-row" key={row.key}>
+                      <span className="switch-row__text">
+                        <span className="switch-row__label">{row.label}</span>
+                        <span className="switch-row__hint">{row.hint}</span>
+                      </span>
+                      <button
+                        type="button"
+                        className="choice"
+                        role="switch"
+                        disabled={attending === row.key}
+                        aria-checked={settings.attention?.[row.key]}
+                        aria-label={row.label}
+                        onClick={() => void toggleAttention(row.key)}
+                      >
+                        {settings.attention?.[row.key] ? "On" : "Off"}
+                      </button>
+                    </div>
+                  ))}
 
                 <div style={{ marginTop: "1rem" }}>
                   <button
@@ -1838,8 +1938,203 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   </button>
                   <p className="hint" style={{ marginTop: "0.4rem" }}>
                     The only way to find out whether this machine will show them.
+                    {/* A browser may refuse to ask without a click, and until
+                        it is answered this window claims nothing. */}
+                    {!desktop && " In a browser, this is also where it asks for permission."}
                   </p>
                 </div>
+
+                {settings?.delivery && (
+                  <div style={{ marginTop: "2rem" }}>
+                    <h4 className="settings__title">Send to your phone or another service</h4>
+                    <p className="settings__lede">
+                      While no Guaca window has focus, the Host also sends what would notify you to
+                      an address you choose: an ntfy topic, which the free ntfy app shows on your
+                      phone, or any service that takes a JSON POST. Nothing is sent while you are at
+                      a window.
+                    </p>
+
+                    <div className="field">
+                      <label className="field__label" htmlFor="push-url">
+                        Address
+                      </label>
+                      {settings.delivery.urlSet && (
+                        <div className="api-key__saved">
+                          <span className="api-key__status">Address saved</span>
+                          <span className="api-key__hint">{settings.delivery.urlHint}</span>
+                          <button
+                            type="button"
+                            className="btn btn--small"
+                            disabled={pushBusy}
+                            onClick={async () => {
+                              if (await writePush({ url: "", token: "" })) setPushReport(null);
+                            }}
+                          >
+                            Stop sending
+                          </button>
+                        </div>
+                      )}
+                      <input
+                        id="push-url"
+                        className="input input--mono"
+                        value={pushUrl}
+                        placeholder={
+                          settings.delivery.urlSet
+                            ? "Paste another address to replace it"
+                            : "https://ntfy.sh/your-topic"
+                        }
+                        autoComplete="off"
+                        spellCheck={false}
+                        disabled={pushBusy}
+                        onChange={(event) => setPushUrl(event.target.value)}
+                      />
+                    </div>
+
+                    <div className="field">
+                      <label className="field__label" htmlFor="push-token">
+                        Token
+                      </label>
+                      {settings.delivery.tokenSet && (
+                        <div className="api-key__saved">
+                          <span className="api-key__status">Token saved</span>
+                          <span className="api-key__hint">{settings.delivery.tokenHint}</span>
+                          <button
+                            type="button"
+                            className="btn btn--small"
+                            disabled={pushBusy}
+                            onClick={() => void writePush({ token: "" })}
+                          >
+                            Remove token
+                          </button>
+                        </div>
+                      )}
+                      <input
+                        id="push-token"
+                        className="input input--mono"
+                        type="password"
+                        value={pushToken}
+                        placeholder={
+                          settings.delivery.tokenSet
+                            ? "Enter a replacement token"
+                            : "tk_... (optional)"
+                        }
+                        autoComplete="off"
+                        disabled={pushBusy}
+                        onChange={(event) => setPushToken(event.target.value)}
+                      />
+                      <p className="field__hint">
+                        Sent as a bearer token. An ntfy access token, or whatever your service asks
+                        for.
+                      </p>
+                    </div>
+
+                    <div className="field">
+                      <label className="field__label" htmlFor="push-link">
+                        Link
+                      </label>
+                      <input
+                        id="push-link"
+                        className="input input--mono"
+                        value={pushLink ?? settings.delivery.linkBase}
+                        placeholder="https://guaca.example.com (optional)"
+                        autoComplete="off"
+                        spellCheck={false}
+                        disabled={pushBusy}
+                        onChange={(event) => setPushLink(event.target.value)}
+                      />
+                      <p className="field__hint">
+                        Where tapping a push takes you: this Host's address, if your phone can open
+                        it. Leave it empty and a push opens nothing.
+                      </p>
+                    </div>
+
+                    <div className="settings__probe" style={{ marginTop: 0 }}>
+                      <button
+                        type="button"
+                        className="btn btn--primary"
+                        disabled={pushBusy || Object.keys(pushTyped()).length === 0}
+                        onClick={() => void savePush()}
+                      >
+                        Save address
+                      </button>
+                      <button
+                        type="button"
+                        className="btn"
+                        disabled={pushBusy || !settings.delivery.urlSet}
+                        onClick={() => void testPush()}
+                      >
+                        Send a test
+                      </button>
+                    </div>
+                    {settings.delivery.urlSet &&
+                      (() => {
+                        const line = pushLine(pushReport, pushTest, Date.now());
+                        if (!line) return null;
+                        return (
+                          <p
+                            className="field__hint push-status"
+                            role="status"
+                            data-tone={line.tone}
+                            style={{
+                              marginTop: "0.6rem",
+                              color: line.tone === "error" ? "var(--danger)" : "var(--muted)",
+                            }}
+                          >
+                            {line.text}
+                          </p>
+                        );
+                      })()}
+
+                    <div className="field" style={{ marginTop: "1.2rem" }}>
+                      <span className="field__label">Format</span>
+                      <div className="choices">
+                        {PUSH_FORMATS.map((format) => (
+                          <button
+                            key={format.value}
+                            type="button"
+                            className="choice"
+                            aria-label={`Format: ${format.label}`}
+                            aria-pressed={settings.delivery?.format === format.value}
+                            disabled={pushBusy}
+                            onClick={() => void writePush({ format: format.value })}
+                          >
+                            {format.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="field">
+                      <span className="field__label">What a push says</span>
+                      <div className="choices">
+                        {PUSH_CONTENTS.map((content) => (
+                          <button
+                            key={content.value}
+                            type="button"
+                            className="choice"
+                            aria-pressed={settings.delivery?.content === content.value}
+                            disabled={pushBusy}
+                            onClick={() => void writePush({ content: content.value })}
+                          >
+                            {content.label}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="field__hint">
+                        What finished is the agent's own line about it. Choose the second if this
+                        address should not carry what your agents are working on.
+                      </p>
+                    </div>
+
+                    <p className="field__hint" style={{ marginTop: "1rem" }}>
+                      On the public ntfy.sh, anyone who knows a topic can read it. Pick a topic
+                      nobody could guess, and better, reserve it and send with an access token, or
+                      run your own ntfy server. A server of your own reaches an iPhone instantly
+                      only by forwarding a wake-up through ntfy.sh (its upstream-base-url setting),
+                      and that wake-up carries a message id, never the text.
+                    </p>
+                  </div>
+                )}
               </>
             )}
 

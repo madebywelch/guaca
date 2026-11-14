@@ -18,6 +18,8 @@ const DURABLE: UiEvent["type"][] = [
   "escalationCleared",
   "decisionsChanged",
   "runSettled",
+  "outcomeRecorded",
+  "outcomesSeen",
 ];
 
 type Phase =

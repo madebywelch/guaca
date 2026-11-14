@@ -14,6 +14,7 @@
  */
 
 import { needsAnswer } from "./decisions";
+import { finished } from "./outcomes";
 import type { State, StreamBuffer } from "./store";
 import type { Activity, AgentCard, AgentId, Envelope, Presence } from "./types";
 
@@ -33,6 +34,9 @@ export function presenceOf(state: State): Presence {
     decisions: state.decisions.filter(needsAnswer),
     session: state.sessionSpend,
     running: Object.values(state.activeRun).filter((run) => run !== undefined).length,
+    // A count and not the list: the icon says how many in its tooltip and
+    // the panel reads its own store for the lines.
+    finished: finished(state.outcomes).length,
   };
 }
 

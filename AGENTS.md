@@ -58,8 +58,8 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/theme.ts        A theme as four choices, and every color solved from them.
   lib/color.ts        Contrast, OKLCH and colorblind distance. The arithmetic only.
   lib/follow.ts       Whether a transcript may move under the operator.
-  lib/notify.ts       When an interruption is warranted. Mostly when it is not.
-  lib/announce.ts     What that interruption would say. One event in, one line out.
+  lib/notify.ts       What a window does with what the Host offers: claim it,
+                      and show it only if the claim won.
   lib/keybinds.ts     Every key the app answers to, in one list, and how
                       this machine writes the one the rail and the box draw.
   lib/limits.ts       The five bounds a conversation runs inside, in words.
@@ -123,6 +123,7 @@ src-tauri/src/
                       next one picking that work up.
     outbox.rs         The dispatcher: offers what the rule lets through to
                       every window, and the first window to claim it shows it.
+                      While nobody is at one, it also sends a push.
     prompt.rs         Prompt assembly, including the trust boundary.
     events.rs         Events pushed to the UI.
   llm/                OpenAI-compatible client, SSE decoding, tool definitions.
@@ -136,6 +137,8 @@ src-tauri/src/
   mcp.rs              The client end of MCP, in both of its protocol eras.
   oauth.rs            Signing a group in to a plugin's server. PKCE, no client id.
   plugins.rs          Where those two meet the store, and a turn spends a grant.
+  push.rs             A push to the operator's own address: what it says, the
+                      ntfy and JSON requests, and when to try again. No I/O.
   db/                 SQLite. Plain SQL, numbered migrations.
   e2b.rs              Computers: the machines agents look at and point at.
   proxy.rs            Loopback viewer for those machines.
@@ -218,6 +221,7 @@ repo: the frontend renders state and forwards intent.
 | The status bar, a page pinned to it, its condensed view, quick actions | *The status bar holds pages the groups keep, and a click on one is the bar's* in `docs/WORKSPACE.md`, then `domain/widget.rs`, `src/lib/widget.ts` and `src/components/StatusBar.tsx`, and `widget.test.ts`, which holds the widths the `artifact` tool states |
 | An agent reading the settings or asking to change them, the operator's current view | *An agent can read the settings, and what the operator is looking at* in `docs/WORKSPACE.md` and *A settings change is a permission with its own diff* in `docs/ATTENTION.md`, then `config::agent_patch` and `Runtime::use_settings` |
 | What interrupts the operator: the outbox, its rule, presence, the dispatcher, `pendingDeliveries` and `claimDelivery`, the `attention` settings | *What interrupts the operator* and *Reminders* in `docs/ATTENTION.md`, then `domain/outbox.rs`, `runtime/outbox.rs` and `db/outbox.rs`, and run `tests/outbox.rs` |
+| A push to the operator's phone or a webhook: the `delivery` settings, what a push says, ntfy and JSON, retries, `pushReport` and `testPush`, keeping the address and the token secret | *Reaching the operator with every window closed* in `docs/ATTENTION.md`, then `src-tauri/src/push.rs`, the endpoint half of `runtime/outbox.rs` and `db/outbox.rs`, and `DeliveryConfig` in `config.rs`, and run `tests/outbox_endpoint.rs`, which never leaves loopback |
 | Permission prompts, parked turns, acting in the operator's name | *A protected action parks the turn that asked for it* |
 | Approval allow and block rules | `docs/ATTENTION.md`, then `domain/policy.rs` and `db/policy.rs` |
 | A program that is installed and reported missing: `claude` | *A double-clicked app does not have the operator's `PATH`* below, then `src-tauri/src/programs.rs` |

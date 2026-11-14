@@ -1,9 +1,17 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../lib/store";
 import { adoptRemote, BEFORE_RELOAD } from "../lib/transport";
-import type { AgentCard, Approval, Envelope, Participant, Reveal } from "../lib/types";
+import type {
+  AgentCard,
+  Approval,
+  Envelope,
+  Outcome,
+  Participant,
+  Reveal,
+  RunId,
+} from "../lib/types";
 import { aDecision, aGroup, DEFAULT_GROUP } from "../test-fixtures";
 import { MenubarPanel } from "./MenubarPanel";
 
@@ -16,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   stopRun: vi.fn<(run: string) => Promise<boolean>>(),
   channelMessages: vi.fn<(agent: string) => Promise<Envelope[]>>(),
   decideApproval: vi.fn(),
+  markOutcomesSeen: vi.fn<(target: { runIds?: RunId[]; before?: number }) => Promise<RunId[]>>(),
 }));
 
 vi.mock("../lib/ipc", () => ({
@@ -104,7 +113,9 @@ beforeEach(() => {
   mocks.sendMessage.mockResolvedValue("run-2");
   mocks.stopEverything.mockResolvedValue(1);
   mocks.channelMessages.mockResolvedValue([]);
+  mocks.markOutcomesSeen.mockImplementation(async (target) => target.runIds ?? []);
   useStore.setState({
+    outcomes: [],
     agents: [agent("Chef"), agent("Scout")],
     groups: [aGroup()],
     activity: {},
@@ -367,5 +378,94 @@ describe("what the panel says at a glance", () => {
     render(<MenubarPanel ready />);
     fireEvent.click(screen.getByRole("button", { name: "Open Guaca" }));
     expect(mocks.openWindow).toHaveBeenCalledWith(null);
+  });
+});
+
+describe("finished work in the panel", () => {
+  const NOW = Date.now();
+  const HOUR = 3_600_000;
+  function outcome(runId: string, over: Partial<Outcome> = {}): Outcome {
+    return {
+      runId,
+      agentId: "id-Scout",
+      groupId: DEFAULT_GROUP,
+      trigger: "routine",
+      triggerRef: null,
+      status: "done",
+      headline: `Report ${runId}`,
+      noteId: null,
+      needs: [],
+      steps: 1,
+      startedAt: NOW - 3 * HOUR,
+      finishedAt: NOW - 2 * HOUR,
+      seenAt: null,
+      ...over,
+    };
+  }
+
+  it("lists it under the requests, five lines and then a way to the rest in For you", async () => {
+    useStore.setState({
+      pending: [waiting()],
+      outcomes: Array.from({ length: 7 }, (_, at) =>
+        outcome(`r${at}`, { finishedAt: NOW - (at + 1) * HOUR }),
+      ),
+    });
+    render(<MenubarPanel ready />);
+
+    const finished = screen.getByRole("region", { name: "Finished" });
+    const requests = screen.getByRole("region", { name: "Waiting on you" });
+    expect(
+      requests.compareDocumentPosition(finished) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      within(finished)
+        .getAllByText(/^Report r/)
+        .map((line) => line.textContent),
+    ).toEqual([
+      "Scout Report r0",
+      "Scout Report r1",
+      "Scout Report r2",
+      "Scout Report r3",
+      "Scout Report r4",
+    ]);
+    // The header still answers one question, and finished work is not it.
+    expect(screen.getByText("1 waiting on you")).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(within(finished).getByRole("button", { name: "And 2 more in For you" }));
+    });
+    expect(mocks.openWindow).toHaveBeenCalledWith({ kind: "forYou" });
+  });
+
+  it("brings the window back at the channel and marks the run seen", async () => {
+    useStore.setState({ outcomes: [outcome("r1", { status: "interrupted" })] });
+    render(<MenubarPanel ready />);
+
+    const line = within(screen.getByRole("region", { name: "Finished" })).getByRole("button", {
+      name: /Report r1/,
+    });
+    expect(within(line).getByText("interrupted 2h")).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(line);
+    });
+    expect(mocks.markOutcomesSeen).toHaveBeenCalledWith({ runIds: ["r1"] });
+    expect(mocks.openWindow).toHaveBeenCalledWith({ kind: "agent", id: "id-Scout" });
+    expect(screen.queryByRole("region", { name: "Finished" })).toBeNull();
+  });
+
+  it("says on an agent's row that it finished something, with the headline on hover", () => {
+    useStore.setState({ outcomes: [outcome("r1", { headline: "Sent the digest." })] });
+    render(<MenubarPanel ready />);
+
+    const row = within(screen.getByRole("navigation", { name: "Agents" })).getByRole("button", {
+      name: /Scout/,
+    });
+    expect(row.getAttribute("title")).toBe("Sent the digest.");
+    expect(within(row).getByText("done 2h")).toBeTruthy();
+  });
+
+  it("draws nothing for it when nothing is unseen", () => {
+    render(<MenubarPanel ready />);
+    expect(screen.queryByRole("region", { name: "Finished" })).toBeNull();
   });
 });

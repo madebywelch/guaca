@@ -6,6 +6,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -17,12 +18,14 @@ import { doing } from "../lib/doing";
 import { useFollowBottom } from "../lib/follow";
 import { api } from "../lib/ipc";
 import { exchange, headline, liveReply, panelOrder, said, workingCount } from "../lib/menubar";
+import { finished, moreLine, newestByAgent, PANEL_LINES } from "../lib/outcomes";
 import { useLiveAgents, useStore } from "../lib/store";
 import { useNow } from "../lib/time";
 import { BEFORE_RELOAD, workspaceOrigin } from "../lib/transport";
 import { type AgentCard, type AgentId, errorMessage, type Tokens } from "../lib/types";
 import { Brand } from "./Brand";
 import { Desk } from "./Desk";
+import { FinishedLine } from "./ForYou";
 import { Markdown } from "./Markdown";
 import { compact, money, priced } from "./Spend";
 
@@ -210,9 +213,14 @@ function Overview({ agents, onOpen }: { agents: AgentCard[]; onOpen: (id: AgentI
   const trail = useStore((s) => s.trail);
   const lastActive = useStore((s) => s.lastActive);
   const finishedAt = useStore((s) => s.finishedAt);
+  const outcomes = useStore((s) => s.outcomes);
+  const seeOutcomes = useStore((s) => s.seeOutcomes);
+  const newest = useMemo(() => newestByAgent(outcomes), [outcomes]);
   const now = useNow();
 
   const open = decisions.filter(needsAnswer).length;
+  const news = finished(outcomes);
+  const more = moreLine(news.length, PANEL_LINES);
   // A crew is named only when there is another to tell it from, which is the
   // rule the crews' column and the icon's tooltip are drawn by.
   const crewOf = (agent: AgentCard) =>
@@ -233,18 +241,55 @@ function Overview({ agents, onOpen }: { agents: AgentCard[]; onOpen: (id: AgentI
 
       <Desk onOpenChannel={(id) => void api.openWindow({ kind: "agent", id })} />
 
+      {/* Under the requests, in the list's own type and never the attention
+          color: finished work is read when there is time. A line brings the
+          window back at that agent's channel, which marks the run seen there
+          too; it is marked here as well, so the line goes whether or not the
+          window is the one in front. */}
+      {news.length > 0 && (
+        <section className="menubar__finished" aria-labelledby="menubar-finished">
+          <h3 id="menubar-finished">Finished</h3>
+          {news.slice(0, PANEL_LINES).map((outcome) => (
+            <FinishedLine
+              key={outcome.runId}
+              outcome={outcome}
+              agent={agents.find((agent) => agent.id === outcome.agentId)}
+              now={now}
+              onOpen={() => {
+                void seeOutcomes({ runIds: [outcome.runId] });
+                void api.openWindow({ kind: "agent", id: outcome.agentId });
+              }}
+            />
+          ))}
+          {more && (
+            <button
+              type="button"
+              className="menubar__more"
+              onClick={() => void api.openWindow({ kind: "forYou" })}
+            >
+              {more}
+            </button>
+          )}
+        </section>
+      )}
+
       {agents.length === 0 ? (
         <p className="menubar__note">No agents yet. Open Guaca to hire an agent.</p>
       ) : (
         <nav className="menubar__agents" aria-label="Agents">
           {agents.map((agent) => {
-            const label = doing(agent.id, { activity, stuck, trail, lastActive }, now);
+            const label = doing(
+              agent.id,
+              { activity, stuck, trail, lastActive, finished: newest },
+              now,
+            );
             const crew = crewOf(agent);
             return (
               <button
                 key={agent.id}
                 type="button"
                 className="agent-row"
+                title={label.title}
                 data-lifecycle={agent.lifecycle}
                 style={{ "--accent": agent.color } as React.CSSProperties}
                 onClick={() => onOpen(agent.id)}
@@ -300,6 +345,8 @@ function Conversation({
   const trail = useStore((s) => s.trail);
   const lastActive = useStore((s) => s.lastActive);
   const finishedAt = useStore((s) => s.finishedAt);
+  const outcomes = useStore((s) => s.outcomes);
+  const news = useMemo(() => newestByAgent(outcomes), [outcomes]);
   const now = useNow();
 
   const [draft, setDraftState] = useState(() => drafts.get(agent.id) ?? "");
@@ -331,7 +378,7 @@ function Conversation({
 
   const recent = exchange(messages, agent.id, RECENT);
   const live = liveReply(streams, agent.id);
-  const label = doing(agent.id, { activity, stuck, trail, lastActive }, now);
+  const label = doing(agent.id, { activity, stuck, trail, lastActive, finished: news }, now);
 
   // The newest line in view, by the transcript's own rule: followed for
   // whoever is at the end, and left alone for whoever scrolled up to read.

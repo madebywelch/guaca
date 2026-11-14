@@ -35,6 +35,27 @@ a preference: an agent can file a meeting-time choice and finish the rest of an
 email sweep. Ordinary completions, routine firings and chat updates do not
 become decision cards.
 
+They are not lost either. Every finished run leaves one outcome (*A run ends in
+an outcome* in docs/ARCHITECTURE.md), and **Finished**, under the requests in
+Needs you, lists the ones the operator has not seen: one line each, newest
+first, under a heading per group when the lines come from more than one. A line
+is the agent's face and name, the first line of the closing note, a word when
+the run ended some other way than finishing (failed, interrupted, stopped,
+needs you) and its age. Clicking it opens that note in its channel and marks
+the run seen, as opening the channel any other way does. A run with no note, or
+whose note was cleared, opens the channel at its end. **Mark all seen** marks
+everything up to the newest line drawn, so a run that finishes while the list is
+open stays. Runs seen in the last seven days stay one click away under
+**Earlier**. A recurring check that found nothing is not listed anywhere.
+
+Finished is read when there is time, so it never competes with what needs an
+answer. It is not in For you's count, on the rail's For you entry or on the menu
+bar icon, nothing in it uses the attention color, and the sentence under the
+title names it only when nothing needs the operator. When it is the only thing
+there it is the first thing For you shows, which is where a banner gathering
+several finished runs leads. `lib/outcomes.ts` decides the order, the headings
+and the words, and the suite beside it is where they are argued.
+
 A decision states the question, relevant context, recommendation, up to six
 choices, a source reference and an optional real deadline. Source references
 are plain text, never executable links. A custom answer is available even when
@@ -189,7 +210,9 @@ next connects rather than spent on nobody. The one-hour snooze changes the next
 reminder, survives restart and is preserved across rescans.
 `decisionReminder` is still emitted after the claim, for windows that raise
 their own banner from it; it stops mattering once windows draw deliveries.
-Push to a phone and configurable briefing times are not implemented here.
+A reminder offered while the operator is away is also pushed to the address in
+`delivery`, if they set one (below). Configurable briefing times are not
+implemented here.
 
 ## What interrupts the operator
 
@@ -235,6 +258,87 @@ claimed with every row it carries. Answering a request, clearing an
 escalation, or seeing a run withdraws whatever was waiting to announce it, in
 the same commit. An item nobody claims in 24 hours expires; what it said is
 still in For you and in its channel.
+
+## Reaching the operator with every window closed
+
+A window that is closed claims nothing, so an offer alone reaches nobody while
+the operator is away. For that the Host can send to an address the operator
+sets in Settings → Notifications ("Send to your phone or another service"): an
+ntfy topic, which the free ntfy app shows on a phone, or any receiver that takes
+a JSON POST, such as Home Assistant, n8n or a chat bridge. Nothing of ours is
+involved, and no account.
+
+**What is pushed.** Exactly what is offered while the operator is away, and
+nothing else. When the dispatcher offers an item and `presence` is away, and
+`delivery.url` is set, the same commit writes a second outbox row with
+destination `endpoint`. So gathered finished work is one push per gathering, a
+request or a stuck agent is one push at once, and nothing is pushed while a
+Guaca window has focus. A push waiting to be tried again is dropped when the
+operator comes back (`operator present`), when the address is removed
+(`turned off`), and when what it is about is answered or seen, in the commit
+that answered or saw it, like the window's row.
+
+**What it says.** Decided when the row is written, by `push::say`, from the
+`content` setting (Robert's call, D3):
+
+| Row | Title | Body, `outcome` | Body, `generic` |
+|---|---|---|---|
+| Finished run | The agent's name | Its headline | "Something finished" as the title, and no line |
+| Gathered finished work | "N finished" | A line per run, as the window shows it | No lines |
+| Request, question, stuck agent | "Needs you" | "Pip has a question." and what the window says under it | No name |
+| Decision reminder | "Needs you" | How many decisions, which names nothing either way | The same |
+| Failed or interrupted run | "Pip could not finish" | Its headline | No name and no line |
+
+A generic push never has the line stored for it, so switching to generic
+cannot be undone for a push already written, and that is the point of it.
+
+**How it is sent.** One POST per row, built by `push::request`. The ntfy
+format is the body as plain text with `Title`, `Priority` (4 for what
+needs the operator and for failures, 3 for finished work), `Tags: guaca`,
+`Click` when `linkBase` is set, and `Authorization: Bearer <token>` when a
+token is set; a title that is not ASCII is sent as an RFC 2047 encoded word,
+which ntfy reads. The JSON format is `{ id, kind, title, body, group, agent,
+status, createdAt, link }` with the same `Authorization`, where `agent` and
+`group` are null for gathered work and for generic content. Both carry
+`X-Guaca-Delivery: <row id>` on every attempt: delivery is at least once,
+because an answer lost after the receiver took a push gets it sent again, and
+that header is how a receiver drops the repeat. Redirects are not followed,
+since following one would send the token wherever it points.
+
+**Trying again.** `push::next` decides. A 2xx is sent. A 3xx, or a 4xx other
+than 408 and 429, fails at once: the same request gets the same answer. A
+429 waits for its `Retry-After` in seconds. Anything else, a 5xx, a 408 or no
+answer within ten seconds, is tried again after 30 seconds, 2 minutes, 10
+minutes, an hour, and hourly after that, until a retry would land more than a
+day after the row was written, and then it fails. The rows are in SQLite, so a
+restart between attempts resumes them.
+
+**What the operator sees.** The pane draws `pushReport`: "Last sent today 9:02
+AM", or "Last attempt failed: 401 Unauthorized. Check the token.", with when it
+is tried again if it will be. "Send a test" (`testPush`) sends one push to the
+saved address at once, whoever is at a window, writes no row, and says what
+came back. Every failure is worded from the status code alone (`push::refused`
+and `push::unreachable`), never from the error the HTTP client formats, which
+names the address.
+
+**The address and the token are secrets.** A topic on the public ntfy.sh is
+readable by anyone who knows it. Both are stored in the Host's settings beside
+the API key and reach the webview only as `urlSet` and `urlHint` (scheme,
+host, and the last four characters of the rest) and `tokenSet` and
+`tokenHint`. They are in no event, no log line and no error, and
+`tests/outbox_endpoint.rs` checks all of those, plus everything the model is
+sent, with a secret in both. No agent can read or set them: `delivery` is not
+in `config::AGENT_WRITABLE`, so `settings` refuses it, and the settings an
+agent reads list what they include by name. It is not added to
+`OPERATOR_ONLY`, for the reason `attention` is not: that would change the
+sentence an agent is refused with.
+
+The pane says so: on ntfy.sh, pick a topic nobody could guess, and better,
+reserve it and send with an access token, or run your own ntfy server. A
+server of your own reaches an iPhone instantly only by forwarding a wake-up
+through ntfy.sh (its `upstream-base-url` setting), and that wake-up carries
+the message id and a hash of the topic, never the text: the app then fetches
+the message from your server (ntfy's docs, *iOS instant notifications*).
 
 ## What an escalation is, and what it deliberately is not
 

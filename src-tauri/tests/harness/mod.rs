@@ -769,6 +769,7 @@ fn build(
         quick_actions: Vec::new(),
         widgets: Vec::new(),
         attention: Default::default(),
+        delivery: Default::default(),
     };
 
     let sink = RecordingSink::new();
