@@ -246,6 +246,16 @@ and `account.rs`.
   the deployed server rather than to a grant, cannot expire, and re-probes on
   the one failure it causes. Without it every plugin call on a legacy server
   pays for a probe whose answer is known, in front of the handshake it replaced.
+- **So a test server must not reuse an address in the same process.** The
+  remembered era is keyed by the endpoint's address, and the kernel hands a
+  loopback port out again as soon as a finished test closes it. A modern server
+  given a port an earlier legacy test had was sent `initialize` first, declaring
+  `2025-11-25`, before the client re-probed, and the test asserting that a
+  modern server sees no handshake failed once in a full gate. A scratch test
+  forcing the reuse failed it every time, and the reverse (a legacy server on a
+  modern test's port) fails its own assertion the same way. `listen` in
+  `tests/plugins.rs` holds any port it has handed out before and binds again,
+  so no two servers there ever share an address.
 - **What later requests declare is what was negotiated, not what was asked
   for.** A legacy server that only knows `2025-06-18` says so in its handshake
   reply, and a header carrying the constant instead contradicts it.

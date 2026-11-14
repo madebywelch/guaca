@@ -20,7 +20,7 @@
 
 mod harness;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -193,11 +193,35 @@ async fn serve(rules: Rules) -> Server {
         .route("/authorize", get(authorize))
         .with_state(server.clone());
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = listen().await;
     let addr = listener.local_addr().unwrap();
     *server.base.lock() = format!("http://{addr}");
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     server
+}
+
+/// A loopback listener on a port no other server in this process has had.
+///
+/// `mcp` remembers which era an endpoint speaks for the life of the process,
+/// keyed by its address, and every test in this file is one process. The kernel
+/// hands a port out again as soon as a finished test's runtime closes it, so a
+/// server could inherit what an earlier test's server was: a modern one was
+/// sent the `initialize` a legacy one had wanted, and a legacy one was spared
+/// the handshake a modern one never needed. The client corrects a wrong era in
+/// one exchange, which is what it is for, but a test asserting what a new
+/// address is sent then reads the earlier test's server. A port seen before is
+/// held, so the kernel offers a different one, until it offers one nobody here
+/// has used.
+async fn listen() -> tokio::net::TcpListener {
+    static USED: Mutex<BTreeSet<u16>> = Mutex::new(BTreeSet::new());
+    let mut held = Vec::new();
+    loop {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        if USED.lock().insert(listener.local_addr().unwrap().port()) {
+            return listener;
+        }
+        held.push(listener);
+    }
 }
 
 /// A gate in front of the host, refusing anything without the operator's header.
@@ -3239,7 +3263,7 @@ mod deployments {
             .route("/sse", get(stream).post(no_post))
             .route("/messages", post(message))
             .with_state(server.clone());
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = listen().await;
         let addr = listener.local_addr().unwrap();
         *server.base.lock() = format!("http://{addr}");
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
