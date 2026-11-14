@@ -672,8 +672,9 @@ The host is told by `TZ`, an IANA zone name such as `America/New_York`.
   (`TZ=America/New_York`), then recreate the service.
 - **systemd.** `guacad` takes the machine's zone, or `Environment=TZ=...`
   in the unit.
-- **A box the installer made** keeps UTC for now: `TZ` is not among the
-  settings its updater hands to the host (`HOST_ENV`).
+- **A box the installer made.** Put `TZ=America/New_York` in
+  `/etc/guaca/guaca.env` and run the installer again. Like every setting
+  there, the host takes it the next time it is made.
 
 `guacad` logs the zone and its current offset once at boot, as
 `keeping local time`. Changing the zone does not move what is already
