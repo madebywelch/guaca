@@ -629,18 +629,30 @@ async fn stopping_everything_ends_every_run_exactly_once() {
     // that released the work it was ending would take a run's count below zero
     // and report it finished twice, and a single run can hide that behind its
     // own settle.
-    let stub = serve(|body| Script::SendTo {
-        recipients: vec![if speaker(body) == "Manager" { "Chef" } else { "Manager" }.into()],
-        text: "and another thing".into(),
+    //
+    // Each conversation has a pair of agents to itself. A badge names an agent
+    // and not a run, so the ledger counts an agent's badge against every run
+    // that agent took part in. Two runs through the same two agents read each
+    // other's turns: `stop_everything` stops one run and then the other, an
+    // agent can start a turn in the second between the two, and the first
+    // settling while that turn was thinking read as the first settling early.
+    let stub = serve(|body| {
+        let peer = match speaker(body).as_str() {
+            "Manager" => "Chef",
+            "Chef" => "Manager",
+            "Host" => "Barista",
+            _ => "Host",
+        };
+        Script::SendTo { recipients: vec![peer.into()], text: "and another thing".into() }
     })
     .await;
 
-    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let h = harness(&stub, &["Manager", "Chef", "Host", "Barista"], GuardLimits::default());
     assert_eq!(h.runtime.live_runs(), 0);
     assert_eq!(h.runtime.stop_everything(), 0, "a stop with nothing running stops nothing");
 
     let first = h.runtime.send_from_human(h.id("Manager"), "Talk to Chef.").unwrap();
-    let second = h.runtime.send_from_human(h.id("Chef"), "Talk to Manager.").unwrap();
+    let second = h.runtime.send_from_human(h.id("Host"), "Talk to Barista.").unwrap();
 
     h.wait_until("both conversations have paid for a call", |h| {
         [first, second].iter().all(|run| {
