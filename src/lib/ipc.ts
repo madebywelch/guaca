@@ -85,6 +85,7 @@ import type {
   PluginOffer,
   Presence,
   ProtectedAction,
+  PushReport,
   QuickDoes,
   RankedModel,
   Reveal,
@@ -404,6 +405,10 @@ export const api = {
    * about was answered or seen first.
    */
   claimDelivery: (id: DeliveryId) => invoke<boolean>("claim_delivery", { id }),
+  /** When a push last went out to the operator's address, and how the last attempt ended. */
+  pushReport: () => invoke<PushReport>("push_report"),
+  /** Sends one push to the saved address now. Resolves with what came back; a refusal rejects. */
+  testPush: () => invoke<string>("test_push"),
   answerDecision: (id: string, answer: string, updatedAt: number) =>
     invoke<WorkDecision>("answer_decision", { id, answer, updatedAt }),
   resumeDecision: (id: string) => invoke<WorkDecision>("resume_decision", { id }),
