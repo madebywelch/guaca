@@ -141,6 +141,14 @@ code.
   `called_off()` directly: a turn that finished its answer while the host began
   to stop delivers it, rather than putting down a finished answer for the next
   host to write again.
+- **A pickup hands an agent all of its work in one hold of the inbox lock.**
+  The actors are already running when `pick_up` queues what the last host
+  put down, so one handed its first message alone started on it before the
+  second arrived: two queued operator messages came back as two turns, where
+  the host that put them down would have taken the second into the turn it
+  was running. `queue_all` sends them under one hold, and an actor takes that
+  lock once after it is handed an envelope, so the rest are in its inbox
+  before the turn's first intake.
 - **A turn's history cannot tell it which calls it made.** A message projects
   to its text, and a call is a part the projection skips, so a turn picked up
   after a restart and rebuilt from history alone reads the request again with

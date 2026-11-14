@@ -73,6 +73,12 @@ The daemon, a browser as a client, and the boot both hosts share.
   What the sentence carries is the address; what to check is `lib/host.ts`'s
   `unreachableHint`, because whether it is Docker on this Mac or a box's address
   depends on which host the page is showing and the transport does not know.
+- **`TokenEntry` remembers admission in a layout effect.** The refusal
+  listener reads `wasAdmitted` the moment it fires. Set in a passive effect,
+  it was still false after the commit that drew the workspace, so a refusal
+  raised by anything the workspace started, or by a test that waited for the
+  workspace and then refused, read a browser that had been let in as a first
+  visitor and drew the form with no alert.
 - **A refused token is forgotten, not kept.** `TokenEntry` clears storage
   when `capabilities()` refuses the paste. Kept, the next reload would admit
   the page on the strength of a stored token, and the app's own reads would

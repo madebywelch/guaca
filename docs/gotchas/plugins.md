@@ -272,3 +272,9 @@ and `account.rs`.
   host's workspace token and provider keys away from a server somebody found on
   npm. The stdio test proves it by checking a variable cargo sets is absent;
   dropping `env_clear` fails it.
+- **A program that died is quoted after its stderr closes, not when its stdout
+  does.** Stderr is read by a task of its own, and a closed stdout could reach
+  the request first, so "it exited before answering" sometimes came without the
+  reason. A write that fails is checked the same way: a program already gone
+  cannot be written to, and it used to be reported as one that stopped reading.
+  Both waits are bounded by `LAST_WORDS`.
