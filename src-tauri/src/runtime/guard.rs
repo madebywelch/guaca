@@ -153,7 +153,8 @@ impl Refusal {
             ),
             Refusal::RunBudgetExhausted { used, max } => format!(
                 "Refused: this run has used its full budget of {max} model calls ({used} used). \
-                 No further messages can be sent. Reply to the operator with what you have."
+                 No further messages can be sent. Stop here and make your final message what you \
+                 have: what is done and what is left."
             ),
             Refusal::PairLimit { recipient, sent, max } => format!(
                 "Refused: you have already sent {recipient} {sent} messages in this run and the \
@@ -181,8 +182,8 @@ impl Refusal {
             Refusal::ExchangeSettled { recipient } => format!(
                 "Refused: you and {recipient} have both had your say in this run, neither of you \
                  is waiting on the other, and this message was sent as a courtesy. Acknowledging \
-                 an acknowledgment is not work. Reply to the operator instead, and say there \
-                 what you still need. If you are giving {recipient} something to do rather than \
+                 an acknowledgment is not work. Put what you still need in your final message \
+                 instead. If you are giving {recipient} something to do rather than \
                  thanking them, send it again with intent \"work\", saying plainly what you need \
                  done."
             ),

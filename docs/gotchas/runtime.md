@@ -57,8 +57,8 @@ code.
   what backs a sentence is a call made *before* it, not anywhere in the turn.
 - **A turn reads its inbox between rounds, and reads nothing that would change
   where its answer goes.** Those are one decision, not a rule with an exception
-  bolted on. The mode, the reply target, the placeholder's channel and `cause`
-  are all fixed before the first token and the UI has been drawing them since,
+  bolted on. The reply target, the placeholder's channel and `cause` are all
+  fixed before the first token and the UI has been drawing them since,
   so what a running turn may take in is exactly what it could already answer
   from where it stands: the operator and Guaca, into a turn that is writing to
   this agent's own channel. `ToPeer` takes in nothing, because that turn's
@@ -66,6 +66,23 @@ code.
   would be read and never answered. A peer's message waits for the same reason
   from the other end: it is a hop with a reply owed, and answering it as a
   footnote to somebody else's turn is not an answer. `Runtime::take_in`.
+- **The mode can change mid-turn, and the prompt has to change with it.** What a
+  turn takes in can change what it is for while leaving where it writes alone:
+  an operator's message makes it `ToOperator`, work makes a `NoteOnly` turn
+  `Assigned`. Changing the mode and not the prompt was a real defect: the turn
+  kept "Saying nothing is allowed here", said nothing, and was reported for
+  silence. `prompt::switch_mode` swaps the reply block before the next call, and
+  it can, because the block is a function of the mode alone and appears once.
+  Anything added to `reply_section` that is not a function of the mode breaks
+  the swap silently: `replacen` finds nothing and the old block stays.
+- **Which silences are owed is not the mode alone.** An operator's message read
+  mid-turn moves an `Assigned` turn to `ToOperator`, and `ToOperator` silence
+  draws no notice; the work it was given is still unreported. `run_turn` keeps
+  an `owed` flag that only goes up, and `emit_reply` reads it for every mode
+  but `ToPeer` and `NoteOnly`. A recurring check's silence is the one owed
+  nothing, and `outcomes::record` writes `nothing_new` for it from the absence of
+  the notice, so a notice written there for any other reason (a limit, a stop)
+  correctly keeps it from reading as a quiet check.
 - **Text a `ToPeer` turn trails after answering its peer belongs to the operator
   or to nobody, and which one is `Store::operator_addressed`.** Dropping all of
   it was right for the case it was written for and wrong for the manager. Seven

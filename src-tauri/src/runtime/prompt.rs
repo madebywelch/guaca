@@ -26,6 +26,7 @@ use crate::domain::escalation::Escalation;
 use crate::domain::occasion::{self, Occasion};
 use crate::domain::routine::Routine;
 use crate::domain::signin::Signin;
+use crate::domain::view::Presence;
 use crate::domain::worknote::{self, WorkingNote};
 use crate::llm::modality::Modalities;
 use crate::llm::openrouter::ChatMessage;
@@ -36,7 +37,7 @@ pub type NameTable = HashMap<AgentId, String>;
 
 /// How the agent's final message will be handled, which it needs to know to
 /// write an appropriate one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReplyMode {
     /// Delivered to the human operator.
     ToOperator,
@@ -52,7 +53,40 @@ pub enum ReplyMode {
     /// instruction to send an email arrived in that mode and the agent
     /// correctly said nothing, which is what an operator saw as an agent that
     /// stopped.
-    Assigned,
+    ///
+    /// `recurring` is a firing of a routine that runs again, and nothing else.
+    /// A check that runs every morning finds nothing most mornings, and a note
+    /// a day saying so is a channel the operator learns to skip; that one
+    /// silence becomes an outcome the runtime writes. Anything else given as
+    /// work, silence is still the one wrong answer.
+    Assigned { recurring: bool },
+    /// The turn that reads the last answer to work this agent handed out, in
+    /// a conversation it owns. Its note is the outcome of the whole thing.
+    ///
+    /// It used to run as `NoteOnly`, which says silence is usually right, so
+    /// a delegation's result was the one note in it that was optional: the
+    /// turn that handed the work out was made to report, and the turn that
+    /// read what came of it was invited not to. Owed, like `Assigned`.
+    Closing(WorkFrom),
+}
+
+/// Where the work a closing turn finishes came from, said to it as the reason
+/// the line it writes matters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkFrom {
+    Operator,
+    /// A routine, by what the agent calls it.
+    Routine(String),
+    /// A decision the operator answered, by its topic.
+    Decision(String),
+}
+
+impl ReplyMode {
+    /// Whether a turn that ends in this mode saying nothing has left work
+    /// unreported. A `ToPeer` turn is decided from what it sent, elsewhere.
+    pub fn owes_a_note(&self) -> bool {
+        matches!(self, ReplyMode::Assigned { recurring: false } | ReplyMode::Closing(_))
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -922,54 +956,9 @@ pub fn system_prompt(
         );
     }
 
-    out.push_str("\n## Your reply\n");
-    out.push_str(match mode {
-        ReplyMode::ToOperator => {
-            "Your final message goes to the human operator. Be direct and brief.\n"
-        }
-        ReplyMode::ToPeer => {
-            "Your final message is delivered to the agent that messaged you. Address them \
-             directly and keep it short. They will not reply again, so do not ask a follow-up \
-             question that needs one.\n"
-        }
-        ReplyMode::NoteOnly => {
-            "You are reading messages that did not ask for anything. Nothing here needs an \
-             answer.\n\n\
-             Saying nothing is allowed here, and it is usually right. Reply with nothing at all \
-             unless something has changed that the operator does not already know. An \
-             acknowledgment does not need acknowledging, and thanking someone for thanking you \
-             is how a group spends an afternoon talking to itself.\n\n\
-             Nothing means nothing. Do not write a line to report that no reply was needed, or \
-             that an acknowledgment was received and required nothing further. That is a note \
-             about nothing, and it costs the operator a line in the only channel they read.\n\n\
-             Everything you have already done this run is in the history above, including every \
-             message you have already sent. Do not do it again because you have been reminded of \
-             it.\n\n\
-             Do not write to a peer to acknowledge one. Nobody is waiting on you, so a thank-you \
-             or a note that you have read something will be refused. The one exception is real \
-             work: if what you have just read means a peer has something to do, send it with \
-             `send_message` and intent \"work\", saying plainly what you need done. They will \
-             report back to you when it is done, so do not chase them for it. Wanting to \
-             stay in touch is not work. Anything else you still need belongs in your note rather \
-             than in a message.\n\n\
-             If something does need saying, your final message is filed as a short note in your \
-             own channel. One or two sentences, and only if it tells the operator something your \
-             last note did not.\n"
-        }
-        ReplyMode::Assigned => {
-            "You have been given something to do, and nobody is waiting on a reply.\n\n\
-             Do it now, with the tools you have. This is work, not an update: the message that \
-             woke you asked for an action, and reading it is not doing it. If part of it is \
-             beyond you or a check fails, do the part you can and say exactly what stopped the \
-             rest.\n\n\
-             Your reply is filed as a short note in your own channel, where the operator reads \
-             it, so write what you did and what came of it: what you sent, to whom, and what the \
-             result was. Saying nothing here is the one wrong answer, because it leaves the \
-             operator watching an agent that appears to have stopped.\n"
-        }
-    });
+    out.push_str(&reply_section(&mode));
 
-    // All four modes, because it is a fact about the machine rather than about
+    // Every mode, because it is a fact about the machine rather than about
     // who is reading. A model cannot infer it and gets it wrong the same way
     // every time: chat-trained, it assumes speech and work interleave, because
     // in most harnesses they do. Here the message is the terminator, so
@@ -998,6 +987,101 @@ pub fn system_prompt(
     out
 }
 
+/// What a turn is told about its own final message: who reads it, and what it
+/// is for. A function of the mode alone, so a turn whose mode changes while it
+/// runs can have this block swapped for the new one with nothing else moved.
+pub fn reply_section(mode: &ReplyMode) -> String {
+    let said = match mode {
+        ReplyMode::ToOperator => "Your final message goes to the human operator. Be direct and \
+             brief. Put the answer or the result in the first line; any detail goes after it.\n"
+            .to_string(),
+        ReplyMode::ToPeer => "Your final message is delivered to the agent that messaged you. \
+             Address them directly and keep it short. They will not reply again, so do not ask a \
+             follow-up question that needs one.\n\n\
+             If you send them your answer with `send_message` during this turn instead, that \
+             message is your answer, and your final message is not sent to them. It is filed in \
+             your own channel when the operator started this conversation, and kept nowhere \
+             otherwise.\n"
+            .to_string(),
+        ReplyMode::NoteOnly => {
+            "You are reading messages that did not ask for anything. Nothing here needs an \
+             answer.\n\n\
+             Saying nothing is allowed here, and it is usually right. Reply with nothing at all \
+             unless something has changed that the operator does not already know. An \
+             acknowledgment does not need acknowledging, and thanking someone for thanking you \
+             is how a group spends an afternoon talking to itself.\n\n\
+             Nothing means nothing. Do not write a line to report that no reply was needed, or \
+             that an acknowledgment was received and required nothing further. That is a note \
+             about nothing, and it costs the operator a line in the only channel they read.\n\n\
+             Everything you have already done this run is in the history above, including every \
+             message you have already sent. Do not do it again because you have been reminded of \
+             it.\n\n\
+             Do not write to a peer to acknowledge one. Nobody is waiting on you, so a thank-you \
+             or a note that you have read something will be refused. The one exception is real \
+             work: if what you have just read means a peer has something to do, send it with \
+             `send_message` and intent \"work\", saying plainly what you need done. They will \
+             report back to you when it is done, so do not chase them for it. Wanting to \
+             stay in touch is not work. Anything else you still need belongs in your note rather \
+             than in a message.\n\n\
+             If something does need saying, your final message is filed as a short note in your \
+             own channel, and its first line is what the operator sees in their list of finished \
+             work. One or two sentences, and only if it tells the operator something your last \
+             note did not.\n"
+                .to_string()
+        }
+        ReplyMode::Assigned { recurring } => {
+            let ending = if *recurring {
+                "This is a check that runs again. If it found nothing new, reply with nothing at \
+                 all: Guaca records that it ran and found nothing, and a note saying so costs the \
+                 operator a line.\n"
+            } else {
+                "Saying nothing here is the one wrong answer, because the operator would see work \
+                 that was given and never reported.\n"
+            };
+            format!(
+                "You have been given something to do, and nobody is waiting on a reply.\n\n\
+                 Do it now, with the tools you have. This is work, not an update: the message that \
+                 woke you asked for an action, and reading it is not doing it. If part of it is \
+                 beyond you or a check fails, do the part you can and say exactly what stopped the \
+                 rest.\n\n\
+                 Your final message is the outcome of this work. Start it with one line, under 160 \
+                 characters, that says what you did and what came of it: what you sent, to whom, \
+                 and what the result was. That line is what the operator sees in their list of \
+                 finished work, and it is what reaches them when they are away. Anything after it \
+                 is the detail, kept in your own channel for whoever opens it.\n\n\
+                 That line does not ask the operator anything. If they have to choose or allow \
+                 something, file it with `decision`. If your work has stopped and only they can \
+                 move it, use `escalate`. Then say in your line that it is waiting on them.\n\n\
+                 {ending}"
+            )
+        }
+        ReplyMode::Closing(from) => {
+            let from = match from {
+                WorkFrom::Operator => "the operator".to_string(),
+                WorkFrom::Routine(name) => format!("your routine \"{name}\""),
+                WorkFrom::Decision(topic) => {
+                    format!("the operator's answer to your decision \"{topic}\"")
+                }
+            };
+            format!(
+                "Everyone you handed this work to has answered, so this turn finishes it. The work \
+                 came from {from}.\n\n\
+                 Finish what is left with the tools you have, then write the outcome. Start with one \
+                 line, under 160 characters, that says what was done and what came of it, written \
+                 for an operator who has been away the whole time. Put the detail after it: who did \
+                 what, and anything still open. That line is what the operator sees in their list \
+                 of finished work, and it is what reaches them when they are away.\n\n\
+                 That line does not ask the operator anything. If they have to choose or allow \
+                 something, file it with `decision`. If the work has stopped and only they can move \
+                 it, use `escalate`.\n\n\
+                 Do not thank or acknowledge the agents who answered. They are done, and a courtesy \
+                 to them will be refused.\n"
+            )
+        }
+    };
+    format!("\n## Your reply\n{said}")
+}
+
 /// A routine's instruction as one line of a list.
 ///
 /// The instruction is written to be acted on with no other context, which is
@@ -1018,6 +1102,15 @@ fn one_line(what: &str) -> String {
     match cut.rfind(char::is_whitespace) {
         Some(space) => format!("{}…", cut[..space].trim_end()),
         None => format!("{cut}…"),
+    }
+}
+
+/// What to call a routine or a decision in one line: its name when it has one,
+/// otherwise the start of what it says, cut the way the schedule cuts it.
+pub fn title_or(name: &str, what: &str) -> String {
+    match name.trim() {
+        "" => one_line(what),
+        name => name.to_string(),
     }
 }
 
@@ -1323,6 +1416,82 @@ pub fn add_artifacts(
 ) {
     if let Some(ChatMessage::System { content }) = messages.first_mut() {
         content.push_str(&artifacts_section(kept, pinned, reader, now));
+    }
+}
+
+/// Where the operator is, which is the one thing in the system prompt that
+/// changes from turn to turn without anything about the agent changing. Last,
+/// so everything above it can be the same from one turn to the next.
+///
+/// Three sentences and nothing else. Which window, which pane and how long ago
+/// to the second are the presence the outbox decides on; an agent needs only
+/// whether a question in its note will be read now, and the four starter
+/// skills that branch on "if the operator is in the conversation" had nothing
+/// to branch on before this.
+pub fn presence_section(presence: &Presence, last_seen: i64, reader: AgentId, now: i64) -> String {
+    let said = match presence {
+        Presence::Here { on_screen: Some(agent), .. } if *agent == reader => {
+            "The operator is looking at this conversation now.".to_string()
+        }
+        Presence::Here { .. } => {
+            "The operator has Guaca open but is looking at something else.".to_string()
+        }
+        Presence::Away => format!(
+            "The operator has not had Guaca open for {}. Anything that needs them goes through \
+             `decision` or `escalate`; a question in your note waits until they come back.",
+            how_long(now - last_seen)
+        ),
+    };
+    format!("\n## Where the operator is\n{said}\n")
+}
+
+/// Appends [`presence_section`] to the system message a turn was built with.
+pub fn add_presence(
+    messages: &mut [ChatMessage],
+    presence: &Presence,
+    last_seen: i64,
+    reader: AgentId,
+    now: i64,
+) {
+    if let Some(ChatMessage::System { content }) = messages.first_mut() {
+        content.push_str(&presence_section(presence, last_seen, reader, now));
+    }
+}
+
+/// Gives a running turn the reply block of the mode it has just moved to.
+///
+/// The rest of the prompt is the same in every mode that can be moved into, so
+/// the block is swapped where it stands and the presence section stays last. A
+/// turn that kept the block it started with was told silence was usually right
+/// and then reported for being silent.
+pub fn switch_mode(messages: &mut [ChatMessage], from: &ReplyMode, to: &ReplyMode) {
+    if let Some(ChatMessage::System { content }) = messages.first_mut() {
+        *content = content.replacen(&reply_section(from), &reply_section(to), 1);
+    }
+}
+
+/// How long, as the nearest whole unit of something: "3 hours", "a day".
+fn how_long(ms: i64) -> String {
+    const MINUTE: i64 = 60_000;
+    const HOUR: i64 = 60 * MINUTE;
+    const DAY: i64 = 24 * HOUR;
+    let ms = ms.max(0);
+    if ms < MINUTE {
+        return "under a minute".to_string();
+    }
+    let minutes = (ms + MINUTE / 2) / MINUTE;
+    let hours = (ms + HOUR / 2) / HOUR;
+    let (n, unit) = if minutes < 60 {
+        (minutes, "minute")
+    } else if hours < 48 {
+        (hours, "hour")
+    } else {
+        ((ms + DAY / 2) / DAY, "day")
+    };
+    match (n, unit) {
+        (1, "hour") => "an hour".to_string(),
+        (1, unit) => format!("a {unit}"),
+        (n, unit) => format!("{n} {unit}s"),
     }
 }
 
@@ -2480,10 +2649,15 @@ mod tests {
         // click. The tool schema alone was not enough, because a model that has
         // just saved a file has no reason to go looking for a tool it does not
         // know it needs.
-        for mode in
-            [ReplyMode::ToOperator, ReplyMode::ToPeer, ReplyMode::NoteOnly, ReplyMode::Assigned]
-        {
-            let prompt = prompt_for(&card("Manager"), &[], "", mode);
+        for mode in [
+            ReplyMode::ToOperator,
+            ReplyMode::ToPeer,
+            ReplyMode::NoteOnly,
+            ReplyMode::Assigned { recurring: false },
+            ReplyMode::Assigned { recurring: true },
+            ReplyMode::Closing(WorkFrom::Operator),
+        ] {
+            let prompt = prompt_for(&card("Manager"), &[], "", mode.clone());
             let handing = section(&prompt, "## Handing over a document");
             assert!(
                 handing.contains("`attach_file`"),
@@ -2924,10 +3098,15 @@ mod tests {
         // message is the terminator, so the model assumed what it assumes
         // everywhere else, which is that it can speak and carry on working.
         let c = card("Manager");
-        for mode in
-            [ReplyMode::ToOperator, ReplyMode::ToPeer, ReplyMode::NoteOnly, ReplyMode::Assigned]
-        {
-            let prompt = prompt_for(&c, &[entry("Chef", &[])], "", mode);
+        for mode in [
+            ReplyMode::ToOperator,
+            ReplyMode::ToPeer,
+            ReplyMode::NoteOnly,
+            ReplyMode::Assigned { recurring: false },
+            ReplyMode::Assigned { recurring: true },
+            ReplyMode::Closing(WorkFrom::Operator),
+        ] {
+            let prompt = prompt_for(&c, &[entry("Chef", &[])], "", mode.clone());
             assert!(
                 prompt.contains("Your message ends your turn"),
                 "{mode:?} has to be told the mechanism, not only the rule"
@@ -3237,7 +3416,12 @@ mod tests {
         // with no reply expected, so the turn ran in the mode that says nothing
         // needs doing and silence is usually right. The agent complied and an
         // operator watched it stop.
-        let told = prompt_for(&card("Outreach"), &[entry("Manager", &[])], "", ReplyMode::Assigned);
+        let told = prompt_for(
+            &card("Outreach"),
+            &[entry("Manager", &[])],
+            "",
+            ReplyMode::Assigned { recurring: false },
+        );
         assert!(told.contains("given something to do"), "the work has to be named: {told}");
         assert!(told.contains("Do it now"), "and demanded: {told}");
         assert!(
@@ -3258,7 +3442,8 @@ mod tests {
         // explained as Guaca reporting a limit or a failure. An agent reading
         // its own weekday sweep under that heading has been told the message is
         // an error notice rather than the work it asked to be given.
-        let prompt = prompt_for(&card("Watcher"), &[], "", ReplyMode::Assigned);
+        let prompt =
+            prompt_for(&card("Watcher"), &[], "", ReplyMode::Assigned { recurring: false });
         let sources = section(&prompt, "## Message sources");
         assert!(sources.contains("routine of yours coming due"), "{sources}");
         assert!(
@@ -3311,10 +3496,15 @@ mod tests {
 
     #[test]
     fn every_reply_mode_repeats_the_non_blocking_rule() {
-        for mode in
-            [ReplyMode::ToOperator, ReplyMode::ToPeer, ReplyMode::NoteOnly, ReplyMode::Assigned]
-        {
-            let prompt = prompt_for(&card("Manager"), &[entry("Chef", &[])], "", mode);
+        for mode in [
+            ReplyMode::ToOperator,
+            ReplyMode::ToPeer,
+            ReplyMode::NoteOnly,
+            ReplyMode::Assigned { recurring: false },
+            ReplyMode::Assigned { recurring: true },
+            ReplyMode::Closing(WorkFrom::Operator),
+        ] {
+            let prompt = prompt_for(&card("Manager"), &[entry("Chef", &[])], "", mode.clone());
             assert!(prompt.contains("Never wait for a reply"), "missing for {mode:?}");
         }
     }
@@ -3701,5 +3891,128 @@ mod tests {
         };
         let brief = resumed(&[record(vec![attached])]).unwrap();
         assert!(brief.contains("attach them again"), "{brief}");
+    }
+    #[test]
+    fn only_a_check_that_runs_again_is_allowed_to_end_in_silence() {
+        let again = prompt_for(&card("Watcher"), &[], "", ReplyMode::Assigned { recurring: true });
+        let once = prompt_for(&card("Watcher"), &[], "", ReplyMode::Assigned { recurring: false });
+        for told in [&again, &once] {
+            let reply = section(told, "## Your reply");
+            assert!(reply.contains("You have been given something to do"), "{reply}");
+            assert!(reply.contains("Start it with one line, under 160 characters"), "{reply}");
+            assert!(reply.contains("file it with `decision`"), "{reply}");
+            assert!(!reply.contains("where the operator reads it"), "{reply}");
+        }
+        assert!(again.contains("This is a check that runs again"), "{again}");
+        assert!(!again.contains("one wrong answer"), "{again}");
+        assert!(once.contains("Saying nothing here is the one wrong answer"), "{once}");
+        assert!(!once.contains("This is a check that runs again"), "{once}");
+    }
+
+    #[test]
+    fn the_turn_that_closes_a_delegation_is_owed_and_says_where_the_work_came_from() {
+        let roster = [entry("Chef", &[])];
+        for (from, said) in [
+            (WorkFrom::Operator, "The work came from the operator."),
+            (
+                WorkFrom::Routine("Morning digest".into()),
+                "The work came from your routine \"Morning digest\".",
+            ),
+            (
+                WorkFrom::Decision("Venue".into()),
+                "The work came from the operator's answer to your decision \"Venue\".",
+            ),
+        ] {
+            let told = prompt_for(&card("Manager"), &roster, "", ReplyMode::Closing(from));
+            let reply = section(&told, "## Your reply");
+            assert!(reply.contains("Everyone you handed this work to has answered"), "{reply}");
+            assert!(reply.contains(said), "{reply}");
+            assert!(reply.contains("Do not thank or acknowledge the agents"), "{reply}");
+            assert!(!reply.contains("Saying nothing is allowed"), "{reply}");
+        }
+        assert!(ReplyMode::Closing(WorkFrom::Operator).owes_a_note());
+        assert!(ReplyMode::Assigned { recurring: false }.owes_a_note());
+        assert!(!ReplyMode::Assigned { recurring: true }.owes_a_note());
+        assert!(!ReplyMode::NoteOnly.owes_a_note());
+    }
+
+    #[test]
+    fn a_mode_that_changes_mid_turn_changes_only_the_reply_block() {
+        let roster = [entry("Chef", &[])];
+        let mut messages = messages_for(
+            &card("Manager"),
+            &roster,
+            &NameTable::new(),
+            "",
+            &[],
+            &[],
+            ReplyMode::NoteOnly,
+        );
+        add_presence(&mut messages, &Presence::Away, 0, AgentId::new(), 3 * 3_600_000);
+        let ChatMessage::System { content: before } = messages[0].clone() else { panic!() };
+
+        switch_mode(&mut messages, &ReplyMode::NoteOnly, &ReplyMode::ToOperator);
+        let ChatMessage::System { content: after } = messages[0].clone() else { panic!() };
+        assert!(!after.contains("Nothing here needs an answer"), "{after}");
+        assert_eq!(
+            after,
+            before.replacen(
+                &reply_section(&ReplyMode::NoteOnly),
+                &reply_section(&ReplyMode::ToOperator),
+                1
+            )
+        );
+        assert!(after.ends_with(&presence_section(
+            &Presence::Away,
+            0,
+            AgentId::new(),
+            3 * 3_600_000
+        )));
+    }
+
+    #[test]
+    fn where_the_operator_is_is_one_of_three_sentences_and_comes_last() {
+        let me = AgentId::new();
+        let here = |on_screen| Presence::Here { on_screen, away_at: 0 };
+        assert_eq!(
+            presence_section(&here(Some(me)), 0, me, 0),
+            "\n## Where the operator is\nThe operator is looking at this conversation now.\n"
+        );
+        for elsewhere in [here(None), here(Some(AgentId::new()))] {
+            assert_eq!(
+                presence_section(&elsewhere, 0, me, 0),
+                "\n## Where the operator is\nThe operator has Guaca open but is looking at \
+                 something else.\n"
+            );
+        }
+        assert_eq!(
+            presence_section(&Presence::Away, 0, me, 3 * 3_600_000 + 60_000),
+            "\n## Where the operator is\nThe operator has not had Guaca open for 3 hours. \
+             Anything that needs them goes through `decision` or `escalate`; a question in your \
+             note waits until they come back.\n"
+        );
+        assert_eq!(how_long(30_000), "under a minute");
+        assert_eq!(how_long(60_000), "a minute");
+        assert_eq!(how_long(3_600_000), "an hour");
+        assert_eq!(how_long(3 * 86_400_000), "3 days");
+
+        let mut messages = messages_for(
+            &card("Manager"),
+            &[],
+            &NameTable::new(),
+            "",
+            &[],
+            &[],
+            ReplyMode::ToOperator,
+        );
+        add_skills(&mut messages, &[]);
+        add_notebook(&mut messages, &[]);
+        add_presence(&mut messages, &here(Some(me)), 0, me, 0);
+        let ChatMessage::System { content } = &messages[0] else { panic!() };
+        assert!(
+            content.ends_with("The operator is looking at this conversation now.\n"),
+            "{content}"
+        );
+        assert_eq!(content.matches("## Where the operator is").count(), 1);
     }
 }

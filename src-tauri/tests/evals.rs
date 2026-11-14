@@ -1094,6 +1094,11 @@ async fn a_coordinator_delegates_from_what_it_remembered_on_an_earlier_run() {
                 Script::Notes("- Ada does the numbers. Bo does the history.".into())
             };
         }
+        // The turn that reads Ada's answer is told it finishes the work, and
+        // a model that reads its prompt says what came back.
+        if system.contains("this turn finishes it") {
+            return Script::Say("Ada is adding up last quarter.".into());
+        }
         if has_tool_result(body) || reading_peer_replies(body) {
             return report_once(body, "Sent to the one that does numbers.");
         }
@@ -1221,7 +1226,7 @@ mod live {
                 &[],
                 &[],
                 &[],
-                ReplyMode::Assigned,
+                ReplyMode::Assigned { recurring: false },
                 &[],
                 None,
                 surfaces,
