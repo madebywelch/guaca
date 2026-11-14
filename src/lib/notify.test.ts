@@ -1,286 +1,294 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  away,
-  burst,
-  classOf,
-  type Moment,
-  markQuiet,
-  QUIET_MS,
-  quiet,
-  resetBurst,
-  resetQuiet,
-  shouldNotify,
-} from "./notify";
-import { NOTIFY_KINDS, type NotifyKind, type NotifyPrefs } from "./prefs";
+import type { Delivery, DeliveryId, DeliveryTarget, Reveal } from "./types";
 
 /**
- * The gates a notification has to pass, read from the refusals inward.
+ * What a window does with what the Host offers: claim it, and show it only if
+ * the claim won.
  *
- * Every interesting assertion in this file is about silence. Raising a
- * notification is one call; the work is declining to, and each way of getting
- * that wrong costs the operator the whole feature, because nobody who turns
- * notifications off turns them back on again. A badge for a routine that fired
- * in the channel they were watching, a second badge for the same failure, a
- * weekend of overdue schedule announced at launch: any one of those and the
- * switch goes off for good.
+ * Every decision about whether something is worth an interruption is on the
+ * Host now, and tested there (`domain/outbox.rs` for the rule, and
+ * `tests/outbox.rs` for the dispatcher and the claim). What is left to get
+ * wrong here is the order of three calls and what a click does, and each way
+ * of getting it wrong is concrete: a banner shown by a window that lost the
+ * claim is the same banner twice, and a claim made by a page that cannot show
+ * anything is a banner nobody sees.
  *
- * The judgment is in `Moment`. "Away" is graded, not binary, so the same three
- * booleans mean three different things depending on the kind, and the class
- * table is the only thing that says which. A kind that quietly changes class is
- * a permission request nobody is told about, or a settled run announced from a
- * channel that has never been opened.
- *
- * `away` itself is two conditions rather than one. A window sitting behind a
- * browser on the same screen is visible and unfocused, which is exactly the
- * case worth interrupting for and the one `document.hidden` misses.
+ * The transport is the real one, so the browser half runs through the same
+ * `Notification` calls a browser client on a remote Host makes. Only the Host
+ * is faked, at `ipc`, and the operating system, at `Notification` and at the
+ * Tauri plugin.
  */
 
-/** The master switch on and every kind wanted: prefs are never the refusal. */
-function wanted(): NotifyPrefs {
+const host = vi.hoisted(() => ({
+  claimDelivery: vi.fn<(id: string) => Promise<boolean>>(),
+  pendingDeliveries: vi.fn<() => Promise<Delivery[]>>(),
+  openWindow: vi.fn<(target: Reveal | null) => Promise<void>>(),
+}));
+vi.mock("./ipc", () => ({ api: host }));
+
+const plugin = vi.hoisted(() => ({
+  isPermissionGranted: vi.fn(async () => true),
+  requestPermission: vi.fn(async () => "granted"),
+  sendNotification: vi.fn<(options: { id?: number; title: string; body?: string }) => void>(),
+  onAction: vi.fn<(cb: (action: unknown) => void) => Promise<{ unregister: () => void }>>(),
+}));
+vi.mock("@tauri-apps/plugin-notification", () => plugin);
+
+/** A browser's notification center, as far as a page can see it. */
+class Shown {
+  static permission: NotificationPermission = "granted";
+  static answer: NotificationPermission = "granted";
+  static requestPermission = vi.fn(async () => {
+    Shown.permission = Shown.answer;
+    return Shown.answer;
+  });
+  static all: Shown[] = [];
+  onclick: (() => void) | null = null;
+  close = vi.fn();
+  constructor(
+    readonly title: string,
+    readonly options: { body?: string },
+  ) {
+    Shown.all.push(this);
+  }
+}
+
+function delivery(id: DeliveryId, over: Partial<Delivery> = {}): Delivery {
   return {
-    on: true,
-    kinds: {
-      decision: true,
-      approval: true,
-      stuck: true,
-      routine: true,
-      settled: true,
-      failed: true,
-    },
+    id,
+    kind: "needsYou",
+    title: `Title ${id}`,
+    body: `Body ${id}`,
+    target: { kind: "channel", agentId: `agent-${id}` },
+    createdAt: 1_756_000_000_000,
+    ...over,
   };
 }
 
-/** Everything wanted but one, so that kind's own switch is the only refusal. */
-function except(kind: NotifyKind): NotifyPrefs {
-  const prefs = wanted();
-  prefs.kinds[kind] = false;
-  return prefs;
-}
+/** What a click asked for, through the same `land` the window wires up. */
+let revealed: Reveal[] = [];
+type Notify = typeof import("./notify");
+let notify: Notify;
+const open = (target: DeliveryTarget) => notify.land(target, (where) => revealed.push(where));
 
-/**
- * The moment that lets every class through: away, looking at the channel it
- * concerns, past the quiet window. Each test overrides only what should refuse.
- */
-function moment(over: Partial<Moment> = {}): Moment {
-  return { away: true, onScreen: true, quiet: false, ...over };
-}
-
-/** A launch, in wall-clock milliseconds, so the quiet window has a real edge. */
-const LAUNCH = 1_756_000_000_000;
-
-beforeEach(() => {
-  // Both windows are module state that outlives a render, and therefore a test.
-  resetQuiet();
-  resetBurst();
+beforeEach(async () => {
+  vi.resetModules();
+  Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+  notify = await import("./notify");
+  revealed = [];
+  Shown.all = [];
+  Shown.permission = "granted";
+  Shown.answer = "granted";
+  vi.stubGlobal("Notification", Shown);
+  vi.spyOn(window, "focus").mockImplementation(() => {});
+  host.claimDelivery.mockReset().mockResolvedValue(true);
+  host.pendingDeliveries.mockReset().mockResolvedValue([]);
+  host.openWindow.mockReset().mockResolvedValue(undefined);
+  Shown.requestPermission.mockClear();
 });
 
-describe("the switches", () => {
-  it("says nothing at all when the master switch is off, whatever the kinds ask for", () => {
-    for (const kind of NOTIFY_KINDS) {
-      expect(shouldNotify(kind, { ...wanted(), on: false }, moment())).toBe(false);
-    }
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe("a delivery the Host offered", () => {
+  it("is claimed once, and shown only when the claim wins", async () => {
+    await expect(notify.deliver(delivery("a"), open)).resolves.toBe(true);
+    expect(host.claimDelivery.mock.calls).toEqual([["a"]]);
+    expect(Shown.all.map((shown) => [shown.title, shown.options.body])).toEqual([
+      ["Title a", "Body a"],
+    ]);
+
+    // Another window won this one. Its banner is that window's to show.
+    host.claimDelivery.mockResolvedValueOnce(false);
+    await expect(notify.deliver(delivery("b"), open)).resolves.toBe(false);
+    expect(host.claimDelivery).toHaveBeenLastCalledWith("b");
+    expect(Shown.all).toHaveLength(1);
   });
 
-  it("refuses a kind the operator switched off while the master switch is still on", () => {
-    // The dialog leaves the four kind switches enabled and readable with the
-    // master on, so the kind's own answer has to be the one that counts.
-    for (const kind of NOTIFY_KINDS) {
-      expect(shouldNotify(kind, except(kind), moment())).toBe(false);
-    }
+  it("says what the Host wrote, word for word", async () => {
+    // Titles are the Host's: "has a question", never "needs your permission".
+    const asked = delivery("q", { title: "Ada has a question", body: "Which branch?" });
+    await notify.deliver(asked, open);
+    expect(Shown.all[0]?.title).toBe("Ada has a question");
+    expect(Shown.all[0]?.options.body).toBe("Which branch?");
   });
 
-  it("holds one kind back without silencing the other three", () => {
-    expect(shouldNotify("approval", except("routine"), moment())).toBe(true);
-    expect(shouldNotify("routine", except("routine"), moment())).toBe(false);
+  it("is lost, not shown, when the claim cannot reach the Host", async () => {
+    host.claimDelivery.mockRejectedValueOnce({ kind: "unreachable", message: "gone" });
+    await expect(notify.deliver(delivery("a"), open)).resolves.toBe(false);
+    expect(Shown.all).toHaveLength(0);
   });
 });
 
-describe("the quiet window after a launch", () => {
-  it("refuses every kind inside it, however much the moment favours them", () => {
-    markQuiet(LAUNCH);
-    // Away, on the channel, and wanted: the one moment where all three classes
-    // fire. A routine whose slot passed over a weekend arrives overdue on the
-    // first tick, and a weekend of schedule at once is why this gate outranks
-    // the rest of them.
-    for (const kind of NOTIFY_KINDS) {
-      expect(shouldNotify(kind, wanted(), moment({ quiet: quiet(LAUNCH + QUIET_MS - 1) }))).toBe(
-        false,
-      );
-    }
+describe("a browser client on a remote Host", () => {
+  it("claims nothing while it may not notify, so a window that can will show it", async () => {
+    Shown.permission = "denied";
+    Shown.answer = "denied";
+    await expect(notify.deliver(delivery("a"), open)).resolves.toBe(false);
+    expect(host.claimDelivery).not.toHaveBeenCalled();
+    expect(Shown.all).toHaveLength(0);
   });
 
-  it("stops holding anything back the instant the window is up", () => {
-    markQuiet(LAUNCH);
-    expect(quiet(LAUNCH + QUIET_MS - 1)).toBe(true);
-    expect(quiet(LAUNCH + QUIET_MS)).toBe(false);
-    expect(shouldNotify("approval", wanted(), moment({ quiet: quiet(LAUNCH + QUIET_MS) }))).toBe(
-      true,
+  it("asks once for a burst of offers, then claims and shows each", async () => {
+    Shown.permission = "default";
+    await Promise.all([notify.deliver(delivery("a"), open), notify.deliver(delivery("b"), open)]);
+    expect(Shown.requestPermission).toHaveBeenCalledTimes(1);
+    expect(host.claimDelivery.mock.calls.flat().sort()).toEqual(["a", "b"]);
+    expect(Shown.all).toHaveLength(2);
+  });
+
+  it("claims nothing when the question is left unanswered", async () => {
+    // What a browser that will not prompt without a click answers.
+    Shown.permission = "default";
+    Shown.answer = "default";
+    await expect(notify.deliver(delivery("a"), open)).resolves.toBe(false);
+    expect(host.claimDelivery).not.toHaveBeenCalled();
+  });
+
+  it("has nowhere to show anything without a Notification at all", async () => {
+    vi.stubGlobal("Notification", undefined);
+    await expect(notify.deliver(delivery("a"), open)).resolves.toBe(false);
+    expect(host.claimDelivery).not.toHaveBeenCalled();
+  });
+
+  it("brings the tab forward on a click and selects the channel it is about", async () => {
+    await notify.deliver(delivery("a"), open);
+    Shown.all[0]?.onclick?.();
+    expect(window.focus).toHaveBeenCalled();
+    expect(Shown.all[0]?.close).toHaveBeenCalled();
+    expect(revealed).toEqual([{ kind: "agent", id: "agent-a" }]);
+    expect(host.openWindow).not.toHaveBeenCalled();
+  });
+
+  it("opens For you on a click on something about no channel", async () => {
+    await notify.deliver(delivery("r", { kind: "reminder", target: { kind: "forYou" } }), open);
+    Shown.all[0]?.onclick?.();
+    expect(revealed).toEqual([{ kind: "forYou" }]);
+  });
+});
+
+describe("the desktop window", () => {
+  let tapped: ((action: unknown) => void) | undefined;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { configurable: true, value: {} });
+    notify = await import("./notify");
+    tapped = undefined;
+    plugin.sendNotification.mockReset();
+    plugin.onAction.mockReset().mockImplementation(async (cb) => {
+      tapped = cb;
+      return { unregister: () => {} };
+    });
+  });
+
+  it("listens for clicks before it raises anything, and raises with an id to find it by", async () => {
+    await notify.deliver(delivery("a"), open);
+    expect(plugin.onAction).toHaveBeenCalledTimes(1);
+    expect(plugin.onAction.mock.invocationCallOrder[0]).toBeLessThan(
+      plugin.sendNotification.mock.invocationCallOrder[0] ?? 0,
     );
+    expect(plugin.sendNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ id: expect.any(Number), title: "Title a", body: "Body a" }),
+    );
+
+    await notify.deliver(delivery("b"), open);
+    expect(plugin.onAction).toHaveBeenCalledTimes(1);
   });
 
-  it("is not open before a launch has been marked", () => {
-    // The mark lands when the first read of state does. Anything arriving
-    // before that has to reach the operator, not fall into a window that was
-    // opened by module load.
-    expect(quiet(LAUNCH)).toBe(false);
-  });
-});
+  it("asks the app to raise the window and land on the channel when one is clicked", async () => {
+    await notify.deliver(delivery("a"), open);
+    await notify.deliver(delivery("b"), open);
+    const [first, second] = plugin.sendNotification.mock.calls.map(([options]) => options.id);
+    expect(first).not.toBe(second);
 
-describe("the class of news a kind is", () => {
-  it("makes a permission request one of the two that can break through", () => {
-    expect(classOf("approval")).toBe("attention");
-  });
+    tapped?.({ actionId: "tap", inputValue: null, notification: { id: second } });
+    expect(host.openWindow.mock.calls).toEqual([[{ kind: "agent", id: "agent-b" }]]);
+    // The app emits the reveal once the window is up; landing here as well
+    // would select before the window is there to show it.
+    expect(revealed).toEqual([]);
 
-  // The same class from the other end, and the case for it is stronger rather
-  // than weaker: a permission expires in ten minutes and stops mattering, and
-  // an agent that has stopped stays stopped until somebody does something.
-  it("makes an agent that has stopped the other one", () => {
-    expect(classOf("stuck")).toBe("attention");
-  });
-
-  it("treats a schedule firing as ambient, because it was pointed somewhere else", () => {
-    expect(classOf("routine")).toBe("ambient");
+    // Once only, and nothing for a notification this page did not raise.
+    tapped?.({ actionId: "tap", inputValue: null, notification: { id: second } });
+    tapped?.({ actionId: "tap", inputValue: null, notification: { id: 12 } });
+    tapped?.({ actionId: "tap", inputValue: null, notification: null });
+    expect(host.openWindow).toHaveBeenCalledTimes(1);
   });
 
-  it("treats both ends of a run as completion, success or failure", () => {
-    // A failure is still the end of something the operator started. It gets no
-    // wider a hearing than a settle: a busy runtime fails runs in channels
-    // nobody has opened.
-    expect(classOf("settled")).toBe("completion");
-    expect(classOf("failed")).toBe("completion");
-  });
-});
-
-describe("attention", () => {
-  it("stays quiet when the operator is watching the channel that is asking", () => {
-    expect(shouldNotify("approval", wanted(), moment({ away: false, onScreen: true }))).toBe(false);
-  });
-
-  it("reaches an operator who is elsewhere, even from the channel on screen", () => {
-    expect(shouldNotify("approval", wanted(), moment({ away: true, onScreen: true }))).toBe(true);
-  });
-
-  it("breaks through a focused window when the request is on a channel that is not on screen", () => {
-    // The one rule that survives a window the operator is looking at. Nobody
-    // finds a parked turn by noticing a row change color three screens up the
-    // rail, and the turn stays parked until it is answered.
-    expect(shouldNotify("approval", wanted(), moment({ away: false, onScreen: false }))).toBe(true);
+  it("still lands somewhere when the app cannot raise the window", async () => {
+    host.openWindow.mockRejectedValueOnce(new Error("no tray"));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await notify.deliver(delivery("a", { target: { kind: "forYou" } }), open);
+    const [options] = plugin.sendNotification.mock.calls[0] ?? [];
+    tapped?.({ actionId: "tap", inputValue: null, notification: { id: options?.id } });
+    await vi.waitFor(() => expect(revealed).toEqual([{ kind: "forYou" }]));
   });
 });
 
-describe("ambient", () => {
-  it("stays quiet while the operator is at the window, on screen or not", () => {
-    expect(shouldNotify("routine", wanted(), moment({ away: false, onScreen: true }))).toBe(false);
-    expect(shouldNotify("routine", wanted(), moment({ away: false, onScreen: false }))).toBe(false);
+describe("what was offered while this page was not connected", () => {
+  it("folds four into one banner that opens For you", async () => {
+    host.pendingDeliveries.mockResolvedValue(["a", "b", "c", "d"].map((id) => delivery(id)));
+    await expect(notify.catchUp(open)).resolves.toBe(4);
+
+    expect(host.claimDelivery.mock.calls).toEqual([["a"], ["b"], ["c"], ["d"]]);
+    expect(Shown.all).toHaveLength(1);
+    expect(Shown.all[0]?.title).toBe("While you were away");
+    expect(Shown.all[0]?.options.body).toBe("Title a\nTitle b\nTitle c\nAnd 1 more in For you.");
+    Shown.all[0]?.onclick?.();
+    expect(revealed).toEqual([{ kind: "forYou" }]);
   });
 
-  it("reaches an operator who is away without asking which channel is on screen", () => {
-    // A routine fires wherever it was pointed and `announcementFor` hands it no
-    // channel, so `onScreen` is whatever the caller happened to compute. Read
-    // it here and half of every schedule goes missing.
-    expect(shouldNotify("routine", wanted(), moment({ away: true, onScreen: true }))).toBe(true);
-    expect(shouldNotify("routine", wanted(), moment({ away: true, onScreen: false }))).toBe(true);
+  it("shows three or fewer one by one, each opening what it is about", async () => {
+    host.pendingDeliveries.mockResolvedValue(["a", "b", "c"].map((id) => delivery(id)));
+    await notify.catchUp(open);
+    expect(Shown.all.map((shown) => shown.title)).toEqual(["Title a", "Title b", "Title c"]);
+    Shown.all[1]?.onclick?.();
+    expect(revealed).toEqual([{ kind: "agent", id: "agent-b" }]);
+  });
+
+  it("counts only what this window won", async () => {
+    host.pendingDeliveries.mockResolvedValue(["a", "b", "c", "d", "e"].map((id) => delivery(id)));
+    host.claimDelivery.mockImplementation(async (id) => id !== "b" && id !== "d");
+    await expect(notify.catchUp(open)).resolves.toBe(3);
+    expect(Shown.all.map((shown) => shown.title)).toEqual(["Title a", "Title c", "Title e"]);
+  });
+
+  it("asks the Host for nothing on a page that may not notify", async () => {
+    Shown.permission = "denied";
+    Shown.answer = "denied";
+    await expect(notify.catchUp(open)).resolves.toBe(0);
+    expect(host.pendingDeliveries).not.toHaveBeenCalled();
+    expect(host.claimDelivery).not.toHaveBeenCalled();
+  });
+
+  it("shows nothing when the Host cannot say what is waiting", async () => {
+    host.pendingDeliveries.mockRejectedValue({ kind: "unknownCommand", message: "too old" });
+    await expect(notify.catchUp(open)).resolves.toBe(0);
+    expect(Shown.all).toHaveLength(0);
   });
 });
 
-describe("completion", () => {
-  it("stays quiet about a run in a channel the operator was not looking at", () => {
-    // The gate that keeps a busy runtime from announcing work nobody opened.
-    for (const kind of ["settled", "failed"] as const) {
-      expect(shouldNotify(kind, wanted(), moment({ away: true, onScreen: false }))).toBe(false);
+describe("the menu bar panel", () => {
+  // A second page on the same Host, offered every delivery the window is. It
+  // must never claim one, or a banner would be taken away from the window and
+  // shown by a page that cannot show it (docs/gotchas/menubar.md).
+  const read = (path: string) => readFileSync(resolve(__dirname, "../..", path), "utf8");
+
+  it("never reaches the code that claims or shows a delivery", () => {
+    for (const page of ["src/menubar.tsx", "src/components/MenubarPanel.tsx"]) {
+      expect(read(page)).not.toMatch(/lib\/notify|claimDelivery|useReportView/);
     }
   });
 
-  it("stays quiet while the operator is at the window watching it happen", () => {
-    for (const kind of ["settled", "failed"] as const) {
-      expect(shouldNotify(kind, wanted(), moment({ away: false, onScreen: true }))).toBe(false);
-    }
-  });
-
-  it("reaches an operator who stepped away from the conversation they were waiting on", () => {
-    for (const kind of ["settled", "failed"] as const) {
-      expect(shouldNotify(kind, wanted(), moment({ away: true, onScreen: true }))).toBe(true);
-    }
-  });
-});
-
-describe("away", () => {
-  const realHidden = Object.getOwnPropertyDescriptor(document, "hidden");
-
-  /** Both are inherited getters in jsdom, so an own property shadows them. */
-  function put(where: { hidden: boolean; focused?: boolean }): void {
-    Object.defineProperty(document, "hidden", { configurable: true, get: () => where.hidden });
-    if (where.focused !== undefined) {
-      document.hasFocus = vi.fn(() => where.focused === true);
-    }
-  }
-
-  afterEach(() => {
-    if (realHidden) Object.defineProperty(document, "hidden", realHidden);
-    else Reflect.deleteProperty(document, "hidden");
-    Reflect.deleteProperty(document, "hasFocus");
-  });
-
-  it("does not claim a webview without hasFocus is away", () => {
-    // A host that does not implement it would otherwise throw here, on the
-    // first event of the session, inside a subscription made once.
-    Object.defineProperty(document, "hasFocus", { configurable: true, value: undefined });
-    put({ hidden: false });
-    expect(away()).toBe(false);
-  });
-
-  it("is false with the window visible and focused, which is the operator watching", () => {
-    put({ hidden: false, focused: true });
-    expect(away()).toBe(false);
-  });
-
-  it("is true for a window that is visible but not focused", () => {
-    // The alt-tabbed case: a Guaca window uncovered on the same screen as the
-    // browser being typed into. `document.hidden` never flips for it, and it is
-    // the case the whole mechanism exists for.
-    put({ hidden: false, focused: false });
-    expect(away()).toBe(true);
-  });
-
-  it("is true for a minimized or fully covered window without consulting focus", () => {
-    const hasFocus = vi.fn(() => true);
-    put({ hidden: true });
-    document.hasFocus = hasFocus;
-    expect(away()).toBe(true);
-    expect(hasFocus).not.toHaveBeenCalled();
-  });
-});
-
-describe("the burst window", () => {
-  it("says the same thing once, not twice, inside the same second", () => {
-    expect(burst("failed:Cook", LAUNCH)).toBe(false);
-    expect(burst("failed:Cook", LAUNCH + 200)).toBe(true);
-  });
-
-  it("does not let a repeat extend its own silence", () => {
-    // The window runs from what was said, not from the last thing suppressed. A
-    // stream retrying just inside the second would otherwise be muted forever.
-    expect(burst("failed:Cook", LAUNCH)).toBe(false);
-    expect(burst("failed:Cook", LAUNCH + 900)).toBe(true);
-    expect(burst("failed:Cook", LAUNCH + 1_000)).toBe(false);
-  });
-
-  it("treats two agents failing at once as two things worth saying", () => {
-    expect(burst("failed:Cook", LAUNCH)).toBe(false);
-    expect(burst("failed:Scribe", LAUNCH)).toBe(false);
-    expect(burst("approval:Cook", LAUNCH)).toBe(false);
-  });
-
-  it("forgets a key once its second is up, which is all that keeps the map bounded", () => {
-    expect(burst("failed:Cook", LAUNCH)).toBe(false);
-    // Chatter under other keys must not keep the first key alive, and must not
-    // outlive its own second either.
-    expect(burst("failed:Scribe", LAUNCH + 400)).toBe(false);
-    expect(burst("failed:Cook", LAUNCH + 1_000)).toBe(false);
-    expect(burst("failed:Scribe", LAUNCH + 1_500)).toBe(false);
-    // The entry the prune replaced is the current one, so the reprieve is not
-    // permanent: this is still the same thing said twice in a second.
-    expect(burst("failed:Cook", LAUNCH + 1_500)).toBe(true);
+  it("is granted no notification command to show one with", () => {
+    const capability = JSON.parse(read("src-tauri/capabilities/menubar.json")) as {
+      permissions: string[];
+    };
+    expect(capability.permissions.filter((one) => one.startsWith("notification:"))).toEqual([]);
   });
 });

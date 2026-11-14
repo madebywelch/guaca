@@ -2488,9 +2488,11 @@ when one opens. Answering, clearing or reading the thing a banner was about
 withdraws the banner. Three switches in the host's settings, the same for every
 window, turn off what needs the operator, failures, or finished work.
 
-Until the window draws what the host offers, it still raises its own banners
-from events, by the rules in `announce.ts` and `notify.ts`, and the host's
-offers go unclaimed and expire after a day.
+A window claims only what it can show: one the operating system or the browser
+will not let notify leaves the offer to another window. More than three waiting
+when a window connects are one banner, "While you were away", that opens For
+you. A click on a banner brings the window forward and opens what it is about.
+Offers nobody claims expire after a day.
 
 There is a button that sends a test notification, which is the only way to tell a
 refused operating-system permission from a working one.

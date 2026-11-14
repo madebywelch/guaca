@@ -17,13 +17,12 @@ import { Search } from "./components/Search";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
-import { announcementFor } from "./lib/announce";
 import { applyAppearance, watchSystemSurface } from "./lib/appearance";
 import { unreachableHint } from "./lib/host";
-import { api, notifyOperator, onRevealRequest } from "./lib/ipc";
+import { api, onRevealRequest } from "./lib/ipc";
 import { bindingFor } from "./lib/keybinds";
 import { FEED_COALESCE_MS, presenceOf, presenceReporter, samePresence } from "./lib/menubar";
-import { away, burst, markQuiet, quiet, shouldNotify } from "./lib/notify";
+import { catchUp, deliver, land } from "./lib/notify";
 import { readFirstTask } from "./lib/onboarding";
 import { useRuntime } from "./lib/runtime";
 import { asSection, type Section } from "./lib/sections";
@@ -35,6 +34,7 @@ import {
   type Group,
   type Overlay,
   type QuickPlace,
+  type Reveal,
   type UiEvent,
 } from "./lib/types";
 import { useReportView } from "./lib/view";
@@ -74,36 +74,29 @@ export default function App() {
   const prefs = useStore((s) => s.prefs);
 
   /**
-   * Raises an operating system notification, when one is warranted.
-   *
-   * Reads the store at the moment of the event rather than closing over it. The
-   * subscription below is made once, on purpose, and a preference or a
-   * selection that has changed since then is the one that has to apply; a
-   * dependency on either would tear the event listener down and rebuild it
-   * every time the operator clicked a different agent.
+   * Where the window lands when the operator asks to be taken somewhere from
+   * outside it: the menu bar panel, or a click on a notification. Read from
+   * the store at the moment it is asked, so it can be made once.
    */
-  const announce = useCallback((event: UiEvent) => {
+  const reveal = useCallback((target: Reveal) => {
     const state = useStore.getState();
-    const said = announcementFor(
-      event,
-      (id) => state.agents.find((agent) => agent.id === id)?.name ?? "An agent",
-    );
-    if (!said) return;
-
-    const warranted = shouldNotify(said.kind, state.prefs.notify, {
-      away: away(),
-      // An announcement about no channel in particular is never held back for
-      // being about the wrong one.
-      onScreen:
-        event.type === "decisionReminder"
-          ? state.forYou
-          : said.channel === null || said.channel === state.selected,
-      quiet: quiet(),
-    });
-    if (!warranted || burst(said.key)) return;
-
-    void notifyOperator(said.title, said.body);
+    if (target.kind === "forYou") state.showForYou(true);
+    else void state.select(target.id);
   }, []);
+
+  /**
+   * A delivery the Host offered every window. Whether it is worth a
+   * notification was decided there; this window only claims it, and shows it
+   * if the claim won. Made once, for the same reason as `reveal`: the
+   * subscription that calls it is.
+   */
+  const onEvent = useCallback(
+    (event: UiEvent) => {
+      if (event.type !== "delivery") return;
+      void deliver(event, (target) => land(target, reveal));
+    },
+    [reveal],
+  );
 
   const [editing, setEditing] = useState<AgentCard | "new" | null>(null);
   const [editingGroup, setEditingGroup] = useState<Group | "new" | null>(null);
@@ -178,14 +171,15 @@ export default function App() {
     return watchSystemSurface(() => applyAppearance(look));
   }, [uiScale, surface, grays, attention, contrast, temperature, typeface, reading, readingSize]);
 
-  // Nothing interrupts the operator for the first few seconds. A routine whose
-  // slot passed while the app was closed is overdue and fires on the first
-  // tick, which is correct, but launching after a weekend away should not
-  // announce a weekend of schedule at once. All of it is on screen immediately
-  // either way; only the interruption waits. Before the subscription below, so
-  // nothing it delivers is announced ahead of the quiet.
-  useEffect(markQuiet, []);
-  const ready = useRuntime(announce);
+  const ready = useRuntime(onEvent);
+
+  // What was offered while this page was not connected: once the first read
+  // lands, and again each time the link comes back up, since an offer made
+  // while the socket was down reached nobody.
+  useEffect(() => {
+    if (!ready || link !== "up") return;
+    void catchUp((target) => land(target, reveal));
+  }, [ready, link, reveal]);
 
   // The menu bar follows the window. The tray process holds no workspace of
   // its own, so its icon is drawn from this window's store, coalesced and only
@@ -222,10 +216,7 @@ export default function App() {
     let canceled = false;
 
     void (async () => {
-      const stop = await onRevealRequest((target) => {
-        if (target.kind === "forYou") useStore.getState().showForYou(true);
-        else void select(target.id);
-      });
+      const stop = await onRevealRequest(reveal);
       if (canceled) {
         stop();
         return;
@@ -237,7 +228,7 @@ export default function App() {
       canceled = true;
       unlisten?.();
     };
-  }, [select]);
+  }, [reveal]);
 
   /**
    * Runs something on one agent and re-reads the roster.

@@ -188,7 +188,7 @@ vi.mock("../lib/ipc", () => ({
 const { SettingsDialog } = await import("./SettingsDialog");
 const { useStore } = await import("../lib/store");
 const transport = await import("../lib/transport");
-const { DEFAULT_PREFS, loadPrefs, NOTIFY_KINDS } = await import("../lib/prefs");
+const { DEFAULT_PREFS, loadPrefs } = await import("../lib/prefs");
 const { BINDINGS, SURFACES } = await import("../lib/keybinds");
 const { PROVIDERS } = await import("../lib/providers");
 const { themeCss, themeTokens } = await import("../lib/theme");
@@ -264,15 +264,6 @@ function switchOn(label: string): HTMLButtonElement {
   const control = row?.querySelector("button");
   if (!control) throw new Error(`no switch on the row for ${label}`);
   return control as HTMLButtonElement;
-}
-
-/** Every kind's switch, in the order the pane lists them. The master is first. */
-function kindSwitches(): HTMLButtonElement[] {
-  return [...document.querySelectorAll(".switch-row")].slice(1).map((row) => {
-    const control = row.querySelector("button");
-    if (!control) throw new Error("a switch row with no switch in it");
-    return control as HTMLButtonElement;
-  });
 }
 
 beforeEach(() => {
@@ -749,15 +740,18 @@ describe("the Save in the foot", () => {
     expect(saveButton()).toBeTruthy();
   });
 
-  it("offers nothing on the panes that write as they are clicked", () => {
+  it("offers nothing on the panes that write as they are clicked", async () => {
     // Appearance and Notifications are kept the moment they are pressed, and a
     // Save under them said the opposite about settings that were already saved.
-    open(stored(), DEFAULT_PREFS, "appearance");
+    const attention = { needsYou: true, failures: true, finished: true };
+    updateSettings.mockResolvedValueOnce(stored({ attention: { ...attention, failures: false } }));
+    open(stored({ attention }), DEFAULT_PREFS, "appearance");
     fireEvent.click(screen.getByRole("button", { name: "Reading surface: Dark" }));
     expect(saveButton()).toBeNull();
 
     pane("Notifications");
-    fireEvent.click(switchOn("Notify me at all"));
+    await act(async () => fireEvent.click(switchOn("Failures")));
+    expect(switchOn("Failures").textContent).toBe("Off");
     expect(saveButton()).toBeNull();
   });
 
@@ -1988,43 +1982,61 @@ describe("appearance", () => {
 });
 
 describe("notifications", () => {
-  const ROUTINE = "A routine fired";
+  const FAILURES = "Failures";
+  const everything = { needsYou: true, failures: true, finished: true };
 
-  it("disables every kind while the master switch is off", () => {
-    open();
+  it("draws the Host's three switches, and nothing an older build kept in this window", () => {
+    open(stored({ attention: everything }));
     pane("Notifications");
-    fireEvent.click(switchOn("Notify me at all"));
 
-    expect(useStore.getState().prefs.notify.on).toBe(false);
-    expect(kindSwitches()).toHaveLength(NOTIFY_KINDS.length);
-    // Off means none of the below, whatever they say, and a switch that can
-    // still be flipped says the opposite. What each one REPORTS, though, is its
-    // own setting rather than its setting and the master together: the row is
-    // already unreachable, and what it has to say is what will apply when the
-    // master goes back on. Reading them together had the label say On while the
-    // control reported itself unchecked, which is a disagreement a sighted
-    // operator and a screen reader would resolve differently.
-    for (const control of kindSwitches()) {
-      expect(control.disabled).toBe(true);
-      expect(control.getAttribute("aria-checked")).toBe("true");
+    const rows = [...document.querySelectorAll(".switch-row")];
+    expect(rows.map((row) => row.querySelector(".switch-row__label")?.textContent)).toEqual([
+      "Things that need you",
+      FAILURES,
+      "Finished work while you are away",
+    ]);
+    for (const row of rows) {
+      expect(row.querySelector("button")?.getAttribute("aria-checked")).toBe("true");
     }
+    expect(screen.queryByText("Notify me at all")).toBeNull();
+    expect(screen.queryByText("A routine fired")).toBeNull();
   });
 
-  it("toggles one kind and leaves the others alone", () => {
-    open();
+  it("toggles one kind and leaves the others alone", async () => {
+    updateSettings.mockResolvedValueOnce(stored({ attention: { ...everything, failures: false } }));
+    open(stored({ attention: everything }));
     pane("Notifications");
-    fireEvent.click(switchOn(ROUTINE));
+    await act(async () => fireEvent.click(switchOn(FAILURES)));
 
-    expect(useStore.getState().prefs.notify.kinds).toEqual({
-      decision: true,
-      approval: true,
-      stuck: true,
-      routine: false,
-      settled: true,
-      failed: true,
-    });
-    expect(useStore.getState().prefs.notify.on).toBe(true);
-    expect(switchOn(ROUTINE).textContent).toBe("Off");
+    // The one key, as a patch, so a switch another window flipped a moment ago
+    // is not written back over by this one.
+    expect(switchOn(FAILURES).textContent).toBe("Off");
+    expect(updateSettings.mock.calls).toEqual([[{ attention: { failures: false } }]]);
+    expect(useStore.getState().settings?.attention).toEqual({ ...everything, failures: false });
+    expect(switchOn("Things that need you").textContent).toBe("On");
+    // The Host's, not this window's: nothing about it is kept in local prefs.
+    expect(useStore.getState().prefs).toEqual(DEFAULT_PREFS);
+  });
+
+  it("leaves a switch as it was when the Host refuses, and says why", async () => {
+    updateSettings.mockRejectedValueOnce({ kind: "io", message: "The host could not save." });
+    open(stored({ attention: everything }));
+    pane("Notifications");
+    fireEvent.click(switchOn(FAILURES));
+
+    await waitFor(() => expect(screen.getByText(/could not save/)).toBeTruthy());
+    expect(banner().className).toContain("banner--error");
+    expect(switchOn(FAILURES).textContent).toBe("On");
+    expect(switchOn(FAILURES).disabled).toBe(false);
+  });
+
+  it("says so when the Host is older than the switches, and still offers the test", () => {
+    open(stored());
+    pane("Notifications");
+
+    expect(screen.getByText(/older than these switches/)).toBeTruthy();
+    expect(document.querySelectorAll(".switch-row")).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Send a test notification" })).toBeTruthy();
   });
 
   it("says so when the machine refuses a test notification", async () => {
