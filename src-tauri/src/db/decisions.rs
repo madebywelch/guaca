@@ -57,6 +57,9 @@ impl Store {
         Ok(results)
     }
 
+    /// Files a decision with no run to say it came from: what a caller with
+    /// no runtime behind it files. The runtime files through
+    /// [`Self::file_decision`], which records the run in the same commit.
     pub fn request_decision(
         &self,
         agent: AgentId,
@@ -64,6 +67,26 @@ impl Store {
         topic: &str,
         request: DecisionRequest,
         due: Option<i64>,
+        now: i64,
+    ) -> Result<WorkDecision, StoreError> {
+        self.file_decision(agent, group, topic, request, due, None, now)
+    }
+
+    /// Files a decision, or revises the pending one on the same topic, and
+    /// records `run` as the run that filed it. The first run to file a topic
+    /// keeps it, as the first raise of an escalation does: a later run that
+    /// restates a question still pending did not leave anything new on the
+    /// desk. In the decision's own commit, so a run's outcome can never read a
+    /// decision it filed without knowing it filed it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn file_decision(
+        &self,
+        agent: AgentId,
+        group: GroupId,
+        topic: &str,
+        request: DecisionRequest,
+        due: Option<i64>,
+        run: Option<RunId>,
         now: i64,
     ) -> Result<WorkDecision, StoreError> {
         let topic = topic.trim();
@@ -110,22 +133,15 @@ impl Store {
             tx.execute("INSERT INTO decisions(id,agent_id,group_id,topic,request,status,created_at,updated_at,due_at,remind_at) VALUES(?1,?2,?3,?4,?5,'pending',?6,?6,?7,?8)", params![id.to_string(),agent.to_string(),group.to_string(),topic,encoded,now,due,reminder])?;
             id
         };
+        if let Some(run) = run {
+            tx.execute(
+                "UPDATE decisions SET filed_run=?2 WHERE id=?1 AND status='pending' AND filed_run IS NULL",
+                params![id.to_string(), run.to_string()],
+            )?;
+        }
         let result = one(&tx, id)?;
         tx.commit()?;
         Ok(result)
-    }
-
-    /// Records the run that filed a decision, so that run's outcome can say it
-    /// left one open. The first run to file a topic keeps it, as the first
-    /// raise of an escalation does: a later run that restates a question still
-    /// pending did not leave anything new on the desk.
-    pub fn mark_filed(&self, agent: AgentId, topic: &str, run: RunId) -> Result<(), StoreError> {
-        self.conn()?.execute(
-            "UPDATE decisions SET filed_run=?3
-              WHERE agent_id=?1 AND topic=?2 AND status='pending' AND filed_run IS NULL",
-            params![agent.to_string(), topic.trim(), run.to_string()],
-        )?;
-        Ok(())
     }
 
     /// The answer, its transcript envelope and recovery point are one commit.
@@ -261,8 +277,11 @@ impl Store {
         )?)
     }
 
-    /// Claim a batch once. Persist the next reminder before emitting an event;
-    /// a reconnect still reads every outstanding row from the inbox.
+    /// Claim a batch once, and write the row that announces it in the same
+    /// commit as the next reminder. The claim used to be the only record, so a
+    /// batch claimed with no window listening, which is every batch due at
+    /// boot, was spent and never shown. Now the outbox holds it until a window
+    /// claims it in turn.
     pub fn decision_reminders(&self, now: i64) -> Result<usize, StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -277,7 +296,17 @@ impl Store {
                 params![decision.id.to_string(), next_reminder(now, decision.due_at)],
             )?;
         }
+        if let Some(slot) = due.iter().map(|decision| decision.remind_at).min() {
+            super::outbox::enqueue(
+                &tx,
+                &crate::domain::outbox::for_reminder(due.len(), slot),
+                now,
+            )?;
+        }
         tx.commit()?;
+        if !due.is_empty() {
+            self.outbox_written().notify_one();
+        }
         Ok(due.len())
     }
 }

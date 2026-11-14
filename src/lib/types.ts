@@ -957,6 +957,23 @@ export interface Settings {
   quickActions?: QuickAction[];
   /** Kept pages pinned to the status bar. Absent from a host older than them. */
   widgets?: Widget[];
+  /** What may interrupt the operator, for every window on this host. Absent
+   *  from a host older than it. */
+  attention?: Attention;
+}
+
+/**
+ * The three things the host may interrupt the operator for. Every switch on
+ * is the default: what needs you and failures as they happen, finished work
+ * only while you are away, gathered into one item.
+ */
+export interface Attention {
+  /** Permission requests, questions, an agent that is stuck, decision reminders. */
+  needsYou: boolean;
+  /** A run that failed or was cut off by a restart. */
+  failures: boolean;
+  /** Finished work, while you are away. */
+  finished: boolean;
 }
 
 /** How much of the status bar a pinned page takes. */
@@ -1017,6 +1034,8 @@ export interface SettingsPatch {
   reasoningEffort?: ReasoningEffort;
   requestTimeoutSecs?: number;
   limits?: Partial<GuardLimits>;
+  /** Only the switches named change. */
+  attention?: Partial<Attention>;
 }
 
 /**
@@ -1195,6 +1214,11 @@ export type UiEvent =
   | { type: "outcomeRecorded"; outcome: Outcome }
   /** The operator saw these, in this window or another one. */
   | { type: "outcomesSeen"; runIds: RunId[] }
+  /**
+   * Something the host decided is worth an interruption, offered to every
+   * window. Show it only if `claimDelivery` answers true.
+   */
+  | ({ type: "delivery" } & Delivery)
   | { type: "approvalRequested"; approvalId: ApprovalId; agentId: AgentId }
   | { type: "approvalSettled"; approvalId: ApprovalId; state: ApprovalState }
   | { type: "escalationRaised"; escalationId: EscalationId; agentId: AgentId }
@@ -1773,4 +1797,26 @@ export interface Outcome {
   startedAt: number;
   finishedAt: number;
   seenAt: number | null;
+}
+
+export type DeliveryId = string;
+
+/** What a delivery is about. */
+export type DeliveryKind = "outcome" | "needsYou" | "reminder" | "failure";
+
+/** What a click on the banner opens. */
+export type DeliveryTarget = { kind: "channel"; agentId: AgentId } | { kind: "forYou" };
+
+/**
+ * One thing the host has decided to tell the operator, written by the host:
+ * a window draws it and decides nothing. A gathered item of finished work is
+ * one delivery, titled with how many.
+ */
+export interface Delivery {
+  id: DeliveryId;
+  kind: DeliveryKind;
+  title: string;
+  body: string;
+  target: DeliveryTarget;
+  createdAt: number;
 }

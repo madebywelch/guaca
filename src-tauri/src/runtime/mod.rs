@@ -14,6 +14,7 @@ mod drain;
 mod errand;
 pub mod events;
 pub mod guard;
+mod outbox;
 pub mod prompt;
 
 pub use drain::Drained;
@@ -499,7 +500,6 @@ use crate::domain::approval::{
 };
 use crate::domain::attachment::Attachment;
 use crate::domain::connector::Connector;
-use crate::domain::decision::DecisionAction;
 use crate::domain::envelope::{
     channel_for, Envelope, Intent, NoticeKind, Part, Participant, RefusedRecipient, ToolOutcome,
     Trust,
@@ -779,6 +779,10 @@ struct Inner {
     /// What the operator's focused window last said it shows, and when. In
     /// memory only: it describes a moment, and a restart ends that moment.
     operator_view: Mutex<Option<(crate::domain::view::OperatorView, i64)>>,
+    /// What every window last said about focus, which is whether anybody is
+    /// there. Kept apart from `operator_view`, which an agent reads: this
+    /// only decides what interrupts the operator.
+    clients: Mutex<crate::domain::view::Clients>,
     guard: Mutex<GuardRegistry>,
     inboxes: Mutex<HashMap<AgentId, Inbox>>,
     activity: Mutex<HashMap<AgentId, Activity>>,
@@ -941,6 +945,7 @@ impl Runtime {
                 settings_file: std::sync::OnceLock::new(),
                 settings_writer: Mutex::new(()),
                 operator_view: Mutex::new(None),
+                clients: Mutex::new(Default::default()),
                 guard: Mutex::new(GuardRegistry::new()),
                 inboxes: Mutex::new(HashMap::new()),
                 activity: Mutex::new(HashMap::new()),
@@ -1137,13 +1142,36 @@ impl Runtime {
     /// Keeps what the operator's window says it is showing, and marks seen
     /// what that agent's runs ended in.
     ///
-    /// Only a channel with nothing open over it: a report comes from the window
-    /// with focus, so a channel on screen is one being read, and a channel under
-    /// Settings or For you is not.
+    /// Only a channel with nothing open over it: a report from the window
+    /// with focus means a channel on screen is one being read, and a channel
+    /// under Settings or For you is not.
+    ///
+    /// What a page that says nothing about focus reports, which is only ever
+    /// while it has it.
     pub fn report_view(&self, view: crate::domain::view::OperatorView) {
+        self.report_window(view, true, None);
+    }
+
+    /// The same from a window that says whether it has focus, and which window
+    /// it is.
+    ///
+    /// A window that has just lost focus says so too. That changes whether
+    /// anybody is there and nothing else: the view an agent reads stays the
+    /// last one a window with focus reported, and nothing is marked seen.
+    pub fn report_window(
+        &self,
+        view: crate::domain::view::OperatorView,
+        focused: bool,
+        client: Option<String>,
+    ) {
         let now = now_ms();
         let view = view.clean();
-        let reading = view.agent_id.filter(|_| view.overlay.is_none());
+        let reading = view.reading();
+        let client = crate::domain::view::window_name(client);
+        self.inner.clients.lock().report(client.as_deref(), focused, reading, now);
+        if !focused {
+            return;
+        }
         *self.inner.operator_view.lock() = Some((view, now));
         if let Some(agent) = reading {
             match self.inner.store.mark_channel_seen(agent, now) {
@@ -5009,24 +5037,7 @@ impl Runtime {
                 }
             }
 
-            ToolInvocation::Decision(action) => {
-                let filed = match &action {
-                    DecisionAction::Request { topic, .. } => Some(topic.clone()),
-                    _ => None,
-                };
-                let (said, part) = self.use_decision(card, action, arguments);
-                // Which run filed it is not something the decision store is
-                // told, so it is written here, where the run is known, once the
-                // decision is. A run's outcome reads it to say it left one open.
-                if let (Some(topic), Part::ToolCall { outcome: ToolOutcome::Ok { .. }, .. }) =
-                    (filed, &part)
-                {
-                    if let Err(err) = self.inner.store.mark_filed(card.id, &topic, run_id) {
-                        tracing::warn!(%err, "could not record which run filed a decision");
-                    }
-                }
-                (said, part)
-            }
+            ToolInvocation::Decision(action) => self.use_decision(card, run_id, action, arguments),
 
             ToolInvocation::Escalate { summary } => {
                 let (body, cut) = escalation::store_as(&summary);
@@ -9111,6 +9122,7 @@ mod tests {
             webhook: Default::default(),
             quick_actions: vec![],
             widgets: vec![],
+            attention: Default::default(),
         };
         let runtime =
             Runtime::new(store, LlmClient::new().unwrap(), config, OnDisk::under(dir.path()), sink);
@@ -9524,6 +9536,7 @@ mod tests {
             webhook: Default::default(),
             quick_actions: vec![],
             widgets: vec![],
+            attention: Default::default(),
         };
         let runtime = Runtime::new(
             store,

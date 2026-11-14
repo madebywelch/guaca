@@ -96,7 +96,26 @@ pub(super) fn record(
         finished_at: now,
         seen_at: None,
     };
-    Ok(insert(tx, &outcome)?.then_some(outcome))
+    if !insert(tx, &outcome)? {
+        return Ok(None);
+    }
+    announce(tx, &outcome);
+    Ok(Some(outcome))
+}
+
+/// Writes what may tell the operator about a run, in the commit that records
+/// it. Logged rather than raised when it cannot be written: the outcome is
+/// what For you lists, and losing it over a banner would lose both.
+fn announce(tx: &Connection, outcome: &Outcome) {
+    let written = super::outbox::name_of(tx, outcome.agent_id).and_then(|name| {
+        match crate::domain::outbox::for_outcome(outcome, &name.unwrap_or_default()) {
+            Some(draft) => super::outbox::enqueue(tx, &draft, outcome.finished_at).map(drop),
+            None => Ok(()),
+        }
+    });
+    if let Err(err) = written {
+        tracing::error!(%err, run = %outcome.run_id, "could not write what announces a finished run");
+    }
 }
 
 /// Writes `interrupted` for a run a restart is reporting, in the recovery's
@@ -125,24 +144,24 @@ pub(super) fn record_interrupted(
         [&run],
         |row| row.get(0),
     )?;
-    insert(
-        tx,
-        &Outcome {
-            run_id: original.run_id,
-            agent_id: owner,
-            group_id: group,
-            trigger,
-            trigger_ref,
-            status: Status::Interrupted,
-            headline: first_sentence(&notice_text(notice)),
-            note_id: Some(notice.id),
-            needs: left_open(tx, original.run_id)?,
-            steps,
-            started_at: original.created_at,
-            finished_at: now,
-            seen_at: None,
-        },
-    )?;
+    let outcome = Outcome {
+        run_id: original.run_id,
+        agent_id: owner,
+        group_id: group,
+        trigger,
+        trigger_ref,
+        status: Status::Interrupted,
+        headline: first_sentence(&notice_text(notice)),
+        note_id: Some(notice.id),
+        needs: left_open(tx, original.run_id)?,
+        steps,
+        started_at: original.created_at,
+        finished_at: now,
+        seen_at: None,
+    };
+    if insert(tx, &outcome)? {
+        announce(tx, &outcome);
+    }
     Ok(())
 }
 
@@ -384,11 +403,14 @@ impl Store {
         if marked.is_empty() {
             return Ok(Vec::new());
         }
+        let marked_json = serde_json::to_string(&marked).expect("a list of ids serializes");
         tx.execute(
             "UPDATE outcomes SET seen_at=?2 WHERE seen_at IS NULL
                 AND run_id IN (SELECT value FROM json_each(?1))",
-            params![serde_json::to_string(&marked).expect("a list of ids serializes"), now],
+            params![marked_json, now],
         )?;
+        // Seen is read: nothing still waiting to announce these runs should.
+        super::outbox::withdraw_runs(&tx, &marked_json)?;
         tx.commit()?;
         marked
             .iter()

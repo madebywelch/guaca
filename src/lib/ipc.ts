@@ -53,6 +53,8 @@ import type {
   ConnectorDraft,
   ConnectorId,
   Decision,
+  Delivery,
+  DeliveryId,
   DeviceCode,
   DirectoryBoard,
   DirectoryListing,
@@ -205,8 +207,18 @@ export const api = {
 
   builtinTools: () => invoke<ToolSummary[]>("builtin_tools"),
 
-  /** Tells the host what this window shows. Only while it has focus. */
-  reportView: (view: OperatorView) => invoke<void>("report_view", { view }),
+  /**
+   * Tells the host what this window shows. Without `presence`, only while it
+   * has focus. With it, also when focus is lost, naming the window: that is
+   * how the host knows whether anybody is there, and it changes nothing an
+   * agent reads about the view.
+   */
+  reportView: (view: OperatorView, presence?: { focused: boolean; client: string }) =>
+    invoke<void>("report_view", {
+      view,
+      focused: presence?.focused ?? null,
+      client: presence?.client ?? null,
+    }),
 
   listSkills: (scope: SkillScope) => invoke<Skill[]>("list_skills", { scope }),
   readSkill: (scope: SkillScope, name: string) => invoke<Skill>("read_skill", { scope, name }),
@@ -380,6 +392,18 @@ export const api = {
       runIds: target.runIds ?? null,
       before: target.before ?? null,
     }),
+  /**
+   * What the host has offered and nobody has claimed, oldest first. Asked on
+   * connecting, since an offer reaches only the windows listening when it is
+   * made.
+   */
+  pendingDeliveries: () => invoke<Delivery[]>("pending_deliveries"),
+  /**
+   * Claims one delivery for this window. True means show it, and it is true
+   * for exactly one window. False means another window has it, or what it was
+   * about was answered or seen first.
+   */
+  claimDelivery: (id: DeliveryId) => invoke<boolean>("claim_delivery", { id }),
   answerDecision: (id: string, answer: string, updatedAt: number) =>
     invoke<WorkDecision>("answer_decision", { id, answer, updatedAt }),
   resumeDecision: (id: string) => invoke<WorkDecision>("resume_decision", { id }),

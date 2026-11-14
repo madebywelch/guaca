@@ -2439,26 +2439,46 @@ ten minutes for an answer, a cascade settles long after the message that started
 it. All of that matters when you are elsewhere and none of it is worth a badge
 while you watch it happen.
 
-So "away" is not one condition, because the four kinds are not the same news.
+So the host decides, once, for every window, and it starts quiet: what needs
+the operator and what failed interrupts them, and finished work interrupts only
+someone who is away. The decision used to be each window's own, which meant a
+window that was closed decided nothing, a reminder due at that moment was spent
+on nobody, and two open windows raised every banner twice. Now the host keeps an
+outbox, and docs/ATTENTION.md has the table it decides from.
 
-- **A permission request** blocks a turn until it is answered. It reaches the
-  operator when the window is not in front of them, *and* when it is but the
-  request belongs to a channel they are not looking at. Nobody finds a parked
-  turn by noticing a row change color three screens up the rail.
-- **A routine firing** was addressed to nobody and implies no channel: it goes
-  where it was pointed, which is almost never where the operator is. It reaches
-  them whenever they are away, with no channel to match against.
-- **A conversation finishing, or failing**, is the end of something they started.
-  It reaches them only when they are away *and* it is the channel they were last
-  looking at, because a busy runtime settles runs in channels nobody has ever
-  opened and one badge each would make the whole mechanism worth turning off.
+- **Something that needs the operator**, a parked permission request, a
+  question, an agent that cannot go on, or decisions due for review, reaches
+  them as it happens, unless the window with focus already shows that agent's
+  channel. Nobody finds a parked turn by noticing a row change color three
+  screens up the rail.
+- **A run that failed**, or that a restart cut off, is the same: it interrupts
+  unless its channel is the one on screen.
+- **A run that finished** interrupts only an operator who is away, and not one
+  banner each: everything that finishes in ten minutes is one item, "3
+  finished", with a line from each closing note. Finished while they were here
+  and still unseen when they leave, it joins that item. Finished while they stay,
+  it waits in For you.
+- **A routine starting** is not news. The banner that used to say a routine had
+  fired said what it was asked to do, before anything had been done; what it
+  finished with is the line that reaches the operator now.
+- **A run the operator stopped**, or a check that found nothing, reaches nobody.
 
-Two more refusals, both of which would otherwise read as a bug. Nothing fires for
-the first few seconds after a launch: a routine whose slot passed while the app
-was closed is overdue and fires on the first tick, which is correct, but starting
-Guaca after a weekend away should not announce a weekend of schedule at once. And
-the same kind about the same channel is said once a second at most, so two agents
-failing together are two notifications while one agent failing twice is one.
+Away is two minutes without a window with focus. Each window says when it gains
+focus, again while it keeps it, and when it loses it, and the host keeps the
+last of these per window in memory. What an agent reads about the screen is
+still the last view a focused window reported: whether anybody is there is the
+host's business, not the model's.
+
+One window shows each banner. The host offers it to all of them, and the first
+to claim it is the only one that draws it; a window that connects later asks for
+what nobody claimed, so a reminder due while every window was closed is shown
+when one opens. Answering, clearing or reading the thing a banner was about
+withdraws the banner. Three switches in the host's settings, the same for every
+window, turn off what needs the operator, failures, or finished work.
+
+Until the window draws what the host offers, it still raises its own banners
+from events, by the rules in `announce.ts` and `notify.ts`, and the host's
+offers go unclaimed and expire after a day.
 
 There is a button that sends a test notification, which is the only way to tell a
 refused operating-system permission from a working one.

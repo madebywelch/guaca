@@ -26,6 +26,7 @@ use crate::domain::ids::{
 };
 use crate::domain::now_ms;
 use crate::domain::occasion::{Clean as CleanOccasion, Occasion};
+use crate::domain::outbox;
 use crate::domain::outcome::{Outcome, Settled};
 use crate::domain::plugin::{
     Headers, Plugin, PluginAccess, PluginKind, PluginTool, PluginToolCard, PluginToolset,
@@ -266,6 +267,10 @@ const EXCERPT_CHARS: usize = 160;
 #[derive(Debug, Clone)]
 pub struct Store {
     pool: Pool<SqliteConnectionManager>,
+    /// Told after a commit that wrote something for the outbox, so the
+    /// dispatcher looks now rather than at its next tick. A permit, not a
+    /// queue: one wake covers any number of rows.
+    outbox: std::sync::Arc<tokio::sync::Notify>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -563,7 +568,16 @@ impl Store {
             )
         });
 
-        Ok(Self { pool: Pool::builder().max_size(8).build(manager)? })
+        Ok(Self { pool: Pool::builder().max_size(8).build(manager)?, outbox: Default::default() })
+    }
+
+    /// What the dispatcher waits on between passes.
+    pub fn outbox_written(&self) -> std::sync::Arc<tokio::sync::Notify> {
+        self.outbox.clone()
+    }
+
+    fn wake_outbox(&self) {
+        self.outbox.notify_one();
     }
 
     pub fn conn(&self) -> Result<Conn, StoreError> {
@@ -1576,7 +1590,7 @@ impl Store {
         summary: &str,
         detail: &[DetailField],
     ) -> Result<Approval, StoreError> {
-        let conn = self.conn()?;
+        let mut conn = self.conn()?;
         // NULL for a permission, and for a question that takes a written
         // answer. An empty array is a real state on a question and is not this.
         let options = match &request {
@@ -1599,7 +1613,10 @@ impl Store {
             decided_at: None,
         };
 
-        conn.execute(
+        // One commit with the row that will announce it, so a request is never
+        // on the desk without a way to reach the operator, or the other way round.
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
             "INSERT INTO approvals (id,agent_id,group_id,run_id,action,summary,detail,state,created_at,options)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
             params![
@@ -1615,6 +1632,15 @@ impl Store {
                 options,
             ],
         )?;
+        let name = super::outbox::name_of(&tx, agent)?.unwrap_or_default();
+        let question = matches!(approval.request, Request::Question { .. });
+        super::outbox::enqueue(
+            &tx,
+            &outbox::for_request(approval.id, question, agent, group, run, &name),
+            approval.created_at,
+        )?;
+        tx.commit()?;
+        self.wake_outbox();
 
         Ok(approval)
     }
@@ -1663,12 +1689,17 @@ impl Store {
         state: ApprovalState,
         answer: Option<&str>,
     ) -> Result<Approval, StoreError> {
-        let conn = self.conn()?;
-        let changed = conn.execute(
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = tx.execute(
             "UPDATE approvals SET state=?2, decided_at=?3, answer=?4
               WHERE id=?1 AND state='pending'",
             params![id.to_string(), state.as_str(), now_ms(), answer],
         )?;
+        if changed > 0 {
+            super::outbox::withdraw_ref(&tx, &id.to_string())?;
+        }
+        tx.commit()?;
         if changed == 0 {
             return match self.get_approval(id)? {
                 Some(existing) => Err(StoreError::ApprovalSettled { state: existing.state }),
@@ -1844,11 +1875,19 @@ impl Store {
     /// restart takes every waiter with it. Left pending, those rows would draw
     /// live buttons that answer nothing.
     pub fn expire_pending_approvals(&self) -> Result<usize, StoreError> {
-        let conn = self.conn()?;
-        Ok(conn.execute(
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "UPDATE outbox SET status='suppressed', last_error=?1
+              WHERE status='pending' AND ref_id IN (SELECT id FROM approvals WHERE state='pending')",
+            params![outbox::Why::Answered.as_str()],
+        )?;
+        let expired = tx.execute(
             "UPDATE approvals SET state='expired', decided_at=?1 WHERE state='pending'",
             params![now_ms()],
-        )?)
+        )?;
+        tx.commit()?;
+        Ok(expired)
     }
 
     /// Removes an agent's requests along with the agent, standing grants
@@ -1912,7 +1951,9 @@ impl Store {
                 "UPDATE escalations SET summary=?2, said_at=?3, times=?4 WHERE id=?1",
                 params![id.to_string(), summary, at, times],
             )?;
+            announce_escalation(&tx, id, agent, group, run_id, at)?;
             tx.commit()?;
+            self.wake_outbox();
             return Ok(Raised::Again(Escalation {
                 id,
                 agent_id: agent,
@@ -1949,7 +1990,9 @@ impl Store {
                 at,
             ],
         )?;
+        announce_escalation(&tx, escalation.id, agent, group, run, at)?;
         tx.commit()?;
+        self.wake_outbox();
         Ok(Raised::First(escalation))
     }
 
@@ -2010,11 +2053,15 @@ impl Store {
     /// the operator is looking at is behind the store, and the read that
     /// follows is what corrects it.
     pub fn clear_escalation(&self, id: EscalationId, at: i64) -> Result<bool, StoreError> {
-        let conn = self.conn()?;
-        Ok(conn.execute(
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let cleared = tx.execute(
             "UPDATE escalations SET cleared_at=?2 WHERE id=?1 AND cleared_at IS NULL",
             params![id.to_string(), at],
-        )? > 0)
+        )? > 0;
+        super::outbox::withdraw_ref(&tx, &id.to_string())?;
+        tx.commit()?;
+        Ok(cleared)
     }
 
     /// Everything one agent has up, cleared because the agent is going.
@@ -2024,11 +2071,20 @@ impl Store {
     /// its escalation would sit on the desk for all of them asking the operator
     /// to deal with work that has stopped for good.
     pub fn clear_agent_escalations(&self, agent: AgentId, at: i64) -> Result<usize, StoreError> {
-        let conn = self.conn()?;
-        Ok(conn.execute(
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "UPDATE outbox SET status='suppressed', last_error=?2
+              WHERE status='pending' AND ref_id IN
+                (SELECT id FROM escalations WHERE agent_id=?1 AND cleared_at IS NULL)",
+            params![agent.to_string(), outbox::Why::Answered.as_str()],
+        )?;
+        let cleared = tx.execute(
             "UPDATE escalations SET cleared_at=?2 WHERE agent_id=?1 AND cleared_at IS NULL",
             params![agent.to_string(), at],
-        )?)
+        )?;
+        tx.commit()?;
+        Ok(cleared)
     }
 
     // ---- the calendar ----------------------------------------------------
@@ -3829,6 +3885,9 @@ impl Store {
             [run.to_string()],
         )?;
         tx.commit()?;
+        if outcome.is_some() {
+            self.wake_outbox();
+        }
         Ok(outcome)
     }
 
@@ -4463,6 +4522,23 @@ impl Store {
 }
 
 // ---- row mapping ---------------------------------------------------------
+
+/// Writes the row that tells the operator an agent is stuck, in the commit
+/// that raised it. Once a day: a repeat on a day that already has one adds
+/// nothing, and the first raise on a new day is one more.
+fn announce_escalation(
+    tx: &rusqlite::Connection,
+    id: EscalationId,
+    agent: AgentId,
+    group: GroupId,
+    run: RunId,
+    at: i64,
+) -> Result<(), StoreError> {
+    let name = super::outbox::name_of(tx, agent)?.unwrap_or_default();
+    let day = crate::domain::local(at).map(|at| at.date_naive().to_string()).unwrap_or_default();
+    super::outbox::enqueue(tx, &outbox::for_escalation(id, agent, group, run, &name, &day), at)?;
+    Ok(())
+}
 
 fn participant_columns(p: Participant) -> (&'static str, Option<String>) {
     match p {
@@ -5593,7 +5669,8 @@ mod tests {
         // none: what it drops, 54, 59 and 62 make again on the way back up.
         // 67 adds the workspace identity, resource ledger and resume marker.
         // 72 adds the outcomes table and the run that filed a decision.
-        conn.execute_batch("DROP TABLE outcomes; ALTER TABLE decisions DROP COLUMN filed_run; DROP TABLE onboarding_hires; DROP TABLE operator_sends; DROP TRIGGER routine_delete_history; DROP TABLE routine_occurrences; ALTER TABLE plugins DROP COLUMN grant_generation; DROP TABLE pending_sandbox_resume; DROP TABLE resource_ledger; DROP TABLE workspace_identity; DROP TABLE approval_policies; ALTER TABLE groups DROP COLUMN rail_order; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
+        // 73 adds the outbox.
+        conn.execute_batch("DROP TABLE outbox; DROP TABLE outcomes; ALTER TABLE decisions DROP COLUMN filed_run; DROP TABLE onboarding_hires; DROP TABLE operator_sends; DROP TRIGGER routine_delete_history; DROP TABLE routine_occurrences; ALTER TABLE plugins DROP COLUMN grant_generation; DROP TABLE pending_sandbox_resume; DROP TABLE resource_ledger; DROP TABLE workspace_identity; DROP TABLE approval_policies; ALTER TABLE groups DROP COLUMN rail_order; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
         migrations::run(&mut conn).unwrap();
         drop(conn);
         assert_eq!(f.store.connector_env(mine.id).unwrap()["TOKEN"], "private-token");

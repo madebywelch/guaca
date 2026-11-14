@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::domain::approval::ApprovalState;
 use crate::domain::envelope::{Envelope, Part, Participant};
 use crate::domain::ids::{AgentId, ApprovalId, EscalationId, GroupId, MessageId, RunId};
+use crate::domain::outbox::{Kind as OutboxKind, Target};
 use crate::domain::outcome::Outcome;
 
 /// What an agent is doing right now, surfaced as the dot next to its name.
@@ -211,6 +212,20 @@ pub enum UiEvent {
     /// The ids rather than a count, so every list can drop exactly those rows.
     OutcomesSeen {
         run_ids: Vec<RunId>,
+    },
+
+    /// Something the Host has decided is worth an interruption, offered to
+    /// every window. A window shows it only if `claimDelivery` with this id
+    /// answers true, which it does for exactly one of them. A window that was
+    /// not connected asks `pendingDeliveries` instead, so missing this event
+    /// loses nothing.
+    Delivery {
+        id: String,
+        kind: OutboxKind,
+        title: String,
+        body: String,
+        target: Target,
+        created_at: i64,
     },
 
     /// An agent is waiting on the operator.

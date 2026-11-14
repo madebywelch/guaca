@@ -150,6 +150,11 @@ pub async fn open(
     // Before the scheduler, so an agent with work to carry on reads as busy
     // to its first sweep.
     runtime.pick_up(recovered);
+    // After the pickup, so what recovery wrote for the operator, a run cut
+    // off by the restart, is the first thing the dispatcher reads. Before the
+    // scheduler, whose first sweep claims the reminders due while the Host was
+    // down and wakes it.
+    runtime.start_dispatcher();
     // Agents keep their own appointments.
     runtime.start_scheduler();
     // And find out what their browsers are already signed in to, so the roster
