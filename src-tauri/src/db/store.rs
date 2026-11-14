@@ -26,6 +26,7 @@ use crate::domain::ids::{
 };
 use crate::domain::now_ms;
 use crate::domain::occasion::{Clean as CleanOccasion, Occasion};
+use crate::domain::outcome::{Outcome, Settled};
 use crate::domain::plugin::{
     Headers, Plugin, PluginAccess, PluginKind, PluginTool, PluginToolCard, PluginToolset,
 };
@@ -3788,16 +3789,47 @@ impl Store {
         )))
     }
 
+    /// Ends a run that finished on its own, with no count of what it spent.
+    /// What a caller with no runtime behind it settles; the runtime says how a
+    /// run ended through [`Self::settle_run_as`].
     pub fn settle_run(&self, run: RunId) -> Result<(), StoreError> {
+        self.settle_run_as(run, Settled::Finished, 0).map(drop)
+    }
+
+    /// Ends a run: its recovery point goes, and its outcome is written, in one
+    /// commit. Two commits would leave a window in which a crash loses the run
+    /// from both places that could say it finished.
+    ///
+    /// `settled` and `steps` are what only the runtime knows: which runs a
+    /// turn took in, which ones the operator stopped, and what each spent.
+    /// The new outcome, if there is one, is for the caller to announce.
+    pub fn settle_run_as(
+        &self,
+        run: RunId,
+        settled: Settled,
+        steps: u32,
+    ) -> Result<Option<Outcome>, StoreError> {
         let mut conn = self.conn()?;
-        let tx = conn.transaction()?;
+        // Immediate, because the outcome is read before anything is written.
+        // A deferred transaction would take its write lock at the insert, and
+        // two runs settling at once would have the second refused with a
+        // snapshot that is already stale, which no busy wait can fix.
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // A run whose outcome cannot be read is still finished. Failing the
+        // settle over it would keep the recovery point, and the next start
+        // would report a conversation that ended as one that was cut off.
+        let outcome =
+            super::outcomes::record(&tx, run, settled, steps, now_ms()).unwrap_or_else(|err| {
+                tracing::error!(%err, %run, "could not record what a run ended in");
+                None
+            });
         tx.execute("DELETE FROM pending_runs WHERE run_id=?1", [run.to_string()])?;
         tx.execute(
             "UPDATE routine_occurrences SET state='done' WHERE owner_run=?1 AND state='started'",
             [run.to_string()],
         )?;
         tx.commit()?;
-        Ok(())
+        Ok(outcome)
     }
 
     pub fn stop_routine_run(&self, run: RunId) -> Result<(), StoreError> {
@@ -5560,7 +5592,8 @@ mod tests {
         // adds to groups, which no migration since 51 rebuilds, and 65's needs
         // none: what it drops, 54, 59 and 62 make again on the way back up.
         // 67 adds the workspace identity, resource ledger and resume marker.
-        conn.execute_batch("DROP TABLE onboarding_hires; DROP TABLE operator_sends; DROP TRIGGER routine_delete_history; DROP TABLE routine_occurrences; ALTER TABLE plugins DROP COLUMN grant_generation; DROP TABLE pending_sandbox_resume; DROP TABLE resource_ledger; DROP TABLE workspace_identity; DROP TABLE approval_policies; ALTER TABLE groups DROP COLUMN rail_order; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
+        // 72 adds the outcomes table and the run that filed a decision.
+        conn.execute_batch("DROP TABLE outcomes; ALTER TABLE decisions DROP COLUMN filed_run; DROP TABLE onboarding_hires; DROP TABLE operator_sends; DROP TRIGGER routine_delete_history; DROP TABLE routine_occurrences; ALTER TABLE plugins DROP COLUMN grant_generation; DROP TABLE pending_sandbox_resume; DROP TABLE resource_ledger; DROP TABLE workspace_identity; DROP TABLE approval_policies; ALTER TABLE groups DROP COLUMN rail_order; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
         migrations::run(&mut conn).unwrap();
         drop(conn);
         assert_eq!(f.store.connector_env(mine.id).unwrap()["TOKEN"], "private-token");

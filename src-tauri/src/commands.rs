@@ -3189,6 +3189,39 @@ pub async fn group_reconnect(
 pub async fn list_decisions(state: &AppState) -> Reply<Vec<WorkDecision>> {
     Ok(state.runtime.store().decisions(None)?)
 }
+
+// ---- outcomes --------------------------------------------------------------
+
+/// What finished runs ended in, newest first. `limit` is required and capped,
+/// because the table grows by one row for every conversation ever finished.
+pub async fn list_outcomes(
+    state: &AppState,
+    since: Option<i64>,
+    group_id: Option<GroupId>,
+    unseen_only: Option<bool>,
+    limit: u32,
+) -> Reply<Vec<crate::domain::outcome::Outcome>> {
+    Ok(state.runtime.store().outcomes(since, group_id, unseen_only.unwrap_or(false), limit)?)
+}
+
+/// Marks outcomes seen: the runs named, the ones finished by `before`, or the
+/// runs named that finished by then. Returns the runs it marked.
+///
+/// Naming neither is refused rather than read as everything: a list on screen
+/// is a moment, and a run that finished after it was drawn is one nobody saw.
+pub async fn mark_outcomes_seen(
+    state: &AppState,
+    run_ids: Option<Vec<RunId>>,
+    before: Option<i64>,
+) -> Reply<Vec<RunId>> {
+    if run_ids.is_none() && before.is_none() {
+        return Err(CommandError::new(
+            "validation",
+            "Name the outcomes to mark seen, or the time to mark them up to.",
+        ));
+    }
+    Ok(state.runtime.mark_outcomes_seen(run_ids.as_deref(), before)?)
+}
 pub async fn answer_decision(
     state: &AppState,
     id: DecisionId,

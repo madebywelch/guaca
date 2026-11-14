@@ -499,6 +499,7 @@ use crate::domain::approval::{
 };
 use crate::domain::attachment::Attachment;
 use crate::domain::connector::Connector;
+use crate::domain::decision::DecisionAction;
 use crate::domain::envelope::{
     channel_for, Envelope, Intent, NoticeKind, Part, Participant, RefusedRecipient, ToolOutcome,
     Trust,
@@ -506,6 +507,7 @@ use crate::domain::envelope::{
 use crate::domain::escalation;
 use crate::domain::ids::{AgentId, ApprovalId, EscalationId, GroupId, MessageId, RunId};
 use crate::domain::now_ms;
+use crate::domain::outcome::Settled;
 use crate::domain::plugin::PluginKind;
 use crate::domain::promise;
 use crate::domain::routine::{EventTrigger, Routine, RunKind};
@@ -751,6 +753,11 @@ struct Runs {
     /// out of bookings is marked whole for the next host rather than settled:
     /// it is not finished, only put down.
     put_down: HashSet<RunId>,
+    /// Runs whose message a turn of another run took in. Each settles when that
+    /// turn ends and has no outcome of its own: the turn that read it is the one
+    /// that answered it. In memory, because a process that ends before the turn
+    /// does leaves the message unanswered, and recovery reports it on its own.
+    absorbed: HashSet<RunId>,
 }
 
 type ResumeRecords = (Vec<MessageId>, Vec<MessageId>);
@@ -1127,9 +1134,40 @@ impl Runtime {
         *self.inner.config.write() = config;
     }
 
-    /// Keeps what the operator's window says it is showing.
+    /// Keeps what the operator's window says it is showing, and marks seen
+    /// what that agent's runs ended in.
+    ///
+    /// Only a channel with nothing open over it: a report comes from the window
+    /// with focus, so a channel on screen is one being read, and a channel under
+    /// Settings or For you is not.
     pub fn report_view(&self, view: crate::domain::view::OperatorView) {
-        *self.inner.operator_view.lock() = Some((view.clean(), crate::domain::now_ms()));
+        let now = now_ms();
+        let view = view.clean();
+        let reading = view.agent_id.filter(|_| view.overlay.is_none());
+        *self.inner.operator_view.lock() = Some((view, now));
+        if let Some(agent) = reading {
+            match self.inner.store.mark_channel_seen(agent, now) {
+                Ok(run_ids) => self.announce_seen(run_ids),
+                Err(err) => tracing::warn!(%err, "could not mark a channel's outcomes seen"),
+            }
+        }
+    }
+
+    /// Marks outcomes seen on the operator's word, and tells every window.
+    pub fn mark_outcomes_seen(
+        &self,
+        runs: Option<&[RunId]>,
+        before: Option<i64>,
+    ) -> Result<Vec<RunId>, RuntimeError> {
+        let marked = self.inner.store.mark_outcomes_seen(runs, before, now_ms())?;
+        self.announce_seen(marked.clone());
+        Ok(marked)
+    }
+
+    fn announce_seen(&self, run_ids: Vec<RunId>) {
+        if !run_ids.is_empty() {
+            self.inner.events.emit(UiEvent::OutcomesSeen { run_ids });
+        }
     }
 
     /// What the operator is looking at, as a sentence, with how old it is.
@@ -2742,7 +2780,7 @@ impl Runtime {
     }
 
     fn track_inflight(&self, run: RunId, delta: i64) {
-        let settled_steps = {
+        let settled = {
             let mut runs = self.inner.runs.lock();
             if delta >= 0 {
                 *runs.outstanding.entry(run).or_insert(0) += delta as usize;
@@ -2750,7 +2788,8 @@ impl Runtime {
             runs.outstanding.entry(run).or_insert(0);
             if Self::release_bookings(&mut runs, run, if delta < 0 { (-delta) as usize } else { 0 })
             {
-                runs.stopped.remove(&run);
+                let stopped = runs.stopped.remove(&run);
+                let absorbed = runs.absorbed.remove(&run);
                 // Part of it is put down, so the last of it ending here is the
                 // conversation handed on whole, not finished: the next host
                 // picks it up, and a run it picks up has not settled.
@@ -2758,21 +2797,35 @@ impl Runtime {
                     self.mark_whole(&[run]);
                     None
                 } else {
-                    if let Err(err) = self.inner.store.settle_run(run) {
-                        tracing::error!(%err, %run, "could not settle the recovery journal");
-                    }
-                    let mut guard = self.inner.guard.lock();
-                    let steps = guard.peek(run).map(|r| r.steps_used()).unwrap_or(0);
-                    guard.unpin(run);
-                    Some(steps)
+                    let ending = if absorbed {
+                        Settled::Absorbed
+                    } else if stopped {
+                        Settled::Stopped
+                    } else {
+                        Settled::Finished
+                    };
+                    let steps =
+                        self.inner.guard.lock().peek(run).map(|r| r.steps_used()).unwrap_or(0);
+                    let outcome = match self.inner.store.settle_run_as(run, ending, steps) {
+                        Ok(outcome) => outcome,
+                        Err(err) => {
+                            tracing::error!(%err, %run, "could not settle the recovery journal");
+                            None
+                        }
+                    };
+                    self.inner.guard.lock().unpin(run);
+                    Some((steps, outcome))
                 }
             } else {
                 None
             }
         };
 
-        if let Some(steps) = settled_steps {
+        if let Some((steps, outcome)) = settled {
             self.inner.events.emit(UiEvent::RunSettled { run_id: run, steps_used: steps });
+            if let Some(outcome) = outcome {
+                self.inner.events.emit(UiEvent::OutcomeRecorded { outcome: Box::new(outcome) });
+            }
         }
     }
 
@@ -4293,6 +4346,9 @@ impl Runtime {
                 }
             }
 
+            if next.run_id != run {
+                self.inner.runs.lock().absorbed.insert(next.run_id);
+            }
             intake.depth.fetch_sub(1, Ordering::SeqCst);
             taken.push(next);
         }
@@ -4953,7 +5009,24 @@ impl Runtime {
                 }
             }
 
-            ToolInvocation::Decision(action) => self.use_decision(card, action, arguments),
+            ToolInvocation::Decision(action) => {
+                let filed = match &action {
+                    DecisionAction::Request { topic, .. } => Some(topic.clone()),
+                    _ => None,
+                };
+                let (said, part) = self.use_decision(card, action, arguments);
+                // Which run filed it is not something the decision store is
+                // told, so it is written here, where the run is known, once the
+                // decision is. A run's outcome reads it to say it left one open.
+                if let (Some(topic), Part::ToolCall { outcome: ToolOutcome::Ok { .. }, .. }) =
+                    (filed, &part)
+                {
+                    if let Err(err) = self.inner.store.mark_filed(card.id, &topic, run_id) {
+                        tracing::warn!(%err, "could not record which run filed a decision");
+                    }
+                }
+                (said, part)
+            }
 
             ToolInvocation::Escalate { summary } => {
                 let (body, cut) = escalation::store_as(&summary);

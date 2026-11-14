@@ -1188,6 +1188,13 @@ export type UiEvent =
       cost: number | null;
     }
   | { type: "runSettled"; runId: RunId; stepsUsed: number }
+  /**
+   * What a run that just settled ended in, after its `runSettled`. Only a run
+   * that has one: a run taken into another run's turn has none of its own.
+   */
+  | { type: "outcomeRecorded"; outcome: Outcome }
+  /** The operator saw these, in this window or another one. */
+  | { type: "outcomesSeen"; runIds: RunId[] }
   | { type: "approvalRequested"; approvalId: ApprovalId; agentId: AgentId }
   | { type: "approvalSettled"; approvalId: ApprovalId; state: ApprovalState }
   | { type: "escalationRaised"; escalationId: EscalationId; agentId: AgentId }
@@ -1719,4 +1726,51 @@ export interface WorkDecision {
   snoozedUntil: number | null;
   deliveryRun: RunId | null;
   interrupted: boolean;
+}
+
+/** What started a run. */
+export type OutcomeTrigger = "operator" | "routine" | "event" | "decision" | "retry";
+
+/**
+ * How a run ended. `nothingNew` is a recurring check that found nothing, and
+ * nothing writes it yet.
+ */
+export type OutcomeStatus =
+  | "done"
+  | "nothingNew"
+  | "needsYou"
+  | "failed"
+  | "stopped"
+  | "interrupted";
+
+/** Something a run left waiting on the operator, by id. Never a copy of it. */
+export type OutcomeNeed =
+  | { kind: "decision"; id: string }
+  | { kind: "escalation"; id: EscalationId };
+
+/**
+ * One finished run: what it ended in, in the words its owner wrote.
+ *
+ * The owner is the agent the run's first message went to, so a delegation is
+ * one outcome, the coordinator's. `headline` is the first line of the owner's
+ * closing note, at most 160 characters, or the first sentence of the notice
+ * that says why it failed or was cut off. `noteId` is the message it came
+ * from, which is what a click opens. Unseen while `seenAt` is null.
+ */
+export interface Outcome {
+  runId: RunId;
+  agentId: AgentId;
+  groupId: GroupId;
+  trigger: OutcomeTrigger;
+  /** The routine, the decision, or the message sent again. */
+  triggerRef: string | null;
+  status: OutcomeStatus;
+  headline: string;
+  noteId: MessageId | null;
+  needs: OutcomeNeed[];
+  /** Model calls the run spent. */
+  steps: number;
+  startedAt: number;
+  finishedAt: number;
+  seenAt: number | null;
 }

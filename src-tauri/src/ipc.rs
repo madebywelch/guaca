@@ -356,6 +356,8 @@ surface! {
     approval_states() -> HashMap<ApprovalId, ApprovalState>,
     approval_answers() -> HashMap<ApprovalId, String>,
     list_decisions() -> Vec<WorkDecision>,
+    list_outcomes(since: Option<i64>, group_id: Option<GroupId>, unseen_only: Option<bool>, limit: u32) -> Vec<crate::domain::outcome::Outcome>,
+    mark_outcomes_seen(run_ids: Option<Vec<RunId>>, before: Option<i64>) -> Vec<RunId>,
     answer_decision(id: DecisionId, answer: String, updated_at: i64) -> WorkDecision,
     resume_decision(id: DecisionId) -> WorkDecision,
     snooze_decision(id: DecisionId, until: i64) -> (),

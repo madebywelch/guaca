@@ -105,6 +105,8 @@ src-tauri/src/
                       many, how long, what it spends, and how it can end.
     escalation.rs     The third thing, which stops nothing: work an agent
                       cannot move and only the operator can.
+    outcome.rs        What a finished run ended in, in one line its owner
+                      wrote, and the status no model is asked for.
     group.rs          A group's wall, and the settings its agents run on.
     plugin.rs         The servers a group can sign in to, what it got, and
                       which of its agents may spend it.
@@ -200,6 +202,7 @@ repo: the frontend renders state and forwards intent.
 | What a turn is told it was asked for: `expects_reply`, `intent`, `ReplyMode` | *Cascades terminate because of one asymmetry*, and `runtime/prompt.rs`, which has to agree with it |
 | A turn that ends on "checking now" and does nothing, the round it is given back, the fault that counts them | *A turn ends when the model stops calling tools, so a closing promise is silence* in `docs/gotchas/runtime.md`, then `src-tauri/src/domain/promise.rs` and the `## Your reply` block in `runtime/prompt.rs` |
 | Streaming, retries, the budget, when a run settles | *A failed model call is retried*, *A thought is shown and never kept*, *The budget counts model calls* |
+| What a finished run ended in: the `outcomes` table, its headline and status, who owns a run, when one is seen, `listOutcomes` and `markOutcomesSeen` | *A run ends in an outcome* in `docs/ARCHITECTURE.md`, then `domain/outcome.rs`, `db/outcomes.rs` and `Store::settle_run_as`, and run `tests/outcomes.rs` |
 | Errands: the `errand` tool, who may send one, what an errand may do, what it spends | *An errand is the agent's model again, inside the turn that sent it* in `docs/ARCHITECTURE.md`, then `domain/errand.rs` and `runtime/errand.rs`, and run `tests/errands.rs` |
 | What a turn shows of itself while it runs: the thinking, the calls, the line above the composer | *A thought is shown and never kept* and *A turn's own work is watched while it happens*, then `src/lib/reasoning.ts` |
 | How a turn is paid for: providers, the ChatGPT sign-in, the Responses API | *A subscription is a second provider, not a second endpoint*, then `llm/codex.rs` and `subscription.rs` |

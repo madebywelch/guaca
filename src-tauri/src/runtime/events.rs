@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::domain::approval::ApprovalState;
 use crate::domain::envelope::{Envelope, Part, Participant};
 use crate::domain::ids::{AgentId, ApprovalId, EscalationId, GroupId, MessageId, RunId};
+use crate::domain::outcome::Outcome;
 
 /// What an agent is doing right now, surfaced as the dot next to its name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -199,6 +200,17 @@ pub enum UiEvent {
     RunSettled {
         run_id: RunId,
         steps_used: u32,
+    },
+    /// What a run that has just settled ended in. After its `RunSettled`, and
+    /// only for a run that has an outcome: one taken into another run's turn,
+    /// or put down for the next host, has none here.
+    OutcomeRecorded {
+        outcome: Box<Outcome>,
+    },
+    /// The operator has seen these outcomes, in this window or another one.
+    /// The ids rather than a count, so every list can drop exactly those rows.
+    OutcomesSeen {
+        run_ids: Vec<RunId>,
     },
 
     /// An agent is waiting on the operator.
