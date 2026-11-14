@@ -70,6 +70,14 @@ export function useHostState(): UpdateState | null {
   return useContext(Context);
 }
 const isManaged = () => desktop && hostMode() === "local";
+/** What the desktop also says about a Host it manages: the zone its clock is
+ *  on, and whether that is this Mac's. Rust compares them, since UTC has more
+ *  than one name. */
+type Zoned = DockerStatus & {
+  hostZone?: string | null;
+  macZone?: string | null;
+  zoneDiffers?: boolean;
+};
 
 export function HostMonitor({ children }: { children: ReactNode }) {
   const [health, setHealth] = useState<Health | null>(null);
@@ -491,6 +499,8 @@ export function HostUpdatePanel() {
   const newer = available(health, release);
   const managed = isManaged() && docker?.origin === workspaceOrigin();
   const canUpdate = managed && docker?.updateAvailable;
+  const zoned: Zoned | null = managed ? docker : null;
+  const otherZone = zoned?.zoneDiffers && zoned.macZone ? zoned : null;
   // A box with an updater. A window only offers a release it can still talk
   // to afterward; a browser is served the new release's own page.
   const latest = release?.latest ?? null;
@@ -523,14 +533,14 @@ export function HostUpdatePanel() {
       : match === "clientOld"
         ? "This Guaca needs an update"
         : "Host updates";
-  const run = async () => {
+  const run = async (done = "Host updated.") => {
     setBusy(true);
     setFailure("");
     setResult("");
     try {
       await localHost.update(workspaceOrigin());
       await refresh(true);
-      setResult("Host updated.");
+      setResult(done);
     } catch (cause) {
       setFailure(errorMessage(cause));
       void refresh(true);
@@ -653,6 +663,12 @@ export function HostUpdatePanel() {
               </dd>
             </>
           )}
+          {zoned?.hostZone && (
+            <>
+              <dt>Time zone</dt>
+              <dd data-drift={otherZone ? "" : undefined}>{zoned.hostZone}</dd>
+            </>
+          )}
           <dt>Available</dt>
           <dd>
             {latest?.channel === "main"
@@ -702,6 +718,31 @@ export function HostUpdatePanel() {
           >
             Check again
           </button>
+        </div>
+      )}
+      {otherZone && !updating && (
+        <div className="field">
+          <p>
+            This Host keeps {otherZone.hostZone} time. Your Mac is on {otherZone.macZone}.{" "}
+            {canUpdate
+              ? "Updating the Host also moves it to your time zone."
+              : "Restart the Host to use your time zone."}
+          </p>
+          {!canUpdate && (
+            <>
+              <p className="field__hint">
+                Guaca saves a complete backup first. Agents that are working pause, and carry on
+                once the Host is back.
+              </p>
+              <button
+                className="btn"
+                type="button"
+                onClick={() => void run(`The Host now keeps ${otherZone.macZone} time.`)}
+              >
+                Restart Host
+              </button>
+            </>
+          )}
         </div>
       )}
       {updating ? (

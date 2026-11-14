@@ -650,6 +650,37 @@ a named volume for settings, credentials, SQLite, attachments and memories. A
 container on your laptop still sleeps with that laptop. Use this same image on
 an always-on host to keep agents working while it is shut.
 
+## A host keeps the operator's time zone
+
+A routine set for 9:00 every weekday, the decision reminders at 9:00 and 16:00
+and the date an agent is told are all on the host's local clock, not the
+clock of whichever window is open. A container has no zone of its own: the
+image keeps UTC, so a host that is not told otherwise fires "9:00" at 4:00 in
+New York, judges a Friday evening routine by Saturday's date, and moves every
+daily routine by an hour at each daylight saving change.
+
+The host is told by `TZ`, an IANA zone name such as `America/New_York`.
+
+- **On this Mac.** The desktop gives the container this Mac's zone when it
+  makes it. A host made before it did, or a Mac that has moved zones since,
+  keeps the old one until the container is made again: Settings > Host names
+  the Host's zone, says when it differs from this Mac's, and offers
+  **Restart Host**, which replaces the container by the same backup and
+  checks as an update.
+- **Compose.** `docker-compose.yml` passes `TZ` through and defaults it to
+  UTC. Set it in the shell or in `.env` beside the file
+  (`TZ=America/New_York`), then recreate the service.
+- **systemd.** `guacad` takes the machine's zone, or `Environment=TZ=...`
+  in the unit.
+- **A box the installer made.** Put `TZ=America/New_York` in
+  `/etc/guaca/guaca.env` and run the installer again. Like every setting
+  there, the host takes it the next time it is made.
+
+`guacad` logs the zone and its current offset once at boot, as
+`keeping local time`. Changing the zone does not move what is already
+scheduled: a routine keeps the instant it is next due, and holds its wall
+time in the new zone from then on.
+
 ## Verifying the host boundary
 
 Run `./scripts/ci.sh` for desktop and daemon lint, builds and offline suites.

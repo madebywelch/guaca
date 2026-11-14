@@ -57,6 +57,7 @@ pub const HOST_ENV: &[&str] = &[
     "GUACA_UPDATE_CHECKS",
     "GUAC_LOG",
     "ANTHROPIC_API_KEY",
+    "TZ",
 ];
 /// The updater's own settings. It carries these and the host's to the
 /// updater that replaces it, which is the only way they survive one.

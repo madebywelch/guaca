@@ -1570,6 +1570,7 @@ dependencies = [
  "futures-util",
  "hyper",
  "hyper-util",
+ "iana-time-zone",
  "parking_lot 0.12.5",
  "percent-encoding",
  "r2d2",

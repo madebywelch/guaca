@@ -242,6 +242,73 @@ describe("host updates in either client", () => {
     await screen.findByText("Host updated.");
     expect(screen.queryByText(/step \d of 5/)).toBeNull();
   });
+  it("names the Host's zone and offers to restart it into this Mac's", async () => {
+    mode.mockReturnValue("local");
+    const status = (hostZone: string, zoneDiffers: boolean) => ({
+      state: "running",
+      message: "Ready",
+      updateAvailable: false,
+      origin: "https://host.example",
+      targetImage: "guacad:new",
+      targetVersion: "0.1.0",
+      hostZone,
+      macZone: "America/New_York",
+      zoneDiffers,
+    });
+    docker.mockResolvedValue(status("UTC", true));
+    update.mockResolvedValue({ origin: "https://host.example", token: "secret" });
+    mount();
+    await screen.findByText(
+      "This Host keeps UTC time. Your Mac is on America/New_York. Restart the Host to use your time zone.",
+    );
+    expect(fact("Time zone").textContent).toBe("UTC");
+    expect(fact("Time zone").hasAttribute("data-drift")).toBe(true);
+    expect(screen.queryByRole("button", { name: "Back up and update host" })).toBeNull();
+    docker.mockResolvedValue(status("America/New_York", false));
+    fireEvent.click(screen.getByRole("button", { name: "Restart Host" }));
+    await screen.findByText("The Host now keeps America/New_York time.");
+    expect(update).toHaveBeenCalledWith("https://host.example");
+    expect(fact("Time zone").textContent).toBe("America/New_York");
+    expect(fact("Time zone").hasAttribute("data-drift")).toBe(false);
+    expect(screen.queryByText(/This Host keeps/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Restart Host" })).toBeNull();
+  });
+  it("lets an update carry the zone when one is due anyway", async () => {
+    mode.mockReturnValue("local");
+    docker.mockResolvedValue({
+      state: "running",
+      message: "Ready",
+      updateAvailable: true,
+      origin: "https://host.example",
+      hostZone: "UTC",
+      macZone: "Europe/Paris",
+      zoneDiffers: true,
+    });
+    mount();
+    await screen.findByText(
+      "This Host keeps UTC time. Your Mac is on Europe/Paris. Updating the Host also moves it to your time zone.",
+    );
+    expect(screen.getByRole("button", { name: "Back up and update host" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Restart Host" })).toBeNull();
+  });
+  it("says nothing about the zone of a Host this Mac does not manage", async () => {
+    docker.mockResolvedValue({
+      state: "running",
+      updateAvailable: false,
+      origin: "http://127.0.0.1:5000",
+      hostZone: "UTC",
+      macZone: "America/New_York",
+      zoneDiffers: true,
+    });
+    for (const local of [false, true]) {
+      mode.mockReturnValue(local ? "local" : "remote");
+      mount();
+      await screen.findByText("Compatibility");
+      expect(screen.queryByText("Time zone")).toBeNull();
+      expect(screen.queryByText(/This Host keeps/)).toBeNull();
+      cleanup();
+    }
+  });
   it("does not offer to replace a different local container", async () => {
     mode.mockReturnValue("local");
     docker.mockResolvedValue({

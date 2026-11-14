@@ -94,6 +94,10 @@ r2d2_sqlite = "0.25"
 # local zone; this is the smallest thing that has both.
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
+# The zone this Mac is on, by its IANA name, which is what a host container is
+# given as `TZ`. chrono already depends on it to find the local zone.
+iana-time-zone = "0.1"
+
 # Verifies a release manifest's Ed25519 signature before the updater installs
 # anything it names. Already compiled in for TLS; this names it directly.
 ring = "0.17"
