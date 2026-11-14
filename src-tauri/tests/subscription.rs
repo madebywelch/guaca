@@ -507,6 +507,7 @@ fn signed_in_where(
         quick_actions: Vec::new(),
         widgets: Vec::new(),
         attention: Default::default(),
+        delivery: Default::default(),
     };
 
     let sink = RecordingSink::new();
@@ -986,6 +987,7 @@ async fn a_real_subscription_answers_a_real_turn() {
         quick_actions: Vec::new(),
         widgets: Vec::new(),
         attention: Default::default(),
+        delivery: Default::default(),
     };
 
     let sink = RecordingSink::new();

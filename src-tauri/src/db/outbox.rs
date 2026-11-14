@@ -4,7 +4,9 @@
 //! Rows are written by the producers in their own commits, through [`enqueue`],
 //! and withdrawn the same way when what they announce is answered or seen.
 //! Everything else here is the dispatcher's: reading what is due, holding,
-//! gathering, offering, and the one claim that decides which window shows it.
+//! gathering, offering, and the one claim that decides which window shows it;
+//! and for the address the operator configured, the second row an offer writes
+//! while they are away, what is due to be sent, and how each attempt ended.
 
 use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 
@@ -14,9 +16,13 @@ use crate::domain::outbox::{
     Delivery, Destination, Draft, Gathered, Kind, Target, Why, EXPIRE_MS, GATHER_MS,
 };
 use crate::domain::outcome::Status as Ended;
+use crate::push::{Next, Push, Report, Said};
 
-/// Only the windows are delivered to yet.
+/// What producers write: every row starts as one for the windows.
 const CLIENTS: &str = Destination::Clients.as_str();
+
+/// What an offer made while the operator is away writes beside it.
+const ENDPOINT: &str = Destination::Endpoint.as_str();
 
 /// Writes a row in the caller's commit. False when its key already has one,
 /// which is how settling twice or raising an escalation twice in a day is one
@@ -167,6 +173,26 @@ fn read_delivery(row: &Row<'_>) -> rusqlite::Result<Result<Delivery, StoreError>
     })())
 }
 
+fn read_push(row: &Row<'_>) -> rusqlite::Result<Result<(Push, u32), StoreError>> {
+    let kind: String = row.get(1)?;
+    let status: Option<String> = row.get(6)?;
+    let push = Push {
+        id: row.get(0)?,
+        kind: Kind::Outcome,
+        title: row.get(2)?,
+        body: row.get(3)?,
+        agent: row.get(4)?,
+        group: row.get(5)?,
+        status: status.as_deref().and_then(Ended::parse),
+        created_at: row.get(7)?,
+    };
+    let attempts: u32 = row.get(8)?;
+    Ok(match Kind::parse(&kind) {
+        Some(kind) => Ok((Push { kind, ..push }, attempts)),
+        None => Err(corrupt("unknown kind", &kind)),
+    })
+}
+
 fn collect<T>(
     rows: impl Iterator<Item = rusqlite::Result<Result<T, StoreError>>>,
 ) -> Result<Vec<T>, StoreError> {
@@ -199,11 +225,13 @@ impl Store {
         collect(rows)
     }
 
-    /// When the dispatcher next has something to do, if it has anything.
+    /// When the dispatcher next has something to do, if it has anything: a row
+    /// for the windows not yet offered, or a push not yet sent.
     pub fn next_delivery_at(&self) -> Result<Option<i64>, StoreError> {
         Ok(self.conn()?.query_row(
             "SELECT min(next_attempt_at) FROM outbox
-              WHERE status='pending' AND offered_at IS NULL AND destination='clients'",
+              WHERE status='pending'
+                AND ((destination='clients' AND offered_at IS NULL) OR destination='endpoint')",
             [],
             |row| row.get(0),
         )?)
@@ -251,6 +279,11 @@ impl Store {
     /// one item for a gathering: the rows it carries, which may be none, are
     /// offered and claimed with it, and it is the row they all name.
     ///
+    /// With `push`, the operator is away and has an address: a row for it is
+    /// written in the same commit, saying that, so an offer is never made
+    /// without the push that goes with it. It names what it is about only for
+    /// a single item, which is what withdraws it when that is answered or seen.
+    ///
     /// None when the row is no longer pending: answered or seen in the moment
     /// since it was read, and then there is nothing to offer.
     pub fn offer_delivery(
@@ -258,6 +291,7 @@ impl Store {
         id: &str,
         carried: Option<&[String]>,
         item: &Gathered,
+        push: Option<&Said>,
         now: i64,
     ) -> Result<Option<Delivery>, StoreError> {
         let mut conn = self.conn()?;
@@ -278,6 +312,28 @@ impl Store {
                 "UPDATE outbox SET offered_at=?3, attempts=attempts+1, batch_id=?1
                   WHERE status='pending' AND id IN (SELECT value FROM json_each(?2))",
                 params![id, serde_json::to_string(carried).expect("ids serialize"), now],
+            )?;
+        }
+        if let Some(said) = push {
+            let single = carried.is_none_or(<[String]>::is_empty);
+            tx.execute(
+                "INSERT OR IGNORE INTO outbox (id,kind,destination,dedup_key,group_id,agent_id,
+                                               run_id,ref_id,title,body,target,next_attempt_at,
+                                               created_at)
+                 SELECT ?2,kind,?3,dedup_key,
+                        CASE WHEN ?4 THEN group_id END,CASE WHEN ?4 THEN agent_id END,
+                        CASE WHEN ?4 THEN run_id END,CASE WHEN ?4 THEN ref_id END,
+                        ?5,?6,target,?7,?7
+                   FROM outbox WHERE id=?1",
+                params![
+                    id,
+                    uuid::Uuid::new_v4().to_string(),
+                    ENDPOINT,
+                    single,
+                    said.title,
+                    said.body,
+                    now
+                ],
             )?;
         }
         let delivery = tx.query_row(
@@ -332,10 +388,78 @@ impl Store {
     pub fn claim_delivery(&self, id: &str, now: i64) -> Result<bool, StoreError> {
         let claimed = self.conn()?.execute(
             "UPDATE outbox SET status='delivered', delivered_at=?2
-              WHERE status='pending' AND offered_at IS NOT NULL
+              WHERE status='pending' AND offered_at IS NOT NULL AND destination='clients'
                 AND (batch_id=?1 OR (id=?1 AND batch_id IS NULL))",
             params![id, now],
         )?;
         Ok(claimed > 0)
+    }
+
+    /// Pushes whose time has come, oldest first, each with how many times it
+    /// has been tried. The names are read now, so a renamed agent is sent as
+    /// it is called today.
+    pub fn due_pushes(&self, now: i64) -> Result<Vec<(Push, u32)>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT o.id,o.kind,o.title,o.body,a.name,g.name,c.status,o.created_at,o.attempts
+               FROM outbox o
+               LEFT JOIN agents a ON a.id=o.agent_id
+               LEFT JOIN groups g ON g.id=o.group_id
+               LEFT JOIN outcomes c ON c.run_id=o.run_id AND o.kind IN ('outcome','failure')
+              WHERE o.status='pending' AND o.destination='endpoint' AND o.next_attempt_at<=?1
+              ORDER BY o.created_at, o.id",
+        )?;
+        let rows = stmt.query_map([now], read_push)?;
+        collect(rows)
+    }
+
+    /// Records how an attempt ended. Nothing, for a push withdrawn while it
+    /// was in the air: the operator has seen or answered what it was about.
+    pub fn record_push(&self, id: &str, next: &Next, now: i64) -> Result<(), StoreError> {
+        let (status, at, error) = match next {
+            Next::Sent => ("delivered", None, None),
+            Next::Again { at, error } => ("pending", Some(*at), Some(error.as_str())),
+            Next::Failed { error } => ("failed", None, Some(error.as_str())),
+        };
+        self.conn()?.execute(
+            "UPDATE outbox SET status=?2, attempts=attempts+1, offered_at=?3,
+                    next_attempt_at=coalesce(?4, next_attempt_at), last_error=?5,
+                    delivered_at=CASE WHEN ?2='delivered' THEN ?3 ELSE delivered_at END
+              WHERE id=?1 AND status='pending' AND destination='endpoint'",
+            params![id, status, now, at, error],
+        )?;
+        Ok(())
+    }
+
+    /// What the Notifications pane says about the address. The last attempt
+    /// is the newest push that was tried and not then withdrawn, since a
+    /// withdrawal says why it was withdrawn rather than how the attempt went.
+    pub fn push_report(&self) -> Result<Report, StoreError> {
+        let conn = self.conn()?;
+        let last_sent_at: Option<i64> = conn.query_row(
+            "SELECT max(delivered_at) FROM outbox
+              WHERE destination='endpoint' AND status='delivered'",
+            [],
+            |row| row.get(0),
+        )?;
+        let last: Option<(i64, String, Option<String>, i64)> = conn
+            .query_row(
+                "SELECT offered_at,status,last_error,next_attempt_at FROM outbox
+                  WHERE destination='endpoint' AND offered_at IS NOT NULL
+                    AND status IN ('pending','delivered','failed')
+                  ORDER BY offered_at DESC, rowid DESC LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?;
+        let Some((attempted, status, error, next)) = last else {
+            return Ok(Report { last_sent_at, ..Report::default() });
+        };
+        Ok(Report {
+            last_sent_at,
+            last_attempt_at: Some(attempted),
+            last_error: if status == "delivered" { None } else { error },
+            retry_at: (status == "pending").then_some(next),
+        })
     }
 }

@@ -72,20 +72,25 @@ impl Kind {
     }
 }
 
-/// Where a row goes. Only the windows for now. The table's CHECK already
-/// admits `endpoint`, so an address the operator configures later needs no
-/// migration, only a variant here.
+/// Where a row goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Destination {
     /// Every connected window is offered it, and the first to claim it shows it.
     Clients,
+    /// The address in the Host's `delivery` setting, which is how a person is
+    /// reached with every window closed. Written beside a window's row when
+    /// that row is offered while the operator is away, and sent rather than
+    /// offered: tried, and tried again, until the address takes it or a day
+    /// has gone by. See `push.rs`.
+    Endpoint,
 }
 
 impl Destination {
     pub const fn as_str(self) -> &'static str {
         match self {
             Destination::Clients => "clients",
+            Destination::Endpoint => "endpoint",
         }
     }
 }

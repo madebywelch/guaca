@@ -3246,6 +3246,18 @@ pub async fn pending_deliveries(state: &AppState) -> Reply<Vec<crate::domain::ou
 pub async fn claim_delivery(state: &AppState, id: String) -> Reply<bool> {
     Ok(state.runtime.claim_delivery(&id)?)
 }
+
+/// When a push last went out to the operator's address, and how the last
+/// attempt ended. Never the address.
+pub async fn push_report(state: &AppState) -> Reply<crate::push::Report> {
+    Ok(state.runtime.push_report()?)
+}
+
+/// Sends one push to the saved address now, and says what came back in words
+/// built from the status alone.
+pub async fn test_push(state: &AppState) -> Reply<String> {
+    state.runtime.test_push().await.map_err(|why| CommandError::new("delivery", why))
+}
 pub async fn answer_decision(
     state: &AppState,
     id: DecisionId,

@@ -360,6 +360,8 @@ surface! {
     mark_outcomes_seen(run_ids: Option<Vec<RunId>>, before: Option<i64>) -> Vec<RunId>,
     pending_deliveries() -> Vec<crate::domain::outbox::Delivery>,
     claim_delivery(id: String) -> bool,
+    push_report() -> crate::push::Report,
+    test_push() -> String,
     answer_decision(id: DecisionId, answer: String, updated_at: i64) -> WorkDecision,
     resume_decision(id: DecisionId) -> WorkDecision,
     snooze_decision(id: DecisionId, until: i64) -> (),
