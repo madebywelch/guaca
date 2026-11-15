@@ -1,0 +1,196 @@
+//! The socket a probe build opens, and what it does with each request.
+//!
+//! Owner-only and opt-in twice over. A build without the `probe` feature does
+//! not contain this file, and a probe build opens nothing unless the launch
+//! named a socket in `GUACA_PROBE_SOCKET`. The socket's directory has to be
+//! one only this account can enter, the socket itself is made readable by
+//! nobody else, and every connection is asked for its account again.
+
+// Optimizations on is the shape of a build someone ships: `tauri build`
+// without `--debug`, `install.sh`, the release workflow. Refused here so that
+// no flag, profile or script can put a control socket in one.
+#[cfg(not(debug_assertions))]
+compile_error!(
+    "the probe feature is for test builds only; build it with --debug, never for release"
+);
+
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+use parking_lot::Mutex;
+use serde_json::{json, Value};
+use tauri::{AppHandle, Manager, Runtime};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{UnixListener, UnixStream};
+
+use super::{Envelope, Reply, Request, State, Window, QUIET_ENV, SOCKET_ENV};
+use crate::tray::Tray;
+
+/// How long a page has to answer. A page that is loading answers as soon as
+/// it can; one that has not answered in this long is not going to.
+const PAGE: Duration = Duration::from_secs(10);
+
+/// The builder, before the app starts, for a launch the probe asked to be
+/// quiet.
+///
+/// The app activates itself when it finishes launching, whatever the launcher
+/// asked, which is the right thing when a person opened it and the wrong one
+/// for a script running beside them: it takes the keyboard from whatever they
+/// were typing in. A quiet launch asks macOS to activate it only if nothing
+/// else is active. The launch scenario leaves this off, because whether the
+/// real app takes the front is the question it is there to answer.
+pub fn prepare<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
+    if std::env::var_os(QUIET_ENV).is_some() {
+        builder.activate_ignoring_other_apps(false)
+    } else {
+        builder
+    }
+}
+
+/// Opens the socket, if this launch named one. Called once the tray exists.
+pub fn start(app: &AppHandle) {
+    let Some(path) = std::env::var_os(SOCKET_ENV).map(PathBuf::from) else { return };
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(err) = serve(app, &path).await {
+            tracing::error!(%err, "the probe channel did not open");
+        }
+    });
+}
+
+async fn serve(app: AppHandle, path: &Path) -> Result<(), String> {
+    let dir = path.parent().ok_or("the probe socket needs a directory")?;
+    let owner = std::fs::metadata(dir).map_err(|err| format!("{}: {err}", dir.display()))?.uid();
+    super::private_dir(dir, owner)?;
+    if path.exists() {
+        return Err(format!("{} already exists; the probe will not replace it", path.display()));
+    }
+    let listener = UnixListener::bind(path).map_err(|err| err.to_string())?;
+    // The socket is this process's own file, so its owner is the account the
+    // app runs as, which is the only one the directory may belong to.
+    let me = std::fs::metadata(path).map_err(|err| err.to_string())?.uid();
+    if me != owner {
+        let _ = std::fs::remove_file(path);
+        return Err(format!("{} belongs to another account", dir.display()));
+    }
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        .map_err(|err| err.to_string())?;
+    tracing::info!(socket = %path.display(), "the probe channel is open");
+    loop {
+        let (stream, _) = listener.accept().await.map_err(|err| err.to_string())?;
+        let admitted = stream.peer_cred().is_ok_and(|peer| super::admits(peer.uid(), me));
+        if !admitted {
+            tracing::warn!("the probe channel turned away a connection from another account");
+            continue;
+        }
+        tauri::async_runtime::spawn(connection(app.clone(), stream));
+    }
+}
+
+async fn connection(app: AppHandle, stream: UnixStream) {
+    let (read, mut write) = stream.into_split();
+    let mut lines = BufReader::new(read).lines();
+    while let Ok(Some(line)) = lines.next_line().await {
+        let reply = match super::parse(&line) {
+            Ok(Envelope { id, request }) => Reply::to(id, handle(&app, request).await),
+            Err(reply) => reply,
+        };
+        if write.write_all(reply.line().as_bytes()).await.is_err() {
+            return;
+        }
+    }
+}
+
+async fn handle(app: &AppHandle, request: Request) -> Result<Value, String> {
+    match request {
+        Request::Hello => Ok(json!({
+            "pid": std::process::id(),
+            "identifier": app.config().identifier,
+        })),
+        Request::State => state(app).await,
+        Request::Page { window, call } => page(app, &window, &call).await,
+        Request::ClickIcon => {
+            let tray = app.try_state::<Arc<Tray>>().ok_or("this launch has no menu bar icon")?;
+            let tray = Arc::clone(&tray);
+            blocking(move || tray.probe_click()).await?.map(|()| Value::Null)
+        }
+        Request::Close { window } => {
+            let window = app
+                .get_webview_window(&window)
+                .ok_or_else(|| format!("no window named {window}"))?;
+            blocking(move || window.close().map_err(|err| err.to_string()))
+                .await?
+                .map(|()| Value::Null)
+        }
+        Request::Hide => {
+            let app = app.clone();
+            blocking(move || app.hide().map_err(|err| err.to_string())).await?.map(|()| Value::Null)
+        }
+        Request::Quit => {
+            // After the answer is on its way, or the client hears a closed
+            // socket and cannot tell a quit from a crash.
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                app.exit(0);
+            });
+            Ok(Value::Null)
+        }
+    }
+}
+
+async fn state(app: &AppHandle) -> Result<Value, String> {
+    let notifications = serde_json::to_value(crate::notifications::current().await)
+        .map_err(|err| err.to_string())?;
+    let app = app.clone();
+    blocking(move || {
+        let windows = app
+            .webview_windows()
+            .into_iter()
+            .map(|(label, window)| Window {
+                label,
+                visible: window.is_visible().unwrap_or(false),
+                focused: window.is_focused().unwrap_or(false),
+                minimized: window.is_minimized().unwrap_or(false),
+            })
+            .collect();
+        let state = State {
+            identifier: app.config().identifier.clone(),
+            pid: std::process::id(),
+            windows,
+            notifications,
+            menubar: app.try_state::<Arc<Tray>>().map(|tray| tray.probe_view()),
+        };
+        serde_json::to_value(state).map_err(|err| err.to_string())
+    })
+    .await?
+}
+
+async fn page(app: &AppHandle, label: &str, call: &Value) -> Result<Value, String> {
+    let window = app.get_webview_window(label).ok_or_else(|| format!("no window named {label}"))?;
+    let (send, answer) = tokio::sync::oneshot::channel::<String>();
+    // The webview calls back once; the callback's type allows more.
+    let send = Mutex::new(Some(send));
+    window
+        .eval_with_callback(super::page_script(call), move |reported| {
+            if let Some(send) = send.lock().take() {
+                let _ = send.send(reported);
+            }
+        })
+        .map_err(|err| err.to_string())?;
+    match tokio::time::timeout(PAGE, answer).await {
+        Ok(Ok(reported)) => super::page_answer(&reported),
+        Ok(Err(_)) => Err(format!("the {label} window dropped the call")),
+        Err(_) => Err(format!("the {label} window did not answer in {}s", PAGE.as_secs())),
+    }
+}
+
+/// Window and tray calls hop to the main thread and wait for it, so they are
+/// made off the async pool.
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(work).await.map_err(|err| err.to_string())
+}

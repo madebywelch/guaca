@@ -126,12 +126,29 @@ key, no network, no spend.
 python3 .claude/skills/run-guaca/seed.py --help
 ```
 
+## Driving the real app without a person
+
+`scripts/probe.py` builds a test build with a control channel in it, runs it
+in the background against a scratch Host seeded with this skill's `seed.py`,
+and asserts on what macOS logged rather than on what the app says. It reads
+windows, focus, the notification permission and the menu bar; presses buttons
+and types into fields by role and name; and opens and closes the menu bar
+panel. No key, no spend, nothing written to the operator's profile.
+`docs/PROBE.md` says what each scenario proves.
+
+```sh
+scripts/probe.py --list
+scripts/probe.py --runs 1 panel
+```
+
 ## What you cannot do from here
 
 `screencapture` needs Screen Recording permission and `osascript` needs
-Accessibility, and neither is granted to the terminal. There is no way to
-screenshot or drive the real window from a shell. Use the harness for anything
-visual, and ask the operator to look when only the real app will do.
+Accessibility, and neither is granted to the terminal by default. Without them
+there is no way to screenshot the real window or press macOS's own dialogs from
+a shell, and the probe's screen scenarios (`allow`, `deny`, `click`,
+`capture`) fail saying so. Use the harness for anything visual, and ask the
+operator to look when only the real app will do.
 
 ## Before you say it works
 

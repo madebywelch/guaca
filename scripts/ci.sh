@@ -59,6 +59,16 @@ run_web() {
   step "Typecheck and build"
   pnpm build
 
+  # The probe's page bridge belongs only in a `vite build --mode probe`
+  # bundle (src/lib/probe.ts). The bundler folds it out of this one; checked on
+  # the output, because a guard rewritten into something the bundler cannot
+  # fold would ship it without a word.
+  step "No probe bridge in the shipped bundle"
+  if grep -rl "__guacaProbe" dist; then
+    echo "dist/ contains the probe bridge; only a --mode probe build may" >&2
+    exit 1
+  fi
+
   step "Release metadata contract"
   node --test scripts/release-manifest.test.mjs
 

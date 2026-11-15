@@ -64,6 +64,9 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
                       this machine writes the one the rail and the box draw.
   lib/limits.ts       The five bounds a conversation runs inside, in words.
   lib/updating.ts     How far an update has got, in steps and never in time.
+  lib/probe.ts        A test build's page answering the probe: elements by
+                      role and name, pressed, typed into and read. Folded out
+                      of every other build.
   components/         One file per surface.
     Memory.tsx        What an agent remembers, and what happens when both of
                       you write it at once.
@@ -166,6 +169,9 @@ src-tauri/src/
                       the one a double-clicked app is started with.
   testing.rs          What the unit tests share: a stand-in program written so
                       that no fork in the test process can hold it open.
+  probe.rs            The control channel a test build opens for
+                      `scripts/probe.py`, and why no shipped build has it.
+                      The socket itself is `probe/channel.rs`.
   pickup.rs           A sign-in this machine already has: the `claude` program
                       and the Codex CLI, asked about themselves and never read.
                       Detection only, and the Codex token is not imported.
@@ -257,6 +263,7 @@ repo: the frontend renders state and forwards intent.
 | Headers an operator gave a server: what is refused, where they go | *Headers, which are how the request arrives* in `docs/PLUGINS.md`, then `domain::plugin::Headers`, the loops in `mcp.rs` that apply them, and `oauth::Gate`, which is why they stop at one origin |
 | Testing an address or a connected plugin without connecting it | *Testing it is the whole path, minus the browser* in `docs/PLUGINS.md`, then `plugins::inspect` and `plugins::check` |
 | Anything about the wire: protocol versions, the handshake, headers | *Two protocol eras* in `docs/PLUGINS.md`, then `mcp.rs`, whose era probe is the one thing no offline test of a single server can check |
+| Testing what only a Mac does: the probe, its control channel and page bridge, its scenarios and observers, or the `probe` feature | `docs/PROBE.md`, then `src-tauri/src/probe.rs` and `src/lib/probe.ts`, and run `scripts/probe.py` on a Mac |
 | Running Guaca somewhere other than the operator's machine: the daemon, the token, a browser as the client | `docs/HOSTING.md`, then `server/mod.rs` and `src/lib/transport.ts`, and run `tests/server.rs` under `--no-default-features --features server` |
 | Updating a host from the app: the button, the updater on a box, the signed manifest, the restore after a failed update | *Updating a remote or externally managed host* in `docs/UPDATES.md`, then `host.rs` and `updater.rs`, and run `scripts/image.sh` and `scripts/box.sh` |
 | What an update shows while it runs: the bar, its steps, a box's host going silent, a rebuild's log | *Updating a host managed by the desktop* in `docs/UPDATES.md`, then `src/lib/updating.ts` and the suite beside it, which reads the step names from `host.rs` and `install.sh` |
@@ -572,6 +579,7 @@ the source rather than at the end.
 ./scripts/ci.sh          # lint, typecheck, build, every test suite, the icons
 ./scripts/ci.sh rust     # Rust only
 ./scripts/image.sh       # the daemon's image: build it, run it, prove it answers
+scripts/probe.py         # on a Mac: what only a Mac does, see docs/PROBE.md
 GUAC_LOG=guac=debug pnpm app
 ```
 
