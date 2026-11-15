@@ -313,6 +313,55 @@ mod tests {
     }
 
     #[test]
+    fn recovery_marks_only_follow_through_the_restart_cut_off() {
+        // Two answered decisions. One's follow-through finished before the
+        // restart, the other's was still running. Only the second was cut off.
+        //
+        // This is also why the decisions are read before the conversations:
+        // recovering a conversation deletes its recovery point, and that row
+        // is the only thing that tells a run cut off from one that finished.
+        // Read after it, the second decision would look finished too.
+        use crate::domain::agent::CleanDraft;
+        use crate::domain::decision::DecisionRequest;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("guac.db")).unwrap();
+        let agent = store
+            .create_agent(&CleanDraft {
+                group_id: None,
+                name: "Assistant".into(),
+                avatar: "orb".into(),
+                color: "#7fb069".into(),
+                model: "test".into(),
+                subscription_model: None,
+                reasoning_effort: None,
+                system_prompt: String::new(),
+                skills: vec![],
+            })
+            .unwrap();
+        let answered = |topic: &str| {
+            let request = DecisionRequest {
+                question: "10 or 11?".into(),
+                context: String::new(),
+                recommendation: String::new(),
+                options: vec!["10".into(), "11".into()],
+                source: String::new(),
+            };
+            let filed =
+                store.request_decision(agent.id, agent.group_id, topic, request, None, 1).unwrap();
+            store.answer_decision(filed.id, "11", false, None, 2).unwrap()
+        };
+        let (finished, delivery) = answered("finished");
+        store.settle_run(delivery.run_id).unwrap();
+        let (cut, _) = answered("cut");
+
+        recover(&store).unwrap();
+        let after = store.decisions(None).unwrap();
+        let interrupted = |id| after.iter().find(|d| d.id == id).unwrap().interrupted;
+        assert!(!interrupted(finished.id), "follow-through that had settled was reported cut off");
+        assert!(interrupted(cut.id), "follow-through the restart cut off was not reported");
+    }
+
+    #[test]
     fn the_database_and_the_settings_are_not_the_same_file() {
         // They have different writers and one of them writes in the background.
         let paths = Paths::under(Path::new("/srv/guaca"));
