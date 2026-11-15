@@ -146,6 +146,60 @@ describe("whether anyone is at the window", () => {
     );
   });
 
+  describe("a page that is hidden and still says it has focus", () => {
+    // What a Mac's webview does when Guaca is hidden: no blur, the document
+    // keeps reporting focus, and only the visibility changes.
+    let visibility: DocumentVisibilityState = "visible";
+    beforeEach(() => {
+      visibility = "visible";
+      vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+    });
+    const hide = async () => {
+      visibility = "hidden";
+      await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+    };
+
+    it("reports losing focus when it is hidden", async () => {
+      renderHook(() => useReportView(channel));
+      await act(async () => vi.advanceTimersByTime(500));
+      await hide();
+      expect(reportView).toHaveBeenLastCalledWith(channel, gone);
+    });
+
+    it("says nothing on the beat while it is hidden, so the Host counts the operator away", async () => {
+      renderHook(() => useReportView(channel));
+      await act(async () => vi.advanceTimersByTime(500));
+      await hide();
+      const said = reportView.mock.calls.length;
+      await act(async () => vi.advanceTimersByTime(5 * 60_000));
+      expect(reportView).toHaveBeenCalledTimes(said);
+    });
+
+    it("reports nothing for what it shows while it is hidden", async () => {
+      const { rerender } = renderHook((view: OperatorView) => useReportView(view), {
+        initialProps: channel,
+      });
+      await act(async () => vi.advanceTimersByTime(500));
+      await hide();
+      const said = reportView.mock.calls.length;
+      rerender(limits);
+      await act(async () => {
+        window.dispatchEvent(new Event("focus"));
+        vi.advanceTimersByTime(500);
+      });
+      expect(reportView).toHaveBeenCalledTimes(said);
+    });
+
+    it("is the operator's again once it is shown with focus", async () => {
+      renderHook(() => useReportView(channel));
+      await act(async () => vi.advanceTimersByTime(500));
+      await hide();
+      visibility = "visible";
+      await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+      expect(reportView).toHaveBeenLastCalledWith(channel, here);
+    });
+  });
+
   it("stops the beat when the page goes away", async () => {
     const { unmount } = renderHook(() => useReportView(channel));
     await act(async () => vi.advanceTimersByTime(500));

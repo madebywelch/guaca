@@ -275,7 +275,8 @@ impl Store {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
-        let (batch, closes) = open.unwrap_or_else(|| (id.to_string(), now + GATHER_MS));
+        let (batch, closes) =
+            open.unwrap_or_else(|| (id.to_string(), now + crate::probe_clock::scaled(GATHER_MS)));
         tx.execute(
             "UPDATE outbox SET attempts=attempts+1, batch_id=?2, next_attempt_at=?3
               WHERE id=?1 AND status='pending'",
