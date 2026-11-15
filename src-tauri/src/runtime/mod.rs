@@ -2807,7 +2807,10 @@ impl Runtime {
                 continue;
             }
             let notes = match self.inner.store.working_notes(one.agent) {
-                Ok(notes) => notes.iter().map(|note| prompt::note_line(note, now)).collect(),
+                Ok(notes) => notes
+                    .iter()
+                    .map(|note| prompt::note_line(note, now).trim_end().to_string())
+                    .collect(),
                 Err(err) => {
                     tracing::warn!(%err, "could not read working notes for a tidy; trying later");
                     continue;

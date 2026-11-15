@@ -8284,7 +8284,7 @@ async fn an_opted_in_agent_is_tidied_once_at_the_hour_on_what_its_work_ended_wit
         format!(
             "[SYSTEM]\n{TIDY}\n\n{}\n\n{}",
             prompt::reported_line(ended.finished_at, &ended.headline, ended.status, at),
-            prompt::note_line(&notes[0], at),
+            prompt::note_line(&notes[0], at).trim_end(),
         ),
         "the tidy, then what the work ended with, then the working notes"
     );

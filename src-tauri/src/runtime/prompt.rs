@@ -933,7 +933,6 @@ pub fn system_prompt(
         // against it says the thing it waits for is not coming.
         for note in working_notes {
             volatile.push_str(&note_line(note, now));
-            volatile.push('\n');
         }
         volatile.push_str(
             "\nRead the ages. Something you noted days ago that has not moved is something to \
@@ -1505,10 +1504,10 @@ pub fn reported_line(finished_at: i64, headline: &str, status: Status, now: i64)
 /// One working note as the prompt draws it: its age, then the note whole, at
 /// most `worknote::MAX_NOTE`. A line cut to a routine's width lost the part of a
 /// note that said who it was waiting on. An overnight tidy is handed its notes
-/// in this shape too.
+/// in this shape too, less the line break that ends it here.
 pub fn note_line(note: &WorkingNote, now: i64) -> String {
     format!(
-        "- {} — {}",
+        "- {} — {}\n",
         worknote::how_long_ago(note.at, now),
         note.body.split_whitespace().collect::<Vec<_>>().join(" ")
     )
