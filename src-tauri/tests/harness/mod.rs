@@ -867,6 +867,7 @@ fn parts_of(envelope: &Envelope) -> String {
                 request.question
             ),
             Part::Json { name, .. } => format!("[{name}]"),
+            Part::Tidy { reported, .. } => format!("[tidy of {} lines]", reported.len()),
         })
         .collect::<Vec<_>>()
         .join(" ")

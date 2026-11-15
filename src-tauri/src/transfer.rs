@@ -368,10 +368,15 @@ pub fn import(
     if serde_json::to_vec(&archive).map_err(|e| e.to_string())?.len() > MAX_ARCHIVE {
         return Err("The group file exceeds 64 MB.".into());
     }
-    let clean =
-        crate::domain::group::GroupDraft { name, inference: None, api_key: None, limits: None }
-            .validate()
-            .map_err(|e| e.to_string())?;
+    let clean = crate::domain::group::GroupDraft {
+        name,
+        inference: None,
+        api_key: None,
+        limits: None,
+        tidy: None,
+    }
+    .validate()
+    .map_err(|e| e.to_string())?;
     if archive.tables.get("groups").map(Vec::len) != Some(1) {
         return Err("A group file must contain exactly one group.".into());
     }

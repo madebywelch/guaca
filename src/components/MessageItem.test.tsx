@@ -772,3 +772,47 @@ describe("a routine coming due", () => {
     expect(openRoutine).toHaveBeenCalledWith("rt1");
   });
 });
+
+describe("an overnight tidy", () => {
+  const tidy = envelope({
+    from: { kind: "system" },
+    to: { kind: "agent", id: "manager" },
+    intent: "work",
+    expectsReply: false,
+    parts: [
+      {
+        type: "tidy",
+        reported: ["- 2h ago — Booked the venue."],
+        notes: ["- 1h ago — Waiting on the caterer's quote."],
+      },
+    ],
+  });
+
+  it("is one line saying it ran, and nothing it handed the agent", () => {
+    // What it carried was written for the agent to read at three in the
+    // morning. As a bubble it would be Guaca reciting the operator's own week
+    // back to them in the middle of their conversation.
+    show(tidy);
+    expect(screen.getByText("Overnight memory tidy")).toBeTruthy();
+    expect(screen.getByText("ran")).toBeTruthy();
+    expect(screen.queryByText(/Booked the venue/)).toBeNull();
+    expect(screen.queryByText(/caterer/)).toBeNull();
+    expect(screen.queryByText(/Time to tidy/)).toBeNull();
+    expect(screen.queryByText("Guaca")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("tells the time the way a routine's line does", () => {
+    const routine = envelope({
+      from: { kind: "system" },
+      to: { kind: "agent", id: "manager" },
+      intent: "work",
+      parts: [{ type: "routine", routineId: "rt1", name: "Sweep", what: "Sweep.", payload: null }],
+    });
+    const { container: ran } = show(tidy);
+    const { container: fired } = show(routine);
+    const time = (container: HTMLElement) => container.querySelector(".wire__meta")?.textContent;
+    expect(time(ran)).toBeTruthy();
+    expect(time(ran)).toBe(time(fired));
+  });
+});

@@ -74,6 +74,18 @@ pub enum ReplyMode {
     /// turn that handed the work out was made to report, and the turn that
     /// read what came of it was invited not to. Owed, like `Assigned`.
     Closing(WorkFrom),
+    /// The overnight tidy of this agent's memory: the clock's message, read by
+    /// a turn offered three tools and nothing else. What it says at the end is
+    /// read by nobody and kept nowhere.
+    ///
+    /// Told nothing about its reply, and not where the operator is. Both of
+    /// those sections tell a turn what its final message is for and how to
+    /// reach the operator with tools this turn does not have, and the message
+    /// it is answering already says how it ends. The stable block above them
+    /// is kept exactly, which is what lets a tidy read it from the provider's
+    /// cache, though it describes tools a tidy is not offered: the list the
+    /// model is sent is what decides what it can call.
+    Tidy,
 }
 
 /// Where the work a closing turn finishes came from, said to it as the reason
@@ -920,13 +932,7 @@ pub fn system_prompt(
         // with no dates says an agent is waiting; the same list with "6d ago"
         // against it says the thing it waits for is not coming.
         for note in working_notes {
-            volatile.push_str(&format!(
-                "- {} — {}\n",
-                worknote::how_long_ago(note.at, now),
-                // Whole, at most `worknote::MAX_NOTE`. A line cut to a routine's
-                // width lost the part of a note that said who it was waiting on.
-                note.body.split_whitespace().collect::<Vec<_>>().join(" ")
-            ));
+            volatile.push_str(&note_line(note, now));
         }
         volatile.push_str(
             "\nRead the ages. Something you noted days ago that has not moved is something to \
@@ -1018,6 +1024,7 @@ pub fn system_prompt(
 /// runs can have this block swapped for the new one with nothing else moved.
 pub fn reply_section(mode: &ReplyMode) -> String {
     let said = match mode {
+        ReplyMode::Tidy => return String::new(),
         ReplyMode::ToOperator => "Your final message goes to the human operator. Be direct and \
              brief. Put the answer or the result in the first line; any detail goes after it.\n"
             .to_string(),
@@ -1320,7 +1327,10 @@ pub fn build_messages(
     ))];
 
     for envelope in history {
-        if is_empty(envelope) {
+        // A tidy is drawn only in the turn it starts. Its lists are stale by
+        // the next one, which draws memory and notes fresh, and the window
+        // that fetched this history leaves it out for the same reason.
+        if is_empty(envelope) || envelope.is_tidy() {
             continue;
         }
         match envelope.from {
@@ -1472,19 +1482,35 @@ pub fn reported_section(reported: &[Outcome], now: i64) -> String {
          what was done; the conversation itself is in your channel.\n",
     );
     for one in reported {
-        let word = match one.status {
-            Status::Failed | Status::Stopped | Status::Interrupted => {
-                format!(" ({})", one.status.as_str())
-            }
-            Status::Done | Status::NeedsYou | Status::NothingNew => String::new(),
-        };
-        out.push_str(&format!(
-            "- {}: {}{word}\n",
-            worknote::how_long_ago(one.finished_at, now),
-            one.headline
-        ));
+        out.push_str(&reported_line(one.finished_at, &one.headline, one.status, now));
+        out.push('\n');
     }
     out
+}
+
+/// One finished run as the line it ended with, aged, with a word only for an
+/// ending worth knowing before the line is read. The shape this section and
+/// an overnight tidy both draw, so an agent reads its own lines one way.
+pub fn reported_line(finished_at: i64, headline: &str, status: Status, now: i64) -> String {
+    let word = match status {
+        Status::Failed | Status::Stopped | Status::Interrupted => {
+            format!(" ({})", status.as_str())
+        }
+        Status::Done | Status::NeedsYou | Status::NothingNew => String::new(),
+    };
+    format!("- {}: {headline}{word}", worknote::how_long_ago(finished_at, now))
+}
+
+/// One working note as the prompt draws it: its age, then the note whole, at
+/// most `worknote::MAX_NOTE`. A line cut to a routine's width lost the part of a
+/// note that said who it was waiting on. An overnight tidy is handed its notes
+/// in this shape too, less the line break that ends it here.
+pub fn note_line(note: &WorkingNote, now: i64) -> String {
+    format!(
+        "- {} — {}\n",
+        worknote::how_long_ago(note.at, now),
+        note.body.split_whitespace().collect::<Vec<_>>().join(" ")
+    )
 }
 
 /// Adds [`reported_section`] to the system message a turn was built with.
@@ -4203,6 +4229,32 @@ mod tests {
             panic!("no system message")
         };
         content
+    }
+
+    #[test]
+    fn a_tidy_reads_the_same_stable_block_and_no_reply_section() {
+        // A tidy is answered by nobody, so it is not told how its reply is
+        // drawn or who reads it. Everything before the boundary is kept byte
+        // for byte, which is what lets it read the prefix from the provider's
+        // cache, even though that part describes tools a tidy is not offered.
+        // Where the operator is never reaches a tidy either: the turn leaves it
+        // out rather than the prompt, and the cascade suite holds that half.
+        let me = card("Manager");
+        let at = crate::domain::now_ms() - 60_000;
+        let normal = every_section(&me, ReplyMode::ToOperator, at);
+        let tidy = every_section(&me, ReplyMode::Tidy, at);
+
+        assert_eq!(tidy.stable(), normal.stable());
+        assert!(normal.volatile().contains(REPLY_HEADING), "{}", normal.volatile());
+        assert!(!tidy.contains("## Your reply"), "{}", tidy.volatile());
+        // Each call draws fresh ids for its routine and its occasion, so the
+        // two are compared by their sections rather than byte for byte.
+        let headings = |text: &str| -> Vec<String> {
+            text.lines().filter(|line| line.starts_with("## ")).map(str::to_string).collect()
+        };
+        let mut kept = headings(normal.volatile());
+        kept.retain(|heading| heading != "## Your reply");
+        assert_eq!(headings(tidy.volatile()), kept, "nothing but the reply section is left out");
     }
 
     #[test]

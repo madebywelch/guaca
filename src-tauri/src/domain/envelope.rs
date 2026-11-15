@@ -279,6 +279,52 @@ pub enum Part {
         answer: String,
         resumed: bool,
     },
+    /// The clock handing an agent its overnight tidy. See [`TIDY`].
+    ///
+    /// The two lists are drawn when the clock hands it over, in the shapes the
+    /// prompt draws them in, and kept as drawn: a line that said "2h ago" at
+    /// three in the morning said it then. The words around them are not kept,
+    /// because they are this build's and are the same for every tidy.
+    ///
+    /// A part of its own, and not a text part, for two readers. The transcript
+    /// draws it as one line rather than as Guaca talking to the operator, and
+    /// the history window leaves it out of every later turn: what it carried
+    /// is stale by morning, and the prompt draws both lists fresh.
+    Tidy {
+        /// The lines this agent's work ended with since its last tidy, newest
+        /// first.
+        reported: Vec<String>,
+        /// Its working notes, oldest first.
+        notes: Vec<String>,
+    },
+}
+
+/// What an agent is told when the clock hands it its overnight tidy, ahead of
+/// the lines and the notes it carries. The words are fixed by approval; a test
+/// in the prompt pins the whole message.
+pub const TIDY: &str = "Time to tidy your memory. Nothing is waiting on you and nobody will read \
+     a reply.\n\n\
+     Below are the lines your work has ended with since you last tidied, and your working \
+     notes. Read them against your memory page above. Then, only if it would make your next \
+     turns better, rewrite the page with `update_memory`: correct what these show to be wrong, \
+     remove what is no longer true, and add what you keep having to work out again. Keep it \
+     short: you read this page at the start of every turn, so it is not an archive, and detail \
+     belongs in your notebook.\n\n\
+     If nothing needs changing, reply with nothing. Do not message anyone, and do not start \
+     other work.";
+
+/// The tidy as the model reads it: the words, then each list as a block of
+/// its own. A list with nothing in it is left out with the blank line before
+/// it, so a tidy never ends on an empty block.
+fn tidy(reported: &[String], notes: &[String]) -> String {
+    let mut out = String::from(TIDY);
+    for block in [reported, notes] {
+        if !block.is_empty() {
+            out.push_str("\n\n");
+            out.push_str(&block.join("\n"));
+        }
+    }
+    out
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -410,6 +456,7 @@ impl Part {
             Part::Decision { id, request, answer, resumed } => {
                 Some(Cow::Owned(decision::delivery(*id, request, answer, *resumed)))
             }
+            Part::Tidy { reported, notes } => Some(Cow::Owned(tidy(reported, notes))),
             _ => None,
         }
     }
@@ -483,6 +530,11 @@ impl Envelope {
             .join("\n")
             .trim()
             .to_string()
+    }
+
+    /// Whether this is the clock handing its agent an overnight tidy.
+    pub fn is_tidy(&self) -> bool {
+        self.parts.iter().any(|part| matches!(part, Part::Tidy { .. }))
     }
 
     /// True when both ends are agents, which is what the flow board shows.
@@ -781,5 +833,55 @@ mod tests {
 
         let human = serde_json::to_value(Participant::Human).unwrap();
         assert_eq!(human["kind"], "human");
+    }
+
+    #[test]
+    fn a_tidy_reads_exactly_the_approved_words_then_each_list_that_has_lines() {
+        // The one sentence a tidy adds to what a model reads, pinned whole.
+        // A change to it is a change to every agent's memory every night.
+        let approved = "Time to tidy your memory. Nothing is waiting on you and nobody will \
+                        read a reply.\n\nBelow are the lines your work has ended with since you \
+                        last tidied, and your working notes. Read them against your memory page \
+                        above. Then, only if it would make your next turns better, rewrite the \
+                        page with `update_memory`: correct what these show to be wrong, remove \
+                        what is no longer true, and add what you keep having to work out again. \
+                        Keep it short: you read this page at the start of every turn, so it is \
+                        not an archive, and detail belongs in your notebook.\n\nIf nothing needs \
+                        changing, reply with nothing. Do not message anyone, and do not start \
+                        other work.";
+        assert_eq!(TIDY, approved);
+        assert!(!TIDY.contains('\u{2014}'));
+
+        let tidy = |reported: &[&str], notes: &[&str]| Envelope {
+            id: MessageId::new(),
+            run_id: RunId::new(),
+            channel_id: AgentId::new(),
+            from: Participant::System,
+            to: Participant::Human,
+            parts: vec![Part::Tidy {
+                reported: reported.iter().map(|s| s.to_string()).collect(),
+                notes: notes.iter().map(|s| s.to_string()).collect(),
+            }],
+            trust: Trust::System,
+            hop: 0,
+            expects_reply: false,
+            intent: Intent::Work,
+            cause: None,
+            created_at: 0,
+        };
+        let both =
+            tidy(&["- 2h ago, done: Booked.", "- 1d ago, failed: Lost."], &["- 3h ago: Waiting."]);
+        assert!(both.is_tidy());
+        assert_eq!(
+            both.plain_text(),
+            format!(
+                "{TIDY}\n\n- 2h ago, done: Booked.\n- 1d ago, failed: Lost.\n\n- 3h ago: Waiting."
+            )
+        );
+        assert_eq!(
+            tidy(&["- 2h ago, done: Booked."], &[]).plain_text(),
+            format!("{TIDY}\n\n- 2h ago, done: Booked."),
+            "no notes, so no empty block and no blank line before one"
+        );
     }
 }

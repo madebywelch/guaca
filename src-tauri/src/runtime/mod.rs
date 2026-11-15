@@ -76,6 +76,10 @@ struct Reading {
     /// rewrite is made from. `None` writes unconditionally, which is an errand,
     /// and an errand is not given the tool.
     memory: Option<String>,
+    /// In a tidy, the longest page it may save, in the characters a save
+    /// counts: the page as the tidy found it, or [TIDY_FLOOR], whichever is
+    /// longer.
+    tidy_limit: Option<usize>,
 }
 
 impl Reading {
@@ -114,7 +118,13 @@ impl Reading {
     /// and errands run side by side, so another errand may have moved that
     /// browser before this one presses anything.
     fn for_errand(&self) -> Reading {
-        Reading { ingested: self.ingested, url: self.url.clone(), allowed: None, memory: None }
+        Reading {
+            ingested: self.ingested,
+            url: self.url.clone(),
+            allowed: None,
+            memory: None,
+            tidy_limit: None,
+        }
     }
 }
 
@@ -742,6 +752,38 @@ const ENDED_BY_RESTART: &str = "The host restarted while this was waiting for th
 /// be rebuilt in memory at startup. The cost of the interval is lateness, and
 /// twenty seconds is under the resolution anything here can be scheduled at.
 const SCHEDULE_TICK: Duration = Duration::from_secs(20);
+
+/// What a turn the run's budget cut short says in its channel.
+fn spent_notice(limits: GuardLimits, name: &str) -> Part {
+    Part::Notice {
+        kind: NoticeKind::GuardStop,
+        text: format!(
+            "This conversation hit its budget of {} model calls, so {name} stopped early.",
+            limits.max_steps_per_run
+        ),
+    }
+}
+
+/// What a turn the operator stopped says in its channel.
+fn stopped_notice(name: &str) -> Part {
+    Part::Notice {
+        kind: NoticeKind::GuardStop,
+        text: format!(
+            "You stopped this conversation. {name} dropped the model call it was in, started \
+             nothing else, and nothing was sent on. Send it again if you want it finished."
+        ),
+    }
+}
+
+/// The most rounds an overnight tidy gets. Reading two lists against a page
+/// and writing the page back is two or three; six leaves room for a notebook
+/// write and a note without letting a tidy become a night's work.
+const TIDY_ROUNDS: usize = 6;
+
+/// The length a tidy may always grow a page to. The limit is there to stop a
+/// long page getting longer every night; a short page is not that problem,
+/// and held to its own length it has no room for the line a tidy came to add.
+const TIDY_FLOOR: usize = 2_000;
 
 /// How often the compost is checked for agents whose thirty days are up.
 ///
@@ -2646,6 +2688,7 @@ impl Runtime {
             loop {
                 runtime.sweep_decisions(now_ms());
                 runtime.sweep_schedule().await;
+                runtime.sweep_tidy(now_ms());
                 // Swept before the first wait rather than after it, so anything
                 // already overdue at launch runs now instead of sitting out a
                 // tick that starts the moment the app opens.
@@ -2742,6 +2785,94 @@ impl Runtime {
                 Ok(_) => {}
                 Err(err) => tracing::warn!(%err, "a routine could not be delivered"),
             }
+        }
+    }
+
+    /// Hands each agent whose group tidies memory overnight its tidy, once the
+    /// hour has struck since it was last seen to.
+    ///
+    /// The runtime's own clock and not a routine: nothing is written to the
+    /// agent's schedule, so a tidy is not one of the routines an agent may
+    /// keep, and not a firing in any routine's history. The hour is the last
+    /// one struck on the host's clock, so a host that was off for a week tidies
+    /// once when it is back, and an agent busy at the hour is tidied on the
+    /// first sweep that finds it idle.
+    ///
+    /// An agent with nothing finished since it was last seen to is marked seen
+    /// to and handed nothing. A run it finishes later that morning waits for
+    /// the next night rather than starting a tidy at ten.
+    pub fn sweep_tidy(&self, now: i64) {
+        // As with the schedule: a host that is stopping hands out nothing, and
+        // the next one's first sweep finds the night still owed.
+        if self.draining() {
+            return;
+        }
+        let due = match self.inner.store.tidy_due() {
+            Ok(due) => due,
+            Err(err) => {
+                tracing::warn!(%err, "could not read who tidies tonight; waiting for the next tick");
+                return;
+            }
+        };
+        for one in due {
+            let Some(struck) = crate::domain::group::Tidy::last_struck(one.hour, now) else {
+                continue;
+            };
+            if one.since >= struck || self.working(one.agent) {
+                continue;
+            }
+            let notes = match self.inner.store.working_notes(one.agent) {
+                Ok(notes) => notes
+                    .iter()
+                    .map(|note| prompt::note_line(note, now).trim_end().to_string())
+                    .collect(),
+                Err(err) => {
+                    tracing::warn!(%err, "could not read working notes for a tidy; trying later");
+                    continue;
+                }
+            };
+            let mut runs = self.inner.runs.lock();
+            let claimed = self.inner.store.claim_tidy(one.agent, struck, now, |lines| Envelope {
+                id: MessageId::new(),
+                run_id: RunId::new(),
+                channel_id: one.agent,
+                from: Participant::System,
+                to: Participant::Agent { id: one.agent },
+                parts: vec![Part::Tidy {
+                    reported: lines
+                        .iter()
+                        .map(|(at, headline, status)| {
+                            prompt::reported_line(*at, headline, *status, now)
+                        })
+                        .collect(),
+                    notes,
+                }],
+                trust: Trust::System,
+                hop: 0,
+                // Nobody waits on what it says, and it is not a request for a
+                // reply: see `ReplyMode::Tidy`.
+                expects_reply: false,
+                intent: Intent::Work,
+                cause: None,
+                created_at: now_ms(),
+            });
+            let envelope = match claimed {
+                Ok(Some(envelope)) => envelope,
+                Ok(None) => continue,
+                Err(err) => {
+                    tracing::warn!(%err, "could not hand an agent its tidy; trying later");
+                    continue;
+                }
+            };
+            tracing::info!(agent = %one.agent.short(), "an overnight tidy came due");
+            if runs.draining {
+                drop(runs);
+                self.inner.events.emit(UiEvent::MessageAppended { message: Box::new(envelope) });
+                continue;
+            }
+            self.book(&mut runs, envelope.run_id);
+            drop(runs);
+            self.enqueue_delivery(envelope);
         }
     }
 
@@ -2878,7 +3009,10 @@ impl Runtime {
             run_id,
             channel_id: agent,
             to: Participant::Agent { id: agent },
-            cause: Some(original.id),
+            // Not for a tidy, which is sent again as a tidy and nothing more. A
+            // cause is what makes a run a retry, and a retry has an outcome:
+            // the operator's Try again would put a tidy in their finished work.
+            cause: (!original.is_tidy()).then_some(original.id),
             created_at: now_ms(),
             ..original
         };
@@ -3593,7 +3727,13 @@ impl Runtime {
         // agent mid-task: an explicit instruction to send an email arrives with
         // no reply expected, so the turn was told nothing needed doing.
         let assigned = batch.iter().chain(&absorbed).any(|e| e.intent.is_work());
+        // The clock's overnight tidy, which is a turn of its own kind from top
+        // to bottom: three tools, six rounds, nobody reading what it says.
+        // Decided from the batch alone, because a tidy is only ever handed to
+        // an idle agent and nothing else is ever taken into one.
+        let tidying = batch.iter().any(Envelope::is_tidy);
         let mut mode = match reply_target {
+            _ if tidying => ReplyMode::Tidy,
             Some(Participant::Human) => ReplyMode::ToOperator,
             Some(Participant::Agent { .. }) => ReplyMode::ToPeer,
             // A routine coming due is the other way an agent is handed work
@@ -3906,11 +4046,15 @@ impl Runtime {
         }
         // Last in the system prompt, and the only part of it that moves with
         // the operator rather than with the agent.
-        let (presence, last_window) = self.presence();
-        prompt::add_presence(&mut messages, &presence, last_window, card.id, now_ms());
-        match self.inner.store.decisions(Some(card.id)) {
-            Ok(decisions) => prompt::add_decisions(&mut messages, &decisions),
-            Err(err) => tracing::warn!(%err, "could not read the agent's decisions"),
+        // Not for a tidy, which has no way to reach the operator and no tool
+        // to read a decision with: see `ReplyMode::Tidy`.
+        if !tidying {
+            let (presence, last_window) = self.presence();
+            prompt::add_presence(&mut messages, &presence, last_window, card.id, now_ms());
+            match self.inner.store.decisions(Some(card.id)) {
+                Ok(decisions) => prompt::add_decisions(&mut messages, &decisions),
+                Err(err) => tracing::warn!(%err, "could not read the agent's decisions"),
+            }
         }
         self.deliver_files(&card, &batch, modalities, &mut messages).await;
         if !absorbed.is_empty() {
@@ -3953,7 +4097,11 @@ impl Runtime {
         let mut addressed: HashSet<AgentId> = HashSet::new();
         // What this turn has read off the web, and where from, and which
         // version of its memory it was shown.
-        let mut reading = Reading { memory: Some(memory.version.clone()), ..Reading::default() };
+        let mut reading = Reading {
+            memory: Some(memory.version.clone()),
+            tidy_limit: tidying.then(|| memory.content.trim().chars().count().max(TIDY_FLOOR)),
+            ..Reading::default()
+        };
         // Files `attach_file` has put on the answer this turn has not written
         // yet. Collected here rather than sent as they arrive, because they
         // belong on the message the agent is still composing: a file delivered
@@ -3984,8 +4132,15 @@ impl Runtime {
             .into_iter()
             .chain(tools::specs(surfaces, modalities))
             .collect();
+        let offered = if tidying { tools::for_tidy(offered) } else { offered };
 
-        let max_rounds = limits.max_tool_rounds as usize;
+        let max_rounds = if tidying {
+            TIDY_ROUNDS.min(limits.max_tool_rounds as usize)
+        } else {
+            limits.max_tool_rounds as usize
+        };
+        // A tidy that named a tool it was not offered. See the loop below.
+        let mut strayed = false;
         for round in 0..max_rounds {
             // Before the step is claimed, and that ordering is the whole reason
             // this check is here rather than a line lower. A run's steps have to
@@ -4063,9 +4218,11 @@ impl Runtime {
                     "turn tool definitions"
                 );
             }
-            let completion = self
-                .stream_with_retries(&inference, &request, run_id, agent_id, Some(&mut stream))
-                .await;
+            // A tidy's words are read by nobody, so they are not drawn either:
+            // an operator up at three would watch a bubble that never lands.
+            let pen = if tidying { None } else { Some(&mut stream) };
+            let completion =
+                self.stream_with_retries(&inference, &request, run_id, agent_id, pen).await;
 
             let completion = match completion {
                 Ok(Some(completion)) => completion,
@@ -4109,7 +4266,9 @@ impl Runtime {
                 // for had made two calls already and still closed on a promise
                 // about two more, because what backs a sentence is a call made
                 // before it rather than anywhere in the turn.
-                let unbacked = (!nudged && round + 1 < max_rounds)
+                // Not in a tidy, whose last words go nowhere: nobody waits on a
+                // promise in them, and the nudge speaks of an operator reading.
+                let unbacked = (!nudged && !tidying && round + 1 < max_rounds)
                     .then(|| promise::promises_work(&completion.content))
                     .flatten();
                 if let Some(said) = unbacked {
@@ -4151,6 +4310,22 @@ impl Runtime {
                 // cancellation handle of its own.
                 if self.stopped(run_id) {
                     called_off = true;
+                    break;
+                }
+
+                // A tidy offered three tools that names another is not run and
+                // not answered: the turn ends here, as if the model had stopped,
+                // with memory as its last stored rewrite left it. A refusal
+                // would be words this turn was never approved to read, and an
+                // answer of any kind is a round spent on something a tidy is
+                // not for.
+                if tidying && !tools::parse(call, &named).as_ref().is_ok_and(tools::tidies) {
+                    tracing::warn!(
+                        agent = %card.name,
+                        tool = %call.name,
+                        "a tidy named a tool it is not offered; ending it there"
+                    );
+                    strayed = true;
                     break;
                 }
 
@@ -4233,7 +4408,7 @@ impl Runtime {
                 }
             }
 
-            if called_off {
+            if called_off || strayed {
                 break;
             }
 
@@ -4259,6 +4434,24 @@ impl Runtime {
         }
 
         stream.close(&*self.inner.events);
+
+        if tidying {
+            let own_model = card.own_model(inference.provider).is_some();
+            self.end_tidy(
+                &card,
+                run_id,
+                inbound_hop,
+                cause,
+                tool_parts,
+                failure,
+                called_off,
+                budget_exhausted,
+                limits,
+                own_model,
+            );
+            self.finish_turn(agent_id, run_id, batch.len(), &taken_in);
+            return;
+        }
 
         // Stopped by the host rather than the operator: put down with a record
         // of what it did, for the next host to carry on from here.
@@ -4295,65 +4488,24 @@ impl Runtime {
             });
         }
         if budget_exhausted {
-            tool_parts.push(Part::Notice {
-                kind: NoticeKind::GuardStop,
-                text: format!(
-                    "This conversation hit its budget of {} model calls, so {} stopped early.",
-                    limits.max_steps_per_run, card.name
-                ),
-            });
+            tool_parts.push(spent_notice(limits, &card.name));
         }
         if called_off {
-            tool_parts.push(Part::Notice {
-                kind: NoticeKind::GuardStop,
-                text: format!(
-                    "You stopped this conversation. {} dropped the model call it was in, started \
-                     nothing else, and nothing was sent on. Send it again if you want it \
-                     finished.",
-                    card.name
-                ),
-            });
+            tool_parts.push(stopped_notice(&card.name));
         }
 
         if let Some(err) = failure {
-            tracing::warn!(agent = %card.name, error = %err, "inference failed");
-            // What ran before the failure ran for real: a send was delivered, a
-            // file was written, a connector was called. The operator about to
-            // press Try again has to see that first, so the turn's record is
-            // written as a finished turn writes it. Its words are kept as a note
-            // on that record and sent to nobody, because a reply would answer
-            // with half a turn.
-            let calls =
-                tool_parts.iter().filter(|part| matches!(part, Part::ToolCall { .. })).count();
-            let text = collected_text.trim().to_string();
-            if !text.is_empty() {
-                tool_parts.push(Part::Text { text });
-            }
-            if !tool_parts.is_empty() {
-                self.record_activity(&card, run_id, inbound_hop, cause, tool_parts);
-            }
-            let mut said = format!("{} could not reply: {}", card.name, err);
-            // The vendor's sentence names the model and not where the name came
-            // from. An operator who found a model on the agent itself read it
-            // as the group's.
-            if matches!(err, LlmError::ModelRejected { .. })
-                && card.own_model(inference.provider).is_some()
-            {
-                said.push_str(&format!(
-                    "\n\nThat model is {name}'s own setting, not its group's. Choose one its \
-                     group's provider runs in {name}'s settings, or use the group default.",
-                    name = card.name
-                ));
-            }
-            if calls > 0 {
-                said.push_str(&format!(
-                    "\n\nIt had already made {calls} {} in this turn, listed above. Check them \
-                     before you send this again: a message, a file or a connector call may \
-                     already have happened.",
-                    if calls == 1 { "call" } else { "calls" }
-                ));
-            }
-            self.notice(agent_id, run_id, cause, NoticeKind::UpstreamError, said);
+            let own_model = card.own_model(inference.provider).is_some();
+            self.report_failure(
+                &card,
+                run_id,
+                inbound_hop,
+                cause,
+                tool_parts,
+                collected_text,
+                err,
+                own_model,
+            );
         } else {
             self.emit_reply(
                 &card,
@@ -4648,7 +4800,10 @@ impl Runtime {
         messages: &mut Vec<ChatMessage>,
         intake: &mut Intake<'_>,
     ) -> Vec<Envelope> {
-        if *mode == ReplyMode::ToPeer {
+        // A tidy takes in nothing either: it can answer nobody, and anything
+        // read there would be read by a turn with three tools and left
+        // unanswered. It waits for the turn after.
+        if matches!(mode, ReplyMode::ToPeer | ReplyMode::Tidy) {
             return Vec::new();
         }
 
@@ -4666,7 +4821,10 @@ impl Runtime {
             // same reason it is left alone everywhere else — the actor's own
             // boundary is where it gets its notice, and folding called-off work
             // into a live turn is the one thing a stop exists to prevent.
+            // Nor is a tidy ever taken into another turn, where it would be
+            // read with every tool to hand.
             let takeable = matches!(next.from, Participant::Human | Participant::System)
+                && !next.is_tidy()
                 && !self.stopped(next.run_id)
                 && !self.inner.resuming.lock().contains_key(&next.id);
             if !takeable {
@@ -4703,6 +4861,135 @@ impl Runtime {
         }
 
         taken
+    }
+
+    /// A turn whose model call failed: what it did is filed as a finished turn
+    /// files it, its words with it as a note sent to nobody, and the failure
+    /// is said in its channel where Try again is.
+    ///
+    /// `own_model` is whether the model that refused was the agent's own setting.
+    #[allow(clippy::too_many_arguments)]
+    fn report_failure(
+        &self,
+        card: &AgentCard,
+        run_id: RunId,
+        hop: u16,
+        cause: Option<MessageId>,
+        mut tool_parts: Vec<Part>,
+        text: String,
+        err: LlmError,
+        own_model: bool,
+    ) {
+        tracing::warn!(agent = %card.name, error = %err, "inference failed");
+        // What ran before the failure ran for real: a send was delivered, a
+        // file was written, a connector was called. The operator about to
+        // press Try again has to see that first, so the turn's record is
+        // written as a finished turn writes it. Its words are kept as a note
+        // on that record and sent to nobody, because a reply would answer
+        // with half a turn.
+        let calls = tool_parts.iter().filter(|part| matches!(part, Part::ToolCall { .. })).count();
+        let text = text.trim().to_string();
+        if !text.is_empty() {
+            tool_parts.push(Part::Text { text });
+        }
+        if !tool_parts.is_empty() {
+            self.record_activity(card, run_id, hop, cause, tool_parts);
+        }
+        let mut said = format!("{} could not reply: {}", card.name, err);
+        // The vendor's sentence names the model and not where the name came
+        // from. An operator who found a model on the agent itself read it
+        // as the group's.
+        if matches!(err, LlmError::ModelRejected { .. }) && own_model {
+            said.push_str(&format!(
+                "\n\nThat model is {name}'s own setting, not its group's. Choose one its \
+                 group's provider runs in {name}'s settings, or use the group default.",
+                name = card.name
+            ));
+        }
+        if calls > 0 {
+            said.push_str(&format!(
+                "\n\nIt had already made {calls} {} in this turn, listed above. Check them \
+                 before you send this again: a message, a file or a connector call may \
+                 already have happened.",
+                if calls == 1 { "call" } else { "calls" }
+            ));
+        }
+        self.notice(card.id, run_id, cause, NoticeKind::UpstreamError, said);
+    }
+
+    /// What a tidy leaves behind: the calls it made, filed in its channel as
+    /// any turn's are, so a rewrite of memory shows as the diff the transcript
+    /// already draws. Its words are kept nowhere, because nobody was asked to
+    /// read them.
+    ///
+    /// Not put down when the host stops it. A tidy is given once a night, and
+    /// what it stored before the stop is stored: memory is what its last
+    /// rewrite left. The next host neither carries it on nor gives it again.
+    ///
+    /// The operator stopping it, the run's budget running out and a model
+    /// call failing are said as they are for any turn, because each is true
+    /// and the last is often the first sign of a key that has expired. A tidy
+    /// reaching its own six rounds is not a limit anyone set, so it puts no
+    /// line in front of them.
+    ///
+    /// A tidy that finished, or that stored a rewrite before it was cut short,
+    /// moves where the next one starts counting from. One that failed or was
+    /// cut short before storing anything leaves it, so the next night's tidy
+    /// is handed the lines this one never read. Either way the night is seen
+    /// to, and nothing is tried again before the hour comes round.
+    #[allow(clippy::too_many_arguments)]
+    fn end_tidy(
+        &self,
+        card: &AgentCard,
+        run_id: RunId,
+        hop: u16,
+        cause: Option<MessageId>,
+        mut tool_parts: Vec<Part>,
+        failure: Option<LlmError>,
+        cut_short: bool,
+        budget_exhausted: bool,
+        limits: GuardLimits,
+        own_model: bool,
+    ) {
+        use crate::domain::envelope::ToolOutcome;
+        let mut saves = tool_parts.iter().filter_map(|part| match part {
+            Part::ToolCall { name, outcome, .. } if name == tools::UPDATE_MEMORY => Some(outcome),
+            _ => None,
+        });
+        let stored = saves.clone().any(|outcome| matches!(outcome, ToolOutcome::Ok { .. }));
+        // A tidy whose last save was refused meant to change the page and did
+        // not, which is not the same as finding nothing to change: its lines
+        // are still owed a tidy.
+        let refused =
+            saves.next_back().is_some_and(|outcome| matches!(outcome, ToolOutcome::Refused { .. }));
+        let finished = stored || (failure.is_none() && !cut_short && !budget_exhausted && !refused);
+        if budget_exhausted {
+            tool_parts.push(spent_notice(limits, &card.name));
+        }
+        if self.called_off(run_id) {
+            tool_parts.push(stopped_notice(&card.name));
+        }
+        match failure {
+            Some(err) => self.report_failure(
+                card,
+                run_id,
+                hop,
+                cause,
+                tool_parts,
+                String::new(),
+                err,
+                own_model,
+            ),
+            None if !tool_parts.is_empty() => {
+                self.record_activity(card, run_id, hop, cause, tool_parts)
+            }
+            None => {}
+        }
+        if finished {
+            if let Err(err) = self.inner.store.tidied(card.id) {
+                tracing::warn!(%err, "could not record that a tidy finished; its lines come again next night");
+            }
+        }
     }
 
     /// Ends a turn: releases the `consumed` envelopes it was started on, and
@@ -5234,6 +5521,32 @@ impl Runtime {
             }
 
             ToolInvocation::UpdateMemory { content } => {
+                // A tidy's rewrite longer than it may leave the page. Judged
+                // only on the page the turn was working from: a save by the
+                // operator since is the conflict below, which is answered
+                // first and in its own words.
+                let after = content.trim().chars().count();
+                let longer = reading.tidy_limit.filter(|limit| after > *limit).filter(|_| {
+                    reading.memory.as_deref().is_none_or(|seen| {
+                        seen == self.inner.workspace.read_versioned(card.id).version
+                    })
+                });
+                if let Some(limit) = longer {
+                    let reason = format!(
+                        "Not saved: a tidy may not leave your memory page longer than {limit} \
+                         characters, and your rewrite is {after}. Cut what is no longer needed, \
+                         or move detail to your notebook, then save again."
+                    );
+                    return (
+                        reason.clone(),
+                        Part::tool_call(
+                            tools::UPDATE_MEMORY,
+                            arguments,
+                            ToolOutcome::Refused { reason },
+                        ),
+                        None,
+                    );
+                }
                 match self.inner.workspace.write_versioned(
                     card.id,
                     &card.name,
@@ -9914,7 +10227,13 @@ mod tests {
     }
 
     fn having_read(url: &str) -> Reading {
-        Reading { ingested: true, url: Some(url.into()), allowed: None, memory: None }
+        Reading {
+            ingested: true,
+            url: Some(url.into()),
+            allowed: None,
+            memory: None,
+            tidy_limit: None,
+        }
     }
 
     /// A browser the operator has asked to be consulted about. Everything below
@@ -10085,6 +10404,7 @@ mod tests {
             url: Some("https://gmail.com/".into()),
             allowed: None,
             memory: None,
+            tidy_limit: None,
         };
         assert!(needs_consent(ASKING, "click", &untainted, &held).is_none());
     }
@@ -10271,13 +10591,15 @@ mod tests {
             url: Some("https://mail.gmail.com/".into()),
             allowed: None,
             memory: None,
+            tidy_limit: None,
         };
         assert!(needs_consent(ASKING, "click", &looked, &held).is_some());
 
         // With nowhere known to be, there is nothing to judge and nothing is
         // claimed. The turn is still marked, so the first `browse` that lands
         // somewhere signed in re-arms it.
-        let blind = Reading { ingested: true, url: None, allowed: None, memory: None };
+        let blind =
+            Reading { ingested: true, url: None, allowed: None, memory: None, tidy_limit: None };
         assert!(needs_consent(ASKING, "click", &blind, &held).is_none());
     }
 
@@ -10470,6 +10792,7 @@ mod tests {
             url: Some("https://linkedin.example/feed".into()),
             allowed: None,
             memory: None,
+            tidy_limit: None,
         };
         let told = runtime
             .may_act_on(&card, RunId::new(), "click", &mut reading)

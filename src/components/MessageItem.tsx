@@ -159,6 +159,13 @@ export const MessageItem = memo(function MessageItem({
     );
   }
 
+  // The clock's overnight tidy. One line, like a routine firing: what it
+  // handed the agent was for the agent, and what came of it is the memory
+  // diff the agent's own record draws under it.
+  if (message.parts.some((part) => part.type === "tidy")) {
+    return <TidyRow at={message.createdAt} />;
+  }
+
   const answered = message.parts.find((part) => part.type === "decision");
   if (answered) {
     return <DecisionReply part={answered} at={message.createdAt} />;
@@ -177,6 +184,23 @@ export const MessageItem = memo(function MessageItem({
 
   return <ChatBubble message={message} byId={lookups.byId} continued={continued} />;
 });
+
+/**
+ * An overnight tidy coming due, drawn as the routine chip is, with nothing to
+ * open: a tidy is not a routine, and nothing about it is the operator's to set
+ * beyond the switch in the group's settings.
+ */
+function TidyRow({ at }: { at: number }) {
+  return (
+    <div className="wire wire--routine">
+      <span className="wire__chip">
+        <span className="wire__label">Overnight memory tidy</span>
+        <span className="wire__why">ran</span>
+        <span className="wire__meta">{clockTime(at)}</span>
+      </span>
+    </div>
+  );
+}
 
 /**
  * What an agent did on its own turn: guard stops, and the tools it reached for.

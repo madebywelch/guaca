@@ -21,8 +21,8 @@ use guac_lib::db::Store;
 use guac_lib::domain::agent::{Lifecycle, COMPOST_MS};
 use guac_lib::domain::approval::{ApprovalState, Decision, ProtectedAction, Request};
 use guac_lib::domain::connector::CleanConnector;
-use guac_lib::domain::envelope::{Part, Participant, ToolOutcome};
-use guac_lib::domain::group::{CleanGroup, GroupLimits, InferenceOverrides};
+use guac_lib::domain::envelope::{Envelope, Part, Participant, ToolOutcome, TIDY};
+use guac_lib::domain::group::{CleanGroup, GroupLimits, InferenceOverrides, Tidy};
 use guac_lib::domain::now_ms;
 use guac_lib::domain::outcome::Status as OutcomeStatus;
 use guac_lib::domain::routine::{Cadence, EventTrigger, RunKind, Trigger};
@@ -30,7 +30,7 @@ use guac_lib::domain::signin::{Signin, Surface};
 use guac_lib::llm::openrouter::LlmClient;
 use guac_lib::runtime::events::{Activity, RecordingSink, UiEvent};
 use guac_lib::runtime::guard::GuardLimits;
-use guac_lib::runtime::{OnDisk, Runtime};
+use guac_lib::runtime::{prompt, OnDisk, Runtime};
 
 use harness::*;
 
@@ -8134,4 +8134,726 @@ async fn a_cleared_channel_takes_what_was_reported_in_it_along() {
     let body = prompt_answering(&stub, "Manager", "Anything new?");
     let system = body["messages"][0]["content"].as_str().unwrap();
     assert!(!system.contains(REPORTED), "{system}");
+}
+
+// ---- the overnight tidy ---------------------------------------------------
+
+/// Turns the overnight tidy on, at three, for the group the agent is in.
+fn tidy_overnight(h: &Harness, name: &str) {
+    let store = h.runtime.store();
+    let agent = store.get_agent(h.id(name)).unwrap().unwrap();
+    let group = store.get_group(agent.group_id).unwrap().unwrap();
+    store
+        .update_group(
+            group.id,
+            &CleanGroup {
+                name: group.name,
+                tidy: Some(Tidy { on: true, hour: 3 }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+}
+
+/// A minute past the tidy hour, some nights from now.
+fn night(nights: i64) -> i64 {
+    Tidy::last_struck(3, now_ms() + nights * 86_400_000).unwrap() + 60_000
+}
+
+/// The tidies an agent has been handed, oldest first.
+fn tidies(h: &Harness, name: &str) -> Vec<Envelope> {
+    let channel = h.runtime.store().channel_messages(h.id(name), 500).unwrap();
+    channel.into_iter().filter(Envelope::is_tidy).collect()
+}
+
+/// What the model was handed last on this call, as it read it.
+fn last_handed(body: &serde_json::Value) -> String {
+    body["messages"]
+        .as_array()
+        .and_then(|messages| messages.iter().rev().find(|m| m["role"] == "user"))
+        .and_then(|m| m["content"].as_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Whether this model call is a tidy's.
+fn a_tidy(body: &serde_json::Value) -> bool {
+    last_handed(body).starts_with(&format!("[SYSTEM]\n{TIDY}"))
+}
+
+fn offered(body: &serde_json::Value) -> Vec<String> {
+    let mut names: Vec<String> = body["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| tool["function"]["name"].as_str().map(str::to_string))
+        .collect();
+    names.sort();
+    names
+}
+
+fn system_of(body: &serde_json::Value) -> String {
+    body["messages"][0]["content"].as_str().unwrap_or_default().to_string()
+}
+
+/// Sweeps for the tidies owed at a moment, and waits for the agent's to
+/// settle when it was handed one.
+async fn sweep(h: &Harness, name: &str, at: i64) -> Option<Envelope> {
+    let before = tidies(h, name).len();
+    h.runtime.sweep_tidy(at);
+    let handed = tidies(h, name);
+    if handed.len() == before {
+        return None;
+    }
+    let tidy = handed.last().cloned().unwrap();
+    h.settle(tidy.run_id).await;
+    Some(tidy)
+}
+
+/// Every row in the outbox that has not been claimed: what any window or
+/// endpoint could still be shown.
+fn outbox(h: &Harness) -> std::collections::BTreeSet<String> {
+    let store = h.runtime.store();
+    let due = store.due_deliveries(i64::MAX).unwrap().into_iter().map(|row| row.id);
+    due.chain(store.pending_deliveries(None).unwrap().into_iter().map(|row| row.id)).collect()
+}
+
+/// How many finished runs For you, the rail and the menu bar count unseen.
+fn unseen(h: &Harness) -> usize {
+    h.runtime.store().outcomes(None, None, true, 500).unwrap().len()
+}
+
+/// What this test binary logged at warn and above, every test's together.
+///
+/// Installed on first use. The one scenario that reads it looks for its own
+/// agent's name, so what the others log beside it does not matter.
+fn warnings() -> String {
+    struct Into(Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Into {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    static LOG: std::sync::OnceLock<Arc<std::sync::Mutex<Vec<u8>>>> = std::sync::OnceLock::new();
+    let log = LOG.get_or_init(|| {
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = log.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .with_ansi(false)
+            .with_writer(move || Into(sink.clone()))
+            .finish();
+        tracing::subscriber::set_global_default(subscriber).expect("nothing else here logs");
+        log
+    });
+    String::from_utf8_lossy(&log.lock().unwrap()).into_owned()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_opted_in_agent_is_tidied_once_at_the_hour_on_what_its_work_ended_with() {
+    let stub = serve(|body| {
+        if a_tidy(body) {
+            Script::Say(String::new())
+        } else if has_tool_result(body) {
+            Script::Say("Booked the venue.".into())
+        } else {
+            Script::Progress("Waiting on the caterer's quote.".into())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Planner"], GuardLimits::default());
+    let planner = h.id("Planner");
+    tidy_overnight(&h, "Planner");
+
+    let run = h.runtime.send_from_human(planner, "Book the venue.").unwrap();
+    h.settle(run).await;
+    let ended = h.runtime.store().outcome(run).unwrap().expect("the run finished");
+    let notes = h.runtime.store().working_notes(planner).unwrap();
+    let normal = stub.transcript.lock().last().cloned().unwrap();
+
+    let at = night(1);
+    let tidy = sweep(&h, "Planner", at).await.expect("work ended since the switch went on");
+    let asked = stub.transcript.lock().last().cloned().unwrap();
+    assert!(a_tidy(&asked));
+    assert_eq!(
+        last_handed(&asked),
+        format!(
+            "[SYSTEM]\n{TIDY}\n\n{}\n\n{}",
+            prompt::reported_line(ended.finished_at, &ended.headline, ended.status, at),
+            prompt::note_line(&notes[0], at).trim_end(),
+        ),
+        "the tidy, then what the work ended with, then the working notes"
+    );
+    assert_eq!(offered(&asked), vec!["note_progress", "notebook", "update_memory"]);
+    for heading in ["## Your reply", "## Where the operator is"] {
+        assert!(system_of(&normal).contains(heading), "a normal turn reads {heading}");
+        assert!(!system_of(&asked).contains(heading), "a tidy does not read {heading}");
+    }
+
+    // Once a night, and nothing to show for it as a finished run.
+    assert_eq!(sweep(&h, "Planner", at + 3_600_000).await, None);
+    assert_eq!(tidies(&h, "Planner").len(), 1);
+    assert_eq!(h.runtime.store().outcome(tidy.run_id).unwrap(), None);
+    // The clock's, and not a routine the agent keeps or could count.
+    assert!(h.runtime.store().agent_routines(planner).unwrap().is_empty());
+    // Nothing since that night, so nothing the next.
+    assert_eq!(sweep(&h, "Planner", night(2)).await, None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn nobody_is_tidied_without_the_switch_or_without_work_since() {
+    let stub = serve(|body| {
+        assert!(!a_tidy(body), "no tidy was owed:\n{}", last_handed(body));
+        Script::Say("Done.".into())
+    })
+    .await;
+    let h = harness_in_groups(
+        &stub,
+        &[("Idle", Some("Kitchen")), ("Busy", Some("Office"))],
+        GuardLimits::default(),
+    );
+    tidy_overnight(&h, "Idle");
+    // Work, in a group that never turned the switch on.
+    let run = h.runtime.send_from_human(h.id("Busy"), "File the receipts.").unwrap();
+    h.settle(run).await;
+    let calls = stub.calls.load(Ordering::SeqCst);
+
+    assert_eq!(sweep(&h, "Idle", night(1)).await, None);
+    assert_eq!(sweep(&h, "Busy", night(1)).await, None);
+    assert_eq!(stub.calls.load(Ordering::SeqCst), calls, "a tidy owed nothing costs nothing");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tidy_that_names_a_tool_it_was_not_offered_ends_there() {
+    let _ = warnings();
+    let stub = serve(|body| {
+        if a_tidy(body) {
+            Script::SendTo { recipients: vec!["Chef".into()], text: "Morning.".into() }
+        } else {
+            Script::Say("Done.".into())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Strayer", "Chef"], GuardLimits::default());
+    tidy_overnight(&h, "Strayer");
+    let run = h.runtime.send_from_human(h.id("Strayer"), "Plan the menu.").unwrap();
+    h.settle(run).await;
+
+    let tidy = sweep(&h, "Strayer", night(1)).await.expect("owed a tidy");
+    let tidy_calls = stub.transcript.lock().iter().filter(|body| a_tidy(body)).count();
+    assert_eq!(tidy_calls, 1, "not answered, so not asked again");
+    assert!(h.said_to_peers("Strayer").is_empty(), "{}", h.transcript());
+    assert!(h.channel_texts("Chef").is_empty(), "{}", h.transcript());
+    let filed = h.runtime.store().channel_messages(h.id("Strayer"), 500).unwrap();
+    assert!(
+        !filed.iter().flat_map(|m| &m.parts).any(|part| matches!(part, Part::ToolCall { .. })),
+        "a call that was not run is not filed as one"
+    );
+    assert_eq!(h.runtime.store().outcome(tidy.run_id).unwrap(), None);
+    let logged = warnings();
+    assert!(
+        logged.lines().any(|line| line.contains("a tidy named a tool it is not offered")
+            && line.contains("Strayer")
+            && line.contains("send_message")),
+        "{logged}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_operator_save_during_a_tidy_is_not_overwritten() {
+    let workspace = Arc::new(std::sync::OnceLock::new());
+    let saving = workspace.clone();
+    let stub = serve(move |body| {
+        if !a_tidy(body) {
+            return Script::Say("Done.".into());
+        }
+        if has_tool_result(body) {
+            return Script::Say(String::new());
+        }
+        let (workspace, id) = saving.get().expect("the harness is built before the turn runs");
+        operator_saves(workspace, *id);
+        Script::Memory("Smith handles verification.\nThe venue is booked.".into())
+    })
+    .await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let manager = h.id("Manager");
+    tidy_overnight(&h, "Manager");
+    h.runtime.workspace().write(manager, "Manager", "Smith handles verification.").unwrap();
+    workspace.set((h.runtime.workspace().clone(), manager)).unwrap();
+    let run = h.runtime.send_from_human(manager, "Book the venue.").unwrap();
+    h.settle(run).await;
+
+    sweep(&h, "Manager", night(1)).await.expect("owed a tidy");
+    assert_eq!(
+        h.runtime.workspace().read(manager),
+        "Jones handles verification.",
+        "the operator's correction was overwritten by a tidy"
+    );
+    let told = stub.transcript.lock().last().map(answers_so_far).unwrap_or_default();
+    assert_eq!(told, vec![format!("{MEMORY_CONFLICT}Jones handles verification.")]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tidy_records_nothing_reaches_nobody_and_is_not_read_again() {
+    let stub = serve(|body| {
+        if a_tidy(body) {
+            Script::Say("All tidy, nothing to change.".into())
+        } else {
+            Script::Say("Booked the venue.".into())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Planner"], GuardLimits::default());
+    tidy_overnight(&h, "Planner");
+    let run = h.runtime.send_from_human(h.id("Planner"), "Book the venue.").unwrap();
+    h.settle(run).await;
+    let (outbox_before, unseen_before) = (outbox(&h), unseen(&h));
+    assert!(!outbox_before.is_empty(), "a finished run is in the outbox, so its absence is news");
+
+    let tidy = sweep(&h, "Planner", night(1)).await.expect("owed a tidy");
+    assert_eq!(h.runtime.store().outcome(tidy.run_id).unwrap(), None);
+    assert!(outbox(&h).is_subset(&outbox_before), "a tidy put something in the outbox");
+    assert_eq!(unseen(&h), unseen_before, "a tidy is counted as unseen work");
+    assert!(
+        !h.transcript().contains("All tidy"),
+        "what a tidy says is filed nowhere:\n{}",
+        h.transcript()
+    );
+
+    // Neither the tidy nor anything it said is in the next turn.
+    let next = h.runtime.send_from_human(h.id("Planner"), "And the caterer?").unwrap();
+    h.settle(next).await;
+    let body = stub.transcript.lock().last().cloned().unwrap();
+    assert!(!a_tidy(&body));
+    let read = serde_json::to_string(&body["messages"]).unwrap();
+    for gone in ["Time to tidy your memory", "All tidy"] {
+        assert!(!read.contains(gone), "{gone} came back in a later turn");
+    }
+    // And nothing of it is among what the agent has reported, which is
+    // where a later prompt reads its earlier conversations from.
+    let card = h.runtime.store().get_agent(h.id("Planner")).unwrap().unwrap();
+    let reported = h.runtime.store().reported(card.id, card.group_id, i64::MAX, 50).unwrap();
+    let mut runs: Vec<_> = reported.iter().map(|one| one.run_id).collect();
+    runs.sort();
+    let mut expected = vec![run, next];
+    expected.sort();
+    assert_eq!(runs, expected, "{reported:?}");
+    assert!(!reported.iter().any(|one| one.run_id == tidy.run_id));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tidy_that_rewrites_memory_files_the_call_and_nothing_else() {
+    let stub = serve(|body| match (a_tidy(body), has_tool_result(body)) {
+        (true, false) => Script::Memory("The venue is the Hall.".into()),
+        (true, true) => Script::Say(String::new()),
+        _ => Script::Say("Booked the venue.".into()),
+    })
+    .await;
+    let h = harness(&stub, &["Planner"], GuardLimits::default());
+    tidy_overnight(&h, "Planner");
+    let run = h.runtime.send_from_human(h.id("Planner"), "Book the venue.").unwrap();
+    h.settle(run).await;
+    let (outbox_before, unseen_before) = (outbox(&h), unseen(&h));
+
+    let tidy = sweep(&h, "Planner", night(1)).await.expect("owed a tidy");
+    assert_eq!(h.runtime.workspace().read(h.id("Planner")), "The venue is the Hall.");
+    let channel = h.runtime.store().channel_messages(h.id("Planner"), 500).unwrap();
+    let at = channel.iter().position(|m| m.id == tidy.id).unwrap();
+    let record = &channel[at + 1..];
+    assert_eq!(record.len(), 1, "{}", h.transcript());
+    assert!(matches!(record[0].from, Participant::Agent { .. }));
+    assert!(matches!(record[0].to, Participant::System));
+    assert!(
+        matches!(&record[0].parts[..], [Part::ToolCall { name, outcome: ToolOutcome::Ok { .. }, .. }]
+            if name == "update_memory"),
+        "the rewrite, under the tidy line, as the transcript draws any: {:?}",
+        record[0].parts
+    );
+    assert_eq!(h.runtime.store().outcome(tidy.run_id).unwrap(), None);
+    assert!(outbox(&h).is_subset(&outbox_before));
+    assert_eq!(unseen(&h), unseen_before);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_tidy_says_so_reaches_nobody_and_is_owed_again_and_retried_as_a_tidy() {
+    let healthy = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let well = healthy.clone();
+    let stub = serve(move |body| {
+        if !a_tidy(body) {
+            Script::Say("Booked the venue.".into())
+        } else if well.load(Ordering::SeqCst) {
+            Script::Say(String::new())
+        } else {
+            Script::Unavailable
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Planner"], GuardLimits::default());
+    let planner = h.id("Planner");
+    tidy_overnight(&h, "Planner");
+    let run = h.runtime.send_from_human(planner, "Book the venue.").unwrap();
+    h.settle(run).await;
+    let (outbox_before, unseen_before) = (outbox(&h), unseen(&h));
+
+    let failed = sweep(&h, "Planner", night(1)).await.expect("owed a tidy");
+    let channel = h.runtime.store().channel_messages(planner, 500).unwrap();
+    let notice = channel
+        .iter()
+        .find(|m| {
+            m.parts.iter().any(|part| {
+                matches!(
+                    part,
+                    Part::Notice {
+                        kind: guac_lib::domain::envelope::NoticeKind::UpstreamError,
+                        ..
+                    }
+                )
+            })
+        })
+        .expect("the failure is said, as it is for any turn");
+    assert_eq!(notice.cause, Some(failed.id), "and offers to try the tidy again");
+    assert_eq!(h.runtime.store().outcome(failed.run_id).unwrap(), None);
+    assert!(outbox(&h).is_subset(&outbox_before), "a failed tidy reached the outbox");
+    assert_eq!(unseen(&h), unseen_before, "a failed tidy is counted as unseen");
+
+    // Try again: the same tidy, and still only a tidy.
+    healthy.store(true, Ordering::SeqCst);
+    let again = h.runtime.retry_turn(planner, failed.id).unwrap();
+    h.settle(again).await;
+    let retried = tidies(&h, "Planner");
+    assert_eq!(retried.len(), 2);
+    assert_eq!(retried[1].parts, failed.parts, "it reads what the failed one would have");
+    assert_eq!(retried[1].cause, None);
+    let asked = stub.transcript.lock().last().cloned().unwrap();
+    assert!(a_tidy(&asked));
+    assert_eq!(offered(&asked), vec!["note_progress", "notebook", "update_memory"]);
+    for heading in ["## Your reply", "## Where the operator is"] {
+        assert!(!system_of(&asked).contains(heading), "a retried tidy reads {heading}");
+    }
+    assert_eq!(h.runtime.store().outcome(again).unwrap(), None);
+    assert!(outbox(&h).is_subset(&outbox_before));
+    assert_eq!(unseen(&h), unseen_before);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tidy_that_never_read_its_lines_is_handed_them_the_next_night() {
+    let stub = serve(|body| {
+        if a_tidy(body) {
+            Script::Unavailable
+        } else {
+            Script::Say("Booked the venue.".into())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Planner"], GuardLimits::default());
+    tidy_overnight(&h, "Planner");
+    let run = h.runtime.send_from_human(h.id("Planner"), "Book the venue.").unwrap();
+    h.settle(run).await;
+
+    let first = sweep(&h, "Planner", night(1)).await.expect("owed a tidy");
+    assert_eq!(sweep(&h, "Planner", night(1) + 60_000).await, None, "not tried again that night");
+    let second = sweep(&h, "Planner", night(2)).await.expect("its lines were never read");
+    let lines = |tidy: &Envelope| match &tidy.parts[0] {
+        Part::Tidy { reported, .. } => reported.len(),
+        _ => unreachable!(),
+    };
+    assert_eq!((lines(&first), lines(&second)), (1, 1));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tidy_that_stored_its_rewrite_before_failing_has_read_its_lines() {
+    let stub = serve(|body| match (a_tidy(body), has_tool_result(body)) {
+        (true, false) => Script::Memory("The venue is the Hall.".into()),
+        (true, true) => Script::Unavailable,
+        _ => Script::Say("Booked the venue.".into()),
+    })
+    .await;
+    let h = harness(&stub, &["Planner"], GuardLimits::default());
+    tidy_overnight(&h, "Planner");
+    let run = h.runtime.send_from_human(h.id("Planner"), "Book the venue.").unwrap();
+    h.settle(run).await;
+
+    sweep(&h, "Planner", night(1)).await.expect("owed a tidy");
+    assert_eq!(h.runtime.workspace().read(h.id("Planner")), "The venue is the Hall.");
+    assert_eq!(sweep(&h, "Planner", night(2)).await, None);
+}
+
+/// What a tidy is told when its rewrite is longer than it may leave the page.
+fn over_the_limit(limit: usize, after: usize) -> String {
+    format!(
+        "Not saved: a tidy may not leave your memory page longer than {limit} characters, and \
+         your rewrite is {after}. Cut what is no longer needed, or move detail to your notebook, \
+         then save again."
+    )
+}
+
+/// A tidy that answers its first call with `first` and its second with
+/// `then`, saying nothing after, over a page that starts as `page`. The
+/// agent has finished one run, so it is owed a tidy on the first night.
+async fn tidy_writing(
+    page: &str,
+    first: String,
+    then: Option<String>,
+) -> (Stub, Harness, guac_lib::domain::ids::AgentId) {
+    let stub = serve(move |body| {
+        if !a_tidy(body) {
+            return Script::Say("Booked the venue.".into());
+        }
+        match (answers_so_far(body).len(), &then) {
+            (0, _) => Script::Memory(first.clone()),
+            (1, Some(then)) => Script::Memory(then.clone()),
+            _ => Script::Say(String::new()),
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Planner"], GuardLimits::default());
+    let planner = h.id("Planner");
+    tidy_overnight(&h, "Planner");
+    h.runtime.workspace().write(planner, "Planner", page).unwrap();
+    let run = h.runtime.send_from_human(planner, "Book the venue.").unwrap();
+    h.settle(run).await;
+    (stub, h, planner)
+}
+
+/// What the tool calls of the last model call were answered with.
+fn told(stub: &Stub) -> Vec<String> {
+    stub.transcript.lock().last().map(answers_so_far).unwrap_or_default()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tidy_may_grow_a_short_page_up_to_two_thousand_characters_and_no_further() {
+    // A short page is not what the limit is for, so a tidy may add the line
+    // it came to add. Two thousand characters is the floor, and a rewrite of
+    // exactly that is stored.
+    let (stub, h, planner) =
+        tidy_writing("The venue is the Hall.", "a".repeat(2001), Some("b".repeat(2000))).await;
+
+    sweep(&h, "Planner", night(1)).await.expect("owed a tidy");
+    assert_eq!(
+        told(&stub),
+        vec![over_the_limit(2000, 2001), "Memory saved (2000 characters).".to_string()]
+    );
+    assert_eq!(h.runtime.workspace().read(planner), "b".repeat(2000));
+    assert_eq!(
+        sweep(&h, "Planner", night(2)).await,
+        None,
+        "it stored a page, so it has read its lines"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tidy_may_not_grow_a_page_already_over_the_limit() {
+    let (stub, h, planner) =
+        tidy_writing(&"c".repeat(2500), "c".repeat(2501), Some("d".repeat(2500))).await;
+
+    sweep(&h, "Planner", night(1)).await.expect("owed a tidy");
+    assert_eq!(
+        told(&stub),
+        vec![over_the_limit(2500, 2501), "Memory saved (2500 characters).".to_string()]
+    );
+    assert_eq!(h.runtime.workspace().read(planner), "d".repeat(2500));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tidy_whose_last_save_was_refused_is_owed_its_lines_again() {
+    // It meant to change the page and could not, which is not the same as
+    // finding nothing to change. The night is still spent, so it is not given
+    // again before the next one.
+    let (stub, h, planner) = tidy_writing(&"c".repeat(2500), "c".repeat(2600), None).await;
+
+    let first = sweep(&h, "Planner", night(1)).await.expect("owed a tidy");
+    assert_eq!(told(&stub), vec![over_the_limit(2500, 2600)]);
+    assert_eq!(h.runtime.workspace().read(planner), "c".repeat(2500));
+    assert_eq!(sweep(&h, "Planner", night(1) + 60_000).await, None, "not again that night");
+    let second = sweep(&h, "Planner", night(2)).await.expect("its lines were never tidied");
+    let lines = |tidy: &Envelope| match &tidy.parts[0] {
+        Part::Tidy { reported, .. } => reported.len(),
+        _ => unreachable!(),
+    };
+    assert_eq!((lines(&first), lines(&second)), (1, 1));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_normal_turn_may_make_the_page_as_long_as_it_likes() {
+    let stub = serve(|body| match answers_so_far(body).len() {
+        0 => Script::Memory("e".repeat(5000)),
+        _ => Script::Say("Noted.".into()),
+    })
+    .await;
+    let h = harness(&stub, &["Planner"], GuardLimits::default());
+    let planner = h.id("Planner");
+    tidy_overnight(&h, "Planner");
+    h.runtime.workspace().write(planner, "Planner", &"c".repeat(2500)).unwrap();
+    let run = h.runtime.send_from_human(planner, "Remember all of this.").unwrap();
+    h.settle(run).await;
+
+    assert_eq!(told(&stub), vec!["Memory saved (5000 characters).".to_string()]);
+    assert_eq!(h.runtime.workspace().read(planner), "e".repeat(5000));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_operator_save_during_a_tidy_is_answered_as_a_conflict_not_as_the_limit() {
+    // The rewrite is over the limit and also made from a page the operator
+    // has since corrected. The correction is what the tidy has to know about:
+    // cutting the rewrite to fit would still put back the line they fixed.
+    let workspace = Arc::new(std::sync::OnceLock::new());
+    let saving = workspace.clone();
+    let stub = serve(move |body| {
+        if !a_tidy(body) {
+            return Script::Say("Booked the venue.".into());
+        }
+        if has_tool_result(body) {
+            return Script::Say(String::new());
+        }
+        let (workspace, id) = saving.get().expect("the harness is built before the tidy runs");
+        operator_saves(workspace, *id);
+        Script::Memory("f".repeat(2001))
+    })
+    .await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let manager = h.id("Manager");
+    tidy_overnight(&h, "Manager");
+    h.runtime.workspace().write(manager, "Manager", "Smith handles verification.").unwrap();
+    workspace.set((h.runtime.workspace().clone(), manager)).unwrap();
+    let run = h.runtime.send_from_human(manager, "Book the venue.").unwrap();
+    h.settle(run).await;
+
+    sweep(&h, "Manager", night(1)).await.expect("owed a tidy");
+    assert_eq!(told(&stub), vec![format!("{MEMORY_CONFLICT}Jones handles verification.")]);
+    assert_eq!(h.runtime.workspace().read(manager), "Jones handles verification.");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tidy_the_operator_stops_before_it_stores_anything_is_owed_again() {
+    let stub =
+        serve(|body| if a_tidy(body) { Script::Hang } else { Script::Say("Done.".into()) }).await;
+    let h = harness(&stub, &["Planner"], GuardLimits::default());
+    tidy_overnight(&h, "Planner");
+    let run = h.runtime.send_from_human(h.id("Planner"), "Book the venue.").unwrap();
+    h.settle(run).await;
+
+    let before = tidies(&h, "Planner").len();
+    h.runtime.sweep_tidy(night(1));
+    let tidy = tidies(&h, "Planner").pop().unwrap();
+    assert_eq!(before, 0);
+    h.wait_until("the tidy's call to be in the air", |_| stub.transcript.lock().iter().any(a_tidy))
+        .await;
+    assert!(h.runtime.stop_run(tidy.run_id));
+    h.settle(tidy.run_id).await;
+    assert_eq!(h.runtime.store().outcome(tidy.run_id).unwrap(), None);
+    assert_eq!(sweep(&h, "Planner", night(1) + 60_000).await, None, "not again that night");
+    h.runtime.sweep_tidy(night(2));
+    let owed = tidies(&h, "Planner");
+    assert_eq!(owed.len(), 2, "its lines were never read, so the next night has them");
+    let lines = |tidy: &Envelope| match &tidy.parts[0] {
+        Part::Tidy { reported, .. } => reported.len(),
+        _ => unreachable!(),
+    };
+    assert_eq!((lines(&tidy), lines(&owed[1])), (1, 1), "aged afresh, and the same line");
+    h.runtime.stop_run(owed[1].run_id);
+    h.settle(owed[1].run_id).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_host_that_was_off_for_three_nights_tidies_once() {
+    let stub =
+        serve(
+            |body| {
+                if a_tidy(body) {
+                    Script::Say(String::new())
+                } else {
+                    Script::Say("Done.".into())
+                }
+            },
+        )
+        .await;
+    let h = harness(&stub, &["Planner"], GuardLimits::default());
+    tidy_overnight(&h, "Planner");
+    let run = h.runtime.send_from_human(h.id("Planner"), "Book the venue.").unwrap();
+    h.settle(run).await;
+
+    assert!(sweep(&h, "Planner", night(3)).await.is_some());
+    assert_eq!(sweep(&h, "Planner", night(3) + 3_600_000).await, None);
+    assert_eq!(tidies(&h, "Planner").len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_at_work_at_the_hour_is_tidied_when_it_is_free() {
+    let stub = serve(|body| {
+        if a_tidy(body) {
+            Script::Say(String::new())
+        } else if last_handed(body).contains("Book the venue.") {
+            Script::Say("Booked.".into())
+        } else {
+            Script::Hang
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Planner"], GuardLimits::default());
+    tidy_overnight(&h, "Planner");
+    let first = h.runtime.send_from_human(h.id("Planner"), "Book the venue.").unwrap();
+    h.settle(first).await;
+    let working = h.runtime.send_from_human(h.id("Planner"), "Find a caterer.").unwrap();
+    h.wait_until("the turn to be in the air", |_| stub.calls.load(Ordering::SeqCst) >= 2).await;
+
+    assert_eq!(sweep(&h, "Planner", night(1)).await, None, "a working agent is not interrupted");
+    h.runtime.stop_run(working);
+    h.settle(working).await;
+    assert!(sweep(&h, "Planner", night(1) + 60_000).await.is_some(), "free, so tidied that night");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_paused_agent_is_tidied_once_when_it_is_resumed() {
+    let stub =
+        serve(
+            |body| {
+                if a_tidy(body) {
+                    Script::Say(String::new())
+                } else {
+                    Script::Say("Done.".into())
+                }
+            },
+        )
+        .await;
+    let h = harness(&stub, &["Planner"], GuardLimits::default());
+    tidy_overnight(&h, "Planner");
+    let run = h.runtime.send_from_human(h.id("Planner"), "Book the venue.").unwrap();
+    h.settle(run).await;
+
+    h.pause("Planner");
+    assert_eq!(sweep(&h, "Planner", night(1)).await, None);
+    assert_eq!(sweep(&h, "Planner", night(2)).await, None);
+    h.resume("Planner");
+    assert!(sweep(&h, "Planner", night(2) + 60_000).await.is_some());
+    assert_eq!(sweep(&h, "Planner", night(2) + 120_000).await, None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_restart_the_same_night_does_not_tidy_again() {
+    let stub =
+        serve(
+            |body| {
+                if a_tidy(body) {
+                    Script::Say(String::new())
+                } else {
+                    Script::Say("Done.".into())
+                }
+            },
+        )
+        .await;
+    let h = harness(&stub, &["Planner"], GuardLimits::default());
+    tidy_overnight(&h, "Planner");
+    let run = h.runtime.send_from_human(h.id("Planner"), "Book the venue.").unwrap();
+    h.settle(run).await;
+    assert!(sweep(&h, "Planner", night(1)).await.is_some());
+
+    let (h, drained) = h.restart(Duration::from_secs(5)).await;
+    assert!(drained.is_complete(), "{drained:?}");
+    assert_eq!(sweep(&h, "Planner", night(1) + 60_000).await, None);
+    let asked = stub.transcript.lock().iter().filter(|body| a_tidy(body)).count();
+    assert_eq!(asked, 1);
 }

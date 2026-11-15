@@ -2128,6 +2128,26 @@ ALTER TABLE outbox ADD COLUMN released_by TEXT;
 ALTER TABLE outbox ADD COLUMN releases INTEGER NOT NULL DEFAULT 0;
 "#,
     ),
+    (
+        79,
+        r#"
+-- An overnight tidy of each agent's memory, switched on per group. See
+-- domain/group.rs. tidy_since is when the operator switched it on and is null
+-- while it is off: an agent never tidied counts what it finished from there,
+-- not from the start of time. tidy_hour is kept while it is off, so switching
+-- back on finds it where it was.
+-- Two marks on the agent, because a night can be seen to without being read.
+-- last_tidy_at is when the clock last saw to it, by handing it a tidy or by
+-- finding it had finished nothing new; written at the handing over, so a tidy
+-- cut short by a stop or a restart is not given again the same night.
+-- tidied_through is where the next tidy's lines start: moved only by a tidy
+-- that finished or stored a rewrite, so one that failed hands its lines on.
+ALTER TABLE groups ADD COLUMN tidy_hour INTEGER NOT NULL DEFAULT 3;
+ALTER TABLE groups ADD COLUMN tidy_since INTEGER;
+ALTER TABLE agents ADD COLUMN last_tidy_at INTEGER;
+ALTER TABLE agents ADD COLUMN tidied_through INTEGER;
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

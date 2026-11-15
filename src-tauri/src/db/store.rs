@@ -60,6 +60,22 @@ pub struct Outstanding {
 /// the channel; what this list is for is recognising which one it was.
 const ASK_GIST: usize = 120;
 
+/// An agent whose group tidies memory overnight, as the clock reads it. See
+/// [`Store::tidy_due`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TidyDue {
+    pub agent: AgentId,
+    pub hour: u8,
+    /// Its last tidy, or the switch being turned on, whichever is later. A
+    /// tidy is owed when the hour has struck since.
+    pub since: i64,
+}
+
+/// The most lines a tidy is handed. A busy week is dozens of runs, and the
+/// newest are the ones that can still correct the page: about a thousand
+/// tokens at most, and a tidy is not where an agent reads its history.
+pub const TIDY_LINES: u32 = 30;
+
 impl Outstanding {
     /// One line, as the prompt draws it.
     ///
@@ -1378,6 +1394,131 @@ impl Store {
         }
         tx.commit()?;
         Ok(true)
+    }
+
+    /// Every agent whose group tidies memory overnight, with the hour and the
+    /// moment it was last seen to: its last tidy, or the switch being turned
+    /// on, whichever is later. A paused agent is not here, and neither is a
+    /// deleted one: neither is tidied, and a paused one is here again once it
+    /// is resumed, with the night it missed still owed.
+    pub fn tidy_due(&self) -> Result<Vec<TidyDue>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT a.id, g.tidy_hour, max(coalesce(a.last_tidy_at, 0), g.tidy_since)
+               FROM agents a JOIN groups g ON g.id = a.group_id
+              WHERE g.tidy_since IS NOT NULL AND a.lifecycle = 'active'",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, u8>(1)?, row.get::<_, i64>(2)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (agent, hour, since) = row?;
+            let agent = agent
+                .parse()
+                .map_err(|e| StoreError::Corrupt(format!("bad agent id {agent:?}: {e}")))?;
+            out.push(TidyDue { agent, hour, since });
+        }
+        Ok(out)
+    }
+
+    /// Sees to one agent for the tidy the hour struck at `struck`: hands it the
+    /// message `draw` makes from what its work ended with since its last tidy
+    /// that finished, or, when it ended with nothing, only notes that it was
+    /// seen to.
+    ///
+    /// One immediate transaction, read and write, for two reasons. Two sweeps
+    /// cannot both hand over the same night's tidy, because the second finds
+    /// it already seen to. And a run that finishes while this runs is either
+    /// in what is handed over or after the mark, never lost between the two.
+    ///
+    /// Marked at the handing over, not when the tidy ends. A tidy a stop, a
+    /// drain or a crash cuts short has been given for this night, and memory
+    /// is what its last stored rewrite left it; giving it again would be a
+    /// second tidy the operator did not ask for.
+    ///
+    /// The lines are the agent's own runs in its own group that said
+    /// something, newest first and at most [`TIDY_LINES`]. A tidy has no run
+    /// of its own on that list, because it writes no outcome, so a tidy can
+    /// never be the reason for the next one.
+    pub fn claim_tidy(
+        &self,
+        agent: AgentId,
+        struck: i64,
+        now: i64,
+        draw: impl FnOnce(Vec<(i64, String, crate::domain::outcome::Status)>) -> Envelope,
+    ) -> Result<Option<Envelope>, StoreError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let seen: Option<(String, i64, i64)> = tx
+            .query_row(
+                "SELECT a.group_id, max(coalesce(a.last_tidy_at, 0), g.tidy_since),
+                        max(coalesce(a.tidied_through, 0), g.tidy_since)
+                   FROM agents a JOIN groups g ON g.id = a.group_id
+                  WHERE a.id = ?1 AND a.lifecycle = 'active' AND g.tidy_since IS NOT NULL",
+                [agent.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let Some((group, _, since)) = seen.filter(|(_, seen, _)| *seen < struck) else {
+            return Ok(None);
+        };
+        let mut stmt = tx.prepare(
+            "SELECT finished_at, headline, status FROM outcomes
+              WHERE agent_id = ?1 AND group_id = ?2 AND finished_at > ?3 AND status <> ?4
+              ORDER BY finished_at DESC, run_id DESC
+              LIMIT ?5",
+        )?;
+        let mut lines = Vec::new();
+        for row in stmt.query_map(
+            params![
+                agent.to_string(),
+                group,
+                since,
+                crate::domain::outcome::Status::NothingNew.as_str(),
+                TIDY_LINES
+            ],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+        )? {
+            let (at, headline, status) = row?;
+            let status = crate::domain::outcome::Status::parse(&status)
+                .ok_or_else(|| StoreError::Corrupt(format!("unknown status {status:?}")))?;
+            lines.push((at, headline, status));
+        }
+        drop(stmt);
+        tx.execute(
+            "UPDATE agents SET last_tidy_at = ?2 WHERE id = ?1",
+            params![agent.to_string(), now],
+        )?;
+        // Nothing since, so nothing is left behind by counting from here.
+        if lines.is_empty() {
+            tx.execute(
+                "UPDATE agents SET tidied_through = ?2 WHERE id = ?1",
+                params![agent.to_string(), now],
+            )?;
+            tx.commit()?;
+            return Ok(None);
+        }
+        let envelope = draw(lines);
+        Self::insert_message(&tx, &envelope)?;
+        tx.execute(
+            "INSERT INTO pending_runs (run_id,message_id) VALUES (?1,?2)",
+            params![envelope.run_id.to_string(), envelope.id.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(Some(envelope))
+    }
+
+    /// Records that `agent`'s tidy read what it was handed: the next one counts
+    /// from when this one was handed over. Anything that finished while it
+    /// ran is after that, and is the next night's.
+    pub fn tidied(&self, agent: AgentId) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        conn.execute(
+            "UPDATE agents SET tidied_through = last_tidy_at WHERE id = ?1",
+            [agent.to_string()],
+        )?;
+        Ok(())
     }
 
     /// Marks messages as taken up by a turn, before the model reads any of
@@ -3401,7 +3542,8 @@ impl Store {
                     g.base_url, g.api_key, g.default_model,
                     g.provider, g.subscription_model, g.request_timeout_secs,
                     g.max_hops, g.max_steps_per_run, g.max_fanout_per_call,
-                    g.max_sends_per_pair, g.max_tool_rounds, g.reasoning_effort
+                    g.max_sends_per_pair, g.max_tool_rounds, g.reasoning_effort,
+                    g.tidy_since IS NOT NULL, g.tidy_hour
                FROM groups g
               ORDER BY g.rail_order, g.created_at, g.rowid",
         )?;
@@ -3418,6 +3560,8 @@ impl Store {
         let id = GroupId::new();
         let over = draft.inference.clone().unwrap_or_default();
         let limits = draft.limits.unwrap_or_default();
+        let tidy = draft.tidy.unwrap_or_default();
+        let now = now_ms();
         // At the bottom of the column, read in the same statement that writes
         // it so two crews made at once cannot both take the last place.
         conn.execute(
@@ -3425,13 +3569,13 @@ impl Store {
                                  provider,subscription_model,request_timeout_secs,
                                  max_hops,max_steps_per_run,max_fanout_per_call,
                                  max_sends_per_pair,max_tool_rounds,reasoning_effort,
-                                 rail_order)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,
+                                 tidy_hour,tidy_since,rail_order)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,
                      (SELECT coalesce(max(rail_order), -1) + 1 FROM groups))",
             params![
                 id.to_string(),
                 draft.name,
-                now_ms(),
+                now,
                 over.base_url,
                 draft.api_key.clone().flatten(),
                 over.default_model,
@@ -3444,6 +3588,8 @@ impl Store {
                 limits.max_sends_per_pair,
                 limits.max_tool_rounds,
                 over.reasoning_effort.map(|e| e.as_str()),
+                tidy.hour,
+                tidy.on.then_some(now),
             ],
         )
         .map_err(|e| classify(e, &draft.name))?;
@@ -3476,7 +3622,14 @@ impl Store {
                         max_fanout_per_call  = CASE WHEN ?11 THEN ?14 ELSE max_fanout_per_call END,
                         max_sends_per_pair   = CASE WHEN ?11 THEN ?15 ELSE max_sends_per_pair END,
                         max_tool_rounds      = CASE WHEN ?11 THEN ?16 ELSE max_tool_rounds END,
-                        reasoning_effort     = CASE WHEN ?3 THEN ?17 ELSE reasoning_effort END
+                        reasoning_effort     = CASE WHEN ?3 THEN ?17 ELSE reasoning_effort END,
+                        tidy_hour            = CASE WHEN ?18 THEN ?19 ELSE tidy_hour END,
+                        -- Kept while it stays on: switching on is the moment
+                        -- an agent never tidied starts counting from, and
+                        -- saving the group again is not switching it on.
+                        tidy_since           = CASE WHEN NOT ?18 THEN tidy_since
+                                                    WHEN ?20 THEN coalesce(tidy_since, ?21)
+                                                    ELSE NULL END
                   WHERE id=?1",
                 params![
                     id.to_string(),
@@ -3496,6 +3649,10 @@ impl Store {
                     limits.max_sends_per_pair,
                     limits.max_tool_rounds,
                     over.reasoning_effort.map(|e| e.as_str()),
+                    draft.tidy.is_some(),
+                    draft.tidy.map(|t| t.hour),
+                    draft.tidy.is_some_and(|t| t.on),
+                    now_ms(),
                 ],
             )
             .map_err(|e| classify(e, &draft.name))?;
@@ -5213,6 +5370,7 @@ fn row_to_group(row: &Row<'_>) -> RowResult<Group> {
                 max_sends_per_pair: row.get(13)?,
                 max_tool_rounds: row.get(14)?,
             },
+            tidy: crate::domain::group::Tidy { on: row.get(16)?, hour: row.get(17)? },
         })
     })())
 }
@@ -5720,7 +5878,7 @@ mod tests {
         // 67 adds the workspace identity, resource ledger and resume marker.
         // 72 adds the outcomes table and the run that filed a decision.
         // 73 adds the outbox. 74 adds the grants and where a decision came from.
-        conn.execute_batch("ALTER TABLE usage DROP COLUMN cached; ALTER TABLE pending_runs DROP COLUMN started_at; DROP TABLE permission_grants; ALTER TABLE decisions DROP COLUMN origin_ref; ALTER TABLE decisions DROP COLUMN origin; DROP TABLE outbox; DROP TABLE outcomes; ALTER TABLE decisions DROP COLUMN filed_run; DROP TABLE onboarding_hires; DROP TABLE operator_sends; DROP TRIGGER routine_delete_history; DROP TABLE routine_occurrences; ALTER TABLE plugins DROP COLUMN grant_generation; DROP TABLE pending_sandbox_resume; DROP TABLE resource_ledger; DROP TABLE workspace_identity; DROP TABLE approval_policies; ALTER TABLE groups DROP COLUMN rail_order; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
+        conn.execute_batch("ALTER TABLE agents DROP COLUMN tidied_through; ALTER TABLE agents DROP COLUMN last_tidy_at; ALTER TABLE groups DROP COLUMN tidy_since; ALTER TABLE groups DROP COLUMN tidy_hour; ALTER TABLE usage DROP COLUMN cached; ALTER TABLE pending_runs DROP COLUMN started_at; DROP TABLE permission_grants; ALTER TABLE decisions DROP COLUMN origin_ref; ALTER TABLE decisions DROP COLUMN origin; DROP TABLE outbox; DROP TABLE outcomes; ALTER TABLE decisions DROP COLUMN filed_run; DROP TABLE onboarding_hires; DROP TABLE operator_sends; DROP TRIGGER routine_delete_history; DROP TABLE routine_occurrences; ALTER TABLE plugins DROP COLUMN grant_generation; DROP TABLE pending_sandbox_resume; DROP TABLE resource_ledger; DROP TABLE workspace_identity; DROP TABLE approval_policies; ALTER TABLE groups DROP COLUMN rail_order; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
         migrations::run(&mut conn).unwrap();
         drop(conn);
         assert_eq!(f.store.connector_env(mine.id).unwrap()["TOKEN"], "private-token");
@@ -7110,6 +7268,7 @@ mod tests {
                 }),
                 api_key: Some(Some("sk-group-9999".into())),
                 limits: Some(GroupLimits { max_steps_per_run: Some(9), ..Default::default() }),
+                tidy: None,
             })
             .unwrap();
 
@@ -7149,6 +7308,7 @@ mod tests {
                 }),
                 api_key: Some(Some("sk-group-9999".into())),
                 limits: Some(GroupLimits { max_hops: Some(3), ..Default::default() }),
+                tidy: None,
             })
             .unwrap();
 
@@ -7188,6 +7348,7 @@ mod tests {
                     inference: Some(InferenceOverrides::default()),
                     limits: Some(GroupLimits::default()),
                     api_key: None,
+                    tidy: None,
                 },
             )
             .unwrap();
@@ -7661,14 +7822,20 @@ mod tests {
                     resumed: false,
                 }],
             ),
+            (
+                Participant::System,
+                me,
+                vec![Part::Tidy { reported: vec!["- done".into()], notes: vec![] }],
+            ),
         ];
         for (i, (from, to, parts)) in samples.into_iter().enumerate() {
             let mut message = envelope(from, to, "", RunId::new());
             message.parts = parts;
             message.created_at = i as i64;
             f.store.append(&message).unwrap();
-            let drawn = !message.plain_text().is_empty()
-                || message.parts.iter().any(|part| matches!(part, Part::File(_)));
+            let drawn = !message.is_tidy()
+                && (!message.plain_text().is_empty()
+                    || message.parts.iter().any(|part| matches!(part, Part::File(_))));
             let kept = f
                 .store
                 .agent_history(writer, i64::MAX, 40)
@@ -7677,6 +7844,177 @@ mod tests {
                 .any(|seen| seen.id == message.id);
             assert_eq!(kept, drawn, "the window and the prompt disagree on {:?}", message.parts);
         }
+    }
+
+    /// An agent in a group of its own that tidies memory overnight at three.
+    fn tidying(f: &Fixture, name: &str) -> AgentCard {
+        let group = f
+            .store
+            .create_group(&CleanGroup {
+                name: format!("{name}'s group"),
+                tidy: Some(crate::domain::group::Tidy { on: true, hour: 3 }),
+                ..Default::default()
+            })
+            .unwrap();
+        f.store.create_agent(&CleanDraft { group_id: Some(group.id), ..draft(name) }).unwrap()
+    }
+
+    /// A run of the agent's that finished at a given moment, as a settle files it.
+    fn ended(f: &Fixture, agent: &AgentCard, headline: &str, status: &str, at: i64) {
+        f.store
+            .conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO outcomes (run_id,agent_id,group_id,trigger,status,headline,
+                                       started_at,finished_at)
+                 VALUES (?1,?2,?3,'operator',?4,?5,?6,?6)",
+                params![
+                    RunId::new().to_string(),
+                    agent.id.to_string(),
+                    agent.group_id.to_string(),
+                    status,
+                    headline,
+                    at
+                ],
+            )
+            .unwrap();
+    }
+
+    /// The strike of the tidy hour some nights after a moment.
+    fn night(after: i64, nights: i64) -> i64 {
+        crate::domain::group::Tidy::last_struck(3, after + nights * 86_400_000).unwrap()
+    }
+
+    /// Hands the agent the tidy for the night struck at that moment, a minute
+    /// after it, and says which lines it was handed.
+    fn claim(f: &Fixture, agent: &AgentCard, struck: i64) -> Option<Vec<String>> {
+        f.store
+            .claim_tidy(agent.id, struck, struck + 60_000, |lines| {
+                let mut tidy = envelope(
+                    Participant::System,
+                    Participant::Agent { id: agent.id },
+                    "",
+                    RunId::new(),
+                );
+                tidy.parts = vec![Part::Tidy {
+                    reported: lines.into_iter().map(|(_, headline, _)| headline).collect(),
+                    notes: vec![],
+                }];
+                tidy
+            })
+            .unwrap()
+            .map(|tidy| match &tidy.parts[0] {
+                Part::Tidy { reported, .. } => reported.clone(),
+                _ => unreachable!(),
+            })
+    }
+
+    #[test]
+    fn a_tidy_is_handed_its_own_runs_that_said_something_newest_first_and_thirty_at_most() {
+        let f = fixture();
+        let me = tidying(&f, "Writer");
+        assert!(f.store.get_group(me.group_id).unwrap().unwrap().tidy.on);
+        let start = crate::domain::now_ms();
+
+        ended(&f, &me, "before the switch", "done", start - 60_000);
+        for i in 0..35 {
+            ended(&f, &me, &format!("run {i}"), "done", start + 1_000 + i);
+        }
+        ended(&f, &me, "found nothing", "nothing_new", start + 2_000);
+        ended(&f, &me, "failed", "failed", start + 3_000);
+        let other = f
+            .store
+            .create_agent(&CleanDraft { group_id: Some(me.group_id), ..draft("Other") })
+            .unwrap();
+        ended(&f, &other, "someone else's", "done", start + 4_000);
+
+        let handed = claim(&f, &me, night(start, 1)).expect("there was work since the switch");
+        assert_eq!(handed.len(), TIDY_LINES as usize);
+        assert_eq!(handed[0], "failed", "newest first, and a failure is a line like any other");
+        assert_eq!(handed[1], "run 34");
+        assert_eq!(handed.last().map(String::as_str), Some("run 6"));
+        for left_out in ["before the switch", "found nothing", "someone else's"] {
+            assert!(!handed.iter().any(|line| line == left_out), "{left_out}: {handed:?}");
+        }
+    }
+
+    #[test]
+    fn a_night_is_handed_over_once_and_a_night_with_nothing_is_seen_to_all_the_same() {
+        let f = fixture();
+        let me = tidying(&f, "Writer");
+        let start = crate::domain::now_ms();
+        let first = night(start, 1);
+
+        assert_eq!(claim(&f, &me, first), None, "nothing finished since the switch");
+        // Finished later that same morning: the next night's, not a tidy at ten.
+        ended(&f, &me, "late", "done", first + 7 * 3_600_000);
+        assert_eq!(claim(&f, &me, first), None);
+        let second = night(start, 2);
+        assert_eq!(claim(&f, &me, second), Some(vec!["late".to_string()]));
+        assert_eq!(claim(&f, &me, second), None, "the same night is not handed over twice");
+    }
+
+    #[test]
+    fn the_next_tidy_counts_from_the_last_one_that_was_read() {
+        let f = fixture();
+        let me = tidying(&f, "Writer");
+        let start = crate::domain::now_ms();
+        ended(&f, &me, "first week", "done", start + 1_000);
+
+        assert_eq!(claim(&f, &me, night(start, 1)), Some(vec!["first week".to_string()]));
+        // Never finished, so the lines it was handed are handed again.
+        assert_eq!(claim(&f, &me, night(start, 2)), Some(vec!["first week".to_string()]));
+        f.store.tidied(me.id).unwrap();
+        assert_eq!(claim(&f, &me, night(start, 3)), None, "read, and nothing since");
+        ended(&f, &me, "second week", "done", night(start, 3) + 3_600_000);
+        assert_eq!(claim(&f, &me, night(start, 4)), Some(vec!["second week".to_string()]));
+    }
+
+    #[test]
+    fn nobody_is_tidied_with_the_switch_off_or_while_paused() {
+        let f = fixture();
+        let me = tidying(&f, "Writer");
+        let start = crate::domain::now_ms();
+        ended(&f, &me, "work", "done", start + 1_000);
+        let first_on = f.store.tidy_due().unwrap()[0].since;
+        assert!(first_on <= start);
+
+        f.store.set_lifecycle(me.id, Lifecycle::Paused).unwrap();
+        assert!(f.store.tidy_due().unwrap().is_empty());
+        assert_eq!(claim(&f, &me, night(start, 1)), None);
+        f.store.set_lifecycle(me.id, Lifecycle::Active).unwrap();
+
+        let group = f.store.get_group(me.group_id).unwrap().unwrap();
+        let switch = |on: bool| {
+            f.store
+                .update_group(
+                    group.id,
+                    &CleanGroup {
+                        name: group.name.clone(),
+                        tidy: Some(crate::domain::group::Tidy { on, hour: 5 }),
+                        ..Default::default()
+                    },
+                )
+                .unwrap()
+        };
+        assert_eq!(switch(false).tidy, crate::domain::group::Tidy { on: false, hour: 5 });
+        assert!(f.store.tidy_due().unwrap().is_empty());
+        assert_eq!(claim(&f, &me, night(start, 1)), None);
+        // Untouched by an edit that does not mention it.
+        let renamed = f
+            .store
+            .update_group(group.id, &CleanGroup { name: "Renamed".into(), ..Default::default() })
+            .unwrap();
+        assert_eq!(renamed.tidy, crate::domain::group::Tidy { on: false, hour: 5 });
+
+        // Back on, it counts from now: what finished while it was off is not
+        // a backlog the first night has to read.
+        let back_on = crate::domain::now_ms();
+        switch(true);
+        let due = f.store.tidy_due().unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].hour, 5);
+        assert!(due[0].since >= back_on, "{} counts from the first time on", due[0].since);
     }
 
     #[test]
