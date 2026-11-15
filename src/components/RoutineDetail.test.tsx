@@ -78,7 +78,10 @@ describe("RoutineDetail", () => {
     setRoutineActive.mockImplementation(async (_id, active) => routine({ active }));
     testRoutine.mockResolvedValue("run-1");
     deleteRoutine.mockResolvedValue(undefined);
-    webhookAddress.mockResolvedValue({ port: 4711, secret: "s3cr3t-s3cr3t" });
+    webhookAddress.mockResolvedValue({
+      url: "http://127.0.0.1:4711/events",
+      secret: "s3cr3t-s3cr3t",
+    });
   });
 
   afterEach(() => {
@@ -318,7 +321,12 @@ describe("RoutineDetail", () => {
     expect((screen.getByLabelText("Event") as HTMLInputElement).value).toBe(
       "invoice.payment_failed",
     );
-    expect(screen.getByText(/Nothing on the clock/)).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "Nothing on the clock: it fires each time this is posted to Guaca, and Test run delivers it now.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/only be posted to a Host/)).toBeNull();
     const line = await screen.findByText(/curl -X POST/);
     expect(line.textContent).toContain(
       "http://127.0.0.1:4711/events/stripe/invoice.payment_failed",
@@ -334,11 +342,18 @@ describe("RoutineDetail", () => {
   });
 
   it("says when the receiver is not running rather than printing a dead address", async () => {
-    webhookAddress.mockResolvedValue({ port: 0, secret: "s3cr3t-s3cr3t" });
+    webhookAddress.mockResolvedValue({ secret: "s3cr3t-s3cr3t" });
     open({ trigger: "event:stripe/invoice.payment_failed", nextRunAt: null });
 
-    expect(await screen.findByText(/receiver is not running/)).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "Nothing on the clock. An event can only be posted to a Host, so in this workspace the routine fires only from Test run.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/receiver is not running/)).toBeNull();
+    expect(screen.queryByText(/each time this is posted to Guaca/)).toBeNull();
     expect(screen.queryByText(/curl -X POST/)).toBeNull();
+    expect(screen.queryByText(/127\.0\.0\.1/)).toBeNull();
   });
 
   it("holds a half-named event and creates a whole one", async () => {

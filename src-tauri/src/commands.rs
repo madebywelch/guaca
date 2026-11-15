@@ -2855,16 +2855,14 @@ pub async fn test_routine(state: &AppState, id: RoutineId) -> Reply<RunId> {
 /// here. This secret is the opposite case. Its only use is to be copied out of
 /// the app into whatever the operator wires to post here, and the routine's
 /// panel is where they are standing when they need it. What it unlocks is the
-/// same thing the Test run button does, on a loopback port, from a process
-/// that could read the config file anyway.
+/// same thing the Test run button does.
 ///
-/// Events are posted to the server's own origin, so `url` is where to post
-/// and there is no port of a receiver of its own to report. `port` is always
-/// zero, which the panel reads as no address on a desktop, where `url` is
-/// absent too.
+/// Events are posted to the server's own `/events` route, so `url` is that
+/// route on the origin the caller reached the Host at. A desktop has no event
+/// route, so there `url` is absent and the panel says the routine fires only
+/// from Test run.
 pub async fn webhook_address(state: &AppState) -> Reply<WebhookAddress> {
     Ok(WebhookAddress {
-        port: 0,
         url: state.reach.origin().map(|origin| format!("{}/events", origin.trim_end_matches('/'))),
         secret: state.runtime.config().webhook.secret,
     })
@@ -2873,7 +2871,6 @@ pub async fn webhook_address(state: &AppState) -> Reply<WebhookAddress> {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WebhookAddress {
-    pub port: u16,
     pub url: Option<String>,
     pub secret: String,
 }

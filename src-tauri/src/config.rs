@@ -305,21 +305,19 @@ impl std::fmt::Debug for DeliveryConfig {
     }
 }
 
-/// Where an event is posted to fire a routine, and what the post has to carry.
+/// What a post to the Host's event route has to carry to fire a routine.
 ///
-/// Both are written by the app rather than typed by the operator, and both are
-/// here rather than derived so that they survive a restart: whatever the
-/// operator wired to post here was given one address and one secret, and an
-/// app that picked a fresh port or a fresh secret on every launch would break
-/// that wiring silently on every launch.
+/// Written by the app rather than typed by the operator, and stored rather
+/// than derived so that it survives a restart: whatever the operator wired to
+/// post events was given one secret, and an app that picked a fresh one on
+/// every launch would break that wiring silently on every launch.
 ///
-/// `port` is zero until the receiver has bound once, which tells it to take
-/// whatever the OS offers and write that down. `secret` is empty until the
-/// first launch generates one. `webhook.rs` is the reader of both.
+/// `secret` is empty until the first launch generates one, in
+/// `webhook::prepare`. A settings file from a build that ran a receiver of
+/// its own also has a `port`; it is ignored on load and not written back.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct WebhookConfig {
-    pub port: u16,
     pub secret: String,
 }
 
@@ -1330,6 +1328,28 @@ mod tests {
 
         save(&path, &cfg).unwrap();
         assert_eq!(load(&path).unwrap(), cfg, "a current config round trips untouched");
+    }
+
+    #[test]
+    fn a_webhook_port_from_an_older_build_loads_and_is_dropped_on_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = AppConfig { version: CURRENT_VERSION, ..Default::default() };
+        cfg.operator_name = "Ada".into();
+        cfg.inference.api_key = "sk-kept".into();
+        cfg.limits.max_hops = 7;
+        cfg.webhook.secret = "kept-secret".into();
+        let mut older = serde_json::to_value(&cfg).unwrap();
+        older["webhook"]["port"] = serde_json::json!(4711);
+        fs::write(&path, older.to_string()).unwrap();
+
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded, cfg, "everything but the port is read as it was written");
+
+        save(&path, &loaded).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(written["webhook"], serde_json::json!({ "secret": "kept-secret" }));
     }
 
     #[cfg(unix)]

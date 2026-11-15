@@ -897,6 +897,7 @@ async fn main_calendar_and_webhook_commands_work_on_the_remote_backend() {
     assert!(deleted.get("ok").is_some(), "{deleted}");
     let (_, address) = call(addr, "webhook_address", json!({})).await;
     assert_eq!(address["ok"]["url"], format!("http://{addr}/events"));
+    assert!(address["ok"].get("port").is_none(), "{address}");
     let secret = address["ok"]["secret"].as_str().unwrap();
     assert!(!secret.is_empty() && secret != TOKEN);
     let client = reqwest::Client::new();

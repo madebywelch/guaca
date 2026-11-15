@@ -72,8 +72,8 @@ describe("trigger vocabulary", () => {
   });
 
   it("writes the line an operator copies, with the secret in the header", () => {
-    const line = webhookLine({ port: 4711, secret: "s3cr3t" }, "stripe", "invoice.paid");
-    expect(line).toContain("POST http://127.0.0.1:4711/events/stripe/invoice.paid");
+    const line = webhookLine("https://guaca.example/events", "s3cr3t", "stripe", "invoice.paid");
+    expect(line).toContain("POST https://guaca.example/events/stripe/invoice.paid");
     expect(line).toContain("-H 'Authorization: Bearer s3cr3t'");
     // In the header and nowhere else: a body-only secret rides along in a
     // cross-origin post from a browser, and a header does not.
@@ -306,11 +306,7 @@ describe("routineTitle", () => {
 });
 
 it("uses the hosted backend URL for a routine webhook", () => {
-  const command = webhookLine(
-    { port: 0, url: "https://guaca.example/events", secret: "fixture" },
-    "stripe",
-    "invoice",
-  );
+  const command = webhookLine("https://guaca.example/events", "fixture", "stripe", "invoice");
   expect(command).toContain("https://guaca.example/events/stripe/invoice");
   expect(command).not.toContain("127.0.0.1");
 });
