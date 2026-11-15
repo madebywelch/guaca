@@ -1430,7 +1430,7 @@ async fn an_open_socket_closes_when_its_session_expires() {
     let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, okm.as_ref());
     let signature = ring::hmac::sign(&key, payload.as_bytes());
     let cookie = format!(
-        "guaca_session_{}={}.{}",
+        "guaca_session_v2_{}={}.{}",
         addr.port(),
         payload,
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature.as_ref())
@@ -1529,102 +1529,6 @@ async fn logging_out_one_session_keeps_the_other_session() {
 }
 
 #[tokio::test]
-async fn a_legacy_bearer_cookie_is_upgraded_without_reusing_the_bearer() {
-    let (addr, _dir) = workspace().await;
-    let client = reqwest::Client::new();
-    let response = client
-        .post(format!("http://{addr}/v1/call"))
-        .header("Origin", format!("http://{addr}"))
-        .header("Cookie", format!("guaca_session_{}={TOKEN}", addr.port()))
-        .json(&json!({ "name": "list_agents", "args": {} }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 200);
-    let cookies: Vec<_> = response
-        .headers()
-        .get_all("set-cookie")
-        .iter()
-        .map(|value| value.to_str().unwrap())
-        .collect();
-    assert_eq!(cookies.len(), 2);
-    assert!(cookies[0].contains("Max-Age=0"));
-    assert!(!cookies[1].contains(TOKEN));
-    let upgraded = cookies[1].split(';').next().unwrap();
-    assert_eq!(
-        client
-            .post(format!("http://{addr}/v1/call"))
-            .header("Origin", format!("http://{addr}"))
-            .header("Cookie", upgraded)
-            .json(&json!({ "name": "list_agents", "args": {} }))
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        200
-    );
-}
-
-#[tokio::test]
-async fn a_late_legacy_upgrade_cannot_replace_a_fresh_signin() {
-    let (addr, _dir) = workspace().await;
-    let client = reqwest::Client::new();
-    let legacy = format!("guaca_session_{}={TOKEN}", addr.port());
-    let old = client
-        .post(format!("http://{addr}/v1/call"))
-        .header("Origin", format!("http://{addr}"))
-        .header("Cookie", &legacy)
-        .json(&json!({"name":"list_agents", "args":{}}))
-        .send()
-        .await
-        .unwrap();
-    let stale = old
-        .headers()
-        .get_all("set-cookie")
-        .iter()
-        .next_back()
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .split(';')
-        .next()
-        .unwrap()
-        .to_string();
-    assert_eq!(
-        client
-            .post(format!("http://{addr}/v1/auth/logout"))
-            .header("Origin", format!("http://{addr}"))
-            .header("Cookie", &stale)
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        200
-    );
-    let fresh = session_cookie(addr).await;
-    let mut jar = std::collections::HashMap::new();
-    for value in [&fresh, &stale] {
-        let (name, value) = value.split_once('=').unwrap();
-        jar.insert(name, value);
-    }
-    let cookie =
-        jar.iter().map(|(name, value)| format!("{name}={value}")).collect::<Vec<_>>().join("; ");
-    let response = client
-        .post(format!("http://{addr}/v1/call"))
-        .header("Origin", format!("http://{addr}"))
-        .header("Cookie", cookie)
-        .json(&json!({"name":"list_agents", "args":{}}))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(
-        response.status(),
-        200,
-        "a delayed legacy response must not replace a fresh session"
-    );
-}
-
-#[tokio::test]
 async fn explicit_signin_is_not_replaced_by_a_legacy_upgrade() {
     let (addr, _dir) = workspace().await;
     let response = reqwest::Client::new()
@@ -1644,53 +1548,214 @@ async fn explicit_signin_is_not_replaced_by_a_legacy_upgrade() {
     assert_eq!(cookies.len(), 1, "the explicit exchange must not be overwritten");
 }
 
-#[tokio::test]
-async fn legacy_upgrades_share_one_revocable_session() {
-    let (addr, _dir) = workspace().await;
+/// A session signed with this workspace's token, the way a host signs one,
+/// that expires at `expires`. For a test that has to choose the name a
+/// session arrives under, which a sign-in does not let it do.
+fn signed_session(expires: u64) -> String {
+    use base64::Engine;
+    let issued = expires - 30 * 24 * 60 * 60;
+    let payload = format!("{}.{}.{}", uuid::Uuid::new_v4().simple(), issued, expires);
+    let salt = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &[0; 32]);
+    let prk = ring::hmac::sign(&salt, TOKEN.as_bytes());
+    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, prk.as_ref());
+    let okm = ring::hmac::sign(&key, b"guaca browser session v1\x01");
+    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, okm.as_ref());
+    let signature = ring::hmac::sign(&key, payload.as_bytes());
+    format!(
+        "{payload}.{}",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature.as_ref())
+    )
+}
+
+/// The two cookies an older host admitted a browser by: the one that carried
+/// the token itself, and the session a host upgraded that one to. The second
+/// is signed and unexpired, so only its name stands between it and a session.
+fn retired_cookies(addr: SocketAddr) -> [String; 2] {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let port = addr.port();
+    [
+        format!("guaca_session_{port}={TOKEN}"),
+        format!("guaca_session_legacy_{port}={}", signed_session(now + 60 * 60)),
+    ]
+}
+
+/// Every `Set-Cookie` on an answer, in order.
+fn set_cookies(headers: &reqwest::header::HeaderMap) -> Vec<String> {
+    headers.get_all("set-cookie").iter().map(|value| value.to_str().unwrap().to_string()).collect()
+}
+
+/// What a browser carrying `cookie` is answered on an API call, a route a page
+/// loads directly, and the event socket: the status, every `Set-Cookie`, and
+/// the body. A socket that is let in answers 101 and nothing else.
+async fn admission(addr: SocketAddr, cookie: Option<&str>) -> Vec<(u16, Vec<String>, String)> {
+    use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Error};
     let client = reqwest::Client::new();
-    let legacy = format!("guaca_session_{}={TOKEN}", addr.port());
-    let request = || {
+    let mut answers = Vec::new();
+    for request in [
         client
             .post(format!("http://{addr}/v1/call"))
-            .header("Origin", format!("http://{addr}"))
-            .header("Cookie", &legacy)
-            .json(&json!({ "name": "list_agents", "args": {} }))
-    };
-    let (a, b) = tokio::join!(request().send(), request().send());
-    let (a, b) = (a.unwrap(), b.unwrap());
-    let upgraded = |response: &reqwest::Response| {
-        response
-            .headers()
-            .get_all("set-cookie")
-            .iter()
-            .next_back()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .split(';')
-            .next()
-            .unwrap()
-            .to_string()
-    };
-    let first = upgraded(&a);
-    let second = upgraded(&b);
-    assert_eq!(first, second, "concurrent legacy requests share a session");
-    assert_eq!(
-        client
-            .post(format!("http://{addr}/v1/auth/logout"))
-            .header("Origin", format!("http://{addr}"))
-            .header("Cookie", &first)
+            .json(&json!({ "name": "list_agents", "args": {} })),
+        client.get(format!("http://{addr}/v1/file/{}/page.pdf", "0".repeat(64))),
+    ] {
+        let mut request = request.header("Origin", format!("http://{addr}"));
+        if let Some(cookie) = cookie {
+            request = request.header("Cookie", cookie);
+        }
+        let response = request.send().await.expect("the daemon answers");
+        let status = response.status().as_u16();
+        let cookies = set_cookies(response.headers());
+        answers.push((status, cookies, response.text().await.unwrap()));
+    }
+    let mut request = format!("ws://{addr}/v1/events").into_client_request().unwrap();
+    request.headers_mut().insert("Origin", format!("http://{addr}").parse().unwrap());
+    if let Some(cookie) = cookie {
+        request.headers_mut().insert("Cookie", cookie.parse().unwrap());
+    }
+    answers.push(match tokio_tungstenite::connect_async(request).await {
+        Ok(_) => (101, Vec::new(), String::new()),
+        Err(Error::Http(response)) => (
+            response.status().as_u16(),
+            response
+                .headers()
+                .get_all("set-cookie")
+                .iter()
+                .map(|value| value.to_str().unwrap().to_string())
+                .collect(),
+            String::from_utf8_lossy(response.body().as_deref().unwrap_or_default()).into_owned(),
+        ),
+        Err(other) => panic!("the socket failed before the daemon answered: {other}"),
+    });
+    answers
+}
+
+#[tokio::test]
+async fn a_bearer_cookie_is_refused_like_no_cookie() {
+    let (addr, _dir) = workspace().await;
+    let unadmitted = admission(addr, None).await;
+    assert!(unadmitted.iter().all(|(status, ..)| *status == 401), "{unadmitted:?}");
+    for cookie in retired_cookies(addr) {
+        assert_eq!(
+            admission(addr, Some(&cookie)).await,
+            unadmitted,
+            "a retired cookie is answered as no cookie at all: {cookie}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn no_response_sets_a_retired_cookie_but_signing_out_expires_them() {
+    let (addr, _dir) = workspace().await;
+    let [bearer, upgraded] = retired_cookies(addr);
+    let retired =
+        [format!("guaca_session_{}", addr.port()), format!("guaca_session_legacy_{}", addr.port())];
+    let session = session_cookie(addr).await;
+    let mut cookies = Vec::new();
+    for jar in [bearer.clone(), upgraded.clone(), format!("{bearer}; {upgraded}; {session}")] {
+        for (_, set, _) in admission(addr, Some(&jar)).await {
+            cookies.extend(set);
+        }
+        let signin = reqwest::Client::new()
+            .post(format!("http://{addr}/v1/auth/session"))
+            .bearer_auth(TOKEN)
+            .header("Cookie", &jar)
             .send()
             .await
-            .unwrap()
-            .status(),
-        200
+            .unwrap();
+        assert_eq!(signin.status(), 200);
+        cookies.extend(set_cookies(signin.headers()));
+    }
+    assert!(
+        cookies.iter().all(|cookie| !retired.iter().any(|name| name_of(cookie) == name)),
+        "nothing but signing out names a retired cookie: {cookies:?}"
     );
-    assert_eq!(
-        request().send().await.unwrap().status(),
-        401,
-        "a revoked legacy cookie cannot upgrade again"
-    );
+
+    let logout = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/auth/logout"))
+        .header("Origin", format!("http://{addr}"))
+        .header("Cookie", format!("{bearer}; {upgraded}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(logout.status(), 200);
+    let expired: Vec<_> = set_cookies(logout.headers())
+        .into_iter()
+        .filter(|cookie| retired.iter().any(|name| name_of(cookie) == name))
+        .collect();
+    assert_eq!(expired.len(), 2, "signing out expires both retired cookies: {expired:?}");
+    for cookie in expired {
+        assert!(cookie.contains("=;"), "a retired cookie is only ever emptied: {cookie}");
+        assert!(cookie.contains("Max-Age=0"), "a retired cookie is only ever expired: {cookie}");
+    }
+}
+
+#[tokio::test]
+async fn a_session_is_admitted_beside_a_retired_cookie() {
+    use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
+    let (addr, _dir) = workspace().await;
+    let [bearer, upgraded] = retired_cookies(addr);
+    let session = session_cookie(addr).await;
+    let jar = format!("{bearer}; {upgraded}; {session}");
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/call"))
+        .header("Origin", format!("http://{addr}"))
+        .header("Cookie", &jar)
+        .json(&json!({ "name": "list_agents", "args": {} }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200, "the session admits the call");
+    assert_eq!(set_cookies(response.headers()), Vec::<String>::new(), "and nothing is reissued");
+
+    let mut request = format!("ws://{addr}/v1/events").into_client_request().unwrap();
+    request.headers_mut().insert("Origin", format!("http://{addr}").parse().unwrap());
+    request.headers_mut().insert("Cookie", jar.parse().unwrap());
+    let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    let snapshot = tokio::time::timeout(std::time::Duration::from_secs(10), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(matches!(snapshot, Message::Text(_)), "the socket opens with its snapshot");
+}
+
+#[tokio::test]
+async fn a_leftover_legacy_session_file_is_removed_when_the_host_starts() {
+    let first = tempfile::tempdir().expect("a temporary workspace");
+    let leftover = first.path().join("legacy-sessions.json");
+    std::fs::write(&leftover, r#"{"0123456789abcdef0123456789abcdef":1700000000}"#).unwrap();
+    let open = |root: &std::path::Path| {
+        guac_lib::server::bind(guac_lib::server::Settings {
+            root: root.to_path_buf(),
+            bind: "127.0.0.1:0".parse().unwrap(),
+            token: TOKEN.into(),
+            web: None,
+            origin: None,
+            updater: None,
+        })
+    };
+    let _running = open(first.path()).await.expect("the first start opens the workspace");
+    assert!(!leftover.exists(), "the first start removes the legacy session file");
+
+    // The first host holds the workspace lock for as long as this process
+    // lives, so the second start opens a copy of what the first left on disk,
+    // which is the state a restarted host finds.
+    let second = tempfile::tempdir().expect("a second temporary workspace");
+    copy_tree(first.path(), second.path());
+    let _restarted = open(second.path()).await.expect("a start with nothing to remove opens");
+    assert!(!second.path().join("legacy-sessions.json").exists());
+}
+
+fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            std::fs::create_dir_all(&target).unwrap();
+            copy_tree(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).unwrap();
+        }
+    }
 }
 
 /// The name half of a `Set-Cookie` value, which is what a browser keys a jar by.

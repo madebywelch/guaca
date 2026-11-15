@@ -230,12 +230,20 @@ locked out.
 Each cookie contains a random session ID and a signed issue time and expiry.
 Sessions expire after 30 days, and rotating the workspace token invalidates
 them all. Signing out revokes only that session in the host data directory;
-other sessions remain active. A browser with a legacy bearer cookie receives
-a new session cookie on its next authenticated request. Legacy bearer cookies
-share one session, so signing out of it signs out every browser that upgraded
-from that bearer. Legacy bearer cookies remain accepted until version 0.4.0
-unless their shared session expires or is revoked. Older hosts cannot
-read the new session cookies, so a rollback requires signing in again.
+other sessions remain active. Older hosts cannot read the new session
+cookies, so a rollback requires signing in again.
+
+That session cookie is the only cookie that admits a browser. Builds before
+sessions admitted a browser by a cookie that carried the token itself, and
+hosts before 0.4.0 still accepted it and upgraded it to a shared session
+cookie, `guaca_session_legacy_<port>`. A host from 0.4.0 reads neither. A
+browser that holds only one of them is answered exactly as a browser with no
+cookie: it sees the token screen, so a browser last admitted before sessions
+has to enter the token once more, or open the invitation again. No answer
+sets either cookie, except that signing out still expires both, so a browser
+that kept the one carrying the token loses it. On start, a host deletes the
+`legacy-sessions.json` an older host kept beside its revocations, because
+nothing reads the session it named.
 
 The socket authenticates by the same cookie. A WebSocket handshake is not
 subject to CORS, so it is held to the same proof as a state-changing request.
