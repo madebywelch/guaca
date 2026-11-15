@@ -50,24 +50,25 @@ use crate::subscription::{DeviceCode, SigninError, Status, Subscription};
 /// How the operator's own browser is opened, which is a property of the host.
 ///
 /// A sign-in that needs a person goes to the browser they are sitting in front
-/// of. On a desktop that is this machine's, and Tauri opens it. On a server
-/// there is nobody at the machine at all, so the honest answer is a refusal
+/// of. A host has nobody at its own machine, so it asks the page that made the
+/// call to open the URL, and with no page open the honest answer is a refusal
 /// naming where the sign-in has to happen instead.
 ///
-/// A boxed function rather than a match on [`Deployment`], because the desktop
-/// arm is the one line in this file that would drag `tauri` back into it, and
-/// this module is the boundary that keeps the runtime host-agnostic.
+/// A boxed function rather than a match on [`Deployment`], so this module
+/// never learns how a browser is reached and never needs `tauri`.
 pub type OpenUrl = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 
 /// Where a sign-in's browser is sent back to, which is the other half of how
 /// this host reaches a person.
 ///
-/// A desktop lands the redirect on a loopback port it bound itself. A server
-/// lands it on a route, at the origin the operator's browser reached the
+/// Every running host is `Reach::Served`, built by `server/mod.rs`. It lands
+/// the redirect on a route, at the origin the operator's browser reached the
 /// workspace through, which nothing at boot can know: a box is behind a tunnel
 /// whose name is the operator's. So it is either told (`GUACA_ORIGIN`) or
-/// remembered from the last call that arrived, and a sign-in started before
-/// either is refused with the sentence that says which to do.
+/// remembered from the last call that arrived, which `server::call` notes
+/// before any command runs, and a sign-in started before either is refused
+/// with the sentence that says which to do. `Reach::Desktop`, a loopback port
+/// bound by a runtime inside the desktop app, is constructed only in tests.
 pub enum Reach {
     Desktop,
     Served {
@@ -90,7 +91,8 @@ impl Reach {
         }
     }
 
-    /// Remembers the origin a call arrived at. A desktop has nothing to note.
+    /// Remembers the origin a call arrived at. `Reach::Desktop` has nothing
+    /// to note.
     pub fn note(&self, origin: String) {
         if let Reach::Served { seen, .. } = self {
             *seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(origin);
@@ -107,7 +109,8 @@ impl Reach {
         }
     }
 
-    /// The callback map a served route delivers into. None on a desktop.
+    /// The callback map a served route delivers into. None for
+    /// `Reach::Desktop`.
     pub fn callbacks(&self) -> Option<crate::oauth::Callbacks> {
         match self {
             Reach::Desktop => None,
@@ -135,8 +138,8 @@ impl Reach {
 }
 
 /// Hands the menu bar a presence read somewhere other than this runtime, or
-/// `None` to put it back on this runtime. A desktop wires this to its tray;
-/// a server has no strip and ignores it.
+/// `None` to put it back on this runtime. The host has no strip and ignores
+/// it: a window feeds its own machine's menu bar, and that never reaches here.
 pub type MenubarFeed = Arc<dyn Fn(Option<crate::menubar::Presence>) + Send + Sync>;
 
 pub struct AppState {
@@ -146,8 +149,8 @@ pub struct AppState {
     /// derived from: a computer's live screen is reached through the daemon
     /// at an address noVNC has to be able to resolve its own files against,
     /// so the credential is a path segment, and it is a ticket for that one
-    /// sandbox rather than the token for the whole workspace. `None` on a
-    /// desktop, whose viewer is on loopback and needs nothing.
+    /// sandbox rather than the token for the whole workspace. Every running
+    /// host has one; `None` is left to tests.
     pub secret: Option<Arc<str>>,
     /// Where this runtime is, which decides what the panels may offer.
     ///
@@ -1002,10 +1005,9 @@ async fn sign_in(
         &landing,
         {
             // The flow takes a callback so `oauth.rs` does not have to know how
-            // a browser is opened, and the host is what decides. On a desktop
-            // this is the operator's own browser and the loopback redirect
-            // lands back in this process. On a server the page is asked to
-            // open it, and the redirect comes back through the served origin.
+            // a browser is opened, and the host is what decides: the page is
+            // asked to open it, and the redirect comes back through the
+            // served origin.
             let open = state.open_url.clone();
             move |url: &str| open(url)
         },
@@ -2857,10 +2859,12 @@ pub async fn test_routine(state: &AppState, id: RoutineId) -> Reply<RunId> {
 /// panel is where they are standing when they need it. What it unlocks is the
 /// same thing the Test run button does.
 ///
-/// Events are posted to the server's own `/events` route, so `url` is that
-/// route on the origin the caller reached the Host at. A desktop has no event
-/// route, so there `url` is absent and the panel says the routine fires only
-/// from Test run.
+/// Events are posted to the host's own `/events` route, so `url` is that
+/// route on the origin the host knows: `GUACA_ORIGIN` when it is set, and
+/// otherwise the origin of the last call, which `server::call` notes before
+/// any command runs. A local host on this Mac answers a loopback address. `url`
+/// is absent only while neither is known, which takes a call that named no
+/// host, and then the panel says the routine fires only from Test run.
 pub async fn webhook_address(state: &AppState) -> Reply<WebhookAddress> {
     Ok(WebhookAddress {
         url: state.reach.origin().map(|origin| format!("{}/events", origin.trim_end_matches('/'))),

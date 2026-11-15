@@ -59,7 +59,8 @@ export function eventFields(spec: TriggerSpec): { service: string; topic: string
  * secret goes in the header and nowhere else; `webhook.rs` says why that is
  * the mechanism and not a convention.
  *
- * `url` is a Host's event route. A desktop has none, so it has no line.
+ * `url` is the host's event route. With no origin known the host answers no
+ * `url`, and then there is no line.
  */
 export function webhookLine(url: string, secret: string, service: string, topic: string): string {
   return [

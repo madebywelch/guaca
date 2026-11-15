@@ -1,5 +1,6 @@
 pub mod account;
-/// The desktop host. One of the two files that know Tauri exists.
+/// The desktop client: the window, the menu bar and the local host's container.
+/// It builds no runtime; agents run in `guacad`.
 #[cfg(feature = "desktop")]
 pub mod app;
 pub mod artifact;

@@ -311,13 +311,14 @@ pub type Callbacks = Arc<Mutex<HashMap<String, tokio::sync::mpsc::UnboundedSende
 /// Where a browser is sent back to after it authorizes, and how its answer
 /// reaches the flow that is waiting for it.
 ///
-/// Two, because the two hosts differ in exactly this. A desktop binds a
-/// loopback port before naming the redirect, and the browser on the same
-/// machine lands on it. A server has no browser on the machine and no port a
-/// remote browser could reach, so the redirect is a route on the origin the
-/// operator reached the workspace at, and the daemon forwards what arrives to
-/// the flow by its state. Everything after the landing (PKCE, the state, the
-/// issuer check, the exchange) is one path.
+/// A running host always uses `Served`: it has no browser on its machine and
+/// no port a browser elsewhere could reach, so the redirect is a route on the
+/// origin the operator reached the workspace at, and the daemon forwards what
+/// arrives to the flow by its state. `Loopback` binds a port on this machine
+/// before naming the redirect, for a browser on the same machine; it is what a
+/// runtime inside the desktop app used, and now only tests sign in through it.
+/// Everything after the landing (PKCE, the state, the issuer check, the
+/// exchange) is one path.
 #[derive(Clone)]
 pub enum Landing {
     Loopback,

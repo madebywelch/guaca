@@ -170,8 +170,6 @@ export function restart(preflight = true): void {
 /** Whether the runtime is somewhere other than this process. */
 export const hosted = true;
 
-/** Whether calls go over Tauri's own bridge, to the runtime in this process. */
-
 const TOKEN_KEY = "guaca.workspace.token";
 let credentialGeneration = 0;
 let exchangeQueue: Promise<void> = Promise.resolve();
@@ -658,13 +656,12 @@ export type Unlisten = () => void;
 /**
  * Subscribes to the runtime's event channel.
  *
- * On a desktop that is Tauri's own bus. Hosted it is a WebSocket that
- * reconnects, because a box is reached across a network and a network drops:
- * the desktop's channel cannot fail without the process failing, and this one
- * can fail while everything is fine.
+ * It is a WebSocket to the host, in the desktop app as in a browser, and it
+ * reconnects, because the host is another process, often across a network,
+ * and the socket can drop while everything is fine.
  *
  * Reconnecting is not resynchronizing. Events missed while the socket was down
- * are gone, exactly as they are when the desktop app is closed, and the answer
+ * are gone, exactly as they are while no window is open, and the answer
  * is the same in both: what the UI draws it refetches. `onReconnect` is how a
  * caller is told to do that.
  *

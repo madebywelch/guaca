@@ -73,9 +73,8 @@ pub enum UiEvent {
     /// the roster is small and a diff protocol here would be pure ceremony.
     AgentsChanged,
 
-    /// A sign-in needs the operator's browser, and on this host the only one
-    /// there is belongs to whoever is reading the page. A desktop opens the
-    /// system browser itself and never emits this; a server has nobody at the
+    /// A sign-in needs the operator's browser, and the only one there is
+    /// belongs to whoever is reading the page. The host has nobody at its own
     /// machine, so the page is asked to open the URL and to show it as a link
     /// in case the browser refuses a window nobody clicked for.
     OpenUrl {

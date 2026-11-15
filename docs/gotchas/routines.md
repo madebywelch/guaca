@@ -39,10 +39,11 @@ is already working. `docs/ROUTINES.md`, then `domain/routine.rs` and
   form, because the browser will not attach one cross-origin without a
   preflight. Moving the secret into the body or the query string reads as
   equivalent and reopens that. `server::events`, then `webhook.rs`.
-- **A desktop has no event route.** The loopback receiver that used to be in
-  `webhook.rs` was never started, and it is gone. `webhookAddress` still
-  answers a port of zero, which the panel reads as no address; the secret in
-  `WebhookConfig` is the server's route's.
+- **The event address is the origin the host was reached at.** The loopback
+  receiver that used to be in `webhook.rs` was never started, and it is gone.
+  `webhookAddress` answers a `url` from `GUACA_ORIGIN` or from the origin
+  `server::call` noted, and no `url` only while neither is known; the secret
+  in `WebhookConfig` is the server's route's.
 - **A 409 is a paused agent, not a missing routine.** The route answers with
   `paused` beside the other counts and a sentence of its own, because a paused
   agent's routine used to read to the sender exactly like a misspelled topic.

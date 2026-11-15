@@ -1,6 +1,6 @@
 # Hosting
 
-The daemon, a browser as a client, and the boot both hosts share.
+The daemon, a browser as a client, and the boot that opens a workspace.
 `docs/HOSTING.md`, then `server/mod.rs`, `boot.rs`, `ipc.rs` and
 `src/lib/transport.ts`.
 
