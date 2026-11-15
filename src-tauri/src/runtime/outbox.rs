@@ -8,6 +8,14 @@
 //! however many are open, and none lost because none was open when it was
 //! offered.
 //!
+//! A claim can be given back. A window on a Mac learns only after its claim
+//! won whether macOS took the banner, and claiming first is what keeps two
+//! windows from raising it twice, so a page that claimed and was refused
+//! releases the claim. The other pages are offered it again for
+//! [`RECLAIM_MS`], never the page that gave it back; if none takes it, or a
+//! second page gives it back too, it is pushed as if nobody were at a window,
+//! because the one thing that would have reached them there has failed.
+//!
 //! The one thing it sends is a push. While the operator is away, an offer is
 //! made with a second row beside it for the address in `delivery`, if there
 //! is one, and `push_deliveries` sends those: a POST each, tried again on a
@@ -22,7 +30,7 @@ use super::{Runtime, RuntimeError, UiEvent};
 use crate::db::{Due, StoreError};
 use crate::domain::now_ms;
 use crate::domain::outbox::{
-    decide, gather, Attention, Delivery, Gathered, Kind, Look, Verdict, Why,
+    decide, gather, Attention, Delivery, Gathered, Kind, Look, Verdict, Why, EXPIRE_MS,
 };
 use crate::domain::view::Presence;
 use crate::push::{self, Answer, Content, Format, Next, Unreachable};
@@ -33,6 +41,11 @@ const TICK: Duration = Duration::from_secs(60);
 
 /// The shortest it sleeps, so a row that cannot be read cannot spin it.
 const REST: Duration = Duration::from_secs(1);
+
+/// How long the other pages have to take a delivery one page gave back. A
+/// page that is listening claims within a second or two; this is for one
+/// that is busy, and it is short beside a parked turn's ten minutes.
+pub const RECLAIM_MS: i64 = 15_000;
 
 impl Runtime {
     /// Starts the dispatcher. Once, at boot, after the drain's work is picked
@@ -116,7 +129,36 @@ impl Runtime {
                 tracing::warn!(%err, id = %row.id, "could not act on a delivery");
             }
         }
+        self.settle_releases(&config.delivery, now);
         offered
+    }
+
+    /// Pushes what every page that tried has given back, whatever the
+    /// operator's presence says, since a page said so by trying.
+    fn settle_releases(&self, delivery: &crate::config::DeliveryConfig, now: i64) {
+        let store = &self.inner.store;
+        let due = match store.due_releases(now) {
+            Ok(due) => due,
+            Err(err) => {
+                tracing::warn!(%err, "could not read the deliveries given back");
+                return;
+            }
+        };
+        for (row, count) in due {
+            let said = delivery
+                .is_on()
+                .then(|| push::say(row.kind, &row.gathered(), count, delivery.content));
+            let settled = store.settle_release(
+                &row.id,
+                said.as_ref(),
+                count == 1,
+                row.created_at + EXPIRE_MS,
+                now,
+            );
+            if let Err(err) = settled {
+                tracing::warn!(%err, id = %row.id, "could not settle a delivery given back");
+            }
+        }
     }
 
     /// Decides a gathering that is over: what is still worth saying is offered
@@ -172,14 +214,34 @@ impl Runtime {
     }
 
     /// Everything offered and not yet claimed, for a window that has just
-    /// connected and heard none of the offers.
-    pub fn pending_deliveries(&self) -> Result<Vec<Delivery>, RuntimeError> {
-        Ok(self.inner.store.pending_deliveries()?)
+    /// connected and heard none of the offers. Never what `page` gave back.
+    pub fn pending_deliveries(&self, page: Option<&str>) -> Result<Vec<Delivery>, RuntimeError> {
+        Ok(self.inner.store.pending_deliveries(page)?)
     }
 
     /// True for the one window that may show this, and false for every other.
-    pub fn claim_delivery(&self, id: &str) -> Result<bool, RuntimeError> {
-        Ok(self.inner.store.claim_delivery(id, now_ms())?)
+    /// `page` is the page asking, which is the only one that can give the
+    /// claim back; a page that names none cannot.
+    pub fn claim_delivery(&self, id: &str, page: Option<&str>) -> Result<bool, RuntimeError> {
+        Ok(self.inner.store.claim_delivery(id, page, now_ms())?)
+    }
+
+    /// Gives back what `page` claimed and could not show. The first time it
+    /// is offered again to every window, and the page that gave it back is
+    /// refused it; the second time it goes to the push at once. False, and
+    /// nothing changes, for a page that does not hold the claim.
+    pub fn release_delivery(&self, id: &str, page: &str) -> Result<bool, RuntimeError> {
+        let store = &self.inner.store;
+        let Some((given, releases)) = store.release_delivery(id, page, RECLAIM_MS, now_ms())?
+        else {
+            return Ok(false);
+        };
+        if releases == 1 {
+            let Delivery { id, kind, title, body, target, created_at } = given;
+            self.emit(UiEvent::Delivery { id, kind, title, body, target, created_at });
+        }
+        store.outbox_written().notify_one();
+        Ok(true)
     }
 
     /// One pass over the address: sends every push whose time has come, and
@@ -203,20 +265,19 @@ impl Runtime {
         // A push waiting to be tried again is dropped once there is no address
         // to try, and once the operator is back: a window shows them what is
         // waiting, and nothing goes to a phone while a Guaca window has focus.
-        let dropped = match (delivery.is_on(), here) {
-            (false, _) => Some(Why::Setting),
-            (true, true) => Some(Why::Present),
-            (true, false) => None,
-        };
-        if let Some(why) = dropped {
-            let ids: Vec<String> = due.into_iter().map(|(push, _)| push.id).collect();
+        // Except what the windows gave back, which no window could show.
+        let (due, dropped): (Vec<_>, Vec<_>) = due
+            .into_iter()
+            .partition(|(_, _, given_back)| delivery.is_on() && (!here || *given_back));
+        if !dropped.is_empty() {
+            let why = if delivery.is_on() { Why::Present } else { Why::Setting };
+            let ids: Vec<String> = dropped.into_iter().map(|(push, _, _)| push.id).collect();
             if let Err(err) = store.suppress_deliveries(&ids, why) {
                 tracing::warn!(%err, "could not drop the pushes that are due");
             }
-            return 0;
         }
         let mut sent = 0;
-        for (mut push, attempts) in due {
+        for (mut push, attempts, _) in due {
             if delivery.content == Content::Generic {
                 push.agent = None;
                 push.group = None;

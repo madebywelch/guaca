@@ -49,7 +49,7 @@ fn rows(h: &Harness) -> Vec<Row> {
 
 /// What a window that has just connected is offered.
 fn pending(h: &Harness) -> Vec<Delivery> {
-    h.runtime.pending_deliveries().unwrap()
+    h.runtime.pending_deliveries(None).unwrap()
 }
 
 fn offers(h: &Harness) -> usize {
@@ -122,8 +122,11 @@ async fn a_reminder_due_with_no_window_open_is_delivered_once_when_one_connects(
     assert_eq!(waiting[0].body, "1 decision needs a review. Open For you to answer or follow up.");
     assert_eq!(waiting[0].target, Target::ForYou);
 
-    assert!(h.runtime.claim_delivery(&waiting[0].id).unwrap(), "the first window shows it");
-    assert!(!h.runtime.claim_delivery(&waiting[0].id).unwrap(), "and no window shows it again");
+    assert!(h.runtime.claim_delivery(&waiting[0].id, None).unwrap(), "the first window shows it");
+    assert!(
+        !h.runtime.claim_delivery(&waiting[0].id, None).unwrap(),
+        "and no window shows it again"
+    );
     assert!(pending(&h).is_empty());
 
     // The next sweep finds nothing due, and writes nothing.
@@ -151,7 +154,7 @@ async fn a_reminder_due_while_the_host_was_down_is_not_lost_at_boot() {
     let waiting = pending(&h);
     assert_eq!(waiting[0].kind, Kind::Reminder);
     assert_eq!(offers(&h), 1, "offered once, to nobody, and kept");
-    assert!(h.runtime.claim_delivery(&waiting[0].id).unwrap());
+    assert!(h.runtime.claim_delivery(&waiting[0].id, None).unwrap());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -171,7 +174,7 @@ async fn two_windows_claiming_one_delivery_show_it_once() {
             let (runtime, start, id) = (h.runtime.clone(), start.clone(), id.clone());
             std::thread::spawn(move || {
                 start.wait();
-                runtime.claim_delivery(&id).unwrap()
+                runtime.claim_delivery(&id, None).unwrap()
             })
         })
         .collect();
@@ -246,7 +249,7 @@ async fn three_routines_finishing_while_the_operator_is_away_are_one_item() {
     }
     assert_eq!(waiting[0].target, Target::ForYou);
 
-    assert!(h.runtime.claim_delivery(&waiting[0].id).unwrap());
+    assert!(h.runtime.claim_delivery(&waiting[0].id, None).unwrap());
     assert!(rows(&h).iter().all(|row| row.status == "delivered"), "{:#?}", rows(&h));
     assert_eq!(offers(&h), 1);
 }
@@ -291,8 +294,8 @@ async fn a_restart_between_the_offer_and_the_claim_delivers_once() {
     let after = pending(&h);
     assert_eq!(after.len(), 1, "{after:#?}");
     assert_eq!(after[0].id, before[0].id);
-    assert!(h.runtime.claim_delivery(&after[0].id).unwrap());
-    assert!(!h.runtime.claim_delivery(&after[0].id).unwrap());
+    assert!(h.runtime.claim_delivery(&after[0].id, None).unwrap());
+    assert!(!h.runtime.claim_delivery(&after[0].id, None).unwrap());
     assert!(pending(&h).is_empty());
     let stuck: Vec<Row> = rows(&h).into_iter().filter(|row| row.kind == "needs_you").collect();
     assert_eq!(stuck.len(), 1, "{stuck:#?}");
@@ -318,7 +321,7 @@ async fn a_banner_about_something_already_dealt_with_is_withdrawn() {
 
     // Cleared in one window before another claims the banner.
     h.runtime.clear_escalation(open[0].id).unwrap();
-    assert!(!h.runtime.claim_delivery(&id).unwrap(), "nothing to show about a cleared wall");
+    assert!(!h.runtime.claim_delivery(&id, None).unwrap(), "nothing to show about a cleared wall");
     let row = rows(&h).into_iter().find(|row| row.id == id).unwrap();
     assert_eq!((row.status.as_str(), row.last_error.as_deref()), ("suppressed", Some("answered")));
 
@@ -372,4 +375,162 @@ async fn a_window_losing_focus_changes_nothing_an_agent_reads() {
     h.runtime.report_window(view, false, Some("laptop".into()));
     assert_eq!(h.runtime.describe_view(), before, "presence is not part of what an agent reads");
     assert!(before.contains("Pip"), "{before}");
+}
+
+/// How long the other pages have to take what one page gave back. The
+/// dispatcher's own constant is private to the runtime, so a change to it
+/// shows up here as a failure rather than going unnoticed.
+const RECLAIM_MS: i64 = 15_000;
+
+/// What one page, named as `PAGE_ID` names it, is offered when it connects.
+fn offered_to(h: &Harness, page: &str) -> Vec<Delivery> {
+    h.runtime.pending_deliveries(Some(page)).unwrap()
+}
+
+fn claims(h: &Harness, id: &str, page: &str) -> bool {
+    h.runtime.claim_delivery(id, Some(page)).unwrap()
+}
+
+fn releases(h: &Harness, id: &str, page: &str) -> bool {
+    h.runtime.release_delivery(id, page).unwrap()
+}
+
+/// A reminder offered to every window, and its id.
+fn a_reminder_is_offered(h: &Harness) -> String {
+    file_due_decision(h, "Assistant", "thread/time");
+    h.runtime.sweep_decisions(now_ms());
+    assert_eq!(h.runtime.dispatch_deliveries(now_ms()), 1);
+    pending(h)[0].id.clone()
+}
+
+fn status_of(h: &Harness, id: &str) -> String {
+    rows(h).into_iter().find(|row| row.id == id).unwrap().status
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_delivery_given_back_is_offered_to_every_other_window_and_never_to_the_one_that_gave_it()
+{
+    let stub = serve(|_| Script::Say("Nothing to do.".into())).await;
+    let h = harness(&stub, &["Assistant"], GuardLimits::default());
+    let id = a_reminder_is_offered(&h);
+    assert!(claims(&h, &id, "desk"));
+    assert_eq!(status_of(&h, &id), "delivered");
+    let before = offers(&h);
+
+    // macOS refused the banner after the claim won.
+    assert!(releases(&h, &id, "desk"));
+    assert_eq!(status_of(&h, &id), "pending", "no longer counted as shown");
+    assert_eq!(offers(&h), before + 1, "offered again to the windows that are listening");
+    assert!(offered_to(&h, "desk").is_empty(), "not to the page that gave it back");
+    assert!(!claims(&h, &id, "desk"), "which cannot take it back either");
+    assert_eq!(offered_to(&h, "laptop").len(), 1, "a window connecting now is offered it");
+    assert!(claims(&h, &id, "laptop"), "and the first other window to claim it shows it");
+    assert!(!claims(&h, &id, "phone"));
+    assert_eq!(status_of(&h, &id), "delivered");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn only_the_page_that_holds_the_claim_can_give_it_back() {
+    let stub = serve(|_| Script::Say("Nothing to do.".into())).await;
+    let h = harness(&stub, &["Assistant"], GuardLimits::default());
+    let id = a_reminder_is_offered(&h);
+    assert!(!releases(&h, &id, "desk"), "nothing to give back before anyone claims it");
+    assert!(claims(&h, &id, "desk"));
+    let before = offers(&h);
+
+    assert!(!releases(&h, &id, "laptop"), "a page that did not claim it");
+    assert!(!releases(&h, "no-such-delivery", "desk"));
+    assert_eq!(status_of(&h, &id), "delivered");
+    assert_eq!(offers(&h), before);
+    assert!(offered_to(&h, "laptop").is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_claim_made_without_naming_the_page_cannot_be_given_back() {
+    let stub = serve(|_| Script::Say("Nothing to do.".into())).await;
+    let h = harness(&stub, &["Assistant"], GuardLimits::default());
+    let id = a_reminder_is_offered(&h);
+    assert!(h.runtime.claim_delivery(&id, None).unwrap(), "an older page claims without a name");
+    assert!(!releases(&h, &id, "desk"), "and no page holds that claim");
+    assert_eq!(status_of(&h, &id), "delivered");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn giving_the_same_claim_back_twice_changes_nothing_the_second_time() {
+    let stub = serve(|_| Script::Say("Nothing to do.".into())).await;
+    let h = harness(&stub, &["Assistant"], GuardLimits::default());
+    let id = a_reminder_is_offered(&h);
+    assert!(claims(&h, &id, "desk"));
+    assert!(releases(&h, &id, "desk"));
+    let before = offers(&h);
+
+    assert!(!releases(&h, &id, "desk"));
+    assert_eq!(offers(&h), before, "offered once, not once per release");
+    assert_eq!(offered_to(&h, "laptop").len(), 1);
+    assert!(offered_to(&h, "desk").is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn with_no_address_what_nobody_else_takes_ends_not_shown() {
+    let stub = serve(|_| Script::Say("Nothing to do.".into())).await;
+    let h = harness(&stub, &["Assistant"], GuardLimits::default());
+    let id = a_reminder_is_offered(&h);
+    let decisions = h.runtime.store().decisions(None).unwrap().len();
+    assert!(claims(&h, &id, "desk"));
+    assert!(releases(&h, &id, "desk"));
+
+    // Nobody else claims it in time, and there is no address to push to.
+    let now = now_ms();
+    h.runtime.dispatch_deliveries(now + RECLAIM_MS);
+    h.runtime.dispatch_deliveries(now + RECLAIM_MS + 60_000);
+    let after = rows(&h);
+    assert_eq!(after.len(), 1, "no push written: {after:#?}");
+    assert_eq!(after[0].status, "pending", "not counted as shown");
+    let next = h.runtime.store().next_delivery_at().unwrap().unwrap();
+    assert!(next > now + RECLAIM_MS + 60_000, "the dispatcher is done with it until it expires");
+
+    // A day after it was written it has expired, like any offer nobody took.
+    h.runtime.dispatch_deliveries(now + outbox::EXPIRE_MS + 1);
+    assert_eq!(status_of(&h, &id), "expired");
+    assert!(offered_to(&h, "laptop").is_empty());
+    assert_eq!(h.runtime.store().decisions(None).unwrap().len(), decisions, "still listed");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn after_a_second_page_gives_it_back_no_page_is_offered_it_again() {
+    let stub = serve(|_| Script::Say("Nothing to do.".into())).await;
+    let h = harness(&stub, &["Assistant"], GuardLimits::default());
+    let id = a_reminder_is_offered(&h);
+    assert!(claims(&h, &id, "desk"));
+    assert!(releases(&h, &id, "desk"));
+    assert!(claims(&h, &id, "panel"));
+    let before = offers(&h);
+
+    assert!(releases(&h, &id, "panel"), "a second page that held the claim gives it back too");
+    assert_eq!(offers(&h), before, "not offered again");
+    for page in ["desk", "panel", "laptop"] {
+        assert!(offered_to(&h, page).is_empty(), "{page}");
+        assert!(!claims(&h, &id, page), "{page}");
+    }
+    assert!(!releases(&h, &id, "panel"), "a third release changes nothing");
+    assert!(!releases(&h, &id, "desk"));
+    assert_eq!(status_of(&h, &id), "pending");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_restart_after_a_release_does_not_offer_it_back_to_the_page_that_gave_it() {
+    let stub = serve(|_| Script::Say("Nothing to do.".into())).await;
+    let h = harness(&stub, &["Assistant"], GuardLimits::default());
+    let id = a_reminder_is_offered(&h);
+    assert!(claims(&h, &id, "desk"));
+    assert!(releases(&h, &id, "desk"));
+
+    let (h, _) = h.restart(Duration::from_secs(5)).await;
+    assert_eq!(h.runtime.dispatch_deliveries(now_ms()), 0, "an offer is not made twice");
+    assert_eq!(offers(&h), 0);
+    assert!(offered_to(&h, "desk").is_empty());
+    assert!(!claims(&h, &id, "desk"));
+    assert!(!releases(&h, &id, "desk"), "the release was recorded, so it is not repeated");
+    assert_eq!(offered_to(&h, "laptop").len(), 1);
+    assert!(claims(&h, &id, "laptop"));
 }

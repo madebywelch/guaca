@@ -576,3 +576,201 @@ async fn the_address_and_the_token_never_leave_the_host_beyond_a_hint() {
         assert!(!text.contains("SECRET"), "{place} carries the address or the token: {text}");
     }
 }
+
+/// How long the other pages have to take what one page gave back; the
+/// dispatcher's own constant is private to the runtime.
+const RECLAIM_MS: i64 = 15_000;
+
+/// A window with focus on another channel, so presence says the operator is
+/// here, and the escalation it is offered.
+async fn an_escalation_offered_while_here(h: &Harness) -> String {
+    let view = OperatorView { agent_id: Some(h.id("Notes")), ..Default::default() };
+    h.runtime.report_window(view, true, Some("desk".into()));
+    let run = h.runtime.send_from_human(h.id("Analyst"), "Ship it.").unwrap();
+    h.settle(run).await;
+    assert_eq!(h.runtime.dispatch_deliveries(now_ms()), 1);
+    assert!(pushes(h).is_empty(), "nothing is pushed while a window has focus");
+    h.runtime.pending_deliveries(Some("desk")).unwrap()[0].id.clone()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn what_no_other_window_takes_is_pushed_once_while_the_operator_is_here() {
+    let stub = serve(escalating()).await;
+    let h = harness(&stub, &["Analyst", "Notes"], GuardLimits::default());
+    let address = receiver().await;
+    deliver_to(&h, &address.url, |_| {});
+    let id = an_escalation_offered_while_here(&h).await;
+
+    assert!(h.runtime.claim_delivery(&id, Some("desk")).unwrap());
+    assert!(h.runtime.release_delivery(&id, "desk").unwrap(), "macOS refused the banner");
+    let now = now_ms();
+    h.runtime.dispatch_deliveries(now);
+    assert_eq!(h.runtime.push_deliveries(now).await, 0, "the other windows have their turn first");
+    assert!(address.seen().is_empty());
+
+    h.runtime.dispatch_deliveries(now + RECLAIM_MS);
+    assert_eq!(
+        h.runtime.push_deliveries(now + RECLAIM_MS).await,
+        1,
+        "pushed though a window has focus"
+    );
+    let seen = address.seen();
+    assert_eq!(seen.len(), 1, "{seen:#?}");
+    assert!(seen[0].body.starts_with("Analyst is stuck."), "{}", seen[0].body);
+
+    for later in [RECLAIM_MS + 1_000, RECLAIM_MS + 60_000] {
+        h.runtime.dispatch_deliveries(now + later);
+        h.runtime.push_deliveries(now + later).await;
+    }
+    assert_eq!(address.seen().len(), 1, "once");
+    assert_eq!(pushes(&h).len(), 1);
+    assert_eq!(pushes(&h)[0].status, "delivered");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn what_another_window_takes_is_not_pushed() {
+    let stub = serve(escalating()).await;
+    let h = harness(&stub, &["Analyst", "Notes"], GuardLimits::default());
+    let address = receiver().await;
+    deliver_to(&h, &address.url, |_| {});
+    let id = an_escalation_offered_while_here(&h).await;
+
+    assert!(h.runtime.claim_delivery(&id, Some("desk")).unwrap());
+    assert!(h.runtime.release_delivery(&id, "desk").unwrap());
+    assert!(h.runtime.claim_delivery(&id, Some("laptop")).unwrap(), "shown in another window");
+    let now = now_ms();
+    h.runtime.dispatch_deliveries(now + RECLAIM_MS);
+    assert_eq!(h.runtime.push_deliveries(now + RECLAIM_MS).await, 0);
+    assert!(pushes(&h).is_empty(), "{:#?}", rows(&h));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_pages_giving_it_back_is_one_push_at_once_while_the_operator_is_here() {
+    let stub = serve(escalating()).await;
+    let h = harness(&stub, &["Analyst", "Notes"], GuardLimits::default());
+    let address = receiver().await;
+    deliver_to(&h, &address.url, |_| {});
+    let id = an_escalation_offered_while_here(&h).await;
+
+    // The main window and a second page on the same Mac, both refused.
+    assert!(h.runtime.claim_delivery(&id, Some("desk")).unwrap());
+    assert!(h.runtime.release_delivery(&id, "desk").unwrap());
+    assert!(h.runtime.claim_delivery(&id, Some("panel")).unwrap());
+    assert!(h.runtime.release_delivery(&id, "panel").unwrap());
+    for page in ["desk", "panel", "laptop"] {
+        assert!(h.runtime.pending_deliveries(Some(page)).unwrap().is_empty(), "{page}");
+    }
+    assert!(!h.runtime.release_delivery(&id, "panel").unwrap(), "a third release changes nothing");
+
+    let now = now_ms();
+    h.runtime.dispatch_deliveries(now);
+    assert_eq!(h.runtime.push_deliveries(now).await, 1, "without waiting for another window");
+    for later in [RECLAIM_MS, RECLAIM_MS + 60_000] {
+        h.runtime.dispatch_deliveries(now + later);
+        h.runtime.push_deliveries(now + later).await;
+    }
+    assert_eq!(address.seen().len(), 1, "once");
+    assert_eq!(pushes(&h).len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_push_already_sent_is_not_sent_again_when_a_window_gives_it_back() {
+    let stub = serve(escalating()).await;
+    let h = harness(&stub, &["Analyst"], GuardLimits::default());
+    let address = receiver().await;
+    deliver_to(&h, &address.url, |_| {});
+
+    // Offered and pushed while the operator was away.
+    let run = h.runtime.send_from_human(h.id("Analyst"), "Ship it.").unwrap();
+    h.settle(run).await;
+    let now = now_ms();
+    h.runtime.dispatch_deliveries(now);
+    assert_eq!(h.runtime.push_deliveries(now).await, 1);
+
+    // They come back, the window catches up, and macOS refuses that banner.
+    let id = h.runtime.pending_deliveries(Some("desk")).unwrap()[0].id.clone();
+    assert!(h.runtime.claim_delivery(&id, Some("desk")).unwrap());
+    assert!(h.runtime.release_delivery(&id, "desk").unwrap());
+    h.runtime.dispatch_deliveries(now + RECLAIM_MS);
+    assert_eq!(h.runtime.push_deliveries(now + RECLAIM_MS).await, 0);
+    assert_eq!(address.seen().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_push_the_operators_return_dropped_is_sent_when_the_window_gives_it_back() {
+    let stub = serve(escalating()).await;
+    let h = harness(&stub, &["Analyst", "Notes"], GuardLimits::default());
+    let address = receiver().await;
+    address.answer(&[500]);
+    deliver_to(&h, &address.url, |_| {});
+
+    let run = h.runtime.send_from_human(h.id("Analyst"), "Ship it.").unwrap();
+    h.settle(run).await;
+    let now = now_ms();
+    h.runtime.dispatch_deliveries(now);
+    assert_eq!(h.runtime.push_deliveries(now).await, 0, "refused once");
+
+    // Back before it is tried again, so the retry is dropped; then the banner
+    // the window raises instead is refused.
+    let view = OperatorView { agent_id: Some(h.id("Notes")), ..Default::default() };
+    h.runtime.report_window(view, true, Some("desk".into()));
+    assert_eq!(h.runtime.push_deliveries(now + 30_000).await, 0);
+    assert_eq!(pushes(&h)[0].status, "suppressed");
+    let id = h.runtime.pending_deliveries(Some("desk")).unwrap()[0].id.clone();
+    assert!(h.runtime.claim_delivery(&id, Some("desk")).unwrap());
+    assert!(h.runtime.release_delivery(&id, "desk").unwrap());
+
+    let later = now_ms() + RECLAIM_MS;
+    h.runtime.dispatch_deliveries(later);
+    assert_eq!(h.runtime.push_deliveries(later).await, 1);
+    assert_eq!(address.seen().len(), 2);
+    assert_eq!(pushes(&h).len(), 1, "the same push, tried again");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_restart_after_a_release_and_its_push_repeats_neither() {
+    let stub = serve(escalating()).await;
+    let h = harness(&stub, &["Analyst", "Notes"], GuardLimits::default());
+    let address = receiver().await;
+    deliver_to(&h, &address.url, |_| {});
+    let id = an_escalation_offered_while_here(&h).await;
+    assert!(h.runtime.claim_delivery(&id, Some("desk")).unwrap());
+    assert!(h.runtime.release_delivery(&id, "desk").unwrap());
+    let now = now_ms();
+    h.runtime.dispatch_deliveries(now + RECLAIM_MS);
+    assert_eq!(h.runtime.push_deliveries(now + RECLAIM_MS).await, 1);
+
+    let (h, _) = h.restart(Duration::from_secs(5)).await;
+    for later in [RECLAIM_MS + 1_000, RECLAIM_MS + 60_000] {
+        h.runtime.dispatch_deliveries(now + later);
+        h.runtime.push_deliveries(now + later).await;
+    }
+    assert_eq!(address.seen().len(), 1, "not pushed again");
+    assert_eq!(pushes(&h).len(), 1);
+    assert!(h.runtime.pending_deliveries(Some("desk")).unwrap().is_empty());
+    assert!(!h.runtime.claim_delivery(&id, Some("desk")).unwrap(), "not offered back to it");
+    assert!(!h.runtime.release_delivery(&id, "desk").unwrap(), "nor released twice");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_restart_inside_the_wait_still_pushes_once() {
+    let stub = serve(escalating()).await;
+    let h = harness(&stub, &["Analyst", "Notes"], GuardLimits::default());
+    let address = receiver().await;
+    deliver_to(&h, &address.url, |_| {});
+    let id = an_escalation_offered_while_here(&h).await;
+    assert!(h.runtime.claim_delivery(&id, Some("desk")).unwrap());
+    assert!(h.runtime.release_delivery(&id, "desk").unwrap());
+
+    let (h, _) = h.restart(Duration::from_secs(5)).await;
+    let view = OperatorView { agent_id: Some(h.id("Notes")), ..Default::default() };
+    h.runtime.report_window(view, true, Some("desk".into()));
+    let now = now_ms();
+    h.runtime.dispatch_deliveries(now);
+    assert_eq!(h.runtime.push_deliveries(now).await, 0, "the wait survives the restart");
+    h.runtime.dispatch_deliveries(now + RECLAIM_MS);
+    assert_eq!(h.runtime.push_deliveries(now + RECLAIM_MS).await, 1);
+    h.runtime.dispatch_deliveries(now + RECLAIM_MS + 60_000);
+    h.runtime.push_deliveries(now + RECLAIM_MS + 60_000).await;
+    assert_eq!(address.seen().len(), 1);
+}

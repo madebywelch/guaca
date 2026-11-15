@@ -2114,6 +2114,20 @@ ALTER TABLE usage ADD COLUMN cached INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE routine_runs ADD COLUMN missed INTEGER NOT NULL DEFAULT 0;
 "#,
     ),
+    (
+        78,
+        r#"
+-- A window's claim, and a claim given back. claimed_by is the page that
+-- claimed a row for the windows; a page that claimed and then could not show
+-- it gives it back, and released_by is the last page that did. releases counts
+-- them, because the first goes to the other pages and the second ends at the
+-- push. Null and zero on every row written before this, all of which were
+-- claimed by a page that could not give one back.
+ALTER TABLE outbox ADD COLUMN claimed_by TEXT;
+ALTER TABLE outbox ADD COLUMN released_by TEXT;
+ALTER TABLE outbox ADD COLUMN releases INTEGER NOT NULL DEFAULT 0;
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

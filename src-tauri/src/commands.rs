@@ -3239,14 +3239,32 @@ pub async fn mark_outcomes_seen(
 /// What the Host has offered every window and nobody has claimed, oldest
 /// first. A window asks on connecting, because an offer goes to whoever is
 /// listening when it is made, which may have been nobody.
-pub async fn pending_deliveries(state: &AppState) -> Reply<Vec<crate::domain::outbox::Delivery>> {
-    Ok(state.runtime.pending_deliveries()?)
+/// `client` is the page asking, which is never offered what it gave back.
+pub async fn pending_deliveries(
+    state: &AppState,
+    client: Option<String>,
+) -> Reply<Vec<crate::domain::outbox::Delivery>> {
+    let page = crate::domain::view::window_name(client);
+    Ok(state.runtime.pending_deliveries(page.as_deref())?)
 }
 
 /// Claims one delivery for the window asking. True means show it; false
 /// means another window has, or what it was about has been answered or seen.
-pub async fn claim_delivery(state: &AppState, id: String) -> Reply<bool> {
-    Ok(state.runtime.claim_delivery(&id)?)
+/// `client` is the page, kept so that it alone can give the claim back; an
+/// older page sends none and can never give one back.
+pub async fn claim_delivery(state: &AppState, id: String, client: Option<String>) -> Reply<bool> {
+    let page = crate::domain::view::window_name(client);
+    Ok(state.runtime.claim_delivery(&id, page.as_deref())?)
+}
+
+/// Gives back a delivery this page claimed and could not show, so another
+/// window or the push can. False, and nothing changes, when this page does not
+/// hold the claim: that is a page out of step, and nothing for the operator.
+pub async fn release_delivery(state: &AppState, id: String, client: String) -> Reply<bool> {
+    let Some(page) = crate::domain::view::window_name(Some(client)) else {
+        return Ok(false);
+    };
+    Ok(state.runtime.release_delivery(&id, &page)?)
 }
 
 /// When a push last went out to the operator's address, and how the last

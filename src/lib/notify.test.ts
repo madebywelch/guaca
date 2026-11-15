@@ -24,6 +24,7 @@ import type { Delivery, DeliveryId, DeliveryTarget, NotificationAccess, Reveal }
 
 const host = vi.hoisted(() => ({
   claimDelivery: vi.fn<(id: string) => Promise<boolean>>(),
+  releaseDelivery: vi.fn<(id: string) => Promise<boolean>>(),
   pendingDeliveries: vi.fn<() => Promise<Delivery[]>>(),
   openWindow: vi.fn<(target: Reveal | null) => Promise<void>>(),
 }));
@@ -132,6 +133,7 @@ beforeEach(async () => {
   vi.stubGlobal("Notification", Shown);
   vi.spyOn(window, "focus").mockImplementation(() => {});
   host.claimDelivery.mockReset().mockResolvedValue(true);
+  host.releaseDelivery.mockReset().mockResolvedValue(true);
   host.pendingDeliveries.mockReset().mockResolvedValue([]);
   host.openWindow.mockReset().mockResolvedValue(undefined);
   Shown.requestPermission.mockClear();
@@ -328,6 +330,59 @@ describe("a desktop window on a Mac", () => {
     await expect(notify.deliver(delivery("a"), open)).resolves.toBe(false);
     expect(host.claimDelivery).toHaveBeenCalledWith("a");
     expect(mac.shown).toEqual([]);
+  });
+
+  it("gives back what it claimed when macOS refuses it, once, so another window or the push can show it", async () => {
+    mac.now = "allowed";
+    mac.refusal = "notification request rejected";
+    await notify.deliver(delivery("a"), open);
+    expect(host.releaseDelivery.mock.calls).toEqual([["a"]]);
+  });
+
+  it("gives back nothing that macOS took", async () => {
+    mac.now = "allowed";
+    await expect(notify.deliver(delivery("a"), open)).resolves.toBe(true);
+    expect(host.releaseDelivery).not.toHaveBeenCalled();
+  });
+
+  it("gives back nothing it lost the claim for, since another window has it", async () => {
+    mac.now = "allowed";
+    mac.refusal = "notification request rejected";
+    host.claimDelivery.mockResolvedValue(false);
+    await notify.deliver(delivery("a"), open);
+    expect(host.releaseDelivery).not.toHaveBeenCalled();
+  });
+
+  it("still says false when the release cannot reach the Host", async () => {
+    mac.now = "allowed";
+    mac.refusal = "notification request rejected";
+    host.releaseDelivery.mockRejectedValue({ kind: "unknownCommand", message: "too old" });
+    await expect(notify.deliver(delivery("a"), open)).resolves.toBe(false);
+  });
+
+  it("gives back everything a refused fold stood for, and only what it won", async () => {
+    mac.now = "allowed";
+    mac.refusal = "notification request rejected";
+    host.pendingDeliveries.mockResolvedValue(["a", "b", "c", "d", "e"].map((id) => delivery(id)));
+    host.claimDelivery.mockImplementation(async (id) => id !== "c");
+    await notify.catchUp(open);
+    expect(host.releaseDelivery.mock.calls).toEqual([["a"], ["b"], ["d"], ["e"]]);
+  });
+
+  it("gives back each of a few it caught up on that macOS refused", async () => {
+    mac.now = "allowed";
+    mac.refusal = "notification request rejected";
+    host.pendingDeliveries.mockResolvedValue(["a", "b"].map((id) => delivery(id)));
+    await notify.catchUp(open);
+    expect(host.releaseDelivery.mock.calls).toEqual([["a"], ["b"]]);
+  });
+
+  it("gives back nothing for a refused test, which is no delivery", async () => {
+    mac.now = "allowed";
+    mac.refusal = "notification request rejected";
+    const transport = await import("./transport");
+    await expect(transport.notify("Guaca", "A test.")).resolves.toBe(false);
+    expect(host.releaseDelivery).not.toHaveBeenCalled();
   });
 
   it("says false for a test macOS allows and then refuses to take", async () => {

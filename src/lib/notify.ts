@@ -9,10 +9,10 @@
  * because `claimDelivery` answers true once.
  *
  * On a Mac a banner counts as shown only once macOS has taken it. A delivery
- * macOS refuses after the claim is still in For you and its channel, but the
- * Host has already counted it as shown and offers it to no other window and no
- * push. Showing before claiming would close that gap by raising one banner per
- * open window, which is what the claim is for.
+ * macOS refuses after the claim is given back with `releaseDelivery`: the Host
+ * offers it to the other windows and never to this page again, and pushes it
+ * if none of them takes it. Showing before claiming would avoid the release by
+ * raising one banner per open window, which is what the claim is for.
  *
  * Claim first, then show, and ask whether this page may show anything before
  * either. A page that claims what it cannot show has taken the only copy away
@@ -48,7 +48,9 @@ export const AWAY_TITLE = "While you were away";
 export async function deliver(delivery: Delivery, open: (target: DeliveryTarget) => void) {
   if (!(await willNotify())) return false;
   if (!(await claim(delivery.id))) return false;
-  return notify(delivery.title, delivery.body, () => open(delivery.target));
+  const shown = await notify(delivery.title, delivery.body, () => open(delivery.target));
+  if (!shown) await release(delivery.id);
+  return shown;
 }
 
 /**
@@ -75,12 +77,17 @@ export async function catchUp(open: (target: DeliveryTarget) => void): Promise<n
   if (won.length > FOLD_AFTER) {
     const shown = won.slice(0, FOLD_AFTER).map((delivery) => delivery.title);
     const rest = won.length - shown.length;
-    await notify(AWAY_TITLE, [...shown, `And ${rest} more in For you.`].join("\n"), () =>
-      open({ kind: "forYou" }),
+    const folded = await notify(
+      AWAY_TITLE,
+      [...shown, `And ${rest} more in For you.`].join("\n"),
+      () => open({ kind: "forYou" }),
     );
+    if (!folded) for (const delivery of won) await release(delivery.id);
   } else {
     for (const delivery of won) {
-      await notify(delivery.title, delivery.body, () => open(delivery.target));
+      if (!(await notify(delivery.title, delivery.body, () => open(delivery.target)))) {
+        await release(delivery.id);
+      }
     }
   }
   return won.length;
@@ -105,6 +112,17 @@ export function land(target: DeliveryTarget, reveal: (target: Reveal) => void): 
     console.warn("Could not bring the window forward for a notification", error);
     reveal(where);
   });
+}
+
+/**
+ * Gives back what this window claimed and could not show. A release that
+ * fails to reach the Host leaves it counted as shown, which is where it stood
+ * before releases existed, and there is nobody to tell.
+ */
+async function release(id: DeliveryId): Promise<void> {
+  try {
+    await api.releaseDelivery(id);
+  } catch {}
 }
 
 /** A refused or failed claim is a lost one: another window may still show it. */

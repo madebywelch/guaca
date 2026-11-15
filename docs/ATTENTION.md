@@ -263,6 +263,37 @@ escalation, or seeing a run withdraws whatever was waiting to announce it, in
 the same commit. An item nobody claims in 24 hours expires; what it said is
 still in For you and in its channel.
 
+**A claim can be given back.** A window claims before it shows, because showing
+first would raise one banner per open window. On a Mac it learns only after
+the claim whether macOS took the banner, so a window that claimed and was
+refused calls `releaseDelivery`. Each claim names the page that made it
+(`client`, the page's `PAGE_ID`, stored as `claimed_by`), and only that page
+can give it back; a release from any other page, or from a page that already
+gave it back, changes nothing and answers false. A page that names nothing,
+which is an older build, can claim and can never give back.
+
+| Release | What happens |
+|---|---|
+| First | The item is pending again and offered again to every window. The page that gave it back is never offered it again (`released_by`): `pendingDeliveries` leaves it out and its claim answers false, after a restart too. The other windows have 15 seconds (`RECLAIM_MS`). |
+| Second, by another page that claimed it in those 15 seconds or later | No window is offered it again. It goes to the push at once. |
+| Third | There is none: no page can hold a claim to give back. |
+
+If no other window takes it in the 15 seconds, or a second page gives it back,
+the dispatcher treats it as if nobody were at a window: with an address set it
+writes the push, whatever presence says, since the one thing that would have
+reached the operator at their window has failed. The push row has the window
+row's dedup key, so an item is pushed at most once: a push already written,
+sent or failed stays as it is, and one dropped because the operator came back
+is due again. With no address nothing is written. Either way the dispatcher
+does not look at the row again; it stays pending, claimable by a window that
+never gave it back, and expires after its 24 hours like any offer nobody took.
+Everything here is in SQLite (migration 78: `claimed_by`, `released_by`,
+`releases`), so a restart repeats neither the offer nor the push.
+
+A page that may not notify never claims (`willNotify` is asked first), so it
+has nothing to give back, and the Settings test banner is no delivery and
+gives back nothing. The menu bar panel never claims at all.
+
 ## Reaching the operator with every window closed
 
 A window that is closed claims nothing, so an offer alone reaches nobody while
@@ -272,13 +303,15 @@ ntfy topic, which the free ntfy app shows on a phone, or any receiver that takes
 a JSON POST, such as Home Assistant, n8n or a chat bridge. Nothing of ours is
 involved, and no account.
 
-**What is pushed.** Exactly what is offered while the operator is away, and
+**What is pushed.** Exactly what is offered while the operator is away, what
+every window that tried gave back (see *A claim can be given back* above), and
 nothing else. When the dispatcher offers an item and `presence` is away, and
 `delivery.url` is set, the same commit writes a second outbox row with
 destination `endpoint`. So gathered finished work is one push per gathering, a
 request or a stuck agent is one push at once, and nothing is pushed while a
 Guaca window has focus. A push waiting to be tried again is dropped when the
-operator comes back (`operator present`), when the address is removed
+operator comes back (`operator present`), unless the windows gave back what it
+is about, when the address is removed
 (`turned off`), and when what it is about is answered or seen, in the commit
 that answered or saw it, like the window's row.
 

@@ -4,9 +4,11 @@
 //! Rows are written by the producers in their own commits, through [`enqueue`],
 //! and withdrawn the same way when what they announce is answered or seen.
 //! Everything else here is the dispatcher's: reading what is due, holding,
-//! gathering, offering, and the one claim that decides which window shows it;
-//! and for the address the operator configured, the second row an offer writes
-//! while they are away, what is due to be sent, and how each attempt ended.
+//! gathering, offering, the one claim that decides which window shows it, and
+//! the claim a window gives back when it could not show it after all; and for
+//! the address the operator configured, the second row an offer writes while
+//! they are away or after every window has given it back, what is due to be
+//! sent, and how each attempt ended.
 
 use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 
@@ -17,6 +19,11 @@ use crate::domain::outbox::{
 };
 use crate::domain::outcome::Status as Ended;
 use crate::push::{Next, Push, Report, Said};
+
+/// How many times a row may be given back. The first goes to the other pages,
+/// and the second ends at the push: a main window and its menu bar panel on one
+/// Mac are both refused by the same macOS, and a third page is no likelier.
+const RELEASES: u32 = 2;
 
 /// What producers write: every row starts as one for the windows.
 const CLIENTS: &str = Destination::Clients.as_str();
@@ -173,7 +180,7 @@ fn read_delivery(row: &Row<'_>) -> rusqlite::Result<Result<Delivery, StoreError>
     })())
 }
 
-fn read_push(row: &Row<'_>) -> rusqlite::Result<Result<(Push, u32), StoreError>> {
+fn read_push(row: &Row<'_>) -> rusqlite::Result<Result<(Push, u32, bool), StoreError>> {
     let kind: String = row.get(1)?;
     let status: Option<String> = row.get(6)?;
     let push = Push {
@@ -187,8 +194,9 @@ fn read_push(row: &Row<'_>) -> rusqlite::Result<Result<(Push, u32), StoreError>>
         created_at: row.get(7)?,
     };
     let attempts: u32 = row.get(8)?;
+    let given_back: bool = row.get(9)?;
     Ok(match Kind::parse(&kind) {
-        Some(kind) => Ok((Push { kind, ..push }, attempts)),
+        Some(kind) => Ok((Push { kind, ..push }, attempts, given_back)),
         None => Err(corrupt("unknown kind", &kind)),
     })
 }
@@ -226,12 +234,14 @@ impl Store {
     }
 
     /// When the dispatcher next has something to do, if it has anything: a row
-    /// for the windows not yet offered, or a push not yet sent.
+    /// for the windows not yet offered, one given back whose time with the
+    /// other pages is up, or a push not yet sent.
     pub fn next_delivery_at(&self) -> Result<Option<i64>, StoreError> {
         Ok(self.conn()?.query_row(
             "SELECT min(next_attempt_at) FROM outbox
               WHERE status='pending'
-                AND ((destination='clients' AND offered_at IS NULL) OR destination='endpoint')",
+                AND ((destination='clients' AND (offered_at IS NULL OR releases>0))
+                     OR destination='endpoint')",
             [],
             |row| row.get(0),
         )?)
@@ -369,39 +379,170 @@ impl Store {
 
     /// Everything offered and not yet claimed, oldest first: what a window
     /// that has just connected asks for, since the offer was made to whoever
-    /// was listening at the time, which may have been nobody.
-    pub fn pending_deliveries(&self) -> Result<Vec<Delivery>, StoreError> {
+    /// was listening at the time, which may have been nobody. Never what
+    /// `page` gave back, and nothing given back twice.
+    pub fn pending_deliveries(&self, page: Option<&str>) -> Result<Vec<Delivery>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
             "SELECT id,kind,title,body,target,created_at FROM outbox
               WHERE status='pending' AND offered_at IS NOT NULL AND destination='clients'
                 AND (batch_id IS NULL OR batch_id=id)
+                AND releases<?2 AND (released_by IS NULL OR released_by IS NOT ?1)
               ORDER BY created_at, id",
         )?;
-        let rows = stmt.query_map([], read_delivery)?;
+        let rows = stmt.query_map(params![page, RELEASES], read_delivery)?;
         collect(rows)
     }
 
     /// Takes an offered row for the window that asks first, with every row it
-    /// carries. True for that window and false for every other, which is the
-    /// whole of how two windows show one banner once.
-    pub fn claim_delivery(&self, id: &str, now: i64) -> Result<bool, StoreError> {
+    /// carries, and keeps which page that was. True for that window and false
+    /// for every other, which is the whole of how two windows show one banner
+    /// once. False too for the page that last gave it back, and for everyone
+    /// once it has been given back twice.
+    pub fn claim_delivery(
+        &self,
+        id: &str,
+        page: Option<&str>,
+        now: i64,
+    ) -> Result<bool, StoreError> {
         let claimed = self.conn()?.execute(
-            "UPDATE outbox SET status='delivered', delivered_at=?2
+            "UPDATE outbox SET status='delivered', delivered_at=?2, claimed_by=?3
               WHERE status='pending' AND offered_at IS NOT NULL AND destination='clients'
-                AND (batch_id=?1 OR (id=?1 AND batch_id IS NULL))",
-            params![id, now],
+                AND (batch_id=?1 OR (id=?1 AND batch_id IS NULL))
+                AND releases<?4 AND (released_by IS NULL OR released_by IS NOT ?3)",
+            params![id, now, page, RELEASES],
         )?;
         Ok(claimed > 0)
     }
 
+    /// Gives back a row `page` claimed and could not show, with every row it
+    /// carries: pending again, and offered again from `now`. After the first
+    /// release the other pages have until `now + reclaim` to take it; after
+    /// the second nobody does, and it is due at once. Returns the item and how
+    /// many times it has now been given back.
+    ///
+    /// None for a page that does not hold the claim, which includes a page
+    /// that already gave it back: then nothing changes.
+    pub fn release_delivery(
+        &self,
+        id: &str,
+        page: &str,
+        reclaim: i64,
+        now: i64,
+    ) -> Result<Option<(Delivery, u32)>, StoreError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // Every SET reads the row as it was, so `releases` in the CASE is the
+        // count before this one.
+        let released = tx.execute(
+            "UPDATE outbox SET status='pending', delivered_at=NULL, claimed_by=NULL,
+                    released_by=?2, releases=releases+1, offered_at=?3,
+                    next_attempt_at=CASE WHEN releases+1<?5 THEN ?3+?4 ELSE ?3 END
+              WHERE status='delivered' AND destination='clients' AND claimed_by=?2
+                AND (batch_id=?1 OR (id=?1 AND batch_id IS NULL))",
+            params![id, page, now, reclaim, RELEASES],
+        )?;
+        if released == 0 {
+            return Ok(None);
+        }
+        let given = tx.query_row(
+            "SELECT id,kind,title,body,target,created_at FROM outbox WHERE id=?1",
+            [id],
+            read_delivery,
+        )??;
+        let releases: u32 =
+            tx.query_row("SELECT releases FROM outbox WHERE id=?1", [id], |row| row.get(0))?;
+        tx.commit()?;
+        Ok(Some((given, releases)))
+    }
+
+    /// Rows given back whose time with the other pages is up, or that were
+    /// given back twice, each with how many rows its item stands for: the
+    /// ones that are now pushed, as if nobody had been at a window.
+    pub fn due_releases(&self, now: i64) -> Result<Vec<(Due, usize)>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {DUE},
+                    (SELECT count(*) FROM outbox b WHERE b.batch_id=o.id AND b.destination='clients')
+               FROM outbox o
+               LEFT JOIN outcomes c ON c.run_id=o.run_id AND o.kind IN ('outcome','failure')
+              WHERE o.status='pending' AND o.destination='clients' AND o.releases>0
+                AND o.offered_at IS NOT NULL AND (o.batch_id IS NULL OR o.batch_id=o.id)
+                AND o.next_attempt_at<=?1
+              ORDER BY o.created_at, o.id"
+        ))?;
+        let rows = stmt.query_map([now], |row| {
+            let count: usize = row.get(10)?;
+            Ok(read_due(row)?.map(|due| (due, count.max(1))))
+        })?;
+        collect(rows)
+    }
+
+    /// Ends a row's time with the windows once every window that tried has
+    /// given it back: with `push`, the row for the address is written, or one
+    /// the operator's return dropped is due again; either way the dispatcher
+    /// does not look at it again before it expires at `expires`. A page that
+    /// never gave it back may still claim it until then.
+    ///
+    /// At most one push per item: the address's row is keyed like the
+    /// window's, so one already written, sent or failed stays as it is.
+    pub fn settle_release(
+        &self,
+        id: &str,
+        push: Option<&Said>,
+        single: bool,
+        expires: i64,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let settled = tx.execute(
+            "UPDATE outbox SET next_attempt_at=?2
+              WHERE status='pending' AND destination='clients' AND releases>0
+                AND next_attempt_at<=?3 AND (batch_id=?1 OR (id=?1 AND batch_id IS NULL))",
+            params![id, expires, now],
+        )?;
+        if settled > 0 {
+            if let Some(said) = push {
+                tx.execute(
+                    "INSERT INTO outbox (id,kind,destination,dedup_key,group_id,agent_id,run_id,
+                                         ref_id,title,body,target,next_attempt_at,created_at)
+                     SELECT ?2,kind,?3,dedup_key,
+                            CASE WHEN ?4 THEN group_id END,CASE WHEN ?4 THEN agent_id END,
+                            CASE WHEN ?4 THEN run_id END,CASE WHEN ?4 THEN ref_id END,
+                            ?5,?6,target,?7,?7
+                       FROM outbox WHERE id=?1
+                     ON CONFLICT (dedup_key, destination) DO UPDATE
+                        SET status='pending', last_error=NULL,
+                            next_attempt_at=excluded.next_attempt_at
+                      WHERE outbox.status='suppressed' AND outbox.last_error=?8",
+                    params![
+                        id,
+                        uuid::Uuid::new_v4().to_string(),
+                        ENDPOINT,
+                        single,
+                        said.title,
+                        said.body,
+                        now,
+                        Why::Present.as_str()
+                    ],
+                )?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Pushes whose time has come, oldest first, each with how many times it
-    /// has been tried. The names are read now, so a renamed agent is sent as
-    /// it is called today.
-    pub fn due_pushes(&self, now: i64) -> Result<Vec<(Push, u32)>, StoreError> {
+    /// has been tried and whether the windows gave back what it is about. The
+    /// names are read now, so a renamed agent is sent as it is called today.
+    pub fn due_pushes(&self, now: i64) -> Result<Vec<(Push, u32, bool)>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT o.id,o.kind,o.title,o.body,a.name,g.name,c.status,o.created_at,o.attempts
+            "SELECT o.id,o.kind,o.title,o.body,a.name,g.name,c.status,o.created_at,o.attempts,
+                    EXISTS (SELECT 1 FROM outbox w
+                             WHERE w.dedup_key=o.dedup_key AND w.destination='clients'
+                               AND w.releases>0)
                FROM outbox o
                LEFT JOIN agents a ON a.id=o.agent_id
                LEFT JOIN groups g ON g.id=o.group_id
