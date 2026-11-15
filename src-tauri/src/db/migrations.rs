@@ -2104,6 +2104,16 @@ UPDATE pending_runs SET started_at = CAST(strftime('%s','now') AS INTEGER) * 100
 ALTER TABLE usage ADD COLUMN cached INTEGER NOT NULL DEFAULT 0;
 "#,
     ),
+    (
+        77,
+        r#"
+-- How many of a routine's slots one firing stands for that came due while
+-- the host was off, the late one included. Zero for a firing on time, which
+-- is what every row written before this was: nothing counted, and nothing
+-- said otherwise. See Routine::missed_before.
+ALTER TABLE routine_runs ADD COLUMN missed INTEGER NOT NULL DEFAULT 0;
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

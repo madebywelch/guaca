@@ -4022,14 +4022,23 @@ async fn testing_a_routine_delivers_it_without_spending_the_schedule() {
     assert_eq!(history[0].kind, RunKind::Test);
 }
 
-/// The event receiver, up on this harness's runtime: the address to post to
-/// and the secret a post has to carry.
+/// The event route, served on its own over this harness's runtime: the
+/// address to post to and the secret a post has to carry.
+///
+/// The route is the server's, so everything that posts to it is in the server
+/// build only. A desktop has no event route at all.
+#[cfg(feature = "server")]
 async fn receiver(h: &Harness) -> (String, String) {
     let secret = "test-secret-that-is-long-enough-to-be-one";
-    let port = guac_lib::webhook::start(h.runtime.clone(), 0, secret.into())
-        .await
-        .expect("loopback is bindable");
-    (format!("http://127.0.0.1:{port}"), secret.to_string())
+    let mut config = h.runtime.config();
+    config.webhook.secret = secret.into();
+    h.runtime.set_config(config);
+    let listener =
+        tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("loopback is bindable");
+    let addr = listener.local_addr().unwrap();
+    let events = guac_lib::server::events::<()>(h.runtime.clone());
+    tokio::spawn(async move { axum::serve(listener, events).await });
+    (format!("http://{addr}"), secret.to_string())
 }
 
 fn dunning(h: &Harness, who: &str, skip_if_working: bool) -> guac_lib::domain::routine::Routine {
@@ -4049,6 +4058,7 @@ fn dunning(h: &Harness, who: &str, skip_if_working: bool) -> guac_lib::domain::r
         .unwrap()
 }
 
+#[cfg(feature = "server")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_retries_of_one_event_claim_each_routine_only_once() {
     let stub = quiet().await;
@@ -4081,6 +4091,7 @@ async fn concurrent_retries_of_one_event_claim_each_routine_only_once() {
     assert_eq!(h.runtime.store().routine_runs(routine.id, 20).unwrap().len(), 1);
 }
 
+#[cfg(feature = "server")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn unkeyed_events_and_repeated_test_fires_are_independent() {
     let stub = quiet().await;
@@ -4100,6 +4111,7 @@ async fn unkeyed_events_and_repeated_test_fires_are_independent() {
     assert_eq!(history.iter().filter(|row| row.kind == RunKind::Test).count(), 2);
 }
 
+#[cfg(feature = "server")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_same_delivery_id_is_scoped_to_each_routine() {
     let stub = quiet().await;
@@ -4142,9 +4154,10 @@ async fn event_arriving_after_drain_is_kept_for_the_next_host() {
     );
 }
 
+#[cfg(feature = "server")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_event_posted_to_the_receiver_fires_the_routine_standing_on_it() {
-    // The whole path an event takes: a POST on the loopback port, the routine
+    // The whole path an event takes: a POST to the event route, the routine
     // standing on that service and topic, the agent's turn, and the history.
     // Driven over real HTTP rather than by calling `deliver_event`, because
     // what the operator wires is a URL and a header, and those are the two
@@ -4210,10 +4223,11 @@ async fn an_event_posted_to_the_receiver_fires_the_routine_standing_on_it() {
     );
 }
 
+#[cfg(feature = "server")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_post_that_does_not_carry_the_secret_fires_nothing() {
     // The secret in the header is the whole of what stops a page open in the
-    // operator's browser from firing a routine on a loopback port, so a post
+    // operator's browser from firing a routine by posting a form, so a post
     // without it has to spend nothing: no turn, no history, no trace of which
     // addresses exist.
     let stub = serve(|_| Script::Say("chased it".into())).await;
@@ -4246,6 +4260,7 @@ async fn a_post_that_does_not_carry_the_secret_fires_nothing() {
     assert!(h.runtime.store().channel_messages(h.id("Clerk"), 20).unwrap().is_empty());
 }
 
+#[cfg(feature = "server")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_event_nobody_stands_on_is_answered_with_a_404() {
     // A 200 here would tell a script its wiring works while the routine it
@@ -4272,9 +4287,10 @@ async fn an_event_nobody_stands_on_is_answered_with_a_404() {
     assert!(h.runtime.store().channel_messages(h.id("Clerk"), 20).unwrap().is_empty());
 }
 
+#[cfg(feature = "server")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_event_that_lands_on_a_working_agent_is_skipped_when_the_routine_says_so() {
-    // The same question the clock's sweep asks, asked from the receiver: the
+    // The same question the clock's sweep asks, asked from the event route: the
     // column would otherwise be true on an event routine and mean nothing.
     let stub = serve(|body| {
         if has_tool_result(body) {
@@ -4330,6 +4346,457 @@ async fn an_event_that_lands_on_a_working_agent_is_skipped_when_the_routine_says
     })
     .await;
     assert_eq!(h.runtime.store().routine_runs(idle.id, 20).unwrap()[0].kind, RunKind::Event);
+}
+
+#[cfg(feature = "server")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_bearer_scheme_in_lower_case_is_accepted() {
+    // RFC 9110 makes the scheme case-insensitive, and senders write it every
+    // way. A 401 for `bearer` would read as a wrong secret.
+    let stub = serve(|_| Script::Say("chased it".into())).await;
+    let h = harness(&stub, &["Clerk"], GuardLimits::default());
+    let routine = dunning(&h, "Clerk", false);
+    let (base, secret) = receiver(&h).await;
+
+    for scheme in ["bearer", "BEARER"] {
+        let reply = reqwest::Client::new()
+            .post(format!("{base}/events/stripe/invoice.payment_failed"))
+            .header("Authorization", format!("{scheme} {secret}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(reply.status(), 200, "{scheme}");
+        let answered: serde_json::Value = reply.json().await.unwrap();
+        assert_eq!(answered["delivered"], 1, "{scheme}: {answered}");
+        assert_eq!(answered["failed"], 0, "{scheme}: {answered}");
+        assert_eq!(answered["paused"], 0, "{scheme}: {answered}");
+    }
+    assert_eq!(h.runtime.store().routine_runs(routine.id, 20).unwrap().len(), 2);
+}
+
+#[cfg(feature = "server")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_event_for_a_paused_agents_routine_says_the_agent_is_paused() {
+    // Before, this read exactly like a misspelled topic, and the sender went
+    // looking for a typo. The routine is there; its agent is not taking work.
+    let stub = serve(|_| Script::Say("chased it".into())).await;
+    let h = harness(&stub, &["Clerk", "Spare"], GuardLimits::default());
+    dunning(&h, "Clerk", false);
+    h.pause("Clerk");
+    let (base, secret) = receiver(&h).await;
+    let post = || {
+        reqwest::Client::new()
+            .post(format!("{base}/events/stripe/invoice.payment_failed"))
+            .bearer_auth(&secret)
+            .body("{}")
+            .send()
+    };
+
+    let reply = post().await.unwrap();
+    assert_eq!(reply.status(), 409);
+    let answered: serde_json::Value = reply.json().await.unwrap();
+    assert_eq!(
+        answered,
+        serde_json::json!({
+            "error": "The routine is there, but its agent is paused.",
+            "listening": 0,
+            "delivered": 0,
+            "skipped": 0,
+            "failed": 0,
+            "paused": 1,
+        })
+    );
+    assert!(h.runtime.store().channel_messages(h.id("Clerk"), 20).unwrap().is_empty());
+
+    // Beside a routine that can take it, the event is delivered and the paused
+    // one is still counted, so the 200 does not hide it.
+    let spare = dunning(&h, "Spare", false);
+    let reply = post().await.unwrap();
+    assert_eq!(reply.status(), 200);
+    let answered: serde_json::Value = reply.json().await.unwrap();
+    assert_eq!(answered["listening"], 1, "{answered}");
+    assert_eq!(answered["delivered"], 1, "{answered}");
+    assert_eq!(answered["paused"], 1, "{answered}");
+    assert!(answered.get("error").is_none(), "{answered}");
+    assert_eq!(h.runtime.store().routine_runs(spare.id, 20).unwrap()[0].kind, RunKind::Event);
+}
+
+#[cfg(feature = "server")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_secret_is_checked_before_the_event_is_read() {
+    // A wrong token learns nothing about which events exist.
+    let stub = quiet().await;
+    let h = harness(&stub, &["Clerk"], GuardLimits::default());
+    let (base, secret) = receiver(&h).await;
+    let client = reqwest::Client::new();
+
+    let refused = client
+        .post(format!("{base}/events/not an/event"))
+        .header("Authorization", "Bearer nope")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 401);
+
+    let missing = client.post(format!("{base}/events/stripe/invoice.paid")).send().await.unwrap();
+    assert_eq!(missing.status(), 401);
+
+    // Right length, wrong bytes: the comparison is not a prefix check.
+    let near = secret.replace('e', "f");
+    assert_eq!(near.len(), secret.len());
+    let refused = client
+        .post(format!("{base}/events/stripe/invoice.paid"))
+        .bearer_auth(&near)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 401);
+}
+
+#[cfg(feature = "server")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn delivery_id_is_checked_only_after_the_secret() {
+    let stub = quiet().await;
+    let h = harness(&stub, &["Clerk"], GuardLimits::default());
+    let (base, secret) = receiver(&h).await;
+    let client = reqwest::Client::new();
+    let url = format!("{base}/events/github/push");
+    let bad = "x".repeat(201);
+
+    let unsigned = client.post(&url).header("Idempotency-Key", &bad).send().await.unwrap();
+    assert_eq!(unsigned.status(), 401);
+    let signed = client
+        .post(&url)
+        .bearer_auth(&secret)
+        .header("Idempotency-Key", &bad)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(signed.status(), 400);
+}
+
+#[cfg(feature = "server")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_client_waiting_to_be_told_to_continue_is_noticed() {
+    // curl sends `Expect: 100-continue` for anything over a kilobyte and waits
+    // to be told to go ahead. A query string is not part of the event.
+    let stub = quiet().await;
+    let h = harness(&stub, &["Clerk"], GuardLimits::default());
+    let routine = h
+        .runtime
+        .store()
+        .create_routine(
+            h.id("Clerk"),
+            "Reviews",
+            "Review the pull request named in the event.",
+            Trigger::Event(EventTrigger {
+                service: "github".into(),
+                topic: "pull_request.opened".into(),
+            }),
+            None,
+            false,
+        )
+        .unwrap();
+    let (base, secret) = receiver(&h).await;
+
+    let reply = reqwest::Client::new()
+        .post(format!("{base}/events/github/pull_request.opened?delivery=1"))
+        .bearer_auth(&secret)
+        .header("Expect", "100-continue")
+        .body(vec![b'x'; 2048])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(reply.status(), 200);
+    let answered: serde_json::Value = reply.json().await.unwrap();
+    assert_eq!(answered["delivered"], 1, "{answered}");
+    assert_eq!(h.runtime.store().routine_runs(routine.id, 20).unwrap()[0].kind, RunKind::Event);
+}
+
+#[cfg(feature = "server")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_refused_request_still_says_how_much_body_is_on_its_way() {
+    // A client still sending its body when the refusal is written reads a
+    // reset instead of the sentence that says what it did wrong.
+    let stub = quiet().await;
+    let h = harness(&stub, &["Clerk"], GuardLimits::default());
+    let (base, _secret) = receiver(&h).await;
+
+    let reply = reqwest::Client::new()
+        .post(format!("{base}/events/stripe/invoice.paid"))
+        .body(vec![b'x'; 40])
+        .send()
+        .await
+        .expect("a refusal, not a reset");
+    assert_eq!(reply.status(), 401);
+    let refused: serde_json::Value = reply.json().await.unwrap();
+    assert!(
+        refused["error"].as_str().unwrap_or_default().contains("Authorization: Bearer"),
+        "{refused}"
+    );
+}
+
+/// The refusal an agent's `add` gets once it keeps `n` routines, in full.
+fn at_the_cap(n: usize) -> String {
+    format!(
+        "Refused: you already keep {n} routines, which is the most one agent may keep. Cancel \
+         one you no longer need with action \"cancel\", or change one with \"update\" so it \
+         covers this."
+    )
+}
+
+/// Gives an agent `n` routines on the clock, every third one switched off,
+/// as the operator would: the cap counts what can still fire, on or off.
+fn keep_routines(h: &Harness, who: &str, n: usize) -> Vec<guac_lib::domain::routine::Routine> {
+    (0..n)
+        .map(|i| {
+            let routine = h
+                .runtime
+                .store()
+                .create_routine(
+                    h.id(who),
+                    &format!("Sweep {i}"),
+                    &format!("Check source number {i} and report what changed."),
+                    Trigger::Clock(Cadence::Daily),
+                    Some(now_ms() + 3_600_000),
+                    false,
+                )
+                .unwrap();
+            if i % 3 == 0 {
+                h.runtime.store().set_routine_active(routine.id, false).unwrap()
+            } else {
+                routine
+            }
+        })
+        .collect()
+}
+
+fn book_another(body: &serde_json::Value) -> Script {
+    if has_tool_result(body) {
+        return Script::Say("Done.".into());
+    }
+    Script::Book {
+        name: "Newsletter".into(),
+        what: "Draft the weekly newsletter from this week's notes.".into(),
+        repeat: "weekly".into(),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_twenty_first_routine_an_agent_adds_is_refused_and_nothing_is_written() {
+    let stub = serve(book_another).await;
+    let h = harness(&stub, &["Watcher"], GuardLimits::default());
+    keep_routines(&h, "Watcher", 20);
+    let checkpoint = h.sink.snapshot().len();
+
+    let asked =
+        h.runtime.send_from_human(h.id("Watcher"), "Draft the newsletter every week.").unwrap();
+    h.settle(asked).await;
+
+    let told = tool_results(&stub);
+    assert_eq!(told, vec![at_the_cap(20)], "the refusal, word for word");
+    let standing = h.runtime.store().agent_routines(h.id("Watcher")).unwrap();
+    assert_eq!(standing.len(), 20, "nothing was written");
+    assert!(!standing.iter().any(|r| r.name == "Newsletter"));
+    let watcher = h.id("Watcher");
+    assert!(
+        !h.sink.snapshot()[checkpoint..]
+            .iter()
+            .any(|e| matches!(e, UiEvent::RoutinesChanged { agent_id } if *agent_id == watcher)),
+        "and nothing told the panel a routine changed"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_operator_can_still_add_a_routine_past_the_cap() {
+    // The cap binds what an agent hands itself, not what the operator sets.
+    // The panel's add is the store's, with no count in front of it, and the
+    // agent's next add is refused with the count as it now stands.
+    let stub = serve(book_another).await;
+    let h = harness(&stub, &["Watcher"], GuardLimits::default());
+    keep_routines(&h, "Watcher", 21);
+    assert_eq!(h.runtime.store().agent_routines(h.id("Watcher")).unwrap().len(), 21);
+
+    let asked =
+        h.runtime.send_from_human(h.id("Watcher"), "Draft the newsletter every week.").unwrap();
+    h.settle(asked).await;
+
+    assert_eq!(tool_results(&stub), vec![at_the_cap(21)]);
+    assert_eq!(h.runtime.store().agent_routines(h.id("Watcher")).unwrap().len(), 21);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn update_and_cancel_still_work_at_the_cap() {
+    // The refusal points at both, so both have to work at the cap.
+    let ids: Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+    let script_ids = ids.clone();
+    let stub = serve(move |body| {
+        let done = body["messages"]
+            .as_array()
+            .map(|m| m.iter().filter(|msg| msg["role"] == "tool").count())
+            .unwrap_or(0);
+        let ids = script_ids.lock().unwrap();
+        match done {
+            0 => Script::Retime { id: ids[0].clone(), repeat: "weekly".into() },
+            1 => Script::Plugin {
+                name: "schedule".into(),
+                arguments: serde_json::json!({ "action": "cancel", "id": ids[1] }),
+            },
+            _ => Script::Say("Changed one and dropped one.".into()),
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Watcher"], GuardLimits::default());
+    let kept = keep_routines(&h, "Watcher", 20);
+    *ids.lock().unwrap() = kept.iter().map(|r| r.id.to_string()).collect();
+
+    let asked = h
+        .runtime
+        .send_from_human(h.id("Watcher"), "Make the first sweep weekly and drop the second.")
+        .unwrap();
+    h.settle(asked).await;
+
+    let told = last_tool_results(&stub);
+    assert!(told[0].starts_with("Updated "), "{told:?}");
+    assert!(told[1].starts_with("Canceled "), "{told:?}");
+    let standing = h.runtime.store().agent_routines(h.id("Watcher")).unwrap();
+    assert_eq!(standing.len(), 19);
+    let first = h.runtime.store().get_routine(kept[0].id).unwrap().unwrap();
+    assert_eq!(first.trigger, Trigger::Clock(Cadence::Weekly));
+    assert!(h.runtime.store().get_routine(kept[1].id).unwrap().is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_fired_one_off_and_a_cancelled_routine_do_not_count_toward_the_cap() {
+    let stub = serve(|body| {
+        if anyone_said(body, "every week") {
+            book_another(body)
+        } else {
+            Script::Say("Woke up.".into())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Watcher"], GuardLimits::default());
+    keep_routines(&h, "Watcher", 18);
+    let cancelled = h
+        .runtime
+        .store()
+        .create_routine(
+            h.id("Watcher"),
+            "Old sweep",
+            "Check the old source.",
+            Trigger::Clock(Cadence::Daily),
+            Some(now_ms() + 3_600_000),
+            false,
+        )
+        .unwrap();
+    assert!(h.runtime.store().delete_routine(cancelled.id).unwrap());
+    h.runtime
+        .store()
+        .create_routine(
+            h.id("Watcher"),
+            "Alarm",
+            "wake up",
+            Trigger::Clock(Cadence::Once),
+            Some(now_ms() - 1000),
+            false,
+        )
+        .unwrap();
+    h.runtime
+        .store()
+        .create_routine(
+            h.id("Watcher"),
+            "Standing",
+            "Check the standing source.",
+            Trigger::Clock(Cadence::Daily),
+            Some(now_ms() + 3_600_000),
+            false,
+        )
+        .unwrap();
+
+    h.runtime.start_scheduler();
+    h.wait_until("the one-off to fire and go", |h| {
+        h.channel_texts("Watcher").iter().any(|t| t.contains("Woke up."))
+            && h.runtime.store().agent_routines(h.id("Watcher")).unwrap().len() == 19
+    })
+    .await;
+
+    let asked =
+        h.runtime.send_from_human(h.id("Watcher"), "Draft the newsletter every week.").unwrap();
+    h.settle(asked).await;
+
+    let told = tool_results(&stub);
+    assert!(told.iter().any(|r| r.starts_with("Scheduled: ")), "{told:?}");
+    assert_eq!(h.runtime.store().agent_routines(h.id("Watcher")).unwrap().len(), 20);
+}
+
+#[tokio::test]
+async fn a_weekday_routine_slept_through_a_weekend_records_the_two_slots_it_missed() {
+    // Due Friday at nine, and the host off from Thursday night until Monday
+    // afternoon. It fires once on waking, and that one row says it stands for
+    // Friday's slot and Monday's, both gone by with nothing running. The
+    // weekend holds no slot to miss.
+    let stub = serve(|_| Script::Say("swept".into())).await;
+    let h = harness(&stub, &["Watcher"], GuardLimits::default());
+    let local = |d: u32, hour: u32| {
+        let date = chrono::NaiveDate::from_ymd_opt(2025, 1, d).unwrap();
+        guac_lib::domain::instant(date.and_hms_opt(hour, 0, 0).unwrap()).unwrap()
+    };
+    // 2025-01-03 is a Friday.
+    let routine = h
+        .runtime
+        .store()
+        .create_routine(
+            h.id("Watcher"),
+            "Morning sweep",
+            "Sweep the inbox.",
+            Trigger::Clock(Cadence::Weekdays),
+            Some(local(3, 9)),
+            false,
+        )
+        .unwrap();
+    h.runtime.set_up_since(local(6, 15));
+
+    h.runtime.start_scheduler();
+    h.wait_until("the catch-up firing", |h| {
+        h.channel_texts("Watcher").iter().any(|t| t.contains("swept"))
+    })
+    .await;
+
+    let history = h.runtime.store().routine_runs(routine.id, 20).unwrap();
+    assert_eq!(history.len(), 1, "one firing, not one per missed day");
+    assert_eq!(history[0].kind, RunKind::Scheduled);
+    assert_eq!(history[0].missed, 2);
+    let after = h.runtime.store().get_routine(routine.id).unwrap().unwrap();
+    assert!(after.next_run_at.unwrap() > now_ms(), "and it is not due again");
+}
+
+#[tokio::test]
+async fn a_routine_that_comes_due_while_the_host_is_up_missed_nothing() {
+    // Overdue all the same, but by a slot that came after the host was up:
+    // whatever held it back, it was not the host being off.
+    let stub = serve(|_| Script::Say("swept".into())).await;
+    let h = harness(&stub, &["Watcher"], GuardLimits::default());
+    let routine = h
+        .runtime
+        .store()
+        .create_routine(
+            h.id("Watcher"),
+            "Sweep",
+            "Sweep the inbox.",
+            Trigger::Clock(Cadence::Every(3600)),
+            Some(now_ms() - 1000),
+            false,
+        )
+        .unwrap();
+    h.runtime.set_up_since(now_ms() - 5000);
+
+    h.runtime.start_scheduler();
+    h.wait_until("the firing", |h| {
+        !h.runtime.store().routine_runs(routine.id, 20).unwrap().is_empty()
+    })
+    .await;
+    assert_eq!(h.runtime.store().routine_runs(routine.id, 20).unwrap()[0].missed, 0);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

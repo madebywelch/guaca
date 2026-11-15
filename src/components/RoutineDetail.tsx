@@ -597,6 +597,14 @@ function History({ runs, now }: { runs: RoutineRun[] | null; now: number }) {
               {/* A button press and a real firing look the same in the
                   transcript, so which one this was is said here. */}
               {entry.kind === "test" && <span className="history__kind">test run</span>}
+              {/* One row for a catch-up rather than one per slot, because
+                  nothing happened at the others; this says it was late, and by
+                  how many slots the host was not there to fire. */}
+              {entry.kind === "scheduled" && entry.missed > 0 && (
+                <span className="history__kind">
+                  {`Fired late, missed ${entry.missed} ${entry.missed === 1 ? "time" : "times"} while the host was off`}
+                </span>
+              )}
               {/* Recorded because the alternative is a gap, and a gap in this
                   list is what a scheduler that has stopped working looks
                   like. */}

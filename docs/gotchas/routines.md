@@ -33,17 +33,26 @@ is already working. `docs/ROUTINES.md`, then `domain/routine.rs` and
   wrote a second routine beside the first and reported the change as made. Both
   fired. `docs/ROUTINES.md` before you take the section out, and note that
   `update` is what the ids in it are for.
-- **An event routine is fired by a POST, and the secret goes in the header
-  rather than the body.** Loopback does not stop a page in the operator's
-  browser from posting to a loopback port; a bearer header does, because the
-  browser will not attach one cross-origin without a preflight that is answered
-  with no CORS headers. Moving the secret into the body or the query string
-  reads as equivalent and reopens that. `webhook.rs`.
-- **The receiver's port is recorded, not taken fresh.** Whatever the operator
-  wired was given one address. A receiver that binds port zero on every launch
-  breaks that wiring silently every launch; `WebhookConfig` is where the port
-  and the secret survive a restart, and a recorded port that is taken falls
-  back to a free one and writes it down.
+- **An event routine is fired by a POST to the server's event route, and the
+  secret goes in the header rather than the body.** A bearer header is what
+  stops a page in the operator's browser from firing a routine by posting a
+  form, because the browser will not attach one cross-origin without a
+  preflight. Moving the secret into the body or the query string reads as
+  equivalent and reopens that. `server::events`, then `webhook.rs`.
+- **A desktop has no event route.** The loopback receiver that used to be in
+  `webhook.rs` was never started, and it is gone. `webhookAddress` still
+  answers a port of zero, which the panel reads as no address; the secret in
+  `WebhookConfig` is the server's route's.
+- **A 409 is a paused agent, not a missing routine.** The route answers with
+  `paused` beside the other counts and a sentence of its own, because a paused
+  agent's routine used to read to the sender exactly like a misspelled topic.
+- **A catch-up row counts only slots from before the host came up.** A slot
+  overdue because the routine was switched off or the agent paused is not one
+  the host missed, and `Routine::missed_before` does not count it. Tests move
+  that moment with `Runtime::set_up_since`.
+- **The cap binds the agent's own `add`, and nothing else.** `update` and
+  `cancel` are what the refusal points to, so they must work at the cap, and
+  the operator's add in the app is not held to it.
 - **The body reaches the model as data, under the instruction.** It rides on
   `Part::Routine` as `payload` and `as_plain_text` fences it under a line that
   says it is not an instruction. Appending it to `what` would hand a vendor's

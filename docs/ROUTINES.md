@@ -19,9 +19,9 @@ and it owns nothing: it has no next moment, and no clock will ever produce one.
 Splitting them in the type is what keeps `next_after`, `first_run` and `accepts`
 off a value that has no answer for any of them.
 
-What delivers one is a POST. `webhook.rs` is a loopback receiver, and
-`/events/stripe/invoice.payment_failed` on it fires every active routine
-standing on that trigger through `Runtime::deliver_event`, which asks the same
+What delivers one is a POST. `/events/stripe/invoice.payment_failed` on the
+server's own origin, the route `server::events` serves, fires every active
+routine standing on that trigger through `Runtime::deliver_event`, which asks the same
 three things the clock's sweep asks, in the same order: is the agent working
 and does the routine skip, move the row, write the firing down. The body of the
 post rides on the fired part as `payload` and reaches the model below the
@@ -32,38 +32,52 @@ the picker now for exactly that reason. It was kept out until something could
 deliver one, because a routine an operator can set and then watch never fire is
 worse than one they cannot set yet.
 
-## The receiver is loopback, and the secret is in a header because of that
+A desktop has no event route. `webhook.rs` used to hold a loopback receiver
+for one, and nothing ever started it: the panel reported its port as zero on
+every launch. It is gone, and what is left in that file is what the server's
+route shares with the rest of the app: the secret, the most a body may be, and
+how a delivery is told apart from its retries. On a desktop an event routine
+fires from Test run and from nothing else, and `webhookAddress` still answers
+a port of zero, which the panel reads as no address.
 
-Loopback is what the two viewers are, and it is enough for them because reading
-a page an agent drew changes nothing. A post here starts a turn, so loopback is
-not enough: any page open in the operator's browser can POST to a loopback port
-cross-origin, and a secret carried in the body rides along in such a post
-unread. The secret is a bearer token in `Authorization`, and that placement is
-the mechanism. A browser will not attach that header cross-origin without a
-preflight, the preflight is answered with no CORS headers at all, and the POST
-is never sent. A secret in a query string or a body would look identical to a
-reader and close nothing.
+## The secret is in a header, and the answer says what became of the event
 
-The port and the secret are written into the settings the first time the
-receiver comes up and read back on every launch after, because the operator
-wires something to an address once. A receiver that took a fresh port from the
-OS every morning would break that wiring every morning with nothing on screen
-to say so. A recorded port that is taken is not fatal either: the receiver takes
-a free one, says so in the log, and writes the new one down. The panel shows
-whichever address is current, and a port of zero, which is a receiver that did
-not come up at all, is drawn as that sentence rather than as an address nothing
-answers.
+A post starts a turn, so the route takes a secret of its own: the webhook
+secret, written into the settings at boot, which grants nothing else, while the
+workspace token does not fire a routine either. It is a bearer token in
+`Authorization`, and that placement is the mechanism. A browser will not attach
+that header cross-origin without a preflight, so a page open in the operator's
+browser cannot fire a routine by posting a form. A secret in a query string or a
+body would look identical to a reader and close nothing. The scheme is matched
+in any letter case, as HTTP has it: a sender that writes `bearer` is not wrong,
+and a 401 for it would read as a wrong secret. The secret is checked before
+anything else about the request is read, so a post without it learns nothing
+about which events exist.
 
-An event nobody stands on is a 404, and that is the answer that matters most. A
-200 would tell a script its wiring works while the routine it was meant for sits
-under a different spelling. The service is lowered on both sides for the same
-reason: a routine set as `stripe` hears from a webhook configured as `Stripe`.
-The body is drained before a refusal is written, because a client still sending
-when the answer arrives reads a reset instead of the sentence that says what it
-did wrong.
+The answer carries five counts, whatever its status: `listening`, the switched-on
+routines standing on the event under an agent that is active; `delivered`,
+`skipped` (dropped for an agent already working) and `failed` (could not be
+delivered at all) out of those; and `paused`, the routines that stand on it under
+an agent that is paused, which are not counted as listening. Any listening
+routine makes it a 200.
+
+With none listening, the answer is a sentence as well as the counts, because
+the sender has something to fix and the status alone does not say what. An
+event nobody stands on is a 404, "No active routine waits on stripe/invoice.paid.
+Add one in Guaca, under the agent that should handle it, and check the spelling
+of both names." That is the answer that matters most: a 200 would tell a script
+its wiring works while the routine it was meant for sits under a different
+spelling. The service is lowered on both sides for the same reason: a routine
+set as `stripe` hears from a webhook configured as `Stripe`. An event whose only
+routines belong to a paused agent is a 409, "The routine is there, but its
+agent is paused." Before, that read exactly like a misspelled topic and sent the
+sender looking for a typo. It is not a 2xx because the event was not delivered
+and is not kept, and a sender that retries may arrive after the agent is
+resumed. A post without the secret is a 401 that says how to send it, a
+delivery id over 200 bytes is a 400, and a body over 64KB is a 413.
 
 A sender can identify a delivery with `Idempotency-Key`, `webhook-id`, or
-`X-GitHub-Delivery`, in that order. The receiver trims the first header present
+`X-GitHub-Delivery`, in that order. The route trims the first header present
 and rejects a value over 200 bytes after authentication. The identifier is
 scoped to each routine, so retrying a keyed post does not fire the same routine
 twice. A post with none of those headers gets a fresh identifier, so its retries
@@ -166,7 +180,7 @@ one that runs is not, and the failure worth having is the noisy one.
 
 One path deliberately does not consult it. Test run is the operator pressing a
 button, and a test that quietly did nothing would read as the button being
-broken. The receiver does consult it, through the same `working` read the sweep
+broken. The event route does consult it, through the same `working` read the sweep
 uses, because the column would otherwise be true on an event routine and mean
 nothing: a burst of posts landing on an agent mid-turn is the same pile-up the
 option exists to prevent, arriving from the other direction.
@@ -177,7 +191,7 @@ option exists to prevent, arriving from the other direction.
 migration 34. A fourth, `event`, is a post that was delivered; it is kept apart
 from `scheduled` because the two answer different questions when a routine
 misbehaves. A scheduled firing at the wrong hour is the cadence, and an event
-firing nobody expected is whatever is posting to the receiver. Both halves are the same argument. A firing that leaves no trace
+firing nobody expected is whatever is posting to the event route. Both halves are the same argument. A firing that leaves no trace
 is a gap in the history, and a gap is also what a scheduler that has stopped
 working looks like; but a skip recorded under an invented run id reads back as
 a delivery that bought no model calls, which is the *other* failure this
@@ -188,6 +202,26 @@ otherwise draw "nothing ran".
 A fast cadence on a busy agent fills the list with skips. That is the news
 rather than noise: a sweep being passed over ten times running is worth seeing,
 and the operator's move is to change the cadence.
+
+## A catch-up firing says how many slots it stands for
+
+A routine due while the host was off fires once when it comes back, at the next
+sweep, and the slot moves to the next one still ahead (*A repeat is a shape*).
+That is right, and it used to leave one silent row: a weekday routine slept
+through from Thursday night to Monday afternoon fired once on Monday with
+nothing to say Friday's slot had gone by too, which is the gap this history
+exists to rule out. So the row carries `missed` (migration 77): how many of the
+routine's slots it stands for that came due while the host was off, the late one
+included. The panel draws it as "Fired late, missed 2 times while the host was
+off", and "missed 1 time" for one.
+
+"While the host was off" is taken literally. `Routine::missed_before` counts the
+slots before the moment the running host came up, walking them with the
+cadence's own `next_after`, so the count and the schedule cannot disagree about
+which days a weekday routine keeps. A slot after that moment that is overdue
+anyway was held back by the operator, the routine switched off or the agent
+paused, and the row does not claim the host was off for it. A firing on time
+reads as it always did.
 
 ## An agent reads its own schedule before it decides to write another one
 
@@ -212,6 +246,18 @@ the prompt with the rule underneath them the part that got skimmed. A routine
 the operator has switched off says so instead of counting down: it still holds
 the slot it was holding, and an agent told a dead routine fires in an hour
 reports work as in hand that nobody is going to do.
+
+## An agent keeps at most twenty routines
+
+Every firing is a fresh run with a fresh budget, and an agent adds a routine
+without anybody being asked, so the number of routines it keeps is the number
+of budgets it can hand itself. `MOST_ROUTINES` is twenty, checked in
+`keep_schedule` before anything is written. It counts every routine the agent
+has that can still fire, switched off or not and whoever set it. A one-off that
+has fired and a cancelled routine are gone from the table and so from the
+count. The refusal names the count and the two ways out, `cancel` and `update`,
+which are never refused by it. The operator adding a routine in the app is not
+held to it: the cap is about what an agent spends on its own say-so.
 
 ## Changing a routine is `update`, and adding a second one is not
 

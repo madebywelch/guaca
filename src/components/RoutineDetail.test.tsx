@@ -130,7 +130,7 @@ describe("RoutineDetail", () => {
     expect(screen.getByText("No runs yet.")).toBeTruthy();
 
     routineRuns.mockResolvedValue([
-      { runId: "run-1", kind: "test", at: MORNING, spent: spent({ calls: 2 }) },
+      { runId: "run-1", kind: "test", at: MORNING, spent: spent({ calls: 2 }), missed: 0 },
     ]);
     fireEvent.click(screen.getByRole("button", { name: "Test run" }));
 
@@ -144,12 +144,13 @@ describe("RoutineDetail", () => {
     // A delivered routine whose agent never ran looks exactly like one that
     // worked, and the operator's next move is not the same.
     routineRuns.mockResolvedValue([
-      { runId: "run-2", kind: "scheduled", at: MORNING, spent: spent({ calls: 0 }) },
+      { runId: "run-2", kind: "scheduled", at: MORNING, spent: spent({ calls: 0 }), missed: 0 },
       {
         runId: "run-1",
         kind: "scheduled",
         at: MORNING - 86_400_000,
         spent: { prompt: 1200, completion: 300, cost: 0.004, calls: 3 },
+        missed: 0,
       },
     ]);
     open();
@@ -167,13 +168,48 @@ describe("RoutineDetail", () => {
     // one was delivered to an agent that did not act on it, which is a
     // different problem with a different fix.
     routineRuns.mockResolvedValue([
-      { runId: null, kind: "skipped", at: MORNING, spent: spent({ calls: 0 }) },
-      { runId: "run-1", kind: "scheduled", at: MORNING - 86_400_000, spent: spent({ calls: 2 }) },
+      { runId: null, kind: "skipped", at: MORNING, spent: spent({ calls: 0 }), missed: 0 },
+      {
+        runId: "run-1",
+        kind: "scheduled",
+        at: MORNING - 86_400_000,
+        spent: spent({ calls: 2 }),
+        missed: 0,
+      },
     ]);
     open({ skipIfWorking: true });
 
     expect(await screen.findByText("skipped, already working")).toBeTruthy();
     expect(screen.queryByText("nothing ran")).toBeNull();
+  });
+
+  it("says how many slots a late firing stands for, and nothing on one that was on time", async () => {
+    // A catch-up after the host was off is one row, and without this it reads
+    // as a routine that was never late.
+    routineRuns.mockResolvedValue([
+      { runId: "run-3", kind: "scheduled", at: MORNING, spent: spent({ calls: 2 }), missed: 3 },
+      {
+        runId: "run-2",
+        kind: "scheduled",
+        at: MORNING - 4 * 86_400_000,
+        spent: spent({ calls: 2 }),
+        missed: 1,
+      },
+      {
+        runId: "run-1",
+        kind: "scheduled",
+        at: MORNING - 5 * 86_400_000,
+        spent: spent({ calls: 2 }),
+        missed: 0,
+      },
+    ]);
+    open();
+
+    expect(
+      await screen.findByText("Fired late, missed 3 times while the host was off"),
+    ).toBeTruthy();
+    expect(screen.getByText("Fired late, missed 1 time while the host was off")).toBeTruthy();
+    expect(screen.getAllByText(/Fired late/)).toHaveLength(2);
   });
 
   it("offers the skip only where there is a next firing to fall back on", async () => {
