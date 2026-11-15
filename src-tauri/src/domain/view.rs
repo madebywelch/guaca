@@ -239,14 +239,15 @@ impl Clients {
         let Some(last) = self.seen.values().map(|seen| seen.at).max() else {
             return Presence::Away;
         };
-        let away_at = last + AWAY_AFTER_MS;
+        let away_after = crate::probe_clock::scaled(AWAY_AFTER_MS);
+        let away_at = last + away_after;
         if now >= away_at {
             return Presence::Away;
         }
         let on_screen = self
             .seen
             .values()
-            .filter(|seen| seen.focused && now - seen.at < AWAY_AFTER_MS)
+            .filter(|seen| seen.focused && now - seen.at < away_after)
             .max_by_key(|seen| seen.at)
             .and_then(|seen| seen.reading);
         Presence::Here { on_screen, away_at }

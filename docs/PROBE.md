@@ -65,7 +65,7 @@ Every run of every scenario starts from nothing and leaves nothing.
 1. **Build or reuse the test build.** `pnpm tauri build --debug --bundles app
    --features probe --config src-tauri/tauri.probe.conf.json` makes
    `Guaca Probe.app` with the bundle identifier `com.madebywelch.guac.probe`,
-   and `cargo build --no-default-features --features server --bin guacad`
+   and `cargo build --no-default-features --features server,probe-host --bin guacad`
    makes the daemon. The probe's frontend is built into
    `src-tauri/target/probe/dist`, so `dist/` stays a normal build.
 2. **Start a scratch Host.** `guacad` on a free loopback port, with its own
@@ -138,6 +138,22 @@ operator drive it. Four things keep it out:
 - Even in a test build the socket opens only when the launch names one, in a
   directory only its owner can enter, readable only by its owner, and every
   connection is asked for its account.
+
+### A shorter minute for the scratch Host
+
+A person counts as away two minutes after a window last had focus, and
+finished work is gathered for ten minutes before it is offered. A scenario
+about being away would wait twelve minutes a run. The scratch Host is built
+with a second test feature, `probe-host`, and a scenario that needs it starts
+the Host with `GUACA_PROBE_MINUTE_MS`, the length of a minute in milliseconds
+(between 1000 and 60000). On that Host both waits run on the shorter minute;
+nothing else changes, and nothing an agent reads says a different length.
+
+It is held to the same promise as the channel. `probe_clock::scaled` is the
+identity in every build without the feature, `probe-host` does not compile
+with optimizations on ("the probe-host feature is for test builds only"), and
+the unit test in `probe.rs` that asks Cargo whether any other feature turns on
+`probe` asks the same of `probe-host`.
 
 ## Observers
 

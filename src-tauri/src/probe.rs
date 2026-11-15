@@ -359,5 +359,12 @@ mod tests {
                 "the {feature} feature turns the probe on, and with it a control socket"
             );
         }
+        assert!(features.contains_key("probe-host"), "the probe-host feature is gone; update this test");
+        for feature in features.keys().filter(|name| *name != "probe-host") {
+            assert!(
+                !enables(feature).iter().any(|name| name == "probe-host"),
+                "the {feature} feature turns probe-host on, and with it a Host that can be told to hurry"
+            );
+        }
     }
 }

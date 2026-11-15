@@ -31,6 +31,7 @@ pub mod plugins;
 /// tests everywhere; the socket only into a build with the `probe` feature.
 #[cfg(any(test, feature = "probe"))]
 pub mod probe;
+pub mod probe_clock;
 pub mod programs;
 pub mod proxy;
 pub mod push;

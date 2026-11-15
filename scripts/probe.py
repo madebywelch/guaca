@@ -1143,7 +1143,7 @@ def build() -> None:
     steps = [
         (["pnpm", "tauri", "build", "--debug", "--bundles", "app", "--features", "probe",
           "--config", "src-tauri/tauri.probe.conf.json"], ROOT),
-        (["cargo", "build", "--no-default-features", "--features", "server", "--bin", "guacad"], TAURI),
+        (["cargo", "build", "--no-default-features", "--features", "server,probe-host", "--bin", "guacad"], TAURI),
     ]
     for args, cwd in steps:
         built = subprocess.run(args, cwd=cwd, stdout=sys.stderr, stderr=sys.stderr)

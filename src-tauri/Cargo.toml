@@ -175,6 +175,12 @@ custom-protocol = ["tauri/custom-protocol"]
 # docs/PROBE.md.
 probe = ["desktop"]
 
+# The scratch Host's clock for the same script: started with
+# GUACA_PROBE_MINUTE_MS, a Host built with this counts the outbox's two waits
+# in shorter minutes. Never part of another feature and refused with
+# optimizations on, like `probe`. See `probe_clock.rs`.
+probe-host = []
+
 # The daemon: the same runtime, reached over HTTP and a socket.
 server = ["dep:axum", "dep:tower-http", "dep:hyper", "dep:hyper-util"]
 
