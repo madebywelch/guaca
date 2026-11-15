@@ -1382,8 +1382,9 @@ for the second.
 
 ## Storage
 
-SQLite, plain SQL, forward-only numbered migrations. Eight tables: agents,
-groups, messages, usage, approvals, routines, signins and connectors. No ORM:
+SQLite, plain SQL, forward-only numbered migrations. The tables are whatever
+`MIGRATIONS` in `db/migrations.rs` creates, applied in order, so read that list
+rather than a count here that the next migration would make wrong. No ORM:
 every query is a few lines of SQL, and hiding them behind a builder would add a
 dependency and remove the ability to read what hits the disk.
 

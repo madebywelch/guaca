@@ -2625,11 +2625,17 @@ could not go: over another app's full-screen space.
 
 **Closing the window puts Guaca in the menu bar instead of ending it.** Tauri
 exits when the last window closes, and for this app that is the wrong default:
-agents keep their own appointments, so quitting on a close means a routine set
-for every morning stops firing the first time somebody tidies their screen, with
-nothing said. A hidden window is not a closed one, so preventing the close is the
-whole mechanism and no exit handling goes with it. Command-Q and the menu's own
-Quit still quit.
+the menu bar icon is where the operator sees that something is waiting on them,
+and a close that quit would take it away the first time somebody tidies their
+screen. A hidden window is not a closed one, so preventing the close is the
+whole mechanism. Command-Q and the menu's own Quit still quit, except while the
+app is updating its local host, which holds the quit until the update is done.
+
+Quitting stops no agent and no routine, because the app runs neither: it is a
+client of the workspace's host. A local host is a Docker container on this Mac,
+so its routines keep firing after the app quits for as long as Docker is running
+and the Mac is awake, and they wait while Docker is quit or the Mac sleeps. A remote host
+keeps firing whatever this Mac does.
 
 That is conditional on the icon having built, and the condition is the point
 rather than caution: an app with no window and no menu bar icon is one the

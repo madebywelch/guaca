@@ -18,10 +18,9 @@
 //! - **Settling.** The sending turn is still holding its envelope while its
 //!   errands work, so the run cannot be reported finished under them.
 //! - **The answer.** It lands in the context that asked for it, as the result
-//!   of the call, rather than as a message on a run of its own. `code` needs
-//!   the other shape because a job outlives the turn by forty minutes; an
-//!   errand is bounded to a few, and a turn that had to be woken again to read
-//!   its answer would lose everything it knew when it asked.
+//!   of the call, rather than as a message on a run of its own. An errand is
+//!   bounded to `errand::ROUNDS` model calls, and a turn that had to be woken
+//!   again to read its answer would lose everything it knew when it asked.
 //!
 //! An errand acts as the agent: the same card, so the same tools, the same
 //! gates and the same places, and every call it makes is drawn in the agent's
