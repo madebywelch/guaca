@@ -3,7 +3,7 @@
 Every rule here breaks in a way no DOM assertion can see: a cascade that lost on
 source order, a flex item that shrank, a color written for paper and forgotten
 in the ink block. `styles.test.ts` reads the stylesheet itself and is the gate,
-and *Every length is named* in `AGENTS.md` is the rule they all sit under.
+and *Every length is named* in `docs/INVARIANTS.md` is the rule they all sit under.
 
 - **The full file view resets `overflow`, not just the height cap and the mask.**
   A clipping flex item has an automatic minimum size of zero, so a document left
