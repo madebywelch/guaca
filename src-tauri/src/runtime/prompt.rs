@@ -1438,7 +1438,7 @@ pub fn presence_section(presence: &Presence, last_seen: i64, reader: AgentId, no
             "The operator has Guaca open but is looking at something else.".to_string()
         }
         Presence::Away => format!(
-            "The operator has not looked at Guaca for {}. Anything that needs them goes through \
+            "The operator has not had Guaca open for {}. Anything that needs them goes through \
              `decision` or `escalate`; a question in your note waits until they come back.",
             how_long(now - last_seen)
         ),
@@ -3988,7 +3988,7 @@ mod tests {
         }
         assert_eq!(
             presence_section(&Presence::Away, 0, me, 3 * 3_600_000 + 60_000),
-            "\n## Where the operator is\nThe operator has not looked at Guaca for 3 hours. \
+            "\n## Where the operator is\nThe operator has not had Guaca open for 3 hours. \
              Anything that needs them goes through `decision` or `escalate`; a question in your \
              note waits until they come back.\n"
         );
