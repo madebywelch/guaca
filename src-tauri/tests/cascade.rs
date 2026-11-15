@@ -8146,7 +8146,11 @@ fn tidy_overnight(h: &Harness, name: &str) {
     store
         .update_group(
             group.id,
-            &CleanGroup { name: group.name, tidy: Some(Tidy { on: true, hour: 3 }), ..Default::default() },
+            &CleanGroup {
+                name: group.name,
+                tidy: Some(Tidy { on: true, hour: 3 }),
+                ..Default::default()
+            },
         )
         .unwrap();
 }
@@ -8501,10 +8505,13 @@ async fn a_failed_tidy_says_so_reaches_nobody_and_is_owed_again_and_retried_as_a
         .iter()
         .find(|m| {
             m.parts.iter().any(|part| {
-                matches!(part, Part::Notice {
-                    kind: guac_lib::domain::envelope::NoticeKind::UpstreamError,
-                    ..
-                })
+                matches!(
+                    part,
+                    Part::Notice {
+                        kind: guac_lib::domain::envelope::NoticeKind::UpstreamError,
+                        ..
+                    }
+                )
             })
         })
         .expect("the failure is said, as it is for any turn");
@@ -8577,8 +8584,8 @@ async fn a_tidy_that_stored_its_rewrite_before_failing_has_read_its_lines() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_tidy_the_operator_stops_before_it_stores_anything_is_owed_again() {
-    let stub = serve(|body| if a_tidy(body) { Script::Hang } else { Script::Say("Done.".into()) })
-        .await;
+    let stub =
+        serve(|body| if a_tidy(body) { Script::Hang } else { Script::Say("Done.".into()) }).await;
     let h = harness(&stub, &["Planner"], GuardLimits::default());
     tidy_overnight(&h, "Planner");
     let run = h.runtime.send_from_human(h.id("Planner"), "Book the venue.").unwrap();
@@ -8588,10 +8595,8 @@ async fn a_tidy_the_operator_stops_before_it_stores_anything_is_owed_again() {
     h.runtime.sweep_tidy(night(1));
     let tidy = tidies(&h, "Planner").pop().unwrap();
     assert_eq!(before, 0);
-    h.wait_until("the tidy's call to be in the air", |_| {
-        stub.transcript.lock().iter().any(a_tidy)
-    })
-    .await;
+    h.wait_until("the tidy's call to be in the air", |_| stub.transcript.lock().iter().any(a_tidy))
+        .await;
     assert!(h.runtime.stop_run(tidy.run_id));
     h.settle(tidy.run_id).await;
     assert_eq!(h.runtime.store().outcome(tidy.run_id).unwrap(), None);
@@ -8611,8 +8616,16 @@ async fn a_tidy_the_operator_stops_before_it_stores_anything_is_owed_again() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_host_that_was_off_for_three_nights_tidies_once() {
     let stub =
-        serve(|body| if a_tidy(body) { Script::Say(String::new()) } else { Script::Say("Done.".into()) })
-            .await;
+        serve(
+            |body| {
+                if a_tidy(body) {
+                    Script::Say(String::new())
+                } else {
+                    Script::Say("Done.".into())
+                }
+            },
+        )
+        .await;
     let h = harness(&stub, &["Planner"], GuardLimits::default());
     tidy_overnight(&h, "Planner");
     let run = h.runtime.send_from_human(h.id("Planner"), "Book the venue.").unwrap();
@@ -8651,8 +8664,16 @@ async fn an_agent_at_work_at_the_hour_is_tidied_when_it_is_free() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_paused_agent_is_tidied_once_when_it_is_resumed() {
     let stub =
-        serve(|body| if a_tidy(body) { Script::Say(String::new()) } else { Script::Say("Done.".into()) })
-            .await;
+        serve(
+            |body| {
+                if a_tidy(body) {
+                    Script::Say(String::new())
+                } else {
+                    Script::Say("Done.".into())
+                }
+            },
+        )
+        .await;
     let h = harness(&stub, &["Planner"], GuardLimits::default());
     tidy_overnight(&h, "Planner");
     let run = h.runtime.send_from_human(h.id("Planner"), "Book the venue.").unwrap();
@@ -8669,8 +8690,16 @@ async fn a_paused_agent_is_tidied_once_when_it_is_resumed() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_restart_the_same_night_does_not_tidy_again() {
     let stub =
-        serve(|body| if a_tidy(body) { Script::Say(String::new()) } else { Script::Say("Done.".into()) })
-            .await;
+        serve(
+            |body| {
+                if a_tidy(body) {
+                    Script::Say(String::new())
+                } else {
+                    Script::Say("Done.".into())
+                }
+            },
+        )
+        .await;
     let h = harness(&stub, &["Planner"], GuardLimits::default());
     tidy_overnight(&h, "Planner");
     let run = h.runtime.send_from_human(h.id("Planner"), "Book the venue.").unwrap();

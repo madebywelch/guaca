@@ -836,7 +836,8 @@ mod tests {
 
     #[test]
     fn a_draft_with_no_tidy_leaves_the_switch_alone() {
-        let read: GroupDraft = serde_json::from_value(serde_json::json!({ "name": "Ops" })).unwrap();
+        let read: GroupDraft =
+            serde_json::from_value(serde_json::json!({ "name": "Ops" })).unwrap();
         assert_eq!(read.tidy, None);
         let read: GroupDraft = serde_json::from_value(
             serde_json::json!({ "name": "Ops", "tidy": { "on": true, "hour": 4 } }),

@@ -4474,7 +4474,16 @@ impl Runtime {
 
         if let Some(err) = failure {
             let own_model = card.own_model(inference.provider).is_some();
-            self.report_failure(&card, run_id, inbound_hop, cause, tool_parts, collected_text, err, own_model);
+            self.report_failure(
+                &card,
+                run_id,
+                inbound_hop,
+                cause,
+                tool_parts,
+                collected_text,
+                err,
+                own_model,
+            );
         } else {
             self.emit_reply(
                 &card,
@@ -4856,8 +4865,7 @@ impl Runtime {
         // written as a finished turn writes it. Its words are kept as a note
         // on that record and sent to nobody, because a reply would answer
         // with half a turn.
-        let calls =
-            tool_parts.iter().filter(|part| matches!(part, Part::ToolCall { .. })).count();
+        let calls = tool_parts.iter().filter(|part| matches!(part, Part::ToolCall { .. })).count();
         let text = text.trim().to_string();
         if !text.is_empty() {
             tool_parts.push(Part::Text { text });
@@ -4934,8 +4942,19 @@ impl Runtime {
             tool_parts.push(stopped_notice(&card.name));
         }
         match failure {
-            Some(err) => self.report_failure(card, run_id, hop, cause, tool_parts, String::new(), err, own_model),
-            None if !tool_parts.is_empty() => self.record_activity(card, run_id, hop, cause, tool_parts),
+            Some(err) => self.report_failure(
+                card,
+                run_id,
+                hop,
+                cause,
+                tool_parts,
+                String::new(),
+                err,
+                own_model,
+            ),
+            None if !tool_parts.is_empty() => {
+                self.record_activity(card, run_id, hop, cause, tool_parts)
+            }
             None => {}
         }
         if finished {

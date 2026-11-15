@@ -852,26 +852,25 @@ mod tests {
         assert_eq!(TIDY, approved);
         assert!(!TIDY.contains('\u{2014}'));
 
-        let tidy = |reported: &[&str], notes: &[&str]| {
-            Envelope {
-                id: MessageId::new(),
-                run_id: RunId::new(),
-                channel_id: AgentId::new(),
-                from: Participant::System,
-                to: Participant::Human,
-                parts: vec![Part::Tidy {
-                    reported: reported.iter().map(|s| s.to_string()).collect(),
-                    notes: notes.iter().map(|s| s.to_string()).collect(),
-                }],
-                trust: Trust::System,
-                hop: 0,
-                expects_reply: false,
-                intent: Intent::Work,
-                cause: None,
-                created_at: 0,
-            }
+        let tidy = |reported: &[&str], notes: &[&str]| Envelope {
+            id: MessageId::new(),
+            run_id: RunId::new(),
+            channel_id: AgentId::new(),
+            from: Participant::System,
+            to: Participant::Human,
+            parts: vec![Part::Tidy {
+                reported: reported.iter().map(|s| s.to_string()).collect(),
+                notes: notes.iter().map(|s| s.to_string()).collect(),
+            }],
+            trust: Trust::System,
+            hop: 0,
+            expects_reply: false,
+            intent: Intent::Work,
+            cause: None,
+            created_at: 0,
         };
-        let both = tidy(&["- 2h ago, done: Booked.", "- 1d ago, failed: Lost."], &["- 3h ago: Waiting."]);
+        let both =
+            tidy(&["- 2h ago, done: Booked.", "- 1d ago, failed: Lost."], &["- 3h ago: Waiting."]);
         assert!(both.is_tidy());
         assert_eq!(
             both.plain_text(),

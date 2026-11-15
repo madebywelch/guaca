@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
+import { clockTime } from "../lib/routine";
 import type {
   Envelope,
   Group,
@@ -648,4 +648,31 @@ it("clears a group's effort override and can explicitly choose the model default
     target: { value: "auto" },
   });
   expect((await save()).inference?.reasoningEffort).toBe("auto");
+});
+
+describe("the overnight tidy", () => {
+  it("opens off at the hour it was left at, and sends the switch and the hour", async () => {
+    open();
+    const switched = screen.getByRole("checkbox", { name: "Tidy memory overnight" });
+    const hour = screen.getByRole("combobox", { name: "Hour" }) as HTMLSelectElement;
+    expect((switched as HTMLInputElement).checked).toBe(false);
+    expect(hour.value).toBe("3");
+
+    fireEvent.click(switched);
+    fireEvent.change(hour, { target: { value: "4" } });
+    expect((await save()).tidy).toEqual({ on: true, hour: 4 });
+  });
+
+  it("keeps a group's hour while the switch is off", async () => {
+    open(aGroup({ id: KITCHEN, name: "Kitchen", tidy: { on: true, hour: 22 } }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Tidy memory overnight" }));
+    expect((await save()).tidy).toEqual({ on: false, hour: 22 });
+  });
+
+  it("draws each hour as a routine's time is drawn", () => {
+    open();
+    const hour = screen.getByRole("combobox", { name: "Hour" }) as HTMLSelectElement;
+    expect(hour.options).toHaveLength(24);
+    expect(hour.options[3]!.textContent).toBe(clockTime(new Date(2000, 0, 1, 3).getTime()));
+  });
 });

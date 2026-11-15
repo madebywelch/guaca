@@ -410,3 +410,34 @@ describe("a request for permission", () => {
     expect(rows.map((row) => row.kind)).toEqual(["peers", "message", "peers"]);
   });
 });
+
+describe("an overnight tidy", () => {
+  it("is a row of its own, with the rewrite it made as the trail under it", () => {
+    const tidy = envelope({
+      from: { kind: "system" },
+      to: { kind: "agent", id: "manager" },
+      trust: "system",
+      expectsReply: false,
+      parts: [{ type: "tidy", reported: ["- 2h ago — Booked the venue."], notes: [] }],
+    });
+    const rewrite = envelope({
+      from: { kind: "agent", id: "manager" },
+      to: { kind: "system" },
+      parts: [
+        {
+          type: "toolCall",
+          name: "update_memory",
+          arguments: { content: "The venue is the Hall." },
+          outcome: { status: "ok", summary: "Saved." },
+        } as Part,
+      ],
+    });
+
+    const rows = transcriptRows([tidy, rewrite], lookups);
+    expect(rows.map((row) => row.kind)).toEqual(["message", "message"]);
+    const [line, trail] = rows as Extract<Row, { kind: "message" }>[];
+    expect(line!.message.id).toBe(tidy.id);
+    expect(line!.continued).toBe(false);
+    expect(trail!.message.parts.map((part) => part.type)).toEqual(["toolCall"]);
+  });
+});

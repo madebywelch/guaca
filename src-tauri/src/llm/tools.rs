@@ -5166,7 +5166,8 @@ mod tests {
 
     #[test]
     fn a_tidy_may_run_its_three_tools_under_any_name_and_nothing_else() {
-        let runs = |name: &str, arguments: &str| parse(&call(name, arguments)).as_ref().is_ok_and(tidies);
+        let runs =
+            |name: &str, arguments: &str| parse(&call(name, arguments)).as_ref().is_ok_and(tidies);
         assert!(runs(UPDATE_MEMORY, r#"{"content":"x"}"#));
         assert!(runs("update_notes", r#"{"content":"x"}"#), "the old name is the same tool");
         assert!(runs(NOTE_PROGRESS, r#"{"note":"x"}"#));
