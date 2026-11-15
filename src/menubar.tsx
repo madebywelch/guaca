@@ -16,6 +16,10 @@ import { useStore } from "./lib/store";
 import { adoptRemote, guardPanelHost, UNAUTHORIZED_EVENT } from "./lib/transport";
 import { errorMessage } from "./lib/types";
 
+// A test build's control channel, and nothing in any other build: Vite turns
+// the mode into a constant and the comparison folds away. See lib/probe.ts.
+if (import.meta.env.MODE === "probe") void import("./lib/probe").then((probe) => probe.install());
+
 /**
  * The panel under the menu bar icon, as a page.
  *

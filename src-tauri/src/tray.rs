@@ -504,6 +504,37 @@ impl Tray {
     }
 }
 
+/// What the probe reads and does. Only in a test build: see `probe.rs`.
+#[cfg(feature = "probe")]
+impl Tray {
+    /// The icon as it was last drawn, and where the panel stands.
+    pub fn probe_view(&self) -> crate::probe::Menubar {
+        let look = self.drawn.lock().clone().unwrap_or_else(|| Presence::default().look());
+        let panel = self.app.get_webview_window(PANEL);
+        crate::probe::Menubar {
+            glyph: format!("{:?}", look.glyph).to_lowercase(),
+            title: look.title,
+            tooltip: look.tooltip,
+            attached: self.host.lock().ready(),
+            panel_visible: panel.as_ref().is_some_and(|panel| panel.is_visible().unwrap_or(false)),
+            panel: panel.is_some(),
+        }
+    }
+
+    /// A left click on the icon, where macOS has put it: the same `toggle` a
+    /// click runs, from the same place, so the panel opens or closes exactly
+    /// as it would for a person.
+    pub fn probe_click(&self) -> Result<(), String> {
+        let rect = self
+            .icon
+            .rect()
+            .map_err(|err| err.to_string())?
+            .ok_or("the menu bar icon is not on screen")?;
+        self.toggle(rect);
+        Ok(())
+    }
+}
+
 /// The window, whatever it is called, and never the panel.
 fn main_window(app: &AppHandle) -> Option<WebviewWindow> {
     app.webview_windows().into_iter().find(|(label, _)| label != PANEL).map(|(_, window)| window)

@@ -12,6 +12,10 @@ import { Roster } from "./components/Markdown";
 import { TokenEntry } from "./components/TokenEntry";
 import { useStore } from "./lib/store";
 
+// A test build's control channel, and nothing in any other build: Vite turns
+// the mode into a constant and the comparison folds away. See lib/probe.ts.
+if (import.meta.env.MODE === "probe") void import("./lib/probe").then((probe) => probe.install());
+
 const root = document.getElementById("root");
 if (!root) throw new Error("missing #root");
 

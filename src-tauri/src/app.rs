@@ -157,7 +157,10 @@ pub fn run() {
         )
         .init();
     crate::programs::adopt_operator_path();
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(feature = "probe")]
+    let builder = crate::probe::channel::prepare(builder);
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .on_window_event(hide_rather_than_quit)
@@ -177,6 +180,8 @@ pub fn run() {
                 }
                 Err(err) => tracing::warn!(%err, "no menu bar presence this session"),
             }
+            #[cfg(feature = "probe")]
+            crate::probe::channel::start(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

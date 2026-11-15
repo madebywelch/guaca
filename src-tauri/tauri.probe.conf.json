@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Guaca Probe",
+  "identifier": "com.madebywelch.guac.probe",
+  "build": {
+    "beforeBuildCommand": "pnpm exec vite build --mode probe --outDir src-tauri/target/probe/dist --emptyOutDir",
+    "frontendDist": "target/probe/dist"
+  }
+}
