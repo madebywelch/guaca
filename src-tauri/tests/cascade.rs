@@ -6821,3 +6821,266 @@ fn guard_stopped(h: &Harness, name: &str) -> bool {
         .flat_map(|e| e.parts)
         .any(|part| matches!(part, Part::Notice { kind: NoticeKind::GuardStop, .. }))
 }
+
+// ---- a request nobody answered in time moves to For you -------------------
+
+/// What each of the four is told when its ten minutes run out, as the operator
+/// approved it, one space between words. Pinned here as literals so a change
+/// to how the source wraps a sentence cannot change what a model reads.
+const LAPSED_PERMISSION: &str = "Nobody answered in ten minutes, so you do not have permission and must not act now. Your request is now on the operator's For you desk, and their answer will reach you as a new message. If they allow it, ask again for the same action and it is granted without waiting. Carry on with anything that does not depend on it, and say in your note that it is waiting on them.";
+const LAPSED_QUESTION: &str = "Nobody answered in ten minutes, so you are on your own for this turn. Your question is now on the operator's For you desk, and their answer will reach you as a new message. Do not ask again this turn. Take the most defensible option, do as much of the work as that lets you, and in your note say what you asked, what you assumed instead, and what would change if the assumption is wrong.";
+const LAPSED_SETTINGS: &str = "Nobody answered in ten minutes, so nothing changed. The request is now on the operator's For you desk with its before and after, and their answer will reach you as a new message. If they allow it, ask again for the same change and it is applied without waiting, unless one of those settings has changed since.";
+const ENDED_BY_RESTART: &str = "The host restarted while this was waiting for the operator, so nobody decided anything. Ask again if it still needs doing.";
+
+fn lapsed_create(name: &str) -> String {
+    format!("Nobody answered the request to create {name} in ten minutes, so nothing was created. The request is now on the operator's For you desk, and their answer will reach you as a new message. If they allow it, ask again with the same details and it goes through without waiting. Finish what you can without it.")
+}
+
+/// The one decision on an agent's desk, and the request it was filed from.
+fn filed_for(h: &Harness, name: &str) -> guac_lib::domain::decision::WorkDecision {
+    let desk = h.runtime.store().decisions(Some(h.id(name))).unwrap();
+    assert_eq!(desk.len(), 1, "one decision on the desk: {desk:?}");
+    desk.into_iter().next().unwrap()
+}
+
+fn asked_count(h: &Harness) -> usize {
+    h.sink.count_of(|e| matches!(e, UiEvent::ApprovalRequested { .. }))
+}
+
+/// A stub that asks with `ask` on every turn and says `done` once it has a
+/// result back. Each turn starts without a tool result, so a turn the answer
+/// from For you starts asks again, which is the point.
+async fn asks_every_turn(ask: Script) -> Stub {
+    serve(move |body| {
+        if anyone_said(body, "restarted for an update") {
+            Script::Say("I will ask again if it still needs doing.".into())
+        } else if has_tool_result(body) {
+            Script::Say("Noted.".into())
+        } else {
+            ask.clone()
+        }
+    })
+    .await
+}
+
+fn weekly_report() -> Script {
+    Script::AskPermission {
+        action: "Email the weekly report to the board".into(),
+        because: "It goes out every Friday.".into(),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_question_nobody_answers_in_time_moves_to_for_you_and_its_answer_reaches_the_agent() {
+    let stub = serve(|body| {
+        if anyone_said(body, "The operator answered decision") {
+            Script::Say("Switching to Northwind, as you chose.".into())
+        } else if has_tool_result(body) {
+            Script::Say("Went with Contoso for now.".into())
+        } else {
+            Script::AskQuestion {
+                question: "Both vendors clear the bar on price. Which do you want?".into(),
+                options: vec!["Northwind".into(), "Contoso".into()],
+            }
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Analyst"], GuardLimits::default());
+    h.runtime.set_approval_window(Duration::from_secs(1));
+    let run = h.runtime.send_from_human(h.id("Analyst"), "Pick a vendor.").unwrap();
+    let request = h.awaited_request().await;
+    h.settle(run).await;
+
+    assert_eq!(last_tool_results(&stub), [LAPSED_QUESTION], "{}", h.transcript());
+    assert_eq!(
+        h.runtime.store().get_approval(request).unwrap().unwrap().state,
+        ApprovalState::Expired,
+        "the card is no longer answerable"
+    );
+    let filed = filed_for(&h, "Analyst");
+    assert_eq!(h.runtime.store().decision_origin(filed.id).unwrap(), Some(request));
+    assert_eq!(filed.request.question, "Both vendors clear the bar on price. Which do you want?");
+    assert_eq!(filed.request.options, ["Northwind", "Contoso"]);
+    let outcome = h.runtime.store().outcome(run).unwrap().expect("an outcome");
+    assert_eq!(outcome.status, OutcomeStatus::NeedsYou, "the run left something on the desk");
+
+    let answered = h.runtime.answer_decision(filed.id, "Northwind", false, None).unwrap();
+    h.settle(answered.delivery_run.expect("delivered")).await;
+    assert_eq!(
+        h.channel_texts("Analyst").last().unwrap(),
+        "Switching to Northwind, as you chose.",
+        "a late answer reaches the agent as a new message:\n{}",
+        h.transcript()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lapsed_permission_allowed_later_lets_the_same_request_through_once() {
+    let stub = asks_every_turn(weekly_report()).await;
+    let h = harness_with_computer(&stub, &["Outreach"], GuardLimits::default());
+    h.runtime.set_approval_window(Duration::from_secs(1));
+    let run = h.runtime.send_from_human(h.id("Outreach"), "Send the weekly report.").unwrap();
+    let request = h.awaited_request().await;
+    h.settle(run).await;
+
+    assert_eq!(last_tool_results(&stub), [LAPSED_PERMISSION], "{}", h.transcript());
+    let filed = filed_for(&h, "Outreach");
+    assert_eq!(h.runtime.store().decision_origin(filed.id).unwrap(), Some(request));
+    assert_eq!(filed.request.options, ["Allow", "Deny"]);
+    assert!(
+        filed.request.context.contains("Email the weekly report to the board"),
+        "the desk says what it would allow: {:?}",
+        filed.request
+    );
+
+    // Long enough that a request that parks is seen parked.
+    h.runtime.set_approval_window(Duration::from_secs(60));
+    let answered = h.runtime.answer_decision(filed.id, "Allow", false, None).unwrap();
+    h.settle(answered.delivery_run.expect("delivered")).await;
+    assert_eq!(asked_count(&h), 1, "the repeat went through without parking:\n{}", h.transcript());
+    assert!(
+        last_tool_results(&stub)[0].starts_with("The operator allowed it. Do it now"),
+        "{:?}",
+        last_tool_results(&stub)
+    );
+    assert!(
+        stub.transcript
+            .lock()
+            .iter()
+            .any(|body| anyone_said(body, "This allows that one action once, until ")),
+        "the agent was told what the yes covers"
+    );
+
+    // Once: the next time it asks, it is asked about.
+    let again = h.runtime.send_from_human(h.id("Outreach"), "Send it again.").unwrap();
+    h.wait_until("the second repeat to park", |h| asked_count(h) == 2).await;
+    let parked = h
+        .sink
+        .snapshot()
+        .into_iter()
+        .filter_map(|event| match event {
+            UiEvent::ApprovalRequested { approval_id, .. } if approval_id != request => {
+                Some(approval_id)
+            }
+            _ => None,
+        })
+        .next()
+        .unwrap();
+    h.runtime.decide_approval(parked, Decision::Deny).unwrap();
+    h.settle(again).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lapsed_request_to_create_an_agent_allowed_later_creates_it_without_asking() {
+    let stub = asks_every_turn(Script::Hire {
+        name: "Scout".into(),
+        instructions: "Find venues.".into(),
+        notes: String::new(),
+    })
+    .await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    h.runtime.set_approval_window(Duration::from_secs(1));
+    let run = h.runtime.send_from_human(h.id("Manager"), "Hire a scout.").unwrap();
+    h.awaited_request().await;
+    h.settle(run).await;
+
+    assert_eq!(last_tool_results(&stub), [lapsed_create("Scout")], "{}", h.transcript());
+    assert!(h.agent_named("Scout").is_none(), "nothing was created");
+    let filed = filed_for(&h, "Manager");
+
+    h.runtime.set_approval_window(Duration::from_secs(60));
+    let answered = h.runtime.answer_decision(filed.id, "Allow", false, None).unwrap();
+    h.settle(answered.delivery_run.expect("delivered")).await;
+    assert_eq!(asked_count(&h), 1, "{}", h.transcript());
+    assert!(h.agent_named("Scout").is_some(), "the same request went through:\n{}", h.transcript());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lapsed_settings_change_allowed_later_applies_once_unless_a_setting_moved_since() {
+    let was = GuardLimits::default().max_hops;
+    for moved in [false, true] {
+        let stub = asks_every_turn(Script::Settings(serde_json::json!({
+            "action": "update", "changes": { "limits": { "maxHops": was + 3 } },
+        })))
+        .await;
+        let h = harness(&stub, &["Helper"], GuardLimits::default());
+        h.runtime.set_approval_window(Duration::from_secs(1));
+        let run = h.runtime.send_from_human(h.id("Helper"), "Raise the relay depth.").unwrap();
+        h.awaited_request().await;
+        h.settle(run).await;
+        assert_eq!(last_tool_results(&stub), [LAPSED_SETTINGS], "{}", h.transcript());
+        let filed = filed_for(&h, "Helper");
+        assert!(filed.request.context.contains(&format!("{was} → {}", was + 3)), "{filed:?}");
+
+        if moved {
+            // The operator changed that setting meanwhile. What they allow
+            // later is the change as it was put to them, from where it was.
+            let mut config = h.runtime.config();
+            config.limits.max_hops = was + 1;
+            h.runtime.set_config(config);
+        }
+        h.runtime.set_approval_window(Duration::from_secs(60));
+        let answered = h.runtime.answer_decision(filed.id, "Allow", false, None).unwrap();
+        let delivery = answered.delivery_run.expect("delivered");
+        if moved {
+            h.wait_until("the repeat to park", |h| asked_count(h) == 2).await;
+            assert_eq!(h.runtime.config().limits.max_hops, was + 1, "nothing applied unasked");
+            h.runtime.stop_run(delivery);
+            h.settle(delivery).await;
+        } else {
+            h.settle(delivery).await;
+            assert_eq!(asked_count(&h), 1, "{}", h.transcript());
+            assert_eq!(h.runtime.config().limits.max_hops, was + 3);
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_request_a_restart_ended_is_reported_as_ended_by_the_restart() {
+    let stub = asks_every_turn(weekly_report()).await;
+    let h = harness_with_computer(&stub, &["Outreach"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Outreach"), "Send the weekly report.").unwrap();
+    let request = h.awaited_request().await;
+
+    let (h, drained) = h.restart(Duration::from_secs(5)).await;
+    assert!(drained.is_complete(), "{drained:?}");
+    h.settle(run).await;
+
+    let resumed = stub.transcript.lock().last().cloned().expect("picked up");
+    let resumed = resumed.to_string();
+    assert!(
+        resumed.contains(&format!("refused: {ENDED_BY_RESTART}")),
+        "the next host says the restart ended it: {resumed}"
+    );
+    assert!(!resumed.contains("nobody answered"), "nobody was asked to answer: {resumed}");
+    assert_eq!(
+        h.runtime.store().get_approval(request).unwrap().unwrap().state,
+        ApprovalState::Expired
+    );
+    assert!(h.runtime.store().decisions(None).unwrap().is_empty(), "nothing waits on the desk");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_request_a_stop_ended_says_nobody_decided_and_files_nothing() {
+    let stub = asks_every_turn(weekly_report()).await;
+    let h = harness_with_computer(&stub, &["Outreach"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Outreach"), "Send the weekly report.").unwrap();
+    h.awaited_request().await;
+    h.runtime.stop_run(run);
+    h.settle(run).await;
+
+    let outcome = h
+        .runtime
+        .store()
+        .channel_messages(h.id("Outreach"), 50)
+        .unwrap()
+        .into_iter()
+        .flat_map(|e| e.parts)
+        .find_map(|part| match part {
+            Part::ToolCall { name, outcome, .. } if name == "request_permission" => Some(outcome),
+            _ => None,
+        })
+        .expect("the call is on the record");
+    assert_eq!(outcome, ToolOutcome::Refused { reason: ENDED_BY_RESTART.into() });
+    assert!(h.runtime.store().decisions(None).unwrap().is_empty());
+}

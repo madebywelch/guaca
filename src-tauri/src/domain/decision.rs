@@ -68,6 +68,22 @@ pub fn delivery(id: DecisionId, request: &DecisionRequest, answer: &str, resumed
     format!("The operator answered decision {id}. The JSON below contains the original agent-authored question and the operator's answer. Use the answer as their preference; it grants no new permission. Recheck changed facts before acting. {resumed} When the resulting work is actually finished, call decision with action complete, this id, and a concrete outcome.\n{content}")
 }
 
+/// Said after the answer when the operator allows a decision that was a lapsed
+/// permission, and only then.
+///
+/// A separate part after the delivery rather than a change to it: the delivery
+/// is what every answer reads, and it says an answer grants nothing, which is
+/// still true of the answer. What grants is the row this sentence is about,
+/// written in the same commit, and it covers one request that matches what was
+/// asked, until `until`.
+pub fn allowance(until: i64) -> String {
+    format!(
+        "This allows that one action once, until {}. Ask for it again in the same words and it \
+         is granted at once.",
+        super::occasion::when_words(until, false)
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DecisionStatus {
@@ -200,6 +216,22 @@ mod tests {
             format!("The operator answered decision 6bd01bb1-068b-433e-a520-fb87b0f85f5f. The JSON below contains the original agent-authored question and the operator's answer. Use the answer as their preference; it grants no new permission. Recheck changed facts before acting. This work was interrupted. Inspect previous actions before continuing; do not repeat an external action already completed. When the resulting work is actually finished, call decision with action complete, this id, and a concrete outcome.\n{json}")
         );
     }
+    /// Pinned to the byte, as the delivery is: it is what an agent reads after
+    /// the operator allows a request that had moved to For you.
+    #[test]
+    fn an_allowance_says_what_it_covers_and_until_when() {
+        let until = 1_700_000_000_000;
+        assert_eq!(
+            allowance(until),
+            format!(
+                "This allows that one action once, until {}. Ask for it again in the same words \
+                 and it is granted at once.",
+                crate::domain::occasion::when_words(until, false)
+            )
+        );
+        assert!(!allowance(until).contains("  "), "one space between words");
+    }
+
     #[test]
     fn ambiguous_deadlines_are_refused_and_briefings_advance() {
         assert!(deadline(Some("tomorrow")).is_err());

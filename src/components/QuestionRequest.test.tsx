@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../lib/store";
-import type { AgentCard, ApprovalState, Envelope, Part } from "../lib/types";
+import type { AgentCard, ApprovalState, Envelope, Part, WorkDecision } from "../lib/types";
 import { MessageItem } from "./MessageItem";
 
 const answerQuestion = vi.fn<(id: string, answer: string) => Promise<unknown>>();
@@ -75,6 +75,27 @@ function asked(part: QuestionPart): Envelope {
   };
 }
 
+/** The decision a lapse files in For you, under the request's own id. */
+function filedFor(id: string): WorkDecision {
+  return {
+    id: "d1",
+    agentId: ANALYST.id,
+    groupId: "g1",
+    topic: `approval:${id}`,
+    request: { question: "", context: "", recommendation: "", options: [], source: "" },
+    status: "pending",
+    answer: null,
+    outcome: null,
+    createdAt: 0,
+    updatedAt: 0,
+    dueAt: null,
+    remindAt: 0,
+    snoozedUntil: null,
+    deliveryRun: null,
+    interrupted: false,
+  };
+}
+
 function draw(
   state: ApprovalState | undefined,
   part = CHOICE,
@@ -98,6 +119,7 @@ describe("a question put to the operator", () => {
   beforeEach(() => {
     answerQuestion.mockReset();
     answerQuestion.mockResolvedValue(undefined);
+    useStore.setState({ decisions: [] });
   });
 
   it("asks the question and offers the agent's own choices", () => {
@@ -156,6 +178,25 @@ describe("a question put to the operator", () => {
     expect(screen.getByText(/went ahead without you/)).toBeTruthy();
   });
 
+  it("says a question that ran out of time is waiting in For you as well", () => {
+    // The agent did go ahead on its own assumption, and the question was filed
+    // too, so the line keeps the first fact and adds where the answer goes now.
+    useStore.setState({ decisions: [filedFor(CHOICE.id)] });
+    draw("expired");
+    expect(
+      screen.getByText(
+        "Nobody answered in ten minutes, so it went ahead without you. The question is waiting in For you.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("keeps today's line for a question a restart ended, which filed nothing", () => {
+    useStore.setState({ decisions: [filedFor("another")] });
+    draw("expired");
+    expect(screen.getByText("Nobody answered, so it went ahead without you.")).toBeTruthy();
+    expect(screen.queryByText(/waiting in For you/)).toBeNull();
+  });
+
   it("is not live at all for a question older than the window the store loads", () => {
     draw(undefined);
     expect(screen.queryByRole("button", { name: "Northwind" })).toBeNull();
@@ -166,6 +207,7 @@ describe("a question that has been answered", () => {
   beforeEach(() => {
     answerQuestion.mockReset();
     answerQuestion.mockResolvedValue(undefined);
+    useStore.setState({ decisions: [] });
   });
 
   // What the channel is for. The answer reached the agent either way; what was

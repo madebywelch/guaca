@@ -13,7 +13,9 @@
 //! a quoted detail field, under a heading the runtime wrote.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
+use super::decision::DecisionRequest;
 use super::ids::{AgentId, ApprovalId, GroupId, RunId};
 
 /// What an agent has stopped mid-turn to put to the operator.
@@ -182,7 +184,9 @@ pub enum ApprovalState {
     Answered,
     /// Nobody answered in time, or the app restarted while it was waiting. A
     /// request that outlives the turn it belongs to can never be granted: the
-    /// agent it would have unblocked is gone.
+    /// agent it would have unblocked is gone. One that ran out of time is
+    /// filed as a decision in the same commit, which is where a late answer
+    /// goes instead: see [`Approval::as_decision`].
     Expired,
 }
 
@@ -263,6 +267,83 @@ pub struct Approval {
     pub decided_at: Option<i64>,
 }
 
+/// What the operator picks to let a lapsed permission through, and to refuse
+/// it. Exactly these, because the answer is compared with them: a decision's
+/// answer is text, and only this one grants.
+pub const ALLOW: &str = "Allow";
+pub const DENY: &str = "Deny";
+
+/// How long an Allow given on a lapsed permission waits to be used.
+///
+/// A day, because the request lapsed while nobody was there, and the operator
+/// who answers it tomorrow morning is answering for work the agent picks up
+/// again whenever it next runs. Longer and the yes outlives what it was about.
+pub const GRANT_LIFETIME_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// What a one-time grant is bound to: the action, and what the agent said it
+/// would do, as Guaca recorded it before asking.
+///
+/// Hashed rather than stored, because nothing reads it back except to compare
+/// it with the next request, and the words it is made of are already on the
+/// approvals row. `what` is built by the caller from the declared facts, so
+/// what counts as "the same action" is decided once per action, where its
+/// facts are known: the recipients and amount of a send, the details of a new
+/// agent, each setting with its before and after. A settings grant therefore
+/// stops matching the moment any setting in it changes, because its "before"
+/// is part of what was allowed.
+pub fn fingerprint(action: ProtectedAction, what: &serde_json::Value) -> String {
+    format!("{:x}", Sha256::digest(format!("{}\n{what}", action.as_str()).as_bytes()))
+}
+
+impl Approval {
+    /// The same request, as a decision the operator can answer later.
+    ///
+    /// What a request becomes when nobody answers it in time. The question is
+    /// the one on the card: Guaca's own sentence for a permission, the agent's
+    /// for a question. A permission's details become the context, one per
+    /// line, as the card drew them. The choices are Allow and Deny, or the
+    /// question's own, and a question that took a written answer still does.
+    /// Cut to what a decision holds rather than refused: the request was valid
+    /// when it was asked, and a long one losing its tail is better than one
+    /// that never reaches the desk.
+    pub fn as_decision(&self) -> DecisionRequest {
+        let (question, cut) = super::cut_to(&self.summary, 300);
+        let context = if self.detail.is_empty() && cut {
+            super::cut_to(&self.summary, 1200).0
+        } else {
+            let lines: Vec<String> = self
+                .detail
+                .iter()
+                .map(|field| format!("{}: {}", field.label.trim(), field.value.trim()))
+                .collect();
+            super::cut_to(&lines.join("\n"), 1200).0
+        };
+        let options = match &self.request {
+            Request::Permission { .. } => vec![ALLOW.to_string(), DENY.to_string()],
+            Request::Question { options } => {
+                let mut kept: Vec<String> = Vec::new();
+                for option in options {
+                    let (option, _) = super::cut_to(option, 120);
+                    if !option.is_empty() && !kept.contains(&option) && kept.len() < 6 {
+                        kept.push(option);
+                    }
+                }
+                if kept.len() < 2 {
+                    kept.clear();
+                }
+                kept
+            }
+        };
+        DecisionRequest {
+            question,
+            context,
+            recommendation: String::new(),
+            options,
+            source: String::new(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,6 +375,64 @@ mod tests {
         // denied would silently drop one. Neither is a guess worth making.
         assert_eq!(ApprovalState::parse("maybe"), None);
         assert_eq!(ProtectedAction::parse("delete_everything"), None);
+    }
+
+    #[test]
+    fn a_fingerprint_is_the_action_and_exactly_what_was_asked() {
+        let what = serde_json::json!({"action": "Send the weekly report", "recipients": ["a@b.c"]});
+        let same = serde_json::json!({"action": "Send the weekly report", "recipients": ["a@b.c"]});
+        let other =
+            serde_json::json!({"action": "Send the weekly report", "recipients": ["x@b.c"]});
+        let act = ProtectedAction::ActOnBehalf;
+        assert_eq!(fingerprint(act, &what), fingerprint(act, &same));
+        assert_ne!(fingerprint(act, &what), fingerprint(act, &other));
+        assert_ne!(fingerprint(act, &what), fingerprint(ProtectedAction::CreateAgent, &what));
+    }
+
+    #[test]
+    fn a_request_becomes_a_decision_the_desk_can_hold() {
+        let request = |request: Request, summary: String, detail: Vec<DetailField>| Approval {
+            id: ApprovalId::new(),
+            agent_id: AgentId::new(),
+            group_id: GroupId::new(),
+            run_id: RunId::new(),
+            request,
+            summary,
+            detail,
+            state: ApprovalState::Pending,
+            answer: None,
+            created_at: 0,
+            decided_at: None,
+        };
+        let permission = request(
+            Request::Permission { action: ProtectedAction::ChangeSettings },
+            "Helper wants to change the workspace's settings".into(),
+            vec![DetailField::new("Relay depth", "8 → 12"), DetailField::new("Timeout", "60 → 90")],
+        )
+        .as_decision();
+        assert_eq!(permission.question, "Helper wants to change the workspace's settings");
+        assert_eq!(permission.context, "Relay depth: 8 → 12\nTimeout: 60 → 90");
+        assert_eq!(permission.options, [ALLOW, DENY]);
+        assert!(permission.clone().validate().is_ok());
+
+        // A long question keeps its whole text behind the cut one, and a
+        // question that took a written answer still takes one.
+        let long = "Which of these? ".repeat(40);
+        let question =
+            request(Request::Question { options: vec![] }, long.clone(), vec![]).as_decision();
+        assert!(question.question.chars().count() <= 300);
+        assert!(question.context.starts_with(long.trim().get(..400).unwrap()));
+        assert!(question.options.is_empty());
+        assert!(question.validate().is_ok());
+
+        let repeated = request(
+            Request::Question { options: vec!["A".into(), "A".into()] },
+            "Which?".into(),
+            vec![],
+        )
+        .as_decision();
+        assert!(repeated.options.is_empty(), "one distinct choice is not a choice");
+        assert!(repeated.validate().is_ok());
     }
 
     #[test]

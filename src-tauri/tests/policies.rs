@@ -6,6 +6,7 @@ use guac_lib::domain::approval::{
     ApprovalState, Decision as ApprovalDecision, ProtectedAction, Request as ApprovalRequest,
 };
 use guac_lib::domain::ids::RunId;
+use guac_lib::domain::now_ms;
 use guac_lib::domain::policy::{Class, Condition, Effect, Field, Predicate, RuleDraft};
 use guac_lib::runtime::events::UiEvent;
 use guac_lib::runtime::guard::GuardLimits;
@@ -195,4 +196,92 @@ async fn outside_domain_and_greater_than_block_allow_and_ask() {
         )
         .await;
     }
+}
+
+/// Lapses one request to act in the operator's name into For you, and allows
+/// it there after `rule` is written, so the turn the answer starts makes the
+/// same request again with a grant in hand.
+async fn allowed_after_a_lapse(
+    arguments: Value,
+    rule: RuleDraft,
+) -> (Stub, Harness, String, RunId) {
+    let stub = serve(move |body| {
+        if has_tool_result(body) {
+            Script::Say("Done".into())
+        } else {
+            request(arguments.clone())
+        }
+    })
+    .await;
+    let h = harness_with_computer(&stub, &["Sender"], GuardLimits::default());
+    h.runtime.set_approval_window(Duration::from_secs(1));
+    let first = h.runtime.send_from_human(h.id("Sender"), "Send it").unwrap();
+    h.awaited_request().await;
+    h.settle(first).await;
+    let filed = h.runtime.store().decisions(Some(h.id("Sender"))).unwrap().remove(0);
+    let fingerprint: String = h
+        .runtime
+        .store()
+        .conn()
+        .unwrap()
+        .query_row(
+            "SELECT fingerprint FROM permission_grants WHERE decision_id=?1",
+            [filed.id.to_string()],
+            |r| r.get(0),
+        )
+        .unwrap();
+
+    h.runtime.store().create_policy(rule).unwrap();
+    h.runtime.set_approval_window(Duration::from_secs(60));
+    let answered = h.runtime.answer_decision(filed.id, "Allow", false, None).unwrap();
+    (stub, h, fingerprint, answered.delivery_run.expect("delivered"))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_block_rule_beats_an_allow_given_on_for_you() {
+    // The grant is the operator's yes to one action. A rule is the operator's
+    // standing no, and it was written for exactly the case where they are not
+    // there to look: it wins, and the grant is left for nothing to spend.
+    let block = policy(
+        Effect::Block,
+        vec![Condition {
+            field: Field::Recipients,
+            predicate: Predicate::OutsideDomain { value: "example.com".into() },
+        }],
+    );
+    let (stub, h, fingerprint, delivery) = allowed_after_a_lapse(
+        json!({"action":"Send the message", "because":"Requested", "to":["a@evil.com"]}),
+        block,
+    )
+    .await;
+    h.settle(delivery).await;
+    assert_eq!(h.sink.count_of(|e| matches!(e, UiEvent::ApprovalRequested { .. })), 1);
+    let told = last_tool_results(&stub).join("\n");
+    assert!(told.starts_with("Refused: the operator's rules never allow this"), "{told}");
+    assert!(
+        h.runtime.store().take_grant(h.id("Sender"), &fingerprint, now_ms()).unwrap(),
+        "the block refused it without spending the grant"
+    );
+
+    // And a block that might apply, with its fact missing, asks rather than
+    // reading the grant, as it does with a standing one.
+    let unsure = policy(
+        Effect::Block,
+        vec![Condition {
+            field: Field::Amount,
+            predicate: Predicate::GreaterThan { value: "50".into(), currency: "USD".into() },
+        }],
+    );
+    let (_stub, h, fingerprint, delivery) = allowed_after_a_lapse(
+        json!({"action":"Pay the invoice", "because":"Requested", "amount":"51", "currency":"EUR"}),
+        unsure,
+    )
+    .await;
+    h.wait_until("the repeat to park despite the grant", |h| {
+        h.sink.count_of(|e| matches!(e, UiEvent::ApprovalRequested { .. })) == 2
+    })
+    .await;
+    h.runtime.stop_run(delivery);
+    h.settle(delivery).await;
+    assert!(h.runtime.store().take_grant(h.id("Sender"), &fingerprint, now_ms()).unwrap());
 }
