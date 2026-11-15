@@ -2451,10 +2451,9 @@ impl AppState {
 
 /// Sends files from this machine's disk to a workspace somewhere else.
 ///
-/// A file dropped on the desktop window is a path on this disk that the host,
-/// local container or remote box, has never seen. So it is read here and the
-/// bytes go to the host's upload route, one file at a time, with the host's
-/// own sentence for each one it refuses. A document never enters the renderer.
+/// Refused on every running host (`Absent::LocalFiles`): a host never has the
+/// operator's disk. The desktop app's own `forward_files` in `app.rs` calls
+/// [`upload_local_files`] directly.
 pub async fn forward_files(
     state: &AppState,
     origin: String,
@@ -2466,6 +2465,10 @@ pub async fn forward_files(
     upload_local_files(origin, token, paths).await
 }
 
+/// A file dropped on the desktop window is a path on this disk that the host,
+/// local container or remote box, has never seen. So it is read here and the
+/// bytes go to the host's upload route, one file at a time, with the host's
+/// own sentence for each one it refuses. A document never enters the renderer.
 pub async fn upload_local_files(
     origin: String,
     token: String,
@@ -2634,6 +2637,10 @@ pub async fn send_message(
 /// not for a conversation about where to put it. The path goes back so the app
 /// can say where to look, since a copy that lands somewhere unannounced is a
 /// copy they have to go and find.
+///
+/// Refused on every running host (`Absent::LocalFiles`), which has no
+/// downloads folder anybody could open; the desktop app's own `download_file`
+/// in `app.rs` saves to the operator's.
 pub async fn save_file(state: &AppState, digest: String, name: String) -> Reply<String> {
     state.deployment.capabilities().require(Absent::LocalFiles)?;
 
