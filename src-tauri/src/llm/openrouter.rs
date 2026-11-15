@@ -25,7 +25,7 @@ use crate::subscription::Subscription;
 #[serde(tag = "role", rename_all = "lowercase")]
 pub enum ChatMessage {
     System {
-        content: String,
+        content: SystemPrompt,
     },
     User {
         content: UserContent,
@@ -84,7 +84,7 @@ impl ChatMessage {
         }
     }
 
-    pub fn system(content: impl Into<String>) -> Self {
+    pub fn system(content: impl Into<SystemPrompt>) -> Self {
         ChatMessage::System { content: content.into() }
     }
 
@@ -94,6 +94,103 @@ impl ChatMessage {
 
     pub fn assistant(content: impl Into<String>) -> Self {
         ChatMessage::Assistant { content: Some(content.into()), tool_calls: Vec::new() }
+    }
+}
+
+/// What a turn is told before anything is said to it, in the two parts a
+/// provider's cache cares about.
+///
+/// A provider reuses a prompt it has seen only up to the first byte that
+/// differs, so the part that is the same on every turn of one agent comes
+/// first and the part that moves comes after it. Kept as one string with the
+/// boundary in it, because every reader that is not a transport wants the
+/// whole text, and two strings would make each of them join them.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SystemPrompt {
+    text: String,
+    /// Where the stable part ends, in bytes. Always on a character boundary:
+    /// it only ever moves by the length of whole strings put in front of it.
+    stable: usize,
+    /// Whose prompt this is. Sent as the provider's cache or routing key, so
+    /// the turns of one agent reach the machine that already holds its prefix.
+    owner: Option<String>,
+}
+
+impl SystemPrompt {
+    pub fn new(stable: String, volatile: &str, owner: Option<String>) -> Self {
+        let at = stable.len();
+        let mut text = stable;
+        text.push_str(volatile);
+        Self { text, stable: at, owner }
+    }
+
+    /// The part that is the same from one turn to the next.
+    pub fn stable(&self) -> &str {
+        &self.text[..self.stable]
+    }
+
+    /// The part that is not.
+    pub fn volatile(&self) -> &str {
+        &self.text[self.stable..]
+    }
+
+    pub fn owner(&self) -> Option<&str> {
+        self.owner.as_deref()
+    }
+
+    /// Adds to the end of the stable part, in front of everything that moves.
+    pub fn extend_stable(&mut self, more: &str) {
+        self.text.insert_str(self.stable, more);
+        self.stable += more.len();
+    }
+
+    /// Edits the part that moves, and only that part.
+    pub fn edit_volatile(&mut self, edit: impl FnOnce(&mut String)) {
+        let mut volatile = self.text.split_off(self.stable);
+        edit(&mut volatile);
+        self.text.push_str(&volatile);
+    }
+}
+
+impl std::fmt::Display for SystemPrompt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
+impl std::ops::Deref for SystemPrompt {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.text
+    }
+}
+
+/// A prompt with nothing known about which part of it moves is all stable,
+/// which is true of every one-off system message this app writes.
+impl From<String> for SystemPrompt {
+    fn from(text: String) -> Self {
+        Self { stable: text.len(), text, owner: None }
+    }
+}
+
+impl From<&str> for SystemPrompt {
+    fn from(text: &str) -> Self {
+        text.to_string().into()
+    }
+}
+
+/// On the wire it is one string, as it always was. Only a transport that has a
+/// use for the boundary reads it, and it does so on purpose.
+impl Serialize for SystemPrompt {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.text)
+    }
+}
+
+impl<'de> Deserialize<'de> for SystemPrompt {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(String::deserialize(deserializer)?.into())
     }
 }
 
@@ -158,7 +255,15 @@ pub struct ChatRequest {
 #[derive(Serialize)]
 struct WireRequest<'a> {
     model: &'a str,
-    messages: &'a [ChatMessage],
+    messages: WireMessages<'a>,
+    /// OpenRouter's sticky-routing key: requests carrying the same one go to
+    /// the same provider, which is the one holding this agent's cached prefix.
+    /// Without it OpenRouter keys a conversation on its first system and first
+    /// user message, and the first user message of a turn is whatever arrived.
+    /// Sent only to OpenRouter, because another endpoint is free to refuse a
+    /// field it does not know, and OpenAI does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_id: Option<&'a str>,
     #[serde(skip_serializing_if = "<[ToolSpec]>::is_empty")]
     tools: &'a [ToolSpec],
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -179,6 +284,93 @@ struct WireRequest<'a> {
 #[derive(Serialize)]
 struct StreamOptions {
     include_usage: bool,
+}
+
+/// The conversation as chat completions takes it, with one difference for a
+/// model that caches only what it is told to.
+///
+/// Anthropic's models reuse nothing unless a block says where the reusable
+/// part ends, so for them the system message is sent as two text parts and
+/// the stable one carries `cache_control`. Every other model caches a prefix
+/// by itself, and gets the plain string it always got: the same bytes, and
+/// nothing a local server has to understand.
+struct WireMessages<'a> {
+    messages: &'a [ChatMessage],
+    mark_stable: bool,
+}
+
+impl Serialize for WireMessages<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+
+        #[derive(Serialize)]
+        struct Part<'a> {
+            #[serde(rename = "type")]
+            kind: &'static str,
+            text: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            cache_control: Option<serde_json::Value>,
+        }
+        #[derive(Serialize)]
+        struct System<'a> {
+            role: &'static str,
+            content: Vec<Part<'a>>,
+        }
+
+        let mut seq = serializer.serialize_seq(Some(self.messages.len()))?;
+        for message in self.messages {
+            match message {
+                ChatMessage::System { content }
+                    if self.mark_stable && !content.stable().is_empty() =>
+                {
+                    let mut parts = vec![Part {
+                        kind: "text",
+                        text: content.stable(),
+                        cache_control: Some(serde_json::json!({ "type": "ephemeral" })),
+                    }];
+                    if !content.volatile().is_empty() {
+                        parts.push(Part {
+                            kind: "text",
+                            text: content.volatile(),
+                            cache_control: None,
+                        });
+                    }
+                    seq.serialize_element(&System { role: "system", content: parts })?;
+                }
+                other => seq.serialize_element(other)?,
+            }
+        }
+        seq.end()
+    }
+}
+
+/// The body of a chat completions call, apart from the call so what is sent
+/// can be read without an endpoint that would have to be OpenRouter's.
+fn wire<'a>(cfg: &InferenceConfig, request: &'a ChatRequest) -> WireRequest<'a> {
+    let openrouter = reqwest::Url::parse(&cfg.base_url)
+        .is_ok_and(|url| url.origin().ascii_serialization() == "https://openrouter.ai");
+    let owner = request.messages.iter().find_map(|message| match message {
+        ChatMessage::System { content } => content.owner(),
+        _ => None,
+    });
+    WireRequest {
+        model: &request.model,
+        messages: WireMessages {
+            messages: &request.messages,
+            mark_stable: caches_only_when_told(&request.model),
+        },
+        session_id: owner.filter(|_| openrouter),
+        tools: &request.tools,
+        tool_choice: if request.tools.is_empty() { None } else { Some("auto") },
+        stream: true,
+        stream_options: Some(StreamOptions { include_usage: true }),
+        temperature: request.temperature,
+    }
+}
+
+/// Whether a model is one of Anthropic's, by OpenRouter's name for it.
+fn caches_only_when_told(model: &str) -> bool {
+    model.starts_with("anthropic/")
 }
 
 // ---- response types ------------------------------------------------------
@@ -245,11 +437,28 @@ pub struct Usage {
     pub prompt_tokens: u32,
     #[serde(default)]
     pub completion_tokens: u32,
+    /// Of `prompt_tokens`, how many the provider read from its cache rather
+    /// than processing again. A share of the prompt count and never added to
+    /// it, on every provider: OpenAI and OpenRouter already report the prompt
+    /// that way, and the other two transports are made to agree.
+    #[serde(default, rename = "prompt_tokens_details", deserialize_with = "cached_of")]
+    pub cached_tokens: u32,
     /// Dollars, when the provider prices the call. OpenRouter does; an
     /// OpenAI-compatible server run locally has nothing to charge and says
     /// nothing, which is why this is optional rather than zero.
     #[serde(default)]
     pub cost: Option<f64>,
+}
+
+/// `prompt_tokens_details.cached_tokens`, which a provider may leave out, send
+/// as null, or nest an empty object for.
+fn cached_of<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    #[derive(Deserialize)]
+    struct Details {
+        #[serde(default)]
+        cached_tokens: Option<u32>,
+    }
+    Ok(Option::<Details>::deserialize(deserializer)?.and_then(|d| d.cached_tokens).unwrap_or(0))
 }
 
 impl Completion {
@@ -626,15 +835,7 @@ impl LlmClient {
         let url = cfg.chat_completions_url();
         let timeout = Duration::from_secs(cfg.request_timeout_secs.clamp(5, 900));
 
-        let body = WireRequest {
-            model: &request.model,
-            messages: &request.messages,
-            tools: &request.tools,
-            tool_choice: if request.tools.is_empty() { None } else { Some("auto") },
-            stream: true,
-            stream_options: Some(StreamOptions { include_usage: true }),
-            temperature: request.temperature,
-        };
+        let body = wire(cfg, request);
 
         let response = self
             .http
@@ -996,6 +1197,133 @@ mod tests {
             serde_json::json!(true),
             "a streamed call reports nothing at all without this: {body}"
         );
+    }
+
+    /// A turn's request as the runtime makes one: a system prompt in two parts,
+    /// owned by an agent, then what was said.
+    fn turn(model: &str) -> ChatRequest {
+        ChatRequest {
+            model: model.into(),
+            messages: vec![
+                ChatMessage::system(SystemPrompt::new(
+                    "You are Pip. The rules.".into(),
+                    "\n## Your working notes\n- a minute ago, waiting on Robert\n",
+                    Some("agent-7".into()),
+                )),
+                ChatMessage::user("[OPERATOR] hello"),
+            ],
+            tools: Vec::new(),
+            temperature: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn an_anthropic_model_is_told_where_the_reusable_part_of_the_prompt_ends() {
+        let (base, seen) = stub(|_| sse(&[&text_frame("hi"), "[DONE]"])).await;
+        let client = LlmClient::new().unwrap();
+        client.stream_chat(&cfg(base), &turn("anthropic/claude-sonnet-5.5"), |_| {}).await.unwrap();
+
+        let body = seen.lock().unwrap()[0].clone();
+        let system = &body["messages"][0];
+        assert_eq!(system["role"], "system", "{body}");
+        assert_eq!(
+            system["content"],
+            serde_json::json!([
+                {"type": "text", "text": "You are Pip. The rules.", "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": "\n## Your working notes\n- a minute ago, waiting on Robert\n"}
+            ]),
+            "the stable part carries the breakpoint and the part that moves does not: {body}"
+        );
+        assert_eq!(body["messages"][1]["content"], "[OPERATOR] hello", "{body}");
+    }
+
+    #[tokio::test]
+    async fn any_other_model_gets_the_prompt_as_one_string_with_no_cache_marker() {
+        let (base, seen) = stub(|_| sse(&[&text_frame("hi"), "[DONE]"])).await;
+        let client = LlmClient::new().unwrap();
+        client
+            .stream_chat(&cfg(base), &turn("deepseek/deepseek-v4.1-flash"), |_| {})
+            .await
+            .unwrap();
+
+        let body = seen.lock().unwrap()[0].clone();
+        assert_eq!(
+            body["messages"][0]["content"],
+            "You are Pip. The rules.\n## Your working notes\n- a minute ago, waiting on Robert\n",
+            "the same bytes as before the prompt had parts: {body}"
+        );
+        assert!(!body.to_string().contains("cache_control"), "{body}");
+        assert!(body.get("session_id").is_none(), "this stub is not OpenRouter: {body}");
+    }
+
+    #[test]
+    fn openrouter_is_given_the_agent_as_its_sticky_routing_key_and_nobody_else_is() {
+        let request = turn("anthropic/claude-sonnet-5.5");
+        let to = |base: &str| serde_json::to_value(wire(&cfg(base.into()), &request)).unwrap();
+        assert_eq!(to("https://openrouter.ai/api/v1")["session_id"], "agent-7");
+        for elsewhere in
+            ["https://api.openai.com/v1", "http://localhost:1234/v1", "http://openrouter.ai/api/v1"]
+        {
+            assert!(to(elsewhere).get("session_id").is_none(), "{elsewhere}");
+        }
+        // A one-off prompt belongs to nobody, so it routes like any request.
+        let mut anonymous = request.clone();
+        anonymous.messages[0] = ChatMessage::system("Reply with the single word: ok");
+        let body =
+            serde_json::to_value(wire(&cfg("https://openrouter.ai/api/v1".into()), &anonymous))
+                .unwrap();
+        assert!(body.get("session_id").is_none(), "{body}");
+    }
+
+    #[tokio::test]
+    async fn cached_prompt_tokens_are_read_as_a_share_of_the_prompt() {
+        let (base, _) = stub(|_| {
+            sse(&[
+                &text_frame("done"),
+                &serde_json::json!({
+                    "choices": [],
+                    "usage": {
+                        "prompt_tokens": 10339, "completion_tokens": 60, "total_tokens": 10399,
+                        "prompt_tokens_details": {"cached_tokens": 10318, "cache_write_tokens": 0}
+                    }
+                })
+                .to_string(),
+                "[DONE]",
+            ])
+        })
+        .await;
+        let client = LlmClient::new().unwrap();
+        let usage =
+            client.stream_chat(&cfg(base), &request(), |_| {}).await.unwrap().usage.unwrap();
+        assert_eq!((usage.prompt_tokens, usage.cached_tokens), (10339, 10318));
+        assert!(usage.cached_tokens <= usage.prompt_tokens);
+
+        // Absent, null and empty all mean the provider said nothing about it.
+        for details in [
+            serde_json::json!(null),
+            serde_json::json!({}),
+            serde_json::json!({"cached_tokens": null}),
+        ] {
+            let usage: Usage = serde_json::from_value(serde_json::json!({
+                "prompt_tokens": 5, "completion_tokens": 1, "prompt_tokens_details": details
+            }))
+            .unwrap();
+            assert_eq!(usage.cached_tokens, 0);
+        }
+        let usage: Usage = serde_json::from_value(serde_json::json!({"prompt_tokens": 5})).unwrap();
+        assert_eq!(usage.cached_tokens, 0);
+    }
+
+    #[test]
+    fn the_stable_part_grows_in_front_of_what_moves() {
+        let mut prompt = SystemPrompt::new("A.".into(), " moving", Some("me".into()));
+        prompt.extend_stable(" B.");
+        prompt.edit_volatile(|v| v.push_str(" more"));
+        assert_eq!((prompt.stable(), prompt.volatile()), ("A. B.", " moving more"));
+        assert_eq!(&*prompt, "A. B. moving more");
+        assert_eq!(serde_json::to_value(&prompt).unwrap(), "A. B. moving more");
+        let back: SystemPrompt = serde_json::from_value(serde_json::json!("whole")).unwrap();
+        assert_eq!((back.stable(), back.volatile(), back.owner()), ("whole", "", None));
     }
 
     #[tokio::test]

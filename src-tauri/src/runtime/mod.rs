@@ -7239,6 +7239,7 @@ impl Runtime {
             model: model.to_string(),
             prompt: usage.prompt_tokens,
             completion: usage.completion_tokens,
+            cached: usage.cached_tokens,
             cost: usage.cost,
         };
         // Accounting must never fail a turn that did real work.
@@ -7252,6 +7253,7 @@ impl Runtime {
             run_id,
             prompt: usage.prompt_tokens,
             completion: usage.completion_tokens,
+            cached: usage.cached_tokens,
             cost: usage.cost,
         });
     }

@@ -2095,6 +2095,15 @@ ALTER TABLE pending_runs ADD COLUMN started_at INTEGER;
 UPDATE pending_runs SET started_at = CAST(strftime('%s','now') AS INTEGER) * 1000;
 "#,
     ),
+    (
+        76,
+        r#"
+-- Of a call's prompt tokens, how many the provider read from its cache. A
+-- share of `prompt`, never added to it. Zero for rows written before anything
+-- read the count, which is what they would have said: nothing asked.
+ALTER TABLE usage ADD COLUMN cached INTEGER NOT NULL DEFAULT 0;
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

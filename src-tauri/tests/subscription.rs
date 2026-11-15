@@ -43,6 +43,8 @@ use harness::{draft, frame};
 
 /// What every scripted call reports having cost, in this protocol's spelling.
 const CALL_TOKENS: (u32, u32) = (120, 30);
+/// Of the input above, what the backend says it read from its cache.
+const CACHED_TOKENS: u32 = 96;
 
 /// What the stub should do for one request.
 #[derive(Debug, Clone)]
@@ -122,6 +124,7 @@ fn render(say: &Say) -> String {
             "status": "completed",
             "usage": {
                 "input_tokens": CALL_TOKENS.0,
+                "input_tokens_details": { "cached_tokens": CACHED_TOKENS },
                 "output_tokens": CALL_TOKENS.1,
                 "output_tokens_details": { "reasoning_tokens": 0 },
             },
@@ -560,6 +563,33 @@ async fn a_turn_runs_on_the_subscription_and_bills_what_it_spent() {
     assert_eq!(tokens.prompt, u64::from(CALL_TOKENS.0));
     assert_eq!(tokens.completion, u64::from(CALL_TOKENS.1));
     assert_eq!(tokens.cost, None, "a subscription reports no price");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_turn_is_keyed_to_its_agent_and_reports_what_the_cache_served() {
+    let stub = serve(|_| Say::Text("Done.".into())).await;
+    let app = signed_in(&stub, &["Manager"], "pro");
+
+    let run = app.ask("Manager", "Go.");
+    app.settle(run).await;
+
+    // The backend sends requests with one key to the machine already holding
+    // that prefix, so every turn of one agent carries the same one: its id.
+    let body = stub.bodies().first().cloned().expect("the endpoint was called");
+    assert_eq!(body["prompt_cache_key"], app.id("Manager").to_string(), "{body}");
+
+    let cached: Vec<(u32, u32)> =
+        app.sink
+            .snapshot()
+            .into_iter()
+            .filter_map(|e| match e {
+                guac_lib::runtime::events::UiEvent::TokensUsed {
+                    run_id, prompt, cached, ..
+                } if run_id == run => Some((prompt, cached)),
+                _ => None,
+            })
+            .collect();
+    assert_eq!(cached, vec![(CALL_TOKENS.0, CACHED_TOKENS)]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

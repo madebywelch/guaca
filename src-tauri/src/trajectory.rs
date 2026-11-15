@@ -710,6 +710,7 @@ mod tests {
                 run_id: run,
                 prompt: 120,
                 completion: 8,
+                cached: 0,
                 cost: None,
             },
             UiEvent::StreamEnded { message_id: message, channel_id: agent },
@@ -851,6 +852,7 @@ mod tests {
                     run_id: run,
                     prompt: 200,
                     completion: 12,
+                    cached: 0,
                     cost: None,
                 },
             );

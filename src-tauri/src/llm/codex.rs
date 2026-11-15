@@ -229,6 +229,11 @@ struct Request<'a> {
     store: bool,
     stream: bool,
     reasoning: Reasoning,
+    /// Which agent's turns these are. The backend routes requests that share a
+    /// key to the same machine, which is the one already holding that agent's
+    /// prefix; without one it guesses from the start of the prompt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_cache_key: Option<&'a str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -324,13 +329,17 @@ fn build<'a>(
 ) -> Request<'a> {
     let mut instructions: Vec<&str> = Vec::new();
     let mut input: Vec<Item> = Vec::new();
+    let mut owner = None;
 
     for message in &request.messages {
         match message {
             // Hoisted out of the conversation and joined, in order. Guaca sends
             // one system message today, but a second one appended later would
             // otherwise be silently dropped rather than appended here.
-            ChatMessage::System { content } => instructions.push(content),
+            ChatMessage::System { content } => {
+                instructions.push(content);
+                owner = owner.or(content.owner());
+            }
 
             ChatMessage::User { content } => {
                 let parts = match content {
@@ -395,6 +404,7 @@ fn build<'a>(
         store: false,
         stream: true,
         reasoning: Reasoning { summary: "auto", effort: effort.wire() },
+        prompt_cache_key: owner,
     }
 }
 
@@ -494,6 +504,16 @@ struct ResponseUsage {
     input_tokens: u32,
     #[serde(default)]
     output_tokens: u32,
+    #[serde(default)]
+    input_tokens_details: Option<InputDetails>,
+}
+
+/// Of `input_tokens`, how many came out of the cache. Already a share of the
+/// input count in this protocol, which is the reading `Usage` keeps.
+#[derive(Debug, Default, Deserialize)]
+struct InputDetails {
+    #[serde(default)]
+    cached_tokens: u32,
 }
 
 impl From<ResponseUsage> for Usage {
@@ -501,6 +521,7 @@ impl From<ResponseUsage> for Usage {
         Usage {
             prompt_tokens: counted.input_tokens,
             completion_tokens: counted.output_tokens,
+            cached_tokens: counted.input_tokens_details.map_or(0, |d| d.cached_tokens),
             // A subscription has already been paid for. Reporting zero would
             // read as a free call in the usage view; `None` reads as "not
             // priced", which is the truth and what a local model reports too.
@@ -837,6 +858,39 @@ mod tests {
     }
 
     #[test]
+    fn a_turn_names_its_agent_as_the_cache_key_and_a_one_off_call_names_nobody() {
+        use crate::llm::openrouter::SystemPrompt;
+        let request = ChatRequest {
+            model: "m".into(),
+            messages: vec![
+                ChatMessage::system(SystemPrompt::new(
+                    "You are Pip.".into(),
+                    " It is Tuesday.",
+                    Some("agent-7".into()),
+                )),
+                ChatMessage::user("hello"),
+            ],
+            tools: Vec::new(),
+            temperature: None,
+        };
+        let json = wire(&build(&request, "m", Default::default()));
+        assert_eq!(json["prompt_cache_key"], "agent-7", "{json}");
+        assert_eq!(
+            json["instructions"], "You are Pip. It is Tuesday.",
+            "one string, stable part first"
+        );
+
+        let probe = ChatRequest {
+            model: "m".into(),
+            messages: vec![ChatMessage::system("Reply with the single word: ok")],
+            tools: Vec::new(),
+            temperature: None,
+        };
+        let json = wire(&build(&probe, "m", Default::default()));
+        assert!(json.get("prompt_cache_key").is_none(), "{json}");
+    }
+
+    #[test]
     fn several_system_messages_are_joined_in_order() {
         let request = ChatRequest {
             model: "m".into(),
@@ -1120,6 +1174,22 @@ mod tests {
         // Not zero: a subscription call is not a free call, it is an unpriced
         // one, and zero would read as free in the usage view.
         assert_eq!(usage.cost, None);
+        assert_eq!(usage.cached_tokens, 0, "the frame says nothing about a cache");
+    }
+
+    #[tokio::test]
+    async fn cached_input_is_read_as_a_share_of_the_input() {
+        let (result, _) = decode(
+            &[
+                r#"data: {"type":"response.output_text.delta","delta":"Hi"}"#,
+                r#"data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":9000,"input_tokens_details":{"cached_tokens":8704},"output_tokens":3}}}"#,
+            ],
+            usize::MAX,
+        )
+        .await;
+        let usage = result.unwrap().usage.unwrap();
+        assert_eq!((usage.prompt_tokens, usage.cached_tokens), (9000, 8704));
+        assert!(usage.cached_tokens <= usage.prompt_tokens);
     }
 
     #[tokio::test]
