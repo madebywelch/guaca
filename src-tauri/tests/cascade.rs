@@ -6688,7 +6688,7 @@ use guac_lib::domain::envelope::NoticeKind;
 
 /// A request from a turn picked up after a restart, carrying what it had done.
 fn picked_up(body: &serde_json::Value) -> bool {
-    anyone_said(body, "restarted for an update partway through your turn")
+    anyone_said(body, "restarted partway through your turn")
 }
 
 fn notices_of(h: &Harness, name: &str, kind: NoticeKind) -> Vec<String> {
@@ -7475,7 +7475,7 @@ fn asked_count(h: &Harness) -> usize {
 /// from For you starts asks again, which is the point.
 async fn asks_every_turn(ask: Script) -> Stub {
     serve(move |body| {
-        if anyone_said(body, "restarted for an update") {
+        if anyone_said(body, "restarted partway") {
             Script::Say("I will ask again if it still needs doing.".into())
         } else if has_tool_result(body) {
             Script::Say("Noted.".into())

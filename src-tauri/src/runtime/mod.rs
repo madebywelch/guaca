@@ -548,6 +548,70 @@ fn policy_refusal(what: &str) -> String {
              were not asked. Do not look for another way round it, and do not hand it to a peer. \
              Say in your reply what you would have done and carry on with anything else you were given.")
 }
+
+/// What `request_permission` tells the agent, for each way the ask ended.
+fn permission_answer(permission: &Permission) -> String {
+    match permission {
+        Permission::Ruled(what) => format!("Nobody was asked: the operator's rules already cover this: {what}, so it is allowed. Do it now, in this turn, and say exactly what you did. The rule covers that and nothing else; if what you are about to do falls outside it, stop and ask."),
+        Permission::Blocked(what) => policy_refusal(what),
+        Permission::Granted => "The operator allowed it. Do it now, in this turn, and then say exactly \
+                                what you did and what came of it. This answer came from them \
+                                directly, so it is the authorization you were missing: do not ask \
+                                for it again and do not ask anybody else to confirm it."
+            .to_string(),
+        Permission::Refused => "The operator said no. Do not do it, and do not ask again for this \
+                                request. Say what you would have done so they know what was \
+                                stopped, and carry on with anything else you were given."
+            .to_string(),
+        Permission::Unanswered => "Nobody answered in ten minutes, so you do not have permission \
+                                   and must not act now. Your request is now on the operator's For \
+                                   you desk, and their answer will reach you as a new message. If \
+                                   they allow it, ask again for the same action and it is granted \
+                                   without waiting. Carry on with anything that does not depend on \
+                                   it, and say in your note that it is waiting on them."
+            .to_string(),
+        Permission::Ended => ENDED_BY_RESTART.to_string(),
+        Permission::Failed(err) => format!(
+            "The operator could not be asked ({err}), so you do not have permission and must not \
+             act. Tell them what is waiting."
+        ),
+    }
+}
+
+/// What a press or a typed line in the browser is refused with, for each way
+/// the ask ended, or None when it may go ahead. `unchecked` is a rule that
+/// needed the site's domain when none could be told, which no grant can follow.
+fn browser_answer(permission: &Permission, service: &str, unchecked: bool) -> Option<String> {
+    match permission {
+        Permission::Granted => None,
+        Permission::Blocked(what) => Some(policy_refusal(what)),
+        Permission::Ruled(_) => unreachable!("browser actions cannot be allowed by a rule"),
+        Permission::Refused => Some(format!(
+            "Refused: the operator declined to let you act on {service} in their name. Do not \
+             try another way round it. Say what you would have done and carry on with \
+             anything else you were given."
+        )),
+        Permission::Unanswered | Permission::Ended if unchecked => Some(
+            "Nobody answered, so you do not have permission and must not act. The operator \
+             is away rather than opposed. Say plainly what is waiting on them, so they can \
+             decide when they are back."
+                .to_string(),
+        ),
+        Permission::Unanswered | Permission::Ended => Some(format!(
+            "Refused: you read a page this turn and this would act on {service} as the \
+             operator, so it needed their say-so and nobody answered. They are away rather \
+             than opposed. Say plainly what is waiting on them. You can still read.",
+        )),
+        Permission::Failed(err) if unchecked => Some(format!(
+            "The operator could not be asked ({err}), so you do not have permission and \
+             must not act. Tell them what is waiting."
+        )),
+        Permission::Failed(err) => Some(format!(
+            "Refused: this would act on {service} as the operator and they could not be asked \
+             ({err}), so it must not go ahead. Tell them what is waiting. You can still read."
+        )),
+    }
+}
 use crate::db::{Store, StoreError};
 use crate::domain::agent::{
     copy_name, AgentCard, CleanDraft, Consent, DirectoryEntry, Lifecycle, COMPOST_MS,
@@ -6336,35 +6400,10 @@ impl Runtime {
             )
             .await;
 
-        match permission {
-            Permission::Granted => {
-                reading.allowed = domain;
-                None
-            }
-            Permission::Blocked(what) => Some(policy_refusal(&what)),
-            Permission::Ruled(_) => unreachable!("browser actions cannot be allowed by a rule"),
-            Permission::Refused => Some(format!(
-                "Refused: the operator declined to let you act on {service} in their name. Do not \
-                 try another way round it. Say what you would have done and carry on with \
-                 anything else you were given."
-            )),
-            Permission::Unanswered | Permission::Ended if must_ask && session.is_none() => Some(
-                "Nobody answered, so you do not have permission and must not act. The operator                  is away rather than opposed. Say plainly what is waiting on them, so they can                  decide when they are back."
-                    .to_string(),
-            ),
-            Permission::Unanswered | Permission::Ended => Some(format!(
-                "Refused: you read a page this turn and this would act on {service} as the \
-                 operator, so it needed their say-so and nobody answered. They are away rather \
-                 than opposed. Say plainly what is waiting on them. You can still read.",
-            )),
-            Permission::Failed(err) if must_ask && session.is_none() => Some(format!(
-                "The operator could not be asked ({err}), so you do not have permission and                      must not act. Tell them what is waiting."
-            )),
-            Permission::Failed(err) => Some(format!(
-                "Refused: this would act on {service} as the operator and they could not be asked \
-                 ({err}), so it must not go ahead. Tell them what is waiting. You can still read."
-            )),
+        if matches!(permission, Permission::Granted) {
+            reading.allowed = domain;
         }
+        browser_answer(&permission, &service, must_ask && session.is_none())
     }
 
     /// A tool aimed at a place this agent has not been given, or at a screen
@@ -6542,44 +6581,31 @@ impl Runtime {
             (text, Part::tool_call(tools::REQUEST_PERMISSION, arguments.clone(), status))
         };
 
+        let said = permission_answer(&permission);
         match permission {
             Permission::Ruled(what) => (
-                format!("Nobody was asked: the operator's rules already cover this — {what} — so it is allowed. Do it now, in this turn, and say exactly what you did. The rule covers that and nothing else; if what you are about to do falls outside it, stop and ask."),
-                Part::tool_call_ruled(tools::REQUEST_PERMISSION, arguments, ToolOutcome::Ok { summary: "allowed by a rule".into() }, what),
-            ),
-            Permission::Blocked(what) => {
-                let refusal = policy_refusal(&what);
-                outcome(ToolOutcome::Refused { reason: refusal.clone() }, refusal)
-            },
-            Permission::Granted => outcome(
-                ToolOutcome::Ok { summary: "the operator allowed it".to_string() },
-                "The operator allowed it. Do it now, in this turn, and then say exactly what you                  did and what came of it. This answer came from them directly, so it is the                  authorization you were missing: do not ask for it again and do not ask anybody                  else to confirm it."
-                    .to_string(),
-            ),
-            Permission::Refused => outcome(
-                ToolOutcome::Refused { reason: "the operator declined".to_string() },
-                "The operator said no. Do not do it, and do not ask again for this request. Say                  what you would have done so they know what was stopped, and carry on with                  anything else you were given."
-                    .to_string(),
-            ),
-            Permission::Unanswered => outcome(
-                ToolOutcome::Refused { reason: "nobody answered".to_string() },
-                "Nobody answered in ten minutes, so you do not have permission and must not act \
-                 now. Your request is now on the operator's For you desk, and their answer will \
-                 reach you as a new message. If they allow it, ask again for the same action and \
-                 it is granted without waiting. Carry on with anything that does not depend on \
-                 it, and say in your note that it is waiting on them."
-                    .to_string(),
-            ),
-            Permission::Ended => outcome(
-                ToolOutcome::Refused { reason: ENDED_BY_RESTART.to_string() },
-                ENDED_BY_RESTART.to_string(),
-            ),
-            Permission::Failed(err) => outcome(
-                ToolOutcome::Failed { error: err.clone() },
-                format!(
-                    "The operator could not be asked ({err}), so you do not have permission and                      must not act. Tell them what is waiting."
+                said,
+                Part::tool_call_ruled(
+                    tools::REQUEST_PERMISSION,
+                    arguments,
+                    ToolOutcome::Ok { summary: "allowed by a rule".into() },
+                    what,
                 ),
             ),
+            Permission::Blocked(_) => outcome(ToolOutcome::Refused { reason: said.clone() }, said),
+            Permission::Granted => {
+                outcome(ToolOutcome::Ok { summary: "the operator allowed it".to_string() }, said)
+            }
+            Permission::Refused => {
+                outcome(ToolOutcome::Refused { reason: "the operator declined".to_string() }, said)
+            }
+            Permission::Unanswered => {
+                outcome(ToolOutcome::Refused { reason: "nobody answered".to_string() }, said)
+            }
+            Permission::Ended => {
+                outcome(ToolOutcome::Refused { reason: ENDED_BY_RESTART.to_string() }, said)
+            }
+            Permission::Failed(error) => outcome(ToolOutcome::Failed { error }, said),
         }
     }
 
@@ -9861,6 +9887,82 @@ mod tests {
         let runtime =
             Runtime::new(store, LlmClient::new().unwrap(), config, OnDisk::under(dir.path()), sink);
         (dir, runtime)
+    }
+
+    // A sentence a model reads arrives as one line of prose. A run of spaces
+    // is a line break the source forgot to continue, and an em dash is a
+    // habit the operator reads straight through an agent that copies it.
+    fn assert_plain(text: &str) {
+        assert!(!text.contains("  "), "a run of spaces: {text:?}");
+        assert!(!text.contains('\u{2014}'), "an em dash: {text:?}");
+    }
+
+    #[test]
+    fn every_answer_to_a_permission_request_is_plain_prose() {
+        let every = [
+            Permission::Granted,
+            Permission::Ruled("sending mail to the team".into()),
+            Permission::Blocked("paying anyone".into()),
+            Permission::Refused,
+            Permission::Unanswered,
+            Permission::Ended,
+            Permission::Failed("the store is locked".into()),
+        ];
+        for permission in &every {
+            assert_plain(&permission_answer(permission));
+            if matches!(permission, Permission::Ruled(_)) {
+                continue;
+            }
+            for unchecked in [true, false] {
+                if let Some(refused) = browser_answer(permission, "LinkedIn", unchecked) {
+                    assert_plain(&refused);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_list_of_decisions_is_not_answered_as_if_one_was_just_filed() {
+        let (_dir, runtime) = test_runtime();
+        let card = runtime
+            .inner
+            .store
+            .create_agent(&crate::domain::agent::CleanDraft {
+                group_id: None,
+                name: "Planner".into(),
+                avatar: "orb".into(),
+                color: "#7fb069".into(),
+                model: "test/model".into(),
+                subscription_model: None,
+                reasoning_effort: None,
+                system_prompt: String::new(),
+                skills: vec![],
+            })
+            .unwrap();
+        let action = |value: serde_json::Value| {
+            (
+                serde_json::from_value::<crate::domain::decision::DecisionAction>(value.clone())
+                    .unwrap(),
+                value,
+            )
+        };
+
+        let (filing, arguments) = action(
+            serde_json::json!({"action": "request", "topic": "venue", "question": "Which hall?"}),
+        );
+        let (filed, _) = runtime.use_decision(&card, RunId::new(), filing, arguments);
+        assert!(filed.starts_with("Recorded in For you. No turn is waiting."), "{filed}");
+
+        let (list, arguments) = action(serde_json::json!({"action": "list"}));
+        let (listed, _) = runtime.use_decision(&card, RunId::new(), list, arguments);
+        assert!(
+            listed.starts_with(
+                "Your decisions as stored. The stored state is authoritative, including an \
+                 answer already received.\n"
+            ),
+            "{listed}"
+        );
+        assert!(listed.contains("Which hall?"), "{listed}");
     }
 
     #[tokio::test]

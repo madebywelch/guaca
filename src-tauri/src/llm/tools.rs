@@ -773,7 +773,20 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
             // than left to judgment. It also has to be told apart from
             // `request_permission`, and the line is what a yes does: that one
             // authorizes an action, and this one does not authorize anything.
-            description: "Only for a live conversation with the operator. Prefer decision for requests that can wait, including email follow-ups. Ask the operator a question you cannot answer yourself, and wait for                           their answer. Use this when the work genuinely forks on something only                           they can settle: which of two directions they want, a number or a name                           you cannot look up, a call between options that are all defensible.                           This stops your turn and puts the question in front of them, so the                           cost of asking is their attention: do not use it for anything you could                           find out, work out, or reasonably decide and report. If a colleague                           would know, use send_message instead. If you can proceed and say what                           you assumed, do that instead. This is not how you ask to be allowed to                           do something: use request_permission for that, and note that an answer                           here permits nothing. Ask one question at a time and make it answerable                           without the conversation around it, because they are reading it in a                           panel and not in your channel. Nobody may answer, and if nobody does                           you are told so and have to carry on without them."
+            description: "Only for a live conversation with the operator. Prefer decision for requests that can wait, including email follow-ups. Ask the operator a question you cannot answer yourself, and wait for \
+                          their answer. Use this when the work genuinely forks on something only \
+                          they can settle: which of two directions they want, a number or a name \
+                          you cannot look up, a call between options that are all defensible. \
+                          This stops your turn and puts the question in front of them, so the \
+                          cost of asking is their attention: do not use it for anything you could \
+                          find out, work out, or reasonably decide and report. If a colleague \
+                          would know, use send_message instead. If you can proceed and say what \
+                          you assumed, do that instead. This is not how you ask to be allowed to \
+                          do something: use request_permission for that, and note that an answer \
+                          here permits nothing. Ask one question at a time and make it answerable \
+                          without the conversation around it, because they are reading it in a \
+                          panel and not in your channel. Nobody may answer, and if nobody does \
+                          you are told so and have to carry on without them."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -781,13 +794,19 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                     "question": {
                         "type": "string",
                         "minLength": 1,
-                        "description": "The question, in one or two sentences, including whatever                                         the operator needs to answer it. Assume they have not                                         read your channel."
+                        "description": "The question, in one or two sentences, including whatever \
+                                        the operator needs to answer it. Assume they have not \
+                                        read your channel."
                     },
                     "options": {
                         "type": "array",
                         "items": { "type": "string" },
                         "maxItems": 6,
-                        "description": "Optional. Two to six answers to choose between, each a                                         short label. Offer these whenever the answer really is a                                         choice: a button is far cheaper for them than a sentence.                                         Leave it out when the answer is a value they have to                                         write."
+                        "description": "Optional. Two to six answers to choose between, each a \
+                                        short label. Offer these whenever the answer really is a \
+                                        choice: a button is far cheaper for them than a sentence. \
+                                        Leave it out when the answer is a value they have to \
+                                        write."
                     }
                 },
                 "required": ["question"],
@@ -806,7 +825,24 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
             // stated in what it puts on a screen rather than in what it spends,
             // and the thing it replaces is named: models do not infer that a
             // message they addressed to the operator did not reach them.
-            description: "Put something on the operator's desk that has stopped your work, and                           carry on without waiting for them. Use this when you cannot make                           progress and they are the only one who can change that: a program or                           tool that will not run, a sign-in that has expired, a key or a machine                           only they can touch, an approval that has already lapsed twice. This                           does not stop your turn and does not wait for an answer. It puts one                           row in front of them wherever they are in the app, and it stays there                           until they clear it. Saying it in your reply instead does not reach                           them: a message waits in a channel they may not open for days, which                           is exactly what this exists to replace. The cost is their screen, so                           this is for work that has stopped and never for a progress report,                           a summary, or something you can do a different way. If a colleague                           could unblock you, use send_message. If you can go on and say what                           you assumed, do that and say it in your reply. If you need an answer                           inside this turn, use ask_operator instead: that one waits, this one                           does not. Raise it again on a later turn if you hit the same wall                           again -- you will not make a second row, and they will be shown how                           long it has been up and how many turns have run into it."
+            description: "Put something on the operator's desk that has stopped your work, and \
+                          carry on without waiting for them. Use this when you cannot make \
+                          progress and they are the only one who can change that: a program or \
+                          tool that will not run, a sign-in that has expired, a key or a machine \
+                          only they can touch, an approval that has already lapsed twice. This \
+                          does not stop your turn and does not wait for an answer. It puts one \
+                          row in front of them wherever they are in the app, and it stays there \
+                          until they clear it. Saying it in your reply instead does not reach \
+                          them: a message waits in a channel they may not open for days, which \
+                          is exactly what this exists to replace. The cost is their screen, so \
+                          this is for work that has stopped and never for a progress report, \
+                          a summary, or something you can do a different way. If a colleague \
+                          could unblock you, use send_message. If you can go on and say what \
+                          you assumed, do that and say it in your reply. If you need an answer \
+                          inside this turn, use ask_operator instead: that one waits, this one \
+                          does not. Raise it again on a later turn if you hit the same wall \
+                          again: you will not make a second row, and they will be shown how \
+                          long it has been up and how many turns have run into it."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -814,7 +850,11 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                     "summary": {
                         "type": "string",
                         "minLength": 1,
-                        "description": "What has stopped and what you need them to do, in one or                                         two sentences. Write it for somebody who has not read                                         your channel and does not know what you were working on.                                         Put the exact command, address or name they will need                                         in it; the rest of the account goes in your reply."
+                        "description": "What has stopped and what you need them to do, in one or \
+                                        two sentences. Write it for somebody who has not read \
+                                        your channel and does not know what you were working on. \
+                                        Put the exact command, address or name they will need \
+                                        in it; the rest of the account goes in your reply."
                     }
                 },
                 "required": ["summary"],
@@ -968,27 +1008,36 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                     "action": { "type": "string", "enum": ["list", "add", "update", "cancel"] },
                     "title": {
                         "type": "string",
-                        "description": "What is happening, in a few words: `Board call`,                                         `Q3 filing due`. On `update`, leave it out to keep the                                         title it already has."
+                        "description": "What is happening, in a few words: `Board call`, \
+                                        `Q3 filing due`. On `update`, leave it out to keep the \
+                                        title it already has."
                     },
                     "starts_at": {
                         "type": "string",
-                        "description": "Local time, `2026-09-14 15:00`. A date on its own,                                         `2026-09-14`, is a whole day with no time on it. On                                         `update` this moves it; leave it out to change the                                         wording without moving the date."
+                        "description": "Local time, `2026-09-14 15:00`. A date on its own, \
+                                        `2026-09-14`, is a whole day with no time on it. On \
+                                        `update` this moves it; leave it out to change the \
+                                        wording without moving the date."
                     },
                     "minutes": {
                         "type": "integer",
-                        "description": "How long it runs, in minutes. Leave it out for something                                         with no length, which most deadlines and reminders are."
+                        "description": "How long it runs, in minutes. Leave it out for something \
+                                        with no length, which most deadlines and reminders are."
                     },
                     "place": {
                         "type": "string",
-                        "description": "Where it happens, if that matters: a room, a city, a                                         link."
+                        "description": "Where it happens, if that matters: a room, a city, a \
+                                        link."
                     },
                     "detail": {
                         "type": "string",
-                        "description": "What the operator needs in order to walk into it                                         prepared. One short paragraph, not a briefing."
+                        "description": "What the operator needs in order to walk into it \
+                                        prepared. One short paragraph, not a briefing."
                     },
                     "id": {
                         "type": "string",
-                        "description": "The occasion to `update` or `cancel`. `list` shows every                                         one your group has with its id."
+                        "description": "The occasion to `update` or `cancel`. `list` shows every \
+                                        one your group has with its id."
                     }
                 },
                 "required": ["action"],
@@ -3143,6 +3192,34 @@ pub fn render_deliveries(results: &[Delivery]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // What an agent is told about its tools reaches it as one line of prose. A
+    // run of spaces is a line break the source forgot to continue, and an em
+    // dash is a habit the operator reads straight through an agent that copies
+    // it. Every string under the parameters counts: a model reads those too.
+    #[test]
+    fn every_tool_definition_is_plain_prose() {
+        fn strings<'a>(value: &'a serde_json::Value, out: &mut Vec<&'a str>) {
+            match value {
+                serde_json::Value::String(text) => out.push(text),
+                serde_json::Value::Array(items) => items.iter().for_each(|item| strings(item, out)),
+                serde_json::Value::Object(fields) => {
+                    fields.values().for_each(|field| strings(field, out))
+                }
+                _ => {}
+            }
+        }
+        for surfaces in [Surfaces::both(), Surfaces::none()] {
+            for spec in all_specs(surfaces) {
+                let mut said = vec![spec.description.as_str()];
+                strings(&spec.parameters, &mut said);
+                for text in said {
+                    assert!(!text.contains("  "), "{}: a run of spaces: {text:?}", spec.name);
+                    assert!(!text.contains('\u{2014}'), "{}: an em dash: {text:?}", spec.name);
+                }
+            }
+        }
+    }
 
     #[test]
     fn the_four_machine_tools_name_their_machine_and_nothing_else_does() {
