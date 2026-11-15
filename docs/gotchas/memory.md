@@ -140,8 +140,17 @@ and `components/WorkingNotes.tsx` are the code.
   `last_tidy_at` is written when the clock hands a tidy over, so a stopped or
   crashed tidy is not given twice in a night. `tidied_through` moves only when
   a tidy finishes or stores a rewrite, so one that failed hands its lines on.
+  A tidy whose last save the size limit refused, with nothing stored, has not
+  finished.
   Collapsing them into one either repeats a tidy the same night or loses the
   lines a failed one never read.
+- **A tidy may not grow a long page, and that is a limit in code, not a
+  sentence.** In a tidy `update_memory` refuses a rewrite longer than the page
+  the tidy found, or 2,000 characters if that is more. Asked in words to keep
+  the page short, a small model still added to it every week; refused, it cut.
+  The floor leaves a short page room for the line a tidy came to add. An
+  operator's save during the tidy is answered as the conflict it is, before the
+  limit, and a normal turn is never limited.
 - **The tidy message is not history.** `Store::agent_history` leaves it out
   and so does the prompt's history loop, and the oracle test that holds the two
   together has a tidy among its samples. Drawn later, it would put a stale copy

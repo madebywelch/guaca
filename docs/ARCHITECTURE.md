@@ -605,7 +605,9 @@ to the turn: a stop, a drain or a crash does not earn a second one.
 `agents.tidied_through` is where the next tidy's lines start, and only a tidy
 that finished, or stored a rewrite before it was cut short, moves it
 (`Store::tidied`). One that failed before storing anything hands its lines to
-the next night. An agent never tidied counts from the moment the switch went on
+the next night, and so does one whose last save the size limit refused: it
+meant to change the page and could not, which is not the same as finding
+nothing to change. An agent never tidied counts from the moment the switch went on
 (`groups.tidy_since`, null while it is off), never from the start of time.
 
 **What it reads.** `Part::Tidy`, from the system, carries the lines and the
@@ -627,6 +629,21 @@ and `note_progress`, with their descriptions as every turn reads them, for six
 rounds at most. A call to anything else is not run and not answered. The turn
 ends there, as if the model had stopped, with a warning in the log and nothing
 said to the model, which would be words no tidy was meant to read.
+
+**How long the page may get.** In a tidy, `update_memory` refuses a rewrite
+longer than the page was when the tidy began, or 2,000 characters if that is
+more (`TIDY_FLOOR`), and stores nothing. The refusal gives both numbers,
+counted as a save counts them, and points at the notebook. Without it a tidy
+grew the page it was there to keep short: over scripted weeks on one small
+model, every week ended longer than the tidies found it, and a sentence in the
+tidy message asking for a shorter page did not change that. With the limit the
+same weeks ended shorter, for about one more model call a tidy. The floor is
+there because a short page is not the problem, and held to its own length it
+has no room for the line a tidy came to add. The check is made only against the
+page the tidy was shown: when the operator has saved the page since, the
+conflict refusal answers instead, in its own words. A normal turn is never
+limited. A tidy pressed to fit can drop a detail it should have kept, and the
+rewrite is filed as any is, so the memory diff under the tidy's line shows it.
 
 **What survives it.** The rewrite, notebook writes and working notes, and the
 calls that made them, filed in the channel as any turn's are, so a rewrite shows
@@ -1455,8 +1472,9 @@ cargo test --manifest-path src-tauri/Cargo.toml --test tidy_week -- --ignored --
 The last is the overnight tidy's own live test, kept out of `evals.sh` because it
 asks a different question: over a scripted week of work and seven nights of
 tidies, does the memory page get better, and does it stay short? It prints the
-page after every night, what each tidy changed, and any call a tidy made to a
-tool it was not offered.
+page after every night, what each tidy changed, each save the size limit
+refused and what the tidy did next, and any call a tidy made to a tool it was
+not offered.
 
 The scripted ones run a stub model playing a specific bad habit on purpose and
 check the runtime contains it. The live ones run the real prompts against your

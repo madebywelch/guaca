@@ -8582,6 +8582,151 @@ async fn a_tidy_that_stored_its_rewrite_before_failing_has_read_its_lines() {
     assert_eq!(sweep(&h, "Planner", night(2)).await, None);
 }
 
+/// What a tidy is told when its rewrite is longer than it may leave the page.
+fn over_the_limit(limit: usize, after: usize) -> String {
+    format!(
+        "Not saved: a tidy may not leave your memory page longer than {limit} characters, and \
+         your rewrite is {after}. Cut what is no longer needed, or move detail to your notebook, \
+         then save again."
+    )
+}
+
+/// A tidy that answers its first call with `first` and its second with
+/// `then`, saying nothing after, over a page that starts as `page`. The
+/// agent has finished one run, so it is owed a tidy on the first night.
+async fn tidy_writing(
+    page: &str,
+    first: String,
+    then: Option<String>,
+) -> (Stub, Harness, guac_lib::domain::ids::AgentId) {
+    let stub = serve(move |body| {
+        if !a_tidy(body) {
+            return Script::Say("Booked the venue.".into());
+        }
+        match (answers_so_far(body).len(), &then) {
+            (0, _) => Script::Memory(first.clone()),
+            (1, Some(then)) => Script::Memory(then.clone()),
+            _ => Script::Say(String::new()),
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Planner"], GuardLimits::default());
+    let planner = h.id("Planner");
+    tidy_overnight(&h, "Planner");
+    h.runtime.workspace().write(planner, "Planner", page).unwrap();
+    let run = h.runtime.send_from_human(planner, "Book the venue.").unwrap();
+    h.settle(run).await;
+    (stub, h, planner)
+}
+
+/// What the tool calls of the last model call were answered with.
+fn told(stub: &Stub) -> Vec<String> {
+    stub.transcript.lock().last().map(answers_so_far).unwrap_or_default()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tidy_may_grow_a_short_page_up_to_two_thousand_characters_and_no_further() {
+    // A short page is not what the limit is for, so a tidy may add the line
+    // it came to add. Two thousand characters is the floor, and a rewrite of
+    // exactly that is stored.
+    let (stub, h, planner) =
+        tidy_writing("The venue is the Hall.", "a".repeat(2001), Some("b".repeat(2000))).await;
+
+    sweep(&h, "Planner", night(1)).await.expect("owed a tidy");
+    assert_eq!(
+        told(&stub),
+        vec![over_the_limit(2000, 2001), "Memory saved (2000 characters).".to_string()]
+    );
+    assert_eq!(h.runtime.workspace().read(planner), "b".repeat(2000));
+    assert_eq!(
+        sweep(&h, "Planner", night(2)).await,
+        None,
+        "it stored a page, so it has read its lines"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tidy_may_not_grow_a_page_already_over_the_limit() {
+    let (stub, h, planner) =
+        tidy_writing(&"c".repeat(2500), "c".repeat(2501), Some("d".repeat(2500))).await;
+
+    sweep(&h, "Planner", night(1)).await.expect("owed a tidy");
+    assert_eq!(
+        told(&stub),
+        vec![over_the_limit(2500, 2501), "Memory saved (2500 characters).".to_string()]
+    );
+    assert_eq!(h.runtime.workspace().read(planner), "d".repeat(2500));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tidy_whose_last_save_was_refused_is_owed_its_lines_again() {
+    // It meant to change the page and could not, which is not the same as
+    // finding nothing to change. The night is still spent, so it is not given
+    // again before the next one.
+    let (stub, h, planner) = tidy_writing(&"c".repeat(2500), "c".repeat(2600), None).await;
+
+    let first = sweep(&h, "Planner", night(1)).await.expect("owed a tidy");
+    assert_eq!(told(&stub), vec![over_the_limit(2500, 2600)]);
+    assert_eq!(h.runtime.workspace().read(planner), "c".repeat(2500));
+    assert_eq!(sweep(&h, "Planner", night(1) + 60_000).await, None, "not again that night");
+    let second = sweep(&h, "Planner", night(2)).await.expect("its lines were never tidied");
+    let lines = |tidy: &Envelope| match &tidy.parts[0] {
+        Part::Tidy { reported, .. } => reported.len(),
+        _ => unreachable!(),
+    };
+    assert_eq!((lines(&first), lines(&second)), (1, 1));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_normal_turn_may_make_the_page_as_long_as_it_likes() {
+    let stub = serve(|body| match answers_so_far(body).len() {
+        0 => Script::Memory("e".repeat(5000)),
+        _ => Script::Say("Noted.".into()),
+    })
+    .await;
+    let h = harness(&stub, &["Planner"], GuardLimits::default());
+    let planner = h.id("Planner");
+    tidy_overnight(&h, "Planner");
+    h.runtime.workspace().write(planner, "Planner", &"c".repeat(2500)).unwrap();
+    let run = h.runtime.send_from_human(planner, "Remember all of this.").unwrap();
+    h.settle(run).await;
+
+    assert_eq!(told(&stub), vec!["Memory saved (5000 characters).".to_string()]);
+    assert_eq!(h.runtime.workspace().read(planner), "e".repeat(5000));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_operator_save_during_a_tidy_is_answered_as_a_conflict_not_as_the_limit() {
+    // The rewrite is over the limit and also made from a page the operator
+    // has since corrected. The correction is what the tidy has to know about:
+    // cutting the rewrite to fit would still put back the line they fixed.
+    let workspace = Arc::new(std::sync::OnceLock::new());
+    let saving = workspace.clone();
+    let stub = serve(move |body| {
+        if !a_tidy(body) {
+            return Script::Say("Booked the venue.".into());
+        }
+        if has_tool_result(body) {
+            return Script::Say(String::new());
+        }
+        let (workspace, id) = saving.get().expect("the harness is built before the tidy runs");
+        operator_saves(workspace, *id);
+        Script::Memory("f".repeat(2001))
+    })
+    .await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let manager = h.id("Manager");
+    tidy_overnight(&h, "Manager");
+    h.runtime.workspace().write(manager, "Manager", "Smith handles verification.").unwrap();
+    workspace.set((h.runtime.workspace().clone(), manager)).unwrap();
+    let run = h.runtime.send_from_human(manager, "Book the venue.").unwrap();
+    h.settle(run).await;
+
+    sweep(&h, "Manager", night(1)).await.expect("owed a tidy");
+    assert_eq!(told(&stub), vec![format!("{MEMORY_CONFLICT}Jones handles verification.")]);
+    assert_eq!(h.runtime.workspace().read(manager), "Jones handles verification.");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_tidy_the_operator_stops_before_it_stores_anything_is_owed_again() {
     let stub =

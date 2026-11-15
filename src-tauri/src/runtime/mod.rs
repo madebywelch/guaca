@@ -76,6 +76,10 @@ struct Reading {
     /// rewrite is made from. `None` writes unconditionally, which is an errand,
     /// and an errand is not given the tool.
     memory: Option<String>,
+    /// In a tidy, the longest page it may save, in the characters a save
+    /// counts: the page as the tidy found it, or [TIDY_FLOOR], whichever is
+    /// longer.
+    tidy_limit: Option<usize>,
 }
 
 impl Reading {
@@ -114,7 +118,13 @@ impl Reading {
     /// and errands run side by side, so another errand may have moved that
     /// browser before this one presses anything.
     fn for_errand(&self) -> Reading {
-        Reading { ingested: self.ingested, url: self.url.clone(), allowed: None, memory: None }
+        Reading {
+            ingested: self.ingested,
+            url: self.url.clone(),
+            allowed: None,
+            memory: None,
+            tidy_limit: None,
+        }
     }
 }
 
@@ -769,6 +779,11 @@ fn stopped_notice(name: &str) -> Part {
 /// and writing the page back is two or three; six leaves room for a notebook
 /// write and a note without letting a tidy become a night's work.
 const TIDY_ROUNDS: usize = 6;
+
+/// The length a tidy may always grow a page to. The limit is there to stop a
+/// long page getting longer every night; a short page is not that problem,
+/// and held to its own length it has no room for the line a tidy came to add.
+const TIDY_FLOOR: usize = 2_000;
 
 /// How often the compost is checked for agents whose thirty days are up.
 ///
@@ -4082,7 +4097,11 @@ impl Runtime {
         let mut addressed: HashSet<AgentId> = HashSet::new();
         // What this turn has read off the web, and where from, and which
         // version of its memory it was shown.
-        let mut reading = Reading { memory: Some(memory.version.clone()), ..Reading::default() };
+        let mut reading = Reading {
+            memory: Some(memory.version.clone()),
+            tidy_limit: tidying.then(|| memory.content.trim().chars().count().max(TIDY_FLOOR)),
+            ..Reading::default()
+        };
         // Files `attach_file` has put on the answer this turn has not written
         // yet. Collected here rather than sent as they arrive, because they
         // belong on the message the agent is still composing: a file delivered
@@ -4933,11 +4952,17 @@ impl Runtime {
         own_model: bool,
     ) {
         use crate::domain::envelope::ToolOutcome;
-        let stored = tool_parts.iter().any(|part| {
-            matches!(part, Part::ToolCall { name, outcome: ToolOutcome::Ok { .. }, .. }
-                if name == tools::UPDATE_MEMORY)
+        let mut saves = tool_parts.iter().filter_map(|part| match part {
+            Part::ToolCall { name, outcome, .. } if name == tools::UPDATE_MEMORY => Some(outcome),
+            _ => None,
         });
-        let finished = stored || (failure.is_none() && !cut_short && !budget_exhausted);
+        let stored = saves.clone().any(|outcome| matches!(outcome, ToolOutcome::Ok { .. }));
+        // A tidy whose last save was refused meant to change the page and did
+        // not, which is not the same as finding nothing to change: its lines
+        // are still owed a tidy.
+        let refused =
+            saves.next_back().is_some_and(|outcome| matches!(outcome, ToolOutcome::Refused { .. }));
+        let finished = stored || (failure.is_none() && !cut_short && !budget_exhausted && !refused);
         if budget_exhausted {
             tool_parts.push(spent_notice(limits, &card.name));
         }
@@ -5496,6 +5521,32 @@ impl Runtime {
             }
 
             ToolInvocation::UpdateMemory { content } => {
+                // A tidy's rewrite longer than it may leave the page. Judged
+                // only on the page the turn was working from: a save by the
+                // operator since is the conflict below, which is answered
+                // first and in its own words.
+                let after = content.trim().chars().count();
+                let longer = reading.tidy_limit.filter(|limit| after > *limit).filter(|_| {
+                    reading.memory.as_deref().is_none_or(|seen| {
+                        seen == self.inner.workspace.read_versioned(card.id).version
+                    })
+                });
+                if let Some(limit) = longer {
+                    let reason = format!(
+                        "Not saved: a tidy may not leave your memory page longer than {limit} \
+                         characters, and your rewrite is {after}. Cut what is no longer needed, \
+                         or move detail to your notebook, then save again."
+                    );
+                    return (
+                        reason.clone(),
+                        Part::tool_call(
+                            tools::UPDATE_MEMORY,
+                            arguments,
+                            ToolOutcome::Refused { reason },
+                        ),
+                        None,
+                    );
+                }
                 match self.inner.workspace.write_versioned(
                     card.id,
                     &card.name,
@@ -10176,7 +10227,13 @@ mod tests {
     }
 
     fn having_read(url: &str) -> Reading {
-        Reading { ingested: true, url: Some(url.into()), allowed: None, memory: None }
+        Reading {
+            ingested: true,
+            url: Some(url.into()),
+            allowed: None,
+            memory: None,
+            tidy_limit: None,
+        }
     }
 
     /// A browser the operator has asked to be consulted about. Everything below
@@ -10347,6 +10404,7 @@ mod tests {
             url: Some("https://gmail.com/".into()),
             allowed: None,
             memory: None,
+            tidy_limit: None,
         };
         assert!(needs_consent(ASKING, "click", &untainted, &held).is_none());
     }
@@ -10533,13 +10591,15 @@ mod tests {
             url: Some("https://mail.gmail.com/".into()),
             allowed: None,
             memory: None,
+            tidy_limit: None,
         };
         assert!(needs_consent(ASKING, "click", &looked, &held).is_some());
 
         // With nowhere known to be, there is nothing to judge and nothing is
         // claimed. The turn is still marked, so the first `browse` that lands
         // somewhere signed in re-arms it.
-        let blind = Reading { ingested: true, url: None, allowed: None, memory: None };
+        let blind =
+            Reading { ingested: true, url: None, allowed: None, memory: None, tidy_limit: None };
         assert!(needs_consent(ASKING, "click", &blind, &held).is_none());
     }
 
@@ -10732,6 +10792,7 @@ mod tests {
             url: Some("https://linkedin.example/feed".into()),
             allowed: None,
             memory: None,
+            tidy_limit: None,
         };
         let told = runtime
             .may_act_on(&card, RunId::new(), "click", &mut reading)
