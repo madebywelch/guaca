@@ -177,7 +177,8 @@ keeps a walk of the tree to a fraction of a second.
 | `permission` | On a bundle macOS has never seen, the app reports "not asked"; with a delivery waiting, connecting asks macOS, macOS shows its question, nothing is claimed while it is unanswered, and macOS takes the question down when the app quits. The probe never answers it. |
 | `notification` | Whatever this Mac allows the probe's own bundle, a waiting delivery and the Settings test button do what the Notifications pane says: claimed and presented as a banner when allowed, asked about when never asked, nothing claimed and nothing presented otherwise. Asserted on the log and the outbox, not on the app's word. |
 | `panel` | With the window closed, a click on the icon opens the panel, the panel lists every agent in the seeded group, a second click closes it, and the app that had the keyboard before has it after. |
-| `allow` | Screen: on a fresh bundle, press Allow on macOS's question; the waiting delivery is claimed and drawn as a banner, the app reports allowed, the pane says so, and the Settings test button raises a second banner. |
+| `allow` | Screen: on a fresh bundle, press Allow on macOS's question; the waiting delivery is claimed and drawn as a banner, the app reports allowed, and the pane says so. |
+| `button` | Screen: on a bundle just allowed, the Settings test button raises a banner. Known to fail about two runs in three today: the notification plugin hands a banner to macOS only if the main run loop is idle at that instant, and otherwise logs "main thread is not pumping" and drops it while the pane says it was sent. The scenario is kept so that the fix is measured. |
 | `deny` | Screen: on a fresh bundle, press Don't Allow; the app reports denied, the pane says macOS has notifications turned off, nothing is claimed and no banner is presented. |
 | `click` | Screen: a delivery about one conversation is shown as a banner; clicking it opens that conversation. |
 | `away` | Screen: four deliveries waiting when the window connects, then Allow; all four are claimed and macOS presents exactly one banner, the "While you were away" fold. |
@@ -192,7 +193,7 @@ that reason until it has them. macOS grants both to the responsible process:
 the terminal a person runs the command in, or the agent or service that
 started it, which is what has to be listed in System Settings, Privacy &
 Security. The probe never asks for either. Banners are not drawn while the
-display is shared, so `allow`, `click` and `away` need Screen Sharing
+display is shared, so `allow`, `button`, `click` and `away` need Screen Sharing
 disconnected, or "Allow notifications when mirroring or sharing the display"
 turned on. And nothing is drawn behind the lock screen, so every screen step
 first checks that the session is unlocked and fails saying so if it is not: a

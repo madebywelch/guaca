@@ -985,10 +985,28 @@ def scenario_allow(record: Record, scratch: Scratch) -> None:
         open_notifications(client)
         wait_until("the pane says macOS allows it", lambda: PANE["allowed"] in pane_text(client), 5)
         record.check("the pane says macOS allows notifications", True)
+
+
+def scenario_button(record: Record, scratch: Scratch) -> None:
+    """Screen: once macOS allows the bundle, the Settings test button raises a banner."""
+    with Prompted(record, scratch, "Allow") as it:
+        assert it.app and it.log and it.app.client
+        app, client = it.app, it.app.client
+        it.log.wait_for("macOS presents the waiting delivery", banner(app.bundle), 15)
+        drawn(record, it.log, app.bundle)
+        open_notifications(client)
+        wait_until("the pane says macOS allows it", lambda: PANE["allowed"] in pane_text(client), 5)
         client.page("main", do="click", role="button", name="Send a test notification")
-        wait_until("the pane says it was sent", lambda: SENT in pane_text(client), 10)
-        wait_until("macOS presents the test", lambda: len(it.log.matching(banner(app.bundle))) == 2, 10)
-        record.check("the Settings test button is presented as a second banner", True)
+        # Nothing asks the app anything until macOS has answered: the
+        # notification plugin hands a banner over only while the main run loop
+        # is idle, and every read through the channel or the page runs there.
+        try:
+            wait_until("macOS presents the test", lambda: len(it.log.matching(banner(app.bundle))) == 2, 10)
+            shown = True
+        except Failed:
+            shown = False
+        record.check("the test button's banner is presented", shown,
+                     None if shown else {"pane says sent": SENT in pane_text(client)})
 
 
 def scenario_deny(record: Record, scratch: Scratch) -> None:
@@ -1079,6 +1097,7 @@ SCENARIOS: dict[str, Callable[[Record, Scratch], None]] = {
     "notification": scenario_notification,
     "panel": scenario_panel,
     "allow": scenario_allow,
+    "button": scenario_button,
     "deny": scenario_deny,
     "click": scenario_click,
     "away": scenario_away,
