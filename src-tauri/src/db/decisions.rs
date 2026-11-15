@@ -3,11 +3,12 @@ use std::collections::HashSet;
 use rusqlite::{params, OptionalExtension, Row, TransactionBehavior};
 
 use super::{Store, StoreError};
+use crate::domain::approval::{ALLOW, GRANT_LIFETIME_MS};
 use crate::domain::decision::{
     next_briefing, next_reminder, DecisionRequest, DecisionStatus, WorkDecision,
 };
 use crate::domain::envelope::{Envelope, Intent, Part, Participant, Trust};
-use crate::domain::ids::{AgentId, DecisionId, GroupId, MessageId, RunId};
+use crate::domain::ids::{AgentId, ApprovalId, DecisionId, GroupId, MessageId, RunId};
 
 const COLUMNS: &str = "d.id,d.agent_id,d.group_id,d.topic,d.request,d.status,d.answer,d.outcome,d.created_at,d.updated_at,d.due_at,d.remind_at,d.snoozed_until,d.delivery_run,d.interrupted";
 fn invalid(message: impl Into<String>) -> StoreError {
@@ -89,61 +90,173 @@ impl Store {
         run: Option<RunId>,
         now: i64,
     ) -> Result<WorkDecision, StoreError> {
-        let topic = topic.trim();
-        if topic.is_empty() || topic.chars().count() > 200 {
-            return Err(invalid("Give this decision a stable topic of 1 to 200 characters, such as an email thread reference."));
-        }
-        let request = request.validate().map_err(invalid)?;
-        let encoded = serde_json::to_string(&request).map_err(|err| invalid(err.to_string()))?;
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let live: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM agents WHERE id=?1 AND group_id=?2 AND lifecycle<>'terminated')", params![agent.to_string(), group.to_string()], |r| r.get(0))?;
-        if !live {
-            return Err(invalid("This agent is no longer available in this group."));
-        }
-        let existing: Option<String> = tx
-            .query_row(
-                "SELECT id FROM decisions WHERE agent_id=?1 AND topic=?2",
-                params![agent.to_string(), topic],
-                |r| r.get(0),
-            )
-            .optional()?;
-        let id = if let Some(id) = existing {
-            let id: DecisionId = id.parse().map_err(|_| invalid("Invalid stored decision id"))?;
-            let previous = one(&tx, id)?;
-            // Freeze the question as soon as a person answers it. A later scan
-            // may not silently reinterpret the answer against different choices.
-            if previous.status == DecisionStatus::Pending
-                && (previous.request != request || previous.due_at != due)
-            {
-                tx.execute("UPDATE decisions SET request=?2,due_at=?3,updated_at=MAX(updated_at+1,?4),remind_at=CASE WHEN snoozed_until>?4 THEN remind_at ELSE MIN(remind_at,?5) END WHERE id=?1", params![id.to_string(),encoded,due,now,if due.is_some_and(|at| at <= now + 60 * 60 * 1000) { now } else { next_reminder(now,due) }])?;
-            }
-            id
-        } else {
-            let count: i64 = tx.query_row("SELECT count(*) FROM decisions WHERE agent_id=?1 AND status IN ('pending','answered')", [agent.to_string()], |r|r.get(0))?;
-            if count >= 100 {
-                return Err(invalid("You already have 100 open decisions. Review and withdraw obsolete items before adding another."));
-            }
-            let id = DecisionId::new();
-            let reminder = if due.is_some_and(|at| at <= now + 60 * 60 * 1000) {
-                now
-            } else {
-                next_reminder(now, due)
-            };
-            tx.execute("INSERT INTO decisions(id,agent_id,group_id,topic,request,status,created_at,updated_at,due_at,remind_at) VALUES(?1,?2,?3,?4,?5,'pending',?6,?6,?7,?8)", params![id.to_string(),agent.to_string(),group.to_string(),topic,encoded,now,due,reminder])?;
-            id
-        };
-        if let Some(run) = run {
-            tx.execute(
-                "UPDATE decisions SET filed_run=?2 WHERE id=?1 AND status='pending' AND filed_run IS NULL",
-                params![id.to_string(), run.to_string()],
-            )?;
-        }
-        let result = one(&tx, id)?;
+        let result = file_in(&tx, agent, group, topic, request, due, run, now)?;
         tx.commit()?;
         Ok(result)
     }
 
+    /// Ends a request nobody answered in time, and files it as a decision, in
+    /// one commit.
+    ///
+    /// One commit because the two are one fact seen from two sides: the card
+    /// stops being answerable at the moment the desk starts holding it, so
+    /// there is no instant in which the request is in neither place, or in
+    /// both. The decision says where it came from, and the run that asked is
+    /// the run that filed it, so that run's outcome says it left one open. A
+    /// permission's `fingerprint` is written beside it, ungranted, for an
+    /// Allow to grant later.
+    ///
+    /// `None` when the row had already left pending: an answer or a stop got
+    /// there first, and that stands. An error leaves the row pending and
+    /// nothing filed, and the caller expires it the old way.
+    pub fn lapse_approval(
+        &self,
+        id: ApprovalId,
+        fingerprint: Option<&str>,
+        now: i64,
+    ) -> Result<Option<WorkDecision>, StoreError> {
+        let approval = self.get_approval(id)?.ok_or(StoreError::ApprovalNotFound(id))?;
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = tx.execute(
+            "UPDATE approvals SET state='expired', decided_at=?2 WHERE id=?1 AND state='pending'",
+            params![id.to_string(), now],
+        )?;
+        if changed == 0 {
+            return Ok(None);
+        }
+        super::outbox::withdraw_ref(&tx, &id.to_string())?;
+        let filed = file_in(
+            &tx,
+            approval.agent_id,
+            approval.group_id,
+            &format!("approval:{id}"),
+            approval.as_decision(),
+            None,
+            Some(approval.run_id),
+            now,
+        )?;
+        tx.execute(
+            "UPDATE decisions SET origin='approval', origin_ref=?2 WHERE id=?1",
+            params![filed.id.to_string(), id.to_string()],
+        )?;
+        if let Some(fingerprint) = fingerprint {
+            tx.execute(
+                "INSERT INTO permission_grants (decision_id,agent_id,fingerprint) VALUES (?1,?2,?3)",
+                params![filed.id.to_string(), approval.agent_id.to_string(), fingerprint],
+            )?;
+        }
+        tx.commit()?;
+        Ok(Some(filed))
+    }
+
+    /// The request a decision was filed from, when Guaca filed it from one.
+    pub fn decision_origin(&self, id: DecisionId) -> Result<Option<ApprovalId>, StoreError> {
+        let origin: Option<Option<String>> = self
+            .conn()?
+            .query_row(
+                "SELECT origin_ref FROM decisions WHERE id=?1 AND origin='approval'",
+                [id.to_string()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(origin.flatten().and_then(|raw| raw.parse().ok()))
+    }
+
+    /// Spends one grant this agent holds for exactly this action, if it holds
+    /// one that is given, unused and not past its day.
+    ///
+    /// One statement, so two requests racing for one grant cannot both have
+    /// it: the second finds it used.
+    pub fn take_grant(
+        &self,
+        agent: AgentId,
+        fingerprint: &str,
+        now: i64,
+    ) -> Result<bool, StoreError> {
+        let taken = self.conn()?.execute(
+            "UPDATE permission_grants SET used_at=?3 WHERE decision_id=(
+                SELECT decision_id FROM permission_grants
+                 WHERE agent_id=?1 AND fingerprint=?2 AND granted_at IS NOT NULL
+                   AND used_at IS NULL AND expires_at>?3
+                 ORDER BY granted_at, decision_id LIMIT 1)",
+            params![agent.to_string(), fingerprint, now],
+        )?;
+        Ok(taken > 0)
+    }
+}
+
+/// Files a decision, or revises the pending one on the same topic, inside a
+/// commit somebody else owns. See [`Store::file_decision`].
+#[allow(clippy::too_many_arguments)]
+fn file_in(
+    tx: &rusqlite::Transaction<'_>,
+    agent: AgentId,
+    group: GroupId,
+    topic: &str,
+    request: DecisionRequest,
+    due: Option<i64>,
+    run: Option<RunId>,
+    now: i64,
+) -> Result<WorkDecision, StoreError> {
+    let topic = topic.trim();
+    if topic.is_empty() || topic.chars().count() > 200 {
+        return Err(invalid("Give this decision a stable topic of 1 to 200 characters, such as an email thread reference."));
+    }
+    let request = request.validate().map_err(invalid)?;
+    let encoded = serde_json::to_string(&request).map_err(|err| invalid(err.to_string()))?;
+    let live: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM agents WHERE id=?1 AND group_id=?2 AND lifecycle<>'terminated')", params![agent.to_string(), group.to_string()], |r| r.get(0))?;
+    if !live {
+        return Err(invalid("This agent is no longer available in this group."));
+    }
+    let existing: Option<String> = tx
+        .query_row(
+            "SELECT id FROM decisions WHERE agent_id=?1 AND topic=?2",
+            params![agent.to_string(), topic],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let id = if let Some(id) = existing {
+        let id: DecisionId = id.parse().map_err(|_| invalid("Invalid stored decision id"))?;
+        let previous = one(tx, id)?;
+        // Freeze the question as soon as a person answers it. A later scan
+        // may not silently reinterpret the answer against different choices.
+        if previous.status == DecisionStatus::Pending
+            && (previous.request != request || previous.due_at != due)
+        {
+            tx.execute("UPDATE decisions SET request=?2,due_at=?3,updated_at=MAX(updated_at+1,?4),remind_at=CASE WHEN snoozed_until>?4 THEN remind_at ELSE MIN(remind_at,?5) END WHERE id=?1", params![id.to_string(),encoded,due,now,if due.is_some_and(|at| at <= now + 60 * 60 * 1000) { now } else { next_reminder(now,due) }])?;
+        }
+        id
+    } else {
+        let count: i64 = tx.query_row(
+            "SELECT count(*) FROM decisions WHERE agent_id=?1 AND status IN ('pending','answered')",
+            [agent.to_string()],
+            |r| r.get(0),
+        )?;
+        if count >= 100 {
+            return Err(invalid("You already have 100 open decisions. Review and withdraw obsolete items before adding another."));
+        }
+        let id = DecisionId::new();
+        let reminder = if due.is_some_and(|at| at <= now + 60 * 60 * 1000) {
+            now
+        } else {
+            next_reminder(now, due)
+        };
+        tx.execute("INSERT INTO decisions(id,agent_id,group_id,topic,request,status,created_at,updated_at,due_at,remind_at) VALUES(?1,?2,?3,?4,?5,'pending',?6,?6,?7,?8)", params![id.to_string(),agent.to_string(),group.to_string(),topic,encoded,now,due,reminder])?;
+        id
+    };
+    if let Some(run) = run {
+        tx.execute(
+                "UPDATE decisions SET filed_run=?2 WHERE id=?1 AND status='pending' AND filed_run IS NULL",
+                params![id.to_string(), run.to_string()],
+            )?;
+    }
+    one(tx, id)
+}
+
+impl Store {
     /// The answer, its transcript envelope and recovery point are one commit.
     /// The caller holds the runtime's run lock through booking, then enqueues.
     pub fn answer_decision(
@@ -186,6 +299,27 @@ impl Store {
                 "The agent responsible for this decision was deleted. Restore it before answering.",
             ));
         }
+        let mut parts = vec![Part::Decision {
+            id,
+            request: decision.request.clone(),
+            answer: answer.to_string(),
+            resumed: resume,
+        }];
+        // A lapsed permission allowed: the grant written when it lapsed is
+        // given now, in this commit, and the agent is told what it covers. A
+        // resumed delivery says nothing more, because the grant it would name
+        // was given the first time.
+        if !resume && answer == ALLOW {
+            let expires = now.saturating_add(GRANT_LIFETIME_MS);
+            let granted = tx.execute(
+                "UPDATE permission_grants SET granted_at=?2, expires_at=?3
+                  WHERE decision_id=?1 AND granted_at IS NULL",
+                params![id.to_string(), now, expires],
+            )?;
+            if granted > 0 {
+                parts.push(Part::text(crate::domain::decision::allowance(expires)));
+            }
+        }
         // The question is model-authored. A system envelope preserves that
         // boundary instead of laundering the whole brief as human instructions.
         let message = Envelope {
@@ -194,12 +328,7 @@ impl Store {
             channel_id: decision.agent_id,
             from: Participant::System,
             to: Participant::Agent { id: decision.agent_id },
-            parts: vec![Part::Decision {
-                id,
-                request: decision.request.clone(),
-                answer: answer.to_string(),
-                resumed: resume,
-            }],
+            parts,
             trust: Trust::System,
             hop: 0,
             expects_reply: true,
@@ -582,5 +711,141 @@ mod tests {
         assert_eq!(s.decision_reminders(now + 10000).unwrap(), 1);
         assert_eq!(s.decision_reminders(now + 10001).unwrap(), 0);
         assert!(s.decisions(None).unwrap()[0].snoozed_until.is_none());
+    }
+
+    // ---- a request nobody answered in time ---------------------------------
+
+    fn parked(
+        store: &Store,
+        agent: &crate::domain::agent::AgentCard,
+        request: crate::domain::approval::Request,
+    ) -> crate::domain::approval::Approval {
+        store
+            .create_approval(
+                agent.id,
+                agent.group_id,
+                RunId::new(),
+                request,
+                "Assistant wants to do something in your name",
+                &[crate::domain::approval::DetailField::new(
+                    "What Assistant will do",
+                    "Send the weekly report",
+                )],
+            )
+            .unwrap()
+    }
+
+    fn permission() -> crate::domain::approval::Request {
+        crate::domain::approval::Request::Permission {
+            action: crate::domain::approval::ProtectedAction::ActOnBehalf,
+        }
+    }
+
+    #[test]
+    fn a_lapse_expires_the_request_and_files_it_in_one_commit() {
+        use crate::domain::approval::ApprovalState;
+        let (_, s, a) = fixture();
+        let asked = parked(&s, &a, permission());
+        let now = 1_700_000_000_000;
+
+        let filed = s.lapse_approval(asked.id, Some("fp"), now).unwrap().expect("filed");
+        assert_eq!(s.get_approval(asked.id).unwrap().unwrap().state, ApprovalState::Expired);
+        assert_eq!(filed.status, DecisionStatus::Pending);
+        assert_eq!(filed.agent_id, a.id);
+        assert_eq!(filed.request.question, "Assistant wants to do something in your name");
+        assert_eq!(filed.request.context, "What Assistant will do: Send the weekly report");
+        assert_eq!(filed.request.options, ["Allow", "Deny"]);
+        assert_eq!(s.decision_origin(filed.id).unwrap(), Some(asked.id));
+        let filed_run: Option<String> = s
+            .conn()
+            .unwrap()
+            .query_row("SELECT filed_run FROM decisions WHERE id=?1", [filed.id.to_string()], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(filed_run, Some(asked.run_id.to_string()), "the run that asked filed it");
+
+        // Once: the row has left pending, so a second lapse files nothing.
+        assert!(s.lapse_approval(asked.id, Some("fp"), now).unwrap().is_none());
+        assert_eq!(s.decisions(Some(a.id)).unwrap().len(), 1);
+
+        // And an answer that got there first stands, with nothing filed.
+        let answered = parked(&s, &a, permission());
+        s.settle_approval(answered.id, ApprovalState::Deny).unwrap();
+        assert!(s.lapse_approval(answered.id, Some("fp"), now).unwrap().is_none());
+        assert_eq!(s.get_approval(answered.id).unwrap().unwrap().state, ApprovalState::Deny);
+        assert_eq!(s.decisions(Some(a.id)).unwrap().len(), 1);
+
+        // An agent filed decision says nothing about where it came from.
+        assert_eq!(s.decision_origin(make(&s, &a).id).unwrap(), None);
+    }
+
+    #[test]
+    fn a_lapsed_question_keeps_its_own_choices_and_is_answered_like_any_decision() {
+        let (_, s, a) = fixture();
+        let asked = parked(
+            &s,
+            &a,
+            crate::domain::approval::Request::Question {
+                options: vec!["Northwind".into(), "Contoso".into()],
+            },
+        );
+        let filed = s.lapse_approval(asked.id, None, 1).unwrap().expect("filed");
+        assert_eq!(filed.request.options, ["Northwind", "Contoso"]);
+        let (_, message) = s.answer_decision(filed.id, "Northwind", false, None, 2).unwrap();
+        assert_eq!(
+            message.parts.len(),
+            1,
+            "a question's answer grants nothing, and says nothing more"
+        );
+        assert!(
+            matches!(&message.parts[0], Part::Decision { answer, .. } if answer == "Northwind")
+        );
+    }
+
+    #[test]
+    fn an_allow_grants_one_use_of_that_action_to_that_agent_for_a_day() {
+        let (_, s, a) = fixture();
+        let other = s
+            .create_agent(&CleanDraft {
+                group_id: None,
+                name: "Other".into(),
+                avatar: "orb".into(),
+                color: "#7fb069".into(),
+                model: "test".into(),
+                subscription_model: None,
+                reasoning_effort: None,
+                system_prompt: String::new(),
+                skills: vec![],
+            })
+            .unwrap();
+        let at = 1_700_000_000_000;
+        let filed =
+            s.lapse_approval(parked(&s, &a, permission()).id, Some("fp"), at).unwrap().unwrap();
+        assert!(!s.take_grant(a.id, "fp", at).unwrap(), "nothing is granted until it is allowed");
+
+        let (_, message) = s.answer_decision(filed.id, "Allow", false, None, at).unwrap();
+        let until = at + crate::domain::approval::GRANT_LIFETIME_MS;
+        assert_eq!(
+            message.parts.last(),
+            Some(&Part::text(crate::domain::decision::allowance(until))),
+            "the agent is told what the yes covers"
+        );
+
+        assert!(!s.take_grant(other.id, "fp", at + 1).unwrap(), "bound to the agent that asked");
+        assert!(!s.take_grant(a.id, "another action", at + 1).unwrap(), "and to that action");
+        assert!(!s.take_grant(a.id, "fp", until).unwrap(), "and for a day");
+        assert!(s.take_grant(a.id, "fp", until - 1).unwrap());
+        assert!(!s.take_grant(a.id, "fp", until - 1).unwrap(), "once");
+    }
+
+    #[test]
+    fn a_deny_grants_nothing_and_says_nothing_more() {
+        let (_, s, a) = fixture();
+        let filed =
+            s.lapse_approval(parked(&s, &a, permission()).id, Some("fp"), 1).unwrap().unwrap();
+        let (_, message) = s.answer_decision(filed.id, "Deny", false, None, 2).unwrap();
+        assert_eq!(message.parts.len(), 1);
+        assert!(!s.take_grant(a.id, "fp", 3).unwrap());
     }
 }

@@ -303,6 +303,7 @@ function Overview({ agents, onOpen }: { agents: AgentCard[]; onOpen: (id: AgentI
                   escalated={stuck.some((one) => one.agentId === agent.id)}
                   finishedAt={finishedAt[agent.id]}
                   seed={agent.id}
+                  size="xs"
                 />
                 <span className="agent-row__title">
                   <span className="agent-row__name">{agent.name}</span>
