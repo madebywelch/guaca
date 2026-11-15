@@ -37,8 +37,8 @@ for one, and nothing ever started it: the panel reported its port as zero on
 every launch. It is gone, and what is left in that file is what the server's
 route shares with the rest of the app: the secret, the most a body may be, and
 how a delivery is told apart from its retries. On a desktop an event routine
-fires from Test run and from nothing else, and `webhookAddress` still answers
-a port of zero, which the panel reads as no address.
+fires from Test run and from nothing else: `webhookAddress` answers no `url`
+there, and the panel says so instead of printing an address.
 
 ## The secret is in a header, and the answer says what became of the event
 

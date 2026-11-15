@@ -141,7 +141,8 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
   const [note, setNote] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   // Where an event is posted, read the first time the draft becomes one. Null
-  // until then, and null is drawn as the sentence without the address.
+  // until then, and null draws neither sentence: which one is true depends on
+  // whether this workspace is a Host, and only the answer says.
   const [address, setAddress] = useState<WebhookAddress | null>(null);
   const now = useNow(30_000);
 
@@ -472,27 +473,29 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
             stays on the {ordinal(draft.moment.monthday)} of the months that have one.
           </span>
         )}
-        {event && (
+        {event && address && !address.url && (
+          <span className="field__hint">
+            Nothing on the clock. An event can only be posted to a Host, so in this workspace the
+            routine fires only from Test run.
+          </span>
+        )}
+        {event && address?.url && (
           <span className="field__hint">
             Nothing on the clock: it fires each time this is posted to Guaca, and Test run delivers
             it now.
-            {address?.port === 0 &&
-              !address.url &&
-              " The receiver is not running this session, so nothing can post to it; the log says why."}
           </span>
         )}
-        {event &&
-          address &&
-          (address.port !== 0 || address.url) &&
-          parseTrigger(draft.trigger).kind === "event" && (
-            <>
-              <pre className="webhook">{webhookLine(address, event.service, event.topic)}</pre>
-              <span className="field__hint">
-                The body, if there is one, reaches the agent under the instruction as data. Guaca
-                calls nobody and polls nothing: whatever posts this is yours to wire.
-              </span>
-            </>
-          )}
+        {event && address?.url && parseTrigger(draft.trigger).kind === "event" && (
+          <>
+            <pre className="webhook">
+              {webhookLine(address.url, address.secret, event.service, event.topic)}
+            </pre>
+            <span className="field__hint">
+              The body, if there is one, reaches the agent under the instruction as data. Guaca
+              calls nobody and polls nothing: whatever posts this is yours to wire.
+            </span>
+          </>
+        )}
         {routine?.active && !dirty && routine.nextRunAt !== null && (
           <span className="field__hint">
             Next in {relativeTime(now, routine.nextRunAt)}, on{" "}
