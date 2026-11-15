@@ -24,6 +24,7 @@ use crate::domain::plugin::PluginToolset;
 const MAX_WAITING: usize = 10;
 use crate::domain::escalation::Escalation;
 use crate::domain::occasion::{self, Occasion};
+use crate::domain::outcome::{Outcome, Status};
 use crate::domain::routine::Routine;
 use crate::domain::signin::Signin;
 use crate::domain::view::Presence;
@@ -31,6 +32,11 @@ use crate::domain::worknote::{self, WorkingNote};
 use crate::llm::modality::Modalities;
 use crate::llm::tools::Surfaces;
 use crate::llm::{ChatMessage, SystemPrompt};
+
+/// How many earlier conversations an agent is shown the closing line of. Ten
+/// lines of at most 160 characters each, so the section stays near 400 tokens
+/// of ordinary prose however long the agent has been running.
+pub const MAX_REPORTED: u32 = 10;
 
 /// Resolves agent ids to display names for prompt labeling.
 pub type NameTable = HashMap<AgentId, String>;
@@ -1439,6 +1445,52 @@ pub fn add_artifacts(
 ) {
     if let Some(ChatMessage::System { content }) = messages.first_mut() {
         before_reply(content, &artifacts_section(kept, pinned, reader, now));
+    }
+}
+
+/// What the agent has already reported about conversations its history window
+/// no longer reaches: the line each one ended with, newest first, and how long
+/// ago. `reported` is [`crate::db::Store::reported`]: the agent's own runs that
+/// started before the oldest message the turn is shown.
+///
+/// The lines are the outcomes already recorded, so this costs no model call.
+/// It is what stops an agent with a long channel from telling the operator
+/// again what it told them yesterday, which is the one memory of past messages
+/// that nothing else in the prompt keeps. A status word is shown only where the
+/// line alone would mislead: a run that failed, was stopped or was cut off.
+/// One still waiting on the operator reads as done here: its open decision is
+/// in the decision index the turn is given and its escalation in its own
+/// section, and its status has no word of its own.
+pub fn reported_section(reported: &[Outcome], now: i64) -> String {
+    if reported.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(
+        "\n## What you have already reported\n\
+         Your earlier conversations, older than the messages above, each as the line it ended \
+         with, newest first. Do not report these again. If one needs following up, its line says \
+         what was done; the conversation itself is in your channel.\n",
+    );
+    for one in reported {
+        let word = match one.status {
+            Status::Failed | Status::Stopped | Status::Interrupted => {
+                format!(" ({})", one.status.as_str())
+            }
+            Status::Done | Status::NeedsYou | Status::NothingNew => String::new(),
+        };
+        out.push_str(&format!(
+            "- {}: {}{word}\n",
+            worknote::how_long_ago(one.finished_at, now),
+            one.headline
+        ));
+    }
+    out
+}
+
+/// Adds [`reported_section`] to the system message a turn was built with.
+pub fn add_reported(messages: &mut [ChatMessage], reported: &[Outcome], now: i64) {
+    if let Some(ChatMessage::System { content }) = messages.first_mut() {
+        before_reply(content, &reported_section(reported, now));
     }
 }
 
@@ -4104,8 +4156,28 @@ mod tests {
         )
     }
 
+    /// One finished run of the agent's, as the store hands it to the prompt.
+    fn ended(headline: &str, status: Status, finished_at: i64) -> Outcome {
+        Outcome {
+            run_id: RunId::new(),
+            agent_id: AgentId::new(),
+            group_id: GroupId::new(),
+            trigger: crate::domain::outcome::Trigger::Operator,
+            trigger_ref: None,
+            status,
+            headline: headline.into(),
+            note_id: None,
+            needs: Vec::new(),
+            steps: 1,
+            started_at: finished_at - 60_000,
+            finished_at,
+            seen_at: None,
+        }
+    }
+
     /// The same, assembled the way a turn is: the skills, the notebook, the
-    /// artifacts and where the operator is, each added where it goes.
+    /// artifacts, what the agent already reported and where the operator is,
+    /// each added where it goes.
     fn assembled(me: &AgentCard, mode: ReplyMode) -> SystemPrompt {
         use crate::domain::skill::{Scope, Skill};
         let prompt = every_section(me, mode, crate::domain::now_ms() - 60_000);
@@ -4125,6 +4197,7 @@ mod tests {
             &[crate::notebook::Entry { path: "plan.md".into(), chars: 40, updated_at: 0 }],
         );
         add_artifacts(&mut messages, &[kept("Plan", None, AgentId::new())], &[], me.id, 0);
+        add_reported(&mut messages, &[ended("Booked the venue.", Status::Done, 0)], 7_200_000);
         add_presence(&mut messages, &Presence::Away, 0, me.id, 3_600_000);
         let ChatMessage::System { content } = messages.remove(0) else {
             panic!("no system message")
@@ -4225,6 +4298,7 @@ mod tests {
             "## What you have already escalated",
             "## Your notebook",
             "## Your group's artifacts",
+            "## What you have already reported",
             "## Your reply",
             "## Where the operator is",
         ];
@@ -4246,6 +4320,50 @@ mod tests {
         }])));
         assert!(prompt.volatile().starts_with("\n## What your reply can show\n"), "{prompt}");
         assert!(prompt.ends_with(&presence_section(&Presence::Away, 0, AgentId::new(), 3_600_000)));
+    }
+
+    #[test]
+    fn what_an_agent_has_already_reported_is_said_in_these_words() {
+        const HOUR: i64 = 3_600_000;
+        let now = 30 * 24 * HOUR;
+        let reported = [
+            ended("Booked the venue for Friday.", Status::Done, now - 2 * HOUR),
+            ended("Asked which caterer to use.", Status::NeedsYou, now - 5 * HOUR),
+            ended("The model provider refused the call.", Status::Failed, now - 26 * HOUR),
+            ended("Stopped before it finished.", Status::Stopped, now - 3 * 24 * HOUR),
+            ended("Guaca quit before the turn finished.", Status::Interrupted, now - 6 * 24 * HOUR),
+        ];
+        assert_eq!(
+            reported_section(&reported, now),
+            concat!(
+                "\n## What you have already reported\n",
+                "Your earlier conversations, older than the messages above, each as the line it ",
+                "ended with, newest first. Do not report these again. If one needs following up, ",
+                "its line says what was done; the conversation itself is in your channel.\n",
+                "- 2h ago: Booked the venue for Friday.\n",
+                "- 5h ago: Asked which caterer to use.\n",
+                "- 1d ago: The model provider refused the call. (failed)\n",
+                "- 3d ago: Stopped before it finished. (stopped)\n",
+                "- 6d ago: Guaca quit before the turn finished. (interrupted)\n",
+            )
+        );
+        // Nothing to say is no section at all, not a heading over an empty list.
+        assert_eq!(reported_section(&[], now), "");
+        let mut messages =
+            vec![ChatMessage::system(every_section(&card("Manager"), ReplyMode::ToOperator, now))];
+        let before = messages[0].clone();
+        add_reported(&mut messages, &[], now);
+        assert_eq!(messages[0], before);
+    }
+
+    #[test]
+    fn what_an_agent_has_already_reported_is_the_last_index_before_its_reply() {
+        let prompt = assembled(&card("Manager"), ReplyMode::ToOperator);
+        let reported = section(&prompt, "## What you have already reported");
+        assert!(reported.ends_with("- 2h ago: Booked the venue.\n"), "{reported}");
+        assert!(prompt.volatile().contains("## What you have already reported"), "its ages move");
+        let next = prompt.find("## What you have already reported").unwrap();
+        assert!(prompt[next..].find("\n## ") == prompt[next..].find(REPLY_HEADING), "{prompt}");
     }
 
     #[test]
@@ -4301,9 +4419,10 @@ mod tests {
             ("the accounts above", "## What you can reach", Points::Up),
             ("working notes above", "## Your working notes", Points::Up),
         ];
-        // The one reference that is not to the prompt at all: "the history
-        // above", in the NoteOnly reply block, means the conversation.
-        let outside = ["the history above"];
+        // The references that are not to the prompt at all: "the history
+        // above", in the NoteOnly reply block, and "the messages above", in what
+        // the agent has already reported, both mean the conversation.
+        let outside = ["the history above", "the messages above"];
 
         for mode in [ReplyMode::ToOperator, ReplyMode::NoteOnly] {
             let prompt = assembled(&card("Manager"), mode.clone());

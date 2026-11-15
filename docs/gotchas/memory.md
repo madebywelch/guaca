@@ -98,6 +98,23 @@ and `components/WorkingNotes.tsx` are the code.
   before the limit; a record carrying the agent's commentary is drawn and still
   counts. The two tests of emptiness have to agree, and a store test holds them
   to it part by part.
+- **What an agent has already reported is its outcomes read back, not a third
+  store.** When a conversation's first message falls out of the history window,
+  the agent is shown the line that conversation ended with: its own runs in its
+  current group that started before the oldest message the turn draws, history
+  or batch, ten at most, newest first (`Store::reported`,
+  `prompt::reported_section`). No model call writes them; they are the outcome
+  headlines already recorded, so the section costs no more than its own tokens,
+  about 400 at its largest. A recurring check that found nothing is left out and
+  is not counted toward the ten: it reported nothing, and an hourly one would
+  push out every line that matters. A run with nothing left in the agent's
+  channel is left out too, because clearing a channel is the operator taking a
+  conversation out of what the agent reads back, and its line would put it
+  back. Only failed, stopped and interrupted carry a word. A run still waiting
+  on the operator reads as done, since its open decision is in the decision
+  index the turn is given and its escalation in *What you have already
+  escalated*. The section is in the volatile block, last before *Your reply*,
+  because its ages move.
 - **What a memory rewrite replaced is absent, empty or a page, and the three
   mean different things.** Absent is a call that replaced nothing, which is
   every other tool and every write recorded before the field existed: there is
