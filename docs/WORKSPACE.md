@@ -2504,9 +2504,11 @@ answers "granted" on every desktop without asking anyone. Banners go through
 under the plugin: the older `NSUserNotificationCenter` it used by default never
 asks for permission, shows nothing while Guaca is in front, and reported every
 banner as raised, so a Mac with Guaca switched off took every delivery and
-showed none. Now a Mac that has never been asked counts as yes for claiming, and
-macOS puts the question the first time there is something to show, or when the
-test is pressed; a Mac that says no claims nothing, and the test says so. The
+showed none. Now a Mac that has never been asked is asked when the first offer
+arrives, before the window claims it, or when the test is pressed. Offers that
+arrive while the question is up wait on the same one. Only a yes claims; a Mac
+that says no claims nothing, so the offer stays with the Host for another window
+or the push, and the test says so. The
 Notifications pane states which of these it is above the test button, with a
 way to System Settings when the answer is no. A copy run straight from the
 checkout is not an app bundle, which `UNUserNotificationCenter` needs, so it
