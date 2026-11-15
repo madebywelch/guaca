@@ -66,7 +66,8 @@ fn transaction_failures_never_advance_a_slot_or_leave_partial_work() {
                 RunKind::Scheduled,
                 None,
                 1000,
-                true
+                true,
+                0
             )
             .is_err());
         assert_eq!(store.get_routine(routine.id).unwrap().unwrap().next_run_at, Some(1000));
@@ -89,7 +90,8 @@ fn transaction_failures_never_advance_a_slot_or_leave_partial_work() {
             RunKind::Scheduled,
             None,
             1000,
-            true
+            true,
+            0
         )
         .is_err());
     assert!(store.get_message(envelope.id).unwrap().is_none());
@@ -107,7 +109,8 @@ fn unstarted_claim_survives_repeated_crashes_and_is_not_claimed_twice() {
             RunKind::Scheduled,
             None,
             1000,
-            true
+            true,
+            0
         )
         .unwrap());
     assert!(!store
@@ -118,7 +121,8 @@ fn unstarted_claim_survives_repeated_crashes_and_is_not_claimed_twice() {
             RunKind::Scheduled,
             None,
             1000,
-            true
+            true,
+            0
         )
         .unwrap());
     drop(store);
@@ -143,6 +147,7 @@ fn started_absorbed_firing_is_reported_interrupted_instead_of_replayed() {
             None,
             1000,
             true,
+            0,
         )
         .unwrap();
     store.start_deliveries(&[envelope.id], RunId::new()).unwrap();
@@ -165,6 +170,7 @@ fn a_stopped_queued_firing_never_returns_after_restart() {
             None,
             1000,
             true,
+            0,
         )
         .unwrap();
     store.stop_routine_run(envelope.run_id).unwrap();
@@ -185,6 +191,7 @@ fn completed_firing_does_not_become_a_false_interruption() {
             None,
             1000,
             true,
+            0,
         )
         .unwrap();
     store.start_deliveries(&[envelope.id], envelope.run_id).unwrap();
@@ -212,6 +219,7 @@ fn absorbed_firing_is_recovered_only_with_its_whole_owner() {
             None,
             1000,
             true,
+            0,
         )
         .unwrap();
     store.start_deliveries(&[envelope.id], parent.run_id).unwrap();
@@ -257,6 +265,7 @@ fn one_shot_completion_keeps_its_history_after_the_schedule_is_removed() {
             None,
             1000,
             true,
+            0,
         )
         .unwrap();
     assert!(store.get_routine(once.id).unwrap().is_none());
@@ -275,6 +284,7 @@ fn failed_start_rolls_back_ownership_and_recovery_still_delivers() {
             None,
             1000,
             true,
+            0,
         )
         .unwrap();
     store.conn().unwrap().execute_batch("CREATE TRIGGER inject BEFORE UPDATE ON routine_runs BEGIN SELECT RAISE(ABORT, 'injected'); END;").unwrap();
@@ -300,6 +310,7 @@ fn failed_stop_and_settlement_roll_back_their_journals() {
             None,
             1000,
             true,
+            0,
         )
         .unwrap();
     store.conn().unwrap().execute_batch("CREATE TRIGGER inject BEFORE DELETE ON pending_runs BEGIN SELECT RAISE(ABORT, 'injected'); END;").unwrap();
@@ -329,6 +340,7 @@ fn failed_recovery_keeps_the_entire_put_down_for_the_next_restart() {
             None,
             1000,
             true,
+            0,
         )
         .unwrap();
     let snapshot = RunState::new(GuardLimits::default()).snapshot();

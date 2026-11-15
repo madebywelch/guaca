@@ -877,9 +877,11 @@ struct Inner {
     last_signin_scan: Mutex<HashMap<AgentId, Instant>>,
     /// Loopback port of the computer viewer. Zero until it is listening.
     viewer_port: AtomicU16,
-    /// Loopback port of the event receiver. Zero until it is listening, which
-    /// is also what the routine panel reads to say the receiver is not up.
-    webhook_port: AtomicU16,
+    /// When this host came up, in milliseconds. A routine slot before it is
+    /// one no sweep could have fired, which is how a catch-up firing knows how
+    /// many slots went by while the host was off. See
+    /// [`Routine::missed_before`].
+    up_since: AtomicI64,
     /// Which agents have a machine tool call in flight, and on which machine.
     ///
     /// Held for exactly the length of the call by [`OnMachine`], a guard that
@@ -924,17 +926,23 @@ struct Inner {
 }
 
 /// What became of one event: how many routines stood on it, and of those how
-/// many were delivered and how many were dropped for an agent already working.
+/// many were delivered, how many were dropped for an agent already working
+/// and how many could not be delivered at all. Beside them, how many stand on
+/// it under an agent that is paused, which are not counted as listening.
 ///
-/// The three are answered to whoever posted the event, because that is the
-/// one party who can act on them: a receiver answering 200 to an event nobody
-/// stands on is a webhook wired to the wrong topic that looks like it works.
+/// All of it is answered to whoever posted the event, because that is the one
+/// party who can act on it: a route answering 200 to an event nobody stands on
+/// is a webhook wired to the wrong topic that looks like it works, and one
+/// that says nothing about a paused agent sends the sender looking for a
+/// spelling mistake that is not there.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EventDelivery {
     pub listening: usize,
     pub delivered: usize,
     pub skipped: usize,
+    pub failed: usize,
+    pub paused: usize,
 }
 
 /// An agent's place on a machine, held while a machine tool call runs.
@@ -1029,7 +1037,7 @@ impl Runtime {
                 files,
                 last_signin_scan: Mutex::new(HashMap::new()),
                 viewer_port: AtomicU16::new(0),
-                webhook_port: AtomicU16::new(0),
+                up_since: AtomicI64::new(now_ms()),
                 on_machine: Mutex::new(HashMap::new()),
                 resource_locks: Mutex::new(HashMap::new()),
                 resource_sweep: tokio::sync::RwLock::new(()),
@@ -1181,12 +1189,13 @@ impl Runtime {
         self.inner.approval_window.store(window.as_millis() as u64, Ordering::SeqCst);
     }
 
-    pub fn set_webhook_port(&self, port: u16) {
-        self.inner.webhook_port.store(port, Ordering::SeqCst);
-    }
-
-    pub fn webhook_port(&self) -> u16 {
-        self.inner.webhook_port.load(Ordering::SeqCst)
+    /// Moves the moment this host counts as having come up.
+    ///
+    /// The seam a test stands a host that was off behind: the slots a
+    /// catch-up firing reports missed are the ones before it, and a test
+    /// cannot wait for a weekend to go by.
+    pub fn set_up_since(&self, at: i64) {
+        self.inner.up_since.store(at, Ordering::SeqCst);
     }
 
     pub(crate) fn hold_workspace_lease(&self, lease: std::fs::File) {
@@ -2438,6 +2447,7 @@ impl Runtime {
             &format!("test:{}", RunId::new()),
             RunKind::Test,
             false,
+            0,
         )
         .map(|run| run.expect("a fresh test occurrence is unique"))
     }
@@ -2449,6 +2459,7 @@ impl Runtime {
         occurrence: &str,
         kind: RunKind,
         advance: bool,
+        missed: u32,
     ) -> Result<Option<RunId>, RuntimeError> {
         let to = routine.agent_id;
         let card = self.inner.store.get_agent(to)?;
@@ -2468,6 +2479,7 @@ impl Runtime {
                 Some(detail),
                 now_ms(),
                 advance,
+                missed,
             )?;
             return Err(err);
         }
@@ -2503,6 +2515,7 @@ impl Runtime {
             None,
             now_ms(),
             advance,
+            missed,
         )? {
             return Ok(None);
         }
@@ -2534,14 +2547,14 @@ impl Runtime {
 
     /// An event arrived: every active routine standing on it fires now.
     ///
-    /// The receiver's half of what `sweep_schedule` does for the clock, and
+    /// The event route's half of what `sweep_schedule` does for the clock, and
     /// the same three steps in the same order for each routine it reaches:
     /// the skip question is asked first, because it is about what the agent
     /// was doing at the moment the event came; the row is moved before the
     /// delivery, so a delivery that fails is not retried by the next event
     /// into a pile; and the firing is written down whichever way it went,
-    /// because a firing that leaves no trace is what a receiver that has
-    /// stopped working looks like too.
+    /// because a firing that leaves no trace is what a route that has stopped
+    /// working looks like too.
     ///
     /// What comes back is counts rather than nothing, and they are the whole
     /// answer the caller gets to give: `listening == 0` is the one worth
@@ -2562,7 +2575,11 @@ impl Runtime {
         let _delivery = self.inner.routine_delivery.lock();
         let now = now_ms();
         let standing = self.inner.store.event_routines(event)?;
-        let mut delivery = EventDelivery { listening: standing.len(), ..Default::default() };
+        let mut delivery = EventDelivery {
+            listening: standing.len(),
+            paused: self.inner.store.paused_event_routines(event)?,
+            ..Default::default()
+        };
 
         for routine in standing {
             let skipping = routine.skip_if_working && self.working(routine.agent_id);
@@ -2586,6 +2603,7 @@ impl Runtime {
                     None,
                     now,
                     true,
+                    0,
                 )? {
                     delivery.skipped += 1;
                     self.emit(UiEvent::RoutinesChanged { agent_id: routine.agent_id });
@@ -2599,6 +2617,7 @@ impl Runtime {
                 &occurrence,
                 RunKind::Event,
                 true,
+                0,
             ) {
                 Ok(Some(_)) => {
                     delivery.delivered += 1;
@@ -2606,7 +2625,10 @@ impl Runtime {
                 }
                 Ok(None) => {}
                 Err(RuntimeError::Store(err)) => return Err(err),
-                Err(err) => tracing::warn!(%err, "an event routine could not be delivered"),
+                Err(err) => {
+                    delivery.failed += 1;
+                    tracing::warn!(%err, "an event routine could not be delivered");
+                }
             }
         }
         Ok(delivery)
@@ -2673,6 +2695,8 @@ impl Runtime {
             // the one after that.
             let occurrence =
                 format!("scheduled:{}", routine.next_run_at.expect("due routines have a slot"));
+            // Counted before the row moves, from the slot it was due at.
+            let missed = routine.missed_before(self.inner.up_since.load(Ordering::SeqCst));
             // The row moved: to its next slot, or off the list altogether if it
             // was a one-shot. Either way the panel is showing a firing that has
             // already happened.
@@ -2700,14 +2724,21 @@ impl Runtime {
                     None,
                     now,
                     true,
+                    missed,
                 ) {
                     tracing::error!(%err, "could not record a skipped routine");
                 }
                 continue;
             }
 
-            match self.claim_routine_delivery(&routine, None, &occurrence, RunKind::Scheduled, true)
-            {
+            match self.claim_routine_delivery(
+                &routine,
+                None,
+                &occurrence,
+                RunKind::Scheduled,
+                true,
+                missed,
+            ) {
                 Ok(_) => {}
                 Err(err) => tracing::warn!(%err, "a routine could not be delivered"),
             }
@@ -7474,7 +7505,7 @@ impl Runtime {
         action: &tools::ScheduleAction,
     ) -> Result<String, crate::db::StoreError> {
         use crate::domain::routine::{
-            human_gap, next_slot_for, same_job, validate, MIN_EVERY_SECS,
+            human_gap, next_slot_for, same_job, validate, MIN_EVERY_SECS, MOST_ROUTINES,
         };
 
         match action {
@@ -7503,6 +7534,20 @@ impl Runtime {
             }
 
             tools::ScheduleAction::Add { name, what, trigger, in_secs, skip_if_working } => {
+                // Read before anything else, so the cap is checked before
+                // anything is written and the answer can say what this now
+                // stands beside. Only the agent's own add is held to it: the
+                // operator adding one in the app is not, and update and
+                // cancel never add a routine.
+                let standing = self.inner.store.agent_routines(card.id)?;
+                if standing.len() >= MOST_ROUTINES {
+                    return Ok(format!(
+                        "Refused: you already keep {} routines, which is the most one agent may \
+                         keep. Cancel one you no longer need with action \"cancel\", or change \
+                         one with \"update\" so it covers this.",
+                        standing.len()
+                    ));
+                }
                 if let Err(err) = validate(name, what, trigger, *in_secs, *skip_if_working) {
                     return Ok(format!(
                         "Refused: {err}. The shortest repeat is {}.",
@@ -7510,9 +7555,6 @@ impl Runtime {
                     ));
                 }
 
-                // Read before the write, so the answer can say what this now
-                // stands beside.
-                let standing = self.inner.store.agent_routines(card.id)?;
                 let first = trigger.first_run(now_ms(), *in_secs);
                 let routine = self.inner.store.create_routine(
                     card.id,

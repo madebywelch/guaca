@@ -1256,6 +1256,24 @@ impl Store {
         Ok(out)
     }
 
+    /// How many switched-on routines stand on one event under an agent that
+    /// is paused.
+    ///
+    /// The ones `event_routines` leaves out on purpose, counted so the
+    /// sender can be told the routine exists. Without it a paused agent's
+    /// routine reads to the sender exactly like a misspelled topic, and the
+    /// fix for the one is no help with the other.
+    pub fn paused_event_routines(&self, event: &EventTrigger) -> Result<usize, StoreError> {
+        let conn = self.conn()?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM routines r JOIN agents a ON a.id = r.agent_id
+              WHERE r.fires = ?1 AND r.active = 1 AND a.lifecycle = 'paused'",
+            params![event.as_str()],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
     /// Records that a routine ran, and what became of its slot.
     ///
     /// A one-shot is removed rather than left with a time in the past, so the
@@ -1295,6 +1313,7 @@ impl Store {
         error: Option<&str>,
         now: i64,
         advance: bool,
+        missed: u32,
     ) -> Result<bool, StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -1326,13 +1345,14 @@ impl Store {
             )?;
         }
         tx.execute(
-            "INSERT INTO routine_runs (routine_id,run_id,kind,at,error) VALUES (?1,?2,?3,?4,?5)",
+            "INSERT INTO routine_runs (routine_id,run_id,kind,at,error,missed) VALUES (?1,?2,?3,?4,?5,?6)",
             params![
                 routine.id.to_string(),
                 envelope.map(|e| e.run_id.to_string()),
                 kind.as_str(),
                 now,
-                error
+                error,
+                missed
             ],
         )?;
         if advance {
@@ -1466,7 +1486,7 @@ impl Store {
         let mut stmt = conn.prepare(
             "SELECT r.run_id, r.kind, r.at,
                     COALESCE(SUM(u.prompt),0), COALESCE(SUM(u.completion),0),
-                    SUM(u.cost), COUNT(u.id), r.error
+                    SUM(u.cost), COUNT(u.id), r.error, r.missed
                FROM routine_runs r
                LEFT JOIN usage u ON u.run_id = r.run_id
               WHERE r.routine_id=?1
@@ -4758,6 +4778,7 @@ fn row_to_routine_run(row: &Row<'_>) -> RowResult<RoutineRun> {
                 calls: row.get::<_, i64>(6)? as u64,
             },
             error: row.get(7)?,
+            missed: row.get::<_, i64>(8)?.try_into().unwrap_or(u32::MAX),
         })
     })())
 }

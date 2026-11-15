@@ -2858,11 +2858,13 @@ pub async fn test_routine(state: &AppState, id: RoutineId) -> Reply<RunId> {
 /// same thing the Test run button does, on a loopback port, from a process
 /// that could read the config file anyway.
 ///
-/// A port of zero is a receiver that is not up, and the panel says so rather
-/// than printing an address nothing answers.
+/// Events are posted to the server's own origin, so `url` is where to post
+/// and there is no port of a receiver of its own to report. `port` is always
+/// zero, which the panel reads as no address on a desktop, where `url` is
+/// absent too.
 pub async fn webhook_address(state: &AppState) -> Reply<WebhookAddress> {
     Ok(WebhookAddress {
-        port: state.runtime.webhook_port(),
+        port: 0,
         url: state.reach.origin().map(|origin| format!("{}/events", origin.trim_end_matches('/'))),
         secret: state.runtime.config().webhook.secret,
     })

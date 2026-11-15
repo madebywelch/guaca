@@ -790,8 +790,8 @@ Main's calendar and browser-consent commands are available on both transports.
 Hosted event routines receive POSTs at `/events/service/topic` on the backend's
 public origin. The routine panel prints that address and its dedicated webhook
 secret. That secret cannot call the workspace API, and the workspace token
-cannot post a routine event. Desktop installs retain the existing loopback
-receiver.
+cannot post a routine event. A desktop install has no event route, so an event
+routine there fires only from Test run.
 
 
 ## Updating the local host

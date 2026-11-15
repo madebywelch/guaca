@@ -147,8 +147,9 @@ src-tauri/src/
   proxy.rs            Loopback viewer for those machines.
   artifact.rs         The other loopback origin: where a page an agent wrote
                       is allowed to run, and everything it may not reach.
-  webhook.rs          The third: where an event is posted to fire a routine,
-                      and why the secret is a header and not a body.
+  webhook.rs          What an event is to its sender: the secret, and why it
+                      is a header and not a body. The route it is posted to
+                      is the server's, `server::events`.
   sessions.py         Reports what a machine's Chrome is signed in to.
   kernel.rs           Browsers: a hosted Chrome, which is where the web belongs.
   cdp.rs              The DevTools protocol. Asks a page instead of looking.
@@ -252,7 +253,7 @@ repo: the frontend renders state and forwards intent.
 | A date an agent wrote, what it is told back, what the prompt says the day is | *A model has no clock* and *Every write is answered with the date that was stored* in `docs/CALENDAR.md`, then `parse_when` and `Occasion::describe` |
 | What the calendar panel draws, the group filter, the month it opens on | *What the operator sees is every group, a month at a time* in `docs/CALENDAR.md`, then `src/lib/calendar.ts` and the suite beside it, which is the gate |
 | Whether a firing lands on an agent that is already working | *A firing can be skipped, which is not the same as deferred* and *A skipped firing is in the history* in `docs/ROUTINES.md`, then `Activity::is_working` and `Runtime::sweep_schedule` |
-| An event that fires a routine: the receiver, the secret, what the body is to the model | *The receiver is loopback, and the secret is in a header because of that* in `docs/ROUTINES.md`, then `src-tauri/src/webhook.rs` and `Runtime::deliver_event`, and the four receiver tests in `tests/cascade.rs` |
+| An event that fires a routine: the route, the secret, what the sender is answered, what the body is to the model | *The secret is in a header, and the answer says what became of the event* in `docs/ROUTINES.md`, then `server::events` in `src-tauri/src/server/mod.rs`, `src-tauri/src/webhook.rs` and `Runtime::deliver_event`, and the event route's tests in `tests/cascade.rs`, which run in the server build |
 | What an agent knows about its own schedule, and how it changes one | *An agent reads its own schedule before it decides to write another one* and *Changing a routine is `update`* in `docs/ROUTINES.md` |
 | Whether an agent may have a computer or a browser at all | *A computer is given to one agent, not to the workspace* in `docs/MACHINES.md`, then `Runtime::surfaces_for` |
 | Sandboxes, the desktop, the screen, sign-ins on it | `docs/MACHINES.md` |

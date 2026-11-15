@@ -254,10 +254,7 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
         .route("/v1/events", get(events_socket))
         .route("/v1/auth/session", post(auth_session))
         .route("/v1/auth/logout", post(auth_logout))
-        .route(
-            "/events/:service/:topic",
-            post(routine_event).layer(DefaultBodyLimit::max(crate::webhook::MOST_BODY_BYTES)),
-        )
+        .merge(self::events(runtime.clone()))
         // `:name` rather than `{name}`: axum 0.7 routes with matchit 0.7, where
         // braces are a literal path segment. Spelled the newer way this compiles,
         // registers a route nothing can match, and every preview draws nothing.
@@ -1101,25 +1098,57 @@ async fn file(
     }
 }
 
-/// Whether a request carries the workspace's token.
+/// The route an event is posted to, on the runtime it fires routines in.
 ///
-/// Constant time, because a comparison that returns early on the first wrong
-/// byte is one an attacker can walk a character at a time. Cheap enough that
-/// there is no argument for the fast version.
-/// Routine webhooks have their own credential; it grants no workspace API access.
+/// Its own router with its own state rather than one more route on the
+/// workspace's, because it answers to a different credential: the webhook
+/// secret, which grants nothing else, and never the workspace token. Merged
+/// into `bind`'s router where the route always stood, so what is served
+/// and what stands in front of it are unchanged; the cascade suite serves it
+/// on its own over a harness's runtime.
+pub fn events<S: Clone + Send + Sync + 'static>(runtime: crate::runtime::Runtime) -> Router<S> {
+    Router::new()
+        .route(
+            "/events/:service/:topic",
+            post(routine_event).layer(DefaultBodyLimit::max(crate::webhook::MOST_BODY_BYTES)),
+        )
+        .with_state(runtime)
+}
+
+/// One event, fired at every routine standing on it.
+///
+/// The secret is checked before anything else is read, so a request without
+/// it learns nothing about which events exist. The scheme is matched in any
+/// letter case, as RFC 9110 has it: a sender that writes `bearer` is not
+/// wrong, and a 401 for it would read as a wrong secret.
+///
+/// Three answers that are not a delivery each say so in a sentence. A 404 for
+/// an event nobody stands on, because a 200 would tell a script its wiring
+/// works while the routine it was meant for sits under a different spelling.
+/// A 409 for one whose every routine belongs to a paused agent, because the
+/// event was not delivered and is not kept, and a sender that retries may
+/// arrive after the agent is resumed. A 401 that says what to send.
 async fn routine_event(
-    State(serving): State<Serving>,
+    State(runtime): State<crate::runtime::Runtime>,
     Path((service, topic)): Path<(String, String)>,
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
-    let secret = serving.state.runtime.config().webhook.secret;
+    let secret = runtime.config().webhook.secret;
     let bearer = headers
         .get(header::AUTHORIZATION)
         .and_then(|h| h.to_str().ok())
-        .and_then(|h| h.strip_prefix("Bearer "));
+        .and_then(|h| h.split_once(' '))
+        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
+        .map(|(_, token)| token.trim());
     if secret.is_empty() || !bearer.is_some_and(|token| same(token, &secret)) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({"error":"Use the routine webhook secret"})))
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({
+                "error": "Send Guaca's webhook secret as `Authorization: Bearer <secret>`. It is \
+                          shown on any routine that waits on an event."
+            })),
+        )
             .into_response();
     }
     let Some(event) = crate::domain::routine::EventTrigger::parse(&format!("{service}/{topic}"))
@@ -1136,22 +1165,38 @@ async fn routine_event(
             return (StatusCode::BAD_REQUEST, Json(json!({"error": message}))).into_response()
         }
     };
-    match serving.state.runtime.deliver_event(
+    let delivery = match runtime.deliver_event(
         &event,
         (!body.is_empty()).then(|| String::from_utf8_lossy(&body).into_owned()),
         &delivery_id,
     ) {
-        Ok(delivery) => {
-            let status =
-                if delivery.listening == 0 { StatusCode::NOT_FOUND } else { StatusCode::OK };
-            (status, Json(delivery)).into_response()
+        Ok(delivery) => delivery,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error":"Could not deliver the routine event"})),
+            )
+                .into_response()
         }
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error":"Could not deliver the routine event"})),
-        )
-            .into_response(),
+    };
+    let mut answer = serde_json::to_value(delivery).unwrap_or_default();
+    if delivery.listening > 0 {
+        return (StatusCode::OK, Json(answer)).into_response();
     }
+    let (status, said) = if delivery.paused > 0 {
+        (StatusCode::CONFLICT, "The routine is there, but its agent is paused.".to_string())
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            format!(
+                "No active routine waits on {}/{}. Add one in Guaca, under the agent that \
+                 should handle it, and check the spelling of both names.",
+                event.service, event.topic
+            ),
+        )
+    };
+    answer["error"] = json!(said);
+    (status, Json(answer)).into_response()
 }
 
 /// The host an address names, and its port when it spells one.

@@ -1579,6 +1579,8 @@ export interface RoutineRun {
    * that worked.
    */
   spent: Tokens;
+  /** Slots this firing stands for that came due while the host was off, the late one included. */
+  missed: number;
 }
 
 /**

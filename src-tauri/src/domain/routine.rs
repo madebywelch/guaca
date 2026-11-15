@@ -74,7 +74,7 @@ pub enum Cadence {
 /// what [`EventTrigger::parse`] enforces, and the service is lowered so the
 /// stored form is canonical: one routine per event, not one per spelling.
 ///
-/// What delivers one is a POST to the loopback receiver in `webhook.rs`,
+/// What delivers one is a POST to the server's event route, `server::events`,
 /// addressed by the same two identifiers: `/events/stripe/invoice.payment_failed`
 /// fires every active routine standing on that trigger, through
 /// `Runtime::deliver_event`. Nothing polls a service and nothing reaches out
@@ -493,6 +493,14 @@ pub struct RoutineRun {
     pub at: i64,
     pub spent: super::usage::Tokens,
     pub error: Option<String>,
+    /// How many of the routine's slots this firing stands for that came due
+    /// while the host was off, the late one included. Zero for a firing on
+    /// time. See [`Routine::missed_before`].
+    ///
+    /// On the row rather than as rows of their own, because nothing happened
+    /// at those slots: a row per slot would read as firings, and one silent
+    /// catch-up row reads as a routine that was never late.
+    pub missed: u32,
 }
 
 impl Routine {
@@ -541,6 +549,35 @@ impl Routine {
             },
             None => NextSlot::Waiting,
         }
+    }
+
+    /// How many of its slots went by while no host was running, counting the
+    /// one it is about to fire late.
+    ///
+    /// `up_since` is when the running host came up. A slot before it is one
+    /// no sweep could have fired, which is what "missed while the host was
+    /// off" means. A slot after it that is overdue all the same was held back
+    /// by the operator (the routine switched off, or the agent paused), and
+    /// saying the host was off about that would be untrue, so it is not
+    /// counted. Zero for a firing on time and for a routine with no slot.
+    ///
+    /// Walked with `next_after` from slot to slot rather than worked out
+    /// again here, so the count and the schedule cannot disagree about which
+    /// days a cadence keeps.
+    pub fn missed_before(&self, up_since: i64) -> u32 {
+        let (Some(cadence), Some(mut slot)) = (self.trigger.cadence(), self.next_run_at) else {
+            return 0;
+        };
+        let mut missed = 0u32;
+        while slot < up_since {
+            missed = missed.saturating_add(1);
+            match cadence.next_after(slot, slot) {
+                // A slot that does not move forward would never end the walk.
+                Some(next) if next > slot => slot = next,
+                _ => break,
+            }
+        }
+        missed
     }
 
     /// How it reads back to the agent that set it.
@@ -645,6 +682,16 @@ fn rough_gap(secs: u32) -> String {
 /// A minute is already fast for something that spends model calls, and anything
 /// shorter is a way to spend a budget by accident.
 pub const MIN_EVERY_SECS: u32 = 60;
+
+/// The most routines one agent may keep through its own `schedule` tool.
+///
+/// Every firing is a fresh run with a fresh budget, so how many routines an
+/// agent keeps is how many budgets it can hand itself without anybody being
+/// asked. Counted over every routine that can still fire, switched off or
+/// not and whoever set it: a one-off that has fired and a cancelled routine
+/// are gone from the table, and so from the count. The operator adding one in
+/// the app is not held to it.
+pub const MOST_ROUTINES: usize = 20;
 
 /// A year. Anything longer is a mistake in arithmetic somewhere.
 pub const MAX_DELAY_SECS: u32 = 365 * 24 * 60 * 60;
@@ -980,6 +1027,39 @@ mod tests {
     }
 
     #[test]
+    fn a_weekday_routine_slept_through_a_weekend_missed_friday_and_monday() {
+        // Due Friday, host off from Thursday night until Monday afternoon:
+        // Friday's slot and Monday's went by with nothing running, and the
+        // weekend holds none to miss.
+        let friday = at(2025, 1, 3, 9, 0);
+        let came_up = at(2025, 1, 6, 15, 0);
+        let due = routine(clock(Cadence::Weekdays), Some(friday));
+        assert_eq!(due.missed_before(came_up), 2);
+        // Up before Monday's slot, only Friday's went by.
+        assert_eq!(due.missed_before(at(2025, 1, 6, 8, 0)), 1);
+    }
+
+    #[test]
+    fn only_slots_from_before_the_host_came_up_are_missed() {
+        // Up before the slot: a firing on time, or one the operator held back
+        // while the host was running, is not one the host missed.
+        let slot = at(2025, 1, 6, 9, 0);
+        let daily = routine(clock(Cadence::Daily), Some(slot));
+        assert_eq!(daily.missed_before(slot), 0);
+        assert_eq!(daily.missed_before(slot - 60_000), 0);
+        assert_eq!(daily.missed_before(at(2025, 1, 9, 12, 0)), 4, "Monday to Thursday");
+
+        let once = routine(clock(Cadence::Once), Some(slot));
+        assert_eq!(once.missed_before(at(2025, 1, 9, 12, 0)), 1, "a one-off has one slot");
+
+        let hourly = routine(clock(Cadence::Every(3600)), Some(slot));
+        assert_eq!(hourly.missed_before(slot + 150 * 60_000), 3, "9:00, 10:00 and 11:00");
+
+        let waiting = routine(event("stripe", "invoice.paid"), None);
+        assert_eq!(waiting.missed_before(i64::MAX), 0, "an event routine holds no slot");
+    }
+
+    #[test]
     fn a_weekly_routine_stays_on_its_weekday() {
         let thursday = at(2025, 1, 2, 14, 30);
         let next = Cadence::Weekly.next_after(thursday, thursday + 1000).unwrap();
@@ -1166,6 +1246,7 @@ mod tests {
             at: 1_000,
             spent: Tokens { prompt: 900, completion: 100, cost: Some(0.002), calls: 2 },
             error: None,
+            missed: 0,
         };
         let json = serde_json::to_value(&run).unwrap();
         assert_eq!(json["kind"], serde_json::json!("scheduled"));
