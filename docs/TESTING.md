@@ -1,7 +1,7 @@
 # Testing
 
 Which suite answers which question, and what each one costs to run. The three
-that run against every change are in *Verify* in `AGENTS.md`, with the commands
+that run against every change are in *Verify* below, with the commands
 for them. This file is the rest: one per subsystem with a wire, a process or a
 provider behind it, most of them holding an `#[ignore]`d half that asks the live
 thing whether what this build believes about it is still true.
@@ -162,6 +162,47 @@ fails nothing offline. Also free.
 cargo test --manifest-path src-tauri/Cargo.toml --lib \
   llm::modality::tests::openrouter_still -- --ignored --nocapture
 ```
+
+## Verify
+
+```sh
+./scripts/ci.sh          # lint, typecheck, build, every test suite, the icons
+./scripts/ci.sh rust     # Rust only
+./scripts/image.sh       # the daemon's image: build it, run it, prove it answers
+scripts/probe.py         # on a Mac: what only a Mac does, see docs/PROBE.md
+GUAC_LOG=guac=debug pnpm app
+```
+
+Getting a change on screen has its own file: `.claude/skills/run-guaca`. It
+holds the harness that draws a component in seconds without a Rust build, a key
+or any spend; what to do when the app refuses to start; and the rule about the
+operator's own workspace, which every workspace on the machine shares.
+
+Three suites ask three different questions, and a change can pass one while
+failing the next. *Three test suites, asking different questions* in
+`docs/ARCHITECTURE.md` is the long version.
+
+- **Cascade tests**, inside the Rust suite, ask whether the runtime did as it
+  was told. They drive the real runtime against a scripted OpenAI-compatible
+  server. If you change messaging, they are the ones that will catch you.
+- **Evals** ask whether the resulting traffic is something an operator would
+  want to watch. Every cascade defect this app has had passed the first suite
+  and failed this one. CI cannot see a prompt that makes agents chattier, so if
+  you change a prompt, run the live half: `./scripts/evals.sh`, which costs
+  money.
+- **Trajectory** asks whether the machinery behaved: every placeholder closed,
+  every parked turn released, every model call on the run's bill, nothing filed
+  against a run already reported finished. If you touch streaming, settle
+  detection, retries or the budget, run it.
+
+```sh
+cargo test --manifest-path src-tauri/Cargo.toml --test trajectory
+```
+
+The other suites, one per subsystem with something live behind it, are in
+this file: the group recording, the subscription, the account, the
+plugins, the two machine providers, and the two reads off OpenRouter's catalog.
+Run the one you touched.
 
 ## What looks like a simplification and is not
 

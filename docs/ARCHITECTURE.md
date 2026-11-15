@@ -2,7 +2,7 @@
 
 Decisions worth explaining, and the reasoning that would otherwise be lost.
 Routines, machines and the workspace have files of their own beside this one,
-and `AGENTS.md` routes between all four.
+and `docs/ROUTING.md` routes between all four.
 
 ## The runtime lives in Rust, not the webview
 
