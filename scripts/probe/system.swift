@@ -167,8 +167,15 @@ case "watch-front":
     emit(["watching": true, "front": appSummary(NSWorkspace.shared.frontmostApplication)])
     RunLoop.main.run()
 case "idle":
-    let any = CGEventType(rawValue: ~0)!
-    emit(["seconds": CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: any)])
+    // Keys, the pointer and the wheel, and nothing else: a display waking,
+    // which the probe does itself, resets the count of any event with
+    // nobody at the Mac.
+    let input: [CGEventType] = [
+        .keyDown, .flagsChanged, .mouseMoved, .scrollWheel,
+        .leftMouseDown, .rightMouseDown, .otherMouseDown,
+        .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
+    ]
+    emit(["seconds": input.map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }.min()!])
 case "windows":
     guard let pid = Int(args.dropFirst().first ?? "") else { refuse("windows needs a pid") }
     emit(windows { ($0[kCGWindowOwnerPID as String] as? Int) == pid })

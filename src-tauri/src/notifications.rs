@@ -8,8 +8,21 @@
 //!
 //! Everywhere else there is no per-app answer to read, and every reading is
 //! `None`, which tells the window to keep asking the plugin as before.
+//!
+//! On macOS a banner is also raised here rather than through the plugin. The
+//! plugin hands it over with `mac-usernotifications`' blocking send, which
+//! refuses ("main thread is not pumping") unless the main run loop happens to
+//! be idle at that instant, and drops the error: a delivery the window had
+//! already claimed was lost whenever the app was busy, and so was the click on
+//! a banner that did appear. The send runs on that crate's own thread and
+//! needs nothing from the main one, so here it is awaited, and the window
+//! hears whether macOS took it.
 
 use serde::Serialize;
+
+/// The event a click on a banner raised by [`show`] arrives as, carrying the
+/// number the window raised it with.
+pub const CLICKED: &str = "notification-clicked";
 
 /// What macOS will do with a banner from this app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -42,6 +55,18 @@ pub async fn ask() -> Option<Permission> {
 /// Opens the pane where the operator turns them back on.
 pub async fn open_settings() -> Result<(), String> {
     imp::open_settings().await
+}
+
+/// Hands a banner to macOS and returns once macOS has accepted or refused it.
+/// With `click`, a click on it is announced as [`CLICKED`] with that number.
+/// `None` off macOS, where the window raises it through the plugin as before.
+pub async fn show(
+    app: tauri::AppHandle,
+    title: String,
+    body: String,
+    click: Option<u32>,
+) -> Option<Result<(), String>> {
+    imp::show(app, title, body, click).await
 }
 
 #[cfg(target_os = "macos")]
@@ -82,6 +107,36 @@ mod imp {
             tracing::warn!(%err, "could not ask for permission to notify");
         }
         current().await
+    }
+
+    pub async fn show(
+        app: tauri::AppHandle,
+        title: String,
+        body: String,
+        click: Option<u32>,
+    ) -> Option<Result<(), String>> {
+        let sent =
+            mac_usernotifications::Notification::new().title(title).message(body).send().await;
+        let handle = match sent {
+            Ok(handle) => handle,
+            Err(err) => {
+                tracing::warn!(%err, "macOS did not accept a notification");
+                return Some(Err(err.to_string()));
+            }
+        };
+        if let Some(click) = click {
+            // Awaited, not blocked on: the response arrives through the
+            // delegate on the main run loop, which this only waits to hear.
+            tauri::async_runtime::spawn(async move {
+                if handle.response().await.is_ok_and(|response| response.is_default_action()) {
+                    use tauri::Emitter;
+                    if let Err(err) = app.emit(super::CLICKED, click) {
+                        tracing::warn!(%err, "could not report a click on a notification");
+                    }
+                }
+            });
+        }
+        Some(Ok(()))
     }
 
     pub async fn open_settings() -> Result<(), String> {
@@ -187,5 +242,14 @@ mod imp {
 
     pub async fn open_settings() -> Result<(), String> {
         Err("Only macOS keeps this switch.".into())
+    }
+
+    pub async fn show(
+        _app: tauri::AppHandle,
+        _title: String,
+        _body: String,
+        _click: Option<u32>,
+    ) -> Option<Result<(), String>> {
+        None
     }
 }

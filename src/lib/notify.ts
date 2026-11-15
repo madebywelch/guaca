@@ -8,6 +8,12 @@
  * the claim won. Two windows open on one Host are two offers and one banner,
  * because `claimDelivery` answers true once.
  *
+ * On a Mac a banner counts as shown only once macOS has taken it. A delivery
+ * macOS refuses after the claim is still in For you and its channel, but the
+ * Host has already counted it as shown and offers it to no other window and no
+ * push. Showing before claiming would close that gap by raising one banner per
+ * open window, which is what the claim is for.
+ *
  * Claim first, then show, and ask whether this page may show anything before
  * either. A page that claims what it cannot show has taken the only copy away
  * from a window that could. On a Mac that has never been asked, that question

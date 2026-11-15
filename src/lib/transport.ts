@@ -516,6 +516,9 @@ export async function probe(candidate: Remote): Promise<{ build: string; capabil
   return { build: String(said.build ?? ""), capabilities: (body as { ok: unknown }).ok };
 }
 
+/** Imported once, by the first local call, and shared by every call after it. */
+let tauriCore: Promise<typeof import("@tauri-apps/api/core")> | null = null;
+
 /**
  * Calls a native client command, whatever host the window shows.
  *
@@ -531,8 +534,8 @@ export async function invokeLocal<T>(name: string, args?: Record<string, unknown
       message: `${name} is a desktop command, and this page is not the desktop app`,
     } satisfies Refusal;
   }
-  const core = await import("@tauri-apps/api/core");
-  return core.invoke<T>(name, args);
+  tauriCore ??= import("@tauri-apps/api/core");
+  return (await tauriCore).invoke<T>(name, args);
 }
 
 /**
@@ -946,8 +949,18 @@ async function permitted(): Promise<boolean> {
   }
 }
 
+/** What a click on a banner the app handed to macOS arrives as (notifications.rs). */
+const NOTIFICATION_CLICKED = "notification-clicked";
+
 /** The one question to macOS in flight, so a burst of offers puts it once. */
 let askingMac: Promise<NotificationAccess | null> | null = null;
+
+/**
+ * Whether this app answered as macOS, the last time it was asked. A banner on
+ * a Mac is handed over by the app itself and not by the plugin, which drops it
+ * whenever the main thread is busy (see notifications.rs).
+ */
+let onMac = false;
 
 /**
  * Whether a notification raised now would be shown, asking macOS first if it
@@ -964,6 +977,7 @@ export async function willNotify(): Promise<boolean> {
   });
   try {
     const system = await askingMac;
+    onMac = system !== null;
     return system === null || system === "allowed";
   } catch {
     return false;
@@ -982,6 +996,26 @@ const clicks = new Map<number, () => void>();
 const CLICKS_KEPT = 64;
 let nextClick = Math.floor(Math.random() * 2 ** 30);
 let listening: Promise<unknown> | null = null;
+let listeningOnMac: Promise<unknown> | null = null;
+
+/** Keeps what a click on a notification should do, and the id to find it by. */
+function remember(onClick: () => void): number {
+  const id = nextClick++ % 2 ** 31;
+  clicks.set(id, onClick);
+  for (const oldest of clicks.keys()) {
+    if (clicks.size <= CLICKS_KEPT) break;
+    clicks.delete(oldest);
+  }
+  return id;
+}
+
+/** Runs what a click on the notification raised with this id should do, once. */
+function clicked(id: number | undefined) {
+  const go = id === undefined ? undefined : clicks.get(id);
+  if (id === undefined || !go) return;
+  clicks.delete(id);
+  go();
+}
 
 /**
  * Raises a notification, if the operator has allowed one.
@@ -996,11 +1030,33 @@ let listening: Promise<unknown> | null = null;
 export async function notify(title: string, body: string, onClick?: () => void): Promise<boolean> {
   // On a Mac this is macOS's own answer, asked for if it never has been, which
   // is how the test button puts the question. A Mac that says no gets nothing
-  // raised and hears false: the plugin hands a banner to the system and never
-  // reports whether it appeared, so this is the only true answer there is.
+  // raised and hears false.
   if (!(await willNotify())) return false;
   try {
+    if (desktop && onMac) {
+      // Handed over by the app, which answers once macOS has taken it or
+      // refused it, so true here means macOS has the banner. Clicks come back
+      // as an event, listened for before anything can be clicked.
+      let click: number | null = null;
+      if (onClick) {
+        listeningOnMac ??= import("@tauri-apps/api/event")
+          .then((events) =>
+            events.listen<number>(NOTIFICATION_CLICKED, (message) => clicked(message.payload)),
+          )
+          .catch(() => {});
+        await listeningOnMac;
+        click = remember(onClick);
+      }
+      try {
+        return await invokeLocal<boolean>("show_notification", { title, body, click });
+      } catch {
+        if (click !== null) clicks.delete(click);
+        return false;
+      }
+    }
     if (desktop) {
+      // Everywhere else the plugin hands a banner to the system and never
+      // reports whether it appeared.
       const plugin = await import("@tauri-apps/plugin-notification");
       if (!onClick) {
         plugin.sendNotification({ title, body });
@@ -1010,21 +1066,11 @@ export async function notify(title: string, body: string, onClick?: () => void):
       // only tracks what it raised while a listener existed.
       listening ??= plugin
         .onAction((action) => {
-          const id = action.notification?.id;
-          const go = id === undefined ? undefined : clicks.get(id);
-          if (action.actionId !== "tap" || id === undefined || !go) return;
-          clicks.delete(id);
-          go();
+          if (action.actionId === "tap") clicked(action.notification?.id);
         })
         .catch(() => {});
       await listening;
-      const id = nextClick++ % 2 ** 31;
-      clicks.set(id, onClick);
-      for (const oldest of clicks.keys()) {
-        if (clicks.size <= CLICKS_KEPT) break;
-        clicks.delete(oldest);
-      }
-      plugin.sendNotification({ id, title, body });
+      plugin.sendNotification({ id: remember(onClick), title, body });
       return true;
     }
     const shown = new Notification(title, { body });

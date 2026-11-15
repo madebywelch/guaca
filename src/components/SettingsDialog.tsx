@@ -161,6 +161,9 @@ const ATTENTION_ROWS: { key: keyof Attention; label: string; hint: string }[] = 
   },
 ];
 
+/** A test macOS allows and then refuses to take, which no switch explains. */
+const NOT_ACCEPTED = "Not sent. macOS did not accept the notification.";
+
 /**
  * What the Notifications pane says about macOS, above the test button. Only a
  * Mac has a per-app answer to read; everywhere else the test is still the only
@@ -1982,9 +1985,11 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                             : {
                                 tone: "error",
                                 text:
-                                  access === "unavailable"
-                                    ? MAC_ACCESS.unavailable
-                                    : MAC_ACCESS.denied,
+                                  access === "allowed"
+                                    ? NOT_ACCEPTED
+                                    : access === "unavailable"
+                                      ? MAC_ACCESS.unavailable
+                                      : MAC_ACCESS.denied,
                               },
                         );
                         return;
