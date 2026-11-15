@@ -259,6 +259,10 @@ def screen_step(what: str) -> None:
             f"{what}: Accessibility is not allowed for the app that runs this command "
             "(System Settings, Privacy & Security, Accessibility)"
         )
+    if access["locked"]:
+        # Behind the lock screen Notification Center draws neither the
+        # question nor a banner, so there is nothing to press.
+        raise Failed(f"{what}: the screen is locked, and only a person can unlock it")
     person_away(what)
 
 
@@ -316,6 +320,7 @@ class Host:
         self.token = secrets.token_hex(32)
         self.db = scratch.host / "data/guac.db"
         self.proc: subprocess.Popen | None = None
+        self.waiting: list[str] = []
 
     def start(self) -> None:
         env = {
@@ -349,8 +354,9 @@ class Host:
                 self.proc.kill()
                 self.proc.wait()
 
-    def seed(self, delivery: dict | None = None) -> str | None:
-        """The seeded group, and one delivery waiting for a window if asked.
+    def seed(self, delivery: dict | None = None, count: int = 1) -> str | None:
+        """The seeded group, and `count` deliveries waiting for a window if
+        asked. Returns the first one's id; `self.waiting` holds them all.
 
         The schema is the Host's to make, so it is started once and stopped
         before anything is written, and started again to read it.
@@ -360,9 +366,11 @@ class Host:
         seeded = run([sys.executable, str(SEED), "--db", str(self.db)])
         if seeded.returncode != 0:
             raise Failed(f"could not seed the workspace: {seeded.stderr.strip()}")
-        delivery_id = None
-        if delivery is not None:
+        self.waiting = []
+        for _ in range(count if delivery is not None else 0):
+            assert delivery is not None
             delivery_id = str(uuid.uuid4())
+            self.waiting.append(delivery_id)
             now = int(time.time() * 1000)
             with sqlite3.connect(self.db) as conn:
                 agent = None
@@ -379,7 +387,7 @@ class Host:
                      DELIVERY_BODY, json.dumps(target), now, now),
                 )
         self.start()
-        return delivery_id
+        return self.waiting[0] if self.waiting else None
 
     def delivery(self, delivery_id: str) -> dict:
         with sqlite3.connect(f"file:{self.db}?mode=ro", uri=True) as conn:
@@ -625,16 +633,18 @@ def background_launch(record: Record, app: App, label: str, quiet: bool) -> None
 
 def scenario_launch(record: Record, scratch: Scratch) -> None:
     """What a background launch does to the front, and whose doing it is."""
-    app = App(scratch, fresh_bundle())
-    signed = codesign(app.path)
-    record.check("the test build is signed as its own bundle", signed["valid"], signed, stop=True)
+    plain = App(scratch, fresh_bundle(), "plain")
+    app = App(scratch, fresh_bundle(), "quiet")
+    for copy in (plain, app):
+        signed = codesign(copy.path)
+        record.check("the test build is signed as its own bundle", signed["valid"], signed, stop=True)
     try:
-        background_launch(record, app, "first background launch of a new bundle", quiet=False)
-        background_launch(record, app, "second background launch of the same bundle", quiet=False)
-        # The probe's own launches ask the app not to activate itself; this
-        # is the same launch with that one difference, so the pair says
-        # whose doing the front was.
-        background_launch(record, app, "background launch with the app's activation off", quiet=True)
+        background_launch(record, plain, "first background launch of a new bundle", quiet=False)
+        background_launch(record, plain, "second background launch of the same bundle", quiet=False)
+        # Every other scenario launches a bundle macOS has never seen with
+        # the app's own activation turned off. This is that launch, on a
+        # second new bundle, so it is held to what the others rely on.
+        background_launch(record, app, "first background launch of a new bundle, activation off", quiet=True)
 
         person_away("launching in the foreground")
         watch = FrontWatch()
@@ -647,12 +657,16 @@ def scenario_launch(record: Record, scratch: Scratch) -> None:
                 took = False
             hand_back(app, watch.before)
             record.check("a normal launch takes the front", took)
+            after = front()
             record.check("a normal launch: the app that was in front is in front again",
-                         front().get("pid") == watch.before.get("pid"))
+                         after.get("pid") == watch.before.get("pid"),
+                         {"before": watch.before.get("bundle"), "after": after.get("bundle"),
+                          "activations": [e.get("bundle") for e in watch.events]})
         finally:
             watch.stop()
             app.quit()
     finally:
+        plain.forget()
         app.forget()
 
 
@@ -688,6 +702,30 @@ def banner(bundle: str) -> str:
     return rf'Presenting <NotificationRecord app:"{re.escape(bundle)}"[^>]*> as banner'
 
 
+def held_back(log: UnifiedLog, bundle: str) -> str | None:
+    """Why macOS kept the bundle's banner off the screen, if it did.
+
+    usernoted logs "Presenting ... as banner" either way; the decision is the
+    Do Not Disturb resolution before it. A Focus, or the display being shared
+    or mirrored ("display shared", the default while Screen Sharing is
+    connected), silences everything but the system's own questions.
+    """
+    pattern = (rf"interruptionSuppression: silence;.*resolutionReason: ([^;]+);"
+               rf".*bundleIdentifier: {re.escape(bundle)};")
+    for message in log.matching(pattern):
+        found = re.search(pattern, message)
+        if found:
+            return found.group(1)
+    return None
+
+
+def drawn(record: Record, log: UnifiedLog, bundle: str) -> None:
+    """A banner macOS says it presented is on screen only if nothing silenced it."""
+    reason = held_back(log, bundle)
+    record.check("macOS does not hold the banner back", reason is None,
+                 {"reason": reason} if reason else None, stop=True)
+
+
 def fresh_bundle() -> str:
     return f"{IDENTIFIER}.fresh{uuid.uuid4().hex[:8]}"
 
@@ -697,6 +735,30 @@ def notification_center() -> int:
     if not found:
         raise Failed("Notification Center is not running")
     return int(found[0])
+
+
+def press_when_shown(what: str, *press: str) -> Any:
+    """Presses system UI as soon as Notification Center has drawn it.
+
+    The log says macOS presented something a moment before the element exists,
+    and a banner is up for only a few seconds, so the press is retried until it
+    lands, and a miss says what was there instead.
+    """
+    center = str(notification_center())
+    last = ""
+
+    def attempt() -> Any:
+        nonlocal last
+        try:
+            return helper(press[0], center, *press[1:])
+        except Failed as why:
+            last = str(why)
+            return None
+
+    try:
+        return wait_until(what, attempt, 5, every=0.2)
+    except Failed:
+        raise Failed(f"{what}: {last}; what names {APP_NAME}: {helper('describe', center, APP_NAME)}") from None
 
 
 def scenario_permission(record: Record, scratch: Scratch) -> None:
@@ -761,6 +823,7 @@ def scenario_notification(record: Record, scratch: Scratch) -> None:
             record.check("the waiting delivery is claimed", True)
             log.wait_for("macOS presents it", banner(IDENTIFIER), 10)
             record.check("macOS presents it as a banner", True)
+            drawn(record, log, IDENTIFIER)
         elif permission == "notAsked":
             log.wait_for("the app asks macOS", asked(IDENTIFIER), 20)
             record.check("the app asks macOS before claiming", True)
@@ -858,10 +921,11 @@ class Prompted:
     pressing a button on it. Whatever was started is stopped on the way out,
     however far it got: a question nobody answers is left on someone's screen."""
 
-    def __init__(self, record: Record, scratch: Scratch, button: str) -> None:
+    def __init__(self, record: Record, scratch: Scratch, button: str, count: int = 1) -> None:
         self.record = record
         self.scratch = scratch
         self.button = button
+        self.count = count
         self.app: App | None = None
         self.host: Host | None = None
         self.log: UnifiedLog | None = None
@@ -880,7 +944,7 @@ class Prompted:
         bundle = fresh_bundle()
         self.host = Host(self.scratch)
         self.record.secrets.append(self.host.token)
-        delivery = self.host.seed({"agent": "Critic"})
+        delivery = self.host.seed({"agent": "Critic"}, self.count)
         assert delivery
         self.delivery = delivery
         self.app = App(self.scratch, bundle)
@@ -890,7 +954,7 @@ class Prompted:
         self.log.wait_for("macOS shows its question", prompt(bundle), 20)
         self.record.check("macOS asks about the fresh bundle", True)
         person_away(f"pressing {self.button}")
-        pressed = helper("press", str(notification_center()), "AXButton", self.button, APP_NAME)
+        pressed = press_when_shown(f"pressing {self.button}", "press", "AXButton", self.button, APP_NAME)
         self.record.check(f"pressed {self.button} on the question about {APP_NAME}", True, pressed)
 
     def __exit__(self, *_: Any) -> None:
@@ -914,7 +978,17 @@ def scenario_allow(record: Record, scratch: Scratch) -> None:
         record.check("the waiting delivery is claimed once the answer is yes", True)
         it.log.wait_for("macOS presents it", banner(app.bundle), 10)
         record.check("macOS presents it as a banner", True)
+        drawn(record, it.log, app.bundle)
         record.check("the app reports allowed", app.state()["notifications"] == "allowed")
+        assert app.client
+        client = app.client
+        open_notifications(client)
+        wait_until("the pane says macOS allows it", lambda: PANE["allowed"] in pane_text(client), 5)
+        record.check("the pane says macOS allows notifications", True)
+        client.page("main", do="click", role="button", name="Send a test notification")
+        wait_until("the pane says it was sent", lambda: SENT in pane_text(client), 10)
+        wait_until("macOS presents the test", lambda: len(it.log.matching(banner(app.bundle))) == 2, 10)
+        record.check("the Settings test button is presented as a second banner", True)
 
 
 def scenario_deny(record: Record, scratch: Scratch) -> None:
@@ -924,8 +998,15 @@ def scenario_deny(record: Record, scratch: Scratch) -> None:
         host, app = it.host, it.app
         wait_until("the app reads the answer", lambda: app.state()["notifications"] == "denied", 10)
         record.check("the app reports denied", True)
-        open_notifications(app.client)
-        record.check("the pane says macOS has notifications turned off", PANE["denied"] in pane_text(app.client))
+        client = app.client
+        open_notifications(client)
+        try:
+            wait_until("the pane reads macOS's answer", lambda: PANE["denied"] in pane_text(client), 5)
+            says = True
+        except Failed:
+            says = False
+        record.check("the pane says macOS has notifications turned off", says,
+                     {"pane": macos_line(pane_text(client))})
         record.check("nothing is claimed",
                      holds_for("unclaimed", lambda: host.delivery(it.delivery)["status"] == "pending", 3))
         record.check("no banner is presented", not it.log.matching(banner(app.bundle)))
@@ -936,15 +1017,33 @@ def scenario_click(record: Record, scratch: Scratch) -> None:
     with Prompted(record, scratch, "Allow") as it:
         assert it.app and it.host and it.log and it.app.client
         client = it.app.client
-        it.log.wait_for("macOS presents the delivery", banner(it.app.bundle), 15)
-        record.check("the delivery is on screen as a banner", True)
         critic = it.host.agent_id("Critic")
+        it.log.wait_for("macOS presents the delivery", banner(it.app.bundle), 15)
+        drawn(record, it.log, it.app.bundle)
+        record.check("the delivery is on screen as a banner", True)
         record.check("another conversation is open first", client.page("main", do="view")["selected"] != critic)
+        # A banner stays up for a few seconds, so it is pressed as soon as it
+        # can be found, and found as soon as it is drawn.
         screen_step("clicking the banner")
-        helper("press-group", str(notification_center()), DELIVERY_TITLE)
+        press_when_shown("clicking the banner", "press-group", DELIVERY_TITLE)
         wait_until("the window opens the conversation",
                    lambda: client.page("main", do="view")["selected"] == critic, 10)
         record.check("the click opens the conversation the delivery is about", True)
+
+
+def scenario_away(record: Record, scratch: Scratch) -> None:
+    """Screen: four deliveries waiting when the window connects are one banner, and all four are taken."""
+    with Prompted(record, scratch, "Allow", count=4) as it:
+        assert it.app and it.host and it.log
+        host, log, bundle = it.host, it.log, it.app.bundle
+        wait_until("the window claims every waiting delivery",
+                   lambda: all(host.delivery(d)["delivered"] for d in host.waiting), 15)
+        record.check("all four waiting deliveries are claimed", True, {"waiting": len(host.waiting)})
+        log.wait_for("macOS presents a banner", banner(bundle), 10)
+        drawn(record, log, bundle)
+        record.check("they are presented as one banner",
+                     holds_for("one banner", lambda: len(log.matching(banner(bundle))) == 1, 3),
+                     {"banners": len(log.matching(banner(bundle)))})
 
 
 def scenario_capture(record: Record, scratch: Scratch) -> None:
@@ -982,6 +1081,7 @@ SCENARIOS: dict[str, Callable[[Record, Scratch], None]] = {
     "allow": scenario_allow,
     "deny": scenario_deny,
     "click": scenario_click,
+    "away": scenario_away,
     "capture": scenario_capture,
 }
 
@@ -1071,6 +1171,12 @@ def main() -> int:
     if not BUILT_APP.exists() or not GUACAD.exists():
         print("no test build; run without --no-build", file=sys.stderr)
         return 2
+
+    # A banner, the permission question and a capture all need a lit
+    # display: wake it once, then keep it and the Mac awake until this
+    # process exits, without touching the Mac's own sleep settings.
+    run(["caffeinate", "-u", "-t", "1"])
+    subprocess.Popen(["caffeinate", "-d", "-i", "-w", str(os.getpid())])
 
     results = []
     deferrals: list[dict] = []

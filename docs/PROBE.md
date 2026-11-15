@@ -28,6 +28,7 @@ scripts/probe.py launch panel            # some of them
 scripts/probe.py --runs 1 permission     # once
 scripts/probe.py --no-build notification # reuse the last test build
 scripts/probe.py --keep panel            # leave the scratch directories
+scripts/probe.py --patience 600 click    # give up on a busy Mac after ten minutes
 ```
 
 It needs a Mac with the toolchain `install.sh` needs (Rust, pnpm) and the
@@ -35,6 +36,17 @@ Xcode command line tools, for `swiftc`. Progress goes to stderr; stdout is one
 JSON document with every step of every run, `pass` overall, and `identical`
 per scenario, which says whether the runs came out step for step the same. The
 exit status is 1 if any step failed.
+
+A run that would take the front or act on system UI while someone is using the
+Mac is put off, not forced: it is tried again once nobody has touched the
+keyboard or pointer for five seconds, for up to `--patience` seconds (half an
+hour by default), and `deferrals` in the JSON lists every run that was put
+off. Input from a Screen Sharing session counts as someone at the Mac.
+
+While it runs, the command holds the display and the Mac awake with
+`caffeinate`, and wakes the display once at the start, so a banner, the
+question and a capture are drawn on a lit screen. Nothing in the Mac's own
+energy settings changes.
 
 ## What a run does
 
@@ -127,6 +139,11 @@ the app says it did.
   "Presenting `<NotificationRecord app:"com.apple.notificationcenter.askpermissions" … req:"*bundle*">` as alert"
   (macOS put its question on screen), "Removing displayed …" (it took it down),
   and "Presenting `<NotificationRecord app:"*bundle*" …>` as banner".
+  That last line is written whether or not anything is drawn, so a banner also
+  has to pass usernoted's Do Not Disturb resolution for the bundle: a line with
+  "interruptionSuppression: silence" and a `resolutionReason` (a Focus, or
+  "display shared" while the screen is shared or mirrored) means macOS kept it
+  off the screen, and the step fails with that reason.
 - **The front app**, from `NSWorkspace`'s activation notification, so even a
   moment in front is seen (`scripts/probe/system.swift watch-front`).
 - **Windows on screen**, from the window server, by process.
@@ -136,24 +153,51 @@ the app says it did.
 `scripts/probe/system.swift` is compiled on first use into
 `src-tauri/target/probe/system`.
 
+### macOS 26 and 27
+
+The scenarios were run on Apple silicon under macOS 26 and 27. The log lines
+above match on both. macOS 27 adds `category:"permission"` and
+`dismissAfterDefaultAction:true` inside the record, appends the presented
+options to the line ("as banner (["badge", "sound", "alert"])"), and names the
+app's path in "Sending request for permission for *bundle* with path …"; the
+patterns allow for all three. Two things differ for the screen layer. macOS 27
+draws the question's Allow and Don't Allow only under the pointer, and offers
+them to assistive technology as named actions on the question's group instead
+of as buttons, so `press` takes a button with that name if there is one and
+the group's action with that name otherwise. And macOS 27's Notification Center can list
+application elements among its own children that lead back to itself, so the
+helper does not follow an application or the menu bar below the root, which
+keeps a walk of the tree to a fraction of a second.
+
 ## Scenarios
 
 | Scenario | What it asserts |
 |---|---|
-| `launch` | Launched with `open -g` (asked to stay in the background), a new bundle does not become frontmost, takes no keyboard focus and is still running after ten seconds. Also recorded: the same launch with the app's launch-time activation turned off, and a normal foreground launch. |
+| `launch` | A first launch of a new bundle with `open -g` and the app's own launch-time activation turned off, which is how every other scenario launches, does not become frontmost, takes no keyboard focus and is still running after ten seconds. A normal launch takes the front, and hiding it hands the front back. Recorded, not asserted: the same `open -g` launch with the activation left on, first and second time for one new bundle. On macOS 27 the first one comes to the front and focuses the window and the second does not; macOS 26 brought a first launch to the front the same way. |
 | `permission` | On a bundle macOS has never seen, the app reports "not asked"; with a delivery waiting, connecting asks macOS, macOS shows its question, nothing is claimed while it is unanswered, and macOS takes the question down when the app quits. The probe never answers it. |
 | `notification` | Whatever this Mac allows the probe's own bundle, a waiting delivery and the Settings test button do what the Notifications pane says: claimed and presented as a banner when allowed, asked about when never asked, nothing claimed and nothing presented otherwise. Asserted on the log and the outbox, not on the app's word. |
 | `panel` | With the window closed, a click on the icon opens the panel, the panel lists every agent in the seeded group, a second click closes it, and the app that had the keyboard before has it after. |
-| `allow`, `deny` | Screen: on a fresh bundle, press Allow (or Don't Allow) on macOS's question; then the waiting delivery is claimed and presented as a banner (or the pane says notifications are off and nothing is claimed). |
+| `allow` | Screen: on a fresh bundle, press Allow on macOS's question; the waiting delivery is claimed and drawn as a banner, the app reports allowed, the pane says so, and the Settings test button raises a second banner. |
+| `deny` | Screen: on a fresh bundle, press Don't Allow; the app reports denied, the pane says macOS has notifications turned off, nothing is claimed and no banner is presented. |
 | `click` | Screen: a delivery about one conversation is shown as a banner; clicking it opens that conversation. |
+| `away` | Screen: four deliveries waiting when the window connects, then Allow; all four are claimed and macOS presents exactly one banner, the "While you were away" fold. |
 | `capture` | Screen: one image of each of the test build's own windows, the panel open, and nothing else. |
 
 The screen scenarios press system UI found by accessibility role and name, only
 inside the group whose text names the test build, and only while nobody has
-touched the keyboard or pointer for three seconds; otherwise the step is
+touched the keyboard or pointer for five seconds; otherwise the step is
 reported as deferred rather than forced. They need Accessibility (and, for
 `capture`, Screen Recording) for the app that runs the command, and fail with
-that reason until it has them. The probe never asks for either.
+that reason until it has them. macOS grants both to the responsible process:
+the terminal a person runs the command in, or the agent or service that
+started it, which is what has to be listed in System Settings, Privacy &
+Security. The probe never asks for either. Banners are not drawn while the
+display is shared, so `allow`, `click` and `away` need Screen Sharing
+disconnected, or "Allow notifications when mirroring or sharing the display"
+turned on. And nothing is drawn behind the lock screen, so every screen step
+first checks that the session is unlocked and fails saying so if it is not: a
+Mac that runs the probe unattended needs a logged-in session that does not lock
+when its display sleeps.
 
 ## What it cannot reach
 
@@ -166,7 +210,7 @@ that reason until it has them. The probe never asks for either.
 - **What anything looks like.** The probe reads text, roles and state, never
   pixels. `capture` saves images for a person to look at.
 - **macOS's own wording.** The labels `allow` and `deny` press are the ones
-  macOS shows in English.
+  macOS shows in English, "Allow" and "Don’t Allow" with a curly apostrophe.
 - **How many times a test bundle is listed.** Each fresh bundle that asks
   about notifications can appear in System Settings, Notifications, until macOS
   forgets the copy.
@@ -178,6 +222,7 @@ notifications is drawn by Notification Center: `permission` puts it on screen
 once per run, for the few seconds until the app quits and macOS takes it down,
 and so do `allow`, `deny` and `click` until they answer it. `launch`
 brings the test build to the front for a moment in each run, and hides it again
-straight away. No banner is raised unless macOS allows the test bundle to show
-one. The delivery the probe seeds says it is a test, and the Settings test
+straight away. Every launch, even a quiet one, puts the test build's icon in
+the Dock for the length of the run. No banner is raised unless macOS allows the
+test bundle to show one. The delivery the probe seeds says it is a test, and the Settings test
 button's banner carries the test build's name, Guaca Probe.

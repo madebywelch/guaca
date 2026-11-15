@@ -139,6 +139,7 @@ panel. No key, no spend, nothing written to the operator's profile.
 ```sh
 scripts/probe.py --list
 scripts/probe.py --runs 1 panel
+scripts/probe.py --no-build launch permission notification panel   # no screen layer
 ```
 
 ## What you cannot do from here
@@ -146,8 +147,10 @@ scripts/probe.py --runs 1 panel
 `screencapture` needs Screen Recording permission and `osascript` needs
 Accessibility, and neither is granted to the terminal by default. Without them
 there is no way to screenshot the real window or press macOS's own dialogs from
-a shell, and the probe's screen scenarios (`allow`, `deny`, `click`,
-`capture`) fail saying so. Use the harness for anything visual, and ask the
+a shell, and the probe's screen scenarios (`allow`, `deny`, `click`, `away`,
+`capture`) fail saying so. Banners are not drawn while the display is shared,
+so `allow`, `click` and `away` also fail, naming the reason, while a Screen
+Sharing session is connected. Use the harness for anything visual, and ask the
 operator to look when only the real app will do.
 
 ## Before you say it works
