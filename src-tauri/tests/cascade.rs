@@ -24,6 +24,7 @@ use guac_lib::domain::connector::CleanConnector;
 use guac_lib::domain::envelope::{Part, Participant, ToolOutcome};
 use guac_lib::domain::group::{CleanGroup, GroupLimits, InferenceOverrides};
 use guac_lib::domain::now_ms;
+use guac_lib::domain::outcome::Status as OutcomeStatus;
 use guac_lib::domain::routine::{Cadence, EventTrigger, RunKind, Trigger};
 use guac_lib::domain::signin::{Signin, Surface};
 use guac_lib::llm::openrouter::LlmClient;
@@ -3101,7 +3102,7 @@ async fn a_refused_courtesy_tells_the_agent_what_to_do_instead() {
         "the agent has to be told why, or it rewords and tries again: {told}"
     );
     assert!(
-        told.contains("Reply to the operator instead"),
+        told.contains("Put what you still need in your final message instead"),
         "a refusal without a way forward is a dead end: {told}"
     );
     assert!(
@@ -6637,4 +6638,186 @@ async fn a_keyed_message_sent_while_the_host_is_stopping_is_answered_by_the_next
     h.settle(run).await;
     assert_eq!(h.channel_texts("Researcher"), ["Are you there?", "Here."]);
     assert!(notices_of(&h, "Researcher", NoticeKind::Interrupted).is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_recurring_check_that_found_nothing_ends_quiet_with_an_outcome_and_no_notice() {
+    // A check that runs every morning and finds nothing most mornings. Told
+    // that silence is the one wrong answer, it wrote a line a day saying so,
+    // and a silent one drew a notice that the agent had stopped. Now it is told
+    // it may say nothing, and the run's outcome says it ran and found nothing.
+    let stub = serve(|_| Script::Say(String::new())).await;
+    let h = harness(&stub, &["Watcher"], GuardLimits::default());
+    let routine = h
+        .runtime
+        .store()
+        .create_routine(
+            h.id("Watcher"),
+            "Listings sweep",
+            "Check the listings and say what is new.",
+            Trigger::Clock(Cadence::Daily),
+            Some(now_ms() + 3_600_000),
+            false,
+        )
+        .unwrap();
+    let run = h.runtime.test_routine(&routine).unwrap();
+    h.settle(run).await;
+
+    let prompt = prompts_by_agent(&stub).remove("Watcher").expect("the Watcher ran");
+    assert!(prompt.contains("This is a check that runs again"), "{prompt}");
+    let outcome = h.runtime.store().outcome(run).unwrap().expect("a finished run has an outcome");
+    assert_eq!(outcome.status, OutcomeStatus::NothingNew, "{}", h.transcript());
+    assert_eq!(outcome.headline, "Ran and found nothing new.");
+    assert!(
+        !guard_stopped(&h, "Watcher"),
+        "a check allowed to be silent was reported as stopping:\n{}",
+        h.transcript()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_one_off_that_ends_in_silence_is_still_reported() {
+    // The other ending. Work that will not come round again has nowhere else
+    // to be reported, so silence there is still the one wrong answer.
+    let stub = serve(|_| Script::Say(String::new())).await;
+    let h = harness(&stub, &["Watcher"], GuardLimits::default());
+    let routine = h
+        .runtime
+        .store()
+        .create_routine(
+            h.id("Watcher"),
+            "Renewal",
+            "Renew the domain.",
+            Trigger::Clock(Cadence::Once),
+            Some(now_ms() + 3_600_000),
+            false,
+        )
+        .unwrap();
+    let run = h.runtime.test_routine(&routine).unwrap();
+    h.settle(run).await;
+
+    let prompt = prompts_by_agent(&stub).remove("Watcher").expect("the Watcher ran");
+    assert!(prompt.contains("Saying nothing here is the one wrong answer"), "{prompt}");
+    assert!(!prompt.contains("This is a check that runs again"), "{prompt}");
+    assert!(guard_stopped(&h, "Watcher"), "the silence went unremarked:\n{}", h.transcript());
+    let outcome = h.runtime.store().outcome(run).unwrap().expect("a finished run has an outcome");
+    assert_eq!(outcome.status, OutcomeStatus::Done, "{}", h.transcript());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_operator_message_read_mid_turn_is_answered_under_the_prompt_for_it() {
+    // A routine's turn is told nobody is waiting on a reply. The operator
+    // types while it works, the message is read on the next round, and from
+    // then on somebody is waiting: the prompt has to say so on that round
+    // rather than keep the one the turn started with.
+    let hook: Arc<std::sync::OnceLock<(Runtime, guac_lib::domain::ids::AgentId)>> =
+        Arc::new(std::sync::OnceLock::new());
+    let armed = hook.clone();
+    let rounds: Arc<parking_lot::Mutex<Vec<String>>> = Arc::default();
+    let seen = rounds.clone();
+    let stub = serve(move |body| {
+        let system = body["messages"][0]["content"].as_str().unwrap_or_default().to_string();
+        seen.lock().push(system);
+        if anyone_said(body, "What did you find") {
+            return Script::Say("Found two new listings.".into());
+        }
+        if let Some((runtime, watcher)) = armed.get() {
+            runtime.send_from_human(*watcher, "What did you find?").unwrap();
+        }
+        Script::Progress("sweeping".into())
+    })
+    .await;
+    let h = harness(&stub, &["Watcher"], GuardLimits::default());
+    let _ = hook.set((h.runtime.clone(), h.id("Watcher")));
+    let routine = h
+        .runtime
+        .store()
+        .create_routine(
+            h.id("Watcher"),
+            "Listings sweep",
+            "Check the listings and say what is new.",
+            Trigger::Clock(Cadence::Once),
+            Some(now_ms() + 3_600_000),
+            false,
+        )
+        .unwrap();
+    let run = h.runtime.test_routine(&routine).unwrap();
+    h.settle(run).await;
+
+    let rounds = rounds.lock().clone();
+    assert!(rounds.len() >= 2, "{rounds:?}");
+    assert!(rounds[0].contains("You have been given something to do"), "{}", rounds[0]);
+    let last = rounds.last().unwrap();
+    assert!(
+        last.contains("Your final message goes to the human operator"),
+        "the round that read the operator's message still had the routine's prompt:\n{last}"
+    );
+    assert!(!last.contains("You have been given something to do"), "{last}");
+    assert!(last.trim_end().ends_with("they come back."), "presence stays last:\n{last}");
+    assert!(
+        h.channel_texts("Watcher").iter().any(|t| t.contains("two new listings")),
+        "{}",
+        h.transcript()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_turn_that_reads_the_last_answer_closes_the_delegation_and_its_line_is_the_outcome() {
+    // The answer to a delegation used to come back to a turn told that
+    // silence was usually right, so whether its result was ever written down
+    // was up to the model. The turn that reads the last answer is now the one
+    // that finishes the work, and its first line is what the operator sees.
+    let closing: Arc<parking_lot::Mutex<Option<String>>> = Arc::default();
+    let kept = closing.clone();
+    let stub = serve(move |body| {
+        let who = speaker(body);
+        let system = body["messages"][0]["content"].as_str().unwrap_or_default();
+        if who == "Chef" {
+            return Script::Say("Booked for 10.".into());
+        }
+        if reading_peer_replies(body) {
+            if system.contains("this turn finishes it") {
+                *kept.lock() = Some(system.to_string());
+                return Script::Say(
+                    "Chef booked the room for 10.\n\nChef confirmed it; nothing is still open."
+                        .into(),
+                );
+            }
+            return Script::Say(String::new());
+        }
+        if has_tool_result(body) {
+            return Script::Say("Asked Chef to book the room.".into());
+        }
+        Script::Instruct { recipients: vec!["Chef".into()], text: "Book the room.".into() }
+    })
+    .await;
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Get the room booked.").unwrap();
+    h.settle(run).await;
+
+    let system = closing.lock().clone().unwrap_or_else(|| {
+        panic!(
+            "the turn reading Chef's answer was never told it closes the work:\n{}",
+            h.transcript()
+        )
+    });
+    assert!(system.contains("The work came from the operator."), "{system}");
+    assert!(
+        system.trim_end().ends_with("a question in your note waits until they come back."),
+        "where the operator is comes last:\n{system}"
+    );
+    let outcome = h.runtime.store().outcome(run).unwrap().expect("a finished run has an outcome");
+    assert_eq!(outcome.headline, "Chef booked the room for 10.", "{}", h.transcript());
+    assert_eq!(outcome.status, OutcomeStatus::Done);
+}
+
+/// Whether the guard wrote a notice in an agent's channel.
+fn guard_stopped(h: &Harness, name: &str) -> bool {
+    h.runtime
+        .store()
+        .channel_messages(h.id(name), 50)
+        .unwrap()
+        .into_iter()
+        .flat_map(|e| e.parts)
+        .any(|part| matches!(part, Part::Notice { kind: NoticeKind::GuardStop, .. }))
 }

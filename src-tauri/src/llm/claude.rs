@@ -156,8 +156,9 @@ pub fn schema(tools: &[ToolSpec]) -> serde_json::Value {
         SAY.to_string(),
         serde_json::json!({
             "type": "string",
-            "description": "What you are saying this round. Empty only when you are \
-                            doing something and have nothing to say about it yet.",
+            "description": "What you are saying this round. Leave it empty while you \
+                            are still working, and in your last round when your instructions say \
+                            to reply with nothing.",
         }),
     );
 

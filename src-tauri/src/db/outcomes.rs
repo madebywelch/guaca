@@ -12,7 +12,7 @@ use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 use super::store::row_to_envelope;
 use super::{Store, StoreError};
 use crate::domain::envelope::{Envelope, NoticeKind, Part, Participant};
-use crate::domain::ids::{AgentId, GroupId, RunId};
+use crate::domain::ids::{AgentId, GroupId, MessageId, RunId};
 use crate::domain::outcome::{
     first_sentence, headline_of, Need, Outcome, Settled, Status, Trigger, NO_NOTE, STOPPED,
 };
@@ -22,6 +22,15 @@ const ENVELOPE: &str = "m.id,m.run_id,m.channel_id,m.from_kind,m.from_agent,m.to
 
 const COLUMNS: &str = "run_id,agent_id,group_id,trigger,trigger_ref,status,headline,note_id,needs,\
      steps,started_at,finished_at,seen_at";
+
+/// What a recurring check that found nothing says it did. Its agent was told
+/// to say nothing in that case, and that Guaca would say this instead.
+pub const NOTHING_NEW: &str = "Ran and found nothing new.";
+
+/// A notice the guard wrote in a channel: a limit reached, a stop, or work
+/// that ended without a word about it.
+const GUARD_STOP: &str = "EXISTS (SELECT 1 FROM json_each(m.parts) \
+     WHERE json_extract(value,'$.type')='notice' AND json_extract(value,'$.kind')='guardStop')";
 
 /// The most a list returns, whatever it was asked for.
 pub const LIST_MAX: u32 = 500;
@@ -65,6 +74,21 @@ pub(super) fn record(
     let failure = first(tx, FAILED, "DESC", params![run.to_string()])?
         .filter(|failure| note.as_ref().is_none_or(|note| failure.created_at > note.created_at));
     let needs = left_open(tx, run)?;
+    // A routine's run that ended without a word from its owner, with nothing
+    // left open and nothing the guard had to say about it in the owner's
+    // channel. The runtime writes that notice whenever silence left work
+    // unreported, so a run without one is a check that ran again, found
+    // nothing, and was told to say nothing in that case.
+    let quiet = note.is_none()
+        && needs.is_empty()
+        && matches!(trigger, Trigger::Routine | Trigger::Event)
+        && first(
+            tx,
+            &format!("m.channel_id=?2 AND {GUARD_STOP}"),
+            "DESC",
+            params![run.to_string(), owner.to_string()],
+        )?
+        .is_none();
 
     let quoted = note.as_ref().and_then(headline_of);
     let (status, headline, note_id) = match (settled, failure) {
@@ -74,6 +98,7 @@ pub(super) fn record(
         (_, Some(failure)) => {
             (Status::Failed, first_sentence(&notice_text(&failure)), Some(failure.id))
         }
+        _ if quiet => (Status::NothingNew, NOTHING_NEW.into(), None),
         _ => (
             if needs.is_empty() { Status::Done } else { Status::NeedsYou },
             quoted.unwrap_or_else(|| NO_NOTE.into()),
@@ -312,7 +337,68 @@ fn read(row: &Row<'_>) -> rusqlite::Result<Result<Outcome, StoreError>> {
     })())
 }
 
+/// The message `run` began with, when the turn reading `batch` is the one that
+/// closes it for `agent`: the agent owns the run, the run has an owner at all
+/// (the operator, a routine or a decision answer started it), every peer the
+/// agent handed work to in it has answered since it last did, and one of those
+/// answers is in the batch. `run` is every message of the run, oldest first.
+///
+/// The last condition is what keeps a courtesy out. A peer that answered and
+/// then wrote again to say thanks has the agent waiting on nobody, and its
+/// thanks is still not the end of anything: only the first word back after an
+/// ask is an answer.
+fn closes<'a>(run: &'a [Envelope], agent: AgentId, batch: &[MessageId]) -> Option<&'a Envelope> {
+    let start = run.first()?;
+    let me = Participant::Agent { id: agent };
+    if start.to != me || Trigger::of(start).is_none() {
+        return None;
+    }
+    let mut asked: Vec<(AgentId, usize)> = Vec::new();
+    for (at, envelope) in run.iter().enumerate() {
+        if let (true, Participant::Agent { id: peer }) = (envelope.from == me, envelope.to) {
+            if peer != agent && envelope.intent.is_work() {
+                asked.retain(|(who, _)| *who != peer);
+                asked.push((peer, at));
+            }
+        }
+    }
+    let answers =
+        |peer: AgentId, e: &Envelope| e.from == Participant::Agent { id: peer } && e.to == me;
+    let answered = |peer: AgentId, at: usize| run[at + 1..].iter().any(|e| answers(peer, e));
+    if asked.is_empty() || !asked.iter().all(|(peer, at)| answered(*peer, *at)) {
+        return None;
+    }
+    let closing = run.iter().enumerate().any(|(i, envelope)| {
+        let Participant::Agent { id: peer } = envelope.from else { return false };
+        batch.contains(&envelope.id)
+            && envelope.to == me
+            && asked.iter().any(|(who, at)| {
+                *who == peer && *at < i && !run[at + 1..i].iter().any(|e| answers(peer, e))
+            })
+    });
+    closing.then_some(start)
+}
+
 impl Store {
+    /// The message `run` began with, when the turn of `agent` that is reading
+    /// `batch` is the one that closes the run. See [`closes`].
+    pub fn closing_start(
+        &self,
+        run: RunId,
+        agent: AgentId,
+        batch: &[MessageId],
+    ) -> Result<Option<Envelope>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {ENVELOPE} FROM messages m WHERE m.run_id=?1 ORDER BY m.created_at, m.id"
+        ))?;
+        let mut messages = Vec::new();
+        for row in stmt.query_map([run.to_string()], row_to_envelope)? {
+            messages.push(row??);
+        }
+        Ok(closes(&messages, agent, batch).cloned())
+    }
+
     /// Finished runs, newest first: everything since `since` in one group or
     /// all of them, or only what the operator has not seen.
     pub fn outcomes(
@@ -416,5 +502,63 @@ impl Store {
             .iter()
             .map(|run| run.parse().map_err(|e| StoreError::Corrupt(format!("bad run id: {e}"))))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::envelope::{Intent, Trust};
+
+    fn say(from: Participant, to: Participant, intent: Intent) -> Envelope {
+        Envelope {
+            id: MessageId::new(),
+            run_id: RunId::new(),
+            channel_id: AgentId::new(),
+            from,
+            to,
+            parts: vec![Part::text("words")],
+            trust: Trust::Peer,
+            hop: 0,
+            expects_reply: intent.is_work(),
+            intent,
+            cause: None,
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn the_first_answer_to_the_last_ask_closes_a_delegation_and_a_thank_you_after_it_does_not() {
+        let (a, b, c) = (AgentId::new(), AgentId::new(), AgentId::new());
+        let (me, chef, bo) = (
+            Participant::Agent { id: a },
+            Participant::Agent { id: b },
+            Participant::Agent { id: c },
+        );
+        let start = say(Participant::Human, me, Intent::Work);
+        let to_chef = say(me, chef, Intent::Work);
+        let to_bo = say(me, bo, Intent::Work);
+        let from_chef = say(chef, me, Intent::Courtesy);
+        let from_bo = say(bo, me, Intent::Courtesy);
+        let thanks = say(chef, me, Intent::Courtesy);
+
+        let mut run = vec![start.clone(), to_chef, to_bo, from_chef.clone()];
+        // Bo has not answered, so this turn finishes nothing.
+        assert!(closes(&run, a, &[from_chef.id]).is_none());
+
+        run.push(from_bo.clone());
+        // Both have; the turn reading Bo's answer is the one that closes it,
+        // and so is a turn that read both answers together.
+        assert_eq!(closes(&run, a, &[from_bo.id]).map(|e| e.id), Some(start.id));
+        assert_eq!(closes(&run, a, &[from_chef.id, from_bo.id]).map(|e| e.id), Some(start.id));
+
+        // A courtesy from a peer that had already answered closes nothing.
+        run.push(thanks.clone());
+        assert!(closes(&run, a, &[thanks.id]).is_none());
+
+        // Nor does a run some other agent owns, or one nobody handed work out in.
+        assert!(closes(&run, b, &[from_bo.id]).is_none());
+        let chat = vec![start, say(me, chef, Intent::Courtesy), thanks.clone()];
+        assert!(closes(&chat, a, &[thanks.id]).is_none());
     }
 }

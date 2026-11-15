@@ -129,9 +129,9 @@ asymmetry that terminates cascades is untouched, because it lives on the answer:
 a reply still expects nothing, whatever the message it answers declared, so a
 chain of instruction and report still costs its own declared work each round and
 still runs out of pair budget, hops and steps. `Assigned` remains for work with
-no peer behind it, which is a routine coming due or an operator line absorbed
-into a turn that was already running: there the note in the agent's own channel
-is exactly where the person who asked is reading.
+no peer behind it, which is a routine coming due, a decision answered, or work
+from Guaca absorbed into a turn that was already running: there the note in the
+agent's own channel is the outcome of the work.
 
 The mode follows the work rather than the sender, and the second incident is
 why. The first version matched on who the message came from, and a routine
@@ -140,6 +140,47 @@ match and fell through to the silent mode, so every schedule an agent kept was
 answered by an agent that had just been told nothing was being asked of it.
 Anything carrying work with nobody to answer is `Assigned`, whoever sent it.
 See `ROUTINES.md`.
+
+**A closing note's first line is the outcome, in every mode that writes to the
+operator.** That line is what the run's outcome quotes (see *A run ends in an
+outcome*), so it is what For you lists and what reaches an operator who is
+away. `ToOperator` is told to put the answer first; `NoteOnly`, `Assigned` and
+`Closing` are told the line is what the operator sees in their list of finished
+work, and the two background modes are held to 160 characters and told that the
+line asks nothing: what needs a choice goes through `decision`, and what has
+stopped goes through `escalate`. `eval.rs` reads it back as two faults, a
+background run whose line is too long for the list and a delegation whose owner
+said nothing once the answer was back.
+
+**`Assigned` has two endings.** Silence is still the one wrong answer to work,
+with one exception: a firing of a routine that runs again (a repeat, or an
+event trigger). A morning check finds nothing most mornings, and a note a day
+saying so is a channel the operator learns to skip, so that turn is told it may
+reply with nothing, the guard writes no notice, and the run's outcome is
+`nothing_new`, written by `outcomes::record` from the facts: a routine's run
+with no note from its owner, nothing left open and no guard notice in the
+owner's channel. Everything else given as work, a one-off, a decision answer,
+anything absorbed, keeps the ending that says silence is wrong.
+
+**The turn that reads the last answer closes the work.** A delegation's result
+used to come back to a `NoteOnly` turn, whose prompt says silence is usually
+right and which the silence check did not cover, so the turn that handed the
+work out was made to report and the turn that read what came of it was invited
+not to. `ReplyMode::Closing` replaces `NoteOnly` when this agent owns the run
+(its first message went to it), the operator, a routine or a decision answer
+started the run, every peer it handed work to in the run has answered, and one
+of those answers is in this batch. The last condition keeps a thank-you out: a
+peer that answered and then wrote again has the agent waiting on nobody, but
+only the first word back after an ask is an answer. `Store::closing_start`
+decides it from the run's messages; its silence is owed, like `Assigned`'s.
+
+**The last section of the system prompt says where the operator is.** One of
+three sentences, from the host's presence (`Runtime::presence`, the same reading
+the outbox decides on): looking at this conversation, Guaca open on something
+else, or not open for a while, with how long and the reminder that a question in
+a note waits until they are back. Last on purpose: it is the only part of the
+system prompt that moves with the operator rather than with the agent, so
+everything above it can stay the same from one turn to the next.
 
 The field is trusted, and that is deliberate. A model can label a courtesy as
 work, and then the run pays for one extra turn and hits the same per-pair,
@@ -209,12 +250,23 @@ Claiming first matters: an exhausted turn cannot show another message to the
 model. Consuming it would release its run without doing its work. Left queued,
 the message keeps its own turn and budget.
 
-**What arrives is context, and never a change of address.** Not the reply mode,
-not the reply target, not the channel the placeholder is already open in, not
-`cause`. All four are decided before the first token and the UI has been drawing
-them ever since; a turn that changed its mind about who it was answering would
-have to close a live bubble in one channel and open it in another, which is a
-worse thing to watch than a late reply.
+**What arrives is context, and never a change of address.** Not the reply
+target, not the channel the placeholder is already open in, not `cause`. All
+three are decided before the first token and the UI has been drawing them ever
+since; a turn that changed its mind about who it was answering would have to
+close a live bubble in one channel and open it in another, which is a worse
+thing to watch than a late reply.
+
+What it can change is what the turn is told about its last message, because
+every mode that takes anything in writes to the same place. An operator's
+message read in a `NoteOnly`, `Assigned` or `Closing` turn moves it to
+`ToOperator`: somebody is now waiting on the answer. Work read in a `NoteOnly`
+turn, or in a recurring check's, moves it to `Assigned` with the ending that says
+silence is wrong. Either way the prompt's reply block is swapped before the next
+call (`prompt::switch_mode`); a turn that kept the block it started with was told
+silence was usually right and then reported for being silent. Work read in any
+mode is owed its report, so a turn that took in "also fix the headline" and said
+nothing is reported even after the mode moved to `ToOperator`.
 
 That constraint is what decides the rule, rather than the other way round. A
 turn in `ToPeer` takes in nothing at all: its answer is addressed to the agent

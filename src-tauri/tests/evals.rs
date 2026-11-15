@@ -25,7 +25,8 @@ use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 
 use guac_lib::domain::ids::{AgentId, RunId};
-use guac_lib::eval::{analyze, faults, Conversation, Fault};
+use guac_lib::domain::outcome::{Outcome, Status, HEADLINE_MAX};
+use guac_lib::eval::{analyze, background, faults, Background, Conversation, Fault};
 use guac_lib::runtime::guard::GuardLimits;
 use guac_lib::trajectory::Trajectory;
 
@@ -40,6 +41,10 @@ struct Eval {
     /// together because they fail apart: a crew can say exactly the right
     /// things through a runtime that left a placeholder open forever.
     trajectory: Trajectory,
+    /// What the runtime recorded the run as ending in.
+    outcome: Option<Outcome>,
+    /// The runs in it that ended with nobody watching.
+    background: Vec<Background>,
 }
 
 impl Eval {
@@ -127,6 +132,8 @@ fn read(h: &Harness, run: RunId, names: &[&str]) -> Eval {
         convo: analyze(&messages, &name_of),
         faults: faults(&messages, &name_of),
         trajectory: h.trajectory(run),
+        outcome: h.runtime.store().outcome(run).unwrap(),
+        background: background(&messages),
     }
 }
 
@@ -1087,6 +1094,11 @@ async fn a_coordinator_delegates_from_what_it_remembered_on_an_earlier_run() {
                 Script::Notes("- Ada does the numbers. Bo does the history.".into())
             };
         }
+        // The turn that reads Ada's answer is told it finishes the work, and
+        // a model that reads its prompt says what came back.
+        if system.contains("this turn finishes it") {
+            return Script::Say("Ada is adding up last quarter.".into());
+        }
         if has_tool_result(body) || reading_peer_replies(body) {
             return report_once(body, "Sent to the one that does numbers.");
         }
@@ -1214,7 +1226,7 @@ mod live {
                 &[],
                 &[],
                 &[],
-                ReplyMode::Assigned,
+                ReplyMode::Assigned { recurring: false },
                 &[],
                 None,
                 surfaces,
@@ -1381,15 +1393,52 @@ mod live {
         secs: u64,
         setup: impl FnOnce(&Harness),
     ) -> Option<(Harness, Eval)> {
+        run_live_started(crew, secs, |h| {
+            setup(h);
+            h.runtime.send_from_human(h.id(crew[0].name), instruction).unwrap()
+        })
+        .await
+    }
+
+    /// The same for work nobody typed: a routine of the first agent's, fired
+    /// the way the scheduler fires one.
+    async fn run_live_fired(
+        crew: &[LiveAgent],
+        what: &str,
+        cadence: guac_lib::domain::routine::Cadence,
+        secs: u64,
+    ) -> Option<(Harness, Eval)> {
+        run_live_started(crew, secs, |h| {
+            let routine = h
+                .runtime
+                .store()
+                .create_routine(
+                    h.id(crew[0].name),
+                    "",
+                    what,
+                    guac_lib::domain::routine::Trigger::Clock(cadence),
+                    Some(guac_lib::domain::now_ms() + 3_600_000),
+                    false,
+                )
+                .unwrap();
+            h.runtime.test_routine(&routine).unwrap()
+        })
+        .await
+    }
+
+    async fn run_live_started(
+        crew: &[LiveAgent],
+        secs: u64,
+        start: impl FnOnce(&Harness) -> RunId,
+    ) -> Option<(Harness, Eval)> {
         let config = configured()?;
         let before = machines_now(&config).await;
         let h = live_crew(config.clone(), crew);
         let names: Vec<&str> = crew.iter().map(|a| a.name).collect();
-        setup(&h);
 
-        // Started before the instruction, because the first turn can park.
+        // Started before the work, because the first turn can park.
         let (answering, asked) = answer_permission_requests(&h);
-        let run = h.runtime.send_from_human(h.id(names[0]), instruction).unwrap();
+        let run = start(&h);
 
         let settled = h.settled_within(run, secs).await;
         answering.abort();
@@ -1424,6 +1473,33 @@ mod live {
         for fault in &eval.faults {
             println!("  FAULT: {}", fault.explain());
         }
+        // One line per scenario, in one shape, so a whole run can be summed
+        // with grep: what the operator was told, what it cost in peer
+        // traffic, and whether each run nobody was watching ended on a line
+        // the list of finished work can show whole. A recurring check that
+        // found nothing and said so by saying nothing has ended on one too:
+        // the runtime wrote it.
+        let quiet = eval.outcome.as_ref().is_some_and(|o| o.status == Status::NothingNew);
+        let ended = eval
+            .background
+            .iter()
+            .filter(|run| {
+                run.line.as_ref().is_some_and(|line| line.chars().count() <= HEADLINE_MAX)
+                    || (quiet && eval.outcome.as_ref().is_some_and(|o| o.run_id == run.run))
+            })
+            .count();
+        println!(
+            "METRIC {scenario} | notes {} | peer {} | chatter {:.2} | background {} | ended on a \
+             line {} | outcome {}",
+            eval.convo.to_operator.len(),
+            eval.convo.between_agents,
+            eval.convo.chatter(),
+            eval.background.len(),
+            ended,
+            eval.outcome
+                .as_ref()
+                .map_or("none".to_string(), |o| format!("{:?}: {}", o.status, o.headline)),
+        );
     }
 
     #[tokio::test]
@@ -1940,5 +2016,96 @@ mod live {
             "a preference is not a routine: nothing here has to happen at a time"
         );
         eval.expect_told_operator("Assistant", 1, "a standing preference");
+    }
+
+    #[tokio::test]
+    #[ignore = "live: costs money, needs a configured key"]
+    async fn live_a_routine_that_did_something_ends_on_one_line_saying_what() {
+        // Nobody is watching a routine fire. What reaches the operator is the
+        // first line of the note it ends on, so that line has to be the result
+        // rather than a heading, a greeting or the start of a list.
+        let crew = vec![LiveAgent::skilled("Assistant", &["drafting", "planning"])];
+        let Some((_, eval)) = run_live_fired(
+            &crew,
+            "Draft today's three-item agenda for the team standup: one item each for yesterday, \
+             today and blockers. Make the items up; this is a planning exercise.",
+            guac_lib::domain::routine::Cadence::Weekdays,
+            180,
+        )
+        .await
+        else {
+            eprintln!("no configured model; skipping");
+            return;
+        };
+        report("a routine that did something", &eval);
+        eval.expect_clean("a routine that did something");
+        let outcome = eval.outcome.as_ref().expect("a finished run has an outcome");
+        assert_eq!(outcome.status, Status::Done, "{}", eval.convo.script);
+    }
+
+    #[tokio::test]
+    #[ignore = "live: costs money, needs a configured key"]
+    async fn live_a_recurring_check_that_found_nothing_says_nothing() {
+        // The other half. A check that runs every morning and finds nothing
+        // most mornings is a line a day in a channel that says nothing, unless
+        // finding nothing is allowed to be silent. Guaca records that it ran.
+        let crew = vec![LiveAgent::skilled("Watcher", &["monitoring"])];
+        let Some((_, eval)) = run_live_fired(
+            &crew,
+            "Look through your working notes for anything marked URGENT and tell the operator \
+             about each one.",
+            guac_lib::domain::routine::Cadence::Daily,
+            180,
+        )
+        .await
+        else {
+            eprintln!("no configured model; skipping");
+            return;
+        };
+        report("a recurring check that found nothing", &eval);
+        eval.expect_clean("a recurring check that found nothing");
+        let outcome = eval.outcome.as_ref().expect("a finished run has an outcome");
+        assert_eq!(
+            outcome.status,
+            Status::NothingNew,
+            "the working notes are empty, so there was nothing to say:\n{}",
+            eval.convo.script
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "live: costs money, needs a configured key"]
+    async fn live_a_routine_that_delegates_ends_on_what_came_back() {
+        // A delegation nobody started by hand. The answer comes back in a turn
+        // that used to be told silence was usually right, so whether the
+        // result was ever written down was up to the model.
+        let crew = vec![
+            LiveAgent::told(
+                "Manager",
+                &["coordination"],
+                "You coordinate. Arithmetic goes to the Mathematician.",
+            ),
+            LiveAgent::skilled("Mathematician", &["arithmetic"]),
+        ];
+        let Some((_, eval)) = run_live_fired(
+            &crew,
+            "Ask the Mathematician what 17 times 23 is, and report the answer.",
+            guac_lib::domain::routine::Cadence::Daily,
+            240,
+        )
+        .await
+        else {
+            eprintln!("no configured model; skipping");
+            return;
+        };
+        report("a routine that delegates", &eval);
+        eval.expect_clean("a routine that delegates");
+        let outcome = eval.outcome.as_ref().expect("a finished run has an outcome");
+        assert!(
+            outcome.headline.contains("391"),
+            "the outcome has to be the answer that came back, not the handing out: {:?}\n{}",
+            outcome.headline,
+            eval.convo.script
+        );
     }
 }

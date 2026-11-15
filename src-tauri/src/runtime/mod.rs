@@ -20,7 +20,7 @@ pub mod prompt;
 pub use drain::Drained;
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU16, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -521,7 +521,7 @@ use crate::plugins;
 use crate::workspace::Workspace;
 use events::{Activity, EventSink, UiEvent};
 use guard::{GuardLimits, GuardRegistry, Refusal, SendRequest, Verdict};
-use prompt::{NameTable, ReplyMode};
+use prompt::{NameTable, ReplyMode, WorkFrom};
 
 /// How many messages one turn reads at once.
 const MAX_BATCH: usize = 12;
@@ -783,6 +783,11 @@ struct Inner {
     /// there. Kept apart from `operator_view`, which an agent reads: this
     /// only decides what interrupts the operator.
     clients: Mutex<crate::domain::view::Clients>,
+    /// The last moment any window said anything, or when this host started if
+    /// none has. How long the operator has been away is measured from here,
+    /// and a host that has never seen a window can only say it has been at
+    /// least this long.
+    last_window: AtomicI64,
     guard: Mutex<GuardRegistry>,
     inboxes: Mutex<HashMap<AgentId, Inbox>>,
     activity: Mutex<HashMap<AgentId, Activity>>,
@@ -946,6 +951,7 @@ impl Runtime {
                 settings_writer: Mutex::new(()),
                 operator_view: Mutex::new(None),
                 clients: Mutex::new(Default::default()),
+                last_window: AtomicI64::new(now_ms()),
                 guard: Mutex::new(GuardRegistry::new()),
                 inboxes: Mutex::new(HashMap::new()),
                 activity: Mutex::new(HashMap::new()),
@@ -1169,6 +1175,7 @@ impl Runtime {
         let reading = view.reading();
         let client = crate::domain::view::window_name(client);
         self.inner.clients.lock().report(client.as_deref(), focused, reading, now);
+        self.inner.last_window.store(now, Ordering::SeqCst);
         if !focused {
             return;
         }
@@ -1179,6 +1186,14 @@ impl Runtime {
                 Err(err) => tracing::warn!(%err, "could not mark a channel's outcomes seen"),
             }
         }
+    }
+
+    /// Whether the operator is there, and the last moment any window said
+    /// anything. What an agent is told about it is one of three sentences; see
+    /// `prompt::presence_section`.
+    pub fn presence(&self) -> (crate::domain::view::Presence, i64) {
+        let presence = self.inner.clients.lock().presence(now_ms());
+        (presence, self.inner.last_window.load(Ordering::SeqCst))
     }
 
     /// Marks outcomes seen on the operator's word, and tells every window.
@@ -3406,9 +3421,22 @@ impl Runtime {
             // the system, so it matched neither arm above and landed in the
             // mode that says nothing is being asked and silence is usually
             // right. Every routine a real model kept was answered that way.
-            _ if assigned => ReplyMode::Assigned,
-            _ => ReplyMode::NoteOnly,
+            _ if assigned => ReplyMode::Assigned {
+                recurring: absorbed.iter().all(|e| !e.intent.is_work())
+                    && self.only_recurring_firings(&batch),
+            },
+            // Reading answers, and the last of them: this turn is where the
+            // work the agent handed out comes back to an end. See
+            // `ReplyMode::Closing`.
+            _ => self
+                .closing(agent_id, run_id, &batch)
+                .map_or(ReplyMode::NoteOnly, ReplyMode::Closing),
         };
+        // Whether this turn ending in silence leaves work unreported. Kept
+        // apart from the mode because an operator's message read mid-turn
+        // moves the mode to `ToOperator`, and the work that was owed a note
+        // before it is owed one still.
+        let mut owed = mode.owes_a_note();
 
         // Before the prompt, the placeholder and the first call, for the same
         // reason as the budget check below it: an agent handed work that has
@@ -3662,7 +3690,7 @@ impl Runtime {
             &calendar,
             &history,
             &batch,
-            mode,
+            mode.clone(),
             &waiting_on,
             escalation.as_ref(),
             surfaces,
@@ -3686,6 +3714,10 @@ impl Runtime {
             }
             Err(err) => tracing::warn!(%err, "could not read the crew's artifacts for this prompt"),
         }
+        // Last in the system prompt, and the only part of it that moves with
+        // the operator rather than with the agent.
+        let (presence, last_window) = self.presence();
+        prompt::add_presence(&mut messages, &presence, last_window, card.id, now_ms());
         match self.inner.store.decisions(Some(card.id)) {
             Ok(decisions) => prompt::add_decisions(&mut messages, &decisions),
             Err(err) => tracing::warn!(%err, "could not read the agent's decisions"),
@@ -3706,8 +3738,10 @@ impl Runtime {
         // Where the finished message will land, and who it is for. Both are
         // known before the first token, so the UI never has to guess and then
         // correct itself.
-        let (out_channel, stream_to) = match (mode, reply_target) {
-            (ReplyMode::ToPeer, Some(Participant::Agent { id })) => (id, Participant::Agent { id }),
+        let (out_channel, stream_to) = match (&mode, &reply_target) {
+            (ReplyMode::ToPeer, Some(Participant::Agent { id })) => {
+                (*id, Participant::Agent { id: *id })
+            }
             _ => (agent_id, Participant::Human),
         };
 
@@ -3783,19 +3817,42 @@ impl Runtime {
                 break;
             }
 
-            let arrived = self.take_in(run_id, mode, &names, &mut rendered, &mut messages, intake);
+            let arrived = self.take_in(run_id, &mode, &names, &mut rendered, &mut messages, intake);
             taken_in.extend(arrived.iter().cloned());
             if !arrived.is_empty() {
                 self.deliver_files(&card, &arrived, modalities, &mut messages).await;
-                // Work taken in mid-turn carries the same obligation work in the
-                // batch does. `NoteOnly` tells an agent nothing is being asked
-                // of it and silence is usually right, which is true of what this
-                // turn woke up to and not of work that landed while it ran.
-                // `Assigned` is the mode that says a note it never
-                // writes is a failure, and both write to the same place, so this
-                // moves nothing the UI has already drawn.
-                if mode == ReplyMode::NoteOnly && arrived.iter().any(|e| e.intent.is_work()) {
-                    mode = ReplyMode::Assigned;
+                // What was taken in can change what this turn is for, and the
+                // prompt is told so before the next call rather than left
+                // saying what the turn woke up to. Every mode that takes
+                // anything in writes to this agent's own channel, so this moves
+                // nothing the UI has already drawn.
+                //
+                // An operator's message is a question with somebody waiting on
+                // the answer, whatever the turn was doing. Work taken in carries
+                // the obligation work in the batch does: `NoteOnly` tells an
+                // agent nothing is being asked of it and silence is usually
+                // right, which is true of what this turn woke up to and not of
+                // work that landed while it ran, and a recurring check that has
+                // been handed something else is no longer only a check.
+                let next = if arrived.iter().any(|e| e.from == Participant::Human) {
+                    ReplyMode::ToOperator
+                } else if arrived.iter().any(|e| e.intent.is_work()) {
+                    match mode {
+                        ReplyMode::NoteOnly | ReplyMode::Assigned { .. } => {
+                            ReplyMode::Assigned { recurring: false }
+                        }
+                        ref other => other.clone(),
+                    }
+                } else {
+                    mode.clone()
+                };
+                // Work read here is owed its report whatever mode the turn is
+                // in now, an operator's included: a turn that took in "also fix
+                // the headline" and said nothing has left it unreported.
+                owed |= arrived.iter().any(|e| e.intent.is_work());
+                if next != mode {
+                    prompt::switch_mode(&mut messages, &mode, &next);
+                    mode = next;
                 }
             }
 
@@ -4121,6 +4178,7 @@ impl Runtime {
                 if called_off { ReplyMode::NoteOnly } else { mode },
                 reply_target,
                 assigned,
+                owed,
                 &addressed,
                 collected_text,
                 tool_parts,
@@ -4290,6 +4348,65 @@ impl Runtime {
         }
     }
 
+    /// Whether everything this batch gives as work is a routine of this
+    /// agent's coming due that will come due again. Only then may the turn end
+    /// in silence: a check that runs again and found nothing has said so by
+    /// saying nothing. A routine that cannot be read back is treated as a
+    /// one-off, which is the reading that never loses a report.
+    fn only_recurring_firings(&self, batch: &[Envelope]) -> bool {
+        let mut work = batch.iter().filter(|e| e.intent.is_work()).peekable();
+        work.peek().is_some()
+            && work.all(|envelope| {
+                envelope.parts.iter().any(|part| match part {
+                    Part::Routine { routine_id, .. } => self
+                        .inner
+                        .store
+                        .get_routine(*routine_id)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|routine| routine.repeats()),
+                    _ => false,
+                })
+            })
+    }
+
+    /// Where the work came from, when this turn is the one that closes it: the
+    /// agent owns the run, the run was started by the operator, a routine or a
+    /// decision answer, every peer it handed work to in the run has answered,
+    /// and an answer is in this batch. A batch that only carries a courtesy
+    /// from a peer that had already answered closes nothing.
+    fn closing(&self, agent: AgentId, run: RunId, batch: &[Envelope]) -> Option<WorkFrom> {
+        let ids: Vec<MessageId> = batch.iter().map(|e| e.id).collect();
+        let start = match self.inner.store.closing_start(run, agent, &ids) {
+            Ok(start) => start?,
+            Err(err) => {
+                tracing::warn!(%err, "could not read whether this turn closes its run");
+                return None;
+            }
+        };
+        start
+            .parts
+            .iter()
+            .find_map(|part| match part {
+                Part::Routine { name, what, .. } => {
+                    Some(WorkFrom::Routine(prompt::title_or(name, what)))
+                }
+                Part::Decision { id, request, .. } => {
+                    let topic = self
+                        .inner
+                        .store
+                        .decisions(Some(agent))
+                        .ok()
+                        .and_then(|all| all.into_iter().find(|d| d.id == *id).map(|d| d.topic))
+                        .filter(|topic| !topic.trim().is_empty())
+                        .unwrap_or_else(|| prompt::title_or("", &request.question));
+                    Some(WorkFrom::Decision(topic))
+                }
+                _ => None,
+            })
+            .or((start.from == Participant::Human).then_some(WorkFrom::Operator))
+    }
+
     /// Takes in whatever arrived while this turn was working, as context.
     ///
     /// Called at the top of every round, so the model sees a correction or an
@@ -4331,7 +4448,7 @@ impl Runtime {
     fn take_in(
         &self,
         run: RunId,
-        mode: ReplyMode,
+        mode: &ReplyMode,
         names: &NameTable,
         // What the prompt already says, by message id. An envelope in here is
         // one this turn is answering and has already been shown, not one to
@@ -4340,7 +4457,7 @@ impl Runtime {
         messages: &mut Vec<ChatMessage>,
         intake: &mut Intake<'_>,
     ) -> Vec<Envelope> {
-        if mode == ReplyMode::ToPeer {
+        if *mode == ReplyMode::ToPeer {
             return Vec::new();
         }
 
@@ -4468,6 +4585,10 @@ impl Runtime {
         // answer to work is silence, and only this function knows whether the
         // turn ended in it.
         assigned: bool,
+        // Whether silence from this turn leaves work unreported, which the
+        // mode alone cannot say once an operator's message has moved it. See
+        // `run_turn`.
+        owed: bool,
         addressed: &HashSet<AgentId>,
         text: String,
         mut tool_parts: Vec<Part>,
@@ -4594,11 +4715,15 @@ impl Runtime {
         // no file, no `send_message` to the asker — leaves a peer waiting on
         // an answer that is not coming, which its gather survives (the idle
         // check ends it) and the operator should still get to read about.
+        //
+        // A recurring check that found nothing is the one piece of work whose
+        // silence is an answer: it was told so, and the run's outcome says
+        // it ran and found nothing.
         let owed_and_silent = text.is_empty()
             && match mode {
-                ReplyMode::Assigned => true,
                 ReplyMode::ToPeer => assigned && !already_answered && files.is_empty(),
-                _ => false,
+                ReplyMode::NoteOnly => false,
+                _ => owed,
             };
         if owed_and_silent {
             tool_parts.push(Part::Notice {
