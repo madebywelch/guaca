@@ -36,6 +36,7 @@ export function aGroup(over: Partial<Group> = {}): Group {
       maxSendsPerPair: null,
       maxToolRounds: null,
     },
+    tidy: { on: false, hour: 3 },
     ...over,
   };
 }

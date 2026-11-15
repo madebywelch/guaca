@@ -2015,6 +2015,30 @@ pub fn for_errands(offered: impl IntoIterator<Item = ToolSpec>) -> Vec<ToolSpec>
         .collect()
 }
 
+/// The only tools an overnight tidy is offered: its memory, its notebook and
+/// its working notes, which are the three things a tidy is for. Nothing that
+/// reaches a person, a peer, a machine or the web, because a tidy runs with
+/// nobody watching and on nobody's request.
+pub const TIDY_TOOLS: [&str; 3] = [UPDATE_MEMORY, NOTEBOOK, NOTE_PROGRESS];
+
+/// The tools a tidy is offered: the turn's own, narrowed to [`TIDY_TOOLS`], with
+/// their descriptions as every other turn reads them.
+pub fn for_tidy(offered: impl IntoIterator<Item = ToolSpec>) -> Vec<ToolSpec> {
+    offered.into_iter().filter(|spec| TIDY_TOOLS.contains(&spec.name.as_str())).collect()
+}
+
+/// Whether a tidy may run this call, by what the call turned out to be rather
+/// than the name it used, so an alias cannot walk round it. A model is
+/// offered three tools and may still name a fourth.
+pub fn tidies(invocation: &ToolInvocation) -> bool {
+    matches!(
+        invocation,
+        ToolInvocation::UpdateMemory { .. }
+            | ToolInvocation::Notebook { .. }
+            | ToolInvocation::NoteProgress { .. }
+    )
+}
+
 /// Whether a call reaches one of the agent's two places, which an errand
 /// holds for the rest of its life once it has touched either of them.
 ///
@@ -5125,5 +5149,29 @@ mod tests {
                 "{name} must not parse as a plugin call"
             );
         }
+    }
+
+    #[test]
+    fn a_tidy_is_offered_three_tools_as_every_turn_reads_them() {
+        let everything = specs(Surfaces::both(), Modalities::seeing());
+        let offered = for_tidy(everything.clone());
+        let names: Vec<&str> = offered.iter().map(|spec| spec.name.as_str()).collect();
+        assert_eq!(names.len(), 3, "{names:?}");
+        for name in TIDY_TOOLS {
+            let tidy = offered.iter().find(|spec| spec.name == name).expect(name);
+            let normal = everything.iter().find(|spec| spec.name == name).expect(name);
+            assert_eq!(tidy, normal, "{name} is described to a tidy as it is to any turn");
+        }
+    }
+
+    #[test]
+    fn a_tidy_may_run_its_three_tools_under_any_name_and_nothing_else() {
+        let runs = |name: &str, arguments: &str| parse(&call(name, arguments)).as_ref().is_ok_and(tidies);
+        assert!(runs(UPDATE_MEMORY, r#"{"content":"x"}"#));
+        assert!(runs("update_notes", r#"{"content":"x"}"#), "the old name is the same tool");
+        assert!(runs(NOTE_PROGRESS, r#"{"note":"x"}"#));
+        assert!(!runs(SEND_MESSAGE, r#"{"to":["Chef"],"text":"hi"}"#));
+        assert!(!runs(SCHEDULE, r#"{"action":"list"}"#));
+        assert!(!runs("linear__create_issue", "{}"));
     }
 }

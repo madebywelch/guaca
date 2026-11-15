@@ -19,12 +19,14 @@ import { useDismiss } from "../lib/dismiss";
 import { api } from "../lib/ipc";
 import { LIMITS } from "../lib/limits";
 import { type Provider as Preset, planLabel, providerFor } from "../lib/providers";
+import { clockTime } from "../lib/routine";
 import { useStore } from "../lib/store";
 import {
   errorMessage,
   type Group,
   type GroupDraft,
   type GroupReset,
+  type GroupTidy,
   type Provider,
   type ReasoningEffort,
   type SubscriptionStatus,
@@ -37,6 +39,9 @@ import { PluginList } from "./PluginList";
 import { ProviderPresets, SubscriptionModel } from "./ProviderFields";
 import { SkillList } from "./SkillList";
 import { ToolList } from "./ToolList";
+
+/** Every hour a group can tidy at, midnight first. */
+const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
 
 interface Props {
   /** Absent means create. */
@@ -116,6 +121,7 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
   // Null until the operator types, because absent and blank are different
   // instructions: one keeps the stored key, the other clears it.
   const [apiKey, setApiKey] = useState<string | null>(null);
+  const [tidy, setTidy] = useState<GroupTidy>(group?.tidy ?? { on: false, hour: 3 });
   const [limits, setLimits] = useState<Record<string, string>>(() =>
     Object.fromEntries(
       LIMITS.map((field) => [field.key, asText(group?.limits[field.key] ?? null)]),
@@ -176,6 +182,7 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
       maxSendsPerPair: asNumber(limits.maxSendsPerPair ?? ""),
       maxToolRounds: asNumber(limits.maxToolRounds ?? ""),
     },
+    tidy,
   });
 
   /**
@@ -205,7 +212,9 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
     // Typed at all, including typed and then emptied, which is the one
     // instruction that puts a group back on the app's key.
     apiKey !== null ||
-    LIMITS.some((field) => limits[field.key] !== asText(group.limits[field.key]));
+    LIMITS.some((field) => limits[field.key] !== asText(group.limits[field.key])) ||
+    tidy.on !== group.tidy.on ||
+    tidy.hour !== group.tidy.hour;
 
   /** Live agents. Terminated ones are not in the count and are not deleted twice. */
   const crew = group?.agentCount ?? 0;
@@ -437,6 +446,33 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                       ? "The app's, all five."
                       : `${setLimitCount} of five set here; the rest are the app's.`}
                   </span>
+                </div>
+
+                {/* The hour is drawn the way a routine's time is, so the two
+                    never disagree on a twelve or a twenty-four hour clock. It
+                    is kept while the switch is off. */}
+                <div className="field field--row">
+                  <label className="field--row">
+                    <input
+                      type="checkbox"
+                      checked={tidy.on}
+                      onChange={(event) => setTidy({ ...tidy, on: event.target.checked })}
+                    />
+                    <span className="field__label">Tidy memory overnight</span>
+                  </label>
+                  <span className="field__label">at</span>
+                  <select
+                    className="input"
+                    aria-label="Hour"
+                    value={tidy.hour}
+                    onChange={(event) => setTidy({ ...tidy, hour: Number(event.target.value) })}
+                  >
+                    {HOURS.map((hour) => (
+                      <option key={hour} value={hour}>
+                        {clockTime(new Date(2000, 0, 1, hour).getTime())}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 {group && (

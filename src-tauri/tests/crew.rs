@@ -649,6 +649,9 @@ fn render(messages: &[Envelope], names: &HashMap<AgentId, String>, report: &RunR
                     request.question
                 ),
                 Part::Json { name, value } => format!("\n[{name}]\n\n```json\n{value}\n```\n"),
+                Part::Tidy { reported, notes } => {
+                    format!("\n[overnight tidy]\n{}\n{}\n", reported.join("\n"), notes.join("\n"))
+                }
             });
         }
     }

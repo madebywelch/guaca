@@ -369,7 +369,7 @@ pub fn import(
         return Err("The group file exceeds 64 MB.".into());
     }
     let clean =
-        crate::domain::group::GroupDraft { name, inference: None, api_key: None, limits: None }
+        crate::domain::group::GroupDraft { name, inference: None, api_key: None, limits: None, tidy: None }
             .validate()
             .map_err(|e| e.to_string())?;
     if archive.tables.get("groups").map(Vec::len) != Some(1) {

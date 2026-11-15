@@ -161,7 +161,12 @@ export type Part =
       request: DecisionRequest;
       answer: string;
       resumed: boolean;
-    };
+    }
+  /**
+   * The clock handing an agent its overnight tidy. Drawn as one line: the
+   * lines and notes it carries were for the agent, and its words are fixed.
+   */
+  | { type: "tidy"; reported: string[]; notes: string[] };
 
 /**
  * The one part with two lives: drawn as a chip while the turn is making the
@@ -287,6 +292,17 @@ export interface Group {
   apiKeyHint: string;
   /** How far a conversation started in this group may run. */
   limits: GroupLimits;
+  /** Whether its agents tidy their memory overnight, and at what hour. */
+  tidy: GroupTidy;
+}
+
+/**
+ * An overnight tidy of each agent's memory. `hour` is 0 to 23 on the host's
+ * clock, and is kept while the switch is off.
+ */
+export interface GroupTidy {
+  on: boolean;
+  hour: number;
 }
 
 /** Every field `null` is a group that runs on the app settings. */
@@ -341,6 +357,7 @@ export interface GroupDraft {
   inference?: InferenceOverrides;
   apiKey?: string;
   limits?: GroupLimits;
+  tidy?: GroupTidy;
 }
 
 export type ConnectorId = string;

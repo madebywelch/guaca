@@ -47,6 +47,8 @@ pub struct Group {
     pub api_key_hint: String,
     /// How far a conversation started in this group may run.
     pub limits: GroupLimits,
+    /// Whether its agents tidy their memory overnight, and at what hour.
+    pub tidy: Tidy,
     /// How many live agents are in it. Carried on the card because every screen
     /// that lists groups wants it, and counting per group in the UI would mean
     /// walking the whole roster once per group.
@@ -130,6 +132,59 @@ impl GroupLimits {
     }
 }
 
+/// The hour a group's agents tidy their memory at, unless the operator picks
+/// another. Late enough that a day's work is over, early enough that it is
+/// done before anyone is back.
+pub const DEFAULT_TIDY_HOUR: u8 = 3;
+
+/// Whether a group's agents tidy their memory overnight, and at what hour.
+///
+/// Off unless the operator turns it on, because a tidy is model calls nobody
+/// asked for: two to four per agent for each night it worked. The hour is a
+/// wall-clock hour on the host, which keeps the operator's time zone, so "3:00"
+/// means three in the morning where they are and moves with daylight saving.
+///
+/// Kept when switched off, so turning it back on finds the hour where it was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Tidy {
+    pub on: bool,
+    /// 0 to 23, on the host's clock.
+    pub hour: u8,
+}
+
+impl Default for Tidy {
+    fn default() -> Self {
+        Tidy { on: false, hour: DEFAULT_TIDY_HOUR }
+    }
+}
+
+impl Tidy {
+    /// An hour past the end of the day is the last hour of it, so what the
+    /// operator reads back is the hour that will be used.
+    pub fn sanitized(self) -> Self {
+        Tidy { hour: self.hour.min(23), ..self }
+    }
+
+    /// The last time `hour` struck at or before `now`, as an instant.
+    ///
+    /// The one question the clock asks: a tidy is owed for every strike its
+    /// agent has not been seen to since. Asked of the last strike rather than
+    /// of a window around it, which is what makes a host that was off for
+    /// three nights tidy once when it is back rather than three times, and an
+    /// agent busy at the hour tidy as soon as it is free.
+    pub fn last_struck(hour: u8, now: i64) -> Option<i64> {
+        let today = super::local(now)?.date_naive();
+        let at = |day: chrono::NaiveDate| {
+            super::instant(day.and_hms_opt(u32::from(hour.min(23)), 0, 0)?)
+        };
+        match at(today)? {
+            struck if struck <= now => Some(struck),
+            _ => at(today.pred_opt()?),
+        }
+    }
+}
+
 /// Fields an operator can set. Separate from `Group` so `id` and timestamps
 /// cannot be forged across the IPC boundary.
 ///
@@ -151,6 +206,9 @@ pub struct GroupDraft {
     pub api_key: Option<String>,
     #[serde(default)]
     pub limits: Option<GroupLimits>,
+    /// Absent leaves the switch and the hour as they were.
+    #[serde(default)]
+    pub tidy: Option<Tidy>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -178,6 +236,8 @@ pub struct CleanGroup {
     /// `Some(None)` clears the key, `None` leaves it as it was.
     pub api_key: Option<Option<String>>,
     pub limits: Option<GroupLimits>,
+    /// `None` leaves the switch and the hour as they were.
+    pub tidy: Option<Tidy>,
 }
 
 /// Blank input means "inherit", so it is stored as NULL rather than "".
@@ -237,6 +297,7 @@ impl GroupDraft {
                 }
             }),
             limits: self.limits.map(GroupLimits::sanitized),
+            tidy: self.tidy.map(Tidy::sanitized),
         })
     }
 }
@@ -324,7 +385,7 @@ mod tests {
     use super::*;
 
     fn draft(name: &str) -> GroupDraft {
-        GroupDraft { name: name.into(), inference: None, api_key: None, limits: None }
+        GroupDraft { name: name.into(), inference: None, api_key: None, limits: None, tidy: None }
     }
 
     /// A draft that sets inference overrides, starting from all-inherit.
@@ -378,6 +439,7 @@ mod tests {
             api_key_set: false,
             api_key_hint: String::new(),
             limits: GroupLimits { max_steps_per_run: Some(9), ..Default::default() },
+            tidy: Tidy::default(),
             agent_count: 0,
             created_at: 0,
         };
@@ -749,5 +811,37 @@ mod tests {
         assert_eq!(lent.api_key, "app-key");
         assert_eq!(lent.base_url, on_subscription().base_url);
         assert_eq!(lent.default_model, "anthropic/claude-sonnet-4.5");
+    }
+
+    #[test]
+    fn the_tidy_is_owed_for_the_last_time_its_hour_struck() {
+        use crate::domain::{instant, local};
+        let hour = |day: chrono::NaiveDate, h: u32, m: u32| {
+            instant(day.and_hms_opt(h, m, 0).unwrap()).unwrap()
+        };
+        let today = local(crate::domain::now_ms()).unwrap().date_naive();
+        let yesterday = today.pred_opt().unwrap();
+        // Before the hour today, the strike that counts is yesterday's.
+        assert_eq!(Tidy::last_struck(3, hour(today, 2, 59)), Some(hour(yesterday, 3, 0)));
+        // On it and after it, today's.
+        assert_eq!(Tidy::last_struck(3, hour(today, 3, 0)), Some(hour(today, 3, 0)));
+        assert_eq!(Tidy::last_struck(3, hour(today, 23, 0)), Some(hour(today, 3, 0)));
+        // Three nights later is one strike, the last one, not three.
+        let later = today.checked_add_days(chrono::Days::new(3)).unwrap();
+        assert_eq!(Tidy::last_struck(3, hour(later, 9, 0)), Some(hour(later, 3, 0)));
+        // An hour past the end of the day is read as the last hour of it.
+        assert_eq!(Tidy { on: true, hour: 40 }.sanitized(), Tidy { on: true, hour: 23 });
+        assert_eq!(Tidy::default(), Tidy { on: false, hour: 3 });
+    }
+
+    #[test]
+    fn a_draft_with_no_tidy_leaves_the_switch_alone() {
+        let read: GroupDraft = serde_json::from_value(serde_json::json!({ "name": "Ops" })).unwrap();
+        assert_eq!(read.tidy, None);
+        let read: GroupDraft = serde_json::from_value(
+            serde_json::json!({ "name": "Ops", "tidy": { "on": true, "hour": 4 } }),
+        )
+        .unwrap();
+        assert_eq!(read.tidy, Some(Tidy { on: true, hour: 4 }));
     }
 }
