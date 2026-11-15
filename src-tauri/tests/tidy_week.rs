@@ -20,7 +20,7 @@ mod harness;
 
 use std::sync::Arc;
 
-use guac_lib::domain::envelope::{Envelope, Part};
+use guac_lib::domain::envelope::{Envelope, Part, ToolOutcome};
 use guac_lib::domain::group::{CleanGroup, Tidy};
 use guac_lib::domain::now_ms;
 
@@ -193,6 +193,7 @@ async fn week(kept: &str) {
     println!("--- the page the week starts from ({} chars) ---\n{kept}", kept.chars().count());
     let start = now_ms();
     let mut nights = Vec::new();
+    let mut limited = Vec::new();
     for (day, said) in WEEK.iter().enumerate() {
         // The morning after this day, far enough from now that the whole day
         // falls after the switch went on.
@@ -257,6 +258,35 @@ async fn week(kept: &str) {
              {} prompt ({} cached), {} completion",
             spent.0, spent.1, spent.2, spent.3, normal.0, normal.1, normal.2, normal.3
         );
+        let mut saves = Vec::new();
+        for envelope in store.channel_messages(me, 1000).unwrap() {
+            if envelope.run_id != tidy.run_id {
+                continue;
+            }
+            for part in envelope.parts {
+                let Part::ToolCall { name, arguments, outcome, .. } = part else { continue };
+                match (name.as_str(), outcome) {
+                    ("update_memory", ToolOutcome::Refused { reason }) => {
+                        println!("refused: {reason}");
+                        saves.push(false);
+                    }
+                    ("update_memory", ToolOutcome::Ok { .. }) => saves.push(true),
+                    ("notebook", _) => println!("notebook: {arguments}"),
+                    _ => {}
+                }
+            }
+        }
+        let refusals = saves.iter().filter(|stored| !**stored).count();
+        let then = match saves.iter().position(|stored| !stored) {
+            None => "-",
+            Some(first) if saves[first..].contains(&true) => "saved",
+            Some(_) => "gave up",
+        };
+        let six = if spent.0 >= 6 && !saves.contains(&true) { "yes" } else { "no" };
+        println!(
+            "limit: {refusals} refused, after a refusal: {then}, six calls and no save: {six}"
+        );
+        limited.push((day + 1, refusals, then, spent.0, six));
         nights.push((day + 1, before.chars().count(), after.chars().count(), spent, normal));
     }
 
@@ -275,6 +305,11 @@ async fn week(kept: &str) {
             "| {night} | {before} | {after} | {} | {} | {} | {} | {} | {} |",
             tidy.0, tidy.1, tidy.2, tidy.3, normal.1, normal.2
         );
+    }
+    println!("\n| night | refusals | after a refusal | tidy calls | six calls, no save |");
+    println!("|---|---|---|---|---|");
+    for (night, refusals, then, calls, six) in &limited {
+        println!("| {night} | {refusals} | {then} | {calls} | {six} |");
     }
     println!("tools named that a tidy was not offered: {}", strays.len());
     for stray in &strays {
