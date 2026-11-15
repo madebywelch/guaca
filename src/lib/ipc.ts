@@ -71,6 +71,7 @@ import type {
   HeaderPair,
   MessageId,
   NotebookEntry,
+  NotificationAccess,
   Occasion,
   OccasionDraft,
   OccasionId,
@@ -670,6 +671,17 @@ export const api = {
    * goes to this machine's own tray process and nowhere else.
    */
   reportHost: (host: Remote) => invokeLocal<void>("report_host", { host }),
+
+  /**
+   * What macOS will do with a banner from this app, read without asking.
+   * `null` off macOS, where the system keeps no per-app answer to read. Asked
+   * of this machine whatever host the window shows, because the banner is
+   * this machine's.
+   */
+  notificationAccess: () => invokeLocal<NotificationAccess | null>("notification_access"),
+
+  /** Opens System Settings at Notifications, where Guaca is turned back on. */
+  openNotificationSettings: () => invokeLocal<void>("open_notification_settings"),
 
   /** The workspace the menu bar panel shows, which is the one the window chose. */
   menubarHost: () => invokeLocal<Remote | null>("menubar_host"),

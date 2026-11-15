@@ -1867,3 +1867,11 @@ export interface Delivery {
   target: DeliveryTarget;
   createdAt: number;
 }
+
+/**
+ * What macOS will do with a banner from this app, as the app reads it
+ * (`notifications.rs`). `denied` is anything that ends in no banner, and
+ * `unavailable` is a copy not running from an app bundle, which macOS shows
+ * nothing for. Read as `null` off macOS, where there is no per-app answer.
+ */
+export type NotificationAccess = "allowed" | "notAsked" | "denied" | "unavailable";

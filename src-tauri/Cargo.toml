@@ -112,6 +112,20 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tauri-plugin-notification = { version = "2.3.3", optional = true }
 
+# On macOS the notification plugin raises banners through notify-rust, which by
+# default uses NSUserNotificationCenter: deprecated, never asks for permission,
+# and shows nothing while the app is in front. Naming notify-rust here only to
+# turn on `preview-macos-un` moves the plugin's own calls to
+# UNUserNotificationCenter, because Cargo builds one notify-rust with the union
+# of every feature asked for. `mac-usernotifications` is the crate that feature
+# pulls in, named directly so `notifications.rs` can read and request the
+# permission through the same delegate and worker. Its version has to stay the
+# one notify-rust resolves, or there would be two delegates fighting over one
+# notification center.
+[target.'cfg(target_os = "macos")'.dependencies]
+notify-rust = { version = "4.18.2", default-features = false, features = ["preview-macos-un"], optional = true }
+mac-usernotifications = { version = "0.3.1", optional = true }
+
 [[test]]
 name = "server"
 path = "tests/server.rs"
@@ -145,6 +159,8 @@ desktop = [
   "dep:tauri",
   "dep:tauri-plugin-opener",
   "dep:tauri-plugin-notification",
+  "dep:notify-rust",
+  "dep:mac-usernotifications",
 ]
 
 # Serves the bundled `dist/` instead of the dev server. Its own feature because

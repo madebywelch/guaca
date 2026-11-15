@@ -73,6 +73,7 @@ import {
   type DeviceCode,
   errorMessage,
   type GuardLimits,
+  type NotificationAccess,
   type Provider as ProviderKind,
   type PushContent,
   type PushFormat,
@@ -159,6 +160,20 @@ const ATTENTION_ROWS: { key: keyof Attention; label: string; hint: string }[] = 
     hint: "Collected into one notification each time you step away. Nothing is sent while you are at a window.",
   },
 ];
+
+/**
+ * What the Notifications pane says about macOS, above the test button. Only a
+ * Mac has a per-app answer to read; everywhere else the test is still the only
+ * way to find out.
+ */
+const MAC_ACCESS: Record<NotificationAccess, string> = {
+  allowed: "macOS allows Guaca to show notifications.",
+  notAsked:
+    "macOS has not asked you about Guaca yet. It asks the first time Guaca has something to show, or when you send a test.",
+  denied: "macOS has notifications turned off for Guaca.",
+  unavailable:
+    "This copy of Guaca is not running as an installed app, so macOS will not show its notifications.",
+};
 
 /** The two shapes a push takes, as the pane names them. */
 const PUSH_FORMATS: { value: PushFormat; label: string }[] = [
@@ -292,6 +307,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
     null,
   );
   const [busy, setBusy] = useState(false);
+  const [macAccess, setMacAccess] = useState<NotificationAccess | null>(null);
   // The switch being written, so a second click on it waits for the first.
   const [attending, setAttending] = useState<keyof Attention | null>(null);
   // The push address, held here like every other field so that an address
@@ -479,6 +495,25 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
     );
     return sent as SettingsPatch;
   };
+
+  // What macOS will do with a banner, read when the pane opens and again each
+  // time the window comes back to the front, which is how the operator returns
+  // from turning Guaca on in System Settings. Null off macOS.
+  useEffect(() => {
+    if (section !== "notifications" || !desktop) return;
+    let live = true;
+    const read = () =>
+      api.notificationAccess().then(
+        (access) => live && setMacAccess(access),
+        () => {},
+      );
+    void read();
+    window.addEventListener("focus", read);
+    return () => {
+      live = false;
+      window.removeEventListener("focus", read);
+    };
+  }, [section]);
 
   // What the Host last did with the address, read when the pane is opened on
   // one and after every change to it, rather than kept up to date: nothing
@@ -1906,6 +1941,25 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   ))}
 
                 <div style={{ marginTop: "1rem" }}>
+                  {macAccess && (
+                    <div style={{ marginBottom: "0.6rem" }}>
+                      <p className="hint">{MAC_ACCESS[macAccess]}</p>
+                      {macAccess === "denied" && (
+                        <button
+                          type="button"
+                          className="btn btn--small"
+                          style={{ marginTop: "0.4rem" }}
+                          onClick={() =>
+                            api
+                              .openNotificationSettings()
+                              .catch((err) => setStatus({ tone: "error", text: errorMessage(err) }))
+                          }
+                        >
+                          Open System Settings
+                        </button>
+                      )}
+                    </div>
+                  )}
                   <button
                     type="button"
                     className="btn"
@@ -1915,7 +1969,27 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                         "Guaca",
                         "This is what a notification looks like.",
                       );
-                      // Deliberately not "it worked". On desktop there is no
+                      // On a Mac the answer is the system's own, read again
+                      // because sending may have been what asked the question.
+                      const access = desktop
+                        ? await api.notificationAccess().catch(() => null)
+                        : null;
+                      if (access !== null) {
+                        setMacAccess(access);
+                        setStatus(
+                          sent
+                            ? { tone: "ok", text: "Sent. It should be on your screen now." }
+                            : {
+                                tone: "error",
+                                text:
+                                  access === "unavailable"
+                                    ? MAC_ACCESS.unavailable
+                                    : MAC_ACCESS.denied,
+                              },
+                        );
+                        return;
+                      }
+                      // Deliberately not "it worked". Off macOS there is no
                       // per-app grant for the plugin to read, so a machine with
                       // notifications switched off accepts this and shows
                       // nothing: claiming success would be the one message that
@@ -1936,12 +2010,14 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   >
                     Send a test notification
                   </button>
-                  <p className="hint" style={{ marginTop: "0.4rem" }}>
-                    The only way to find out whether this machine will show them.
-                    {/* A browser may refuse to ask without a click, and until
+                  {!macAccess && (
+                    <p className="hint" style={{ marginTop: "0.4rem" }}>
+                      The only way to find out whether this machine will show them.
+                      {/* A browser may refuse to ask without a click, and until
                         it is answered this window claims nothing. */}
-                    {!desktop && " In a browser, this is also where it asks for permission."}
-                  </p>
+                      {!desktop && " In a browser, this is also where it asks for permission."}
+                    </p>
+                  )}
                 </div>
 
                 {settings?.delivery && (

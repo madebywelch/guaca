@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Delivery, DeliveryId, DeliveryTarget, Reveal } from "./types";
+import type { Delivery, DeliveryId, DeliveryTarget, NotificationAccess, Reveal } from "./types";
 
 /**
  * What a window does with what the Host offers: claim it, and show it only if
@@ -36,6 +36,33 @@ const plugin = vi.hoisted(() => ({
   onAction: vi.fn<(cb: (action: unknown) => void) => Promise<{ unregister: () => void }>>(),
 }));
 vi.mock("@tauri-apps/plugin-notification", () => plugin);
+
+/**
+ * The app's own reading of macOS: `now` is what it would say without asking,
+ * and `answer` is what the operator says when it does ask. `prompts` counts the
+ * questions macOS actually put, and `held`, when set, keeps one on screen
+ * until the test answers it. `null` is every other desktop, where the plugin
+ * is asked instead.
+ */
+const mac = vi.hoisted(() => ({
+  now: null as NotificationAccess | null,
+  answer: "allowed" as NotificationAccess,
+  prompts: 0,
+  held: null as Promise<void> | null,
+  invoke: vi.fn(async (name: string): Promise<unknown> => {
+    if (name === "notification_access") return mac.now;
+    if (name === "ask_notification_access") {
+      if (mac.now === "notAsked") {
+        mac.prompts++;
+        await mac.held;
+        mac.now = mac.answer;
+      }
+      return mac.now;
+    }
+    throw new Error(`unexpected command ${name}`);
+  }),
+}));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: mac.invoke }));
 
 /** A browser's notification center, as far as a page can see it. */
 class Shown {
@@ -88,6 +115,11 @@ beforeEach(async () => {
   host.pendingDeliveries.mockReset().mockResolvedValue([]);
   host.openWindow.mockReset().mockResolvedValue(undefined);
   Shown.requestPermission.mockClear();
+  mac.now = null;
+  mac.answer = "allowed";
+  mac.prompts = 0;
+  mac.held = null;
+  mac.invoke.mockClear();
 });
 
 afterEach(() => {
@@ -227,6 +259,120 @@ describe("the desktop window", () => {
     const [options] = plugin.sendNotification.mock.calls[0] ?? [];
     tapped?.({ actionId: "tap", inputValue: null, notification: { id: options?.id } });
     await vi.waitFor(() => expect(revealed).toEqual([{ kind: "forYou" }]));
+  });
+});
+
+describe("a desktop window on a Mac", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { configurable: true, value: {} });
+    notify = await import("./notify");
+    plugin.isPermissionGranted.mockClear();
+    plugin.sendNotification.mockReset();
+    plugin.onAction.mockReset().mockResolvedValue({ unregister: () => {} });
+  });
+
+  it("claims nothing and raises nothing when macOS has notifications off for Guaca", async () => {
+    mac.now = "denied";
+    await expect(notify.deliver(delivery("a"), open)).resolves.toBe(false);
+    expect(host.claimDelivery).not.toHaveBeenCalled();
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+    // The plugin answers yes on every desktop, so it is not the one asked.
+    expect(plugin.isPermissionGranted).not.toHaveBeenCalled();
+  });
+
+  it("says false, and raises nothing, for a test macOS will not show", async () => {
+    mac.now = "denied";
+    const transport = await import("./transport");
+    await expect(transport.notify("Guaca", "A test.")).resolves.toBe(false);
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+  });
+
+  it("raises what it claimed when macOS allows it", async () => {
+    mac.now = "allowed";
+    await expect(notify.deliver(delivery("a"), open)).resolves.toBe(true);
+    expect(host.claimDelivery).toHaveBeenCalledWith("a");
+    expect(plugin.sendNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Title a", body: "Body a" }),
+    );
+  });
+
+  it("asks macOS before it claims the first offer, and not on connect", async () => {
+    mac.now = "notAsked";
+    await expect(notify.catchUp(open)).resolves.toBe(0);
+    expect(mac.prompts).toBe(0);
+
+    host.claimDelivery.mockImplementation(async () => {
+      // The answer is in before the claim is made.
+      expect(mac.now).toBe("allowed");
+      return true;
+    });
+    await expect(notify.deliver(delivery("a"), open)).resolves.toBe(true);
+    expect(mac.prompts).toBe(1);
+    expect(host.claimDelivery).toHaveBeenCalledWith("a");
+    expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it("claims nothing when the first answer is no, leaving the offer to the Host", async () => {
+    mac.now = "notAsked";
+    mac.answer = "denied";
+    await expect(notify.deliver(delivery("a"), open)).resolves.toBe(false);
+    await expect(notify.deliver(delivery("b"), open)).resolves.toBe(false);
+    expect(mac.prompts).toBe(1);
+    expect(host.claimDelivery).not.toHaveBeenCalled();
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+  });
+
+  it("puts one prompt for offers that arrive while it is on screen", async () => {
+    mac.now = "notAsked";
+    let answer = () => {};
+    mac.held = new Promise((resolve) => {
+      answer = resolve;
+    });
+    const shown = Promise.all(["a", "b", "c"].map((id) => notify.deliver(delivery(id), open)));
+    await vi.waitFor(() => expect(mac.prompts).toBe(1));
+    expect(host.claimDelivery).not.toHaveBeenCalled();
+
+    answer();
+    // Each one raised: `notify` answers true only once it has. Not counted on
+    // the plugin's mock, because vitest hands concurrent dynamic imports of a
+    // mocked module the real one, which raises through `Notification`.
+    await expect(shown).resolves.toEqual([true, true, true]);
+    expect(mac.prompts).toBe(1);
+    expect(host.claimDelivery.mock.calls).toEqual([["a"], ["b"], ["c"]]);
+  });
+
+  it("raises nothing when another window claimed it while the prompt was up", async () => {
+    mac.now = "notAsked";
+    host.claimDelivery.mockResolvedValue(false);
+    await expect(notify.deliver(delivery("a"), open)).resolves.toBe(false);
+    expect(mac.prompts).toBe(1);
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+  });
+
+  it("asks before claiming what waited for it on connect, and claims nothing on no", async () => {
+    mac.now = "notAsked";
+    mac.answer = "denied";
+    host.pendingDeliveries.mockResolvedValue([delivery("a"), delivery("b")]);
+    await expect(notify.catchUp(open)).resolves.toBe(0);
+    expect(mac.prompts).toBe(1);
+    expect(host.claimDelivery).not.toHaveBeenCalled();
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+  });
+
+  it("asks directly for the test button, and raises it on yes", async () => {
+    mac.now = "notAsked";
+    const transport = await import("./transport");
+    await expect(transport.notify("Guaca", "A test.")).resolves.toBe(true);
+    expect(mac.prompts).toBe(1);
+    expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows nothing from a copy that is not running as an app", async () => {
+    mac.now = "unavailable";
+    await expect(notify.deliver(delivery("a"), open)).resolves.toBe(false);
+    expect(host.claimDelivery).not.toHaveBeenCalled();
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
   });
 });
 

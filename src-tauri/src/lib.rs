@@ -20,6 +20,9 @@ pub mod llm;
 pub mod mcp;
 pub mod menubar;
 pub mod notebook;
+/// Whether macOS will show what a window raises. Only a window raises anything.
+#[cfg(feature = "desktop")]
+pub mod notifications;
 pub mod oauth;
 pub mod pickup;
 pub mod plugins;
