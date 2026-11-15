@@ -10,7 +10,9 @@
  *
  * Claim first, then show, and ask whether this page may show anything before
  * either. A page that claims what it cannot show has taken the only copy away
- * from a window that could.
+ * from a window that could. On a Mac that has never been asked, that question
+ * is the real macOS prompt, put when an offer arrives and answered before the
+ * claim.
  *
  * A page that was not connected when something was offered asks for what is
  * still waiting when it connects. More than three of those is one banner,
@@ -23,7 +25,7 @@
  */
 
 import { api } from "./ipc";
-import { desktop, mayNotify, notify } from "./transport";
+import { desktop, mayNotify, notify, willNotify } from "./transport";
 import type { Delivery, DeliveryId, DeliveryTarget, Reveal } from "./types";
 
 /** How many waiting deliveries are shown one by one before they are folded. */
@@ -38,7 +40,7 @@ export const AWAY_TITLE = "While you were away";
  * window claimed it and when this page may not notify.
  */
 export async function deliver(delivery: Delivery, open: (target: DeliveryTarget) => void) {
-  if (!(await mayNotify())) return false;
+  if (!(await willNotify())) return false;
   if (!(await claim(delivery.id))) return false;
   return notify(delivery.title, delivery.body, () => open(delivery.target));
 }
@@ -55,6 +57,9 @@ export async function catchUp(open: (target: DeliveryTarget) => void): Promise<n
   } catch {
     return 0;
   }
+  // Asked only once there is something waiting, so connecting with nothing to
+  // show puts no question to anyone.
+  if (waiting.length === 0 || !(await willNotify())) return 0;
 
   const won: Delivery[] = [];
   for (const delivery of waiting) {

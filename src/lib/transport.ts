@@ -913,11 +913,11 @@ let asking: Promise<boolean> | null = null;
  * nothing and leaves the offer to another window. Concurrent askers share one
  * prompt.
  *
- * On macOS the app reads the system's own answer for Guaca, and a Mac that has
- * never been asked counts as yes here: macOS asks once, and the moment to ask
- * is when there is something to show, which is `notify`. Asking on connect
- * would put the question to someone who has nothing waiting. Elsewhere on
- * desktop the plugin answers yes without asking.
+ * On macOS the app reads the system's own answer for Guaca without asking, and
+ * a Mac that has never been asked counts as "could" here. The question itself
+ * is `willNotify`, put when there is something to show: asking on connect would
+ * put it to someone with nothing waiting. Elsewhere on desktop the plugin
+ * answers yes without asking.
  */
 export function mayNotify(): Promise<boolean> {
   asking ??= permitted().finally(() => {
@@ -941,6 +941,30 @@ async function permitted(): Promise<boolean> {
       Notification.permission === "granted" ||
       (await Notification.requestPermission()) === "granted"
     );
+  } catch {
+    return false;
+  }
+}
+
+/** The one question to macOS in flight, so a burst of offers puts it once. */
+let askingMac: Promise<NotificationAccess | null> | null = null;
+
+/**
+ * Whether a notification raised now would be shown, asking macOS first if it
+ * never has. What a page checks before it claims a delivery: on a Mac nobody
+ * has been asked about, the prompt comes first and the claim only on yes, so a
+ * no leaves the offer to another window or to the push. Concurrent callers
+ * share the one prompt. Off macOS this is `mayNotify`.
+ */
+export async function willNotify(): Promise<boolean> {
+  if (!(await mayNotify())) return false;
+  if (!desktop) return true;
+  askingMac ??= invokeLocal<NotificationAccess | null>("ask_notification_access").finally(() => {
+    askingMac = null;
+  });
+  try {
+    const system = await askingMac;
+    return system === null || system === "allowed";
   } catch {
     return false;
   }
@@ -970,15 +994,13 @@ let listening: Promise<unknown> | null = null;
  * is the caller's, since only the app can raise its own window.
  */
 export async function notify(title: string, body: string, onClick?: () => void): Promise<boolean> {
-  if (!(await mayNotify())) return false;
+  // On a Mac this is macOS's own answer, asked for if it never has been, which
+  // is how the test button puts the question. A Mac that says no gets nothing
+  // raised and hears false: the plugin hands a banner to the system and never
+  // reports whether it appeared, so this is the only true answer there is.
+  if (!(await willNotify())) return false;
   try {
     if (desktop) {
-      // macOS asks here, the first time there is something to show. A Mac that
-      // says no gets nothing raised and hears false: the plugin hands a banner
-      // to the system and never reports whether it appeared, so this answer is
-      // the only true one there is.
-      const system = await invokeLocal<NotificationAccess | null>("ask_notification_access");
-      if (system !== null && system !== "allowed") return false;
       const plugin = await import("@tauri-apps/plugin-notification");
       if (!onClick) {
         plugin.sendNotification({ title, body });
