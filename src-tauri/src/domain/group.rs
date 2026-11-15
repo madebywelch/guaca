@@ -316,12 +316,11 @@ impl GroupInference {
     /// The endpoint, key and endpoint model this group holds, whoever pays for
     /// its turns.
     ///
-    /// What pi is lent when a job is set to Guaca's key. A group whose turns a
-    /// subscription pays for still holds its endpoint and key, kept rather than
-    /// blanked exactly so they are there to go back to, and that key is the
-    /// one the operator gave this crew. So the job gets it, and the endpoint's
-    /// own model with it: the subscription's is a name the endpoint refuses.
-    /// Resolved as if the endpoint paid, so `active_model` agrees.
+    /// A group whose turns a subscription pays for still holds its endpoint and
+    /// key, kept rather than blanked exactly so they are there to go back to.
+    /// This resolves them as if the endpoint paid, so `active_model` agrees,
+    /// and with the endpoint's own model: the subscription's is a name the
+    /// endpoint refuses.
     pub fn endpoint(&self, base: &InferenceConfig) -> InferenceConfig {
         let mut out = base.clone();
         out.provider = Provider::Compatible;

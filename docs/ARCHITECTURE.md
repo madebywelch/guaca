@@ -1292,16 +1292,17 @@ carries is a digest and a name, and the runtime resolves both against its own
 store: the size and the type on the message are read off the disk, not taken
 from the webview.
 
-**The webview reads a file over a URL, not over IPC.** The scheme is
-`guacfile://localhost/{digest}/{name}`, answered out of the file store by
-`app.rs`, so a preview is fetched once, by the one element drawing it, only
-while that element is on screen, and the webview caches and ranges it. Handing
-the same bytes back over IPC would give up exactly what content-addressing
-them bought: IPC is where the transcript travels, in bulk. The scheme is also
-narrower than Tauri's asset protocol, which opens a scoped part of the disk;
-nothing is addressable here but a digest this app stored, and a digest that is
+**The webview reads a file over a URL, not over a command.** The URL is the
+host's `/v1/file/{digest}/{name}` route, answered out of the file store, so a
+preview is fetched once, by the one element drawing it, only while that
+element is on screen, and the webview caches and ranges it. Handing the same
+bytes back as a command's answer would give up exactly what content-addressing
+them bought: the command surface is where the transcript travels, in bulk.
+Nothing is addressable here but a digest this app stored, and a digest that is
 not 64 hex characters is refused before it is ever joined onto a path. The
-name in the URL decides the type of the answer and nothing else.
+name in the URL decides the type of the answer and nothing else. A
+`guacfile:` scheme answered by `app.rs` did this while the runtime lived in
+the window; nothing registers it now.
 
 A transcript draws what it can of a file rather than naming it: a picture, a
 document's first page in the webview's own viewer, a markdown file as the

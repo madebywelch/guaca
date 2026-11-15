@@ -4,9 +4,9 @@ import type { GroupArchive, Reconnect } from "./transfer";
  *
  * Every call the UI can make goes through here, so the set of things the
  * frontend is able to do is one readable list. camelCase argument keys map onto
- * the Rust snake_case parameters, in both hosts: `transport.ts` is what decides
- * whether a call goes over Tauri's IPC or over HTTP to a box, and nothing in
- * this file knows which.
+ * the Rust snake_case parameters. `invoke` goes over HTTP to the host the page
+ * is attached to; `invokeLocal` goes over Tauri's IPC to the desktop app's own
+ * commands, which are about this machine rather than the workspace.
  */
 
 import {
@@ -661,7 +661,7 @@ export const api = {
    * Sends files from this machine's disk to the box this window is showing.
    *
    * A drop on the desktop app is a path, and a box has never seen this disk,
-   * so the runtime in this process reads the bytes and posts them to the box.
+   * so the desktop app reads the bytes and posts them to the box.
    * Answered in the same shape as every other way a file arrives.
    */
   forwardFiles: (origin: string, token: string, paths: string[]) =>

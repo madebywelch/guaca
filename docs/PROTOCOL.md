@@ -11,7 +11,7 @@ records which ideas were adopted, which were deliberately dropped, and which
 gaps had to be filled from scratch.
 
 The governing rule: an idea earns its place only if it pays off inside a
-single-process, single-user, local desktop app. Most of what these protocols
+single-user app whose agents all run in one host process. Most of what these protocols
 specify exists to cross an organizational trust boundary. Guaca has no such
 boundary, so importing that machinery would be cargo cult.
 
@@ -341,13 +341,15 @@ what is offered is Guaca's own sign-in through the browser session that CLI has
 already opened. The card says why, because a sign-in asked for twice with no
 explanation reads as a bug.
 
-The offer is desktop-only. A browser client cannot see the host's programs, and a
-box's programs may be signed in to accounts the person in the window does not
-own, so `Capabilities::borrowed_signins` is false for every server and
-`existing_signins` answers with nothing there whatever the panel asks. The window
-checks the same capability and that it is on this Mac before it offers anything,
-and the command answers with nothing of its own so a stale bundle cannot offer
-what the host will not do.
+The offer needs a runtime on the operator's own machine, and every running
+workspace is now a host, so no workspace makes it today. A browser client
+cannot see the host's programs, and a box's programs may be signed in to
+accounts the person in the window does not own, so
+`Capabilities::borrowed_signins` is false for every server and
+`existing_signins` answers with nothing there whatever the panel asks. The
+window checks the same capability and that it is on this Mac before it offers
+anything, and the command answers with nothing of its own so a stale bundle
+cannot offer what the host will not do.
 
 ## Considered and declined
 

@@ -90,7 +90,7 @@ account. It uses the same connector implementation as the existing service.
    complete Google's consent screen. The sign-out control explains how to
    remove the configured bearer; it cannot remove an environment variable.
 
-## The runtime runs in two hosts, and neither knows which
+## The runtime runs in the host, and every window is a client
 
 The native client no longer constructs `Runtime`, opens the live database or
 starts schedulers. `app.rs` wires the window, notifications, menu bar, local
@@ -188,7 +188,7 @@ gets reworded and retried by a model and reported as a bug by a person:
 one that does not.
 
 `Capabilities` is read by the command boundary and by the frontend. Local
-model endpoints are available in both hosts, interpreted on the backend. File
+model endpoints are available on every host, interpreted on the backend. File
 paths and credentials on the client do not transfer to the server.
 `claude_program` reports whether the backend has the `claude` program
 installed, for the provider row.
@@ -386,13 +386,13 @@ appear before any workspace-dependent screen mounts.
 
 ## Two loopback origins reach a browser through the daemon
 
-The desktop serves two things from loopback ports of their own: a page an
-agent wrote (`artifact.rs`, an origin so the page's script may run under a
+The host serves two things from loopback ports inside its own process: a page
+an agent wrote (`artifact.rs`, an origin so the page's script may run under a
 policy of its own) and a computer's live screen (`proxy.rs`, a relay that
-attaches the sandbox token the webview must never hold). In a browser, or in
-a window pointed at a box, `127.0.0.1` is the wrong machine, and both drew
-a blank rectangle that passed every test. Each is now also a route on the
-daemon, in front of the same loopback server.
+attaches the sandbox token the webview must never hold). A client's
+`127.0.0.1` is never the host's, whether the host is a box or a container on
+the same Mac, and both drew a blank rectangle that passed every test. Each is
+also a route on the daemon, in front of the same loopback server.
 
 A page is the simpler one. `/v1/artifact/{id}` answers from `page_for`,
 which the loopback server answers from too, with every header
@@ -413,8 +413,9 @@ for that one sandbox, `sha256(token ":" sandbox)`, checkable without being
 stored and worth nothing but the right to watch that screen through this
 daemon; `referer` and `cookie` are dropped on the way in so it never reaches
 the machine on the far side. `AppState::screened` rewrites a computer's
-address to the route on a server and leaves it alone on a desktop, and the
-page resolves the relative address against the origin it reached.
+address to the route, which it does on every host because every host has a
+workspace token, and the page resolves the relative address against the
+origin it reached.
 
 ## One image, and the build it says it is
 
@@ -803,8 +804,9 @@ Main's calendar and browser-consent commands are available on both transports.
 Hosted event routines receive POSTs at `/events/service/topic` on the backend's
 public origin. The routine panel prints that address and its dedicated webhook
 secret. That secret cannot call the workspace API, and the workspace token
-cannot post a routine event. A desktop install has no event route, so an event
-routine there fires only from Test run.
+cannot post a routine event. Every host has the event route, and the panel
+prints its address whenever the host knows the origin it was reached at
+(`docs/ROUTINES.md`).
 
 
 ## Updating the local host

@@ -1,16 +1,16 @@
 /**
  * How the webview gets at a file, and what it can show of one.
  *
- * The bytes never cross IPC: a transcript does, in bulk, which is the whole
- * reason a message carries a digest rather than a document. They come over
- * `guacfile:` instead, a scheme `app.rs` answers out of the file store, so a
- * picture is fetched once by the element drawing it and only while that element
- * is on screen.
+ * The bytes never cross the command surface: a transcript does, in bulk, which
+ * is the whole reason a message carries a digest rather than a document. They
+ * come from the host's file route instead, so a picture is fetched once by the
+ * element drawing it and only while that element is on screen. An `<img>`
+ * cannot carry a header, so the token goes in the query string, exactly as the
+ * event socket's does.
  *
- * A hosted workspace answers the same bytes on a route instead, because a
- * custom scheme is a thing a webview registers and a browser has none. The one
- * difference is where the token goes: an `<img>` cannot carry a header, so it
- * goes in the query string, exactly as the event socket's does.
+ * `hosted` is always true now, so the `guacfile:` and loopback branches below
+ * are the arrangement from when the runtime lived in the window; nothing
+ * registers that scheme any more.
  */
 
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -18,7 +18,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { hosted, token, workspaceOrigin } from "./transport";
 import type { Attachment } from "./types";
 
-/** The scheme `app.rs` registers. */
+/** The scheme `app.rs` registered when the runtime lived in the window. */
 const SCHEME = "guacfile";
 
 /** How much of a text file the strip under a message reads. */
@@ -118,9 +118,9 @@ export function fileUrl(file: Pick<Attachment, "digest" | "name">): string {
 /**
  * Where a page an agent wrote is framed from.
  *
- * On a desktop the artifact origin is a loopback port of its own. Hosted, the
- * daemon serves the same document on its own origin, behind the token, and
- * the frame's `sandbox` is what keeps the page's origin opaque either way.
+ * The daemon serves the document on its own origin, behind the token, and the
+ * frame's `sandbox` keeps the page's origin opaque. The loopback branch is
+ * for a runtime in this process, which no workspace has any more.
  */
 export function artifactUrl(at: { port: number; id: string; ticket?: string | null }): string {
   if (hosted) {
@@ -132,10 +132,9 @@ export function artifactUrl(at: { port: number; id: string; ticket?: string | nu
 /**
  * Where a computer's screen is framed from.
  *
- * The runtime hands back an absolute loopback address on a desktop and a
- * relative one on a server, because only the page knows which origin it
- * reached the daemon at. The ticket in that path is for one sandbox's screen
- * and nothing else.
+ * The host hands back a relative address, because only the page knows which
+ * origin it reached the daemon at, and an absolute one is left as it is. The
+ * ticket in that path is for one sandbox's screen and nothing else.
  */
 export function screenUrl(vncUrl: string): string {
   return vncUrl.startsWith("/") ? `${workspaceOrigin()}${vncUrl}` : vncUrl;

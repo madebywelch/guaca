@@ -118,8 +118,9 @@ export type Place = "thisMac" | "remote" | "browser";
  * Read at the call rather than once on import, because the answer is the
  * chooser's and the page is reloaded when the chooser changes it.
  *
- * A window with nothing attached is the app's own runtime, which is on this
- * Mac. An attached one is a box only when the chooser says remote: the desktop
+ * A window with nothing attached is on this Mac: before setup attaches a host,
+ * or, before every workspace became a host, the app's own runtime. An attached
+ * one is a box only when the chooser says remote: the desktop
  * reaches a container on this Mac and a host already running on this Mac by
  * the same kind of address, so the stored mode is the only thing that tells
  * them from a server somebody rented. A browser is told neither and would be
@@ -156,8 +157,9 @@ export function hostAt(place: Place): string {
  *
  * Three arrangements and three answers, because one sentence was true of one of
  * them. A browser holds no token at all now that the session is an HttpOnly
- * cookie the daemon sets; a desktop window running its own runtime has no
- * address to reach and nothing to send; and a desktop window showing a box keeps
+ * cookie the daemon sets; a desktop window with no host attached has no
+ * address to reach and nothing to send (it once meant a runtime in the window,
+ * which no workspace has any more); and a desktop window showing a box keeps
  * that box's address and token so a reload finds it again.
  */
 export function clientKeeps(facts: { desktop: boolean; attached: boolean }): string {

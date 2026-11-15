@@ -76,11 +76,10 @@ addable skill to a temporary directory. It writes nothing anywhere else.
 cargo test --manifest-path src-tauri/Cargo.toml --test skills_sh -- --ignored
 ```
 
-`tests/server.rs` drives the daemon, which is the second host over the same
-library: a workspace opened under a temporary directory, bound to a free port,
+`tests/server.rs` drives the daemon, which is where every workspace runs: a workspace opened under a temporary directory, bound to a free port,
 and spoken to over HTTP and the event socket with `reqwest`, entirely offline.
-It asks the questions only that host can fail: that the same commands answer
-over a POST as over Tauri's bridge, that a server refuses what it cannot do and
+It asks the questions only that host can fail: that the commands the window
+calls answer over a POST, that a server refuses what it cannot do and
 says what to do instead, that nothing but `/health` answers
 without the token, that an event reaches a client that is not a webview, and
 that a stored file is reachable by its digest. It is compiled only under the

@@ -127,10 +127,10 @@ export interface State {
   /**
    * What this workspace can do, read once when the window opens.
    *
-   * Everything on a desktop, and the desktop's answer is also what is assumed
-   * until the read lands: a panel drawn before it can offer nothing a desktop
-   * would not, and nothing draws before `ready` anyway. On a server the five
-   * flags are what stand between an operator and a control that fails only
+   * The desktop deployment's answer, everything, is what is assumed until the
+   * read lands: a panel drawn before it can offer nothing a desktop would not,
+   * and nothing draws before `ready` anyway. Every running workspace answers
+   * as a server, and the four flags are what stand between an operator and a control that fails only
    * after they have filled it in.
    */
   capabilities: Capabilities;
@@ -383,7 +383,7 @@ export interface State {
    * A sign-in page the runtime asked this browser to open, while the flow
    * behind it is still waiting.
    *
-   * Only a hosted workspace sets it: a desktop opens its own browser. Drawn as
+   * Set from the host's `openUrl` event, which every workspace sends. Drawn as
    * a link as well as opened, because a window opened from an event rather
    * than a click is one a browser may refuse, and a sign-in that opened
    * nothing looks exactly like one that hung.

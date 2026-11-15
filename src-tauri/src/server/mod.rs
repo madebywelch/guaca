@@ -1,10 +1,9 @@
-//! The server host: the same runtime, reached over HTTP and a socket.
+//! The host: the runtime, reached over HTTP and a socket.
 //!
-//! This is the second of two hosts. `app.rs` puts the runtime behind a window
-//! on the operator's machine; this puts it on a box that stays awake when they
-//! close their laptop. Everything between the two is identical, and that is the
-//! design rather than a coincidence: `boot.rs` opens the workspace, `ipc.rs`
-//! lists the commands, and neither of them knows which host it is in.
+//! Every workspace runs here, in a container on the operator's Mac or on a box
+//! that stays awake when they close their laptop. The desktop window, its menu
+//! bar panel and a browser are all clients of it; `app.rs` builds no runtime.
+//! `boot.rs` opens the workspace and `ipc.rs` lists the commands.
 //!
 //! ## It cannot tell whose box it is on
 //!
@@ -16,11 +15,12 @@
 //!
 //! ## Two shapes, because that is what a webview already spoke
 //!
-//! Tauri's IPC is "a name, some named arguments, and a value or a structured
-//! error" plus one event channel the runtime pushes into. Those are a POST and
-//! a WebSocket. Nothing above [`crate::ipc::dispatch`] learns which arrived, so
-//! there is no second API to keep in step, and `ipc.contract.test.ts` fails the
-//! build if the two transports ever answer to different sets of names.
+//! Tauri's IPC, which the webview spoke when the runtime lived in the window,
+//! is "a name, some named arguments, and a value or a structured error" plus
+//! one event channel the runtime pushes into. Those are a POST and a
+//! WebSocket, so the commands kept their shape when they moved here, and
+//! `ipc.contract.test.ts` fails the build if the Rust and TypeScript command
+//! lists disagree.
 //!
 //! ## What guards it
 //!
@@ -559,7 +559,7 @@ tokio::task_local! {
     static CALLER: Option<String>;
 }
 
-/// One command, arriving as JSON instead of over Tauri's IPC.
+/// One command, arriving as JSON.
 async fn call(
     State(serving): State<Serving>,
     headers: HeaderMap,
@@ -668,8 +668,9 @@ async fn oauth_callback(State(serving): State<Serving>, RawQuery(query): RawQuer
 
 /// A page an agent wrote, by the digest it was framed under.
 ///
-/// The desktop serves this from a loopback origin of its own; here it is a
-/// route, and everything `artifact.rs` argues still holds: the policy rides
+/// `artifact.rs` also serves it from a loopback port inside this process,
+/// which no client can reach; here it is a route, and everything
+/// `artifact.rs` argues still holds: the policy rides
 /// on every answer, refusals included, and the frame's `sandbox` keeps the
 /// page's origin opaque. Token in the query, because a frame cannot carry a
 /// header, which is the trade the file route already makes.
@@ -1053,10 +1054,10 @@ async fn pump(
 
 /// One stored file, by the digest of its own contents.
 ///
-/// The desktop answers this on a `guacfile:` scheme registered in `app.rs`;
-/// here it is a route, and the reasoning either side of it is unchanged. The
-/// bytes never cross the command surface: a transcript does, in bulk, which is
-/// the whole reason a message carries a digest rather than a document.
+/// A route, which is how every client reaches a stored file: nothing registers
+/// a `guacfile:` scheme any more. The bytes never cross the command surface:
+/// a transcript does, in bulk, which is the whole reason a message carries a
+/// digest rather than a document.
 ///
 /// The token is in the query string because an `<img>` and a `<frame>` cannot
 /// carry a header, which is the same trade the event socket makes and for the

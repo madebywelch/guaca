@@ -26,7 +26,8 @@ import { Markdown } from "./Markdown";
  * text file gets its first lines, and anything this cannot draw says so and
  * offers the one thing that always works. All five open a full view on a click.
  *
- * The bytes come over `guacfile:` rather than IPC: see `lib/files.ts`.
+ * The bytes come from the host's file route rather than a command: see
+ * `lib/files.ts`.
  */
 export function FileCard({ file }: { file: Attachment }) {
   const [open, setOpen] = useState(false);

@@ -90,14 +90,17 @@ invites nobody* is said in the tool description, the prompt section and the
 panel's own footer. A model wrote an occasion and told the operator the call was
 booked, which is what all three are for.
 
-**The runtime runs in two hosts, and neither it nor `commands.rs` knows
-which.** A window on the operator's machine and a daemon on a box that stays
-awake are `app.rs` and `server/mod.rs`, over one library. `boot.rs` opens the
-workspace for both, `ipc.rs` writes the command surface once, and
-`domain/deployment.rs` is the only place the two are told apart: five
-capabilities, each something physically on the operator's machine, refused in
-the command before anything is spent and drawn on the row before the field is
-filled in. A managed box and an operator's own box are the same variant, and a
+**There is one runtime, and it runs in the host.** Every workspace is a
+`guacad` daemon, in a container on the operator's Mac or on a box that stays
+awake, and `server/mod.rs` is the only place a `Runtime` is built. The desktop
+window, its menu bar panel and a browser are clients of that host over the same
+HTTP commands and event socket. `app.rs` holds only what is about the
+operator's own machine (the window, the menu bar, notifications, the local
+host's container, reading a dropped file) and never runs an agent: agent logic
+written there is in the wrong half. `boot.rs` opens the workspace, `ipc.rs`
+writes the command surface once, and `domain/deployment.rs` is the only place
+what a host can do is decided: four capabilities, refused in the command before
+anything is spent and drawn on the row before the field is filled in. A managed box and an operator's own box are the same variant, and a
 third would mean something below that line had started caring who paid.
 `docs/HOSTING.md`.
 

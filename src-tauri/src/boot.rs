@@ -1,21 +1,19 @@
-//! Opening a workspace, which is the same act in both hosts.
+//! Opening a workspace.
 //!
 //! A workspace is a database, three settings files and two directories, and
-//! bringing one up is the same sequence whether the runtime ends up behind a
-//! window or behind a socket: open the store, close whatever a restart
+//! bringing one up is one sequence: open the store, close whatever a restart
 //! stranded, read the settings, build the runtime, pick up what the last one
 //! put down, start the loops that keep their own time, and release anything a
 //! previous process left running at a provider.
 //!
-//! It lives here rather than in `app.rs` because two copies would drift, and
-//! the drift would be silent in the worst way: a loop started in one host and
-//! forgotten in the other is a workspace where routines never fire, and nothing
-//! reports it because nothing is wrong. The desktop is the host that has been
-//! shipping, so this is written to be exactly what it already did.
+//! It was written when the desktop app ran a runtime of its own, so that both
+//! hosts opened a workspace the same way: a loop started in one and forgotten
+//! in the other is a workspace where routines never fire, and nothing reports
+//! it because nothing is wrong. The daemon in `server/mod.rs` is now its only
+//! caller.
 //!
-//! What is *not* here is anything either host does alone. A menu bar, a
-//! downloads folder and a `guacfile:` scheme are the window's; a listening
-//! socket and a bearer token are the daemon's. Both are handed in.
+//! What is *not* here is anything the daemon does alone, such as a listening
+//! socket and a bearer token. Those are handed in.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU16;
@@ -31,10 +29,11 @@ use crate::subscription::Subscription;
 
 /// Where a workspace keeps itself.
 ///
-/// Two directories rather than one because the desktop app is handed two by the
-/// operating system and they are not the same place on macOS. A daemon is given
-/// one root and puts them side by side under it, which is the arrangement a
-/// volume wants: one thing to snapshot, one thing to restore.
+/// Two directories rather than one because the desktop app, when it ran a
+/// runtime, was handed two by the operating system and they are not the same
+/// place on macOS. A daemon is given one root and puts them side by side under
+/// it (`Paths::under`), which is the arrangement a volume wants: one thing to
+/// snapshot, one thing to restore.
 #[derive(Debug, Clone)]
 pub struct Paths {
     pub data: PathBuf,
@@ -72,8 +71,9 @@ pub struct Booted {
 /// Opens the workspace at these paths and starts everything that keeps time.
 ///
 /// The `handle` is explicit rather than ambient because the desktop's setup
-/// hook runs on the main thread outside any runtime, where `tokio::spawn`
-/// panics. A daemon has an ambient one and passes its own.
+/// hook, which used to call this, ran on the main thread outside any runtime,
+/// where `tokio::spawn` panics. The daemon, the only caller now, has an
+/// ambient one and passes its own.
 pub async fn open(
     paths: &Paths,
     handle: tokio::runtime::Handle,
@@ -120,7 +120,7 @@ pub async fn open(
         config::load(&config_path).map_err(|err| format!("could not read the settings: {err}"))?;
     // Events reach a routine only through the server's `/events` route, and a
     // post there carries this dedicated secret rather than the workspace token,
-    // so it is written once and kept, in both hosts.
+    // so it is written once and kept.
     if crate::webhook::prepare(&mut app_config.webhook) {
         config::save(&config_path, &app_config)
             .map_err(|err| format!("could not save webhook settings: {err}"))?;

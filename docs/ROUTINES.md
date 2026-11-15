@@ -32,13 +32,17 @@ the picker now for exactly that reason. It was kept out until something could
 deliver one, because a routine an operator can set and then watch never fire is
 worse than one they cannot set yet.
 
-A desktop has no event route. `webhook.rs` used to hold a loopback receiver
-for one, and nothing ever started it: the panel reported its port as zero on
-every launch. It is gone, and what is left in that file is what the server's
-route shares with the rest of the app: the secret, the most a body may be, and
-how a delivery is told apart from its retries. On a desktop an event routine
-fires from Test run and from nothing else: `webhookAddress` answers no `url`
-there, and the panel says so instead of printing an address.
+Every workspace is a host, and every host has the event route. `webhook.rs`
+used to hold a loopback receiver for a desktop that ran its own runtime, and
+nothing ever started it. It is gone, and what is left in that file is what the
+server's route shares with the rest of the app: the secret, the most a body may
+be, and how a delivery is told apart from its retries. `webhookAddress`
+answers the route on the origin the host knows: `GUACA_ORIGIN` when it is set,
+and otherwise the origin of the last call, which `server::call` notes before any
+command runs. So the routine's panel prints an address whenever the host knows
+one, and for a local host on this Mac it is a loopback address that only
+something on this Mac can post to. With no origin known, the panel says the
+routine fires only from Test run.
 
 ## The secret is in a header, and the answer says what became of the event
 

@@ -1,9 +1,12 @@
 //! Where the runtime is running, and the handful of things that decides.
 //!
-//! Guaca runs in two places. In the desktop app it is a `tokio` runtime inside
-//! the window's own process, on the operator's machine, with their disk and
-//! their programs. On a server it is a daemon on a machine reached over a
-//! network, and the operator is somewhere else entirely.
+//! Every running workspace is a `guacad` daemon reached over HTTP and a
+//! socket, whether it is a container on the operator's Mac or a machine
+//! somewhere else, and `server/mod.rs` always builds it as
+//! [`Deployment::Server`]. [`Deployment::Desktop`] is the arrangement from
+//! before that, a `tokio` runtime inside the desktop app's own process with
+//! the operator's disk and programs; nothing that runs constructs it now, and
+//! only tests do.
 //!
 //! ## Two, not three
 //!
@@ -36,7 +39,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum Deployment {
-    /// In the desktop app's own process, on the operator's machine.
+    /// Inside the desktop app's own process, on the operator's machine. No
+    /// running workspace is one: only tests construct it.
     #[default]
     Desktop,
     /// A daemon on a machine the operator reaches over a network. Their own box

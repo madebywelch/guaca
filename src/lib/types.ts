@@ -69,7 +69,7 @@ export type Intent = "work" | "courtesy";
  *
  * The bytes are not here and never cross IPC. They sit once in the runtime's
  * file store addressed by `digest`, which is the SHA-256 of the contents, and
- * the webview reads them over the `guacfile:` scheme when it has to draw one.
+ * the webview reads them from the host's file route when it has to draw one.
  * See `lib/files.ts`.
  */
 export interface Attachment {
