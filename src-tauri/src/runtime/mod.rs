@@ -64,6 +64,18 @@ struct Reading {
     /// moment the turn takes in content from anywhere else, and `None` on the
     /// next turn because this whole struct is built fresh for each one.
     allowed: Option<String>,
+    /// The version of the memory page this turn's next rewrite starts from.
+    ///
+    /// The page in the prompt is the one read when the turn began, and a
+    /// rewrite is that page with a change made to it. The operator can save the
+    /// same file from the panel while the turn is still running, and a rewrite
+    /// stored over their save would put back the page they had just corrected,
+    /// with nothing to tell either of them. So the write is checked against the
+    /// version the turn was shown, and then against the one its own last write
+    /// stored, or the one a refused write showed it: each is the page its next
+    /// rewrite is made from. `None` writes unconditionally, which is an errand,
+    /// and an errand is not given the tool.
+    memory: Option<String>,
 }
 
 impl Reading {
@@ -102,7 +114,7 @@ impl Reading {
     /// and errands run side by side, so another errand may have moved that
     /// browser before this one presses anything.
     fn for_errand(&self) -> Reading {
-        Reading { ingested: self.ingested, url: self.url.clone(), allowed: None }
+        Reading { ingested: self.ingested, url: self.url.clone(), allowed: None, memory: None }
     }
 }
 
@@ -553,7 +565,7 @@ use crate::llm::modality::{self, Modalities};
 use crate::llm::openrouter::{ChatMessage, ChatRequest, LlmClient, LlmError, Token, ToolCall};
 use crate::llm::tools::{self, Delivery, ToolInvocation};
 use crate::plugins;
-use crate::workspace::Workspace;
+use crate::workspace::{Workspace, WriteResult};
 use events::{Activity, EventSink, UiEvent};
 use guard::{GuardLimits, GuardRegistry, Refusal, SendRequest, Verdict};
 use prompt::{NameTable, ReplyMode, WorkFrom};
@@ -3696,7 +3708,7 @@ impl Runtime {
         let mut rendered: HashSet<MessageId> =
             history.iter().map(|e| e.id).chain(absorbed_ids.iter().copied()).collect();
 
-        let memory = self.inner.workspace.read(agent_id);
+        let memory = self.inner.workspace.read_versioned(agent_id);
         // Read fresh alongside it, and a read that fails is an empty list
         // rather than a refused turn: an agent that cannot see what it is in
         // the middle of still has this conversation, and half a prompt beats
@@ -3821,7 +3833,7 @@ impl Runtime {
             &signins,
             &plugins,
             &names,
-            &memory,
+            &memory.content,
             &working_notes,
             &routines,
             &calendar,
@@ -3898,8 +3910,9 @@ impl Runtime {
         let mut tool_parts: Vec<Part> = Vec::new();
         // Peers written to through `send_message` during this turn.
         let mut addressed: HashSet<AgentId> = HashSet::new();
-        // What this turn has read off the web, and where from.
-        let mut reading = Reading::default();
+        // What this turn has read off the web, and where from, and which
+        // version of its memory it was shown.
+        let mut reading = Reading { memory: Some(memory.version.clone()), ..Reading::default() };
         // Files `attach_file` has put on the answer this turn has not written
         // yet. Collected here rather than sent as they arrive, because they
         // belong on the message the agent is still composing: a file delivered
@@ -5180,8 +5193,37 @@ impl Runtime {
             }
 
             ToolInvocation::UpdateMemory { content } => {
-                match self.inner.workspace.write(card.id, &card.name, &content) {
-                    Ok(stored) => {
+                match self.inner.workspace.write_versioned(
+                    card.id,
+                    &card.name,
+                    &content,
+                    reading.memory.as_deref(),
+                ) {
+                    // Somebody saved the page after this turn read it, and the
+                    // only other writer is the operator. Nothing is stored:
+                    // their page is the newer one and this rewrite was made
+                    // from the page before it. Handed back whole, because the
+                    // prompt still shows the old one and the agent cannot make
+                    // its change on top of a page it has not seen. Its next
+                    // write starts from this one.
+                    Ok(WriteResult::Conflict { current, .. }) => {
+                        reading.memory = Some(crate::workspace::version(&current));
+                        let summary = format!(
+                            "Not saved: the operator edited your memory while you were working, \
+                             and your rewrite started from the page as it was before. Their \
+                             version is below. Make your change again on top of it.\n\n{current}"
+                        );
+                        (
+                            summary.clone(),
+                            Part::tool_call(
+                                tools::UPDATE_MEMORY,
+                                arguments,
+                                ToolOutcome::Refused { reason: summary },
+                            ),
+                        )
+                    }
+                    Ok(WriteResult::Stored(stored)) => {
+                        reading.memory = Some(crate::workspace::version(&stored.content));
                         // The panel beside the agent is drawing this file, and
                         // the operator is most likely to be reading it while
                         // the agent is working, which is exactly when it moves.
@@ -9820,7 +9862,7 @@ mod tests {
     }
 
     fn having_read(url: &str) -> Reading {
-        Reading { ingested: true, url: Some(url.into()), allowed: None }
+        Reading { ingested: true, url: Some(url.into()), allowed: None, memory: None }
     }
 
     /// A browser the operator has asked to be consulted about. Everything below
@@ -9986,8 +10028,12 @@ mod tests {
         // from the operator's instruction rather than from a page. Asking here
         // would put a dialog in front of ordinary work.
         let held = [session("gmail.com")];
-        let untainted =
-            Reading { ingested: false, url: Some("https://gmail.com/".into()), allowed: None };
+        let untainted = Reading {
+            ingested: false,
+            url: Some("https://gmail.com/".into()),
+            allowed: None,
+            memory: None,
+        };
         assert!(needs_consent(ASKING, "click", &untainted, &held).is_none());
     }
 
@@ -10168,14 +10214,18 @@ mod tests {
         // that read the page, so the browser's last known position is what the
         // click is judged against.
         let held = [session("gmail.com")];
-        let looked =
-            Reading { ingested: true, url: Some("https://mail.gmail.com/".into()), allowed: None };
+        let looked = Reading {
+            ingested: true,
+            url: Some("https://mail.gmail.com/".into()),
+            allowed: None,
+            memory: None,
+        };
         assert!(needs_consent(ASKING, "click", &looked, &held).is_some());
 
         // With nowhere known to be, there is nothing to judge and nothing is
         // claimed. The turn is still marked, so the first `browse` that lands
         // somewhere signed in re-arms it.
-        let blind = Reading { ingested: true, url: None, allowed: None };
+        let blind = Reading { ingested: true, url: None, allowed: None, memory: None };
         assert!(needs_consent(ASKING, "click", &blind, &held).is_none());
     }
 
@@ -10367,6 +10417,7 @@ mod tests {
             ingested: true,
             url: Some("https://linkedin.example/feed".into()),
             allowed: None,
+            memory: None,
         };
         let told = runtime
             .may_act_on(&card, RunId::new(), "click", &mut reading)
