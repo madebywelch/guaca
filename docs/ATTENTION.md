@@ -363,9 +363,45 @@ history is bounded separately so old receipts cannot evict live work.
 
 ## The ten minutes
 
-Existing parked permissions and live questions still lapse after ten minutes.
-That bound does not apply to durable decisions. Agents should use `decision`
-for unattended work instead of relying on a live question reaching someone.
+A parked permission or live question holds its turn for ten minutes
+(`APPROVAL_WINDOW`). When nobody answers in that time the request is not lost:
+`Store::lapse_approval` expires the card and files the same request as a
+decision in one commit, so there is no moment when it is in neither place or
+answerable in both. The question is the card's own: Guaca's sentence for a
+permission, with its details as the context, and Allow and Deny as the choices;
+the agent's question, with its own choices, for `ask_operator`. The decision
+records where it came from (`origin` and `origin_ref`, migration 74), and the
+run that asked is the run that filed it, so that run's outcome is "needs you"
+and the outbox treats it as any other filed decision: reminders, and the
+interruption policy. The turn is told the request is on For you and carries on
+without it. Whenever the operator answers, the answer reaches the agent as a new
+message, as every decision's does.
+
+Four kinds lapse this way: `request_permission`, `ask_operator`, `create_agent`
+and `settings`. Browser consent does not: that press belonged to a page the
+turn has since left, so it expires as it always did, and so does a page pinned
+to the status bar. A stop or a restart that closes a request first is a
+different fact from a lapse. Nothing is filed, and the turn, or the turn the
+next host picks up, is told the restart ended it and to ask again.
+
+An Allow on a decision filed from a lapsed permission is a one-time grant. The
+row is written ungranted when the request lapses, bound to the agent and to a
+fingerprint of exactly what was asked (`approval::fingerprint`): for acting in
+the operator's name, the action, the tool, the recipients, the domain and the
+amount; for a new agent, its name, instructions, skills and starting memory;
+for a settings change, each setting with its before and after, so the grant
+stops matching once any of those settings has changed. The Allow sets it
+granted for 24 hours, and the agent is told so after the answer. The next
+request from that agent with the same fingerprint is let through without
+parking, once (`Store::take_grant` spends it in one statement). It is read
+after the rules, so a block rule wins over it, and it is not read when a block
+might apply and its fact is missing, for the same reason a standing grant is
+not. A Deny, and an answer to a question, grant nothing.
+
+The window is a constant in the product. `Runtime::set_approval_window` exists
+so the cascade suite can watch a lapse happen in a second; nothing else calls
+it. The bound never applies to a decision an agent files itself, which is still
+the way to put something to an operator who is not there.
 
 ## Testing
 

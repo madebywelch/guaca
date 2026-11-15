@@ -2056,6 +2056,33 @@ CREATE INDEX outbox_ref ON outbox (ref_id) WHERE status='pending';
 CREATE INDEX outbox_run ON outbox (run_id) WHERE status='pending';
 "#,
     ),
+    (
+        74,
+        r#"
+-- What a decision was filed from, when Guaca filed it rather than an agent: a
+-- permission or a question nobody answered in time is filed as a decision, and
+-- origin_ref is the approvals row it came from. Both null on every decision an
+-- agent filed itself.
+ALTER TABLE decisions ADD COLUMN origin TEXT;
+ALTER TABLE decisions ADD COLUMN origin_ref TEXT;
+-- One action one agent may take once without asking, because the operator
+-- allowed the decision a lapsed permission was filed as. Written ungranted when
+-- the request lapses, so the fingerprint is the action as it was asked for and
+-- never as it is later described; granted_at and expires_at are set by an
+-- Allow, and used_at by the one request it lets through.
+CREATE TABLE permission_grants (
+    decision_id TEXT    PRIMARY KEY REFERENCES decisions(id) ON DELETE CASCADE,
+    agent_id    TEXT    NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    fingerprint TEXT    NOT NULL,
+    granted_at  INTEGER,
+    expires_at  INTEGER,
+    used_at     INTEGER
+);
+-- What a request reads: this agent's grants for this action, given and unused.
+CREATE INDEX permission_grants_open ON permission_grants (agent_id, fingerprint)
+    WHERE granted_at IS NOT NULL AND used_at IS NULL;
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

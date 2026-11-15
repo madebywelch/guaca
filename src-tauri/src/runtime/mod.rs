@@ -20,7 +20,7 @@ pub mod prompt;
 pub use drain::Drained;
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicI64, AtomicU16, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU16, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -447,6 +447,9 @@ struct Proposal {
     /// What the agent is told happened, once it has.
     said: String,
     apply: SettingsEdit,
+    /// Each setting with its before and after, hashed: what an Allow given on
+    /// For you lets through once, and only while every before still holds.
+    fingerprint: String,
 }
 
 /// What an allowed [`Proposal`] does to the settings.
@@ -464,9 +467,41 @@ enum Permission {
     Ruled(String),
     Blocked(String),
     Refused,
+    /// Nobody answered in the window. The request is on For you, unless the
+    /// caller asked for it to lapse the old way.
     Unanswered,
+    /// A stop or a restart closed the request before anybody answered it.
+    Ended,
     /// Nobody was asked, because the request could not be recorded.
     Failed(String),
+}
+
+/// How a parked request came to an end.
+enum Parked {
+    /// Somebody answered, and this is the row as they left it.
+    Settled(Approval),
+    /// Nobody answered in the window.
+    Lapsed,
+    /// A stop or a restart closed it first.
+    Ended,
+}
+
+/// What a request that runs out of time becomes.
+enum Lapse {
+    /// A decision on For you. A permission brings the fingerprint its grant
+    /// will be bound to; a question has none, because no answer to it grants.
+    File { fingerprint: Option<String> },
+    /// Expired and nothing more: browser consent, which belonged to a page the
+    /// turn has since left, and a page pinned to the status bar, which keeps
+    /// its own sentences.
+    Expire,
+}
+
+/// What an agent asked the operator, and how it came out.
+enum Asked {
+    Answered(String),
+    Lapsed,
+    Ended,
 }
 
 fn policy_request(
@@ -672,7 +707,21 @@ const SIGNIN_SCAN_EVERY: Duration = Duration::from_secs(120);
 /// the cost of giving up too early is an operator who walked to the kitchen
 /// coming back to a request that has already lapsed. What it must not be is
 /// forever, because a turn that never ends is a run that never settles.
+///
+/// Running out is not the end of the request. It moves to For you as a
+/// decision, where it waits as long as it takes: see `Store::lapse_approval`.
+/// The turn is told so, which is why the sentences it reads say ten minutes;
+/// [`Runtime::set_approval_window`] exists so a test can watch a lapse happen
+/// without waiting for one, and nothing in the product calls it.
 const APPROVAL_WINDOW: Duration = Duration::from_secs(10 * 60);
+
+/// What a turn is told when a stop or a restart closed its request before
+/// anybody answered it. Its own sentence because it is a different fact from a
+/// lapse: nothing was filed anywhere, so there is nothing to wait for, and the
+/// turn picked up after a restart has to ask again. Also the outcome recorded
+/// on the call, because that is what the resumed turn reads back.
+const ENDED_BY_RESTART: &str = "The host restarted while this was waiting for the operator, so \
+                                nobody decided anything. Ask again if it still needs doing.";
 
 /// How often the schedule is swept for routines that have come due.
 ///
@@ -798,6 +847,9 @@ struct Inner {
     /// Turns parked on a permission request, by request id. The row in SQLite
     /// is the record; this is the way back to the agent that is holding.
     waiting: Mutex<HashMap<ApprovalId, tokio::sync::oneshot::Sender<()>>>,
+    /// How long a parked turn waits before its request moves to For you, in
+    /// milliseconds. [`APPROVAL_WINDOW`] unless a test shortened it.
+    approval_window: AtomicU64,
     /// Per-agent notes on disk.
     workspace: Workspace,
     /// Skills on disk: the operator's and each crew's. Guaca's own are
@@ -958,6 +1010,7 @@ impl Runtime {
                 routine_delivery: Mutex::new(()),
                 runs: Mutex::new(Runs::default()),
                 waiting: Mutex::new(HashMap::new()),
+                approval_window: AtomicU64::new(APPROVAL_WINDOW.as_millis() as u64),
                 workspace,
                 skills,
                 notebooks,
@@ -1107,6 +1160,13 @@ impl Runtime {
 
     pub fn viewer_port(&self) -> u16 {
         self.inner.viewer_port.load(Ordering::SeqCst)
+    }
+
+    /// Shortens how long a parked turn waits for the operator, so a test can
+    /// see a request lapse into For you. Nothing in the product calls this: the
+    /// ten minutes is in the sentences the turn reads when it happens.
+    pub fn set_approval_window(&self, window: Duration) {
+        self.inner.approval_window.store(window.as_millis() as u64, Ordering::SeqCst);
     }
 
     pub fn set_webhook_port(&self, port: u16) {
@@ -3168,6 +3228,13 @@ impl Runtime {
     /// answer arrived on. Those two can disagree by microseconds when a click
     /// lands as the window closes, and the row is the thing the operator can
     /// see: honoring it means a button that visibly said "allowed" allowed it.
+    ///
+    /// `fingerprint` is what makes a request one that can move to For you when
+    /// nobody answers it, and one an Allow given there lets through once. Built
+    /// by each caller from what was asked (see `approval::fingerprint`), and
+    /// `None` for the two kinds that keep the old lapse: browser consent and a
+    /// page pinned to the status bar.
+    #[allow(clippy::too_many_arguments)]
     async fn ask_permission(
         &self,
         card: &AgentCard,
@@ -3176,6 +3243,7 @@ impl Runtime {
         summary: String,
         detail: Vec<DetailField>,
         policy: crate::domain::policy::Request,
+        fingerprint: Option<String>,
     ) -> Permission {
         // The only shortcut either kind has, and it belongs to this one alone:
         // a standing yes is about an action, and a question asks for nothing.
@@ -3201,21 +3269,35 @@ impl Runtime {
                 Err(err) => return Permission::Failed(err.to_string()),
             }
         }
+        // An Allow the operator gave on this request after it lapsed into For
+        // you. After the rules, so a block still wins, and not when a block
+        // might apply and its fact is missing, for the reason a standing grant
+        // is not read then either. Spent here, so it lets one request through.
+        if let Some(fingerprint) = fingerprint.as_deref().filter(|_| !blocks_grant) {
+            match self.inner.store.take_grant(card.id, fingerprint, now_ms()) {
+                Ok(true) => return Permission::Granted,
+                Ok(false) => {}
+                Err(err) => return Permission::Failed(err.to_string()),
+            }
+        }
 
+        let lapse = match fingerprint {
+            Some(fingerprint) => Lapse::File { fingerprint: Some(fingerprint) },
+            None => Lapse::Expire,
+        };
         let settled =
-            self.park(card, run_id, Request::Permission { action }, summary, detail).await;
+            self.park(card, run_id, Request::Permission { action }, summary, detail, lapse).await;
 
         match settled {
-            Ok(Some(approval)) => match approval.state {
+            Ok(Parked::Settled(approval)) => match approval.state {
                 ApprovalState::Allow | ApprovalState::AlwaysAllow => Permission::Granted,
                 ApprovalState::Deny => Permission::Refused,
                 ApprovalState::Pending | ApprovalState::Answered | ApprovalState::Expired => {
-                    Permission::Unanswered
+                    Permission::Ended
                 }
             },
-            // The request cannot be read back, so nothing can be said about
-            // what the operator wanted. Refusing to act is the only safe end.
-            Ok(None) => Permission::Unanswered,
+            Ok(Parked::Lapsed) => Permission::Unanswered,
+            Ok(Parked::Ended) => Permission::Ended,
             Err(err) => Permission::Failed(err),
         }
     }
@@ -3228,19 +3310,23 @@ impl Runtime {
     /// wants, and whatever it does with the answer passes through every guard
     /// it was already subject to.
     ///
-    /// `None` is nobody answered, which is a real outcome and not an error: the
-    /// agent is told so and gets to decide what to do about it.
+    /// Nobody answering is a real outcome and not an error: the agent is told
+    /// so and gets to decide what to do about it, and the question waits on
+    /// For you for an answer that reaches it later as a new message.
     async fn ask_question(
         &self,
         card: &AgentCard,
         run_id: RunId,
         question: String,
         options: Vec<String>,
-    ) -> Result<Option<String>, String> {
-        let settled =
-            self.park(card, run_id, Request::Question { options }, question, Vec::new()).await?;
-
-        Ok(settled.and_then(|approval| approval.answer))
+    ) -> Result<Asked, String> {
+        let lapse = Lapse::File { fingerprint: None };
+        let request = Request::Question { options };
+        Ok(match self.park(card, run_id, request, question, Vec::new(), lapse).await? {
+            Parked::Settled(approval) => approval.answer.map_or(Asked::Ended, Asked::Answered),
+            Parked::Lapsed => Asked::Lapsed,
+            Parked::Ended => Asked::Ended,
+        })
     }
 
     /// The parking itself, which both kinds share.
@@ -3260,7 +3346,8 @@ impl Runtime {
         request: Request,
         summary: String,
         detail: Vec<DetailField>,
-    ) -> Result<Option<Approval>, String> {
+        lapse: Lapse,
+    ) -> Result<Parked, String> {
         let approval = match self.inner.store.create_approval(
             card.id,
             card.group_id,
@@ -3293,7 +3380,7 @@ impl Runtime {
                     state: expired.state,
                 });
             }
-            return Ok(None);
+            return Ok(Parked::Ended);
         }
 
         // Two parts, because a channel draws them differently and has to: one
@@ -3322,25 +3409,68 @@ impl Runtime {
             .events
             .emit(UiEvent::ApprovalRequested { approval_id: approval.id, agent_id: card.id });
 
-        let woken = tokio::time::timeout(APPROVAL_WINDOW, wait).await.is_ok();
+        let window = Duration::from_millis(self.inner.approval_window.load(Ordering::SeqCst));
+        let woken = tokio::time::timeout(window, wait).await.is_ok();
         self.inner.waiting.lock().remove(&approval.id);
         self.set_activity(card.id, Activity::Thinking);
 
+        // Running out can lose to an answer or a stop landing in this instant,
+        // and when it does that one stands: both ways of ending it here only
+        // move a row out of pending, so the loser changes nothing and the row
+        // is read back below.
         if !woken {
-            // Expiring can lose to an answer landing in this instant, and when
-            // it does that answer stands: `settle_approval` only moves a row out
-            // of pending, so the loser here changes nothing.
-            if let Ok(expired) =
-                self.inner.store.settle_approval(approval.id, ApprovalState::Expired)
-            {
-                self.inner.events.emit(UiEvent::ApprovalSettled {
-                    approval_id: approval.id,
-                    state: expired.state,
-                });
+            let expired = || UiEvent::ApprovalSettled {
+                approval_id: approval.id,
+                state: ApprovalState::Expired,
+            };
+            match lapse {
+                Lapse::File { fingerprint } => {
+                    match self.inner.store.lapse_approval(
+                        approval.id,
+                        fingerprint.as_deref(),
+                        now_ms(),
+                    ) {
+                        Ok(Some(_)) => {
+                            self.inner.events.emit(expired());
+                            self.emit(UiEvent::DecisionsChanged);
+                            return Ok(Parked::Lapsed);
+                        }
+                        Ok(None) => {}
+                        // Not filed, so the turn must not be told it is on
+                        // For you. Closed the old way so it does not stay
+                        // answerable for a turn that has stopped waiting.
+                        Err(err) => {
+                            tracing::warn!(%err, "could not move a lapsed request to For you");
+                            if self
+                                .inner
+                                .store
+                                .settle_approval(approval.id, ApprovalState::Expired)
+                                .is_ok()
+                            {
+                                self.inner.events.emit(expired());
+                            }
+                            return Err(err.to_string());
+                        }
+                    }
+                }
+                Lapse::Expire => {
+                    if self.inner.store.settle_approval(approval.id, ApprovalState::Expired).is_ok()
+                    {
+                        self.inner.events.emit(expired());
+                        return Ok(Parked::Lapsed);
+                    }
+                }
             }
         }
 
-        self.inner.store.get_approval(approval.id).map_err(|err| err.to_string())
+        // Woken, or beaten to it. A row a stop or a restart closed is expired
+        // with nobody having said anything; anything else is an answer.
+        match self.inner.store.get_approval(approval.id) {
+            Ok(Some(row)) if row.state == ApprovalState::Expired => Ok(Parked::Ended),
+            Ok(Some(row)) => Ok(Parked::Settled(row)),
+            Ok(None) => Err("the request could not be read back".to_string()),
+            Err(err) => Err(err.to_string()),
+        }
     }
 
     // ---- one agent turn --------------------------------------------------
@@ -5800,6 +5930,7 @@ impl Runtime {
                     },
                 ],
                 request,
+                None,
             )
             .await;
 
@@ -5815,11 +5946,11 @@ impl Runtime {
                  try another way round it. Say what you would have done and carry on with \
                  anything else you were given."
             )),
-            Permission::Unanswered if must_ask && session.is_none() => Some(
+            Permission::Unanswered | Permission::Ended if must_ask && session.is_none() => Some(
                 "Nobody answered, so you do not have permission and must not act. The operator                  is away rather than opposed. Say plainly what is waiting on them, so they can                  decide when they are back."
                     .to_string(),
             ),
-            Permission::Unanswered => Some(format!(
+            Permission::Unanswered | Permission::Ended => Some(format!(
                 "Refused: you read a page this turn and this would act on {service} as the \
                  operator, so it needed their say-so and nobody answered. They are away rather \
                  than opposed. Say plainly what is waiting on them. You can still read.",
@@ -5970,6 +6101,21 @@ impl Runtime {
                 detail.push(DetailField::new(label, value));
             }
         }
+        // The same action is the same words for what it will do, through the
+        // same tool, to the same people, place and amount. The reason is left
+        // out: it is why, not what, and a model asking again words it afresh.
+        let mut recipients = facts.recipients.clone().unwrap_or_default();
+        recipients.sort();
+        let fingerprint = crate::domain::approval::fingerprint(
+            ProtectedAction::ActOnBehalf,
+            &serde_json::json!({
+                "action": action.trim(),
+                "tool": text("tool"),
+                "recipients": recipients,
+                "domain": facts.domain,
+                "amount": facts.amount.as_ref().map(|it| [&it.value, &it.currency]),
+            }),
+        );
         let request = policy_request(
             card,
             crate::domain::policy::Class::ActOnBehalf,
@@ -5986,6 +6132,7 @@ impl Runtime {
                 format!("{} wants to do something in your name", card.name),
                 detail,
                 request,
+                Some(fingerprint),
             )
             .await;
 
@@ -6014,8 +6161,16 @@ impl Runtime {
             ),
             Permission::Unanswered => outcome(
                 ToolOutcome::Refused { reason: "nobody answered".to_string() },
-                "Nobody answered, so you do not have permission and must not act. The operator                  is away rather than opposed. Say plainly what is waiting on them, so they can                  decide when they are back."
+                "Nobody answered in ten minutes, so you do not have permission and must not act \
+                 now. Your request is now on the operator's For you desk, and their answer will \
+                 reach you as a new message. If they allow it, ask again for the same action and \
+                 it is granted without waiting. Carry on with anything that does not depend on \
+                 it, and say in your note that it is waiting on them."
                     .to_string(),
+            ),
+            Permission::Ended => outcome(
+                ToolOutcome::Refused { reason: ENDED_BY_RESTART.to_string() },
+                ENDED_BY_RESTART.to_string(),
             ),
             Permission::Failed(err) => outcome(
                 ToolOutcome::Failed { error: err.clone() },
@@ -6055,7 +6210,7 @@ impl Runtime {
         };
 
         match asked {
-            Ok(Some(answer)) => outcome(
+            Ok(Asked::Answered(answer)) => outcome(
                 ToolOutcome::Ok { summary: format!("the operator answered: {answer}") },
                 format!(
                     "The operator answered: {answer}\n\nThat is their decision, so take it and \
@@ -6068,13 +6223,18 @@ impl Runtime {
             // only that something failed reports the failure and stops, which
             // leaves the operator with no work done and a question they have
             // already missed once.
-            Ok(None) => outcome(
+            Ok(Asked::Lapsed) => outcome(
                 ToolOutcome::Ok { summary: "nobody answered".to_string() },
-                "Nobody answered in time, so you are on your own for this one. Do not ask again \
-                 this turn. Take the most defensible option, do as much of the work as that lets \
-                 you, and in your reply say plainly what you asked, that nobody answered, what \
-                 you assumed instead, and what would change if the assumption is wrong."
+                "Nobody answered in ten minutes, so you are on your own for this turn. Your \
+                 question is now on the operator's For you desk, and their answer will reach you \
+                 as a new message. Do not ask again this turn. Take the most defensible option, \
+                 do as much of the work as that lets you, and in your note say what you asked, \
+                 what you assumed instead, and what would change if the assumption is wrong."
                     .to_string(),
+            ),
+            Ok(Asked::Ended) => outcome(
+                ToolOutcome::Ok { summary: ENDED_BY_RESTART.to_string() },
+                ENDED_BY_RESTART.to_string(),
             ),
             Err(reason) => outcome(
                 ToolOutcome::Failed { error: reason },
@@ -6193,6 +6353,15 @@ impl Runtime {
                     None,
                     page_read,
                 ),
+                Some(crate::domain::approval::fingerprint(
+                    ProtectedAction::CreateAgent,
+                    &serde_json::json!({
+                        "name": clean.name,
+                        "instructions": clean.system_prompt,
+                        "skills": clean.skills,
+                        "notes": notes,
+                    }),
+                )),
             )
             .await;
 
@@ -6232,16 +6401,24 @@ impl Runtime {
             ),
             Permission::Unanswered => (
                 format!(
-                    "Nobody answered the request to create {}, so nothing was created. The \
-                     operator is away rather than opposed. Finish what you can without it and \
-                     tell them plainly what you wanted to add and why, so they can decide when \
-                     they are back.",
+                    "Nobody answered the request to create {} in ten minutes, so nothing was \
+                     created. The request is now on the operator's For you desk, and their answer \
+                     will reach you as a new message. If they allow it, ask again with the same \
+                     details and it goes through without waiting. Finish what you can without it.",
                     clean.name
                 ),
                 Part::tool_call(
                     tools::CREATE_AGENT,
                     arguments,
                     ToolOutcome::Refused { reason: "the operator did not answer".to_string() },
+                ),
+            ),
+            Permission::Ended => (
+                ENDED_BY_RESTART.to_string(),
+                Part::tool_call(
+                    tools::CREATE_AGENT,
+                    arguments,
+                    ToolOutcome::Refused { reason: ENDED_BY_RESTART.to_string() },
                 ),
             ),
             Permission::Failed(err) => failed(
@@ -7418,6 +7595,7 @@ impl Runtime {
                     None,
                     false,
                 ),
+                Some(proposal.fingerprint.clone()),
             )
             .await;
         match permission {
@@ -7465,11 +7643,17 @@ impl Runtime {
                 arguments,
             ),
             Permission::Unanswered => answer(
-                "Nobody answered, so nothing changed. The operator is away rather than opposed: \
-                 say in your reply what you wanted to change and why, so they can decide when \
-                 they are back."
+                "Nobody answered in ten minutes, so nothing changed. The request is now on the \
+                 operator's For you desk with its before and after, and their answer will reach \
+                 you as a new message. If they allow it, ask again for the same change and it is \
+                 applied without waiting, unless one of those settings has changed since."
                     .to_string(),
                 ToolOutcome::Refused { reason: "the operator did not answer".to_string() },
+                arguments,
+            ),
+            Permission::Ended => answer(
+                ENDED_BY_RESTART.to_string(),
+                ToolOutcome::Refused { reason: ENDED_BY_RESTART.to_string() },
                 arguments,
             ),
             Permission::Failed(err) => answer(
@@ -7497,7 +7681,15 @@ impl Runtime {
             .map(|change| format!("{} {} → {}", change.label, change.from, change.to))
             .collect::<Vec<_>>()
             .join("; ");
+        let fingerprint = crate::domain::approval::fingerprint(
+            ProtectedAction::ChangeSettings,
+            &serde_json::json!(asked
+                .iter()
+                .map(|change| [&change.label, &change.from, &change.to])
+                .collect::<Vec<_>>()),
+        );
         Ok(Some(Proposal {
+            fingerprint,
             detail: asked
                 .iter()
                 .map(|change| {
@@ -8306,6 +8498,7 @@ impl Runtime {
                     None,
                     false,
                 ),
+                None,
             )
             .await;
         Ok(match answer {
@@ -8357,7 +8550,7 @@ impl Runtime {
                  request: do not ask again this turn."
                     .to_string(),
             ),
-            Permission::Unanswered => Kept::Refused(
+            Permission::Unanswered | Permission::Ended => Kept::Refused(
                 "nobody answered, so it is not on the status bar. The operator is away rather \
                  than opposed: say in your reply what you wanted to pin and why."
                     .to_string(),
@@ -10111,5 +10304,80 @@ mod tests {
         assert!(browser_replacement_notice(true).contains("previous browser was gone"));
         assert_eq!(computer_replacement_notice(false), "");
         assert_eq!(browser_replacement_notice(false), "");
+    }
+
+    #[tokio::test]
+    async fn browser_consent_lapses_as_it_always_did_and_a_grant_never_answers_it() {
+        // The press belonged to a page the turn has since left, so it is not
+        // filed on For you, and an Allow given there for acting in the
+        // operator's name is not a yes to it: the gate still asks, and the
+        // grant is still there afterward.
+        let (_dir, runtime) = test_runtime();
+        runtime.set_approval_window(Duration::from_millis(50));
+        let store = &runtime.inner.store;
+        let mut card = store
+            .create_agent(&CleanDraft {
+                group_id: None,
+                name: "Browser".into(),
+                avatar: "orb".into(),
+                color: "#7fb069".into(),
+                model: "test/model".into(),
+                subscription_model: None,
+                reasoning_effort: None,
+                system_prompt: String::new(),
+                skills: vec![],
+            })
+            .unwrap();
+        card.browser_consent = Consent::AskBeforeActing;
+        let signin = Signin {
+            agent_id: card.id,
+            surface: Surface::Browser,
+            domain: "linkedin.example".into(),
+            service: "LinkedIn".into(),
+            recognized: true,
+            first_seen_at: 0,
+            last_seen_at: 0,
+        };
+        store.replace_signins(card.id, Surface::Browser, &[signin]).unwrap();
+
+        let earlier = store
+            .create_approval(
+                card.id,
+                card.group_id,
+                RunId::new(),
+                Request::Permission { action: ProtectedAction::ActOnBehalf },
+                "Browser wants to do something in your name",
+                &[],
+            )
+            .unwrap();
+        let filed = store.lapse_approval(earlier.id, Some("granted"), now_ms()).unwrap().unwrap();
+        store
+            .answer_decision(filed.id, crate::domain::approval::ALLOW, false, None, now_ms())
+            .unwrap();
+
+        let mut reading = Reading {
+            ingested: true,
+            url: Some("https://linkedin.example/feed".into()),
+            allowed: None,
+        };
+        let told = runtime
+            .may_act_on(&card, RunId::new(), "click", &mut reading)
+            .await
+            .expect("an unanswered press is refused");
+        assert!(told.starts_with("Refused: you read a page this turn"), "{told}");
+        assert!(told.contains("They are away rather than opposed"), "the sentence it had: {told}");
+
+        let states: Vec<String> = store
+            .conn()
+            .unwrap()
+            .prepare("SELECT state FROM approvals WHERE agent_id=?1 ORDER BY created_at")
+            .unwrap()
+            .query_map([card.id.to_string()], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(states, ["expired", "expired"], "it asked, and nobody answered");
+        assert_eq!(store.decisions(Some(card.id)).unwrap().len(), 1, "nothing filed for it");
+        assert!(store.take_grant(card.id, "granted", now_ms()).unwrap(), "and nothing spent");
     }
 }
