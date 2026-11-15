@@ -2,7 +2,7 @@
 
 import { COMMIT, VERSION } from "./build";
 import { compatibility, parseHealth } from "./releases";
-import type { UiEvent } from "./types";
+import type { NotificationAccess, UiEvent } from "./types";
 
 /** Tauri v2 puts this on `window` before any of our code runs. */
 export const desktop = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -911,7 +911,13 @@ let asking: Promise<boolean> | null = null;
  * that could. In a browser the question is a prompt, and one that may not be
  * answered at all without a click, so a page left at "not decided" claims
  * nothing and leaves the offer to another window. Concurrent askers share one
- * prompt. On desktop the plugin answers yes without asking.
+ * prompt.
+ *
+ * On macOS the app reads the system's own answer for Guaca, and a Mac that has
+ * never been asked counts as yes here: macOS asks once, and the moment to ask
+ * is when there is something to show, which is `notify`. Asking on connect
+ * would put the question to someone who has nothing waiting. Elsewhere on
+ * desktop the plugin answers yes without asking.
  */
 export function mayNotify(): Promise<boolean> {
   asking ??= permitted().finally(() => {
@@ -923,6 +929,8 @@ export function mayNotify(): Promise<boolean> {
 async function permitted(): Promise<boolean> {
   try {
     if (desktop) {
+      const system = await invokeLocal<NotificationAccess | null>("notification_access");
+      if (system !== null) return system === "allowed" || system === "notAsked";
       const plugin = await import("@tauri-apps/plugin-notification");
       return (
         (await plugin.isPermissionGranted()) || (await plugin.requestPermission()) === "granted"
@@ -965,6 +973,12 @@ export async function notify(title: string, body: string, onClick?: () => void):
   if (!(await mayNotify())) return false;
   try {
     if (desktop) {
+      // macOS asks here, the first time there is something to show. A Mac that
+      // says no gets nothing raised and hears false: the plugin hands a banner
+      // to the system and never reports whether it appeared, so this answer is
+      // the only true one there is.
+      const system = await invokeLocal<NotificationAccess | null>("ask_notification_access");
+      if (system !== null && system !== "allowed") return false;
       const plugin = await import("@tauri-apps/plugin-notification");
       if (!onClick) {
         plugin.sendNotification({ title, body });

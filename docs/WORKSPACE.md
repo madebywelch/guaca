@@ -2495,7 +2495,22 @@ you. A click on a banner brings the window forward and opens what it is about.
 Offers nobody claims expire after a day.
 
 There is a button that sends a test notification, which is the only way to tell a
-refused operating-system permission from a working one.
+refused operating-system permission from a working one, except on a Mac.
+
+macOS keeps a switch per app and will say where it stands, so there the app
+reads it (`notifications.rs`) instead of trusting the notification plugin, which
+answers "granted" on every desktop without asking anyone. Banners go through
+`UNUserNotificationCenter`, by turning on notify-rust's `preview-macos-un`
+under the plugin: the older `NSUserNotificationCenter` it used by default never
+asks for permission, shows nothing while Guaca is in front, and reported every
+banner as raised, so a Mac with Guaca switched off took every delivery and
+showed none. Now a Mac that has never been asked counts as yes for claiming, and
+macOS puts the question the first time there is something to show, or when the
+test is pressed; a Mac that says no claims nothing, and the test says so. The
+Notifications pane states which of these it is above the test button, with a
+way to System Settings when the answer is no. A copy run straight from the
+checkout is not an app bundle, which `UNUserNotificationCenter` needs, so it
+raises nothing and the pane says why.
 
 ## The menu bar is Guaca with the window shut
 

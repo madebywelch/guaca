@@ -15,7 +15,11 @@ const read = (path: string) => readFileSync(resolve(root, path), "utf8");
 
 /** Command names the frontend calls. */
 function calledCommands(): Set<string> {
-  const source = read("src/lib/ipc.ts") + read("src/lib/host.ts") + read("src/lib/transfer.ts");
+  const source =
+    read("src/lib/ipc.ts") +
+    read("src/lib/host.ts") +
+    read("src/lib/transfer.ts") +
+    read("src/lib/transport.ts");
   // Matches up to the opening paren rather than the first `>`, so a nested
   // generic like `Record<AgentId, Activity>` does not cut the match short.
   // Two doors, one surface: `invoke` reaches whichever host the page is in,

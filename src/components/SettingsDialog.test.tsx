@@ -10,6 +10,7 @@ import type {
   DeliverySettings,
   DeviceCode,
   GuardLimits,
+  NotificationAccess,
   PushReport,
   Settings,
   SettingsPatch,
@@ -85,6 +86,9 @@ const updateSettings = vi.fn<(patch: SettingsPatch) => Promise<Settings>>(async 
 const getSettings = vi.fn<() => Promise<Settings>>(async () => stored());
 const testConnection = vi.fn<(patch?: SettingsPatch) => Promise<string>>(async () => "Reached it.");
 const notifyOperator = vi.fn<(title: string, body: string) => Promise<boolean>>(async () => true);
+/** What macOS says about Guaca; `null` is every other platform. */
+const notificationAccess = vi.fn<() => Promise<NotificationAccess | null>>(async () => null);
+const openNotificationSettings = vi.fn<() => Promise<void>>(async () => {});
 const pushReport = vi.fn<() => Promise<PushReport>>(async () => nothingSent());
 const testPush = vi.fn<() => Promise<string>>(async () => "Sent, and the address took it.");
 
@@ -190,6 +194,8 @@ vi.mock("../lib/ipc", () => ({
     cancelClaudeSignin: async () => {},
     pushReport: () => pushReport(),
     testPush: () => testPush(),
+    notificationAccess: () => notificationAccess(),
+    openNotificationSettings: () => openNotificationSettings(),
   },
   notifyOperator: (title: string, body: string) => notifyOperator(title, body),
   openExternal: (url: string) => openExternal(url),
@@ -292,6 +298,7 @@ beforeEach(() => {
   testPush.mockResolvedValue("Sent, and the address took it.");
   testConnection.mockResolvedValue("Reached OpenRouter. 312 models.");
   notifyOperator.mockResolvedValue(true);
+  notificationAccess.mockResolvedValue(null);
   subscriptionStatus.mockResolvedValue(signedOut());
   completeSubscriptionSignin.mockResolvedValue(signedIn());
   signOutSubscription.mockResolvedValue(stored({ provider: "compatible" }));
@@ -2080,6 +2087,90 @@ describe("notifications", () => {
     expect(banner().className).not.toContain("banner--ok");
     expect(banner().className).not.toContain("banner--error");
     expect(screen.getByText(/Handed to the operating system/)).toBeTruthy();
+  });
+
+  describe("on a Mac", () => {
+    const TURNED_OFF = "macOS has notifications turned off for Guaca.";
+    const test = () => screen.getByRole("button", { name: "Send a test notification" });
+
+    it("says macOS allows them, above the test button", async () => {
+      notificationAccess.mockResolvedValue("allowed");
+      open();
+      pane("Notifications");
+
+      const line = await screen.findByText("macOS allows Guaca to show notifications.");
+      expect(line.compareDocumentPosition(test()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Open System Settings" })).toBeNull();
+      expect(screen.queryByText(/The only way to find out/)).toBeNull();
+    });
+
+    it("says when macOS has not asked yet, and when it will", async () => {
+      notificationAccess.mockResolvedValue("notAsked");
+      open();
+      pane("Notifications");
+
+      expect(await screen.findByText(/macOS has not asked you about Guaca yet/)).toBeTruthy();
+      expect(screen.getByText(/first time Guaca has something to show/)).toBeTruthy();
+    });
+
+    it("says they are turned off, and opens System Settings to turn them on", async () => {
+      notificationAccess.mockResolvedValue("denied");
+      open();
+      pane("Notifications");
+
+      expect(await screen.findByText(TURNED_OFF)).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Open System Settings" }));
+      await waitFor(() => expect(openNotificationSettings).toHaveBeenCalledTimes(1));
+    });
+
+    it("reads it again when the window comes back from System Settings", async () => {
+      notificationAccess.mockResolvedValue("denied");
+      open();
+      pane("Notifications");
+      expect(await screen.findByText(TURNED_OFF)).toBeTruthy();
+
+      notificationAccess.mockResolvedValue("allowed");
+      fireEvent.focus(window);
+      expect(await screen.findByText("macOS allows Guaca to show notifications.")).toBeTruthy();
+      expect(screen.queryByText(TURNED_OFF)).toBeNull();
+    });
+
+    it("says a test macOS accepted should be on screen", async () => {
+      notificationAccess.mockResolvedValue("allowed");
+      open();
+      pane("Notifications");
+      fireEvent.click(test());
+
+      await waitFor(() =>
+        expect(screen.getByText("Sent. It should be on your screen now.")).toBeTruthy(),
+      );
+      expect(banner().className).toContain("banner--ok");
+      expect(screen.queryByText(/Handed to the operating system/)).toBeNull();
+    });
+
+    it("says they are turned off when macOS would not show the test", async () => {
+      notifyOperator.mockResolvedValue(false);
+      notificationAccess.mockResolvedValueOnce("notAsked").mockResolvedValue("denied");
+      open();
+      pane("Notifications");
+      await screen.findByText(/macOS has not asked you about Guaca yet/);
+      fireEvent.click(test());
+
+      await waitFor(() => expect(banner().textContent).toContain(TURNED_OFF));
+      expect(banner().className).toContain("banner--error");
+      expect(screen.queryByText(/Handed to the operating system/)).toBeNull();
+      expect(screen.getByRole("button", { name: "Open System Settings" })).toBeTruthy();
+    });
+
+    it("is not asked about at all in a browser", () => {
+      platform.desktop = false;
+      notificationAccess.mockResolvedValue("denied");
+      open();
+      pane("Notifications");
+
+      expect(notificationAccess).not.toHaveBeenCalled();
+      expect(screen.getByText(/In a browser, this is also where it asks/)).toBeTruthy();
+    });
   });
 });
 

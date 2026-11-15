@@ -57,6 +57,20 @@ async fn open_docker() -> Result<(), String> {
     }
     Err("Open Docker Desktop from your applications, then check again.".into())
 }
+/// What macOS will do with a banner from this app; `None` off macOS.
+#[tauri::command]
+async fn notification_access() -> Option<crate::notifications::Permission> {
+    crate::notifications::current().await
+}
+/// The same, after asking if macOS never has.
+#[tauri::command]
+async fn ask_notification_access() -> Option<crate::notifications::Permission> {
+    crate::notifications::ask().await
+}
+#[tauri::command]
+async fn open_notification_settings() -> Result<(), String> {
+    crate::notifications::open_settings().await
+}
 #[tauri::command]
 async fn forward_files(
     origin: String,
@@ -174,6 +188,9 @@ pub fn run() {
             app_source,
             rebuild_app,
             open_docker,
+            notification_access,
+            ask_notification_access,
+            open_notification_settings,
             forward_files,
             download_file,
             report_presence,
