@@ -578,6 +578,74 @@ it, or when `markOutcomesSeen` names it or a moment it finished by; either way
 Naming neither is refused: a list on screen is a moment, and a run that finished
 after it was drawn has not been seen.
 
+## An overnight tidy is a turn the clock gives and nobody reads
+
+A group can switch on *Tidy memory overnight*, with an hour on the host's clock
+(three by default). Each agent in it is then given one turn a night to read what
+its work ended with since it last tidied, next to its working notes, and to
+rewrite its memory page if that would make its next turns better. Nothing else
+in the app reconciles memory, and nothing reconciles it more often: rewriting a
+page after every interaction is the regime that wears it down, which is why
+`docs/gotchas/memory.md` asks for the small store to be reconciled rarely.
+
+**When.** `Runtime::sweep_tidy` runs on the scheduler's tick, after the
+routines. It asks one question of each agent: has the tidy hour struck since the
+agent was last seen to (`Tidy::last_struck`)? So a host that was off for three
+nights tidies once when it is back, and an agent busy at three is tidied on the
+first tick that finds it idle. A paused or deleted agent is not on the list; a
+paused one is owed the night again once it is resumed. The clock is the
+runtime's own and not a routine: no row on the agent's schedule, nothing in any
+routine's history, nothing counted toward the twenty an agent may keep.
+
+**Two marks, because a night can be seen to without being read.**
+`agents.last_tidy_at` is written when the clock hands a tidy over, or finds the
+agent finished nothing worth a line, in one immediate transaction with the read
+(`Store::claim_tidy`). That is what keeps a night to one tidy whatever happens
+to the turn: a stop, a drain or a crash does not earn a second one.
+`agents.tidied_through` is where the next tidy's lines start, and only a tidy
+that finished, or stored a rewrite before it was cut short, moves it
+(`Store::tidied`). One that failed before storing anything hands its lines to
+the next night. An agent never tidied counts from the moment the switch went on
+(`groups.tidy_since`, null while it is off), never from the start of time.
+
+**What it reads.** `Part::Tidy`, from the system, carries the lines and the
+notes as drawn at the moment it was handed over. The model reads one fixed
+message (`envelope::TIDY`) followed by the lines and then the notes, each a
+block of its own and left out when empty. The lines are the agent's own runs in
+its current group, newest first, thirty at most, in the shape *What you have
+already reported* draws (`prompt::reported_line`); a check that found nothing
+new is not a line. The notes are drawn as the prompt draws them
+(`prompt::note_line`).
+
+**What it is told and offered.** `ReplyMode::Tidy`. The stable half of the
+system prompt is kept byte for byte, so a tidy reads that prefix from the
+provider's cache like any other turn, even though it describes tools a tidy is
+not given. The turn leaves out *Your reply* and *Where the operator is*, the
+operator's decisions, and the nudge a turn gets when it ends on a promise:
+nobody is waiting on what it says. It is offered `update_memory`, `notebook`
+and `note_progress`, with their descriptions as every turn reads them, for six
+rounds at most. A call to anything else is not run and not answered. The turn
+ends there, as if the model had stopped, with a warning in the log and nothing
+said to the model, which would be words no tidy was meant to read.
+
+**What survives it.** The rewrite, notebook writes and working notes, and the
+calls that made them, filed in the channel as any turn's are, so a rewrite shows
+as the memory diff under the tidy's line. Nothing the model says is filed or
+drawn. A tidy writes no outcome: nothing in For you, nothing unseen on the rail
+or the menu bar, nothing in the outbox, never a line under *What you have
+already reported*, and so never the reason for the next night's tidy. The tidy
+message itself is left out of every later turn's history and does not take a
+place in the window, because its lists are stale by morning and the prompt
+draws memory and notes fresh.
+
+**When it goes wrong.** A model call that fails says so in the channel, in the
+same notice any turn files, because it is often the first sign of a key that has
+expired, and the operator stopping it and the run's budget running out are said
+as they are for any turn. Try again sends the same tidy again with no cause, so
+the retry is still a tidy and still writes no outcome. A drain does not put a
+tidy down, and recovery reports one a crash cut short as interrupted, without an
+outcome. Either way memory is what its last stored rewrite left.
+
 ## A subscription is a second provider, not a second endpoint
 
 An operator can pay for a turn two ways: an OpenAI-compatible endpoint with a key
@@ -1381,7 +1449,14 @@ and the shape was not.
 ```sh
 cargo test --manifest-path src-tauri/Cargo.toml --test evals   # scripted, in CI
 ./scripts/evals.sh                                             # live, costs money
+cargo test --manifest-path src-tauri/Cargo.toml --test tidy_week -- --ignored --nocapture
 ```
+
+The last is the overnight tidy's own live test, kept out of `evals.sh` because it
+asks a different question: over a scripted week of work and seven nights of
+tidies, does the memory page get better, and does it stay short? It prints the
+page after every night, what each tidy changed, and any call a tidy made to a
+tool it was not offered.
 
 The scripted ones run a stub model playing a specific bad habit on purpose and
 check the runtime contains it. The live ones run the real prompts against your

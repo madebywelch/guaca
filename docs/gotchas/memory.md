@@ -130,3 +130,22 @@ and `components/WorkingNotes.tsx` are the code.
   refuses names that could leave the folder, and `Notebooks::locate` refuses a
   path that runs through a link somebody left there. An agent cannot make a
   link; an operator's stray one must not become a way out.
+- **The overnight tidy writes no outcome, and that is what keeps it from
+  feeding itself.** Its lines are the agent's outcomes since its last tidy. A
+  tidy with an outcome would be a line in the next night's tidy, and a night
+  with nothing else would still owe one. It also keeps a tidy out of For you,
+  the unseen counts and the outbox without a rule in any of them. *An overnight
+  tidy is a turn the clock gives and nobody reads* in `docs/ARCHITECTURE.md`.
+- **Two marks on the agent, and they move at different times.**
+  `last_tidy_at` is written when the clock hands a tidy over, so a stopped or
+  crashed tidy is not given twice in a night. `tidied_through` moves only when
+  a tidy finishes or stores a rewrite, so one that failed hands its lines on.
+  Collapsing them into one either repeats a tidy the same night or loses the
+  lines a failed one never read.
+- **The tidy message is not history.** `Store::agent_history` leaves it out
+  and so does the prompt's history loop, and the oracle test that holds the two
+  together has a tidy among its samples. Drawn later, it would put a stale copy
+  of the agent's own notes in front of the fresh ones.
+- **A tidy's three tools are checked by what the call is, not by its name.**
+  `tools::tidies` matches the parsed invocation, so `update_notes`, the old
+  name, is the same tool, and an alias of anything else is still refused.
