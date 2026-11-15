@@ -1292,6 +1292,162 @@ async fn a_memory_write_that_failed_tells_nobody_it_changed() {
     );
 }
 
+/// What each tool call this turn made so far came back with, in order.
+fn answers_so_far(body: &serde_json::Value) -> Vec<String> {
+    body["messages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|message| message["role"] == "tool")
+        .map(|message| message["content"].as_str().unwrap_or_default().to_string())
+        .collect()
+}
+
+/// The operator saving an agent's memory from the panel: the page they were
+/// shown, and the version it was, which is what `set_agent_memory` is sent.
+fn operator_saves(workspace: &guac_lib::workspace::Workspace, id: guac_lib::domain::ids::AgentId) {
+    let shown = workspace.read_versioned(id);
+    let saved = workspace
+        .write_versioned(id, "Manager", "Jones handles verification.", Some(&shown.version))
+        .unwrap();
+    assert!(matches!(saved, guac_lib::workspace::WriteResult::Stored(_)));
+}
+
+const MEMORY_CONFLICT: &str =
+    "Not saved: the operator edited your memory while you were working, and \
+     your rewrite started from the page as it was before. Their version is below. Make your \
+     change again on top of it.\n\n";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_operator_save_during_a_turn_is_not_overwritten_by_the_agents_rewrite() {
+    // The agent's rewrite is the page it was shown at the top of its turn
+    // with a change made to it. The operator corrected that page from the
+    // panel while the turn ran, and the rewrite used to be stored over their
+    // correction, putting back the line they had just fixed with nothing to
+    // tell either of them.
+    let workspace = Arc::new(std::sync::OnceLock::new());
+    let saving = workspace.clone();
+    let stub = serve(move |body| {
+        if has_tool_result(body) {
+            return Script::Say("Done.".into());
+        }
+        let (workspace, id) = saving.get().expect("the harness is built before the turn runs");
+        operator_saves(workspace, *id);
+        Script::Memory("Smith handles verification.\nThe operator likes tables.".into())
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let manager = h.id("Manager");
+    h.runtime.workspace().write(manager, "Manager", "Smith handles verification.").unwrap();
+    workspace.set((h.runtime.workspace().clone(), manager)).unwrap();
+
+    let run = h.runtime.send_from_human(manager, "remember that I like tables").unwrap();
+    h.settle(run).await;
+
+    assert_eq!(
+        h.runtime.workspace().read(manager),
+        "Jones handles verification.",
+        "the operator's correction was overwritten by a page made before it"
+    );
+    let bodies = stub.transcript.lock().clone();
+    let told = bodies.last().map(answers_so_far).unwrap_or_default();
+    assert_eq!(told, vec![format!("{MEMORY_CONFLICT}Jones handles verification.")]);
+    let refused = h
+        .runtime
+        .store()
+        .channel_messages(manager, 200)
+        .unwrap()
+        .iter()
+        .flat_map(|m| m.parts.clone())
+        .any(|part| {
+            matches!(part, Part::ToolCall { name, outcome, replaced: None, .. }
+                if name == "update_memory" && matches!(outcome, ToolOutcome::Refused { .. }))
+        });
+    assert!(refused, "the transcript has to show the write that was not saved as not saved");
+    assert_eq!(
+        h.sink.count_of(|e| matches!(e, UiEvent::MemoryChanged { .. })),
+        0,
+        "nothing the agent wrote was stored, so the panel has nothing new to read"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn after_a_refused_rewrite_the_agent_can_make_its_change_on_the_operators_page() {
+    // The refusal says to make the change again on top of the page it hands
+    // back, so that is the page the next write is checked against. Checked
+    // against the page the turn began with, every write after the operator's
+    // save would be refused until the turn ran out.
+    let workspace = Arc::new(std::sync::OnceLock::new());
+    let saving = workspace.clone();
+    let stub = serve(move |body| match answers_so_far(body).len() {
+        0 => {
+            let (workspace, id) = saving.get().expect("the harness is built before the turn runs");
+            operator_saves(workspace, *id);
+            Script::Memory("Smith handles verification.\nThe operator likes tables.".into())
+        }
+        1 => Script::Memory("Jones handles verification.\nThe operator likes tables.".into()),
+        _ => Script::Say("Done.".into()),
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let manager = h.id("Manager");
+    h.runtime.workspace().write(manager, "Manager", "Smith handles verification.").unwrap();
+    workspace.set((h.runtime.workspace().clone(), manager)).unwrap();
+
+    let run = h.runtime.send_from_human(manager, "remember that I like tables").unwrap();
+    h.settle(run).await;
+
+    let bodies = stub.transcript.lock().clone();
+    let told = bodies.last().map(answers_so_far).unwrap_or_default();
+    assert_eq!(told.len(), 2, "{told:?}");
+    assert!(told[0].starts_with(MEMORY_CONFLICT), "{told:?}");
+    assert_eq!(told[1], "Memory saved (54 characters).");
+    assert_eq!(
+        h.runtime.workspace().read(manager),
+        "Jones handles verification.\nThe operator likes tables."
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn with_nobody_else_writing_every_rewrite_in_a_turn_is_saved() {
+    // The other side of the check. With no save in between, the agent's
+    // write is stored and answered exactly as it always was, and a second
+    // rewrite in the same turn is checked against the page its own first one
+    // stored, not the one the turn began with.
+    let stub = serve(|body| match answers_so_far(body).len() {
+        0 => Script::Memory("Smith handles verification.".into()),
+        1 => Script::Memory("Smith handles verification.\nJones signs off.".into()),
+        _ => Script::Say("Done.".into()),
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let manager = h.id("Manager");
+    let run = h.runtime.send_from_human(manager, "remember who verifies and signs").unwrap();
+    h.settle(run).await;
+
+    let bodies = stub.transcript.lock().clone();
+    let told = bodies.last().map(answers_so_far).unwrap_or_default();
+    assert_eq!(
+        told,
+        vec![
+            "Memory saved (27 characters).".to_string(),
+            "Memory saved (44 characters).".to_string()
+        ]
+    );
+    assert_eq!(
+        h.runtime.workspace().read(manager),
+        "Smith handles verification.\nJones signs off."
+    );
+    assert_eq!(
+        h.sink
+            .count_of(|e| matches!(e, UiEvent::MemoryChanged { agent_id } if *agent_id == manager)),
+        2
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn what_one_agent_remembers_is_never_shown_to_another() {
     // A memory is written by an agent for itself, in whatever shorthand suits

@@ -4004,24 +4004,41 @@ impl Store {
     /// Bound each indexed read before merging ids, then load only the newest
     /// `limit` bodies. A backlog cannot displace earlier context, and a long
     /// conversation cannot turn a small prompt into a scan of every message.
+    ///
+    /// Only a row the prompt will draw takes one of the `limit` places. Every
+    /// turn that called a tool files an activity record in this channel, and a
+    /// record holding nothing but calls and notices renders as nothing, so
+    /// counting rows rather than messages gave a tool-using agent about 26 of
+    /// its 40 and dropped real messages to make room for blanks. `SHOWN` is
+    /// the prompt's own test for an empty message, `prompt::is_empty`, written
+    /// in SQL: a part with words in it, a file, a routine firing or a decision.
+    /// A record that carries the agent's commentary has words in it and still
+    /// counts, because it is still drawn.
     pub fn agent_history(
         &self,
         agent: AgentId,
         through: i64,
         limit: u32,
     ) -> Result<Vec<Envelope>, StoreError> {
+        const SHOWN: &str = "EXISTS (
+                 SELECT 1 FROM json_each(parts) AS part
+                  WHERE json_extract(part.value, '$.type') IN ('file', 'routine', 'decision')
+                     OR (json_extract(part.value, '$.type')='text'
+                         AND trim(json_extract(part.value, '$.text'),
+                                  ' ' || char(9) || char(10) || char(13)) <> '')
+             )";
         let conn = self.conn()?;
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare(&format!(
             "WITH visible AS (
                  SELECT id, created_at FROM (
                      SELECT id, created_at FROM messages
-                      WHERE channel_id=?1 AND created_at<=?2
+                      WHERE channel_id=?1 AND created_at<=?2 AND {SHOWN}
                       ORDER BY created_at DESC, id DESC LIMIT ?3
                  )
                  UNION
                  SELECT id, created_at FROM (
                      SELECT id, created_at FROM messages
-                      WHERE from_kind='agent' AND from_agent=?1
+                      WHERE from_kind='agent' AND from_agent=?1 AND {SHOWN}
                       ORDER BY created_at DESC, id DESC LIMIT ?3
                  )
              ), recent AS (
@@ -4029,8 +4046,8 @@ impl Store {
              )
              SELECT id,run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,intent,cause,created_at
                FROM messages JOIN recent USING (id)
-              ORDER BY created_at DESC, id DESC",
-        )?;
+              ORDER BY created_at DESC, id DESC"
+        ))?;
         let rows = stmt.query_map(params![agent.to_string(), through, limit], row_to_envelope)?;
         let mut out = Vec::new();
         for row in rows {
@@ -5235,6 +5252,7 @@ mod tests {
     use crate::domain::attachment::Attachment;
     use crate::domain::envelope::channel_for;
     use crate::domain::envelope::NoticeKind;
+    use crate::domain::envelope::ToolOutcome;
     use crate::domain::ids::RunId;
     use crate::domain::plugin::HeaderPair;
     use crate::domain::routine::Cadence;
@@ -7513,6 +7531,131 @@ mod tests {
             vec!["message 0", "message 1"],
             "newer queued messages must not displace the context this turn can read"
         );
+    }
+
+    #[test]
+    fn a_turn_that_called_a_tool_leaves_the_history_window_to_messages() {
+        // A working agent's channel: the operator asks, the agent notes where
+        // it is, the agent answers. The note is filed as an activity record the
+        // prompt draws as nothing, and while every row took a place, thirteen
+        // of the forty went to records and the agent was shown 27 messages.
+        let f = fixture();
+        let writer = f.store.create_agent(&draft("Writer")).unwrap().id;
+        let me = Participant::Agent { id: writer };
+        let run = RunId::new();
+        let mut at = 0;
+        let mut file = |mut message: Envelope| {
+            message.created_at = at;
+            at += 1;
+            f.store.append(&message).unwrap();
+        };
+        for i in 0..25 {
+            file(envelope(Participant::Human, me, &format!("question {i}"), run));
+            let mut record = envelope(me, Participant::System, "", run);
+            record.parts = vec![Part::tool_call(
+                "note_progress",
+                serde_json::json!({ "note": format!("working on question {i}") }),
+                ToolOutcome::Ok { summary: "Noted.".into() },
+            )];
+            file(record);
+            file(envelope(me, Participant::Human, &format!("answer {i}"), run));
+        }
+
+        let history = f.store.agent_history(writer, i64::MAX, 40).unwrap();
+        let drawn: Vec<String> =
+            history.iter().map(Envelope::plain_text).filter(|text| !text.is_empty()).collect();
+        assert_eq!(drawn.len(), 40, "the window is forty messages, not forty rows: {drawn:?}");
+        assert_eq!(drawn.first().map(String::as_str), Some("question 5"));
+        assert_eq!(drawn.last().map(String::as_str), Some("answer 24"));
+        assert_eq!(history.len(), 40, "and nothing the prompt will not draw came back with them");
+    }
+
+    #[test]
+    fn what_the_history_window_leaves_out_is_what_the_prompt_would_not_draw() {
+        // `SHOWN` is the prompt's test for an empty message restated in SQL,
+        // and the two must agree. One that skips a row the prompt would draw
+        // takes a message away from the agent; one that keeps a row the prompt
+        // would not draw gives its place to a blank.
+        use crate::domain::decision::DecisionRequest;
+        use crate::domain::ids::{DecisionId, RoutineId};
+
+        let f = fixture();
+        let writer = f.store.create_agent(&draft("Writer")).unwrap().id;
+        let me = Participant::Agent { id: writer };
+        let call = || {
+            Part::tool_call(
+                "directory",
+                serde_json::json!({}),
+                ToolOutcome::Ok { summary: "1 agent(s): Writer".into() },
+            )
+        };
+        let samples: Vec<(Participant, Participant, Vec<Part>)> = vec![
+            (Participant::Human, me, vec![Part::text("words")]),
+            (Participant::Human, me, vec![Part::text(" \n\t ")]),
+            (me, Participant::System, vec![call()]),
+            (me, Participant::System, vec![call(), Part::text("Checked who is here.")]),
+            (
+                Participant::System,
+                me,
+                vec![Part::Notice { kind: NoticeKind::GuardStop, text: "hop limit".into() }],
+            ),
+            (
+                Participant::Human,
+                me,
+                vec![Part::Json { name: "data".into(), value: serde_json::json!({ "a": 1 }) }],
+            ),
+            (
+                Participant::Human,
+                me,
+                vec![Part::File(Attachment {
+                    digest: "aaa".into(),
+                    name: "budget.pdf".into(),
+                    mime: "application/pdf".into(),
+                    bytes: 2048,
+                })],
+            ),
+            (
+                Participant::System,
+                me,
+                vec![Part::Routine {
+                    routine_id: RoutineId::new(),
+                    name: "Morning".into(),
+                    what: "post the summary".into(),
+                    payload: None,
+                }],
+            ),
+            (
+                Participant::System,
+                me,
+                vec![Part::Decision {
+                    id: DecisionId::new(),
+                    request: DecisionRequest {
+                        question: "Which footer address?".into(),
+                        context: String::new(),
+                        recommendation: "Use the office.".into(),
+                        options: vec![],
+                        source: String::new(),
+                    },
+                    answer: "Leave the address out.".into(),
+                    resumed: false,
+                }],
+            ),
+        ];
+        for (i, (from, to, parts)) in samples.into_iter().enumerate() {
+            let mut message = envelope(from, to, "", RunId::new());
+            message.parts = parts;
+            message.created_at = i as i64;
+            f.store.append(&message).unwrap();
+            let drawn = !message.plain_text().is_empty()
+                || message.parts.iter().any(|part| matches!(part, Part::File(_)));
+            let kept = f
+                .store
+                .agent_history(writer, i64::MAX, 40)
+                .unwrap()
+                .iter()
+                .any(|seen| seen.id == message.id);
+            assert_eq!(kept, drawn, "the window and the prompt disagree on {:?}", message.parts);
+        }
     }
 
     #[test]

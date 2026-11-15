@@ -71,6 +71,33 @@ and `components/WorkingNotes.tsx` are the code.
   as what was stored, and what came back is what goes on screen, because
   `Workspace::write` trims and cuts and the typed version is a page the agent
   is never going to be given.
+- **An agent's rewrite is checked against the page it was shown, and loses to
+  the operator's save.** A rewrite is the page from the top of the turn with a
+  change made to it, and the operator can save the same file from the panel
+  while the turn runs. Stored unconditionally, it put back whatever the operator
+  had just corrected and told nobody. The turn carries the version it read
+  (`Reading::memory` in `runtime/mod.rs`) into `Workspace::write_versioned`;
+  on a mismatch nothing is stored and `update_memory` answers with the
+  operator's page whole, since the prompt still shows the old one. The version
+  then moves to that page, and after a stored write to what was stored, so a
+  second rewrite in one turn is checked against the turn's own first one and
+  not refused for it. The panel's conflict handling is the mirror of this: it
+  protects a draft, and this protects a save.
+- **The memory file is replaced by a rename, never written in place.** It is
+  the only copy of what an agent knows, and `fs::write` empties the file before
+  refilling it, so a crash or a full disk in between left a page cut short.
+  `workspace::replace` writes beside it and renames over it, the way the
+  notebook and skills already did. The temporary name ends in `.md.tmp`, which
+  the id lookup does not match, so a file a crash left behind is never read as
+  memory.
+- **The history window counts messages the prompt draws, not rows.** Every
+  turn that called a tool files an activity record in the agent's channel, and
+  one that holds only calls and notices renders as nothing. Counted as rows they
+  took about a third of the forty places, so a tool-using agent saw 26 messages.
+  `Store::agent_history` now skips what `prompt::is_empty` would skip, in SQL,
+  before the limit; a record carrying the agent's commentary is drawn and still
+  counts. The two tests of emptiness have to agree, and a store test holds them
+  to it part by part.
 - **What a memory rewrite replaced is absent, empty or a page, and the three
   mean different things.** Absent is a call that replaced nothing, which is
   every other tool and every write recorded before the field existed: there is

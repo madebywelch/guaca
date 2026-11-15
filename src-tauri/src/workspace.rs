@@ -38,7 +38,7 @@
 //!   crowds out the conversation.
 
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -194,6 +194,19 @@ impl Workspace {
         content: &str,
         expected: Option<&str>,
     ) -> Result<WriteResult, WorkspaceError> {
+        self.write_through(id, name, content, expected, |from, to| fs::rename(from, to))
+    }
+
+    /// `write_versioned`, with the last step of putting the page in place
+    /// handed in, so a test can make it fail where a crash would.
+    fn write_through(
+        &self,
+        id: AgentId,
+        name: &str,
+        content: &str,
+        expected: Option<&str>,
+        rename: fn(&Path, &Path) -> io::Result<()>,
+    ) -> Result<WriteResult, WorkspaceError> {
         let _guard = MEMORY_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let before = self.read_unlocked(id);
         if expected.is_some_and(|expected| expected != version(&before)) {
@@ -225,7 +238,7 @@ impl Workspace {
             }
         }
 
-        fs::write(&target, &body)
+        replace(&target, &body, rename)
             .map_err(|source| WorkspaceError::Io { path: target.clone(), source })?;
 
         Ok(WriteResult::Stored(Stored {
@@ -244,6 +257,30 @@ impl Workspace {
             let _ = fs::remove_file(path);
         }
     }
+}
+
+/// Puts a page at `target` by writing it beside it and renaming it over.
+///
+/// The file is the only copy of what an agent knows. Written in place, it is
+/// emptied the moment it is opened and refilled after, so a crash or a full
+/// disk in between left an agent with a page cut short or no page at all. A
+/// rename is the one step that either happens whole or not at all, so until it
+/// does the old page is still there to read. The temporary name does not end in
+/// the id suffix `existing_path` looks for, so a leftover one is never read as
+/// memory, and the next write reuses it: every write holds `MEMORY_LOCK`.
+fn replace(
+    target: &Path,
+    body: &str,
+    rename: fn(&Path, &Path) -> io::Result<()>,
+) -> io::Result<()> {
+    let temp = target.with_extension("md.tmp");
+    let written = fs::File::create(&temp)
+        .and_then(|mut file| file.write_all(body.as_bytes()).and_then(|()| file.sync_all()));
+    let placed = written.and_then(|()| rename(&temp, target));
+    if placed.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    placed
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -405,6 +442,44 @@ mod tests {
         let stored = ws.write(id, "Manager", &body).unwrap();
         assert!(!stored.truncated);
         assert_eq!(ws.read(id).chars().count(), MAX_MEMORY);
+    }
+
+    #[test]
+    fn a_write_that_fails_before_its_rename_leaves_the_old_page() {
+        // Where a crash or a full disk lands: the new page is written, or half
+        // written, and never put in place. Written straight onto the file, that
+        // moment had already emptied the only copy of what the agent knew.
+        let (ws, _dir) = workspace();
+        let id = AgentId::new();
+        ws.write(id, "Manager", "what it knew").unwrap();
+
+        let failed = ws.write_through(id, "Manager", "what it meant to write", None, |_, _| {
+            Err(io::Error::other("stopped before the rename"))
+        });
+        assert!(failed.is_err(), "the write did not fail, so this proves nothing");
+        assert_eq!(ws.read(id), "what it knew");
+        assert_eq!(
+            fs::read_dir(ws.root()).unwrap().count(),
+            1,
+            "the half-made page was left lying beside the real one"
+        );
+
+        ws.write(id, "Manager", "what it meant to write").unwrap();
+        assert_eq!(ws.read(id), "what it meant to write", "and the next write goes through");
+    }
+
+    #[test]
+    fn a_page_left_half_written_by_a_crash_is_never_read_as_memory() {
+        // A process that dies after the temporary file and before the rename
+        // never gets to tidy up, so what it leaves has to be harmless on disk.
+        let (ws, _dir) = workspace();
+        let id = AgentId::new();
+        let stored = ws.write(id, "Manager", "what it knew").unwrap();
+        fs::write(stored.path.with_extension("md.tmp"), "what it me").unwrap();
+
+        assert_eq!(ws.read(id), "what it knew");
+        ws.write(id, "Manager", "what it meant to write").unwrap();
+        assert_eq!(ws.read(id), "what it meant to write");
     }
 
     #[test]
