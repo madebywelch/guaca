@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../lib/store";
-import type { AgentCard, ApprovalState, Envelope, Part } from "../lib/types";
+import type { AgentCard, ApprovalState, Envelope, Part, WorkDecision } from "../lib/types";
 import { MessageItem } from "./MessageItem";
 
 const decideApproval = vi.fn<(id: string, decision: string) => Promise<unknown>>();
@@ -71,6 +71,27 @@ function asking(part: Extract<Part, { type: "approval" }> = REQUEST): Envelope {
   };
 }
 
+/** The decision a lapse files in For you, under the request's own id. */
+function filedFor(id: string): WorkDecision {
+  return {
+    id: "d1",
+    agentId: MANAGER.id,
+    groupId: "g1",
+    topic: `approval:${id}`,
+    request: { question: "", context: "", recommendation: "", options: [], source: "" },
+    status: "pending",
+    answer: null,
+    outcome: null,
+    createdAt: 0,
+    updatedAt: 0,
+    dueAt: null,
+    remindAt: 0,
+    snoozedUntil: null,
+    deliveryRun: null,
+    interrupted: false,
+  };
+}
+
 function draw(state: ApprovalState | undefined, part = REQUEST) {
   useStore.setState({ approvals: state ? { [part.id]: state } : {}, banner: null });
   return render(
@@ -87,6 +108,7 @@ describe("a request for permission", () => {
     decideApproval.mockReset();
     decideApproval.mockResolvedValue(undefined);
     approvalStates.mockClear();
+    useStore.setState({ decisions: [] });
   });
 
   it("shows what was asked for, not just that something was", () => {
@@ -121,6 +143,25 @@ describe("a request for permission", () => {
     expect(screen.queryByRole("button", { name: "Allow" })).toBeNull();
     expect(screen.getByText(said)).toBeTruthy();
     expect(screen.getByText(REQUEST.summary)).toBeTruthy();
+  });
+
+  it("says a request that ran out of time is waiting in For you", () => {
+    // The lapse filed it as a decision, so "nothing happened" would send the
+    // operator away from the one place their answer still reaches the agent.
+    useStore.setState({ decisions: [filedFor(REQUEST.id)] });
+    draw("expired");
+    expect(
+      screen.getByText("Nobody answered in ten minutes. It is waiting in For you."),
+    ).toBeTruthy();
+    expect(screen.queryByText(/so nothing happened/)).toBeNull();
+  });
+
+  it("keeps saying nothing happened when the lapse filed nothing", () => {
+    // Browser consent, and a request a restart ended, are not filed anywhere.
+    useStore.setState({ decisions: [filedFor("another")] });
+    draw("expired");
+    expect(screen.getByText("Nobody answered, so nothing happened.")).toBeTruthy();
+    expect(screen.queryByText(/waiting in For you/)).toBeNull();
   });
 
   it("offers no decision for a request it has never heard of", () => {

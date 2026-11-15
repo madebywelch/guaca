@@ -18,6 +18,10 @@ const SETTLED: Record<string, string> = {
   expired: "Nobody answered, so it went ahead without you.",
 };
 
+/** A question that ran out of time and was filed in For you as well. */
+const FILED =
+  "Nobody answered in ten minutes, so it went ahead without you. The question is waiting in For you.";
+
 /**
  * An agent asking the operator what to do, in the channel it asked from.
  *
@@ -51,6 +55,9 @@ export function QuestionRequest({ part, agent }: Props) {
   // it was asked and never changes, and the answer is kept on the request's row.
   const said = useStore((s) => s.answers[part.id]);
   const answer = useStore((s) => s.answerQuestion);
+  // A lapse files the question in For you under its own id, in the commit that
+  // expires it. One a restart ended is not filed, and keeps the older sentence.
+  const filed = useStore((s) => s.decisions.some((d) => d.topic === `approval:${part.id}`));
   const [sending, setSending] = useState(false);
   const [written, setWritten] = useState("");
 
@@ -82,7 +89,9 @@ export function QuestionRequest({ part, agent }: Props) {
           <p className="ask__note">
             {state === "pending"
               ? `${asker} is waiting on you. Nothing is being decided for you here.`
-              : (SETTLED[state] ?? "This question is no longer live.")}
+              : state === "expired" && filed
+                ? FILED
+                : (SETTLED[state] ?? "This question is no longer live.")}
           </p>
         </div>
       </div>

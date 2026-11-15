@@ -27,6 +27,9 @@ const SETTLED: Record<string, string> = {
   expired: "Nobody answered, so nothing happened.",
 };
 
+/** A request that ran out of time and was filed in For you instead. */
+const FILED = "Nobody answered in ten minutes. It is waiting in For you.";
+
 /**
  * An agent asking the operator for permission, in the channel it asked from.
  *
@@ -48,6 +51,10 @@ export function ApprovalRequest({ part, agent }: Props) {
   // somewhere else, or lapsing while this was on screen, is handled there: the
   // runtime's copy is the truth and both readings of it are corrected together.
   const decide = useStore((s) => s.decideApproval);
+  // A lapse files the request in For you under its own id, in the commit that
+  // expires it. Browser consent and a request a restart ended are not filed,
+  // so they keep the sentence that says nothing happened.
+  const filed = useStore((s) => s.decisions.some((d) => d.topic === `approval:${part.id}`));
   const [deciding, setDeciding] = useState<Decision | null>(null);
 
   const asker = agent?.name ?? "A deleted agent";
@@ -71,7 +78,9 @@ export function ApprovalRequest({ part, agent }: Props) {
           <p className="ask__note">
             {state === "pending"
               ? `${asker} is waiting on you. ${NOTHING_YET[part.action]}`
-              : (SETTLED[state] ?? "This request is no longer live.")}
+              : state === "expired" && filed
+                ? FILED
+                : (SETTLED[state] ?? "This request is no longer live.")}
           </p>
         </div>
       </div>
