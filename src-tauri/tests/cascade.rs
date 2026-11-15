@@ -159,7 +159,7 @@ async fn an_exhausted_turn_leaves_new_work_its_own_budget() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn manager_introduces_itself_to_every_other_agent() {
-    // The scenario from the brief, start to finish.
+    // The whole introduction, start to finish.
     let peers = ["Chef", "Host", "Barista", "Sommelier"];
     let stub = serve(move |body| {
         let who = speaker(body);
