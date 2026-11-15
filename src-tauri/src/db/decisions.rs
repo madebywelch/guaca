@@ -453,9 +453,10 @@ impl Store {
 
     /// Marks follow-through a restart cut off as interrupted: an answered
     /// decision whose delivery run still holds its recovery point, so it had
-    /// not settled when the last process ended. Except where a drain put that
-    /// run down whole for the next host, which is still going, and its agent
-    /// carries it on without asking.
+    /// not settled when the last process ended. Except where that run is
+    /// carried on: a drain put it down whole for the next host, or no turn
+    /// had started on the answer, which is delivered again. Either way its
+    /// agent carries it on without asking.
     ///
     /// Follow-through that settled is not touched. Its turn ended and the
     /// agent may still be waiting on somebody before it can call the work
@@ -463,17 +464,21 @@ impl Store {
     ///
     /// Called before `Store::recover`, which deletes the recovery point of
     /// every run it reports interrupted: after it, a run cut off and a run
-    /// that finished long ago look the same. The picked-up rule is the one
-    /// `Store::recover` applies, a run marked whole with a message put down
-    /// for it. Its own commit, so a process that dies between this and
+    /// that finished long ago look the same. The carried-on rule is the one
+    /// `Store::recover` applies: a run marked whole with a message put down
+    /// for it, or one `put_down::UNTOUCHED` holds for. Its own commit, so a process that dies between this and
     /// recovery repeats both and marks nothing twice.
     pub fn recover_decisions(&self) -> Result<usize, StoreError> {
         Ok(self.conn()?.execute(
-            "UPDATE decisions SET interrupted=1 WHERE status='answered' AND interrupted=0
-                AND delivery_run IN (SELECT run_id FROM pending_runs)
-                AND delivery_run NOT IN (SELECT w.run_id FROM put_down_runs w
-                    JOIN messages m ON m.run_id=w.run_id
-                    JOIN put_down p ON p.message_id=m.id)",
+            &format!(
+                "UPDATE decisions SET interrupted=1 WHERE status='answered' AND interrupted=0
+                    AND delivery_run IN (SELECT p.run_id FROM pending_runs p
+                        WHERE NOT ({}))
+                    AND delivery_run NOT IN (SELECT w.run_id FROM put_down_runs w
+                        JOIN messages m ON m.run_id=w.run_id
+                        JOIN put_down d ON d.message_id=m.id)",
+                super::put_down::UNTOUCHED
+            ),
             [],
         )?)
     }
@@ -605,6 +610,7 @@ mod tests {
         };
         let (_, first) = s.answer_decision(d.id, " 11 ", false, None, d.created_at + 1).unwrap();
         assert_eq!(first.parts, answered(false));
+        s.start_deliveries(&[first.id], first.run_id).unwrap();
         s.recover_decisions().unwrap();
         let (_, again) = s.answer_decision(d.id, "", true, None, d.created_at + 2).unwrap();
         assert_eq!(again.parts, answered(true));
@@ -706,7 +712,9 @@ mod tests {
         let d = make(&s, &a);
         let (_, delivery) = s.answer_decision(d.id, "11", false, None, d.created_at + 1).unwrap();
         let other = make_other(&s, &a);
-        s.answer_decision(other.id, "yes", false, None, d.created_at + 1).unwrap();
+        let (_, started) =
+            s.answer_decision(other.id, "yes", false, None, d.created_at + 1).unwrap();
+        s.start_deliveries(&[started.id], started.run_id).unwrap();
 
         // What a drain writes for a conversation it hands on whole.
         let state = crate::runtime::guard::RunState::new(Default::default());
@@ -733,7 +741,8 @@ mod tests {
     fn restart_keeps_answer_and_requires_explicit_resume_before_completion() {
         let (_, s, a) = fixture();
         let d = make(&s, &a);
-        s.answer_decision(d.id, "11", false, None, d.created_at + 1).unwrap();
+        let (_, delivery) = s.answer_decision(d.id, "11", false, None, d.created_at + 1).unwrap();
+        s.start_deliveries(&[delivery.id], delivery.run_id).unwrap();
         assert_eq!(s.recover_decisions().unwrap(), 1);
         assert_eq!(s.recover_decisions().unwrap(), 0);
         assert!(s
@@ -771,9 +780,39 @@ mod tests {
         // recovery point that is the only sign the run was cut off.
         let (_, s, a) = fixture();
         let d = make(&s, &a);
-        s.answer_decision(d.id, "11", false, None, d.created_at + 1).unwrap();
+        let (_, delivery) = s.answer_decision(d.id, "11", false, None, d.created_at + 1).unwrap();
+        s.start_deliveries(&[delivery.id], delivery.run_id).unwrap();
         assert_eq!(s.recover().unwrap().interrupted, 1, "the run itself is reported");
         assert_eq!(s.recover_decisions().unwrap(), 0);
+    }
+
+    #[test]
+    fn an_answer_no_turn_had_started_is_delivered_again_and_not_interrupted() {
+        // The counterpart of every test here that marks its delivery started:
+        // nothing had read this answer, so the restart delivers it again, and
+        // the decision is carried on rather than cut off.
+        let (_, s, a) = fixture();
+        let d = make(&s, &a);
+        let (_, delivery) = s.answer_decision(d.id, "11", false, None, d.created_at + 1).unwrap();
+        assert_eq!(s.recover_decisions().unwrap(), 0);
+        let recovered = s.recover().unwrap();
+        assert_eq!(recovered.interrupted, 0);
+        assert_eq!(recovered.resumed.len(), 1);
+        assert_eq!(recovered.resumed[0].envelope.id, delivery.id);
+        let row = s.decisions(None).unwrap().remove(0);
+        assert!(!row.interrupted);
+        assert_eq!(row.delivery_run, Some(delivery.run_id));
+        assert!(
+            s.answer_decision(d.id, "", true, None, d.created_at + 2).is_err(),
+            "nothing to resume: the answer is on its way"
+        );
+
+        // A second restart before a turn takes it is the same restart again.
+        assert_eq!(s.recover_decisions().unwrap(), 0);
+        assert_eq!(s.recover().unwrap().resumed.len(), 1);
+
+        s.settle_run(delivery.run_id).unwrap();
+        s.finish_decision(d.id, a.id, DecisionStatus::Completed, "sent", d.created_at + 3).unwrap();
     }
 
     #[test]
@@ -789,6 +828,7 @@ mod tests {
         assert_eq!(again.cause, Some(first.id));
         assert_eq!(row.delivery_run, Some(again.run_id));
         assert!(s.retry_decision(d.id, &first, d.created_at + 3).is_err(), "delivered since");
+        s.start_deliveries(&[again.id], again.run_id).unwrap();
 
         // Interrupted: delivered exactly as Resume delivers it, once.
         assert_eq!(s.recover_decisions().unwrap(), 1);

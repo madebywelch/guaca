@@ -355,7 +355,8 @@ mod tests {
         };
         let (finished, delivery) = answered("finished");
         store.settle_run(delivery.run_id).unwrap();
-        let (cut, _) = answered("cut");
+        let (cut, delivery) = answered("cut");
+        store.start_deliveries(&[delivery.id], delivery.run_id).unwrap();
 
         recover(&store).unwrap();
         let after = store.decisions(None).unwrap();
