@@ -16,7 +16,7 @@
  * repeat after the first inherits it.
  */
 
-import type { Routine, TriggerSpec, WebhookAddress } from "./types";
+import type { Routine, TriggerSpec } from "./types";
 
 const HOUR_SECS = 3600;
 const GAP_PREFIX = "every:";
@@ -58,11 +58,13 @@ export function eventFields(spec: TriggerSpec): { service: string; topic: string
  * own: a shell script, a tunnel's forwarding rule, a vendor's webhook form. The
  * secret goes in the header and nowhere else; `webhook.rs` says why that is
  * the mechanism and not a convention.
+ *
+ * `url` is a Host's event route. A desktop has none, so it has no line.
  */
-export function webhookLine(address: WebhookAddress, service: string, topic: string): string {
+export function webhookLine(url: string, secret: string, service: string, topic: string): string {
   return [
-    `curl -X POST ${address.url ?? `http://127.0.0.1:${address.port}/events`}/${service.trim()}/${topic.trim()} \\`,
-    `  -H 'Authorization: Bearer ${address.secret}' \\`,
+    `curl -X POST ${url}/${service.trim()}/${topic.trim()} \\`,
+    `  -H 'Authorization: Bearer ${secret}' \\`,
     `  -d '{"any":"body"}'`,
   ].join("\n");
 }

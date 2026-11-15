@@ -118,8 +118,9 @@ pub async fn open(
 
     let mut app_config =
         config::load(&config_path).map_err(|err| format!("could not read the settings: {err}"))?;
-    // Hosted webhooks arrive through the daemon's public listener. Persist the
-    // same dedicated secret the desktop receiver uses, not the workspace token.
+    // Events reach a routine only through the server's `/events` route, and a
+    // post there carries this dedicated secret rather than the workspace token,
+    // so it is written once and kept, in both hosts.
     if crate::webhook::prepare(&mut app_config.webhook) {
         config::save(&config_path, &app_config)
             .map_err(|err| format!("could not save webhook settings: {err}"))?;

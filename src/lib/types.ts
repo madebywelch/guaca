@@ -1607,7 +1607,6 @@ export interface RoutineRun {
  * rather than printing an address nothing answers.
  */
 export interface WebhookAddress {
-  port: number;
   url?: string | null;
   secret: string;
 }

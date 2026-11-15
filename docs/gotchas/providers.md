@@ -1,7 +1,7 @@
 # Providers
 
 The two ways a turn is paid for that are not an API key: a ChatGPT sign-in, and
-the `claude` program. *A subscription is a second provider* in `AGENTS.md` is
+the `claude` program. *A subscription is a second provider* in `docs/INVARIANTS.md` is
 the rule these sit under, `docs/PROTOCOL.md` has the dates and the sources, and
 the code is `llm/codex.rs`, `llm/claude.rs` and `subscription.rs`.
 
