@@ -1249,6 +1249,8 @@ export type UiEvent =
       runId: RunId;
       prompt: number;
       completion: number;
+      /** Of `prompt`, the tokens the provider read from its cache. A share, never added to it. */
+      cached: number;
       /** Null when the provider does not price calls. Not the same as free. */
       cost: number | null;
     }

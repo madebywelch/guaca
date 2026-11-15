@@ -64,6 +64,24 @@ the code is `llm/codex.rs`, `llm/claude.rs` and `subscription.rs`.
   silently wrong about the next one. Every field is optional, so wrong is not an
   error: `structured_output` deserializes to absent, and the symptom is replies
   going missing rather than anything failing.
+- **`cached` is a share of `prompt` on every provider, and the program had to
+  be made to agree.** OpenAI and OpenRouter report `prompt_tokens` with the
+  cached tokens already inside it and `prompt_tokens_details.cached_tokens` as
+  the part of it that was reused; the Responses API does the same under
+  `input_tokens_details`. The `claude` program counts `input_tokens` apart
+  from `cache_creation_input_tokens` and `cache_read_input_tokens`, so its
+  prompt is all three and `cached` is the third. Taking the cache reads out of
+  its prompt instead would make a prompt count, and a hit rate, mean one thing
+  on this provider and another on the other two.
+- **The cache hints go only where they are understood.** `cache_control` is on
+  the system message only for an `anthropic/` model, which is the only kind
+  that caches nothing unless told to; every other model gets the system
+  message as one string, byte for byte what it got before the prompt had
+  parts. `session_id` goes only to `https://openrouter.ai`, where it is the
+  sticky-routing key
+  ([prompt caching](https://openrouter.ai/docs/features/prompt-caching),
+  "Using `session_id` for sticky sessions"); OpenAI's own API refuses a field
+  it does not know, and an operator can point the endpoint there.
 - **A model named on a group running on Claude is kept and never used.** There
   is no third model field and there will not be one: which model answers a turn
   is the program's own setting, and this app passes no `--model` for a turn.

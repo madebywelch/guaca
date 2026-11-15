@@ -17,6 +17,9 @@ pub struct UsageEntry {
     pub model: String,
     pub prompt: u32,
     pub completion: u32,
+    /// Of `prompt`, how many tokens the provider read from its cache. A share
+    /// of the prompt count, never added to it, on every provider.
+    pub cached: u32,
     pub cost: Option<f64>,
 }
 

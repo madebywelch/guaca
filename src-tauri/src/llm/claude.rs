@@ -286,7 +286,7 @@ pub fn conversation(messages: &[ChatMessage]) -> (String, Vec<serde_json::Value>
 
     for message in messages {
         match message {
-            ChatMessage::System { content } => system.push(content.clone()),
+            ChatMessage::System { content } => system.push(content.to_string()),
             ChatMessage::User { content } => match content {
                 UserContent::Text(body) => text(&mut blocks, body.clone()),
                 UserContent::Parts(parts) => {
@@ -420,6 +420,10 @@ impl ProgramUsage {
                 .input_tokens
                 .saturating_add(self.cache_creation_input_tokens)
                 .saturating_add(self.cache_read_input_tokens),
+            // Counted in the prompt above as well, which is what the other two
+            // transports' prompt counts already include: cached is a share of
+            // the prompt there, and has to mean the same here.
+            cached_tokens: self.cache_read_input_tokens,
             completion_tokens: self.output_tokens,
             cost: None,
         }
@@ -936,6 +940,25 @@ mod tests {
         assert_eq!(usage.completion_tokens, 5);
         // The price it quoted is not money that moved. `ProgramUsage::tally`.
         assert_eq!(usage.cost, None);
+    }
+
+    #[test]
+    fn a_cache_read_is_kept_apart_and_still_counted_in_the_prompt() {
+        let usage: ProgramUsage = serde_json::from_value(serde_json::json!({
+            "input_tokens": 12,
+            "cache_creation_input_tokens": 300,
+            "cache_read_input_tokens": 9000,
+            "output_tokens": 40
+        }))
+        .unwrap();
+        let tally = usage.tally();
+        assert_eq!(
+            tally.prompt_tokens, 9312,
+            "everything the model read, as on the other two paths"
+        );
+        assert_eq!(tally.cached_tokens, 9000, "of which this much came out of the cache");
+        assert!(tally.cached_tokens <= tally.prompt_tokens);
+        assert_eq!(ProgramUsage::default().tally().cached_tokens, 0);
     }
 
     #[test]

@@ -1480,6 +1480,54 @@ and every suite gets it.
 GUACA_RUNS=5 ./scripts/crew.sh    # five, to see what varies
 ```
 
+## A prompt is laid out for the provider's cache
+
+A provider that has read a prompt before reuses it up to the first token that
+differs, and bills the reused part at a fraction of the price. A typical call
+is about eleven thousand tokens, most of it the same from one turn of an agent
+to the next, so the order of the system prompt decides most of what a turn
+costs.
+
+`runtime/prompt.rs` builds it as two blocks, carried together in
+`SystemPrompt`. The **stable** block is what changes only when the agent, its
+model or its reach does: who it is and who it works for, its instructions,
+what reaches it, its computer and browser, what it can reach, the rules on
+message sources, talking to other agents and growing the group, handing over a
+document, the paragraph saying a message ends the turn, and the skills index.
+The **volatile** block is everything that moves: what a reply can show, the
+schedule, the calendar and today's date, memory, working notes and their ages,
+stated skills, who else is here, what the agent is waiting on and has
+escalated, the notebook and artifacts indexes, the reply the turn owes, and
+where the operator is. Before this the working notes' ages sat a third of the
+way in and the reply block in the middle, so two turns of one agent agreed for
+about six thousand characters and then never again.
+
+Two sections sit where their words put them rather than where their content
+would. The paragraph on what a reply can be ends one way on a turn answering a
+peer and another way otherwise, and is kept whole, so a peer's turn has a
+stable block of its own. What the agent can reach is in the stable block
+because the rules on message sources call it "the accounts above"; it changes
+when a sign-in, a credential or a plugin does, not from turn to turn. A test
+holds every "above", "below" and "further down" in the prompt to what it names.
+
+Each transport then says what its provider needs to hear:
+
+- **Chat completions.** For an `anthropic/` model the system message is sent
+  as two text parts and the stable one carries `cache_control`, because
+  Anthropic caches nothing it is not told to. Every other model gets the plain
+  string it always got: it caches a prefix by itself, and a local server is
+  not asked to accept a shape it may not. To OpenRouter alone the request
+  also carries `session_id` set to the agent, its sticky-routing key, so an
+  agent's turns reach the provider holding its prefix.
+- **ChatGPT subscription.** `prompt_cache_key` is the agent, for the same reason.
+- **The `claude` program.** It caches by itself; nothing is sent.
+
+What came out of the cache is read on all three and stored in `usage.cached`
+(migration 76). It is a share of `prompt`, never added to it, which is how
+OpenAI and OpenRouter already count. The program counts cache reads apart from
+fresh input, so there the prompt total is all three of its input counts and
+`cached` is the cache reads among them.
+
 ## Known limitations
 
 Stated plainly rather than discovered later.
@@ -1500,6 +1548,17 @@ Stated plainly rather than discovered later.
   correctness.
 - **History window is fixed at 40 messages** per prompt, with no summarization.
   A very long conversation loses its early context.
+- **The cache covers the stable block, and sometimes only that.** Everything
+  after the first change in the volatile block is processed again, and the
+  conversation history comes after it. Where a provider places tool
+  definitions after the system message, they are reprocessed too: on the
+  endpoint the live evals use, the second of two turns of one agent, a minute
+  apart, read 3,584 of 11,642 prompt tokens from the cache, about the size of
+  the stable block, against 1,024 before the reorder. For Anthropic models the breakpoint is on the
+  stable block only, so their history is never cached. Trimming the tool
+  descriptions, the larger saving, is separate work.
+- **The usage view does not show the cache.** `usage.cached` is recorded for
+  every call and nothing reads it yet.
 - **Undelivered messages to an agent deleted mid-run are dropped**, not returned
   to the sender, and the sender is not notified. The run they belonged to ends
   rather than hanging, but nobody is told what was lost.

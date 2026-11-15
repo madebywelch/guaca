@@ -4307,8 +4307,8 @@ impl Store {
     pub fn record_usage(&self, entry: &UsageEntry) -> Result<(), StoreError> {
         let conn = self.conn()?;
         conn.execute(
-            "INSERT INTO usage (agent_id,group_id,run_id,model,prompt,completion,cost,created_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            "INSERT INTO usage (agent_id,group_id,run_id,model,prompt,completion,cost,created_at,cached)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             params![
                 entry.agent_id.to_string(),
                 entry.group_id.to_string(),
@@ -4318,6 +4318,7 @@ impl Store {
                 entry.completion,
                 entry.cost,
                 now_ms(),
+                entry.cached,
             ],
         )?;
         Ok(())
@@ -5680,7 +5681,7 @@ mod tests {
         // 67 adds the workspace identity, resource ledger and resume marker.
         // 72 adds the outcomes table and the run that filed a decision.
         // 73 adds the outbox. 74 adds the grants and where a decision came from.
-        conn.execute_batch("ALTER TABLE pending_runs DROP COLUMN started_at; DROP TABLE permission_grants; ALTER TABLE decisions DROP COLUMN origin_ref; ALTER TABLE decisions DROP COLUMN origin; DROP TABLE outbox; DROP TABLE outcomes; ALTER TABLE decisions DROP COLUMN filed_run; DROP TABLE onboarding_hires; DROP TABLE operator_sends; DROP TRIGGER routine_delete_history; DROP TABLE routine_occurrences; ALTER TABLE plugins DROP COLUMN grant_generation; DROP TABLE pending_sandbox_resume; DROP TABLE resource_ledger; DROP TABLE workspace_identity; DROP TABLE approval_policies; ALTER TABLE groups DROP COLUMN rail_order; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
+        conn.execute_batch("ALTER TABLE usage DROP COLUMN cached; ALTER TABLE pending_runs DROP COLUMN started_at; DROP TABLE permission_grants; ALTER TABLE decisions DROP COLUMN origin_ref; ALTER TABLE decisions DROP COLUMN origin; DROP TABLE outbox; DROP TABLE outcomes; ALTER TABLE decisions DROP COLUMN filed_run; DROP TABLE onboarding_hires; DROP TABLE operator_sends; DROP TRIGGER routine_delete_history; DROP TABLE routine_occurrences; ALTER TABLE plugins DROP COLUMN grant_generation; DROP TABLE pending_sandbox_resume; DROP TABLE resource_ledger; DROP TABLE workspace_identity; DROP TABLE approval_policies; ALTER TABLE groups DROP COLUMN rail_order; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
         migrations::run(&mut conn).unwrap();
         drop(conn);
         assert_eq!(f.store.connector_env(mine.id).unwrap()["TOKEN"], "private-token");
@@ -6124,6 +6125,29 @@ mod tests {
     }
 
     #[test]
+    fn a_calls_cached_tokens_are_written_beside_its_prompt() {
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Scout")).unwrap();
+        f.store
+            .record_usage(&UsageEntry {
+                agent_id: card.id,
+                group_id: card.group_id,
+                run_id: RunId::new(),
+                model: "test/model".into(),
+                prompt: 11264,
+                completion: 80,
+                cached: 9984,
+                cost: None,
+            })
+            .unwrap();
+        let conn = f.store.conn().unwrap();
+        let (prompt, cached): (u32, u32) = conn
+            .query_row("SELECT prompt, cached FROM usage", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!((prompt, cached), (11264, 9984));
+    }
+
+    #[test]
     fn usage_is_written_and_summed_against_the_real_schema() {
         // The bug this covers: every query here was written against a table
         // that a later edit was supposed to have given a `cost` column, and
@@ -6141,6 +6165,7 @@ mod tests {
                 model: "test/model".into(),
                 prompt: 1000,
                 completion: 200,
+                cached: 0,
                 cost: Some(0.25),
             })
             .unwrap();
@@ -6153,6 +6178,7 @@ mod tests {
                 model: "local/model".into(),
                 prompt: 10,
                 completion: 5,
+                cached: 0,
                 cost: None,
             })
             .unwrap();
@@ -6778,6 +6804,7 @@ mod tests {
                     model: "test/model".into(),
                     prompt,
                     completion,
+                    cached: 0,
                     cost,
                 })
                 .unwrap();
@@ -6860,6 +6887,7 @@ mod tests {
                 model: "test/model".into(),
                 prompt: 10,
                 completion: 2,
+                cached: 0,
                 cost: Some(0.01),
             })
             .unwrap();

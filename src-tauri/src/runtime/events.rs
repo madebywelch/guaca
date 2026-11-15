@@ -192,6 +192,9 @@ pub enum UiEvent {
         run_id: RunId,
         prompt: u32,
         completion: u32,
+        /// Of `prompt`, how many tokens the provider read from its cache. A
+        /// share of the prompt count, never added to it.
+        cached: u32,
         /// Absent when the provider does not price calls, which is not the
         /// same as free and must not be added up as zero.
         cost: Option<f64>,
