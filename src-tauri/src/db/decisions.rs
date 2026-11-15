@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use rusqlite::{params, OptionalExtension, Row, TransactionBehavior};
 
 use super::{Store, StoreError};
@@ -256,6 +254,52 @@ fn file_in(
     one(tx, id)
 }
 
+/// Writes one delivery of a decision's answer, its recovery point, and the
+/// row naming it the delivery of record, inside the caller's commit. A
+/// delivery that is not the one of record is one a restart cannot see.
+fn deliver_in(
+    tx: &rusqlite::Transaction<'_>,
+    decision: &WorkDecision,
+    answer: &str,
+    parts: Vec<Part>,
+    cause: Option<MessageId>,
+    now: i64,
+) -> Result<Envelope, StoreError> {
+    let live: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM agents WHERE id=?1 AND lifecycle<>'terminated')",
+        [decision.agent_id.to_string()],
+        |r| r.get(0),
+    )?;
+    if !live {
+        return Err(invalid(
+            "The agent responsible for this decision was deleted. Restore it before answering.",
+        ));
+    }
+    // The question is model-authored. A system envelope preserves that
+    // boundary instead of laundering the whole brief as human instructions.
+    let message = Envelope {
+        id: MessageId::new(),
+        run_id: RunId::new(),
+        channel_id: decision.agent_id,
+        from: Participant::System,
+        to: Participant::Agent { id: decision.agent_id },
+        parts,
+        trust: Trust::System,
+        hop: 0,
+        expects_reply: true,
+        intent: Intent::Work,
+        cause,
+        created_at: now,
+    };
+    Store::insert_message(tx, &message)?;
+    tx.execute(
+        "INSERT INTO pending_runs(run_id,message_id) VALUES(?1,?2)",
+        params![message.run_id.to_string(), message.id.to_string()],
+    )?;
+    tx.execute("UPDATE decisions SET status='answered',answer=?2,updated_at=?3,snoozed_until=NULL,remind_at=?4,delivery_run=?5,interrupted=0 WHERE id=?1", params![decision.id.to_string(),answer,now,next_briefing(now),message.run_id.to_string()])?;
+    Ok(message)
+}
+
 impl Store {
     /// The answer, its transcript envelope and recovery point are one commit.
     /// The caller holds the runtime's run lock through booking, then enqueues.
@@ -289,16 +333,6 @@ impl Store {
         if answer.is_empty() || answer.chars().count() > 4000 {
             return Err(invalid("An answer must contain 1 to 4000 characters."));
         }
-        let live: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM agents WHERE id=?1 AND lifecycle<>'terminated')",
-            [decision.agent_id.to_string()],
-            |r| r.get(0),
-        )?;
-        if !live {
-            return Err(invalid(
-                "The agent responsible for this decision was deleted. Restore it before answering.",
-            ));
-        }
         let mut parts = vec![Part::Decision {
             id,
             request: decision.request.clone(),
@@ -320,28 +354,51 @@ impl Store {
                 parts.push(Part::text(crate::domain::decision::allowance(expires)));
             }
         }
-        // The question is model-authored. A system envelope preserves that
-        // boundary instead of laundering the whole brief as human instructions.
-        let message = Envelope {
-            id: MessageId::new(),
-            run_id: RunId::new(),
-            channel_id: decision.agent_id,
-            from: Participant::System,
-            to: Participant::Agent { id: decision.agent_id },
-            parts,
-            trust: Trust::System,
-            hop: 0,
-            expects_reply: true,
-            intent: Intent::Work,
-            cause: None,
-            created_at: now,
+        let answer = answer.to_string();
+        let message = deliver_in(&tx, &decision, &answer, parts, None, now)?;
+        let result = one(&tx, id)?;
+        tx.commit()?;
+        Ok((result, message))
+    }
+
+    /// Try again on a message that delivered this decision's answer.
+    ///
+    /// The decision's own delivery, never a copy beside it: a copy left the
+    /// row pointing at the run that failed, so For you still offered Resume
+    /// and the answer arrived twice, and a crash during the copy's
+    /// follow-through was not seen as one. So it is the delivery of record
+    /// after this, in the same commit that writes it.
+    ///
+    /// Follow-through a restart interrupted is resumed exactly as Resume
+    /// resumes it. A turn that failed on the decision's current delivery has
+    /// that delivery sent again, as Try again sends any message. Anything else
+    /// has been delivered since, or finished, and is refused.
+    pub fn retry_decision(
+        &self,
+        id: DecisionId,
+        failed: &Envelope,
+        now: i64,
+    ) -> Result<(WorkDecision, Envelope), StoreError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let decision = one(&tx, id)?;
+        let answer = decision.answer.clone().unwrap_or_default();
+        let (parts, cause) = match decision.status {
+            DecisionStatus::Answered if decision.interrupted => (
+                vec![Part::Decision {
+                    id,
+                    request: decision.request.clone(),
+                    answer: answer.clone(),
+                    resumed: true,
+                }],
+                None,
+            ),
+            DecisionStatus::Answered if decision.delivery_run == Some(failed.run_id) => {
+                (failed.parts.clone(), Some(failed.id))
+            }
+            _ => return Err(invalid("Only interrupted follow-through can be resumed.")),
         };
-        Self::insert_message(&tx, &message)?;
-        tx.execute(
-            "INSERT INTO pending_runs(run_id,message_id) VALUES(?1,?2)",
-            params![message.run_id.to_string(), message.id.to_string()],
-        )?;
-        tx.execute("UPDATE decisions SET status='answered',answer=?2,updated_at=?3,snoozed_until=NULL,remind_at=?4,delivery_run=?5,interrupted=0 WHERE id=?1", params![id.to_string(),answer,now,next_briefing(now),message.run_id.to_string()])?;
+        let message = deliver_in(&tx, &decision, &answer, parts, cause, now)?;
         let result = one(&tx, id)?;
         tx.commit()?;
         Ok((result, message))
@@ -394,15 +451,30 @@ impl Store {
         Ok(())
     }
 
-    /// Marks follow-through a restart cut off as interrupted, except where the
-    /// conversation carrying it is being picked up where a drain put it down:
-    /// that one is still going, and its agent carries it on without asking.
-    pub fn recover_decisions(&self, resumed: &HashSet<RunId>) -> Result<usize, StoreError> {
-        let resumed: Vec<String> = resumed.iter().map(ToString::to_string).collect();
+    /// Marks follow-through a restart cut off as interrupted: an answered
+    /// decision whose delivery run still holds its recovery point, so it had
+    /// not settled when the last process ended. Except where a drain put that
+    /// run down whole for the next host, which is still going, and its agent
+    /// carries it on without asking.
+    ///
+    /// Follow-through that settled is not touched. Its turn ended and the
+    /// agent may still be waiting on somebody before it can call the work
+    /// complete, which it must be able to do after any number of restarts.
+    ///
+    /// Called before `Store::recover`, which deletes the recovery point of
+    /// every run it reports interrupted: after it, a run cut off and a run
+    /// that finished long ago look the same. The picked-up rule is the one
+    /// `Store::recover` applies, a run marked whole with a message put down
+    /// for it. Its own commit, so a process that dies between this and
+    /// recovery repeats both and marks nothing twice.
+    pub fn recover_decisions(&self) -> Result<usize, StoreError> {
         Ok(self.conn()?.execute(
             "UPDATE decisions SET interrupted=1 WHERE status='answered' AND interrupted=0
-                AND coalesce(delivery_run, '') NOT IN (SELECT value FROM json_each(?1))",
-            [serde_json::to_string(&resumed).expect("a list of strings serializes")],
+                AND delivery_run IN (SELECT run_id FROM pending_runs)
+                AND delivery_run NOT IN (SELECT w.run_id FROM put_down_runs w
+                    JOIN messages m ON m.run_id=w.run_id
+                    JOIN put_down p ON p.message_id=m.id)",
+            [],
         )?)
     }
 
@@ -512,7 +584,7 @@ mod tests {
         drop(s);
         let s = Store::open(&dir.path().join("test.db")).unwrap();
         s.expire_pending_approvals().unwrap();
-        s.recover_decisions(&HashSet::new()).unwrap();
+        s.recover_decisions().unwrap();
         let (answered, envelope) =
             s.answer_decision(d.id, "11", false, None, d.created_at + 3 * 86400 * 1000).unwrap();
         assert_eq!(answered.answer.as_deref(), Some("11"));
@@ -533,7 +605,7 @@ mod tests {
         };
         let (_, first) = s.answer_decision(d.id, " 11 ", false, None, d.created_at + 1).unwrap();
         assert_eq!(first.parts, answered(false));
-        s.recover_decisions(&HashSet::new()).unwrap();
+        s.recover_decisions().unwrap();
         let (_, again) = s.answer_decision(d.id, "", true, None, d.created_at + 2).unwrap();
         assert_eq!(again.parts, answered(true));
         assert_eq!(s.get_message(again.id).unwrap().unwrap().parts, answered(true));
@@ -636,8 +708,10 @@ mod tests {
         let other = make_other(&s, &a);
         s.answer_decision(other.id, "yes", false, None, d.created_at + 1).unwrap();
 
-        let picked_up = HashSet::from([delivery.run_id]);
-        assert_eq!(s.recover_decisions(&picked_up).unwrap(), 1, "only the other one");
+        // What a drain writes for a conversation it hands on whole.
+        let state = crate::runtime::guard::RunState::new(Default::default());
+        s.put_down(&[(delivery.id, &[])], &[(delivery.run_id, 0, state.snapshot())]).unwrap();
+        assert_eq!(s.recover_decisions().unwrap(), 1, "only the other one");
         let decisions = s.decisions(None).unwrap();
         let carried = decisions.iter().find(|x| x.id == d.id).unwrap();
         assert!(!carried.interrupted);
@@ -660,8 +734,8 @@ mod tests {
         let (_, s, a) = fixture();
         let d = make(&s, &a);
         s.answer_decision(d.id, "11", false, None, d.created_at + 1).unwrap();
-        assert_eq!(s.recover_decisions(&HashSet::new()).unwrap(), 1);
-        assert_eq!(s.recover_decisions(&HashSet::new()).unwrap(), 0);
+        assert_eq!(s.recover_decisions().unwrap(), 1);
+        assert_eq!(s.recover_decisions().unwrap(), 0);
         assert!(s
             .finish_decision(d.id, a.id, DecisionStatus::Completed, "sent", d.created_at + 2)
             .is_err());
@@ -679,8 +753,64 @@ mod tests {
             )
             .unwrap();
         assert_eq!(completed.status, DecisionStatus::Completed);
-        assert_eq!(s.recover_decisions(&HashSet::new()).unwrap(), 0);
+        assert_eq!(s.recover_decisions().unwrap(), 0);
     }
+    #[test]
+    fn follow_through_that_settled_is_not_interrupted_and_can_be_completed() {
+        let (_, s, a) = fixture();
+        let d = make(&s, &a);
+        let (_, delivery) = s.answer_decision(d.id, "11", false, None, d.created_at + 1).unwrap();
+        s.settle_run(delivery.run_id).unwrap();
+        assert_eq!(s.recover_decisions().unwrap(), 0);
+        s.finish_decision(d.id, a.id, DecisionStatus::Completed, "sent", d.created_at + 2).unwrap();
+    }
+
+    #[test]
+    fn read_after_recovery_a_cut_off_run_looks_finished() {
+        // Why `boot::recover` marks decisions first: recovery deletes the
+        // recovery point that is the only sign the run was cut off.
+        let (_, s, a) = fixture();
+        let d = make(&s, &a);
+        s.answer_decision(d.id, "11", false, None, d.created_at + 1).unwrap();
+        assert_eq!(s.recover().unwrap().interrupted, 1, "the run itself is reported");
+        assert_eq!(s.recover_decisions().unwrap(), 0);
+    }
+
+    #[test]
+    fn try_again_is_the_delivery_of_record_and_happens_once() {
+        let (_, s, a) = fixture();
+        let d = make(&s, &a);
+        let (_, first) = s.answer_decision(d.id, "11", false, None, d.created_at + 1).unwrap();
+
+        // A turn that failed on the current delivery: the same message again,
+        // as Try again sends any message, and now the one a restart watches.
+        let (row, again) = s.retry_decision(d.id, &first, d.created_at + 2).unwrap();
+        assert_eq!(again.parts, first.parts);
+        assert_eq!(again.cause, Some(first.id));
+        assert_eq!(row.delivery_run, Some(again.run_id));
+        assert!(s.retry_decision(d.id, &first, d.created_at + 3).is_err(), "delivered since");
+
+        // Interrupted: delivered exactly as Resume delivers it, once.
+        assert_eq!(s.recover_decisions().unwrap(), 1);
+        let (row, resumed) = s.retry_decision(d.id, &first, d.created_at + 4).unwrap();
+        assert_eq!(
+            resumed.parts,
+            vec![Part::Decision {
+                id: d.id,
+                request: request(),
+                answer: "11".into(),
+                resumed: true
+            }]
+        );
+        assert_eq!(row.delivery_run, Some(resumed.run_id));
+        assert!(!row.interrupted);
+        assert!(s.answer_decision(d.id, "", true, None, d.created_at + 5).is_err());
+        assert!(s.retry_decision(d.id, &again, d.created_at + 5).is_err());
+
+        s.finish_decision(d.id, a.id, DecisionStatus::Completed, "sent", d.created_at + 6).unwrap();
+        assert!(s.retry_decision(d.id, &resumed, d.created_at + 7).is_err(), "finished");
+    }
+
     #[test]
     fn withdrawal_is_a_receipt_and_cannot_hide_an_answer() {
         let (_, s, a) = fixture();

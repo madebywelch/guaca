@@ -38,20 +38,13 @@ fn old_full_patches_and_persisted_limits_remain_readable() {
 
 #[test]
 fn agent_limit_validation_keeps_its_previous_error() {
-    let error =
-        agent_patch(&json!({"limits": {"maxHops": null}}), &AppConfig::default()).unwrap_err();
+    let error = agent_patch(&json!({"limits": {"maxHops": null}})).unwrap_err();
     assert_eq!(error, "those values could not be read (invalid type: null, expected u16). `read` shows each setting's type.");
-    let error = agent_patch(
-        &json!({"limits": {"maxHops": null}, "provider": "compatible"}),
-        &AppConfig::default(),
-    )
-    .unwrap_err();
+    let error =
+        agent_patch(&json!({"limits": {"maxHops": null}, "provider": "compatible"})).unwrap_err();
     assert!(error.starts_with("`provider` is the operator's to change"));
-    let error = agent_patch(
-        &json!({"browserIdleMinutes": "bad", "limits": {"maxHops": null}}),
-        &AppConfig::default(),
-    )
-    .unwrap_err();
+    let error = agent_patch(&json!({"browserIdleMinutes": "bad", "limits": {"maxHops": null}}))
+        .unwrap_err();
     assert_eq!(error, "those values could not be read (invalid type: string \"bad\", expected u32). `read` shows each setting's type.");
 }
 

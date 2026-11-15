@@ -260,6 +260,13 @@ pub fn recover(store: &Store) -> Result<crate::db::Recovered, String> {
         Err(err) => tracing::warn!(%err, "could not close stale permission requests"),
     }
 
+    // Before the conversations, because recovering one deletes its recovery
+    // point, and that row is the only thing that says a decision's
+    // follow-through was cut off rather than finished long ago.
+    store
+        .recover_decisions()
+        .map_err(|err| format!("could not recover decision answers: {err}"))?;
+
     let recovered = store
         .recover()
         .map_err(|err| format!("could not recover interrupted conversations: {err}"))?;
@@ -269,10 +276,6 @@ pub fn recover(store: &Store) -> Result<crate::db::Recovered, String> {
             "conversations interrupted by restart are ready for review"
         );
     }
-
-    store
-        .recover_decisions(&recovered.runs())
-        .map_err(|err| format!("could not recover decision answers: {err}"))?;
     Ok(recovered)
 }
 

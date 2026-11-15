@@ -188,10 +188,14 @@ Completion requires a separate tool call with a concrete outcome after the work
 is done. It cannot be inferred from a turn ending. Outstanding answered records
 remain visible and continue to receive review reminders.
 
-On restart, answered records become interrupted. The operator's **Resume
-follow-through** re-delivers the saved answer with instructions to inspect prior
-actions before continuing. Nothing silently replays an external effect. Pending
-questions survive without a time limit; completed receipts remain completed.
+On restart, an answered record becomes interrupted only when the run delivering
+its answer was still unsettled, so follow-through that had finished can still be
+completed afterward. The operator's **Resume follow-through** re-delivers the
+saved answer with instructions to inspect prior actions before continuing. Try
+again on that delivery goes through the same Resume and records the new run as
+the delivery, so the answer is not delivered twice. Nothing silently replays an
+external effect. Pending questions survive without a time limit; completed
+receipts remain completed.
 
 ## Reminders
 
