@@ -2162,6 +2162,22 @@ describe("notifications", () => {
       expect(screen.getByRole("button", { name: "Open System Settings" })).toBeTruthy();
     });
 
+    it("says macOS did not take the test when it allows them and refused this one", async () => {
+      notifyOperator.mockResolvedValue(false);
+      notificationAccess.mockResolvedValue("allowed");
+      open();
+      pane("Notifications");
+      await screen.findByText("macOS allows Guaca to show notifications.");
+      fireEvent.click(test());
+
+      await waitFor(() =>
+        expect(banner().textContent).toContain("Not sent. macOS did not accept the notification."),
+      );
+      expect(banner().className).toContain("banner--error");
+      expect(banner().textContent).not.toContain(TURNED_OFF);
+      expect(screen.queryByText("Sent. It should be on your screen now.")).toBeNull();
+    });
+
     it("is not asked about at all in a browser", () => {
       platform.desktop = false;
       notificationAccess.mockResolvedValue("denied");

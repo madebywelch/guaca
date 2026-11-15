@@ -49,8 +49,18 @@ const mac = vi.hoisted(() => ({
   answer: "allowed" as NotificationAccess,
   prompts: 0,
   held: null as Promise<void> | null,
-  invoke: vi.fn(async (name: string): Promise<unknown> => {
+  /** What the app handed to macOS, and why macOS refuses the next one, if it does. */
+  shown: [] as { title: string; body: string; click: number | null }[],
+  refusal: null as string | null,
+  invoke: vi.fn(async (name: string, args?: Record<string, unknown>): Promise<unknown> => {
     if (name === "notification_access") return mac.now;
+    if (name === "show_notification") {
+      // The app hands a banner over itself only on a Mac; elsewhere it says so.
+      if (mac.now === null) return false;
+      if (mac.refusal) throw mac.refusal;
+      mac.shown.push(args as (typeof mac.shown)[number]);
+      return true;
+    }
     if (name === "ask_notification_access") {
       if (mac.now === "notAsked") {
         mac.prompts++;
@@ -63,6 +73,16 @@ const mac = vi.hoisted(() => ({
   }),
 }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mac.invoke }));
+
+/** The app's events, as far as a click on a banner it handed to macOS goes. */
+const events = vi.hoisted(() => ({
+  clicked: undefined as ((message: { payload: number }) => void) | undefined,
+  listen: vi.fn(async (name: string, handler: (message: { payload: number }) => void) => {
+    if (name === "notification-clicked") events.clicked = handler;
+    return () => {};
+  }),
+}));
+vi.mock("@tauri-apps/api/event", () => ({ listen: events.listen }));
 
 /** A browser's notification center, as far as a page can see it. */
 class Shown {
@@ -119,7 +139,11 @@ beforeEach(async () => {
   mac.answer = "allowed";
   mac.prompts = 0;
   mac.held = null;
+  mac.shown = [];
+  mac.refusal = null;
   mac.invoke.mockClear();
+  events.clicked = undefined;
+  events.listen.mockClear();
 });
 
 afterEach(() => {
@@ -288,13 +312,58 @@ describe("a desktop window on a Mac", () => {
     expect(plugin.sendNotification).not.toHaveBeenCalled();
   });
 
-  it("raises what it claimed when macOS allows it", async () => {
+  it("raises what it claimed when macOS allows it, through the app and not the plugin", async () => {
     mac.now = "allowed";
     await expect(notify.deliver(delivery("a"), open)).resolves.toBe(true);
     expect(host.claimDelivery).toHaveBeenCalledWith("a");
-    expect(plugin.sendNotification).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Title a", body: "Body a" }),
-    );
+    expect(mac.shown).toEqual([{ title: "Title a", body: "Body a", click: expect.any(Number) }]);
+    // The plugin drops a banner whenever the main thread is busy as it hands
+    // it over, and never says so.
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+  });
+
+  it("says false for what it claimed when macOS refuses to take it", async () => {
+    mac.now = "allowed";
+    mac.refusal = "notification request rejected";
+    await expect(notify.deliver(delivery("a"), open)).resolves.toBe(false);
+    expect(host.claimDelivery).toHaveBeenCalledWith("a");
+    expect(mac.shown).toEqual([]);
+  });
+
+  it("says false for a test macOS allows and then refuses to take", async () => {
+    mac.now = "allowed";
+    mac.refusal = "notification request rejected";
+    const transport = await import("./transport");
+    await expect(transport.notify("Guaca", "A test.")).resolves.toBe(false);
+    expect(plugin.sendNotification).not.toHaveBeenCalled();
+  });
+
+  it("listens for clicks before it hands anything over, and lands on the channel clicked", async () => {
+    mac.now = "allowed";
+    await notify.deliver(delivery("a"), open);
+    await notify.deliver(delivery("b"), open);
+    expect(events.listen).toHaveBeenCalledTimes(1);
+    const order = (name: string) =>
+      mac.invoke.mock.invocationCallOrder[
+        mac.invoke.mock.calls.findIndex(([call]) => call === name)
+      ];
+    expect(events.listen.mock.invocationCallOrder[0]).toBeLessThan(order("show_notification") ?? 0);
+    const [first, second] = mac.shown.map((shown) => shown.click);
+    expect(first).not.toBe(second);
+
+    events.clicked?.({ payload: second! });
+    expect(host.openWindow.mock.calls).toEqual([[{ kind: "agent", id: "agent-b" }]]);
+    // Once only, and nothing for a notification this page did not raise.
+    events.clicked?.({ payload: second! });
+    events.clicked?.({ payload: 12 });
+    expect(host.openWindow).toHaveBeenCalledTimes(1);
+  });
+
+  it("raises a test with nothing to click through to", async () => {
+    mac.now = "allowed";
+    const transport = await import("./transport");
+    await expect(transport.notify("Guaca", "A test.")).resolves.toBe(true);
+    expect(mac.shown).toEqual([{ title: "Guaca", body: "A test.", click: null }]);
   });
 
   it("asks macOS before it claims the first offer, and not on connect", async () => {
@@ -310,7 +379,7 @@ describe("a desktop window on a Mac", () => {
     await expect(notify.deliver(delivery("a"), open)).resolves.toBe(true);
     expect(mac.prompts).toBe(1);
     expect(host.claimDelivery).toHaveBeenCalledWith("a");
-    expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
+    expect(mac.shown).toHaveLength(1);
   });
 
   it("claims nothing when the first answer is no, leaving the offer to the Host", async () => {
@@ -334,10 +403,9 @@ describe("a desktop window on a Mac", () => {
     expect(host.claimDelivery).not.toHaveBeenCalled();
 
     answer();
-    // Each one raised: `notify` answers true only once it has. Not counted on
-    // the plugin's mock, because vitest hands concurrent dynamic imports of a
-    // mocked module the real one, which raises through `Notification`.
+    // Each one raised: on a Mac `notify` answers true only once macOS has it.
     await expect(shown).resolves.toEqual([true, true, true]);
+    expect(mac.shown.map((banner) => banner.title)).toEqual(["Title a", "Title b", "Title c"]);
     expect(mac.prompts).toBe(1);
     expect(host.claimDelivery.mock.calls).toEqual([["a"], ["b"], ["c"]]);
   });
@@ -365,7 +433,7 @@ describe("a desktop window on a Mac", () => {
     const transport = await import("./transport");
     await expect(transport.notify("Guaca", "A test.")).resolves.toBe(true);
     expect(mac.prompts).toBe(1);
-    expect(plugin.sendNotification).toHaveBeenCalledTimes(1);
+    expect(mac.shown).toHaveLength(1);
   });
 
   it("shows nothing from a copy that is not running as an app", async () => {

@@ -71,6 +71,20 @@ async fn ask_notification_access() -> Option<crate::notifications::Permission> {
 async fn open_notification_settings() -> Result<(), String> {
     crate::notifications::open_settings().await
 }
+/// A banner handed to macOS: true once macOS has it, an error if it refused,
+/// false off macOS, where the window raises it through the plugin.
+#[tauri::command]
+async fn show_notification(
+    app: tauri::AppHandle,
+    title: String,
+    body: String,
+    click: Option<u32>,
+) -> Result<bool, String> {
+    crate::notifications::show(app, title, body, click)
+        .await
+        .transpose()
+        .map(|shown| shown.is_some())
+}
 #[tauri::command]
 async fn forward_files(
     origin: String,
@@ -196,6 +210,7 @@ pub fn run() {
             notification_access,
             ask_notification_access,
             open_notification_settings,
+            show_notification,
             forward_files,
             download_file,
             report_presence,

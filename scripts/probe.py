@@ -261,8 +261,15 @@ def screen_step(what: str) -> None:
         )
     if access["locked"]:
         # Behind the lock screen Notification Center draws neither the
-        # question nor a banner, so there is nothing to press.
-        raise Failed(f"{what}: the screen is locked, and only a person can unlock it")
+        # question nor a banner, so there is nothing to press. A display that
+        # went to sleep raises the same shield with no password asked, and
+        # waking it lowers the shield: only a session still locked after a
+        # wake needs a person.
+        run(["caffeinate", "-u", "-t", "2"])
+        try:
+            wait_until("the lock screen lowers once the display wakes", lambda: not helper("access")["locked"], 10, every=0.5)
+        except Failed:
+            raise Failed(f"{what}: the screen is locked, and only a person can unlock it") from None
     person_away(what)
 
 
@@ -921,11 +928,12 @@ class Prompted:
     pressing a button on it. Whatever was started is stopped on the way out,
     however far it got: a question nobody answers is left on someone's screen."""
 
-    def __init__(self, record: Record, scratch: Scratch, button: str, count: int = 1) -> None:
+    def __init__(self, record: Record, scratch: Scratch, button: str, count: int = 1, busy: int = 0) -> None:
         self.record = record
         self.scratch = scratch
         self.button = button
         self.count = count
+        self.busy = busy
         self.app: App | None = None
         self.host: Host | None = None
         self.log: UnifiedLog | None = None
@@ -954,6 +962,11 @@ class Prompted:
         self.log.wait_for("macOS shows its question", prompt(bundle), 20)
         self.record.check("macOS asks about the fresh bundle", True)
         person_away(f"pressing {self.button}")
+        if self.busy:
+            # From here the window's main thread is kept busy, so the answer,
+            # the claim and the hand-off to macOS all happen while it is.
+            assert self.app.client
+            self.app.client.ask("busy", ms=self.busy)
         pressed = press_when_shown(f"pressing {self.button}", "press", "AXButton", self.button, APP_NAME)
         self.record.check(f"pressed {self.button} on the question about {APP_NAME}", True, pressed)
 
@@ -997,9 +1010,9 @@ def scenario_button(record: Record, scratch: Scratch) -> None:
         open_notifications(client)
         wait_until("the pane says macOS allows it", lambda: PANE["allowed"] in pane_text(client), 5)
         client.page("main", do="click", role="button", name="Send a test notification")
-        # Nothing asks the app anything until macOS has answered: the
-        # notification plugin hands a banner over only while the main run loop
-        # is idle, and every read through the channel or the page runs there.
+        # Nothing asks the app anything until macOS has answered, so that if a
+        # banner is only handed over while the main run loop is idle, as it was
+        # through the notification plugin, this test still sees it fail.
         try:
             wait_until("macOS presents the test", lambda: len(it.log.matching(banner(app.bundle))) == 2, 10)
             shown = True
@@ -1007,6 +1020,23 @@ def scenario_button(record: Record, scratch: Scratch) -> None:
             shown = False
         record.check("the test button's banner is presented", shown,
                      None if shown else {"pane says sent": SENT in pane_text(client)})
+
+
+def scenario_busy(record: Record, scratch: Scratch) -> None:
+    """Screen: a delivery handed over while the window's main thread is busy is drawn, and its click opens the conversation."""
+    with Prompted(record, scratch, "Allow", busy=10000) as it:
+        assert it.app and it.host and it.log and it.app.client
+        client, bundle = it.app.client, it.app.bundle
+        critic = it.host.agent_id("Critic")
+        it.log.wait_for("macOS presents the delivery", banner(bundle), 15)
+        drawn(record, it.log, bundle)
+        record.check("a delivery handed over while the main thread is busy is drawn", True)
+        record.check("another conversation is open first", client.page("main", do="view")["selected"] != critic)
+        screen_step("clicking the banner")
+        press_when_shown("clicking the banner", "press-group", DELIVERY_TITLE)
+        wait_until("the window opens the conversation",
+                   lambda: client.page("main", do="view")["selected"] == critic, 15)
+        record.check("its click opens the conversation", True)
 
 
 def scenario_deny(record: Record, scratch: Scratch) -> None:
@@ -1098,6 +1128,7 @@ SCENARIOS: dict[str, Callable[[Record, Scratch], None]] = {
     "panel": scenario_panel,
     "allow": scenario_allow,
     "button": scenario_button,
+    "busy": scenario_busy,
     "deny": scenario_deny,
     "click": scenario_click,
     "away": scenario_away,
@@ -1192,20 +1223,24 @@ def main() -> int:
         return 2
 
     # A banner, the permission question and a capture all need a lit
-    # display: wake it once, then keep it and the Mac awake until this
-    # process exits, without touching the Mac's own sleep settings.
-    run(["caffeinate", "-u", "-t", "1"])
-    subprocess.Popen(["caffeinate", "-d", "-i", "-w", str(os.getpid())])
-
+    # display, and a display that sleeps raises the lock screen's shield even
+    # with no password asked. One assertion wakes the display, declares the
+    # user active and keeps the display and the Mac awake from before the
+    # first screen step to after the last, without touching the Mac's own
+    # sleep settings. -w ends it with this process however that exits.
+    awake = subprocess.Popen(["caffeinate", "-u", "-d", "-i", "-w", str(os.getpid())])
     results = []
     deferrals: list[dict] = []
-    for name in args.scenarios or list(SCENARIOS):
-        for index in range(1, args.runs + 1):
-            record, entry = attempt(name, index, args.keep)
-            while record.deferred and patient(args.patience, deferrals, entry):
+    try:
+        for name in args.scenarios or list(SCENARIOS):
+            for index in range(1, args.runs + 1):
                 record, entry = attempt(name, index, args.keep)
-            results.append(entry)
-            print(f"{name} run {index}: {'pass' if entry['pass'] else 'deferred' if entry['deferred'] else 'FAIL'}", file=sys.stderr)
+                while record.deferred and patient(args.patience, deferrals, entry):
+                    record, entry = attempt(name, index, args.keep)
+                results.append(entry)
+                print(f"{name} run {index}: {'pass' if entry['pass'] else 'deferred' if entry['deferred'] else 'FAIL'}", file=sys.stderr)
+    finally:
+        awake.terminate()
 
     summary: dict = {"pass": all(r["pass"] for r in results), "deferrals": deferrals, "runs": results}
     by_scenario: dict[str, list[list]] = {}
