@@ -16,6 +16,13 @@
  * lets a window that crashed or slept count as gone, so the heartbeat is what
  * keeps someone reading one channel for ten minutes from counting as away.
  *
+ * Focus is the document's focus while the page is visible, and only then. On
+ * a Mac, hiding Guaca (Command-H, or the app hidden any other way) fires no
+ * blur in the webview and leaves `document.hasFocus()` true for as long as it
+ * stays hidden; only `visibilitychange` says anything. Asked alone, the
+ * heartbeat kept a hidden Guaca present forever, and finished work never
+ * interrupted anyone who had looked at it once.
+ *
  * Only the window reports. The menu bar panel never calls this, so it neither
  * counts as the operator being present nor puts a channel on screen.
  *
@@ -37,6 +44,11 @@ const SETTLE_MS = 400;
  * operator away while they are reading.
  */
 export const HEARTBEAT_MS = 45_000;
+
+/** Whether the operator is in this window: it has focus and can be seen. */
+function present(): boolean {
+  return document.hasFocus() && document.visibilityState !== "hidden";
+}
 
 export function sameView(a: OperatorView | null, b: OperatorView): boolean {
   return (
@@ -69,7 +81,7 @@ export function useReportView(view: OperatorView): void {
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      if (document.hasFocus()) report(true, false);
+      if (present()) report(true, false);
     }, SETTLE_MS);
     return () => window.clearTimeout(timer);
   }, [view.agentId, view.overlay, view.section, view.groupId, report]);
@@ -77,7 +89,9 @@ export function useReportView(view: OperatorView): void {
   useEffect(() => {
     // A window coming back to the front is the operator's again, even if what
     // it shows did not change while another window had them.
-    const focus = () => report(true, true);
+    const focus = () => {
+      if (present()) report(true, true);
+    };
     // Focus moving into a page an agent wrote, which is a frame inside this
     // document, blurs the window and leaves the document focused. The operator
     // is still here, so a blur counts only once the document agrees.
@@ -85,19 +99,26 @@ export function useReportView(view: OperatorView): void {
     const blur = () => {
       window.clearTimeout(checking);
       checking = window.setTimeout(() => {
-        if (!document.hasFocus()) report(false, true);
+        if (!present()) report(false, true);
       }, 0);
     };
+    // Hidden is leaving, and shown again with focus is coming back.
+    const shown = () => {
+      if (document.visibilityState === "hidden") report(false, true);
+      else focus();
+    };
     const beat = window.setInterval(() => {
-      if (document.hasFocus()) report(true, true);
+      if (present()) report(true, true);
     }, HEARTBEAT_MS);
     window.addEventListener("focus", focus);
     window.addEventListener("blur", blur);
+    document.addEventListener("visibilitychange", shown);
     return () => {
       window.clearTimeout(checking);
       window.clearInterval(beat);
       window.removeEventListener("focus", focus);
       window.removeEventListener("blur", blur);
+      document.removeEventListener("visibilitychange", shown);
     };
   }, [report]);
 }
