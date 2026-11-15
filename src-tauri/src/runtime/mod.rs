@@ -3863,6 +3863,16 @@ impl Runtime {
             }
             Err(err) => tracing::warn!(%err, "could not read the crew's artifacts for this prompt"),
         }
+        // What the agent said at the end of each conversation the window no
+        // longer reaches. Older than the oldest message drawn, history or
+        // batch, so a run still on screen is never listed twice; and after the
+        // indexes, so it is the last thing read before the reply it bears on.
+        if let Some(oldest) = history.iter().chain(&batch).map(|e| e.created_at).min() {
+            match self.inner.store.reported(card.id, card.group_id, oldest, prompt::MAX_REPORTED) {
+                Ok(reported) => prompt::add_reported(&mut messages, &reported, now_ms()),
+                Err(err) => tracing::warn!(%err, "could not read what this agent already reported"),
+            }
+        }
         // Last in the system prompt, and the only part of it that moves with
         // the operator rather than with the agent.
         let (presence, last_window) = self.presence();

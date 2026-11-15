@@ -428,6 +428,44 @@ impl Store {
         Ok(outcomes)
     }
 
+    /// What `agent` has already reported in `group` about runs that started
+    /// before `before`, newest first: the conversations its history window no
+    /// longer reaches, as the lines they ended with.
+    ///
+    /// A recurring check that found nothing reported nothing, so it is neither
+    /// listed nor counted against `limit`: an hourly check would otherwise push
+    /// out every line the agent did write. A run with nothing left in the
+    /// agent's channel was cleared by the operator, who wanted it gone from what
+    /// the agent reads back, and its line would bring it back.
+    pub fn reported(
+        &self,
+        agent: AgentId,
+        group: GroupId,
+        before: i64,
+        limit: u32,
+    ) -> Result<Vec<Outcome>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {COLUMNS} FROM outcomes o
+              WHERE o.agent_id=?1 AND o.group_id=?2 AND o.started_at<?3
+                AND o.status<>'{}'
+                AND EXISTS (SELECT 1 FROM messages m
+                             WHERE m.run_id=o.run_id AND m.channel_id=o.agent_id)
+              ORDER BY o.finished_at DESC, o.run_id DESC
+              LIMIT ?4",
+            Status::NothingNew.as_str()
+        ))?;
+        let rows = stmt.query_map(
+            params![agent.to_string(), group.to_string(), before, limit.min(LIST_MAX)],
+            read,
+        )?;
+        let mut outcomes = Vec::new();
+        for row in rows {
+            outcomes.push(row??);
+        }
+        Ok(outcomes)
+    }
+
     pub fn outcome(&self, run: RunId) -> Result<Option<Outcome>, StoreError> {
         let conn = self.conn()?;
         let found = conn
@@ -508,7 +546,101 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::agent::CleanDraft;
     use crate::domain::envelope::{Intent, Trust};
+
+    fn hired(store: &Store, name: &str) -> (AgentId, GroupId) {
+        let card = store
+            .create_agent(&CleanDraft {
+                group_id: None,
+                name: name.into(),
+                avatar: "avocado".into(),
+                color: "#7fb069".into(),
+                model: "test/model".into(),
+                subscription_model: None,
+                reasoning_effort: None,
+                system_prompt: format!("You are the {name}."),
+                skills: Vec::new(),
+            })
+            .unwrap();
+        (card.id, card.group_id)
+    }
+
+    /// A run of `agent`'s that began in its channel at `started` and ended in
+    /// `headline`. Without `kept`, the operator has since cleared the channel.
+    #[allow(clippy::too_many_arguments)]
+    fn ran(
+        store: &Store,
+        agent: AgentId,
+        group: GroupId,
+        headline: &str,
+        status: Status,
+        started: i64,
+        finished: i64,
+        kept: bool,
+    ) {
+        let run = RunId::new();
+        if kept {
+            let mut start = say(Participant::Human, Participant::Agent { id: agent }, Intent::Work);
+            start.run_id = run;
+            start.channel_id = agent;
+            start.created_at = started;
+            store.append(&start).unwrap();
+        }
+        let outcome = Outcome {
+            run_id: run,
+            agent_id: agent,
+            group_id: group,
+            trigger: Trigger::Operator,
+            trigger_ref: None,
+            status,
+            headline: headline.into(),
+            note_id: None,
+            needs: Vec::new(),
+            steps: 1,
+            started_at: started,
+            finished_at: finished,
+            seen_at: None,
+        };
+        assert!(insert(&store.conn().unwrap(), &outcome).unwrap());
+    }
+
+    #[test]
+    fn an_agent_is_handed_the_ten_newest_lines_of_its_own_that_predate_its_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("guac.db")).unwrap();
+        let (me, group) = hired(&store, "Manager");
+        let (other, _) = hired(&store, "Chef");
+        let window = 10_000;
+
+        for i in 1..=12 {
+            let at = i * 100;
+            let status = if i == 12 { Status::NeedsYou } else { Status::Done };
+            ran(&store, me, group, &format!("Line {i}."), status, at, at + 50, true);
+        }
+        // Each of these is newer than every line above and would push one out.
+        for i in 1..=3 {
+            let at = 2_000 + i * 100;
+            ran(&store, me, group, NOTHING_NEW, Status::NothingNew, at, at + 50, true);
+        }
+        ran(&store, other, group, "Chef's line.", Status::Done, 3_000, 3_050, true);
+        ran(&store, me, GroupId::new(), "In the old group.", Status::Done, 3_100, 3_150, true);
+        ran(&store, me, group, "Cleared.", Status::Done, 3_200, 3_250, false);
+        // Started inside the window: its messages are on screen already.
+        ran(&store, me, group, "Still on screen.", Status::Done, window, window + 50, true);
+        ran(&store, me, group, "Newer still.", Status::Done, window + 100, window + 150, true);
+
+        let lines: Vec<String> = store
+            .reported(me, group, window, 10)
+            .unwrap()
+            .into_iter()
+            .map(|outcome| outcome.headline)
+            .collect();
+        let expected: Vec<String> = (3..=12).rev().map(|i| format!("Line {i}.")).collect();
+        assert_eq!(lines, expected);
+
+        assert!(store.reported(me, group, 100, 10).unwrap().is_empty(), "nothing predates it");
+    }
 
     fn say(from: Participant, to: Participant, intent: Intent) -> Envelope {
         Envelope {

@@ -61,6 +61,10 @@ pub enum Request {
     Hide,
     /// The app quits, as Quit Guaca in the icon's menu would.
     Quit,
+    /// The main thread kept busy for `ms` milliseconds, in slices short
+    /// enough that the window still answers, so its run loop is almost never
+    /// idle: what a window drawing a long reply does to it. Answered at once.
+    Busy { ms: u64 },
 }
 
 /// The answer to one request.
@@ -223,6 +227,7 @@ mod tests {
             (r#"{"id":7,"op":"close","window":"main"}"#, Request::Close { window: "main".into() }),
             (r#"{"id":5,"op":"hide"}"#, Request::Hide),
             (r#"{"id":6,"op":"quit"}"#, Request::Quit),
+            (r#"{"id":8,"op":"busy","ms":5000}"#, Request::Busy { ms: 5000 }),
         ];
         for (line, request) in cases {
             let envelope = parse(line).unwrap_or_else(|reply| panic!("{line}: {reply:?}"));

@@ -7459,3 +7459,212 @@ async fn a_decision_answer_queued_behind_a_busy_turn_is_followed_through_after_a
         .unwrap();
     assert_eq!(row.status, DecisionStatus::Completed);
 }
+
+// ---- what an agent has already reported ----------------------------------
+
+const REPORTED: &str = "## What you have already reported";
+
+/// The newest user turn of a request: what the turn is answering.
+fn answering(body: &serde_json::Value) -> String {
+    body["messages"]
+        .as_array()
+        .and_then(|messages| messages.iter().rev().find(|m| m["role"] == "user"))
+        .and_then(|m| m["content"].as_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// The number written after `word` in `text`: "Topic 7." is 7.
+fn number_after(text: &str, word: &str) -> Option<u32> {
+    let rest = &text[text.find(word)? + word.len()..];
+    rest.chars().take_while(char::is_ascii_digit).collect::<String>().parse().ok()
+}
+
+/// The lines under the section, as the agent read them.
+fn reported_lines(system: &str) -> Vec<String> {
+    let Some(at) = system.find(REPORTED) else { return Vec::new() };
+    let rest = &system[at + REPORTED.len()..];
+    let body = rest.split("\n## ").next().unwrap_or_default();
+    body.lines().filter(|line| line.starts_with("- ")).map(str::to_string).collect()
+}
+
+/// The system prompt of the last request an agent made answering `needle`.
+fn prompt_answering(stub: &Stub, name: &str, needle: &str) -> serde_json::Value {
+    stub.transcript
+        .lock()
+        .iter()
+        .rev()
+        .find(|body| speaker(body) == name && answering(body).contains(needle))
+        .cloned()
+        .unwrap_or_else(|| panic!("{name} never answered {needle:?}"))
+}
+
+/// Every conversation turn a request draws after its system prompt, as text.
+fn drawn(body: &serde_json::Value) -> Vec<String> {
+    body["messages"].as_array().unwrap()[1..]
+        .iter()
+        .filter_map(|m| m["content"].as_str().map(str::to_string))
+        .collect()
+}
+
+/// A topic the operator raises and the agent reports on in one line.
+async fn reporter() -> Stub {
+    serve(|body| {
+        let asked = answering(body);
+        match number_after(&asked, "Topic ") {
+            Some(topic) => Script::Say(format!("{} reported on topic {topic}.", speaker(body))),
+            None => Script::Say("Nothing else is open.".into()),
+        }
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_is_shown_the_ten_newest_lines_it_ended_with_before_its_window() {
+    let stub = reporter().await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    for topic in 1..=32 {
+        let run = h.runtime.send_from_human(h.id("Manager"), &format!("Topic {topic}.")).unwrap();
+        h.settle(run).await;
+    }
+    let last = h.runtime.send_from_human(h.id("Manager"), "Anything else?").unwrap();
+    h.settle(last).await;
+
+    // While the whole conversation still fits, there is nothing to list.
+    for topic in 1..=15 {
+        let body = prompt_answering(&stub, "Manager", &format!("Topic {topic}."));
+        let system = body["messages"][0]["content"].as_str().unwrap();
+        assert!(!system.contains(REPORTED), "topic {topic} saw the section:\n{system}");
+    }
+
+    let body = prompt_answering(&stub, "Manager", "Anything else?");
+    let system = body["messages"][0]["content"].as_str().unwrap();
+    let on_screen: Vec<u32> =
+        drawn(&body).iter().filter_map(|turn| number_after(turn, "Topic ")).collect();
+    // A run is older than the window when the message that started it is not
+    // drawn, and the newest ten of those are listed, newest first.
+    let expected: Vec<String> = (1..=32)
+        .rev()
+        .filter(|topic| !on_screen.contains(topic))
+        .take(10)
+        .map(|topic| format!("Manager reported on topic {topic}."))
+        .collect();
+    let listed: Vec<String> = reported_lines(system)
+        .iter()
+        .map(|line| line.split_once(": ").expect("an age, then the line").1.to_string())
+        .collect();
+    assert!(on_screen.contains(&32), "the newest topic is in the window: {on_screen:?}");
+    assert!(32 - on_screen.len() >= 12, "twelve or more fell out: {on_screen:?}");
+    assert_eq!(listed, expected, "{system}");
+    for line in reported_lines(system) {
+        assert!(line.starts_with("- just now: ") || line.contains(" ago: "), "{line}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_coordinator_still_reads_the_line_that_started_a_long_delegation() {
+    let stub = serve(|body| {
+        let asked = answering(body);
+        let step = number_after(&asked, "step ");
+        if speaker(body) == "Chef" {
+            return Script::Say(match step {
+                Some(step) => format!("Done with step {step}."),
+                None => "The launch menu is written.".into(),
+            });
+        }
+        if reading_peer_replies(body) {
+            return Script::Say(match step {
+                Some(step) => format!("Step {step} of the launch is finished."),
+                None => "Launch planned: Chef wrote the menu and owns the steps.".into(),
+            });
+        }
+        if has_tool_result(body) {
+            return Script::Say("Asked Chef.".into());
+        }
+        Script::Instruct {
+            recipients: vec!["Chef".into()],
+            text: match step {
+                Some(step) => format!("Please do step {step} of the launch."),
+                None => "Write the launch menu.".into(),
+            },
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let manager = h.id("Manager");
+    let first = h.runtime.send_from_human(manager, "Plan the launch with Chef.").unwrap();
+    h.settle(first).await;
+    let started = h.runtime.store().outcome(first).unwrap().expect("the first run ended");
+    assert_eq!(started.headline, "Launch planned: Chef wrote the menu and owns the steps.");
+
+    let before = h.runtime.store().agent_history(manager, i64::MAX, 1_000).unwrap().len();
+    let mut step = 0;
+    while h.runtime.store().agent_history(manager, i64::MAX, 1_000).unwrap().len() < before + 50 {
+        step += 1;
+        let run = h.runtime.send_from_human(manager, &format!("Next, step {step}.")).unwrap();
+        h.settle(run).await;
+    }
+    let last = h.runtime.send_from_human(manager, "How is the launch going?").unwrap();
+    h.settle(last).await;
+
+    let body = prompt_answering(&stub, "Manager", "How is the launch going?");
+    let system = body["messages"][0]["content"].as_str().unwrap();
+    assert!(
+        !drawn(&body).iter().any(|turn| turn.contains("Plan the launch")),
+        "the brief is still on screen, so this proves nothing"
+    );
+    assert!(
+        reported_lines(system)
+            .iter()
+            .any(|line| line.ends_with(": Launch planned: Chef wrote the menu and owns the steps.")),
+        "{system}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_is_shown_only_its_own_lines_and_never_another_groups() {
+    let stub = reporter().await;
+    let h = harness_in_groups(
+        &stub,
+        &[("Manager", None), ("Chef", None), ("Scout", Some("Field"))],
+        GuardLimits::default(),
+    );
+    for topic in 1..=24 {
+        for name in ["Manager", "Chef", "Scout"] {
+            let run = h.runtime.send_from_human(h.id(name), &format!("Topic {topic}.")).unwrap();
+            h.settle(run).await;
+        }
+    }
+    for name in ["Manager", "Chef", "Scout"] {
+        let run = h.runtime.send_from_human(h.id(name), "Anything else?").unwrap();
+        h.settle(run).await;
+        let body = prompt_answering(&stub, name, "Anything else?");
+        let lines = reported_lines(body["messages"][0]["content"].as_str().unwrap());
+        assert!(!lines.is_empty(), "{name} has lines older than its window");
+        for line in &lines {
+            assert!(line.contains(&format!(": {name} reported on topic ")), "{name}: {line}");
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cleared_channel_takes_what_was_reported_in_it_along() {
+    let stub = reporter().await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let manager = h.id("Manager");
+    for topic in 1..=24 {
+        let run = h.runtime.send_from_human(manager, &format!("Topic {topic}.")).unwrap();
+        h.settle(run).await;
+    }
+    let shown = h.runtime.send_from_human(manager, "Anything else?").unwrap();
+    h.settle(shown).await;
+    let body = prompt_answering(&stub, "Manager", "Anything else?");
+    assert!(!reported_lines(body["messages"][0]["content"].as_str().unwrap()).is_empty());
+
+    h.runtime.store().delete_channel_messages(manager).unwrap();
+    let fresh = h.runtime.send_from_human(manager, "Anything new?").unwrap();
+    h.settle(fresh).await;
+    let body = prompt_answering(&stub, "Manager", "Anything new?");
+    let system = body["messages"][0]["content"].as_str().unwrap();
+    assert!(!system.contains(REPORTED), "{system}");
+}

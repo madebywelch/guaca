@@ -2510,9 +2510,19 @@ arrive while the question is up wait on the same one. Only a yes claims; a Mac
 that says no claims nothing, so the offer stays with the Host for another window
 or the push, and the test says so. The
 Notifications pane states which of these it is above the test button, with a
-way to System Settings when the answer is no. A copy run straight from the
-checkout is not an app bundle, which `UNUserNotificationCenter` needs, so it
-raises nothing and the pane says why.
+way to System Settings when the answer is no.
+
+On a Mac the app hands each banner to macOS itself (`notifications.rs`), not
+through the plugin. The plugin's hand-off refused whenever the app's main thread
+was busy at that instant and dropped the banner without a word, so a delivery
+the window had already claimed could vanish, and a click on a banner that did
+appear could do nothing. Now the window hears whether macOS took the banner,
+and a click comes back as an event. A test macOS allows and still refuses to
+take says "Not sent. macOS did not accept the notification." A delivery claimed
+and then refused stays in For you and in its channel, but no other window and
+no push is offered it, since the Host counts it as shown. A copy run straight
+from the checkout is not an app bundle, which `UNUserNotificationCenter` needs,
+so it raises nothing and the pane says why.
 
 ## The menu bar is Guaca with the window shut
 
