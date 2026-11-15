@@ -914,8 +914,7 @@ pub fn system_prompt(
              for something a person has to do. Spend one on what needs the operator and on \
              nothing else: a reply with three boxes in it is a reply with none. `NOTE` and \
              `TIP` draw the quiet box, which is worth seeing and needs nobody. Any other word \
-             stays an ordinary quote. In a turn nobody is waiting on, what needs the operator \
-             goes through `decision` or `escalate` instead.\n\n\
+             stays an ordinary quote.\n\n\
              Two fenced blocks are drawn as figures instead of as code.\n\n\
              A ```chart fence holds one JSON object and becomes a real chart:\n\n\
              ```chart\n\
@@ -1000,9 +999,9 @@ pub fn reply_section(mode: &ReplyMode) -> String {
              Address them directly and keep it short. They will not reply again, so do not ask a \
              follow-up question that needs one.\n\n\
              If you send them your answer with `send_message` during this turn instead, that \
-             message is your answer, and your final message is not sent to them. It goes to the \
-             operator when they wrote to you in this conversation; otherwise it is kept only on \
-             the record of this turn, where nobody is sent it.\n"
+             message is your answer, and your final message is not sent to them. It is filed in \
+             your own channel when the operator started this conversation, and kept nowhere \
+             otherwise.\n"
             .to_string(),
         ReplyMode::NoteOnly => {
             "You are reading messages that did not ask for anything. Nothing here needs an \
