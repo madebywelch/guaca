@@ -16,6 +16,7 @@ import {
   invoke,
   invokeLocal,
   notify,
+  PAGE_ID,
   type Refusal,
   type Remote,
   openExternal as reachBrowser,
@@ -397,15 +398,22 @@ export const api = {
   /**
    * What the host has offered and nobody has claimed, oldest first. Asked on
    * connecting, since an offer reaches only the windows listening when it is
-   * made.
+   * made. Never what this page gave back.
    */
-  pendingDeliveries: () => invoke<Delivery[]>("pending_deliveries"),
+  pendingDeliveries: () => invoke<Delivery[]>("pending_deliveries", { client: PAGE_ID }),
   /**
    * Claims one delivery for this window. True means show it, and it is true
    * for exactly one window. False means another window has it, or what it was
-   * about was answered or seen first.
+   * about was answered or seen first. The page is named so that only it can
+   * give the claim back.
    */
-  claimDelivery: (id: DeliveryId) => invoke<boolean>("claim_delivery", { id }),
+  claimDelivery: (id: DeliveryId) => invoke<boolean>("claim_delivery", { id, client: PAGE_ID }),
+  /**
+   * Gives back a delivery this window claimed and could not show, so another
+   * window or the push can. False when this page does not hold the claim,
+   * which changes nothing.
+   */
+  releaseDelivery: (id: DeliveryId) => invoke<boolean>("release_delivery", { id, client: PAGE_ID }),
   /** When a push last went out to the operator's address, and how the last attempt ended. */
   pushReport: () => invoke<PushReport>("push_report"),
   /** Sends one push to the saved address now. Resolves with what came back; a refusal rejects. */
