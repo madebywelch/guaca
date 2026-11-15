@@ -43,10 +43,20 @@ keyboard or pointer for five seconds, for up to `--patience` seconds (half an
 hour by default), and `deferrals` in the JSON lists every run that was put
 off. Input from a Screen Sharing session counts as someone at the Mac.
 
-While it runs, the command holds the display and the Mac awake with
-`caffeinate`, and wakes the display once at the start, so a banner, the
-question and a capture are drawn on a lit screen. Nothing in the Mac's own
-energy settings changes.
+While it runs, the command holds one `caffeinate -u -d -i` from before the
+first screen step until it exits, so a banner, the question and a capture are
+drawn on a lit screen. That turns the display on, declares the user active,
+and keeps the display and the Mac awake. Nothing in the Mac's own energy
+settings changes.
+
+A display that goes to sleep raises the lock screen's shield about ten seconds
+later, even with the password after sleep turned off, and the session then
+reads as locked. Waking the display lowers the shield without a password. So a
+screen step that finds the session locked first wakes the display and waits up
+to ten seconds, and fails with "the screen is locked" only if the session is
+still locked after that. Waking the display also resets the count macOS keeps
+of any event, so someone at the Mac is read from the keyboard, the pointer and
+the scroll wheel alone, and the probe's own wake never puts a run off.
 
 ## What a run does
 
@@ -99,6 +109,7 @@ with the same `id` and either `value` or `error`.
 | `close` | A window's close button: for the main window, hiding it. |
 | `hide` | The app hidden, which hands the keyboard to whatever is next. |
 | `quit` | The app quits. |
+| `busy` | The main thread held in 20 ms slices for `ms` milliseconds, answered at once. The window keeps answering between slices, but its run loop is almost never idle, as when it draws a long reply. |
 
 The bridge answers `ready`, `view` (which conversation is open and the agents
 the store holds), `attach` (save a Host and reload, which is what the host
@@ -178,7 +189,8 @@ keeps a walk of the tree to a fraction of a second.
 | `notification` | Whatever this Mac allows the probe's own bundle, a waiting delivery and the Settings test button do what the Notifications pane says: claimed and presented as a banner when allowed, asked about when never asked, nothing claimed and nothing presented otherwise. Asserted on the log and the outbox, not on the app's word. |
 | `panel` | With the window closed, a click on the icon opens the panel, the panel lists every agent in the seeded group, a second click closes it, and the app that had the keyboard before has it after. |
 | `allow` | Screen: on a fresh bundle, press Allow on macOS's question; the waiting delivery is claimed and drawn as a banner, the app reports allowed, and the pane says so. |
-| `button` | Screen: on a bundle just allowed, the Settings test button raises a banner. Known to fail in most runs today (seven of the last nine on macOS 27): the notification plugin hands a banner to macOS only if the main run loop is idle at that instant, and otherwise logs "main thread is not pumping" and drops it while the pane says it was sent. The scenario is kept so that the fix is measured. |
+| `button` | Screen: on a bundle just allowed, the Settings test button raises a banner. |
+| `busy` | Screen: with the window's main thread kept busy from before Allow is pressed, the waiting delivery is still drawn as a banner, and a click on it opens its conversation. Before the app handed banners to macOS itself, the plugin dropped a banner whenever the main run loop was not idle at the instant of the hand-off: this scenario failed every run, and `button` two runs in three. |
 | `deny` | Screen: on a fresh bundle, press Don't Allow; the app reports denied, the pane says macOS has notifications turned off, nothing is claimed and no banner is presented. |
 | `click` | Screen: a delivery about one conversation is shown as a banner; clicking it opens that conversation. |
 | `away` | Screen: four deliveries waiting when the window connects, then Allow; all four are claimed and macOS presents exactly one banner, the "While you were away" fold. |
@@ -193,12 +205,13 @@ that reason until it has them. macOS grants both to the responsible process:
 the terminal a person runs the command in, or the agent or service that
 started it, which is what has to be listed in System Settings, Privacy &
 Security. The probe never asks for either. Banners are not drawn while the
-display is shared, so `allow`, `button`, `click` and `away` need Screen Sharing
-disconnected, or "Allow notifications when mirroring or sharing the display"
-turned on. And nothing is drawn behind the lock screen, so every screen step
-first checks that the session is unlocked and fails saying so if it is not: a
-Mac that runs the probe unattended needs a logged-in session that does not lock
-when its display sleeps.
+display is shared, so the banner scenarios (`allow`, `button`, `busy`, `click`
+and `away`) need Screen Sharing disconnected, or "Allow notifications when
+mirroring or sharing the display" turned on. And nothing is drawn behind the
+lock screen, so every screen step first checks that the session is unlocked,
+wakes the display if it is not, and fails saying so if it is still locked: a
+Mac that runs the probe unattended needs a logged-in session that asks for no
+password when its display sleeps.
 
 ## What it cannot reach
 

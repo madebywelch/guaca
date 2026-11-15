@@ -17,7 +17,7 @@ compile_error!(
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use serde_json::{json, Value};
@@ -138,6 +138,40 @@ async fn handle(app: &AppHandle, request: Request) -> Result<Value, String> {
             });
             Ok(Value::Null)
         }
+        Request::Busy { ms } => {
+            occupy(app.clone(), Instant::now() + Duration::from_millis(ms));
+            Ok(Value::Null)
+        }
+    }
+}
+
+/// Holds the main thread in 20 ms slices until `until`. Each slice is queued
+/// from a thread of its own once the one before it has finished, so between
+/// slices the run loop goes back to whatever else is waiting, IPC included,
+/// and is idle only for the instant before the next slice wakes it. Queued
+/// before the last one finished, slices would be drained in one go and the
+/// window would stall instead; queued from the main thread, a slice would run
+/// inline and the next would nest inside it.
+fn occupy(app: AppHandle, until: Instant) {
+    let spawned = std::thread::Builder::new().name("probe-busy".into()).spawn(move || {
+        let (finished, finishes) = std::sync::mpsc::channel::<()>();
+        while Instant::now() < until {
+            let finished = finished.clone();
+            let queued = app.run_on_main_thread(move || {
+                std::thread::sleep(Duration::from_millis(20));
+                let _ = finished.send(());
+            });
+            if let Err(err) = queued {
+                tracing::warn!(%err, "could not keep the main thread busy");
+                return;
+            }
+            if finishes.recv().is_err() {
+                return;
+            }
+        }
+    });
+    if let Err(err) = spawned {
+        tracing::warn!(%err, "could not start keeping the main thread busy");
     }
 }
 
