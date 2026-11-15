@@ -44,7 +44,6 @@ use std::sync::Arc;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Path, Query, RawQuery, State};
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
-use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
 use axum::{Json, Router};
@@ -75,7 +74,13 @@ const SESSION_SECONDS: u64 = 30 * 24 * 60 * 60;
 
 /// The cookie a browser keeps its session in. The name is completed with the
 /// host's port by `cookie_name`, because a cookie is not scoped by one.
-const SESSION_COOKIE: &str = "guaca_session";
+const SESSION_COOKIE: &str = "guaca_session_v2";
+
+/// Cookies an older host set and no host reads now. The first carried the
+/// token itself, and the second the one session those were upgraded to.
+/// Signing out still expires both, so a browser that kept one does not hold
+/// a copy of the token until the cookie's own expiry.
+const RETIRED_COOKIES: [&str; 2] = ["guaca_session", "guaca_session_legacy"];
 
 /// The origins the desktop webview is served from. None of them is ever this
 /// daemon's own: the app has exactly one cross-origin client, a window showing
@@ -208,6 +213,16 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
     let paths = crate::boot::Paths::under(&settings.root);
     let booted = crate::boot::open(&paths, tokio::runtime::Handle::current(), sink.clone()).await?;
 
+    // A host before 0.4.0 kept the session it upgraded bearer cookies to here.
+    // Nothing reads it now, and it names a session, so it does not stay.
+    for retired in ["legacy-sessions.json", "legacy-sessions.tmp"] {
+        match std::fs::remove_file(settings.root.join(retired)) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => tracing::warn!(%err, retired, "could not remove a retired session file"),
+        }
+    }
+
     let runtime = booted.runtime;
     let state = Arc::new(AppState {
         runtime: runtime.clone(),
@@ -285,7 +300,6 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
             &format!("{}/:ticket/:sandbox/:port/*rest", crate::commands::SCREEN_ROUTE),
             any(screen).layer(axum::middleware::map_response(isolate_screen)),
         )
-        .layer(axum::middleware::from_fn_with_state(serving.clone(), upgrade_legacy_cookie))
         .with_state(serving);
 
     if let Some(web) = settings.web.as_ref() {
@@ -1260,7 +1274,7 @@ fn over_https(headers: &HeaderMap) -> bool {
 /// already what separates two hosts in `same_origin`, and it is the one part
 /// of an authority a cookie cannot express.
 fn cookie_name(headers: &HeaderMap) -> String {
-    named_cookie(headers, "guaca_session_v2")
+    named_cookie(headers, SESSION_COOKIE)
 }
 
 fn named_cookie(headers: &HeaderMap, prefix: &str) -> String {
@@ -1291,7 +1305,6 @@ fn make_cookie(headers: &HeaderMap, name: &str, value: &str, max_age: u64) -> He
 #[derive(Debug, PartialEq, Eq)]
 enum SessionState {
     Invalid,
-    Legacy,
     Active { id: String, expires: u64 },
     Expired,
     Revoked,
@@ -1324,26 +1337,6 @@ fn sign_session(token: &str, id: &str, issued: u64) -> String {
     )
 }
 
-fn legacy_session(token: &str, path: &std::path::Path, time: u64) -> Result<String, String> {
-    let tag = ring::hmac::sign(&session_key(token), b"guaca legacy session id");
-    let id = uuid::Uuid::from_slice(&tag.as_ref()[..16])
-        .map_err(|e| e.to_string())?
-        .simple()
-        .to_string();
-    let file = path.with_file_name("legacy-sessions.json");
-    let mut issued = revocations(&file)?;
-    let when = match issued.get(&id) {
-        Some(when) => *when,
-        None => {
-            issued.insert(id.clone(), time);
-            let bytes = serde_json::to_vec(&issued).map_err(|e| e.to_string())?;
-            durable_write(&file, &bytes)?;
-            time
-        }
-    };
-    Ok(sign_session(token, &id, when))
-}
-
 fn durable_write(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
     use std::io::Write;
     let temp = path.with_extension("tmp");
@@ -1362,10 +1355,6 @@ fn session_state(
     revoked: &std::collections::HashMap<String, u64>,
 ) -> SessionState {
     use base64::Engine;
-    // Remove legacy bearer-cookie admission in 0.4.0, the next minor release.
-    if same(value, token) {
-        return SessionState::Legacy;
-    }
     let Some((payload, signature)) = value.rsplit_once('.') else { return SessionState::Invalid };
     let Ok(signature) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(signature) else {
         return SessionState::Invalid;
@@ -1398,20 +1387,11 @@ fn session_state(
 }
 
 fn cookie_value(headers: &HeaderMap) -> Option<&str> {
-    let cookies = headers.get(header::COOKIE)?.to_str().ok()?;
-    for wanted in [
-        cookie_name(headers),
-        named_cookie(headers, "guaca_session_legacy"),
-        named_cookie(headers, SESSION_COOKIE),
-    ] {
-        if let Some(value) = cookies.split(';').find_map(|part| {
-            let (name, value) = part.trim().split_once('=')?;
-            (name.trim() == wanted).then_some(value.trim())
-        }) {
-            return Some(value);
-        }
-    }
-    None
+    let wanted = cookie_name(headers);
+    headers.get(header::COOKIE)?.to_str().ok()?.split(';').find_map(|part| {
+        let (name, value) = part.trim().split_once('=')?;
+        (name.trim() == wanted).then_some(value.trim())
+    })
 }
 
 fn revocations(path: &std::path::Path) -> Result<std::collections::HashMap<String, u64>, String> {
@@ -1426,58 +1406,7 @@ fn read_session(serving: &Serving, headers: &HeaderMap) -> SessionState {
     let Some(value) = cookie_value(headers) else { return SessionState::Invalid };
     let path = serving.revocations.lock();
     let Ok(revoked) = revocations(&path) else { return SessionState::Invalid };
-    let legacy;
-    let value = if same(value, &serving.token) {
-        let Ok(session) = legacy_session(&serving.token, &path, now()) else {
-            return SessionState::Invalid;
-        };
-        legacy = session;
-        &legacy
-    } else {
-        value
-    };
     session_state(&serving.token, value, now(), &revoked)
-}
-
-async fn upgrade_legacy_cookie(
-    State(serving): State<Serving>,
-    request: axum::extract::Request,
-    next: Next,
-) -> Response {
-    let headers = request.headers().clone();
-    let upgrade = if request.uri().path() != "/v1/auth/logout"
-        && request.uri().path() != "/v1/auth/session"
-        && cookie_value(&headers).is_some_and(|value| same(value, &serving.token))
-    {
-        match read_session(&serving, &headers) {
-            SessionState::Active { expires, .. } => Some(expires),
-            _ => None,
-        }
-    } else {
-        None
-    };
-    let mut response = next.run(request).await;
-    if let Some(expires) = upgrade.filter(|_| {
-        response.status().is_success() || response.status() == StatusCode::SWITCHING_PROTOCOLS
-    }) {
-        let path = serving.revocations.lock();
-        if let Ok(value) = legacy_session(&serving.token, &path, now()) {
-            response.headers_mut().append(
-                header::SET_COOKIE,
-                make_cookie(&headers, &named_cookie(&headers, SESSION_COOKIE), "", 0),
-            );
-            response.headers_mut().append(
-                header::SET_COOKIE,
-                make_cookie(
-                    &headers,
-                    &named_cookie(&headers, "guaca_session_legacy"),
-                    &value,
-                    expires.saturating_sub(now()),
-                ),
-            );
-        }
-    }
-    response
 }
 
 /// Whether a request proves it came from a page on this origin.
@@ -1613,13 +1542,6 @@ async fn auth_logout(State(serving): State<Serving>, headers: HeaderMap) -> Resp
     let result = (|| -> Result<Option<String>, String> {
         let mut revoked = revocations(&path)?;
         if let Some(value) = cookie_value(&headers) {
-            let legacy;
-            let value = if same(value, &serving.token) {
-                legacy = legacy_session(&serving.token, &path, now())?;
-                &legacy
-            } else {
-                value
-            };
             if let SessionState::Active { id, expires } =
                 session_state(&serving.token, value, now(), &revoked)
             {
@@ -1641,7 +1563,7 @@ async fn auth_logout(State(serving): State<Serving>, headers: HeaderMap) -> Resp
     }
     let mut response = Json(json!({ "ok": "signed out" })).into_response();
     response.headers_mut().insert(header::SET_COOKIE, session_cookie(&headers, "", 0));
-    for prefix in ["guaca_session_legacy", SESSION_COOKIE] {
+    for prefix in RETIRED_COOKIES {
         response.headers_mut().append(
             header::SET_COOKIE,
             make_cookie(&headers, &named_cookie(&headers, prefix), "", 0),
@@ -1660,8 +1582,7 @@ fn authorized(
     // state-changing request forgeable from another origin, so one that cannot
     // prove it came from here is refused: the cookie rode along without the
     // browser having meant to send it.
-    if matches!(read_session(serving, headers), SessionState::Legacy | SessionState::Active { .. })
-    {
+    if matches!(read_session(serving, headers), SessionState::Active { .. }) {
         let state_changing =
             *method == Method::POST || *method == Method::PUT || *method == Method::DELETE;
         if state_changing && !proves_same_origin(headers) {
@@ -1739,7 +1660,7 @@ mod tests {
         let first = issue_session("token", 100);
         let second = issue_session("token", 100);
         assert_ne!(first, second);
-        assert_eq!(session_state("token", "token", 100, &revoked), SessionState::Legacy);
+        assert_eq!(session_state("token", "token", 100, &revoked), SessionState::Invalid);
         assert_eq!(session_state("other", &first, 100, &revoked), SessionState::Invalid);
         assert_eq!(session_state("token", &first, 99, &revoked), SessionState::Invalid);
         assert_eq!(
