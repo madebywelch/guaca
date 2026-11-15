@@ -3507,15 +3507,11 @@ impl Runtime {
             return;
         }
 
-        let routines: Vec<_> = batch
-            .iter()
-            .filter(|envelope| {
-                envelope.parts.iter().any(|part| matches!(part, Part::Routine { .. }))
-            })
-            .map(|envelope| envelope.id)
-            .collect();
-        if let Err(err) = self.inner.store.start_routine_deliveries(&routines, run_id) {
-            tracing::error!(%err, "could not start a routine delivery; leaving it for recovery");
+        // Before the model reads any of it: once this is written, a crash
+        // reports the conversation instead of delivering it again.
+        let starting: Vec<_> = batch.iter().map(|envelope| envelope.id).collect();
+        if let Err(err) = self.inner.store.start_deliveries(&starting, run_id) {
+            tracing::error!(%err, "could not mark a delivery started; abandoning it rather than run a turn a crash would repeat");
             self.abandon(run_id, batch.len());
             return;
         }
@@ -4624,12 +4620,11 @@ impl Runtime {
                 break;
             }
 
-            if next.parts.iter().any(|part| matches!(part, Part::Routine { .. })) {
-                if let Err(err) = self.inner.store.start_routine_deliveries(&[next.id], run) {
-                    tracing::error!(%err, "could not start a routine delivery; leaving it queued");
-                    intake.carry.push_front(next);
-                    break;
-                }
+            // Taken in is read, so it is started like the turn's own batch.
+            if let Err(err) = self.inner.store.start_deliveries(&[next.id], run) {
+                tracing::error!(%err, "could not mark a delivery started; leaving it queued");
+                intake.carry.push_front(next);
+                break;
             }
 
             if next.run_id != run {

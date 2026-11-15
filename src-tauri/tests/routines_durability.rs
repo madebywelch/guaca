@@ -145,7 +145,7 @@ fn started_absorbed_firing_is_reported_interrupted_instead_of_replayed() {
             true,
         )
         .unwrap();
-    store.start_routine_deliveries(&[envelope.id], RunId::new()).unwrap();
+    store.start_deliveries(&[envelope.id], RunId::new()).unwrap();
     store.settle_run(envelope.run_id).unwrap();
     let recovered = store.recover().unwrap();
     assert!(recovered.resumed.is_empty());
@@ -187,7 +187,7 @@ fn completed_firing_does_not_become_a_false_interruption() {
             true,
         )
         .unwrap();
-    store.start_routine_deliveries(&[envelope.id], envelope.run_id).unwrap();
+    store.start_deliveries(&[envelope.id], envelope.run_id).unwrap();
     store.settle_run(envelope.run_id).unwrap();
     let recovered = store.recover().unwrap();
     assert!(recovered.resumed.is_empty());
@@ -214,7 +214,7 @@ fn absorbed_firing_is_recovered_only_with_its_whole_owner() {
             true,
         )
         .unwrap();
-    store.start_routine_deliveries(&[envelope.id], parent.run_id).unwrap();
+    store.start_deliveries(&[envelope.id], parent.run_id).unwrap();
     store.settle_run(envelope.run_id).unwrap();
     let snapshot = RunState::new(GuardLimits::default()).snapshot();
     store
@@ -278,7 +278,7 @@ fn failed_start_rolls_back_ownership_and_recovery_still_delivers() {
         )
         .unwrap();
     store.conn().unwrap().execute_batch("CREATE TRIGGER inject BEFORE UPDATE ON routine_runs BEGIN SELECT RAISE(ABORT, 'injected'); END;").unwrap();
-    assert!(store.start_routine_deliveries(&[envelope.id], RunId::new()).is_err());
+    assert!(store.start_deliveries(&[envelope.id], RunId::new()).is_err());
     let state: String = store
         .conn()
         .unwrap()
@@ -306,7 +306,7 @@ fn failed_stop_and_settlement_roll_back_their_journals() {
     assert!(store.stop_routine_run(envelope.run_id).is_err());
     assert_eq!(store.recover().unwrap().resumed.len(), 1);
     store.conn().unwrap().execute_batch("DROP TRIGGER inject").unwrap();
-    store.start_routine_deliveries(&[envelope.id], envelope.run_id).unwrap();
+    store.start_deliveries(&[envelope.id], envelope.run_id).unwrap();
     store.conn().unwrap().execute_batch("CREATE TRIGGER inject BEFORE UPDATE ON routine_occurrences BEGIN SELECT RAISE(ABORT, 'injected'); END;").unwrap();
     assert!(store.settle_run(envelope.run_id).is_err());
     let pending: i64 = store

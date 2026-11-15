@@ -9,9 +9,14 @@
 //!
 //! What this file keeps is only what a drain could vouch for. A message is put
 //! down with the records of the turn it was in the middle of, and a
-//! conversation is marked whole once nothing of it is left running. Everything
-//! else a restart finds, whether a crash or a turn still inside a tool call
-//! when the host was stopped, is reported interrupted exactly as before.
+//! conversation is marked whole once nothing of it is left running.
+//!
+//! A crash vouches for one thing more: a conversation no turn had started.
+//! Its message was written and never read, so nothing can have happened that
+//! was not written down, and it is delivered again as though it had just
+//! arrived. Everything else a restart finds, whether a turn a crash cut off or
+//! one still inside a tool call when the host was stopped, is reported
+//! interrupted exactly as before.
 
 use std::collections::{HashMap, HashSet};
 
@@ -59,11 +64,24 @@ pub struct Recovered {
     pub interrupted: usize,
 }
 
-impl Recovered {
-    pub fn runs(&self) -> HashSet<RunId> {
-        self.resumed.iter().map(|put| put.envelope.run_id).collect()
-    }
-}
+/// A conversation still owed an answer that no turn had started, as a
+/// condition on `pending_runs p`: never marked started, holding nothing but
+/// the message it began with, and addressed to an agent that can still read
+/// it.
+///
+/// One rule with two readers. `Store::recover` delivers these again, and
+/// `Store::recover_decisions` leaves the decision whose answer one carries
+/// unmarked, because it is about to be delivered rather than cut off. Read
+/// differently by the two, a decision would be reported interrupted while its
+/// answer was being delivered, or its answer reported and the decision not.
+///
+/// A conversation holding a second message is reported even when nothing
+/// marked it started: delivering its first message again would answer only
+/// part of what it owes, and whatever wrote the second may have acted on it.
+pub(super) const UNTOUCHED: &str = "p.started_at IS NULL \
+     AND NOT EXISTS (SELECT 1 FROM messages l WHERE l.run_id=p.run_id AND l.id<>p.message_id) \
+     AND EXISTS (SELECT 1 FROM messages f JOIN agents a ON a.id=f.to_agent \
+         WHERE f.id=p.message_id AND f.to_kind='agent' AND a.lifecycle<>'terminated')";
 
 impl Store {
     /// Puts messages down and marks the conversations left with nothing else
@@ -227,6 +245,38 @@ impl Store {
                     resumed.push(PutDown { envelope, records: Vec::new(), absorbed: Vec::new() });
                 }
             }
+        }
+        // A turn had these when the last host put them down, so they are
+        // started whatever their row says. Carried on once, on the drain's
+        // word; a crash before the next turn ends reports them.
+        for put in &resumed {
+            if !put.records.is_empty() || !put.absorbed.is_empty() {
+                tx.execute(
+                    "UPDATE pending_runs SET started_at=?2 WHERE run_id=?1 AND started_at IS NULL",
+                    params![put.envelope.run_id.to_string(), now_ms()],
+                )?;
+            }
+        }
+        {
+            let mut picked: HashSet<RunId> =
+                resumed.iter().map(|put| put.envelope.run_id).collect();
+            let mut stmt = tx.prepare(&format!(
+                "SELECT {ENVELOPE} FROM messages m JOIN pending_runs p ON p.message_id=m.id
+                  WHERE {UNTOUCHED} ORDER BY m.created_at,m.id"
+            ))?;
+            let rows = stmt.query_map([], row_to_envelope)?;
+            let mut untouched = Vec::new();
+            for row in rows {
+                let envelope = row??;
+                if !already.contains(&envelope.id) && picked.insert(envelope.run_id) {
+                    untouched.push(PutDown { envelope, records: Vec::new(), absorbed: Vec::new() });
+                }
+            }
+            drop(stmt);
+            resumed.extend(untouched);
+            // Oldest first across all three kinds, as an actor would have
+            // read them. Stable, so each kind keeps its own order on a tie.
+            resumed.sort_by_key(|put| put.envelope.created_at);
         }
         let picked: HashSet<RunId> = resumed.iter().map(|put| put.envelope.run_id).collect();
         let associated: HashSet<MessageId> =
@@ -440,6 +490,7 @@ mod tests {
         let run = RunId::new();
         let original = asked(&agent, run, "atomic");
         store.append_delivery(&original).unwrap();
+        store.start_deliveries(&[original.id], run).unwrap();
         store.conn().unwrap().execute_batch("CREATE TRIGGER fail_whole BEFORE INSERT ON put_down_runs BEGIN SELECT RAISE(ABORT, 'crash'); END;").unwrap();
         assert!(store
             .put_down(
@@ -583,13 +634,63 @@ mod tests {
     }
 
     #[test]
-    fn a_restart_that_was_not_a_drain_reports_everything_as_before() {
+    fn a_restart_that_was_not_a_drain_reports_what_a_turn_had_started() {
+        let (_dir, store, agent) = fixture();
+        let original = asked(&agent, RunId::new(), "do the work");
+        store.append_delivery(&original).unwrap();
+        store.start_deliveries(&[original.id], original.run_id).unwrap();
+
+        let recovered = store.recover().unwrap();
+        assert!(recovered.resumed.is_empty());
+        assert_eq!(recovered.interrupted, 1);
+    }
+
+    #[test]
+    fn a_restart_that_was_not_a_drain_delivers_again_what_no_turn_had_started() {
         let (_dir, store, agent) = fixture();
         let original = asked(&agent, RunId::new(), "do the work");
         store.append_delivery(&original).unwrap();
 
         let recovered = store.recover().unwrap();
-        assert!(recovered.resumed.is_empty());
+        assert_eq!(recovered.interrupted, 0);
+        assert!(notices(&store, &agent).is_empty(), "nothing to review: nothing had read it");
+        assert_eq!(recovered.resumed.len(), 1);
+        assert_eq!(recovered.resumed[0].envelope, original);
+        assert!(recovered.resumed[0].records.is_empty());
+        assert!(recovered.steps.is_empty(), "a fresh budget: none of it was spent");
+
+        // Still unstarted, so a second crash before a turn takes it delivers
+        // it again rather than reporting it.
+        let again = store.recover().unwrap();
+        assert_eq!(again.interrupted, 0);
+        assert_eq!(again.resumed.len(), 1);
+    }
+
+    #[test]
+    fn a_message_put_down_unstarted_and_picked_up_is_delivered_again_after_a_crash() {
+        let (_dir, store, agent) = fixture();
+        let run = RunId::new();
+        let late = asked(&agent, run, "sent during the update");
+        store
+            .append_put_down(&late, Some((0, RunState::new(Default::default()).snapshot())))
+            .unwrap();
+        assert_eq!(store.recover().unwrap().resumed.len(), 1);
+
+        let crashed = store.recover().unwrap();
+        assert_eq!(crashed.interrupted, 0);
+        assert_eq!(crashed.resumed.len(), 1);
+        assert_eq!(crashed.resumed[0].envelope, late);
+    }
+
+    #[test]
+    fn a_message_for_a_deleted_agent_is_reported_rather_than_delivered_again() {
+        let (_dir, store, agent) = fixture();
+        let original = asked(&agent, RunId::new(), "do the work");
+        store.append_delivery(&original).unwrap();
+        store.discard_agent(agent.id, 1_000).unwrap();
+
+        let recovered = store.recover().unwrap();
+        assert!(recovered.resumed.is_empty(), "nobody is left to read it");
         assert_eq!(recovered.interrupted, 1);
     }
 }

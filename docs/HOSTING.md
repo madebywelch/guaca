@@ -591,13 +591,18 @@ had already spent. A turn that had made calls is told each one and how it came
 out, because its history cannot tell it: a message projects to its text, and a
 call is a part the projection skips (`prompt::resumed`).
 
-What a drain cannot vouch for is reported exactly as a restart always was.
-Every accepted conversation records its first delivery in `pending_runs`, in
-the same SQLite transaction as the message. Settlement removes that entry; an
-operator stop also removes it without releasing the in-memory bookings. A
-conversation is picked up only if all of it was put down (`put_down_runs`).
-Anything else the next host finds, whether a crash or a turn still inside a
-tool call when the window closed, becomes a durable interruption notice on the
+What a drain cannot vouch for is reported exactly as a restart always was,
+unless no turn had started on it. Every accepted conversation records its first
+delivery in `pending_runs`, in the same SQLite transaction as the message, and
+the turn that first takes any of it up marks it started (`started_at`) before
+the model reads it. Settlement removes that entry; an operator stop also removes
+it without releasing the in-memory bookings. A conversation is picked up if all
+of it was put down (`put_down_runs`), or if it was never started: a message that
+was written and never read, whether it waited behind a busy turn, was held by a
+paused agent or was an answer from For you, is delivered again as though it had
+just arrived, after as many restarts in a row as it takes. Anything else the
+next host finds, whether a crash in the middle of a turn or a turn still inside
+a tool call when the window closed, becomes a durable interruption notice on the
 conversation's first message, once, before actors start, with **Try again**.
 
 This is a deliberate recovery policy: an external action can succeed just
