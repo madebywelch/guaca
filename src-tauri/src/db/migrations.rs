@@ -2083,6 +2083,18 @@ CREATE INDEX permission_grants_open ON permission_grants (agent_id, fingerprint)
     WHERE granted_at IS NOT NULL AND used_at IS NULL;
 "#,
     ),
+    (
+        75,
+        r#"
+-- When a turn first took up a conversation still owed an answer. Null until
+-- then, and a crash that finds it null has found a message no model has read
+-- and no tool has acted on, which is delivered again rather than reported.
+-- Rows written before this column existed are marked started, because
+-- nothing recorded whether they were, and a guess the wrong way repeats work.
+ALTER TABLE pending_runs ADD COLUMN started_at INTEGER;
+UPDATE pending_runs SET started_at = CAST(strftime('%s','now') AS INTEGER) * 1000;
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -2386,6 +2398,25 @@ mod tests {
             )
             .unwrap();
         assert_eq!(tables, 2);
+    }
+
+    #[test]
+    fn a_recovery_point_written_before_starts_were_recorded_counts_as_started() {
+        // Nothing said whether a turn had begun on it, and the guess that it
+        // had not would repeat work a turn may already have done.
+        let mut conn = memory();
+        for (v, sql) in MIGRATIONS.iter().take_while(|(v, _)| *v <= 74) {
+            conn.execute_batch(sql).unwrap();
+            conn.pragma_update(None, "user_version", *v).unwrap();
+        }
+        conn.execute("INSERT INTO messages (id,run_id,channel_id,from_kind,to_kind,parts,trust,hop,expects_reply,created_at) VALUES ('original','run','channel','human','system','[]','operator',0,0,0)", []).unwrap();
+        conn.execute("INSERT INTO pending_runs (run_id,message_id) VALUES ('run','original')", [])
+            .unwrap();
+        run(&mut conn).unwrap();
+        let started: Option<i64> = conn
+            .query_row("SELECT started_at FROM pending_runs WHERE run_id='run'", [], |r| r.get(0))
+            .unwrap();
+        assert!(started.is_some());
     }
 
     #[test]

@@ -7084,3 +7084,222 @@ async fn a_request_a_stop_ended_says_nobody_decided_and_files_nothing() {
     assert_eq!(outcome, ToolOutcome::Refused { reason: ENDED_BY_RESTART.into() });
     assert!(h.runtime.store().decisions(None).unwrap().is_empty());
 }
+
+// ---- a host that crashes --------------------------------------------------
+
+/// Ends this host the way a crash does, with no drain: every actor stops where
+/// it is, and the workspace is opened on a new host with the recovery and the
+/// pickup boot runs. `paused` are paused on the new host before it starts, so
+/// what it picks up waits there without a turn beginning on it.
+///
+/// Returns the runs it delivered again and how many it reported interrupted.
+fn crash(h: Harness, paused: &[&str]) -> (Harness, Vec<RunId>, usize) {
+    for id in h.ids.values() {
+        h.runtime.stop_agent(*id);
+    }
+    let store = Store::open(&h._dir.path().join("guac.db")).unwrap();
+    let recovered = guac_lib::boot::recover(&store).unwrap();
+    let again = recovered.resumed.iter().map(|put| put.envelope.run_id).collect();
+    let interrupted = recovered.interrupted;
+    for (name, id) in &h.ids {
+        let lifecycle =
+            if paused.contains(&name.as_str()) { Lifecycle::Paused } else { Lifecycle::Active };
+        store.set_lifecycle(*id, lifecycle).unwrap();
+    }
+    let sink = RecordingSink::new();
+    let runtime = Runtime::new(
+        store,
+        LlmClient::new().unwrap(),
+        h.runtime.config(),
+        OnDisk::under(h._dir.path()),
+        sink.clone(),
+    );
+    runtime.start_all().unwrap();
+    runtime.pick_up(recovered);
+    (Harness { runtime, sink, ids: h.ids, _dir: h._dir }, again, interrupted)
+}
+
+/// Hangs every call until `crashed` is set, then answers.
+async fn hangs_until(crashed: Arc<std::sync::atomic::AtomicBool>, answer: &'static str) -> Stub {
+    serve(
+        move |_| {
+            if crashed.load(Ordering::SeqCst) {
+                Script::Say(answer.into())
+            } else {
+                Script::Hang
+            }
+        },
+    )
+    .await
+}
+
+/// The first message's turn is in the air, and the second waits behind it.
+async fn queued_behind_a_busy_turn(h: &Harness, stub: &Stub) -> (RunId, RunId) {
+    let researcher = h.id("Researcher");
+    let first = h.runtime.send_from_human(researcher, "The first thing.").unwrap();
+    h.wait_until("the first turn to be in the air", |_| stub.calls.load(Ordering::SeqCst) >= 1)
+        .await;
+    let second = h.runtime.send_from_human(researcher, "The second thing.").unwrap();
+    h.wait_until("the second to queue", |h| h.runtime.inbox_depth(researcher) == 1).await;
+    (first, second)
+}
+
+fn interrupted_runs(h: &Harness, name: &str) -> Vec<RunId> {
+    h.runtime
+        .store()
+        .channel_messages(h.id(name), 200)
+        .unwrap()
+        .into_iter()
+        .filter(|m| {
+            matches!(m.parts.first(), Some(Part::Notice { kind: NoticeKind::Interrupted, .. }))
+        })
+        .map(|m| m.run_id)
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_message_queued_behind_a_busy_turn_is_answered_after_a_crash() {
+    // Nothing read the second message before the process died, so nothing can
+    // have happened because of it that was not written down. The next host
+    // delivers it as though it had just arrived, and the operator never has to
+    // notice there was a crash at all.
+    let crashed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stub = hangs_until(crashed.clone(), "Second handled.").await;
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let (first, second) = queued_behind_a_busy_turn(&h, &stub).await;
+
+    crashed.store(true, Ordering::SeqCst);
+    let (h, again, interrupted) = crash(h, &[]);
+    assert_eq!(again, [second], "delivered again: no turn had started on it");
+    assert_eq!(interrupted, 1);
+    h.settle(second).await;
+
+    assert_eq!(stub.calls.load(Ordering::SeqCst), 2, "answered once, by one call");
+    let texts = h.channel_texts("Researcher");
+    assert_eq!(texts.iter().filter(|text| *text == "The second thing.").count(), 1);
+    assert_eq!(texts.iter().filter(|text| *text == "Second handled.").count(), 1);
+    assert_eq!(interrupted_runs(&h, "Researcher"), [first], "only what a turn had begun");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_message_whose_turn_had_called_the_model_is_reported_not_delivered_again() {
+    // The turn was in a model call when the process died. It may have been in
+    // a tool call instead, and nothing written down can tell the two apart,
+    // so it is never repeated on its own: it is reported, with Try again.
+    let crashed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stub = hangs_until(crashed.clone(), "Should not be asked.").await;
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Researcher"), "Send the invoice.").unwrap();
+    h.wait_until("the call to be in the air", |_| stub.calls.load(Ordering::SeqCst) >= 1).await;
+
+    crashed.store(true, Ordering::SeqCst);
+    let (h, again, interrupted) = crash(h, &[]);
+    assert!(again.is_empty(), "a started turn is never repeated on its own");
+    assert_eq!(interrupted, 1);
+    assert_eq!(h.runtime.live_runs(), 0, "nothing was handed to an agent");
+    assert_eq!(stub.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(interrupted_runs(&h, "Researcher"), [run]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_message_two_crashes_in_a_row_find_unstarted_is_answered_once() {
+    // The first crash delivers the queued message again, to an agent that is
+    // paused, so no turn starts on it before the second crash. It is still a
+    // message nothing has read, so the second crash delivers it again too,
+    // and it is answered exactly once.
+    let crashed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stub = hangs_until(crashed.clone(), "Second handled.").await;
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let researcher = h.id("Researcher");
+    let (first, second) = queued_behind_a_busy_turn(&h, &stub).await;
+
+    let (h, again, interrupted) = crash(h, &["Researcher"]);
+    assert_eq!(again, [second]);
+    assert_eq!(interrupted, 1);
+    h.wait_until("it to hold the message", |h| {
+        h.sink.snapshot().iter().any(|event| {
+            matches!(event, UiEvent::ActivityChanged { agent_id, activity: Activity::Paused }
+                if *agent_id == researcher)
+        })
+    })
+    .await;
+    assert_eq!(stub.calls.load(Ordering::SeqCst), 1, "paused: nothing started on it");
+
+    crashed.store(true, Ordering::SeqCst);
+    let (h, again, interrupted) = crash(h, &[]);
+    assert_eq!(again, [second], "still unstarted, so delivered again");
+    assert_eq!(interrupted, 0, "the first was reported once, by the first crash");
+    h.settle(second).await;
+
+    assert_eq!(stub.calls.load(Ordering::SeqCst), 2, "answered once, by one call");
+    let texts = h.channel_texts("Researcher");
+    assert_eq!(texts.iter().filter(|text| *text == "The second thing.").count(), 1);
+    assert_eq!(texts.iter().filter(|text| *text == "Second handled.").count(), 1);
+    assert_eq!(interrupted_runs(&h, "Researcher"), [first]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_decision_answer_queued_behind_a_busy_turn_is_followed_through_after_a_crash() {
+    use guac_lib::domain::decision::{DecisionRequest, DecisionStatus};
+
+    let crashed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let after = crashed.clone();
+    let stub = serve(move |body| {
+        if !after.load(Ordering::SeqCst) {
+            Script::Hang
+        } else if anyone_said(body, "11 AM") {
+            Script::Say("Booked for 11 AM.".into())
+        } else {
+            Script::Say("Nothing to do.".into())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Assistant"], GuardLimits::default());
+    let agent = h.runtime.store().get_agent(h.id("Assistant")).unwrap().unwrap();
+    let decision = h
+        .runtime
+        .store()
+        .request_decision(
+            agent.id,
+            agent.group_id,
+            "thread/time",
+            DecisionRequest {
+                question: "10 AM or 11 AM?".into(),
+                context: String::new(),
+                recommendation: String::new(),
+                source: String::new(),
+                options: vec!["10 AM".into(), "11 AM".into()],
+            },
+            None,
+            now_ms(),
+        )
+        .unwrap();
+    let busy = h.runtime.send_from_human(agent.id, "Tidy the calendar.").unwrap();
+    h.wait_until("the busy turn to be in the air", |_| stub.calls.load(Ordering::SeqCst) >= 1)
+        .await;
+    let answered = h.runtime.answer_decision(decision.id, "11 AM", false, None).unwrap();
+    let delivery = answered.delivery_run.unwrap();
+    h.wait_until("the answer to queue", |h| h.runtime.inbox_depth(agent.id) == 1).await;
+
+    crashed.store(true, Ordering::SeqCst);
+    let (h, again, interrupted) = crash(h, &[]);
+    assert_eq!(again, [delivery], "the answer is delivered again: nothing had read it");
+    assert_eq!(interrupted, 1);
+    let row = h.runtime.store().decisions(None).unwrap().remove(0);
+    assert!(!row.interrupted, "follow-through on its way is not follow-through cut off");
+    assert_eq!(row.delivery_run, Some(delivery));
+    h.settle(delivery).await;
+
+    assert_eq!(h.channel_texts("Assistant").last().unwrap(), "Booked for 11 AM.");
+    assert_eq!(interrupted_runs(&h, "Assistant"), [busy], "nothing offers to send it again");
+    assert!(
+        h.runtime.answer_decision(decision.id, "", true, None).is_err(),
+        "nothing to resume: it was followed through"
+    );
+    let row = h
+        .runtime
+        .store()
+        .finish_decision(decision.id, agent.id, DecisionStatus::Completed, "Booked.", now_ms())
+        .unwrap();
+    assert_eq!(row.status, DecisionStatus::Completed);
+}

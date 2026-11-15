@@ -1360,17 +1360,27 @@ impl Store {
         Ok(true)
     }
 
-    pub fn start_routine_deliveries(
-        &self,
-        messages: &[MessageId],
-        owner: RunId,
-    ) -> Result<(), StoreError> {
+    /// Marks messages as taken up by a turn, before the model reads any of
+    /// them: the conversation each one belongs to is started, and a routine
+    /// firing among them is owned by `owner`, the run of the turn that took
+    /// it.
+    ///
+    /// A conversation marked here is one a restart never delivers again on
+    /// its own, because from now on something may have happened that was
+    /// never written down. One left unmarked has been read by nothing, and a
+    /// crash delivers it again. See `Store::recover`.
+    pub fn start_deliveries(&self, messages: &[MessageId], owner: RunId) -> Result<(), StoreError> {
         if messages.is_empty() {
             return Ok(());
         }
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
+        let now = now_ms();
         for message in messages {
+            tx.execute(
+                "UPDATE pending_runs SET started_at=?2 WHERE started_at IS NULL AND run_id=(SELECT run_id FROM messages WHERE id=?1)",
+                params![message.to_string(), now],
+            )?;
             tx.execute(
                 "UPDATE routine_occurrences SET state='started',owner_run=?2 WHERE message_id=?1 AND state IN ('pending','started')",
                 params![message.to_string(), owner.to_string()],
@@ -5670,7 +5680,7 @@ mod tests {
         // 67 adds the workspace identity, resource ledger and resume marker.
         // 72 adds the outcomes table and the run that filed a decision.
         // 73 adds the outbox. 74 adds the grants and where a decision came from.
-        conn.execute_batch("DROP TABLE permission_grants; ALTER TABLE decisions DROP COLUMN origin_ref; ALTER TABLE decisions DROP COLUMN origin; DROP TABLE outbox; DROP TABLE outcomes; ALTER TABLE decisions DROP COLUMN filed_run; DROP TABLE onboarding_hires; DROP TABLE operator_sends; DROP TRIGGER routine_delete_history; DROP TABLE routine_occurrences; ALTER TABLE plugins DROP COLUMN grant_generation; DROP TABLE pending_sandbox_resume; DROP TABLE resource_ledger; DROP TABLE workspace_identity; DROP TABLE approval_policies; ALTER TABLE groups DROP COLUMN rail_order; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
+        conn.execute_batch("ALTER TABLE pending_runs DROP COLUMN started_at; DROP TABLE permission_grants; ALTER TABLE decisions DROP COLUMN origin_ref; ALTER TABLE decisions DROP COLUMN origin; DROP TABLE outbox; DROP TABLE outcomes; ALTER TABLE decisions DROP COLUMN filed_run; DROP TABLE onboarding_hires; DROP TABLE operator_sends; DROP TRIGGER routine_delete_history; DROP TABLE routine_occurrences; ALTER TABLE plugins DROP COLUMN grant_generation; DROP TABLE pending_sandbox_resume; DROP TABLE resource_ledger; DROP TABLE workspace_identity; DROP TABLE approval_policies; ALTER TABLE groups DROP COLUMN rail_order; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
         migrations::run(&mut conn).unwrap();
         drop(conn);
         assert_eq!(f.store.connector_env(mine.id).unwrap()["TOKEN"], "private-token");
