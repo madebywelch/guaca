@@ -170,9 +170,11 @@ impl Workspace {
     /// Replaces an agent's memory.
     ///
     /// Returns what was actually stored, which is the input trimmed and, if it
-    /// ran over the cap, cut at a line boundary with a marker. Silently storing
-    /// a truncated file would let an agent believe it had recorded something it
-    /// had not.
+    /// ran over the cap, cut to `MAX_MEMORY` characters, back to the last line
+    /// break when one falls in the second half. Nothing is written into the page
+    /// to mark the cut; `truncated` says so, and the caller tells the agent.
+    /// Silently storing a truncated file would let an agent believe it had
+    /// recorded something it had not.
     ///
     /// It also returns what was there first. Replacing is the only write this
     /// interface has, so the version it replaced exists nowhere else a moment

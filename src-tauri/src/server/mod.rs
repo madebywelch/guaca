@@ -121,9 +121,10 @@ pub struct Settings {
 
 /// Fans runtime events out to whoever is watching.
 ///
-/// The counterpart of `TauriSink`, and it makes the same decision about a
-/// failed send: no receivers means nobody is looking, which is ordinary rather
-/// than an error. The transcript is already durable by the time this is called.
+/// The only sink a running workspace has: the desktop window, the menu bar
+/// panel and a browser are all clients of this socket. A failed send with no
+/// receivers means nobody is looking, which is ordinary rather than an error.
+/// The transcript is already durable by the time this is called.
 struct SocketSink {
     events: broadcast::Sender<UiEvent>,
     live: parking_lot::Mutex<live::Snapshot>,

@@ -622,6 +622,11 @@ picked up. A conversation the operator stopped is never picked up. Completed
 messages, attachments, memories and working notes remain on the volume. Back up the volume before deploying; SQLite migrations are
 forward-only.
 
+The database runs in WAL mode with `synchronous = NORMAL` (`Store::open`), so a
+crash of the host process loses nothing it committed, but an event the host
+acknowledged in the last moments before a power loss or an operating system
+crash can be rolled back.
+
 A workspace also holds a process lock for its runtime's lifetime. A second
 host pointed at the same data folder refuses to start, rather than running
 a second scheduler or treating the first process's work as interrupted.

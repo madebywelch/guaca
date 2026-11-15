@@ -3,8 +3,8 @@
 //! An agent's tools all act on its own machine, its own notes or its own peers.
 //! Some things reach further than that, and those stop and ask. The mechanism is
 //! general because the answer has to be recorded either way: which agent asked,
-//! for what, and what the operator said. [`ProtectedAction`] has one variant
-//! today, and adding a second is a variant plus the call site that raises it.
+//! for what, and what the operator said. [`ProtectedAction`] has three variants
+//! today, and adding another is a variant plus the call site that raises it.
 //!
 //! The wording an operator reads is composed here from what the runtime already
 //! validated, never by the model. An agent that could write its own request

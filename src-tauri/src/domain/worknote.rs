@@ -26,9 +26,10 @@
 //!
 //! Which leaves forgetting. It has to happen, and the agent must not be the one
 //! doing it: a stale note does not sit inert, it steers the next turn toward
-//! work that is already done (arXiv 2505.16067). So the store forgets by age,
-//! by itself, and nothing in the tool surface offers an agent a way to revise
-//! what it wrote. Deciding what to drop is the operation these models are
+//! work that is already done (arXiv 2505.16067). So the store forgets by
+//! itself, oldest first: it keeps an agent's newest `KEPT` notes and each new
+//! one past that pushes the oldest out. Nothing in the tool surface offers an
+//! agent a way to revise what it wrote. Deciding what to drop is the operation these models are
 //! measurably worst at, and this is the one store that never asks.
 
 use serde::{Deserialize, Serialize};

@@ -143,8 +143,9 @@ words the settings pane uses (`config::LIMIT_LABELS`, checked against
 and the patch is applied to the settings as they are at that moment, so an edit
 another window saved while the card was open is not undone.
 
-It is the one protected action with no standing yes. "Always" is scoped to an
-agent and an action, and this action is any setting to any value: a standing
+It is one of two protected actions with no standing yes; acting in the
+operator's name is the other. "Always" is scoped to an agent and an action, and
+this action is any setting to any value: a standing
 yes given for a timeout would cover a relay depth raised to its ceiling, and
 the limits are the guard that ends a cascade. `ProtectedAction::stands` says
 so, `decide_approval` records an "always" as a single allow, and

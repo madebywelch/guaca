@@ -341,7 +341,7 @@ describe("RoutineDetail", () => {
     expect(screen.queryByRole("button", { name: "Save changes" })).toBeNull();
   });
 
-  it("says when the receiver is not running rather than printing a dead address", async () => {
+  it("says an event can only be posted to a Host when there is no address", async () => {
     webhookAddress.mockResolvedValue({ secret: "s3cr3t-s3cr3t" });
     open({ trigger: "event:stripe/invoice.payment_failed", nextRunAt: null });
 

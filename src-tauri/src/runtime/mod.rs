@@ -3229,11 +3229,6 @@ impl Runtime {
 
     // ---- asking the operator ---------------------------------------------
 
-    /// Answers a permission request and wakes whatever is waiting on it.
-    ///
-    /// The row is settled first and only from pending, so a second click, or a
-    /// click that arrives as the request times out, is refused here rather than
-    /// overwriting an answer that is already recorded.
     /// Takes one escalation off the desk.
     ///
     /// There is no waker to fire and no turn to resume, which is what makes
@@ -3252,6 +3247,11 @@ impl Runtime {
         Ok(())
     }
 
+    /// Answers a permission request and wakes whatever is waiting on it.
+    ///
+    /// The row is settled first and only from pending, so a second click, or a
+    /// click that arrives as the request times out, is refused here rather than
+    /// overwriting an answer that is already recorded.
     pub fn decide_approval(
         &self,
         id: ApprovalId,
@@ -9171,12 +9171,13 @@ impl Runtime {
         inference
     }
 
-    /// The endpoint and key a job set to Guaca's key is lent: this agent's
-    /// group's, over the app's, whoever pays for the group's turns.
+    /// The endpoint and key this agent's group holds, over the app's, whoever
+    /// pays for the group's turns.
     ///
     /// Not `inference_for`, which collapses to the provider paying for turns:
-    /// a crew on a subscription would lend a subscription model to an endpoint
-    /// that refuses it by name. `GroupInference::endpoint` has the argument.
+    /// on a group a subscription pays for, that pairs a subscription model with
+    /// an endpoint that refuses it by name. `GroupInference::endpoint` has the
+    /// argument.
     pub fn lent_endpoint(&self, card: &AgentCard) -> InferenceConfig {
         let base = self.inner.config.read().inference.clone();
         match self.inner.store.group_inference(card.group_id) {
