@@ -1547,7 +1547,12 @@ Stated plainly rather than discovered later.
   sending it back, which this app promises not to do. The cost is tokens, not
   correctness.
 - **History window is fixed at 40 messages** per prompt, with no summarization.
-  A very long conversation loses its early context.
+  What falls out of it survives only as the line each earlier conversation ended
+  with: an agent is shown the ten newest of those under *What you have already
+  reported*, so it does not report them again, but the brief that started a
+  conversation and everything said after it is gone from the prompt. A
+  conversation still running when its first message falls out has no line yet,
+  so a long one loses its own brief.
 - **The cache covers the stable block, and sometimes only that.** Everything
   after the first change in the volatile block is processed again, and the
   conversation history comes after it. Where a provider places tool
