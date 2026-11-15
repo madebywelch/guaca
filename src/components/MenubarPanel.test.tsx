@@ -342,6 +342,17 @@ describe("what the panel says at a glance", () => {
     expect(screen.getByText("1 working")).toBeTruthy();
   });
 
+  it("draws each row's face at the size its column is cut for", () => {
+    useStore.setState({ activity: { "id-Scout": { state: "thinking" } } });
+    render(<MenubarPanel ready />);
+
+    const rows = screen.getAllByRole("button").filter((b) => b.className === "agent-row");
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.querySelector(".avatar")?.classList.contains("avatar--xs")).toBe(true);
+    }
+  });
+
   it("names a crew only when there is another to tell it from", () => {
     const { unmount } = render(<MenubarPanel ready />);
     expect(screen.queryByText("Everyone")).toBeNull();
