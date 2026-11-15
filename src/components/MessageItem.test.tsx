@@ -782,7 +782,7 @@ describe("an overnight tidy", () => {
     parts: [
       {
         type: "tidy",
-        reported: ["- 2h ago — Booked the venue."],
+        reported: ["- 2h ago: Booked the venue."],
         notes: ["- 1h ago — Waiting on the caterer's quote."],
       },
     ],

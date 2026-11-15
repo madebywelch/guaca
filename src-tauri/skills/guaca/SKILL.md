@@ -223,8 +223,10 @@ versions differ, the app says which runs what and which to update, and
 **Settings > Host** shows both versions and the latest release. A host
 this Mac manages updates from there with a backup first; a remote host is
 updated on that machine, and the pane links the instructions. Updating a host
-interrupts work that is running, and interrupted conversations wait for the
-operator to review them rather than being repeated.
+pauses work that is running. A turn that reached a safe point carries on when
+the host is back; one that did not waits for the operator to review it rather
+than being repeated. A message no agent had started on is delivered once the
+host is back.
 
 ## What you cannot do
 

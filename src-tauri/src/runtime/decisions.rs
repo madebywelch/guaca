@@ -114,6 +114,7 @@ impl Runtime {
         action: DecisionAction,
         arguments: serde_json::Value,
     ) -> (String, Part) {
+        let listing = matches!(action, DecisionAction::List);
         let result = (|| -> Result<String, crate::db::StoreError> {
             let result = match action {
                 DecisionAction::Request { topic, request, due_at } => {
@@ -157,7 +158,19 @@ impl Runtime {
         match result {
             Ok(body) => {
                 self.emit(UiEvent::DecisionsChanged);
-                (format!("Recorded in For you. No turn is waiting. Continue independent work; do not assume an unanswered choice. The stored state is authoritative, including an answer already received.\n{body}"), Part::tool_call(tools::DECISION, arguments, ToolOutcome::Ok { summary: "decision recorded".into() }))
+                let said = if listing {
+                    format!("Your decisions as stored. The stored state is authoritative, including an answer already received.\n{body}")
+                } else {
+                    format!("Recorded in For you. No turn is waiting. Continue independent work; do not assume an unanswered choice. The stored state is authoritative, including an answer already received.\n{body}")
+                };
+                (
+                    said,
+                    Part::tool_call(
+                        tools::DECISION,
+                        arguments,
+                        ToolOutcome::Ok { summary: "decision recorded".into() },
+                    ),
+                )
             }
             Err(err) => (
                 format!("The decision was not changed: {err}"),

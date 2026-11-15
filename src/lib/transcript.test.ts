@@ -418,7 +418,7 @@ describe("an overnight tidy", () => {
       to: { kind: "agent", id: "manager" },
       trust: "system",
       expectsReply: false,
-      parts: [{ type: "tidy", reported: ["- 2h ago — Booked the venue."], notes: [] }],
+      parts: [{ type: "tidy", reported: ["- 2h ago: Booked the venue."], notes: [] }],
     });
     const rewrite = envelope({
       from: { kind: "agent", id: "manager" },
