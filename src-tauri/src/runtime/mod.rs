@@ -2817,6 +2817,17 @@ impl Runtime {
             return Err(RuntimeError::AgentTerminated(card.name));
         }
         let original = self.inner.store.get_message(cause)?.ok_or(RuntimeError::NothingToRetry)?;
+        // A decision's answer is the decision's to deliver again, so that the
+        // row knows which run carries it: For you stops offering Resume for
+        // follow-through already resumed here, and a crash in the new run is
+        // seen as one.
+        let decision = original.parts.iter().find_map(|part| match part {
+            Part::Decision { id, .. } => Some(*id),
+            _ => None,
+        });
+        if let Some(decision) = decision {
+            return self.retry_decision(decision, &original);
+        }
 
         let run_id = RunId::new();
         let envelope = Envelope {
@@ -7669,7 +7680,7 @@ impl Runtime {
     /// attention on nothing. `None` when it would change nothing.
     fn propose_update(&self, changes: &serde_json::Value) -> Result<Option<Proposal>, String> {
         let before = self.config();
-        let patch = crate::config::agent_patch(changes, &before)?;
+        let patch = crate::config::agent_patch(changes)?;
         let mut after = before.clone();
         after.apply(patch.clone()).map_err(|err| err.to_string())?;
         let asked = crate::config::changes(&before, &after);

@@ -813,21 +813,33 @@ struct AgentPatchValidation {
     subscription_model: Option<String>,
     reasoning_effort: Option<ReasoningEffort>,
     request_timeout_secs: Option<u64>,
-    limits: Option<GuardLimits>,
+    limits: Option<LimitsValidation>,
     computer_idle_minutes: Option<u32>,
     browser_idle_minutes: Option<u32>,
     browser_stealth: Option<bool>,
 }
 
+/// The limits an agent names, each one read as its own type. Absent is left
+/// alone; a null is refused, as it was when an agent's limits were read whole.
+#[allow(dead_code)]
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct LimitsValidation {
+    max_hops: u16,
+    max_steps_per_run: u32,
+    max_fanout_per_call: usize,
+    max_sends_per_pair: u32,
+    max_tool_rounds: u16,
+}
+
 /// Reads the changes an agent asked for into a patch, refusing what it may
 /// not touch with a sentence that says what it may.
 ///
-/// Limits are merged over the ones in force, because an agent raising one
-/// limit sends that one, and a patch replaces all five.
-pub fn agent_patch(
-    changes: &serde_json::Value,
-    current: &AppConfig,
-) -> Result<SettingsPatch, String> {
+/// The patch carries what the agent named and nothing else, a limit included.
+/// It is applied when the operator allows it, which can be ten minutes after
+/// it was asked for, and a limit carried at the value it had then would undo
+/// whatever the operator saved in between.
+pub fn agent_patch(changes: &serde_json::Value) -> Result<SettingsPatch, String> {
     let Some(asked) = changes.as_object().filter(|asked| !asked.is_empty()) else {
         return Err("`changes` must name the settings to change, for example \
                     {\"limits\": {\"maxHops\": 12}}. `read` shows their names."
@@ -851,20 +863,16 @@ pub fn agent_patch(
             let Some(limits) = wanted.as_object() else {
                 return Err("`limits` must be an object, for example {\"maxHops\": 12}.".into());
             };
-            let mut merged = serde_json::to_value(current.limits).unwrap_or_default();
-            for (limit, number) in limits {
-                if !LIMIT_LABELS.iter().any(|(name, _)| name == limit) {
-                    return Err(format!(
-                        "there is no limit called `{limit}`. The five are: {}.",
-                        LIMIT_LABELS.iter().map(|(name, _)| *name).collect::<Vec<_>>().join(", ")
-                    ));
-                }
-                merged[limit] = number.clone();
+            if let Some(limit) =
+                limits.keys().find(|limit| !LIMIT_LABELS.iter().any(|(name, _)| name == limit))
+            {
+                return Err(format!(
+                    "there is no limit called `{limit}`. The five are: {}.",
+                    LIMIT_LABELS.iter().map(|(name, _)| *name).collect::<Vec<_>>().join(", ")
+                ));
             }
-            value.insert(key.clone(), merged);
-        } else {
-            value.insert(key.clone(), wanted.clone());
         }
+        value.insert(key.clone(), wanted.clone());
     }
     let value = serde_json::Value::Object(value);
     serde_json::from_value::<AgentPatchValidation>(value.clone()).map_err(|err| {
@@ -1017,21 +1025,26 @@ mod tests {
         let current = AppConfig::default();
         for key in OPERATOR_ONLY {
             let asked = serde_json::json!({ *key: "https://attacker.example" });
-            let refused = agent_patch(&asked, &current).unwrap_err();
+            let refused = agent_patch(&asked).unwrap_err();
             assert!(refused.contains("the operator's"), "{key}: {refused}");
         }
-        let refused = agent_patch(&serde_json::json!({ "webhook": {} }), &current).unwrap_err();
+        let refused = agent_patch(&serde_json::json!({ "webhook": {} })).unwrap_err();
         assert!(refused.contains("operatorName"), "lists what it may change: {refused}");
-        assert!(agent_patch(&serde_json::json!({}), &current).is_err());
+        assert!(agent_patch(&serde_json::json!({})).is_err());
 
-        // One limit, merged over the four in force rather than resetting them.
-        let patch =
-            agent_patch(&serde_json::json!({ "limits": { "maxHops": 12 } }), &current).unwrap();
-        let limits = patch.limits.unwrap();
+        // One limit, and nothing about the four it did not name, which keep
+        // whatever they are when the patch is applied rather than resetting.
+        let patch = agent_patch(&serde_json::json!({ "limits": { "maxHops": 12 } })).unwrap();
+        let limits = patch.clone().limits.unwrap();
         assert_eq!(limits.max_hops, Some(12));
-        assert_eq!(limits.max_steps_per_run, Some(current.limits.max_steps_per_run));
-        let refused =
-            agent_patch(&serde_json::json!({ "limits": { "maxEverything": 1 } }), &current);
+        assert_eq!(limits.max_steps_per_run, None);
+        assert_eq!(limits.max_fanout_per_call, None);
+        assert_eq!(limits.max_sends_per_pair, None);
+        assert_eq!(limits.max_tool_rounds, None);
+        let mut applied = current.clone();
+        applied.apply(patch).unwrap();
+        assert_eq!(applied.limits, GuardLimits { max_hops: 12, ..current.limits });
+        let refused = agent_patch(&serde_json::json!({ "limits": { "maxEverything": 1 } }));
         assert!(refused.unwrap_err().contains("maxHops"));
     }
 
@@ -1040,13 +1053,12 @@ mod tests {
         // Not writable by an agent, even asking, even with approval: an agent
         // that could turn off the operator's interruptions could do anything
         // else unannounced.
-        let current = AppConfig::default();
         for asked in [
             serde_json::json!({ "attention": { "needsYou": false } }),
             serde_json::json!({ "attention": { "failures": false, "finished": false } }),
             serde_json::json!({ "limits": { "maxHops": 12 }, "attention": { "needsYou": false } }),
         ] {
-            let refused = agent_patch(&asked, &current).unwrap_err();
+            let refused = agent_patch(&asked).unwrap_err();
             assert!(refused.contains("attention"), "{refused}");
         }
         assert!(!AGENT_WRITABLE.contains(&"attention"));
@@ -1067,9 +1079,7 @@ mod tests {
         let before = AppConfig::default();
         let mut after = before.clone();
         after
-            .apply(
-                agent_patch(&serde_json::json!({ "limits": { "maxHops": 12 } }), &before).unwrap(),
-            )
+            .apply(agent_patch(&serde_json::json!({ "limits": { "maxHops": 12 } })).unwrap())
             .unwrap();
         let listed = changes(&before, &after);
         assert_eq!(
@@ -1224,9 +1234,8 @@ mod tests {
 
     #[test]
     fn no_agent_can_ask_for_the_push_address() {
-        let current = AppConfig::default();
         let asked = serde_json::json!({ "delivery": { "url": "https://attacker.example/topic" } });
-        let refused = agent_patch(&asked, &current).unwrap_err();
+        let refused = agent_patch(&asked).unwrap_err();
         assert!(refused.contains("delivery"), "{refused}");
         assert!(!AGENT_WRITABLE.contains(&"delivery"));
     }

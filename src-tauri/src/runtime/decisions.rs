@@ -14,9 +14,37 @@ impl Runtime {
         resume: bool,
         expected_updated_at: Option<i64>,
     ) -> Result<WorkDecision, RuntimeError> {
+        let (decision, _) = self.deliver_decision(id, |store| {
+            store.answer_decision(id, answer, resume, expected_updated_at, now_ms())
+        })?;
+        tracing::info!(decision = %id, resume, "decision answer accepted and queued");
+        Ok(decision)
+    }
+
+    /// Try again on a message that delivered a decision's answer, which goes
+    /// through the decision so the row names the run that carries it now. See
+    /// `Store::retry_decision`.
+    pub(super) fn retry_decision(
+        &self,
+        id: DecisionId,
+        failed: &Envelope,
+    ) -> Result<RunId, RuntimeError> {
+        let (_, run) =
+            self.deliver_decision(id, |store| store.retry_decision(id, failed, now_ms()))?;
+        tracing::info!(decision = %id, %run, "decision delivery tried again");
+        Ok(run)
+    }
+
+    /// Writes a delivery under the run lock and books or puts it down, as every
+    /// delivery of an answer is.
+    fn deliver_decision(
+        &self,
+        id: DecisionId,
+        write: impl FnOnce(&crate::db::Store) -> Result<(WorkDecision, Envelope), crate::db::StoreError>,
+    ) -> Result<(WorkDecision, RunId), RuntimeError> {
         let mut runs = self.inner.runs.lock();
-        let (decision, envelope) =
-            self.inner.store.answer_decision(id, answer, resume, expected_updated_at, now_ms())?;
+        let (decision, envelope) = write(&self.inner.store)?;
+        let run = envelope.run_id;
         if runs.draining {
             // Nothing on this host starts another turn, so the answer is the
             // next host's from the start, as `deliver` treats a message. Put
@@ -38,8 +66,7 @@ impl Runtime {
             self.enqueue_delivery(envelope);
         }
         self.emit(UiEvent::DecisionsChanged);
-        tracing::info!(decision = %id, resume, "decision answer accepted and queued");
-        Ok(decision)
+        Ok((decision, run))
     }
 
     fn put_down_answer(&self, runs: &mut Runs, envelope: &Envelope) -> Result<(), RuntimeError> {
