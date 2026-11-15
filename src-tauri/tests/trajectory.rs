@@ -696,7 +696,14 @@ async fn stopping_everything_ends_each_run_once_when_they_share_both_inboxes() {
     // settled while Manager was still thinking" can be Manager's turn in the
     // other run, and that one anomaly is left out. Everything else in the
     // ledger is keyed by run.
+    //
+    // A stop is told apart from the other guard notices by its sentence,
+    // because they share one kind. Every turn here asks for another send until
+    // the stop lands, so on a slow machine a turn can reach the ceiling of tool
+    // calls first, and its agent then takes the next turn in the same run.
+    // That is the guard working, not a step after a stop.
     const PROBE: &str = "Is anything left?";
+    let said_it_was_stopped = |text: &str| text.starts_with("You stopped this conversation");
     let stub = serve(|body| {
         if anyone_said(body, PROBE) {
             return Script::Say("Nothing.".into());
@@ -765,9 +772,10 @@ async fn stopping_everything_ends_each_run_once_when_they_share_both_inboxes() {
             t.ledger
         );
         assert!(
-            t.records
-                .iter()
-                .any(|r| matches!(r, Record::Noticed { kind: NoticeKind::GuardStop, .. })),
+            t.records.iter().any(|r| matches!(
+                r,
+                Record::Noticed { kind: NoticeKind::GuardStop, text, .. } if said_it_was_stopped(text)
+            )),
             "{which} conversation has to say it was stopped:\n{}",
             t.ledger
         );
@@ -778,7 +786,9 @@ async fn stopping_everything_ends_each_run_once_when_they_share_both_inboxes() {
         let mut told = std::collections::HashSet::new();
         for record in &t.records {
             match record {
-                Record::Noticed { agent, kind: NoticeKind::GuardStop, .. } => {
+                Record::Noticed { agent, kind: NoticeKind::GuardStop, text }
+                    if said_it_was_stopped(text) =>
+                {
                     told.insert(*agent);
                 }
                 Record::Called { agent, .. } | Record::StreamOpened { agent, .. } => assert!(
