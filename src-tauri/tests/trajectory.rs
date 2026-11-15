@@ -629,18 +629,30 @@ async fn stopping_everything_ends_every_run_exactly_once() {
     // that released the work it was ending would take a run's count below zero
     // and report it finished twice, and a single run can hide that behind its
     // own settle.
-    let stub = serve(|body| Script::SendTo {
-        recipients: vec![if speaker(body) == "Manager" { "Chef" } else { "Manager" }.into()],
-        text: "and another thing".into(),
+    //
+    // Each conversation has a pair of agents to itself. A badge names an agent
+    // and not a run, so the ledger counts an agent's badge against every run
+    // that agent took part in. Two runs through the same two agents read each
+    // other's turns: `stop_everything` stops one run and then the other, an
+    // agent can start a turn in the second between the two, and the first
+    // settling while that turn was thinking read as the first settling early.
+    let stub = serve(|body| {
+        let peer = match speaker(body).as_str() {
+            "Manager" => "Chef",
+            "Chef" => "Manager",
+            "Host" => "Barista",
+            _ => "Host",
+        };
+        Script::SendTo { recipients: vec![peer.into()], text: "and another thing".into() }
     })
     .await;
 
-    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let h = harness(&stub, &["Manager", "Chef", "Host", "Barista"], GuardLimits::default());
     assert_eq!(h.runtime.live_runs(), 0);
     assert_eq!(h.runtime.stop_everything(), 0, "a stop with nothing running stops nothing");
 
     let first = h.runtime.send_from_human(h.id("Manager"), "Talk to Chef.").unwrap();
-    let second = h.runtime.send_from_human(h.id("Chef"), "Talk to Manager.").unwrap();
+    let second = h.runtime.send_from_human(h.id("Host"), "Talk to Barista.").unwrap();
 
     h.wait_until("both conversations have paid for a call", |h| {
         [first, second].iter().all(|run| {
@@ -669,6 +681,115 @@ async fn stopping_everything_ends_every_run_exactly_once() {
     }
 
     assert_eq!(h.runtime.live_runs(), 0, "and nothing is left outstanding");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stopping_everything_ends_each_run_once_when_they_share_both_inboxes() {
+    // The shape the test above gives up: one conversation started at each of
+    // two agents, so both inboxes hold work from both runs when the stop lands.
+    // That is where a stop that released the work it was ending hides, behind
+    // the other run's settle.
+    //
+    // Asserted is only what the ledger reads per run. A badge names an agent
+    // and not a run, and `trajectory::read` says in its module comment that it
+    // is exact only while one run is in flight. Here two are, so "the run
+    // settled while Manager was still thinking" can be Manager's turn in the
+    // other run, and that one anomaly is left out. Everything else in the
+    // ledger is keyed by run.
+    const PROBE: &str = "Is anything left?";
+    let stub = serve(|body| {
+        if anyone_said(body, PROBE) {
+            return Script::Say("Nothing.".into());
+        }
+        Script::SendTo {
+            recipients: vec![if speaker(body) == "Manager" { "Chef" } else { "Manager" }.into()],
+            text: "and another thing".into(),
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let first = h.runtime.send_from_human(h.id("Manager"), "Talk to Chef.").unwrap();
+    let second = h.runtime.send_from_human(h.id("Chef"), "Talk to Manager.").unwrap();
+
+    h.wait_until("both conversations have paid for a call", |h| {
+        [first, second].iter().all(|run| {
+            h.sink.count_of(|e| matches!(e, UiEvent::TokensUsed { run_id, .. } if run_id == run))
+                > 0
+        })
+    })
+    .await;
+    assert_eq!(h.runtime.live_runs(), 2);
+
+    assert_eq!(h.runtime.stop_everything(), 2);
+    for (run, which) in [(first, "the first"), (second, "the second")] {
+        assert!(
+            h.settled_within(run, 10).await,
+            "{which} conversation owes an ending:\n{}",
+            h.trajectory(run).ledger
+        );
+    }
+
+    // A synchronization point, not a sleep. An actor takes one envelope at a
+    // time, so once a question sent to each agent after the stop has been
+    // answered, every turn either agent still had from the stopped runs has
+    // finished and released what it held. A run released twice settles again
+    // in one of those turns, so by now its second settle is in the stream.
+    for name in ["Manager", "Chef"] {
+        let probe = h.runtime.send_from_human(h.id(name), PROBE).unwrap();
+        h.settle(probe).await;
+    }
+    assert_eq!(h.runtime.live_runs(), 0, "and nothing is left outstanding");
+
+    for (run, which) in [(first, "the first"), (second, "the second")] {
+        let t = h.trajectory(run);
+        let settles =
+            h.sink.count_of(|e| matches!(e, UiEvent::RunSettled { run_id, .. } if *run_id == run));
+        assert_eq!(
+            settles, 1,
+            "{which} conversation was reported finished {settles} times:\n{}",
+            t.ledger
+        );
+
+        let wrong: Vec<String> = t
+            .anomalies()
+            .into_iter()
+            .filter(|a| !matches!(a, Anomaly::StillWorkingWhenTheRunSettled { .. }))
+            .map(|a| format!("  - {}", a.explain()))
+            .collect();
+        assert!(wrong.is_empty(), "{which} conversation:\n{}\n{}", t.ledger, wrong.join("\n"));
+        assert_eq!(
+            t.steps().map(|steps| steps as usize),
+            Some(t.calls()),
+            "{which} conversation must not report a call it never made:\n{}",
+            t.ledger
+        );
+        assert!(
+            t.records
+                .iter()
+                .any(|r| matches!(r, Record::Noticed { kind: NoticeKind::GuardStop, .. })),
+            "{which} conversation has to say it was stopped:\n{}",
+            t.ledger
+        );
+
+        // Once an agent has said a run was stopped, it never opens another
+        // placeholder or makes another call in that run. Both are keyed by
+        // run, so this holds however the two runs interleave.
+        let mut told = std::collections::HashSet::new();
+        for record in &t.records {
+            match record {
+                Record::Noticed { agent, kind: NoticeKind::GuardStop, .. } => {
+                    told.insert(*agent);
+                }
+                Record::Called { agent, .. } | Record::StreamOpened { agent, .. } => assert!(
+                    !told.contains(agent),
+                    "{which} conversation took another step after its own stop:\n{}",
+                    t.ledger
+                ),
+                _ => {}
+            }
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
