@@ -1050,6 +1050,16 @@ describe("the new window's surfaces", () => {
       .join("\n");
   }
 
+  it("lifts the asleep pile on a dark ground, where a faded gray all but vanished", () => {
+    const value = (selector: string, token: string) =>
+      Number(ruleOf(css, selector).match(new RegExp(`${token}: ([0-9.]+);`))?.[1]);
+    const paper = ":root";
+    const ink = ':root[data-surface="dark"]';
+    expect(value(ink, "--ribbon-asleep-lift")).toBeGreaterThan(value(paper, "--ribbon-asleep-lift"));
+    expect(value(ink, "--ribbon-asleep")).toBeGreaterThan(value(paper, "--ribbon-asleep"));
+    expect(ruleOf(css, ".ribbon__pile-faces")).toMatch(/brightness\(var\(--ribbon-asleep-lift\)\)/);
+  });
+
   it("brings the Groups sheet in on the one arrival, with no keyframe of its own", () => {
     expect(ruleOf(css, ".sheet")).not.toContain("sheet-in");
     const arrival = [...css.matchAll(/([^{}]*)\{[^{}]*animation: pop var/g)].map((m) => m[1] ?? "");
