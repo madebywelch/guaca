@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { api } from "../lib/ipc";
-import { layoutRibbon, RIBBON_FACE_PX } from "../lib/ribbon";
+import { layoutRibbon, RIBBON_CHAR_PX, RIBBON_FACE_PX } from "../lib/ribbon";
 import { useStore } from "../lib/store";
 import { useNow } from "../lib/time";
 import { errorMessage, type Occasion, type UpcomingRun } from "../lib/types";
@@ -10,6 +10,8 @@ import { Ribbon } from "./Ribbon";
 interface Props {
   onOpenAgent: (agentId: string) => void;
   onOpenPile: () => void;
+  /** Whose page is open, so the strip can mark them. */
+  openAgentId?: string | null;
 }
 
 /** How far ahead the timeline reads: through the end of next week, which covers its day columns. */
@@ -22,7 +24,7 @@ const AHEAD_MS = 8 * 86_400_000;
  * that fails leaves the timeline drawing what it has: it is a picture of the
  * day, and a picture with one row missing beats a banner over it.
  */
-export function Timeline({ onOpenAgent, onOpenPile }: Props) {
+export function Timeline({ onOpenAgent, onOpenPile, openAgentId }: Props) {
   const agents = useStore((state) => state.agents);
   const activity = useStore((state) => state.activity);
   const outcomes = useStore((state) => state.outcomes);
@@ -64,6 +66,7 @@ export function Timeline({ onOpenAgent, onOpenPile }: Props) {
         upcoming,
         occasions,
         faceSpan: width > 0 ? RIBBON_FACE_PX / width : 0,
+        charSpan: width > 0 ? RIBBON_CHAR_PX / width : 0,
       }),
     [now, agents, activity, outcomes, pending, upcoming, occasions, width],
   );
@@ -73,6 +76,7 @@ export function Timeline({ onOpenAgent, onOpenPile }: Props) {
       ribbon={ribbon}
       onOpenAgent={onOpenAgent}
       onOpenPile={onOpenPile}
+      openAgentId={openAgentId}
       onTrackWidth={setWidth}
     />
   );

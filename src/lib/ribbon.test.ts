@@ -1,3 +1,7 @@
+// One zone on every machine, so "9:12 on a Monday" and its labels are the same
+// moment wherever the suite runs. Set before anything here makes a Date.
+process.env.TZ = "America/New_York";
+
 import { describe, expect, it } from "vitest";
 
 import { anAgent, anApproval, anOutcome } from "../test-fixtures";
@@ -176,6 +180,43 @@ describe("the band", () => {
     expect(ribbon.band?.x).toBeGreaterThanOrEqual(0);
     expect(ribbon.band?.x).toBeLessThan(ribbon.now.x);
   });
+
+  it("holds every unseen face as drawn, a crowd pushed left of its moment included", () => {
+    // Seen a minute ago, three runs since: drawn a face apart, the crowd ends
+    // up left of the moment the band starts at.
+    const outcomes = [
+      anOutcome({
+        agentId: "kit",
+        startedAt: at(16, 9),
+        finishedAt: at(16, 9, 1),
+        seenAt: at(16, 9, 10),
+      }),
+      ...["ines", "tomas", "noor"].map((agentId) =>
+        anOutcome({ agentId, startedAt: at(16, 9, 10), finishedAt: at(16, 9, 11) }),
+      ),
+    ];
+    const ribbon = layoutRibbon(morning({ outcomes, approvals: [], activity: {} }));
+    const unseen = ribbon.faces.filter((one) => one.state === "finished");
+    expect(unseen).toHaveLength(3);
+    for (const one of unseen) {
+      expect(one.x - SPAN / 2).toBeGreaterThanOrEqual((ribbon.band?.x ?? 1) - 1e-9);
+    }
+  });
+
+  it("leaves its words off when it is too narrow to hold them clear of the now pill", () => {
+    const outcomes = [
+      anOutcome({
+        agentId: "kit",
+        startedAt: at(16, 9),
+        finishedAt: at(16, 9, 1),
+        seenAt: at(16, 9, 10),
+      }),
+      anOutcome({ agentId: "ines", startedAt: at(16, 9, 10), finishedAt: at(16, 9, 11) }),
+    ];
+    const band = layoutRibbon(morning({ outcomes, approvals: [], activity: {} })).band;
+    expect(band).not.toBeNull();
+    expect(band?.label).toBeNull();
+  });
 });
 
 describe("where a request stops waiting", () => {
@@ -331,9 +372,78 @@ describe("what is scheduled", () => {
     expect(alone?.words).toBe(true);
   });
 
+  it("names a routine saved without a name rather than drawing it blank", () => {
+    const upcoming = [run({ agentId: "ines", name: "  ", nextRunAt: at(17, 9) })];
+    const [item] = layoutRibbon(morning({ upcoming, occasions: [] })).scheduled;
+    expect(item?.what).toBe("Routine");
+    expect(item?.label).toBe("Routine, Tue 9:00 AM");
+  });
+
   it("is never a face: an agent's routine leaves its face where it was", () => {
     const ribbon = layoutRibbon(morning());
     expect(ribbon.faces.filter((one) => one.agentId === "ines")).toHaveLength(1);
+  });
+});
+
+describe("labels", () => {
+  /** A character a hundredth of the strip: a 1,000 pixel ribbon at 10 a letter. */
+  const CHAR = 0.01;
+  const half = (text: string) => Math.max(SPAN, text.length * CHAR) / 2;
+
+  it("keeps every name and every coming item off the now line", () => {
+    // Marlow works at 9:12 and Dara asked at 9:05: drawn at their moments, the
+    // line ran through the M of one name and the middle of the other.
+    const input = morning({ charSpan: CHAR });
+    const ribbon = layoutRibbon(input);
+    const name = (id: string) => AGENTS.find((one) => one.id === id)?.name ?? "";
+    for (const one of ribbon.faces) {
+      expect(Math.abs(one.x - ribbon.now.x)).toBeGreaterThanOrEqual(half(name(one.agentId)));
+    }
+    for (const one of ribbon.scheduled) {
+      const text = one.what.length > one.when.length ? one.what : one.when;
+      expect(Math.abs(one.x - ribbon.now.x)).toBeGreaterThanOrEqual(half(text));
+    }
+    // Who is at work goes after the line, who asked before it.
+    expect(face(input, "marlow")?.x).toBeGreaterThan(ribbon.now.x);
+    expect(face(input, "dara")?.x).toBeLessThan(ribbon.now.x);
+  });
+
+  it("keeps a label near either end of the strip inside it", () => {
+    const upcoming = [
+      run({ agentId: "tomas", name: "Friday release note", nextRunAt: at(20, 15) }),
+    ];
+    const outcomes = [
+      anOutcome({
+        agentId: "tomas",
+        startedAt: at(16, 0, 5),
+        finishedAt: at(16, 0, 10),
+      }),
+    ];
+    const agents = [anAgent("tomas", { name: "Tomás Villanueva-Ortega" })];
+    const ribbon = layoutRibbon(
+      morning({
+        agents,
+        upcoming,
+        outcomes,
+        approvals: [],
+        activity: {},
+        occasions: [],
+        charSpan: CHAR,
+      }),
+    );
+    const note = ribbon.scheduled[0];
+    expect(note?.words).toBe(true);
+    expect(note?.align).toBe("end");
+    const tomas = ribbon.faces[0];
+    expect(tomas?.align).toBe("start");
+    // Hung from the mark's edge, each label then ends a half face from it.
+    expect((note?.x ?? 1) + SPAN / 2).toBeLessThanOrEqual(1);
+    expect((tomas?.x ?? 0) - SPAN / 2).toBeGreaterThanOrEqual(0);
+  });
+
+  it("centers a label that fits under its mark", () => {
+    const ribbon = layoutRibbon(morning({ charSpan: CHAR }));
+    expect(ribbon.faces.find((one) => one.agentId === "tomas")?.align).toBe("center");
   });
 });
 

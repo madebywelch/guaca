@@ -1,3 +1,7 @@
+// One zone on every machine, so "9:12 on a Monday" and its labels are the same
+// moment wherever the suite runs. Set before anything here makes a Date.
+process.env.TZ = "America/New_York";
+
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -153,5 +157,52 @@ describe("a click", () => {
     fireEvent.click(within(list).getByRole("button", { name: "3 asleep" }));
     expect(openPile).toHaveBeenCalledTimes(1);
     expect(openAgent).not.toHaveBeenCalled();
+  });
+});
+
+describe("an agent's page", () => {
+  it("marks whose page is open and steps the rest back", () => {
+    render(
+      <Ribbon
+        ribbon={morning()}
+        onOpenAgent={openAgent}
+        onOpenPile={openPile}
+        openAgentId="marlow"
+      />,
+    );
+    const strip = screen.getByRole("navigation", { name: "Agents" });
+    expect(strip.getAttribute("data-open")).toBe("some");
+    const list = within(strip).getByRole("list", { name: "Today's timeline" });
+    expect(
+      within(list)
+        .getByRole("button", { name: /^Marlow/ })
+        .getAttribute("aria-current"),
+    ).toBe("page");
+    expect(
+      within(list).getByRole("button", { name: /^Dara/ }).getAttribute("aria-current"),
+    ).toBeNull();
+  });
+
+  it("dims nobody when the open agent is asleep in the pile", () => {
+    render(
+      <Ribbon ribbon={morning()} onOpenAgent={openAgent} onOpenPile={openPile} openAgentId="kit" />,
+    );
+    expect(screen.getByRole("navigation", { name: "Agents" }).getAttribute("data-open")).toBeNull();
+  });
+});
+
+describe("a coming item", () => {
+  it("shows its time even with no room to say what it is", () => {
+    const ribbon = morning();
+    const crowded = {
+      ...ribbon,
+      scheduled: ribbon.scheduled.map((item) => ({ ...item, words: false })),
+    };
+    const { container } = render(
+      <Ribbon ribbon={crowded} onOpenAgent={openAgent} onOpenPile={openPile} />,
+    );
+    const item = container.querySelector(".ribbon__item");
+    expect(item?.querySelector(".ribbon__item-when")?.textContent).toBe("9:00 AM");
+    expect(item?.querySelector(".ribbon__item-what")).toBeNull();
   });
 });
