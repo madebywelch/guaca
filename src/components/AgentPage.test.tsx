@@ -163,6 +163,7 @@ describe("the agent's page, past the conversation", () => {
     useStore.setState({
       agents: [card("a1", "Cook")],
       activity: { a1: { state: "thinking" } },
+      activeRun: { a1: "r1" },
       trail: {
         a1: [
           {
@@ -216,6 +217,83 @@ describe("the agent's page, past the conversation", () => {
       "Routines",
       "Profile",
     ]);
+  });
+
+  it("says only that it is working when the run it is on is not known", async () => {
+    useStore.setState({
+      agents: [card("a1", "Cook")],
+      activity: { a1: { state: "thinking" } },
+      activeRun: {},
+      trail: {},
+      messages: {
+        a1: [
+          {
+            id: "m1",
+            runId: "r1",
+            channelId: "a1",
+            from: { kind: "human" },
+            to: { kind: "agent", id: "a1" },
+            parts: [{ type: "text", text: "Find a plumber for Thursday" }],
+            trust: "operator",
+            hop: 0,
+            expectsReply: true,
+            intent: "work",
+            cause: null,
+            createdAt: Date.now(),
+          },
+        ],
+      },
+    });
+    render(<AgentPanel section="now" agent={card("a1", "Cook")} onEditProfile={vi.fn()} />);
+    expect(await screen.findByRole("heading", { name: "Working" })).toBeTruthy();
+    expect(screen.queryByText("Find a plumber for Thursday")).toBeNull();
+  });
+
+  it("names the request that started the run it is on, not whatever was said to it last", async () => {
+    const said = (id: string, runId: string, text: string, createdAt: number) => ({
+      id,
+      runId,
+      channelId: "a1",
+      from: { kind: "human" as const },
+      to: { kind: "agent" as const, id: "a1" },
+      parts: [{ type: "text" as const, text }],
+      trust: "operator" as const,
+      hop: 0,
+      expectsReply: true,
+      intent: "work" as const,
+      cause: null,
+      createdAt,
+    });
+    useStore.setState({
+      agents: [card("a1", "Cook")],
+      activity: { a1: { state: "thinking" } },
+      activeRun: { a1: "r1" },
+      trail: {},
+      messages: {
+        a1: [
+          said("m1", "r1", "Find a plumber for Thursday", Date.now() - 60_000),
+          said("m2", "r2", "Also, the cat needs feeding", Date.now()),
+        ],
+      },
+    });
+    render(<AgentPanel section="now" agent={card("a1", "Cook")} onEditProfile={vi.fn()} />);
+    expect(await screen.findByText("Find a plumber for Thursday")).toBeTruthy();
+    expect(screen.queryByText("Also, the cat needs feeding")).toBeNull();
+  });
+
+  it("says plainly that it is waiting for an answer", async () => {
+    useStore.setState({
+      agents: [card("a1", "Cook")],
+      activity: { a1: { state: "awaitingApproval" } },
+      activeRun: {},
+      trail: {},
+      messages: { a1: [] },
+    });
+    render(<AgentPanel section="now" agent={card("a1", "Cook")} onEditProfile={vi.fn()} />);
+    expect(
+      await screen.findByRole("heading", { name: "Waiting for your answer before it goes on" }),
+    ).toBeTruthy();
+    expect(screen.queryByText(/with a request from you/)).toBeNull();
   });
 
   it("switches the memory over with everything else, rather than under the new name", async () => {

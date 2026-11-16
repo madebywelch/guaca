@@ -136,11 +136,10 @@ function latest(messages: Envelope[] | undefined, test: (one: Envelope) => boole
 
 const firstLine = (one: Envelope) => plainText(one).trim().split("\n")[0] ?? "";
 
-/** How a turn that is not running yet, or is held, is said ahead of whose it is. */
-const doingWords: Record<Exclude<Activity["state"], "idle" | "paused">, string> = {
+/** How a turn that has a request behind it is said ahead of whose it is. */
+const doingWords: Record<"thinking" | "queued", string> = {
   thinking: "Working on a request from",
   queued: "Waiting its turn, with a request from",
-  awaitingApproval: "Waiting on you, with a request from",
 };
 
 /**
@@ -155,6 +154,7 @@ function Doing({ agent }: { agent: AgentCard }) {
   const activity = useStore((state) => state.activity[agent.id]);
   const trail = useStore((state) => state.trail[agent.id]);
   const messages = useStore((state) => state.messages[agent.id]);
+  const run = useStore((state) => state.activeRun[agent.id]);
   const agents = useStore((state) => state.agents);
   const now = useNow(30_000);
   const own = (one: Participant) => one.kind === "agent" && one.id === agent.id;
@@ -181,7 +181,12 @@ function Doing({ agent }: { agent: AgentCard }) {
     );
   }
 
-  const asked = latest(messages, (one) => own(one.to) && !own(one.from));
+  // The request that started the run it is on: the first message to it in
+  // that run. A later message is something said while it works, not the task.
+  const asked =
+    run === undefined
+      ? undefined
+      : messages?.find((one) => one.runId === run && own(one.to) && !own(one.from));
   const from = asked?.from;
   const who =
     from === undefined
@@ -194,7 +199,13 @@ function Doing({ agent }: { agent: AgentCard }) {
   return (
     <section className="doing" aria-labelledby={`doing-${agent.id}`}>
       <h3 id={`doing-${agent.id}`} className="doing__title">
-        {doingWords[state]} {who}
+        {state === "awaitingApproval"
+          ? "Waiting for your answer before it goes on"
+          : asked
+            ? `${doingWords[state]} ${who}`
+            : state === "queued"
+              ? "Waiting its turn"
+              : "Working"}
       </h3>
       {asked && (
         <p className="doing__line">
