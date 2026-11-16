@@ -314,7 +314,7 @@ try {
     await fits(".app");
     await fits(".topbar");
     await fits(".pane");
-    assert.ok((await evaluate("document.querySelector('.pane__title').textContent")).length > 0, "the page names its agent");
+    assert.equal(await evaluate("document.querySelector('.pane__title').textContent"), "Browser check", "the page names its agent");
     await fits(".pane__scroll");
     await fits(".composer");
     assert.equal(await evaluate("document.querySelector('.app > .rail')"), null, "no rail beside the column");
