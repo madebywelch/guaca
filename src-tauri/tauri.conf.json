@@ -22,7 +22,7 @@
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
         "dragDropEnabled": true,
-        "backgroundThrottling": "throttle"
+        "backgroundThrottling": "disabled"
       }
     ],
     "security": {

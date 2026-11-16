@@ -301,9 +301,8 @@ has been hidden for a few minutes: the app hidden, its window closed to the
 menu bar, or the window covered by another. On a Mac that meant an offer made
 six minutes after the operator hid Guaca sat unclaimed, question or finished
 work, until something woke the page, and no banner was raised. The main window
-is built with `backgroundThrottling` set to `"throttle"` in `tauri.conf.json`,
-which lets WebKit slow a hidden page's timers but never suspend it, so an
-offer is still claimed within a second. The panel keeps the
+is built with `backgroundThrottling` set to `"disabled"` in `tauri.conf.json`,
+which keeps WebKit from suspending or slowing its page. The panel keeps the
 default: it never claims, and nothing it does is waited on while it is closed.
 `scripts/probe.py longaway` holds the window hidden for six real minutes and
 expects both banners.

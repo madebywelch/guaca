@@ -553,7 +553,7 @@ describe("the window that claims", () => {
       app: { windows: { label?: string; backgroundThrottling?: string }[] };
     };
     const main = conf.app.windows.filter((window) => (window.label ?? "main") === "main");
-    expect(main.map((window) => window.backgroundThrottling)).toEqual(["throttle"]);
+    expect(main.map((window) => window.backgroundThrottling)).toEqual(["disabled"]);
   });
 });
 
