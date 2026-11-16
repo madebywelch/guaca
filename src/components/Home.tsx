@@ -64,7 +64,14 @@ export function Home({ onSearch, onManageGroups }: Props) {
         <Quiet working={working.map((agent) => agent.name)} decisions={setAside} now={now} />
       ) : (
         <>
-          <Desk onOpenChannel={(agent) => void select(agent)} />
+          <Desk
+            onOpenChannel={(agent) => void select(agent)}
+            title={
+              <>
+                Needs you <span className="home__count">{pending.length + stuck.length}</span>
+              </>
+            }
+          />
           {due.length > 0 && (
             <section className="home__filed" aria-label="Waiting in For you">
               {due.slice(0, FILED_SHOWN).map((item) => {

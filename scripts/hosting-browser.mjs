@@ -287,30 +287,66 @@ try {
     await writeFile(path.join(process.env.GUACA_BROWSER_SHOTS,`${name}.png`),Buffer.from(shot.data,"base64"));
   };
   const pageTab = (label) => `.agent-tabs__tab:nth-child(${["Now","Conversation"].indexOf(label)+1})`;
+  const box = (selector) => evaluate(`(() => { const r=document.querySelector(${JSON.stringify(selector)})?.getBoundingClientRect(); return r ? {left:r.left,right:r.right,top:r.top,bottom:r.bottom,height:r.height} : null; })()`);
+  // Every label on the timeline is inside the top row's margins, and none
+  // is crossed by the now line.
+  const ribbonClear = async (where) => {
+    const facts = await evaluate(`(() => {
+      const edge = parseFloat(getComputedStyle(document.querySelector('.topbar')).paddingRight);
+      const now = document.querySelector('.ribbon__now').getBoundingClientRect();
+      const nowX = now.left + now.width / 2;
+      const labels = [...document.querySelectorAll('.ribbon__name, .ribbon__item-what, .ribbon__item-when, .ribbon__pile-label, .ribbon__pile-faces')]
+        .filter((n) => n.getClientRects().length)
+        .map((n) => { const r = n.getBoundingClientRect(); return {text:n.textContent, left:r.left, right:r.right}; });
+      return {edge, nowX, vw: innerWidth, labels};
+    })()`);
+    for (const label of facts.labels) {
+      assert.ok(label.left >= facts.edge - 1 && label.right <= facts.vw - facts.edge + 1, `${where}: "${label.text}" is inside the margins: ${JSON.stringify({...label, edge:facts.edge, vw:facts.vw})}`);
+      if (label.text) assert.ok(label.right <= facts.nowX - 1 || label.left >= facts.nowX + 1, `${where}: "${label.text}" is clear of the now line at ${facts.nowX}: ${JSON.stringify(label)}`);
+    }
+  };
   for (const width of [320,390,430,768]) {
     await size(width,844);
     await fits(".app");
     await fits(".topbar");
-    await fits(".ribbon");
     await fits(".pane");
-    assert.ok((await evaluate("document.querySelector('.pane__kicker').textContent")).startsWith("Browser test"));
+    assert.ok((await evaluate("document.querySelector('.pane__title').textContent")).length > 0, "the page names its agent");
     await fits(".pane__scroll");
     await fits(".composer");
     assert.equal(await evaluate("document.querySelector('.app > .rail')"), null, "no rail beside the column");
+    // An agent's page on a phone is its conversation: no timeline, a one-line
+    // head, a one-row status bar, and most of the height to read and write in.
+    assert.equal(await evaluate("getComputedStyle(document.querySelector('.ribbon')).display"), "none", "the timeline gives way on an agent's page");
+    const head = await box(".pane__header");
+    assert.ok(head.height <= 60, `the page's head is one line: ${JSON.stringify(head)}`);
+    const bar = await box(".statusbar");
+    assert.ok(bar.height <= 60, `the status bar is one row: ${JSON.stringify(bar)}`);
+    const reading = await evaluate("(() => { const log=document.querySelector('.pane__scroll[role=log]').getBoundingClientRect(); const c=document.querySelector('.composer').getBoundingClientRect(); return (c.bottom - log.top) / visualViewport.height; })()");
+    assert.ok(reading >= 0.6, `conversation and composer take at least 60% of the height: ${reading}`);
     await tap(".composer__input");
     // The draft from the last width is still there; typing replaces it.
     await evaluate("document.querySelector('.composer__input').select()");
     await cdp("Input.insertText", {text:"Draft survives navigation"},session);
+    // The agent menu has a way in by touch on the page itself.
+    await tap(".pane__more");
+    await until(() => evaluate("!!document.querySelector('.menu')"), "agent actions open by touch");
+    await fits(".menu");
+    await evaluate("document.querySelector('.menu__scrim').click()");
     await tap(".topbar__back");
     await until(() => evaluate("!!document.querySelector('.home')"), "Today opens from the top row");
     await fits(".home");
+    await fits(".ribbon");
+    await ribbonClear(`Today at ${width}`);
     await tap('.topbar__places button[aria-label="Groups and agents"], .topbar__places button[aria-label="Agents"]');
     await until(() => evaluate("!!document.querySelector('.sheet')"), "the Groups sheet opens");
     await delay(400);
     await fits(".sheet");
+    await fits(".sheet__head");
     await fits(".mobile-crews select");
+    assert.equal(await evaluate("[...document.querySelectorAll('.sheet button')].filter((b) => b.getClientRects().length && /^(For you|Calendar|Artifacts)/.test(b.textContent.trim())).length"), 0, "a place is drawn once: not again in the sheet");
     await shoot(`chats-${width}`);
-    await evaluate("document.querySelector('.sheet-scrim .scrim__close').click()");
+    await tap(".sheet__head button");
+    await until(() => evaluate("!document.querySelector('.sheet')"), "the Groups sheet closes by its own button");
     await tap('.topbar__places button[aria-label="Search"]');
     await until(() => evaluate("!!document.querySelector('.palette__input')"), "search opens from the top row");
     await tap(".palette__input");
@@ -322,9 +358,41 @@ try {
     await tap(pageTab("Now"));
     await until(() => evaluate("!!document.querySelector('.agent-panel')"), "the agent's details open as a tab");
     await fits(".pane__scroll:has(> .agent-panel)");
+    // Writing while watching: the composer stays under Now.
+    await fits(".composer");
     await shoot(`details-${width}`);
     await tap(pageTab("Conversation"));
+    await tap('.topbar__places button[aria-label="Search"]');
+    await until(() => evaluate("!!document.querySelector('.palette')"), "search opens from chat");
+    await fits(".palette");
+    await tap(".palette__query button");
+    await until(() => evaluate("!document.querySelector('.palette')"), "search cancels by touch");
+    assert.equal(await evaluate("document.querySelector('.composer__input').value"), "Draft survives navigation");
+    await size(width,400);
     await fits(".composer");
+    await size(width,844);
+    await evaluate("document.querySelector('.composer__input').focus()");
+    // React must see the input event; assigning .value alone would not clear its draft.
+    await evaluate(`(() => { const n=document.querySelector('.composer__input');
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(n,'');
+      n.dispatchEvent(new Event('input',{bubbles:true})); n.blur(); })()`);
+    await tap('.topbar__places button[aria-label="Settings"]');
+    await until(() => evaluate("!!document.querySelector('.dialog--settings')"),"settings opens on phone");
+    await delay(250);
+    await fits(".dialog--settings");
+    await fits(".settings__pane");
+    await fits(".settings__foot");
+    if (width === 320) {
+      const sections = await evaluate("Array.from(document.querySelector('.settings__section select').options).map(o=>o.value)");
+      for (const section of sections) {
+        await evaluate(`(() => {const n=document.querySelector('.settings__section select'); n.value=${JSON.stringify(section)}; n.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+        await delay(100);
+        await fits(".settings__pane");
+        await fits(".settings__foot");
+      }
+    }
+    await shoot(`settings-${width}`);
+    await evaluate("document.querySelector('.scrim__close').click()");
     if (width === 320) {
       for (const [button,dialog] of [[".statusbar__places button:nth-child(1)",".dialog--artifacts"],[".statusbar__places button:nth-child(2)",".dialog--calendar"],[".statusbar__places button:nth-child(3)",".for-you"]]) {
         await tap(button);
@@ -333,6 +401,13 @@ try {
         await fits(dialog);
         await evaluate("document.querySelector('.scrim__close').click()");
       }
+      await tap('.topbar__places .rail__new');
+      await until(() => evaluate("!!document.querySelector('.menu')"), "the New menu opens by touch");
+      await evaluate("[...document.querySelectorAll('.menu .menu__item')].find((n) => n.textContent.includes('cafeteria')).click()");
+      await until(() => evaluate("!!document.querySelector('.dialog--cafeteria')"), ".dialog--cafeteria opens");
+      await delay(250);
+      await fits(".dialog--cafeteria");
+      await evaluate("document.querySelector('.scrim__close').click()");
     }
     await shoot(`chat-${width}`);
   }
@@ -344,7 +419,10 @@ try {
   await fits(".ribbon");
   await fits(".pane");
   assert.equal(await evaluate("document.querySelector('.app > .rail')"), null, "no rail beside the column");
-  console.log("PASS: phone widths, touch navigation, preserved drafts, keyboard-sized viewport, places and desktop layout.");
+  await tap(".topbar__back");
+  await until(() => evaluate("!!document.querySelector('.home')"), "Today opens on the desktop");
+  await ribbonClear("Today at 1280");
+  console.log("PASS: phone widths, touch navigation and the agent menu, preserved drafts, keyboard-sized viewport, places, timeline margins and desktop layout.");
 
   // Exercise the real artifact route in Chromium, including its opaque origin.
   const artifact = await call("frame_artifact", {
@@ -389,5 +467,6 @@ try {
   for (const child of children.reverse()) await stop(child);
   model.closeAllConnections();
   await new Promise((resolve) => model.close(resolve));
-  await rm(scratch, { recursive: true, force: true });
+  // Chrome's helpers can still be writing its profile a moment after it exits.
+  await rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

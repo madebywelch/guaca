@@ -1,4 +1,4 @@
-import { type FormEvent, useState } from "react";
+import { type FormEvent, type ReactNode, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { useStore } from "../lib/store";
@@ -13,7 +13,14 @@ import type { AgentCard, AgentId, Approval, Decision, Escalation } from "../lib/
  * gone from the other; only where "Open channel" leads is up to the caller,
  * because one is inside the window and the other has to bring it back.
  */
-export function Desk({ onOpenChannel }: { onOpenChannel: (agent: AgentId) => void }) {
+export function Desk({
+  onOpenChannel,
+  title,
+}: {
+  onOpenChannel: (agent: AgentId) => void;
+  /** Said above the cards in place of the count sentence, where a heading already frames them. */
+  title?: ReactNode;
+}) {
   const pending = useStore((s) => s.pending);
   const stuck = useStore((s) => s.stuck);
   const agents = useStore((s) => s.agents);
@@ -23,7 +30,7 @@ export function Desk({ onOpenChannel }: { onOpenChannel: (agent: AgentId) => voi
   if (pending.length + stuck.length === 0) return null;
   return (
     <section className="for-you__requests" aria-label="Waiting on you">
-      <h3>{deskSummary(pending.length, stuck.length)}</h3>
+      <h3>{title ?? deskSummary(pending.length, stuck.length)}</h3>
       {pending.map((request) => (
         <DeskCard
           key={request.id}
@@ -160,6 +167,13 @@ function DeskCard({ request, agent, onDecide, onAnswer, onOpenChannel }: CardPro
           </p>
           <p className="desk__summary">{request.summary}</p>
         </div>
+        {/* The way out of the summary and into what led to it. A decision that
+            needs the conversation around it is exactly the one this surface
+            must not pretend it can take. Quiet, and on the line that says who
+            asked, because it is about them and not one of the answers. */}
+        <button type="button" className="desk__open" onClick={onOpenChannel}>
+          Open channel
+        </button>
       </header>
 
       {request.detail.length > 0 && (
@@ -218,16 +232,6 @@ function DeskCard({ request, agent, onDecide, onAnswer, onOpenChannel }: CardPro
             }}
           />
         )}
-        {/* The way out of the summary and into what led to it. A decision that
-            needs the conversation around it is exactly the one this surface
-            must not pretend it can take. */}
-        <button
-          type="button"
-          className="btn btn--ghost btn--small desk__open"
-          onClick={onOpenChannel}
-        >
-          Open channel
-        </button>
         {/* The host's time, never a fuse counted here: it owns the window, and
             a request it already let go must not be drawn as still waiting. */}
         {request.lapsesAt !== null && (
@@ -268,11 +272,13 @@ function Answers({
   if (options.length > 0) {
     return (
       <>
-        {options.map((option) => (
+        {/* The first choice is the one the agent offered first, drawn as the one
+            to press; the rest are there, and quiet. */}
+        {options.map((option, index) => (
           <button
             key={option}
             type="button"
-            className="btn btn--small"
+            className={index === 0 ? "btn btn--primary btn--small" : "btn btn--ghost btn--small"}
             disabled={disabled}
             onClick={() => onAnswer(option)}
           >

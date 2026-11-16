@@ -50,8 +50,6 @@ const VIEWS: { view: AgentView; label: string }[] = [
 
 interface Props {
   channel: ChannelKey;
-  onBack?: () => void;
-  onDetails?: () => void;
   /** Where the operator asked for an agent's actions, and on whom. */
   onOpenMenu: (agent: AgentCard, at: { x: number; y: number }) => void;
   /**
@@ -79,8 +77,6 @@ const WAITED_MS = 1000;
 export function ChannelView({
   channel,
   onOpenMenu,
-  onBack,
-  onDetails,
   view = "conversation",
   onView,
   onEditProfile,
@@ -105,6 +101,7 @@ export function ChannelView({
   const crew = useStore((s) => s.groups.find((group) => group.id === agent?.groupId)?.name);
   const group = useStore((s) => s.groups.find((entry) => entry.id === agent?.groupId));
   const settings = useStore((s) => s.settings);
+  const asking = useStore((s) => s.pending.some((one) => one.agentId === agent?.id));
   // What will answer, resolved the way a turn resolves it: this agent's own
   // model, over its group's, over the app's. The composer says it because the
   // box is where the operator commits to a turn.
@@ -191,55 +188,36 @@ export function ChannelView({
   return (
     <section className="pane">
       <header className="pane__header">
-        {onBack && (
-          <button
-            type="button"
-            className="mobile-only btn btn--ghost mobile-back"
-            aria-label="Back to chats"
-            onClick={onBack}
-          >
-            <Icon name="chevron-left" />
-          </button>
-        )}
         {agent ? (
           <>
-            {/* The page's own head, as a printed report has one: what this is,
-                then whose it is, then what it runs on. It used to be a toolbar
-                row — a face, a name and a menu — which is the shape of a chat
-                app. A record opens with a title. */}
+            {/* The face, the name, and one plain line about where it is and
+                what it is doing. What it runs on sits beside the tabs. */}
+            <span className="pane__face">
+              <AgentAvatar
+                avatar={agent.avatar}
+                color={agent.color}
+                activity={activity[agent.id]}
+                lifecycle={agent.lifecycle}
+                seed={agent.id}
+                size="md"
+              />
+            </span>
             <div className="pane__identity">
-              <p className="pane__kicker">
-                {crew ?? "Independent agent"} · a channel with one agent
-              </p>
-              <span className="pane__line">
-                <AgentAvatar
-                  avatar={agent.avatar}
-                  color={agent.color}
-                  activity={activity[agent.id]}
-                  lifecycle={agent.lifecycle}
-                  seed={agent.id}
-                  size="sm"
-                />
-                <h1 className="pane__title">{agent.name}</h1>
-              </span>
-              <p className="pane__meta">
-                {answeredBy(agent, group, settings)}
-                {paused ? " · paused" : ""}
+              <h1 className="pane__title">{agent.name}</h1>
+              <p className="pane__about">
+                {about(crew ?? "Independent agent", {
+                  paused,
+                  asking,
+                  working: activity[agent.id]?.state === "thinking",
+                })}
               </p>
             </div>
-            {onDetails && (
-              <button
-                type="button"
-                className="mobile-only btn btn--ghost mobile-details"
-                onClick={onDetails}
-              >
-                Details
-              </button>
-            )}
             {/* The one thing about an agent that changes what this pane does.
                 Everything else it is set up with is edited rarely and read
                 behind the menu, rather than sitting over every message. */}
             {paused && <span className="pane__flag">Paused</span>}
+            {/* Everything you can do to this agent, behind one glyph. On a
+                phone it is the only way to that menu: touch has no right click. */}
             <button
               type="button"
               className="pane__more"
@@ -260,23 +238,14 @@ export function ChannelView({
         )}
       </header>
 
-      {agent && onView && (
-        <nav className="agent-tabs" aria-label={`${agent.name}'s page`}>
-          {VIEWS.map((tab) => (
-            <button
-              key={tab.view}
-              type="button"
-              className="agent-tabs__tab"
-              aria-current={tab.view === view ? "page" : undefined}
-              onClick={() => onView(tab.view)}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </nav>
+      {agent && (
+        <div className="agent-tabs">
+          {onView && <AgentTabs agent={agent} view={view} onView={onView} />}
+          <p className="pane__meta">{answeredBy(agent, group, settings)}</p>
+        </div>
       )}
 
-      {agent && view !== "conversation" && (
+      {agent && view !== "conversation" && view !== "now" && (
         <div className="pane__scroll">
           <AgentPanel agent={agent} section={view} onEditProfile={(one) => onEditProfile?.(one)} />
         </div>
@@ -285,7 +254,15 @@ export function ChannelView({
       {/* Hidden rather than unmounted while another view is drawn: the
           transcript keeps its place and the composer its draft, so coming back
           to the conversation is coming back to where it was left. */}
-      <div className="pane__body" hidden={view !== "conversation"}>
+      {/* The composer is under Now as well as the conversation: what an agent
+          is doing is what a person most often wants to say something about,
+          and leaving the live view to write would lose sight of it. */}
+      <div className="pane__body" hidden={view !== "conversation" && view !== "now"}>
+        {agent && view === "now" && (
+          <div className="pane__scroll">
+            <AgentPanel agent={agent} section="now" onEditProfile={(one) => onEditProfile?.(one)} />
+          </div>
+        )}
         {/* A log rather than a plain box, so a screen reader offers it as the
           transcript it is. `aria-live` is off deliberately: the role would
           otherwise announce politely, and opening a channel replaces three
@@ -295,6 +272,7 @@ export function ChannelView({
         <div
           className="pane__scroll"
           ref={scrollRef}
+          hidden={view === "now"}
           role="log"
           aria-live="off"
           aria-label={`Conversation with ${agent?.name ?? "this agent"}`}
@@ -769,8 +747,6 @@ function LiveStreams({
   follow,
 }: {
   channel: ChannelKey;
-  onBack?: () => void;
-  onDetails?: () => void;
   lookups: ReturnType<typeof useAgentLookup>;
   follow: () => void;
 }) {
@@ -829,8 +805,6 @@ function Arrivals({
   lookups,
 }: {
   channel: ChannelKey;
-  onBack?: () => void;
-  onDetails?: () => void;
   messages: Envelope[] | undefined;
   lookups: ReturnType<typeof useAgentLookup>;
 }) {
@@ -897,6 +871,86 @@ function announcement(message: Envelope, byId: ReturnType<typeof useAgentLookup>
  * read the schema. It says which model will answer and whose choice it was, and
  * says nothing at all about where it came from when the agent chose it itself.
  */
+/** "Studio, working": where an agent is, and what it is doing if anything. */
+function about(
+  where: string,
+  { paused, asking, working }: { paused: boolean; asking: boolean; working: boolean },
+): string {
+  if (paused) return `${where}, paused`;
+  if (asking) return `${where}, waiting on you`;
+  if (working) return `${where}, working`;
+  return where;
+}
+
+/**
+ * The page's tabs. Its own component because the counts on it arrive after
+ * the page is drawn, and the transcript beside it must not be drawn again for
+ * a number on a tab.
+ */
+function AgentTabs({
+  agent,
+  view,
+  onView,
+}: {
+  agent: AgentCard;
+  view: AgentView;
+  onView: (view: AgentView) => void;
+}) {
+  const counts = useTabCounts(agent.id);
+  return (
+    <nav className="agent-tabs__list" aria-label={`${agent.name}'s page`}>
+      {VIEWS.map((tab) => {
+        const count = counts[tab.view];
+        return (
+          <button
+            key={tab.view}
+            type="button"
+            className="agent-tabs__tab"
+            aria-current={tab.view === view ? "page" : undefined}
+            onClick={() => onView(tab.view)}
+          >
+            {tab.label}
+            {count ? (
+              <span className="agent-tabs__count" aria-hidden="true">
+                {count}
+              </span>
+            ) : null}
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+/**
+ * How many routines and notebook pages an agent has, for its tabs. Read again
+ * when either changes, and a read that fails leaves the tab without a number:
+ * a count is a courtesy, and the tab still opens the list.
+ */
+function useTabCounts(agentId: AgentId): Partial<Record<AgentView, number>> {
+  const routines = useStore((s) => s.routineVersion[agentId]);
+  const notebook = useStore((s) => s.notebookVersion[agentId]);
+  const [counts, setCounts] = useState<Partial<Record<AgentView, number>>>({});
+  useEffect(() => {
+    let current = true;
+    setCounts({});
+    void Promise.allSettled([
+      Promise.resolve().then(() => api.agentRoutines(agentId)),
+      Promise.resolve().then(() => api.agentNotebook(agentId)),
+    ]).then(([listed, pages]) => {
+      if (!current) return;
+      setCounts({
+        routines: listed.status === "fulfilled" ? listed.value?.length : undefined,
+        notebook: pages.status === "fulfilled" ? pages.value?.length : undefined,
+      });
+    });
+    return () => {
+      current = false;
+    };
+  }, [agentId, routines, notebook]);
+  return counts;
+}
+
 function answeredBy(agent: AgentCard, group: Group | undefined, settings: Settings | null): string {
   const runs = runsOn(agent, group, settings);
   if (runs.model === "No model set") return "no model set";

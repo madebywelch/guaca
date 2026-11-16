@@ -1,6 +1,7 @@
 import { type ComponentProps, useEffect, useRef } from "react";
 
 import { useDismiss } from "../lib/dismiss";
+import { useStore } from "../lib/store";
 import { Sidebar } from "./Sidebar";
 
 type Props = ComponentProps<typeof Sidebar> & { onClose: () => void };
@@ -18,6 +19,8 @@ type Props = ComponentProps<typeof Sidebar> & { onClose: () => void };
  */
 export function GroupsSheet({ onClose, onOpenChannel, ...rest }: Props) {
   const panel = useRef<HTMLDivElement>(null);
+  const many = useStore((state) => state.groups.length > 1);
+  const title = many ? "Groups and agents" : "Agents";
   useDismiss(onClose);
   useEffect(() => {
     panel.current?.focus();
@@ -33,13 +36,21 @@ export function GroupsSheet({ onClose, onOpenChannel, ...rest }: Props) {
         tabIndex={-1}
         ref={panel}
       >
-        <Sidebar
-          {...rest}
-          onOpenChannel={() => {
-            onOpenChannel?.();
-            onClose();
-          }}
-        />
+        <header className="sheet__head">
+          <h2 className="sheet__title">{title}</h2>
+          <button type="button" className="btn btn--ghost btn--small" onClick={onClose}>
+            Done
+          </button>
+        </header>
+        <div className="sheet__body">
+          <Sidebar
+            {...rest}
+            onOpenChannel={() => {
+              onOpenChannel?.();
+              onClose();
+            }}
+          />
+        </div>
       </div>
     </div>
   );

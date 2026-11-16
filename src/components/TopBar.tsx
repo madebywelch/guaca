@@ -50,7 +50,10 @@ export function TopBar({
           Today
         </button>
       ) : (
-        <p className="topbar__day">{day}</p>
+        // Text is part of the row a window is dragged by; only a control is not.
+        <p className="topbar__day" data-tauri-drag-region>
+          {day}
+        </p>
       )}
       <nav className="topbar__places" aria-label="Window">
         <button

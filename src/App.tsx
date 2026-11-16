@@ -140,7 +140,7 @@ export default function App() {
     setAgentView(busy && !focused ? "now" : "conversation");
   }, [selected, focused]);
 
-  // The three shortcuts that work wherever the operator is, matched against
+  // The four shortcuts that work wherever the operator is, matched against
   // the same table the Shortcuts pane draws from, so a key listed there is a key
   // that works. Everything else in that table belongs to the surface it acts
   // on: see `lib/keybinds`.
@@ -356,7 +356,11 @@ export default function App() {
   // `data-link` is the one attribute the whole window reads: whether what it
   // draws is current. `styles.css` is where the transcript loses its weight.
   return (
-    <div className="app" data-link={link === "down" ? "down" : undefined}>
+    <div
+      className="app"
+      data-link={link === "down" ? "down" : undefined}
+      data-page={selected === null ? "today" : "agent"}
+    >
       <TopBar
         open={openAgent?.name ?? null}
         onHome={leaveChannel}
@@ -369,7 +373,11 @@ export default function App() {
       />
 
       {ready && (
-        <Timeline onOpenAgent={(id) => void select(id)} onOpenPile={() => setShowGroups(true)} />
+        <Timeline
+          onOpenAgent={(id) => void select(id)}
+          onOpenPile={() => setShowGroups(true)}
+          openAgentId={selected}
+        />
       )}
 
       <main>

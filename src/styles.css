@@ -339,6 +339,10 @@
   --ribbon-lapse: 0.375rem; /* The point where a request stops waiting. */
   --ribbon-glyph: 0.875rem; /* The calendar glyph in a scheduled item's place. */
   --ribbon-asleep: 0.55; /* How far the pile fades. */
+  --ribbon-aside: 0.42; /* How far the others step back while one agent's page is open. */
+  --column-edge: var(--space-7); /* The top row's side margin, which the timeline keeps. */
+  --column-w: 46rem; /* Today and an agent's page: one column, one width. */
+  --page: var(--sunken); /* The ground under the column, which its surfaces stand on. */
 
   /* ---- Motion -------------------------------------------------------------
      One curve, three tempos. Cohesion is mostly this: every surface in the app
@@ -950,6 +954,20 @@ input[type="file"]::file-selector-button {
    one of the answers it takes. */
 .desk__open {
   margin-left: auto;
+  flex: none;
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--muted);
+  font-size: var(--type-small);
+  text-decoration: underline;
+  text-decoration-color: var(--rule-hard);
+  text-underline-offset: var(--space-1);
+  cursor: pointer;
+}
+
+.desk__open:hover {
+  color: var(--text);
 }
 
 /* How long it has been true and how many turns have run into it. At the far end
@@ -10222,8 +10240,20 @@ button.artifacts__version[aria-pressed="true"] {
       ) +
       var(--space-6)
   );
-  position: relative;
+  flex: none;
   height: var(--ribbon-h);
+  /* A ground of its own, closed with a rule, so the strip reads as the
+     window's head and not as the first thing on the page under it. */
+  background: var(--ground);
+  border-bottom: 1px solid var(--rule);
+}
+
+/* Inset by the top row's own margin: the pile's first face and the last
+   item's words start and end where the day and the buttons above do. */
+.ribbon__inner {
+  position: relative;
+  height: 100%;
+  margin: 0 var(--column-edge);
 }
 
 .ribbon[data-pile="none"] {
@@ -10339,7 +10369,6 @@ button.artifacts__version[aria-pressed="true"] {
   flex-direction: column;
   align-items: center;
   z-index: 2;
-  transition: left var(--tempo-move) var(--ease);
 }
 
 /* Its words get the room beside it on the strip and no more. */
@@ -10354,9 +10383,39 @@ button.artifacts__version[aria-pressed="true"] {
   text-overflow: ellipsis;
 }
 
-.ribbon__item[data-words="none"] .ribbon__item-what,
-.ribbon__item[data-words="none"] .ribbon__item-when {
-  display: none;
+/* Near an end of the strip a label hangs inward from its mark's edge, so
+   none of it is past the window's margin. */
+.ribbon__face[data-align="start"],
+.ribbon__item[data-align="start"] {
+  transform: translateX(calc(var(--ribbon-face) / -2));
+  align-items: flex-start;
+}
+
+.ribbon__face[data-align="end"],
+.ribbon__item[data-align="end"] {
+  transform: translateX(calc(var(--ribbon-face) / 2 - 100%));
+  align-items: flex-end;
+}
+
+/* On an agent's page the others step back and the open one is underlined. */
+.ribbon__face,
+.ribbon__item,
+.ribbon__pile {
+  transition: left var(--tempo-move) var(--ease), opacity var(--tempo-tap) var(--ease);
+}
+
+.ribbon[data-open] .ribbon__face:not([data-open]),
+.ribbon[data-open] .ribbon__item,
+.ribbon[data-open] .ribbon__pile,
+.ribbon[data-open] .ribbon__band-label {
+  opacity: var(--ribbon-aside);
+}
+
+.ribbon__face[data-open] .ribbon__name {
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-thickness: var(--ribbon-now-w);
+  text-underline-offset: var(--space-2);
 }
 
 .ribbon__face-button,
@@ -10567,7 +10626,8 @@ button.artifacts__version[aria-pressed="true"] {
   justify-content: space-between;
   gap: var(--space-5);
   height: var(--topbar-h);
-  padding: 0 var(--space-6);
+  padding: 0 var(--column-edge);
+  background: var(--ground);
   flex: none;
   user-select: none;
 }
@@ -10621,7 +10681,6 @@ button.artifacts__version[aria-pressed="true"] {
 /* ---- The column ------------------------------------------------------- */
 
 .home {
-  --column-w: 46rem;
   width: min(var(--column-w), 100%);
   margin: 0 auto;
   padding: var(--space-7) var(--space-6) var(--space-8);
@@ -10643,9 +10702,9 @@ button.artifacts__version[aria-pressed="true"] {
   display: flex;
   align-items: center;
   gap: var(--space-4);
-  padding: var(--space-4) var(--space-4) var(--space-4) var(--space-4);
+  padding: var(--space-4);
   background: var(--raised);
-  border: 1px solid var(--rule);
+  border: 1px solid transparent;
   border-radius: var(--radius-signal);
   box-shadow: var(--lift-1);
 }
@@ -10765,7 +10824,8 @@ button.artifacts__version[aria-pressed="true"] {
   width: var(--space-8);
   height: var(--space-8);
   border: 0;
-  border-radius: var(--radius-sm);
+  /* The field's own corner, so the button reads as part of the box it is in. */
+  border-radius: var(--radius-signal);
   background: var(--action-fill);
   color: var(--on-action-fill);
   transition: opacity var(--tempo-tap) var(--ease);
@@ -10821,6 +10881,10 @@ button.artifacts__version[aria-pressed="true"] {
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
+  /* On the column's edges, as the field above and the list below are: the
+     card is the surface here, not a padded, ruled section of For you. */
+  padding: 0;
+  border-bottom: 0;
 }
 
 .home .for-you__requests > h3,
@@ -10834,8 +10898,58 @@ button.artifacts__version[aria-pressed="true"] {
   color: var(--attention);
 }
 
+/* The one raised thing under the field: a card standing on the page, edged
+   in the color that means it is waiting, the question set as its title. */
 .home .desk__card {
-  border-left: var(--space-1) solid var(--attention);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-6) var(--space-7);
+  background: var(--raised);
+  border: 0;
+  border-left: var(--space-2) solid var(--attention-fill);
+  border-radius: var(--radius-signal);
+  box-shadow: var(--lift-1);
+}
+
+.home .desk__who {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--space-4);
+  row-gap: var(--space-4);
+}
+
+.home .desk__whotext {
+  display: contents;
+}
+
+.home .desk__asker {
+  grid-column: 2;
+  grid-row: 1;
+  margin: 0;
+}
+
+.home .desk__summary {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--text);
+  font-size: var(--type-lede);
+  font-weight: 600;
+  line-height: var(--lead-tight);
+  letter-spacing: var(--track-flat);
+}
+
+.home .desk__open {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.home .desk__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4);
 }
 
 .desk__when {
@@ -11119,3 +11233,209 @@ button.artifacts__version[aria-pressed="true"] {
     display: none;
   }
 }
+
+
+/* ==========================================================================
+   The page under the timeline
+
+   One ground for the column on Today and on an agent's page, a step down from
+   the timeline's, so what stands on it (the field, a card waiting on you)
+   reads as raised without a line drawn round it. An agent's page is the same
+   column as Today: the two are one app, and a page the width of the window
+   was the old channel with the rail taken off.
+   ========================================================================== */
+
+.app > main {
+  background: var(--page);
+}
+
+.app[data-page="agent"] .pane {
+  width: min(var(--column-w), 100%);
+  margin: 0 auto;
+  background: none;
+}
+
+.app[data-page="agent"] .pane__header {
+  align-items: center;
+  gap: var(--space-6);
+  padding: var(--space-7) var(--space-6) var(--space-6);
+  background: none;
+  border-bottom: 0;
+}
+
+.pane__face {
+  flex: none;
+  display: inline-flex;
+}
+
+.pane__identity {
+  flex: 1;
+}
+
+.pane__about {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--type-aside);
+}
+
+.app[data-page="agent"] .pane__title {
+  font-family: var(--font-ui);
+  font-weight: 600;
+}
+
+.agent-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  padding: 0 var(--space-6);
+  border-bottom: 1px solid var(--rule);
+  flex: none;
+}
+
+.agent-tabs__list {
+  display: flex;
+  gap: var(--space-2);
+  min-width: 0;
+  /* A phone is narrower than six tabs: they scroll rather than widen the page. */
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.agent-tabs__tab {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  flex: none;
+  padding: var(--space-4) var(--space-4);
+}
+
+.agent-tabs__count {
+  color: var(--faint);
+  font-size: var(--type-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+/* What the agent runs on, read at the end of its tabs: still on the page,
+   and no longer the second line of its name. */
+.agent-tabs .pane__meta {
+  margin-left: auto;
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pane__scroll[hidden] {
+  display: none;
+}
+
+.app[data-page="agent"] .composer {
+  background: var(--raised);
+}
+
+/* The places at the end of the status bar are where you go, not commands:
+   quiet words, like the day in the top row. */
+.statusbar__place {
+  font: inherit;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-3);
+  cursor: pointer;
+  transition: background var(--tempo-tap) var(--ease), color var(--tempo-tap) var(--ease);
+}
+
+.statusbar__place:hover {
+  background: var(--sunken);
+  color: var(--text);
+}
+
+/* The Groups sheet says what it is and how to leave it, on every width: on
+   a phone it is the whole screen, and a scrim to press is not there. */
+.sheet {
+  flex-direction: column;
+  background: var(--rail-ground);
+}
+
+.sheet__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-5);
+  padding: var(--space-5) var(--space-6);
+  border-bottom: 1px solid var(--rule);
+  flex: none;
+}
+
+.sheet__title {
+  margin: 0;
+  font-size: var(--type-ui);
+  font-weight: 600;
+}
+
+.sheet__body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* For you, Calendar, Artifacts and Settings are in the status bar and the top
+   row. Drawn again at the sheet's foot, each was on screen twice. */
+.sheet .rail__foot {
+  display: none;
+}
+
+@media (max-width: 48rem), (hover: none) and (pointer: coarse) {
+  /* The agent menu's one way in by touch. */
+  .pane__more {
+    display: inline-flex;
+  }
+
+  /* An agent's page on a phone is its conversation: the timeline gives way,
+     and the head is one line, face and name, under the top row's way back. */
+  .app[data-page="agent"] .ribbon {
+    display: none;
+  }
+
+  .app[data-page="agent"] .pane__header {
+    gap: var(--space-4);
+    padding: var(--space-3) var(--space-5);
+  }
+
+  .app[data-page="agent"] .pane__title {
+    font-size: var(--type-body);
+  }
+
+  .app[data-page="agent"] .pane__about,
+  .agent-tabs .pane__meta {
+    display: none;
+  }
+
+  .agent-tabs {
+    padding: 0 var(--space-4);
+  }
+
+  .agent-tabs__tab {
+    min-height: var(--control-touch);
+    align-items: center;
+  }
+
+  /* One row: what does not fit scrolls sideways rather than taking a second
+     line from the conversation above it. */
+  .statusbar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .statusbar > * {
+    flex: none;
+  }
+
+  .statusbar__place {
+    min-height: var(--control-touch);
+  }
+}
+

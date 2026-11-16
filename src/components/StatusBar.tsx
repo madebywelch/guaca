@@ -186,7 +186,7 @@ export function StatusBar({ onOpen, onMessage }: Props) {
       <nav className="statusbar__places" aria-label="Places">
         <button
           type="button"
-          className="statusbar__button"
+          className="statusbar__place"
           onClick={() => showArtifacts({ id: null })}
         >
           Artifacts
@@ -194,7 +194,7 @@ export function StatusBar({ onOpen, onMessage }: Props) {
         {!opened.has("calendar") && (
           <button
             type="button"
-            className="statusbar__button"
+            className="statusbar__place"
             onClick={() => onOpen({ kind: "calendar" })}
           >
             Calendar
@@ -203,7 +203,7 @@ export function StatusBar({ onOpen, onMessage }: Props) {
         {!opened.has("forYou") && (
           <button
             type="button"
-            className="statusbar__button"
+            className="statusbar__place"
             aria-label={waiting > 0 ? `For you, ${waiting} waiting` : "For you"}
             onClick={() => onOpen({ kind: "forYou" })}
           >
