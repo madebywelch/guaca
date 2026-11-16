@@ -1,10 +1,18 @@
 import { useEffect, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
-import { prefersReducedMotion } from "../lib/motion";
 import { runsOn } from "../lib/profile";
 import { useStore } from "../lib/store";
-import type { Activity, AgentCard, RoutineId } from "../lib/types";
+import { useNow, whenLabel } from "../lib/time";
+import { callInFlight } from "../lib/trail";
+import {
+  type Activity,
+  type AgentCard,
+  type Envelope,
+  type Participant,
+  plainText,
+  type RoutineId,
+} from "../lib/types";
 import { BrowserScreen } from "./BrowserScreen";
 import { ComputerScreen } from "./ComputerScreen";
 import { Memory } from "./Memory";
@@ -14,7 +22,7 @@ import { RoutineList } from "./RoutineList";
 import { WorkingNotes } from "./WorkingNotes";
 
 /** Where on the page a tab of the agent's sends the reader. */
-export type AgentSection = "now" | "routines" | "memory" | "notebook" | "skills";
+export type AgentSection = "now" | "routines" | "memory" | "notebook" | "profile";
 
 interface Props {
   agent: AgentCard;
@@ -116,29 +124,124 @@ function Profile({ agent, onEdit }: { agent: AgentCard; onEdit: () => void }) {
   );
 }
 
+/** The last message in a channel that `test` holds for. */
+function latest(messages: Envelope[] | undefined, test: (one: Envelope) => boolean) {
+  if (!messages) return undefined;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const one = messages[i] as Envelope;
+    if (test(one)) return one;
+  }
+  return undefined;
+}
+
+const firstLine = (one: Envelope) => plainText(one).trim().split("\n")[0] ?? "";
+
+/** How a turn that is not running yet, or is held, is said ahead of whose it is. */
+const doingWords: Record<Exclude<Activity["state"], "idle" | "paused">, string> = {
+  thinking: "Working on a request from",
+  queued: "Waiting its turn, with a request from",
+  awaitingApproval: "Waiting on you, with a request from",
+};
+
 /**
- * What an agent has, beside what it says: the page every tab but Conversation
- * opens, one column, scrolled to the section the tab names.
+ * What the agent is doing, at the top of Now: the request it is working on
+ * and who it came from, then the steps it has taken on it so far. An agent
+ * with nothing running says so, and what it last finished.
  *
- * One page rather than a page per tab, because its order is its design. A
- * screen is a picture of something happening right now, so the two of them
- * lead; then the schedule it keeps, which is the one section nothing else on
- * screen says; then the working notes and the memory, the two halves of what
- * an agent carries between conversations, read against each other; and the
- * notebook last, because it is what the agent reads only when it needs it.
- * Splitting them across tabs would make each one a page with one thing on it
- * and lose what they say beside each other.
+ * Read from the conversation and the live trail rather than kept anywhere of
+ * its own, so it says what the transcript says and cannot disagree with it.
+ */
+function Doing({ agent }: { agent: AgentCard }) {
+  const activity = useStore((state) => state.activity[agent.id]);
+  const trail = useStore((state) => state.trail[agent.id]);
+  const messages = useStore((state) => state.messages[agent.id]);
+  const agents = useStore((state) => state.agents);
+  const now = useNow(30_000);
+  const own = (one: Participant) => one.kind === "agent" && one.id === agent.id;
+  const state = activity?.state ?? "idle";
+
+  if (state === "idle" || state === "paused") {
+    const said = latest(messages, (one) => own(one.from));
+    return (
+      <section className="doing" aria-labelledby={`doing-${agent.id}`}>
+        <h3 id={`doing-${agent.id}`} className="doing__title">
+          {state === "paused" ? "Paused, so nothing is running" : "Nothing is running"}
+        </h3>
+        <p className="doing__line">
+          {said ? (
+            <>
+              <span className="doing__when">Last finished {whenLabel(said.createdAt, now)}</span>{" "}
+              <span className="doing__text">{firstLine(said)}</span>
+            </>
+          ) : (
+            `${agent.name} has not done anything yet.`
+          )}
+        </p>
+      </section>
+    );
+  }
+
+  const asked = latest(messages, (one) => own(one.to) && !own(one.from));
+  const from = asked?.from;
+  const who =
+    from === undefined
+      ? "somebody"
+      : from.kind === "human"
+        ? "you"
+        : from.kind === "agent"
+          ? (agents.find((one) => one.id === from.id)?.name ?? "another agent")
+          : "a routine";
+  return (
+    <section className="doing" aria-labelledby={`doing-${agent.id}`}>
+      <h3 id={`doing-${agent.id}`} className="doing__title">
+        {doingWords[state]} {who}
+      </h3>
+      {asked && (
+        <p className="doing__line">
+          <span className="doing__when">{whenLabel(asked.createdAt, now)}</span>{" "}
+          <span className="doing__text">{firstLine(asked)}</span>
+        </p>
+      )}
+      <h3 className="doing__title doing__title--steps">Steps</h3>
+      {trail?.length ? (
+        <ol className="doing__steps">
+          {trail.map((call, index) => (
+            <li
+              // biome-ignore lint/suspicious/noArrayIndexKey: calls append in arrival order; providers may reuse call IDs across rounds.
+              key={`${call.callId}-${index}`}
+              className="doing__step"
+              data-state={call.done ? call.done.outcome.status : "running"}
+            >
+              {callInFlight(call.name, call.arguments)}
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p className="doing__line">Thinking it over, with no steps taken yet.</p>
+      )}
+    </section>
+  );
+}
+
+/**
+ * What an agent has, beside what it says: one tab of it at a time.
+ *
+ * Now is what the agent is doing, and the two places it does it in, live.
+ * Every store has a tab of its own and is drawn there only: the schedule
+ * under Routines, the working notes and the memory under Memory, read against
+ * each other, the notebook under Notebook, and what it is set up with under
+ * Profile. A tab opens at its top.
  *
  * The agent's name, look and instructions are deliberately not editable here.
  * Those are edited rarely and all at once, which is what a dialog is for; the
- * profile at the top is its summary, and its one button opens it.
+ * profile is its summary, and its one button opens it.
  */
 export function AgentPanel({ agent, section, onEditProfile }: Props) {
   const [routine, setRoutine] = useState<RoutineId | "new" | null>(null);
 
-  // Switching agent comes back to the top of the page. A routine id belongs
-  // to one agent, and leaving it open would show another agent's schedule
-  // under this agent's name until it failed to load.
+  // Switching agent comes back to the list. A routine id belongs to one
+  // agent, and leaving it open would show another agent's schedule under this
+  // agent's name until it failed to load.
   useEffect(() => {
     setRoutine(null);
   }, [agent.id]);
@@ -153,49 +256,51 @@ export function AgentPanel({ agent, section, onEditProfile }: Props) {
     taken();
   }, [asked, taken]);
 
+  // A tab opens at its top, at once: a glide down from wherever the last tab
+  // was left is motion nobody asked for.
+  const detail = section === "routines" && routine !== null;
   useEffect(() => {
-    if (routine !== null) return;
+    if (detail) return;
     document
       .getElementById(`agent-${section}`)
-      ?.scrollIntoView?.({ block: "start", behavior: prefersReducedMotion() ? "auto" : "smooth" });
-  }, [section, routine]);
+      ?.scrollIntoView?.({ block: "start", behavior: "auto" });
+  }, [section, detail]);
 
   return (
     <aside className="agent-panel" aria-label={`${agent.name}: details`}>
-      {/* Hidden rather than unmounted while a routine is open. The screen
-          holds a live connection to the agent's desktop, and rebuilding it
-          every time somebody looked at a schedule would drop and reconnect it.
+      {/* Hidden rather than unmounted while a routine is open, so the list
+          keeps its place behind it.
 
-          The key is here rather than on each section, and it is the whole
-          mechanism for switching agent: every section below holds one agent's
-          thing, a desktop connection, a browser, a list read over IPC, and
-          none of them may be left under the next agent's name. One key on what
-          they share says that once. Saying it once per section collided:
-          React indexes the outgoing children by key to decide what to delete,
-          so a duplicate overwrote the entry the screen would have been deleted
-          through, and the previous agent's screen stayed in the document with
-          its polling still running. */}
-      <div className="agent-panel__level" hidden={routine !== null} key={agent.id}>
-        <div id="agent-skills" className="agent-panel__anchor">
-          <Profile agent={agent} onEdit={() => onEditProfile(agent)} />
-        </div>
-        <div id="agent-now" className="agent-panel__anchor">
-          <BrowserScreen agent={agent} />
-          <ComputerScreen agent={agent} />
-        </div>
-        <div id="agent-routines" className="agent-panel__anchor">
-          <RoutineList agentId={agent.id} onOpen={setRoutine} />
-        </div>
-        <div id="agent-memory" className="agent-panel__anchor">
-          <WorkingNotes agentId={agent.id} />
-          <Memory agentId={agent.id} />
-        </div>
-        <div id="agent-notebook" className="agent-panel__anchor">
-          <Notebook agentId={agent.id} />
+          The key is the whole mechanism for switching agent: every section
+          holds one agent's thing, a desktop connection, a browser, a list read
+          over IPC, and none of them may be left under the next agent's name.
+          One key on what they share says that once. Saying it once per section
+          collided: React indexes the outgoing children by key to decide what to
+          delete, so a duplicate overwrote the entry the screen would have been
+          deleted through, and the previous agent's screen stayed in the
+          document with its polling still running. */}
+      <div className="agent-panel__level" hidden={detail} key={agent.id}>
+        <div id={`agent-${section}`} className="agent-panel__anchor">
+          {section === "now" && (
+            <>
+              <Doing agent={agent} />
+              <BrowserScreen agent={agent} />
+              <ComputerScreen agent={agent} />
+            </>
+          )}
+          {section === "routines" && <RoutineList agentId={agent.id} onOpen={setRoutine} />}
+          {section === "memory" && (
+            <>
+              <WorkingNotes agentId={agent.id} />
+              <Memory agentId={agent.id} />
+            </>
+          )}
+          {section === "notebook" && <Notebook agentId={agent.id} />}
+          {section === "profile" && <Profile agent={agent} onEdit={() => onEditProfile(agent)} />}
         </div>
       </div>
 
-      {routine !== null && (
+      {detail && (
         <RoutineDetail
           key={`${agent.id}:${routine}`}
           agentId={agent.id}

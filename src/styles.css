@@ -11020,7 +11020,69 @@ button.artifacts__version[aria-pressed="true"] {
 }
 
 .agent-panel__anchor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
   scroll-margin-top: var(--space-6);
+}
+
+/* What the agent is doing, at the top of Now. The task reads as a title; its
+   steps are a plain list under the same small heading every section uses. */
+.doing {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.doing__title {
+  margin: 0;
+  font-size: var(--type-body);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.doing__title--steps {
+  margin-top: var(--space-5);
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  font-weight: 400;
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.doing__line {
+  margin: 0;
+  font-size: var(--type-aside);
+  color: var(--muted);
+}
+
+.doing__when {
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+}
+
+.doing__text {
+  color: var(--text);
+}
+
+.doing__steps {
+  margin: 0;
+  padding: 0 0 0 var(--space-7);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  font-size: var(--type-aside);
+  color: var(--text);
+}
+
+.doing__step[data-state="running"] {
+  color: var(--muted);
+}
+
+.doing__step[data-state="failed"],
+.doing__step[data-state="refused"] {
+  color: var(--danger);
 }
 
 /* ---- The groups sheet ------------------------------------------------- */

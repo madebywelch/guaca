@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useStore } from "../lib/store";
 import type { AgentCard, Browser, Computer } from "../lib/types";
 import { AgentPanel } from "./AgentPanel";
+import { VIEWS } from "./ChannelView";
 
 const agentComputer = vi.fn<(id: string) => Promise<Computer | null>>();
 const agentBrowser = vi.fn<(id: string) => Promise<Browser | null>>();
@@ -110,7 +111,8 @@ describe("the agent's page, past the conversation", () => {
     // when the second arrived: React's reconciler indexes the old children by
     // key, so the duplicate overwrote the entry it would have deleted through.
     // Every switch added another dead card, and only closing the panel, which
-    // unmounts their container, cleared them.
+    // unmounts their container, cleared them. Each tab goes through the switch
+    // itself, since each draws its own sections.
     const view = render(
       <AgentPanel section="now" agent={card("a1", "Cook")} onEditProfile={vi.fn()} />,
     );
@@ -128,38 +130,91 @@ describe("the agent's page, past the conversation", () => {
       expect(screen.getAllByRole("region", { name: /'s computer$/ })).toHaveLength(1),
     );
     expect(screen.getAllByRole("region", { name: /'s browser$/ })).toHaveLength(1);
-    expect(screen.getAllByRole("heading", { name: "Routines" })).toHaveLength(1);
-    expect(screen.getAllByRole("button", { name: "Edit" })).toHaveLength(1);
     expect(screen.queryByRole("region", { name: "Cook's computer" })).toBeNull();
     expect(screen.queryByRole("region", { name: "Scribe's computer" })).toBeNull();
+    view.unmount();
+
+    for (const [section, check] of [
+      [
+        "routines",
+        () => expect(screen.getAllByRole("heading", { name: "Routines" })).toHaveLength(1),
+      ],
+      ["memory", () => expect(screen.getAllByRole("button", { name: "Edit" })).toHaveLength(1)],
+    ] as const) {
+      const tab = render(
+        <AgentPanel section={section} agent={card("a1", "Cook")} onEditProfile={vi.fn()} />,
+      );
+      for (const [id, name] of [
+        ["a2", "Scribe"],
+        ["a3", "Runner"],
+      ] as const) {
+        tab.rerender(
+          <AgentPanel section={section} agent={card(id, name)} onEditProfile={vi.fn()} />,
+        );
+      }
+      await waitFor(check);
+      tab.unmount();
+    }
   });
 
-  it("draws the places, the schedule above the stores, and the notebook last", async () => {
-    // The order is the whole content of this panel's design and nothing else
-    // in the tree asserts it: every section renders either way, and a swap
-    // that reads as deliberate in a diff is invisible in every other test.
+  it("draws what the agent is doing on Now: the task, its steps, then the places", async () => {
+    // Now is what the agent is doing and nothing else: every store has a tab
+    // of its own, and drawing them here as well said each of them twice.
+    useStore.setState({
+      agents: [card("a1", "Cook")],
+      activity: { a1: { state: "thinking" } },
+      trail: {
+        a1: [
+          {
+            callId: "c1",
+            name: "browse",
+            arguments: { action: "open", url: "https://plumbers.example" },
+            done: null,
+            startedAt: 0,
+          },
+        ],
+      },
+      messages: {
+        a1: [
+          {
+            id: "m1",
+            runId: "r1",
+            channelId: "a1",
+            from: { kind: "human" },
+            to: { kind: "agent", id: "a1" },
+            parts: [{ type: "text", text: "Find a plumber for Thursday" }],
+            trust: "operator",
+            hop: 0,
+            expectsReply: true,
+            intent: "work",
+            cause: null,
+            createdAt: Date.now(),
+          },
+        ],
+      },
+    });
     render(<AgentPanel section="now" agent={card("a1", "Cook")} onEditProfile={vi.fn()} />);
-    await screen.findByRole("heading", { name: "Routines" });
-    await waitFor(() =>
-      expect(screen.getByRole("heading", { name: /Working notes/ }).textContent).toBe(
-        "Working notes · 0",
-      ),
-    );
+    await screen.findByRole("heading", { name: "Computer" });
 
     const order = screen
       .getAllByRole("heading", { level: 3 })
       .map((heading) => heading.textContent);
+    expect(order).toEqual(["Working on a request from you", "Steps", "Browser", "Computer"]);
+    expect(screen.getByText("Find a plumber for Thursday")).toBeTruthy();
+    expect(screen.getByRole("listitem").textContent).toBe("Opening plumbers.example");
+    expect(screen.queryByRole("heading", { name: "Routines" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Memory" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Notebook" })).toBeNull();
 
-    // The two places the agent works lead, each a name and a switch. The
-    // notebook is last: it is what the agent reads when it needs it, and the
-    // two above it are what it carries on every turn.
-    expect(order).toEqual([
-      "Browser",
-      "Computer",
-      "Routines",
-      "Working notes · 0",
+    // The tabs, in the order the page draws them: what it is doing, what it
+    // said, what it carries, and what it is set up with last.
+    expect(VIEWS.map((tab) => tab.label)).toEqual([
+      "Now",
+      "Conversation",
       "Memory",
       "Notebook",
+      "Routines",
+      "Profile",
     ]);
   });
 
@@ -168,12 +223,12 @@ describe("the agent's page, past the conversation", () => {
     // left behind is the worst of the three to leave: an operator editing what
     // they believe is one agent's memory would save it onto another's.
     const view = render(
-      <AgentPanel section="now" agent={card("a1", "Cook")} onEditProfile={vi.fn()} />,
+      <AgentPanel section="memory" agent={card("a1", "Cook")} onEditProfile={vi.fn()} />,
     );
     expect(await screen.findByText("a1 remembers this")).toBeTruthy();
 
     view.rerender(
-      <AgentPanel section="now" agent={card("a2", "Scribe")} onEditProfile={vi.fn()} />,
+      <AgentPanel section="memory" agent={card("a2", "Scribe")} onEditProfile={vi.fn()} />,
     );
 
     expect(await screen.findByText("a2 remembers this")).toBeTruthy();

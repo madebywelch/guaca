@@ -39,13 +39,13 @@ import { PeerBurstRow, RefusedRow, WritingRow } from "./WireRow";
 export type AgentView = "conversation" | AgentSection;
 
 /** The tabs, in the order a person reaches for them. */
-const VIEWS: { view: AgentView; label: string }[] = [
+export const VIEWS: { view: AgentView; label: string }[] = [
   { view: "now", label: "Now" },
   { view: "conversation", label: "Conversation" },
   { view: "memory", label: "Memory" },
   { view: "notebook", label: "Notebook" },
   { view: "routines", label: "Routines" },
-  { view: "skills", label: "Skills" },
+  { view: "profile", label: "Profile" },
 ];
 
 interface Props {
