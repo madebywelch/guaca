@@ -204,6 +204,14 @@ try {
     tab = (await cdp("Target.createTarget", { url: `${base}/#token=${token}` })).targetId;
     session = (await cdp("Target.attachToTarget", { targetId: tab, flatten: true })).sessionId;
     await until(() => openAgent("Browser check"), "real app renders its roster");
+    // A working agent opens on Now; what this check reads is the transcript.
+    await until(
+      () =>
+        evaluate(
+          "(() => { const tab = [...document.querySelectorAll('.agent-tabs__tab')].find((e) => e.textContent === 'Conversation'); tab?.click(); return !!tab; })()",
+        ),
+      "the conversation tab",
+    );
   };
   await openClient();
   assert.equal(await evaluate("location.hash"), "", "invitation is removed from the URL");
@@ -290,12 +298,15 @@ try {
     await fits(".composer");
     assert.equal(await evaluate("document.querySelector('.app > .rail')"), null, "no rail beside the column");
     await tap(".composer__input");
+    // The draft from the last width is still there; typing replaces it.
+    await evaluate("document.querySelector('.composer__input').select()");
     await cdp("Input.insertText", {text:"Draft survives navigation"},session);
     await tap(".topbar__back");
     await until(() => evaluate("!!document.querySelector('.home')"), "Today opens from the top row");
     await fits(".home");
     await tap('.topbar__places button[aria-label="Groups and agents"], .topbar__places button[aria-label="Agents"]');
     await until(() => evaluate("!!document.querySelector('.sheet')"), "the Groups sheet opens");
+    await delay(400);
     await fits(".sheet");
     await fits(".mobile-crews select");
     await shoot(`chats-${width}`);
@@ -310,7 +321,7 @@ try {
     assert.equal(await evaluate("document.querySelector('.composer__input').value"),"Draft survives navigation");
     await tap(pageTab("Now"));
     await until(() => evaluate("!!document.querySelector('.agent-panel')"), "the agent's details open as a tab");
-    await fits(".agent-panel");
+    await fits(".pane__scroll:has(> .agent-panel)");
     await shoot(`details-${width}`);
     await tap(pageTab("Conversation"));
     await fits(".composer");

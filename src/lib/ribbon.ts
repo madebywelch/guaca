@@ -443,9 +443,12 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
     });
   // Faces and what is scheduled share one row, so they are spread as one:
   // spread apart, a run due at eight would sit on top of a face working now.
+  // When the strip cannot hold every face and every item a face apart, the
+  // schedule gives way: who needs you and who is working come first.
+  const fits = (wanted.length + runs.length + occasions.length) * input.faceSpan <= 1;
   const row = [
     ...wanted.map((face) => ({ face, item: null, at: face.at, x: xAt(scale, face.at) })),
-    ...[...runs, ...occasions].map((item) => ({
+    ...(fits ? [...runs, ...occasions] : []).map((item) => ({
       face: null,
       item,
       at: item.at,

@@ -303,6 +303,14 @@ describe("what is scheduled", () => {
     expect(scheduled.map((one) => one.label)).toEqual(["Page review, today 10:00 AM"]);
   });
 
+  it("gives way to the faces on a strip too narrow for both", () => {
+    // A phone's strip holds five faces' width. Five faces and four items
+    // drawn on it overlapped every name; the faces are what it is for.
+    const ribbon = layoutRibbon(morning({ faceSpan: 0.2 }));
+    expect(ribbon.faces).toHaveLength(layoutRibbon(morning()).faces.length);
+    expect(ribbon.scheduled).toEqual([]);
+  });
+
   it("shares the row with the faces and is never nearer to one than a face", () => {
     const ribbon = layoutRibbon(morning());
     const xs = [...ribbon.faces, ...ribbon.scheduled].map((one) => one.x).sort((a, b) => a - b);

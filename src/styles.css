@@ -10946,6 +10946,9 @@ button.artifacts__version[aria-pressed="true"] {
   padding: 0 var(--space-7);
   border-bottom: 1px solid var(--rule);
   flex: none;
+  /* A phone is narrower than six tabs: they scroll rather than widen the page. */
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 
 .agent-tabs__tab {
@@ -11070,3 +11073,49 @@ button.artifacts__version[aria-pressed="true"] {
   font-variant-numeric: tabular-nums;
 }
 
+/* A phone: the field's input takes a row of its own under who it goes to,
+   and the timeline keeps its faces and the now line, without the hours and
+   days it has no room to letter. */
+@media (max-width: 48rem), (hover: none) and (pointer: coarse) {
+  .intake__box {
+    flex-wrap: wrap;
+  }
+
+  .intake__input {
+    order: 3;
+    flex-basis: 100%;
+  }
+
+  .intake__key {
+    display: none;
+  }
+
+  .intake__send {
+    margin-left: auto;
+  }
+
+  .ribbon__tick {
+    display: none;
+  }
+
+  /* The sheet is the whole screen on a phone, its list the whole sheet. */
+  .sheet {
+    width: 100%;
+  }
+
+  .sheet .rail {
+    flex: 1;
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+/* A short screen, a phone on its side or under its keyboard, keeps what is
+   being written in view: the timeline and the page's kicker give way first. */
+@media (max-height: 32rem) {
+  .ribbon,
+  .pane__kicker,
+  .pane__meta {
+    display: none;
+  }
+}
