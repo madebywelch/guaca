@@ -11400,7 +11400,10 @@ button.artifacts__version[aria-pressed="true"] {
 
   .agent-tabs__tab,
   .topbar__button,
-  .intake__send {
+  .intake__send,
+  .desk__open,
+  .intake__target,
+  .intake__option {
     min-width: var(--control-touch);
     min-height: var(--control-touch);
   }

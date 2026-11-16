@@ -1081,7 +1081,14 @@ describe("the new window's surfaces", () => {
     const at = css.lastIndexOf(opener);
     expect(at).toBeGreaterThan(-1);
     const block = css.slice(at, css.indexOf("\n}\n", at));
-    for (const selector of [".agent-tabs__tab", ".topbar__button", ".intake__send"]) {
+    for (const selector of [
+      ".agent-tabs__tab",
+      ".topbar__button",
+      ".intake__send",
+      ".desk__open",
+      ".intake__target",
+      ".intake__option",
+    ]) {
       const sized = [...block.matchAll(/([^{}]*)\{([^{}]*)\}/g)].some(
         (m) =>
           (m[1] ?? "")
