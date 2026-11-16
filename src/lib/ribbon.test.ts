@@ -113,6 +113,27 @@ describe("where a face goes", () => {
     expect(finished).toMatchObject({ state: "finished", at: at(16, 8) });
   });
 
+  it("keeps what has already happened left of now when the clock it is drawn with lags", () => {
+    // The strip's clock moves once a minute and a question lands whenever it
+    // is asked, so one asked at 9:12:30 is drawn with a now of 9:12. It was
+    // still asked before now, and its face goes on the side of the line it
+    // takes once the clock catches up, not on the side of the line that is
+    // still to come.
+    const asked = NOW + 30_000;
+    const input = morning({
+      approvals: [anApproval({ agentId: "dara", createdAt: asked })],
+      outcomes: [...morning().outcomes, anOutcome({ agentId: "pip", finishedAt: asked })],
+    });
+    const ribbon = layoutRibbon(input);
+    for (const id of ["dara", "pip"]) {
+      const one = ribbon.faces.find((f) => f.agentId === id);
+      expect(one, id).toBeDefined();
+      expect(one!.x, `${id} is left of now`).toBeLessThan(ribbon.now.x);
+    }
+    const caughtUp = layoutRibbon({ ...input, now: NOW + 60_000 });
+    expect(caughtUp.faces.find((f) => f.agentId === "dara")!.x).toBeLessThan(caughtUp.now.x);
+  });
+
   it("is pulled to the oldest question an agent has asked", () => {
     const approvals = [
       anApproval({ agentId: "dara", createdAt: at(16, 9, 5) }),

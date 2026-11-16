@@ -565,8 +565,11 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
   // and what is live or still coming right of it, each side kept a label's
   // half and a character clear: Marlow working at 9:12 sits just after the
   // line rather than with his name cut through by it.
+  // A face's side is what it is, not its time: asked, finished and resting
+  // have happened, and the clock this is drawn with moves once a minute, so
+  // one that landed since the last tick is still left of the line.
   const nowX = xAt(scale, now);
-  const after = (one: Row) => one.at > now || one.face?.state === "working";
+  const after = (one: Row) => (one.face ? one.face.state === "working" : one.at > now);
   const beforeHi = (rows: Row[]) => {
     const last = rows[rows.length - 1] as Row;
     return nowX - halfOf(last.text) - charSpan + last.width / 2;
