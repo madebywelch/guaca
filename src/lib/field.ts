@@ -67,3 +67,15 @@ export function addressed(
   const body = rest.slice(match.name.length).trim();
   return body ? { agent: match, text: body } : undefined;
 }
+
+/**
+ * The agent an `@Name` names when it is the whole of what was typed: a
+ * recipient with no message, which the field takes as a pick rather than
+ * sending the name on its own as the message.
+ */
+export function namedAlone(text: string, agents: AgentCard[]): AgentCard | undefined {
+  const typed = text.trim();
+  if (!typed.startsWith("@")) return undefined;
+  const name = typed.slice(1).toLowerCase();
+  return writable(agents).find((agent) => agent.name.toLowerCase() === name);
+}

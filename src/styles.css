@@ -10739,7 +10739,7 @@ button.artifacts__version[aria-pressed="true"] {
 }
 
 .intake__option:hover,
-.intake__option[aria-selected="true"] {
+.intake__option[aria-current="true"] {
   background: var(--sunken);
 }
 
