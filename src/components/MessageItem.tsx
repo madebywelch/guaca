@@ -1,6 +1,7 @@
 import { memo } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
+import { ABSENT_ACCENT } from "../avatars/catalog";
 import { api } from "../lib/ipc";
 import { routineTitle } from "../lib/routine";
 import { useStore } from "../lib/store";
@@ -50,7 +51,7 @@ function identity(participant: Participant, byId: Lookups["byId"]) {
   const card = byId(participant.id);
   return card
     ? { id: card.id, name: card.name, color: card.color, avatar: card.avatar }
-    : { id: participant.id, name: "Deleted agent", color: "#8aa0a6", avatar: "blank" };
+    : { id: participant.id, name: "Deleted agent", color: ABSENT_ACCENT, avatar: "blank" };
 }
 
 function clockTime(ms: number): string {

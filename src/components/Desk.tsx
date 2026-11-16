@@ -1,6 +1,7 @@
 import { type FormEvent, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
+import { ABSENT_ACCENT } from "../avatars/catalog";
 import { useStore } from "../lib/store";
 import { clockLabel, relativeTime } from "../lib/time";
 import type { AgentCard, AgentId, Approval, Decision, Escalation } from "../lib/types";
@@ -89,7 +90,7 @@ function StuckCard({ escalation, agent, onClear, onOpenChannel }: StuckProps) {
       <header className="desk__who">
         <AgentAvatar
           avatar={agent?.avatar ?? "blank"}
-          color={agent?.color ?? "#8aa0a6"}
+          color={agent?.color ?? ABSENT_ACCENT}
           size="sm"
           seed={agent?.id ?? escalation.id}
         />
@@ -150,7 +151,7 @@ function DeskCard({ request, agent, onDecide, onAnswer, onOpenChannel }: CardPro
       <header className="desk__who">
         <AgentAvatar
           avatar={agent?.avatar ?? "blank"}
-          color={agent?.color ?? "#8aa0a6"}
+          color={agent?.color ?? ABSENT_ACCENT}
           size="sm"
           seed={agent?.id ?? request.id}
         />

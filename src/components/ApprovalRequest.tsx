@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
+import { ABSENT_ACCENT } from "../avatars/catalog";
 import { useStore } from "../lib/store";
 import type { AgentCard, Decision, Part, ProtectedAction } from "../lib/types";
 
@@ -69,7 +70,7 @@ export function ApprovalRequest({ part, agent }: Props) {
       <div className="ask__head">
         <AgentAvatar
           avatar={agent?.avatar ?? "blank"}
-          color={agent?.color ?? "#8aa0a6"}
+          color={agent?.color ?? ABSENT_ACCENT}
           size="sm"
           seed={agent?.id ?? part.id}
         />

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
+import { ABSENT_ACCENT } from "../avatars/catalog";
 import { needsAnswer } from "../lib/decisions";
 import { api } from "../lib/ipc";
 import { drawnThrough, finished, statusWord } from "../lib/outcomes";
@@ -74,7 +75,7 @@ export function Home({ onSearch, onManageGroups }: Props) {
                   <article key={item.id} className="home__card">
                     <AgentAvatar
                       avatar={agent?.avatar ?? "blank"}
-                      color={agent?.color ?? "#8a8a8a"}
+                      color={agent?.color ?? ABSENT_ACCENT}
                       size="sm"
                       seed={agent?.id ?? item.id}
                     />
@@ -138,7 +139,7 @@ export function Home({ onSearch, onManageGroups }: Props) {
                       >
                         <AgentAvatar
                           avatar={agent?.avatar ?? "blank"}
-                          color={agent?.color ?? "#8a8a8a"}
+                          color={agent?.color ?? ABSENT_ACCENT}
                           size="sm"
                           lifecycle={agent?.lifecycle}
                           seed={agent?.id ?? outcome.runId}
