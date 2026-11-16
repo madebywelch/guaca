@@ -60,7 +60,8 @@ the scroll wheel alone, and the probe's own wake never puts a run off.
 
 ## What a run does
 
-Every run of every scenario starts from nothing and leaves nothing.
+Every run starts from a fresh workspace and removes it afterward. A failed run
+keeps only the diagnostics listed below.
 
 1. **Build or reuse the test build.** `pnpm tauri build --debug --bundles app
    --features probe --config src-tauri/tauri.probe.conf.json` makes
@@ -91,9 +92,56 @@ Every run of every scenario starts from nothing and leaves nothing.
 6. **Run the scenario's steps**, each a wait on a condition with a timeout.
    Nothing sleeps to let something happen; the only fixed windows are the ones
    an absence is measured over ("nothing is claimed for three seconds").
-7. **Tear down**: quit the app through the channel, stop the Host, remove the
-   copy from Launch Services with `lsregister -u`, delete every scratch
-   directory.
+7. **Tear down**: capture bounded diagnostics before quitting the app through
+   the channel, stop the Host, remove the copy from Launch Services with
+   `lsregister -u`, delete every scratch directory. Failed attempts retain only
+   the evidence described below.
+
+## Failure evidence
+
+A failed attempt writes `src-tauri/target/probe/failures/<unique-attempt>/evidence.json`
+before deleting its scratch profile. Its JSON result includes the directory in
+`evidence`, or `null` if evidence could not be written. Successful and deferred
+attempts do not retain evidence. `--keep` still leaves the scratch directories.
+Retained evidence directories are owner-only, with mode `0700`; files use
+`0600`. Each attempt creates a unique directory and never overwrites a file.
+
+Each app quit first captures sanitized state and the main page's
+`{"do":"diagnostic"}` response. This includes quits in a scenario's `finally`,
+before the attempt catches the failure. The last 16 snapshots stay in memory
+until the attempt ends. Each diagnostic request uses a separate connection with
+a one-second deadline and a 256 KiB response limit. A missing or stalled channel
+does not prevent normal teardown or replace the original failure.
+
+The launch sets `GUACA_PROBE_TRACE` to `<scratch.channel>/native.jsonl`.
+After stopping the app, the attempt reads at most 1 MiB and 4096 lines from
+this trace. Missing or unreadable traces produce `native.readable: false` and
+an empty row list. A malformed row is skipped.
+
+Evidence has a strict allowlist. Native rows retain only `phase`, numeric `id`,
+numeric or boolean `value`, numeric `us`, and boolean `main`. Page rows retain
+only `phase`, numeric `id`, numeric or boolean `value`, and numeric `ms`, plus
+the page's numeric `ms` clock. IDs are opaque nonnegative integers. Numbers
+must be finite and no larger in magnitude than an unsigned 64-bit integer.
+Native evidence keeps at most 4096 rows; each page snapshot keeps at most 256.
+Only these phases are accepted:
+
+- Native: `notification.default`, `notification.clicked`, `window.open`,
+  `window.reveal`, `toggle.enter`, `toggle.return`, `app.did_hide`, and
+  `toggle.completed`.
+- Page: `notification.clicked`, `notification.missing`,
+  `notification.remembered`, `reveal.agent`, `select.requested`,
+  `select.invalid`, and `select.committed`.
+
+State retains only boolean visibility, focus, and minimization fields for the
+fixed `main` and `menubar` windows, and the menu bar's boolean `attached`,
+`panel`, and `panelVisible` fields. Evidence never copies app or Host logs,
+configuration, databases, session files, credentials, messages, titles,
+exception text, or arbitrary payloads.
+
+`python3 scripts/probe.test.py` checks retention, sanitization, and teardown
+without launching the app or using the screen. `./scripts/ci.sh scripts`
+includes these tests.
 
 ## The channel
 
@@ -105,7 +153,7 @@ with the same `id` and either `value` or `error`.
 | `hello` | The process id and the bundle identifier the build was configured with. |
 | `state` | Every window (visible, focused, minimized), the notification permission as `notifications.rs` reads it, and the menu bar: the glyph, title and tooltip as drawn, whether the panel has its host, and whether it is showing. |
 | `page` | A call into a window's bridge, below. |
-| `clickIcon` | A left click on the menu bar icon, through the same `Tray::toggle` a click runs, at the icon's own place. |
+| `clickIcon` | Dispatches `Tray::toggle` on the main thread, at the icon's own place. When closing a visible panel with no visible main window while the app is not already hidden, acknowledgment waits for `NSApplicationDidHideNotification`. Completion is bounded at five seconds, below the existing channel and scenario limits. A queued click whose receiver has closed is canceled before it runs. This is a channel action, not a physical click. |
 | `close` | A window's close button: for the main window, hiding it. |
 | `hide` | The app hidden, which hands the keyboard to whatever is next. |
 | `quit` | The app quits. |
@@ -214,6 +262,7 @@ keeps a walk of the tree to a fraction of a second.
 | `permission` | On a bundle macOS has never seen, the app reports "not asked"; with a delivery waiting, connecting asks macOS, macOS shows its question, nothing is claimed while it is unanswered, and macOS takes the question down when the app quits. The probe never answers it. |
 | `notification` | Whatever this Mac allows the probe's own bundle, a waiting delivery and the Settings test button do what the Notifications pane says: claimed and presented as a banner when allowed, asked about when never asked, nothing claimed and nothing presented otherwise. Asserted on the log and the outbox, not on the app's word. |
 | `panel` | With the window closed, a click on the icon opens the panel, the panel lists every agent in the seeded group, a second click closes it, and the app that had the keyboard before has it after. |
+| `panelstable` | With the main window hidden, a channel `clickIcon` closes the visible panel, the probe waits until it is hidden, and another `clickIcon` immediately reopens it. Once reopened with focus, the panel must stay visible and focused for three seconds. This supplements `draft` without changing its assertions or schedule. |
 | `allow` | Screen: on a fresh bundle, press Allow on macOS's question; the waiting delivery is claimed and drawn as a banner, the app reports allowed, and the pane says so. |
 | `button` | Screen: on a bundle just allowed, the Settings test button raises a banner. |
 | `busy` | Screen: with the window's main thread kept busy from before Allow is pressed, the waiting delivery is still drawn as a banner, and a click on it opens its conversation. Before the app handed banners to macOS itself, the plugin dropped a banner whenever the main run loop was not idle at the instant of the hand-off: this scenario failed every run, and `button` two runs in three. |
@@ -252,12 +301,12 @@ password when its display sleeps.
 
 ## What it cannot reach
 
-- **A person's click is not the channel's click.** `clickIcon` runs the same
-  code as a click on the icon, but macOS decides whether an app may come to the
-  front, and it allows that in answer to a person's input. Opened from the
-  channel with the window closed, the panel does not take the keyboard, so the
-  hand-back the `panel` scenario asserts holds without having been tested
-  under load. A real click needs the screen layer, which is what `escape` makes.
+- **A person's click is not the channel's click.** `clickIcon` dispatches the
+  toggle on the main thread and waits for the hide lifecycle when closing the
+  panel would hide the app. It does not synthesize a physical mouse event or
+  prove how macOS handles a person's input. `panelstable` checks visibility and
+  focus after channel close and reopen. A real click still needs the screen
+  layer, which is what `escape` makes.
 - **What anything looks like.** The probe reads text, roles and state, never
   pixels. `capture` saves images for a person to look at.
 - **macOS's own wording.** The labels `allow` and `deny` press are the ones

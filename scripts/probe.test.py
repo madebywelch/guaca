@@ -1,0 +1,302 @@
+import json
+import socket
+import subprocess
+import tempfile
+import threading
+import time
+import unittest
+from pathlib import Path
+from unittest.mock import Mock, call, patch
+
+import probe
+
+
+SECRET = "fake-secret-never-retain"
+
+
+class Channel:
+    def __init__(self, path, answer):
+        self.answer = answer
+        self.requests = []
+        self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.socket.bind(str(path))
+        self.socket.listen()
+        self.socket.settimeout(0.4)
+        self.thread = threading.Thread(target=self.serve, daemon=True)
+        self.thread.start()
+
+    def serve(self):
+        for _ in range(2):
+            try:
+                connection = self.socket.accept()[0]
+            except OSError:
+                return
+            with connection:
+                with connection.makefile("rb") as stream:
+                    request = json.loads(stream.readline())
+                self.requests.append(request)
+                value = self.answer(request)
+                try:
+                    connection.sendall(json.dumps({"id": request["id"], "ok": True, "value": value}).encode() + b"\n")
+                except BrokenPipeError:
+                    pass
+
+    def close(self):
+        self.thread.join(timeout=1)
+        self.socket.close()
+
+
+class EvidenceTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="probe-unit-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        built = self.root / "built.app"
+        (built / "Contents").mkdir(parents=True)
+        for name, value in {
+            "BUILT_APP": built,
+            "APPS": self.root / "apps",
+            "FAILURES": self.root / "failures",
+            "run": Mock(return_value=subprocess.CompletedProcess([], 0, "", "")),
+        }.items():
+            patcher = patch.object(probe, name, value, create=True)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.scratch = None
+        self.client = None
+
+    def answer(self, request):
+        if request["op"] == "state":
+            return {
+                "pid": 42, "identifier": SECRET, "notifications": SECRET,
+                "windows": [{"label": "main", "visible": True, "focused": False, "minimized": False,
+                             "title": SECRET}, {"label": SECRET, "visible": True}],
+                "menubar": {"attached": True, "panel": True, "panelVisible": False,
+                            "title": SECRET, "tooltip": SECRET, "glyph": SECRET},
+                "payload": SECRET,
+            }
+        return {"rows": [{"phase": "select.committed", "id": 7, "value": 2, "ms": 12.5,
+                           "message": SECRET},
+                          {"phase": SECRET, "id": 7, "value": 2, "ms": 12.5},
+                          {"phase": "select.committed", "id": SECRET, "value": 2, "ms": 12.5}],
+                "ms": 13, "token": SECRET}
+
+    def scenario(self, record, scratch, *, error=True, diagnostic=None):
+        self.scratch = scratch
+        for path in (scratch.root / "app.log", scratch.root / "host.log", scratch.host / "config.json"):
+            path.write_text(SECRET)
+        row = {"phase": "toggle.enter", "id": 7, "value": 2, "us": 100, "main": True, "body": SECRET}
+        invalid = [{**row, key: value} for key, value in (
+            ("phase", SECRET), ("phase", {}), ("id", SECRET), ("id", True), ("id", -1),
+            ("id", 2**64), ("value", SECRET), ("value", float("nan")),
+            ("us", SECRET), ("us", float("inf")), ("main", SECRET))]
+        (scratch.channel / "native.jsonl").write_text(
+            "\n".join(json.dumps(value) for value in [row, *invalid]) + "\n" + SECRET + "\n")
+        app = probe.App(scratch)
+        self.client = app.client = Mock()
+        channel = Channel(app.socket, diagnostic or self.answer)
+        self.addCleanup(channel.close)
+        try:
+            if error:
+                raise probe.Failed("original failure " + SECRET)
+            record.check("a non-stopping failure", False)
+        finally:
+            app.quit()
+
+    def run_attempt(self, scenario):
+        with patch.dict(probe.SCENARIOS, {"unit": scenario}), patch.object(
+            probe.App, "alive", lambda app: app.client is not None
+        ):
+            return probe.attempt("unit", 1, False)
+
+    def evidence(self, entry):
+        directory = Path(entry["evidence"])
+        self.assertTrue(directory.is_relative_to(self.root / "failures"))
+        self.assertFalse(self.scratch.root.exists())
+        self.assertFalse(self.scratch.apps.exists())
+        self.assertEqual([path.name for path in directory.iterdir()], ["evidence.json"])
+        self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(directory.parent.stat().st_mode & 0o777, 0o700)
+        self.assertEqual((directory / "evidence.json").stat().st_mode & 0o777, 0o600)
+        text = (directory / "evidence.json").read_text()
+        self.assertNotIn(SECRET, text)
+        return json.loads(text)
+
+    def test_exception_in_scenario_finally_retains_evidence_after_cleanup(self):
+        record, entry = self.run_attempt(self.scenario)
+        self.assertFalse(record.passed)
+        self.assertEqual(entry["steps"][-1], {"step": "original failure " + SECRET, "pass": False})
+        evidence = self.evidence(entry)
+        self.assertEqual(evidence["native"]["rows"], [
+            {"phase": "toggle.enter", "id": 7, "value": 2, "us": 100, "main": True}])
+        snapshot = evidence["snapshots"][0]
+        self.assertEqual(snapshot["page"], {"rows": [
+            {"phase": "select.committed", "id": 7, "value": 2, "ms": 12.5}], "ms": 13})
+        self.assertEqual(snapshot["state"], {
+            "windows": {"main": {"visible": True, "focused": False, "minimized": False}},
+            "menubar": {"attached": True, "panel": True, "panelVisible": False}})
+        self.client.ask.assert_called_once_with("quit")
+        self.client.close.assert_called_once()
+
+    def test_non_stopping_failure_and_unique_attempt_directories(self):
+        def scenario(record, scratch):
+            self.scenario(record, scratch, error=False)
+        first = self.run_attempt(scenario)[1]
+        second = self.run_attempt(scenario)[1]
+        self.assertNotEqual(first["evidence"], second["evidence"])
+        self.assertEqual(len(self.evidence(second)["snapshots"]), 1)
+
+    def test_missing_or_unreadable_native_trace(self):
+        for unreadable in (False, True):
+            with self.subTest(unreadable=unreadable):
+                def scenario(record, scratch):
+                    self.scratch = scratch
+                    if unreadable:
+                        (scratch.channel / "native.jsonl").mkdir()
+                    record.check("failed before launch", False)
+                evidence = self.evidence(self.run_attempt(scenario)[1])
+                self.assertEqual(evidence["native"], {"readable": False, "rows": []})
+
+    def test_existing_evidence_is_never_overwritten(self):
+        with patch.object(probe.uuid, "uuid4", return_value=Mock(hex="same-attempt")):
+            first = self.run_attempt(self.scenario)[1]
+            path = Path(first["evidence"]) / "evidence.json"
+            before = path.read_bytes()
+            second = self.run_attempt(self.scenario)[1]
+        self.assertIsNone(second["evidence"])
+        self.assertEqual(path.read_bytes(), before)
+        self.assertFalse(self.scratch.root.exists())
+
+    def test_failed_diagnostics_do_not_replace_failure_or_skip_cleanup(self):
+        def diagnostic(request):
+            return {"rows": SECRET, "ms": SECRET} if request["op"] == "page" else SECRET
+        entry = self.run_attempt(lambda record, scratch: self.scenario(
+            record, scratch, diagnostic=diagnostic))[1]
+        evidence = self.evidence(entry)
+        self.assertEqual(entry["steps"][-1]["step"], "original failure " + SECRET)
+        self.assertEqual(evidence["snapshots"][0]["page"], {"rows": []})
+        self.client.close.assert_called_once()
+
+    def test_capture_exception_still_quits_and_cleans_up(self):
+        with patch.object(probe, "diagnostic_snapshot", side_effect=RuntimeError(SECRET)):
+            entry = self.run_attempt(self.scenario)[1]
+        self.assertEqual(self.evidence(entry)["snapshots"], [])
+        self.assertEqual(entry["steps"][-1]["step"], "original failure " + SECRET)
+        self.client.ask.assert_called_once_with("quit")
+        self.client.close.assert_called_once()
+
+    def test_trace_read_error_keeps_other_evidence(self):
+        original = Path.open
+
+        def open_(path, *args, **kwargs):
+            if path.name == "native.jsonl" and args == ("rb",):
+                raise PermissionError(SECRET)
+            return original(path, *args, **kwargs)
+
+        with patch.object(Path, "open", open_):
+            entry = self.run_attempt(self.scenario)[1]
+        evidence = self.evidence(entry)
+        self.assertEqual(evidence["native"], {"readable": False, "rows": []})
+        self.assertEqual(len(evidence["snapshots"]), 1)
+
+    def test_evidence_write_error_does_not_skip_cleanup(self):
+        original = probe.os.open
+
+        def open_(path, *args, **kwargs):
+            if Path(path).name == "evidence.json":
+                raise PermissionError(SECRET)
+            return original(path, *args, **kwargs)
+
+        with patch.object(probe.os, "open", open_):
+            entry = self.run_attempt(self.scenario)[1]
+        self.assertIsNone(entry["evidence"])
+        self.assertFalse(self.scratch.root.exists())
+        self.assertFalse(self.scratch.apps.exists())
+        self.assertEqual(entry["steps"][-1]["step"], "original failure " + SECRET)
+
+    def test_native_and_page_rows_are_bounded(self):
+        native = {"phase": "toggle.completed", "id": 1, "value": False, "us": 2, "main": True}
+        page = {"phase": "notification.remembered", "id": 1, "value": True, "ms": 2}
+        self.assertEqual(probe.evidence_rows([native] * 5000, probe.NATIVE_PHASES, "us"), [native] * 4096)
+        self.assertEqual(probe.evidence_rows([page] * 600, probe.PAGE_PHASES, "ms"), [page] * 256)
+
+    def test_launch_passes_native_trace_path(self):
+        scratch = probe.Scratch()
+        self.addCleanup(scratch.close)
+        app = probe.App(scratch)
+        with patch.object(probe, "Client") as client, patch.object(probe, "wait_until"):
+            client.return_value.ask.return_value = {"pid": 42}
+            app.launch()
+        args = probe.run.call_args.args[0]
+        trace = f"GUACA_PROBE_TRACE={scratch.channel}/native.jsonl"
+        self.assertIn(trace, args)
+        self.assertEqual(args[args.index(trace) - 1], "--env")
+        app.client = app.pid = None
+
+    def test_silent_channel_has_a_bounded_capture(self):
+        def diagnostic(request):
+            time.sleep(0.15)
+            return self.answer(request)
+        with patch.object(probe, "DIAGNOSTIC_TIMEOUT", 0.03, create=True):
+            started = time.monotonic()
+            entry = self.run_attempt(lambda record, scratch: self.scenario(
+                record, scratch, diagnostic=diagnostic))[1]
+        self.assertLess(time.monotonic() - started, 0.5)
+        self.assertEqual(self.evidence(entry)["snapshots"][0], {})
+        self.client.close.assert_called_once()
+
+    def test_success_and_deferral_leave_no_evidence(self):
+        for deferred in (False, True):
+            def scenario(record, scratch):
+                self.scratch = scratch
+                if deferred:
+                    raise probe.Deferred("try later")
+            _, entry = self.run_attempt(scenario)
+            self.assertNotIn("evidence", entry)
+            self.assertFalse(self.scratch.root.exists())
+        self.assertFalse((self.root / "failures").exists())
+
+
+class PanelStableTests(unittest.TestCase):
+    def test_close_hidden_reopen_stays_focused_or_detects_late_hide(self):
+        for outcome in ("stable", "hidden", "unfocused"):
+            with self.subTest(outcome=outcome):
+                clock = [0.0]
+                opened = [False]
+                main = [True]
+                client = Mock()
+                app = Mock(client=client)
+                app.launch.return_value = client
+
+                def ask(op, **fields):
+                    if op == "close":
+                        main[0] = False
+                    if op == "clickIcon":
+                        opened[0] = not opened[0]
+
+                def state():
+                    panel = opened[0] and not (outcome == "hidden" and clock[0] >= 0.75)
+                    focused = panel and not (outcome == "unfocused" and clock[0] >= 0.75)
+                    return {"menubar": {"attached": True, "panelVisible": panel}, "windows": [
+                        {"label": "main", "visible": main[0]},
+                        {"label": "menubar", "visible": panel, "focused": focused}]}
+
+                client.ask.side_effect = ask
+                app.state.side_effect = state
+                record = probe.Record("panelstable", 1, [])
+                with patch.object(probe, "Host"), patch.object(probe, "App", return_value=app), \
+                     patch.object(probe, "connect"), patch.object(probe, "person_away"), \
+                     patch.object(probe, "front", return_value={"pid": 1}), patch.object(probe, "hand_back"), \
+                     patch.object(probe.time, "monotonic", side_effect=lambda: clock[0]), \
+                     patch.object(probe.time, "sleep", side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)):
+                    probe.scenario_panelstable(record, Mock())
+                self.assertEqual(record.passed, outcome == "stable")
+                self.assertEqual(client.ask.call_args_list, [
+                    call("close", window="main"), call("clickIcon"), call("clickIcon"), call("clickIcon")])
+                self.assertGreaterEqual(clock[0], 3 if outcome == "stable" else 0.75)
+                app.quit.assert_called_once()
+                app.forget.assert_called_once()
+
+
+if __name__ == "__main__":
+    unittest.main()

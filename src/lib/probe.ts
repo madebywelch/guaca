@@ -16,6 +16,7 @@
  * script waits by asking again.
  */
 
+import { diagnosticRows } from "./diagnostic";
 import { useStore } from "./store";
 import { attached, saveConnection } from "./transport";
 
@@ -23,6 +24,7 @@ import { attached, saveConnection } from "./transport";
 export type Call =
   | { do: "ready" }
   | { do: "view" }
+  | { do: "diagnostic" }
   | { do: "attach"; origin: string; token: string }
   | { do: "find"; role: string; name?: string }
   | { do: "click"; role: string; name: string }
@@ -231,6 +233,8 @@ export function run(call: Call, document: Document = window.document): Answer {
         };
       case "view":
         return { ok: true, value: view() };
+      case "diagnostic":
+        return { ok: true, value: diagnosticRows() };
       case "attach":
         saveConnection({ origin: call.origin, token: call.token }, "remote");
         // After the answer has left: a reload now would take it with it.

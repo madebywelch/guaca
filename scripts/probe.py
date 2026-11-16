@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import secrets
@@ -72,6 +73,22 @@ SENT = "Sent. It should be on your screen now."
 # A banner the probe raises says what it is.
 DELIVERY_TITLE = "Guaca probe: test notification"
 DELIVERY_BODY = "Raised by scripts/probe.py while testing a build. Nothing needs you."
+
+FAILURES = TAURI / "target/probe/failures"
+DIAGNOSTIC_TIMEOUT = 1.0
+EVIDENCE_BYTES = 256 * 1024
+NATIVE_BYTES = 1024 * 1024
+NATIVE_ROWS = 4096
+PAGE_ROWS = 256
+EVIDENCE_SNAPSHOTS = 16
+NATIVE_PHASES = frozenset({
+    "notification.default", "notification.clicked", "window.open", "window.reveal",
+    "toggle.enter", "toggle.return", "app.did_hide", "toggle.completed",
+})
+PAGE_PHASES = frozenset({
+    "notification.clicked", "notification.missing", "notification.remembered", "reveal.agent",
+    "select.requested", "select.invalid", "select.committed",
+})
 
 
 class Failed(Exception):
@@ -328,6 +345,89 @@ def screen_step(what: str) -> None:
 # The scratch world ----------------------------------------------------------
 
 
+def evidence_number(value: Any) -> bool:
+    return type(value) in (int, float) and abs(value) <= 2**64 - 1 and math.isfinite(value)
+
+
+def evidence_rows(rows: Any, phases: frozenset[str], clock: str) -> list[dict]:
+    if not isinstance(rows, list):
+        return []
+    kept = []
+    for row in rows[:NATIVE_ROWS if clock == "us" else PAGE_ROWS]:
+        if not isinstance(row, dict) or type(row.get("phase")) is not str or row["phase"] not in phases:
+            continue
+        if type(row.get("id")) is not int or not 0 <= row["id"] <= 2**64 - 1:
+            continue
+        if not (type(row.get("value")) is bool or evidence_number(row.get("value"))):
+            continue
+        if not evidence_number(row.get(clock)) or row[clock] < 0:
+            continue
+        clean = {key: row[key] for key in ("phase", "id", "value", clock)}
+        if clock == "us":
+            if type(row.get("main")) is not bool:
+                continue
+            clean["main"] = row["main"]
+        kept.append(clean)
+    return kept
+
+
+def diagnostic(path: Path, **request: Any) -> Any:
+    """A separate, bounded connection, even if the scenario's channel is broken."""
+    try:
+        deadline = time.monotonic() + DIAGNOSTIC_TIMEOUT
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(DIAGNOSTIC_TIMEOUT)
+            sock.connect(str(path))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            sock.settimeout(remaining)
+            sock.sendall(json.dumps({"id": 1, **request}).encode() + b"\n")
+            data = bytearray()
+            while b"\n" not in data and len(data) < EVIDENCE_BYTES:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                sock.settimeout(remaining)
+                chunk = sock.recv(min(4096, EVIDENCE_BYTES - len(data)))
+                if not chunk:
+                    return None
+                data.extend(chunk)
+            if b"\n" in data:
+                reply = json.loads(data.split(b"\n", 1)[0])
+                if isinstance(reply, dict) and reply.get("id") == 1 and reply.get("ok") is True:
+                    return reply.get("value")
+    except Exception:
+        pass
+    return None
+
+
+def diagnostic_snapshot(path: Path) -> dict:
+    snapshot: dict = {}
+    state = diagnostic(path, op="state")
+    if isinstance(state, dict):
+        windows = state.get("windows")
+        clean: dict = {"windows": {}}
+        if isinstance(windows, list):
+            for window in windows:
+                if isinstance(window, dict) and window.get("label") in ("main", "menubar"):
+                    clean["windows"][window["label"]] = {
+                        key: window[key] for key in ("visible", "focused", "minimized")
+                        if type(window.get(key)) is bool
+                    }
+        menubar = state.get("menubar")
+        if isinstance(menubar, dict):
+            clean["menubar"] = {key: menubar[key] for key in ("attached", "panel", "panelVisible")
+                                if type(menubar.get(key)) is bool}
+        snapshot["state"] = clean
+    page = diagnostic(path, op="page", window="main", call={"do": "diagnostic"})
+    if isinstance(page, dict):
+        snapshot["page"] = {"rows": evidence_rows(page.get("rows"), PAGE_PHASES, "ms")}
+        if evidence_number(page.get("ms")) and page["ms"] >= 0:
+            snapshot["page"]["ms"] = page["ms"]
+    return snapshot
+
+
 class Scratch:
     """One run's directories, all under one temporary root, removed at the end."""
 
@@ -345,6 +445,37 @@ class Scratch:
         self.apps.mkdir(parents=True)
         self.started: list[Callable[[], None]] = []
         self.logs: list[UnifiedLog] = []
+        self.snapshots: list[dict] = []
+
+    def retain_failure(self) -> Path | None:
+        """Persist only allowlisted evidence, never the scratch profile or logs."""
+        directory = FAILURES / uuid.uuid4().hex
+        try:
+            native: dict = {"readable": False, "rows": []}
+            trace = self.channel / "native.jsonl"
+            try:
+                if trace.is_file():
+                    with trace.open("rb") as source:
+                        data = source.read(NATIVE_BYTES)
+                    rows = []
+                    for line in data.splitlines()[:NATIVE_ROWS]:
+                        try:
+                            rows.append(json.loads(line))
+                        except (ValueError, UnicodeError, RecursionError):
+                            pass
+                    native = {"readable": True, "rows": evidence_rows(rows, NATIVE_PHASES, "us")}
+            except OSError:
+                pass
+            FAILURES.mkdir(parents=True, exist_ok=True, mode=0o700)
+            FAILURES.chmod(0o700)
+            directory.mkdir(mode=0o700)
+            fd = os.open(directory / "evidence.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w") as target:
+                target.write(json.dumps({"native": native, "snapshots": self.snapshots},
+                                        indent=2, allow_nan=False) + "\n")
+            return directory
+        except Exception:
+            return None
 
     def track(self, stop: Callable[[], None]) -> None:
         """Something this run started, stopped when the run ends however it
@@ -619,6 +750,7 @@ class App:
             "HOME": str(self.scratch.home),
             "CFFIXED_USER_HOME": str(self.scratch.home),
             "GUACA_PROBE_SOCKET": str(self.socket),
+            "GUACA_PROBE_TRACE": str(self.scratch.channel / "native.jsonl"),
             "GUAC_LOG": "guac=info,warn",
         }
         for key, value in env.items():
@@ -647,6 +779,13 @@ class App:
         return self.client.ask("state")
 
     def quit(self) -> None:
+        if self.client:
+            try:
+                snapshot = diagnostic_snapshot(self.socket)
+                self.scratch.snapshots.append(snapshot)
+                self.scratch.snapshots = self.scratch.snapshots[-EVIDENCE_SNAPSHOTS:]
+            except Exception:
+                pass
         if self.client and self.alive():
             try:
                 self.client.ask("quit")
@@ -1554,6 +1693,44 @@ def rows_released(host: Host, delivery: str) -> bool:
         return (conn.execute("SELECT releases FROM outbox WHERE id=?", (delivery,)).fetchone() or [0])[0] >= 1
 
 
+def scenario_panelstable(record: Record, scratch: Scratch) -> None:
+    """A channel-close followed immediately by a channel-reopen leaves the panel visible and focused for three seconds."""
+    host = Host(scratch)
+    record.secrets.append(host.token)
+    host.seed()
+    app = App(scratch)
+    before = None
+    try:
+        client = app.launch()
+        connect(app, host)
+        wait_until("the panel is made", lambda: app.state()["menubar"]["attached"], 20)
+        client.ask("close", window="main")
+        wait_until("the window closes", lambda: not visible(app, "main"), 10)
+        person_away("opening and reopening the panel")
+        before = front()
+        client.ask("clickIcon")
+        wait_until("the panel opens", lambda: app.state()["menubar"]["panelVisible"], 10)
+        client.ask("clickIcon")
+        wait_until("the panel closes", lambda: not app.state()["menubar"]["panelVisible"], 10)
+        client.ask("clickIcon")
+
+        def stable() -> bool:
+            state = app.state()
+            return state["menubar"]["panelVisible"] and any(
+                w["label"] == "menubar" and w["visible"] and w["focused"] for w in state["windows"]
+            )
+
+        wait_until("the panel opens again with the keyboard", stable, 10)
+        record.check("the reopened panel stays visible and focused for three seconds",
+                     holds_for("the reopened panel stays visible and focused", stable, 3))
+    finally:
+        if before:
+            hand_back(app, before)
+        app.quit()
+        host.stop()
+        app.forget()
+
+
 def scenario_draft(record: Record, scratch: Scratch) -> None:
     """Screen: a draft typed to one agent in the panel is not on another, and is there when you come back; read through Accessibility."""
     host = Host(scratch)
@@ -1700,6 +1877,7 @@ SCENARIOS: dict[str, Callable[[Record, Scratch], None]] = {
     "permission": scenario_permission,
     "notification": scenario_notification,
     "panel": scenario_panel,
+    "panelstable": scenario_panelstable,
     "allow": scenario_allow,
     "button": scenario_button,
     "busy": scenario_busy,
@@ -1754,6 +1932,7 @@ def attempt(name: str, index: int, keep: bool) -> tuple[Record, dict]:
     """One run of one scenario in its own scratch world."""
     scratch = Scratch()
     record = Record(name, index, [])
+    evidence = None
     started = time.monotonic()
     try:
         SCENARIOS[name](record, scratch)
@@ -1766,12 +1945,16 @@ def attempt(name: str, index: int, keep: bool) -> tuple[Record, dict]:
     except Exception as error:
         record.steps.append({"step": f"the probe itself failed: {error!r}", "pass": False})
     finally:
+        scratch.stop_all()
+        if not record.passed and not record.deferred:
+            evidence = scratch.retain_failure()
         if keep:
-            scratch.stop_all()
             record.steps.append({"step": "scratch kept", "observed": str(scratch.root)})
         else:
             scratch.close()
     entry = record.result()
+    if not record.passed and not record.deferred:
+        entry["evidence"] = str(evidence) if evidence else None
     entry["seconds"] = round(time.monotonic() - started, 1)
     # Lines the live stream never delivered and the persisted log had: each
     # one a step that would have been read as macOS doing nothing.

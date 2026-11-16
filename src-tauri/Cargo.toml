@@ -126,6 +126,8 @@ tauri-plugin-notification = { version = "2.3.3", optional = true }
 notify-rust = { version = "4.18.2", default-features = false, features = ["preview-macos-un"], optional = true }
 mac-usernotifications = { version = "0.3.1", optional = true }
 objc2 = { version = "0.6", optional = true }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSNotification", "NSOperation", "block2"], optional = true }
+block2 = { version = "0.6", optional = true }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder"], optional = true }
 
 [[test]]
@@ -177,7 +179,7 @@ custom-protocol = ["tauri/custom-protocol"]
 # part of another feature (a unit test in `probe.rs` holds that) and refused at
 # compile time with optimizations on, so a release cannot carry it. See
 # docs/PROBE.md.
-probe = ["desktop"]
+probe = ["desktop", "dep:objc2-foundation", "dep:block2"]
 
 # The scratch Host's clock for the same script: started with
 # GUACA_PROBE_MINUTE_MS, a Host built with this counts the outbox's two waits

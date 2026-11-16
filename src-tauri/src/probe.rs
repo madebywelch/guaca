@@ -18,6 +18,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+mod toggle;
+#[cfg(feature = "probe")]
+pub mod trace;
+
 #[cfg(feature = "probe")]
 pub mod channel;
 
