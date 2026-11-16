@@ -981,7 +981,6 @@ describe("when the connection to the host is lost", () => {
 describe("phone navigation", () => {
   it("opens the same channel again and preserves its draft across its tabs and Today", async () => {
     listAgents.mockResolvedValue([agent("Ada")]);
-    localStorage.setItem("guac.inspector", "closed");
     const { container } = render(<App />);
     await waitFor(() => expect(railRow("Ada")).toBeTruthy());
     fireEvent.click(railRow("Ada"));
