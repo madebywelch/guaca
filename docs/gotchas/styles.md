@@ -100,8 +100,8 @@ and *Every length is named* in `docs/INVARIANTS.md` is the rule they all sit und
   invisible.
 - **A column's recessed surface is not the page's either.** `--sunken` is a hair
   off white, which is a field on paper and nothing at all on an off-white panel,
-  so the three columns remap it onto `--rail-sunken` in one rule that names all
-  of them. Remapped there rather than at each rule inside, so a row added to the
+  so the Groups sheet's two columns, the menu bar panel and the agent panel
+  remap it onto `--rail-sunken` in one rule that names all of them. Remapped there rather than at each rule inside, so a row added to the
   Groups sheet tomorrow is recessed from what it is actually drawn on.
 - **One surface is ink whichever surface the operator picked, and it says so
   itself.** The full-window machine viewer pins `--stage-*` on `.screen`,

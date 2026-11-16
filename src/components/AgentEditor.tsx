@@ -368,8 +368,8 @@ export function AgentEditor({ agent, onClose }: Props) {
 
         {agent && confirmDelete && (
           <p className="field__hint" style={{ marginTop: "0.6rem" }}>
-            {agent.name} leaves the sidebar and stops receiving messages. What it already said stays
-            readable in the other agents' channels, and the name becomes free to reuse.
+            {agent.name} leaves the Groups sheet and stops receiving messages. What it already said
+            stays readable in the other agents' channels, and the name becomes free to reuse.
           </p>
         )}
       </div>

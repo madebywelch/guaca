@@ -1402,7 +1402,7 @@ Two lessons are encoded in `Store::open`:
   see 0 and both try to create the tables.
 
 Agents are ordered by `rowid`. `created_at` is not a total order at millisecond
-resolution, and falling back to the UUID sorts the sidebar randomly.
+resolution, and falling back to the UUID sorts the Groups sheet randomly.
 
 ## Deleting an agent is a soft delete
 
