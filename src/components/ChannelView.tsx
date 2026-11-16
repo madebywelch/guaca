@@ -366,7 +366,14 @@ export function ChannelView({
         <Arrivals channel={channel} messages={messages} lookups={lookups} />
         {/* Keyed by agent, so the disclosure below does not arrive already
               open on a channel the operator has just switched to. */}
-        {agent && <TurnFooter key={agent.id} agent={agent} state={activity[agent.id]} />}
+        {agent && (
+          <TurnFooter
+            key={agent.id}
+            agent={agent}
+            state={activity[agent.id]}
+            now={view === "now"}
+          />
+        )}
         <Composer
           key={`composer-${channel}`}
           draftKey={channel}
@@ -427,7 +434,16 @@ export function ChannelView({
  * This one holds only which of the two is open, which is the whole reason it
  * exists: both buttons are on the line and the panel is above it.
  */
-function TurnFooter({ agent, state }: { agent: AgentCard; state: Activity | undefined }) {
+function TurnFooter({
+  agent,
+  state,
+  now,
+}: {
+  agent: AgentCard;
+  state: Activity | undefined;
+  /** Under Now, which already says what the agent is doing and who it is. */
+  now: boolean;
+}) {
   const inline = useStore((s) => s.prefs.showReasoning);
   const [showing, setShowing] = useState<Showing | null>(null);
   const panel = useId();
@@ -452,6 +468,7 @@ function TurnFooter({ agent, state }: { agent: AgentCard; state: Activity | unde
       {!inline && showing === "steps" && <StepsPanel id={panel} agent={agent.id} />}
       <WorkingNote
         agent={agent}
+        now={now}
         panel={panel}
         showing={showing}
         onToggle={(which) => setShowing((held) => (held === which ? null : which))}
@@ -591,11 +608,17 @@ function StepsPanel({ id, agent }: { id: string; agent: AgentId }) {
  */
 function WorkingNote({
   agent,
+  now: onNow,
   panel,
   showing,
   onToggle,
 }: {
   agent: AgentCard;
+  /**
+   * Under Now the page above says who is working and on what, step by step,
+   * so the line keeps only what acts on the turn: the count and Stop.
+   */
+  now: boolean;
   /** The one slot this line's two buttons open into. */
   panel: string;
   /** Which of them is open, if either. */
@@ -644,33 +667,37 @@ function WorkingNote({
     // model publishes its first thought or reaches for its first tool.
     <div
       className="working"
-      role={saying ? undefined : "status"}
+      role={saying || onNow ? undefined : "status"}
       data-thinking={saying || undefined}
     >
-      <AgentAvatar
-        avatar={agent.avatar}
-        color={agent.color}
-        size="md"
-        seed={agent.id}
-        activity={{ state: "thinking" }}
-        title={`${agent.name} is working`}
-      />
-      {held ? (
-        // Only where there is something to open. A control that does nothing is
-        // one the operator learns to distrust, and a model that publishes no
-        // working is a turn with nothing behind this line.
-        <button
-          type="button"
-          className="working__label working__label--open"
-          aria-expanded={showing === "working"}
-          aria-controls={showing === "working" ? panel : undefined}
-          aria-label={`${showing === "working" ? "Hide" : "Show"} what ${agent.name} is working through`}
-          onClick={() => onToggle("working")}
-        >
-          {line}
-        </button>
-      ) : (
-        <span className="working__label">{line}</span>
+      {!onNow && (
+        <>
+          <AgentAvatar
+            avatar={agent.avatar}
+            color={agent.color}
+            size="md"
+            seed={agent.id}
+            activity={{ state: "thinking" }}
+            title={`${agent.name} is working`}
+          />
+          {held ? (
+            // Only where there is something to open. A control that does nothing is
+            // one the operator learns to distrust, and a model that publishes no
+            // working is a turn with nothing behind this line.
+            <button
+              type="button"
+              className="working__label working__label--open"
+              aria-expanded={showing === "working"}
+              aria-controls={showing === "working" ? panel : undefined}
+              aria-label={`${showing === "working" ? "Hide" : "Show"} what ${agent.name} is working through`}
+              onClick={() => onToggle("working")}
+            >
+              {line}
+            </button>
+          ) : (
+            <span className="working__label">{line}</span>
+          )}
+        </>
       )}
       <div className="working__end">
         {/* Named, never counted, and never behind the click beside it. The
