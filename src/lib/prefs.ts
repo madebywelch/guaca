@@ -224,8 +224,15 @@ export function loadPrefs(): Prefs {
     if (raw === null) return DEFAULT_PREFS;
     const parsed: unknown = JSON.parse(raw);
     const prefs = readPrefs(parsed);
-    const marked = typeof parsed === "object" && parsed !== null && "look" in parsed;
-    return marked && parsed.look === LOOK ? prefs : movedFromOldDefault(prefs);
+    // A newer build's mark counts as marked: it has already moved the old
+    // default, and moving again would undo a slate chosen there.
+    const marked =
+      typeof parsed === "object" &&
+      parsed !== null &&
+      "look" in parsed &&
+      typeof parsed.look === "number" &&
+      parsed.look >= LOOK;
+    return marked ? prefs : movedFromOldDefault(prefs);
   } catch {
     return DEFAULT_PREFS;
   }

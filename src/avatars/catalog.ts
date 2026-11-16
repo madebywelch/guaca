@@ -363,6 +363,13 @@ export const ACCENTS: { name: string; value: string }[] = [
 
 export const DEFAULT_ACCENT = ACCENTS[0]?.value as string;
 
+/**
+ * The color an agent that is gone is drawn in, wherever its face still has to
+ * be: one value, so a deleted agent looks the same on every surface. A gray
+ * off every accent, so it is never read as one of the living.
+ */
+export const ABSENT_ACCENT = "#8aa0a6";
+
 /** Picks the accent least used so far, so a new crew is visually separable. */
 export function suggestAccent(taken: string[]): string {
   const counts = new Map(ACCENTS.map((a) => [a.value, 0]));

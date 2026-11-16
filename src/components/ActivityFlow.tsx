@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { AgentAvatar } from "../avatars/AgentAvatar";
+import { ABSENT_ACCENT } from "../avatars/catalog";
 import { ROOT_PX } from "../lib/appearance";
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
@@ -401,7 +402,7 @@ function peerFor(
 ): { peer: WirePeer; gone: boolean } {
   const card = byId(id);
   if (!card) {
-    return { peer: { id, name: "Deleted agent", color: "#8aa0a6", avatar: "pit" }, gone: true };
+    return { peer: { id, name: "Deleted agent", color: ABSENT_ACCENT, avatar: "pit" }, gone: true };
   }
   return {
     peer: { id: card.id, name: card.name, color: card.color, avatar: card.avatar },

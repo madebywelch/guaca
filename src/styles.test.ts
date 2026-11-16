@@ -272,12 +272,12 @@ describe("the columns that are not the page", () => {
     }
   });
 
-  it("recesses from the column rather than from the page", () => {
+  it("recesses from the column and the agent panel rather than from the page", () => {
     // Matched against the source rather than against `RULES`, whose selector
     // group stops at a newline: this rule names its three scopes one per line.
     const remap = css.match(/([^{}]*)\{\s*--sunken: var\(--rail-sunken\);\s*\}/);
     expect(remap, "no rule remaps --sunken onto --rail-sunken").toBeTruthy();
-    for (const scope of [".rail,", ".grail,", ".inspector,", ".menubar"]) {
+    for (const scope of [".rail,", ".grail,", ".agent-panel,", ".menubar"]) {
       expect(remap![1]!).toContain(scope);
     }
     expect(PAPER.has("--rail-sunken")).toBe(true);
@@ -309,7 +309,7 @@ describe("the window's columns", () => {
    * anything in it is a pixel too wide. The inspector said only that, and the
    * terminal's directory, one unbroken path, gave it a horizontal scrollbar.
    */
-  it.each(["rail__list", "grail__list", "pane__scroll", "inspector__body"])(
+  it.each(["rail__list", "grail__list", "pane__scroll", "agent-panel"])(
     "scrolls .%s on one axis",
     (column) => {
       const shown = getComputedStyle(nest(column));
@@ -319,8 +319,8 @@ describe("the window's columns", () => {
     },
   );
 
-  it("breaks a path in the inspector rather than cutting it off", () => {
-    expect(getComputedStyle(nest("inspector__body")).overflowWrap).toBe("break-word");
+  it("breaks a path in the agent panel rather than cutting it off", () => {
+    expect(getComputedStyle(nest("agent-panel")).overflowWrap).toBe("break-word");
   });
 });
 
@@ -1032,5 +1032,60 @@ describe("a host and this app on different builds", () => {
     document.body.append(facts);
     expect(getComputedStyle(marked).color).toBe(getComputedStyle(label).color);
     expect(getComputedStyle(marked).color).not.toBe(getComputedStyle(plain).color);
+  });
+});
+
+describe("the new window's surfaces", () => {
+  /** Every declaration made for `selector`, in any rule whose selector list holds it. */
+  function ruleOf(source: string, selector: string): string {
+    const bare = source.replace(/\/\*[\s\S]*?\*\//g, "");
+    return [...bare.matchAll(/(^|\n)([^{}@\n][^{}]*)\{([^{}]*)\}/g)]
+      .filter((match) =>
+        (match[2] ?? "")
+          .split(",")
+          .map((one) => one.trim())
+          .includes(selector),
+      )
+      .map((match) => match[3] ?? "")
+      .join("\n");
+  }
+
+  it("brings the Groups sheet in on the one arrival, with no keyframe of its own", () => {
+    expect(ruleOf(css, ".sheet")).not.toContain("sheet-in");
+    const arrival = [...css.matchAll(/([^{}]*)\{[^{}]*animation: pop var/g)].map((m) => m[1] ?? "");
+    expect(
+      arrival.some((selectors) =>
+        selectors
+          .split(",")
+          .map((s) => s.trim())
+          .includes(".sheet"),
+      ),
+    ).toBe(true);
+    expect(css).not.toMatch(/@keyframes sheet-in/);
+  });
+
+  it("gives the page's tabs, the top bar's buttons and the field's send a finger's room", () => {
+    const opener = "@media (max-width: 48rem), (hover: none) and (pointer: coarse) {";
+    const at = css.lastIndexOf(opener);
+    expect(at).toBeGreaterThan(-1);
+    const block = css.slice(at, css.indexOf("\n}\n", at));
+    for (const selector of [".agent-tabs__tab", ".topbar__button", ".intake__send"]) {
+      const sized = [...block.matchAll(/([^{}]*)\{([^{}]*)\}/g)].some(
+        (m) =>
+          (m[1] ?? "")
+            .split(",")
+            .map((s) => s.trim())
+            .includes(selector) &&
+          (m[2] ?? "").includes("min-height: var(--control-touch)") &&
+          (m[2] ?? "").includes("min-width: var(--control-touch)"),
+      );
+      expect(sized, `${selector} is not sized for touch`).toBe(true);
+    }
+  });
+
+  it("spends one column width on the agent panel, and named sizes on the field's picker", () => {
+    expect(ruleOf(css, ".agent-panel")).toContain("var(--column-w)");
+    expect(ruleOf(css, ".agent-panel")).not.toMatch(/\d+rem/);
+    expect(ruleOf(css, ".intake__menu")).not.toMatch(/\d+rem/);
   });
 });

@@ -359,16 +359,20 @@ function faceLabel(name: string, state: FaceState, at: number, now: number): str
 }
 
 /**
- * Where the band starts: the last time anything was marked seen, or with
- * nothing ever seen, when the oldest unseen run began. Null when there is
- * nothing unseen to put in it.
+ * Where the band starts: the last time anything was marked seen, or when the
+ * oldest unseen run began if that is earlier. Null when there is nothing
+ * unseen to put in it.
+ *
+ * The earlier of the two, because seeing is per run: opening one agent marks
+ * its run seen now, and a band that started there would leave every older run
+ * nobody has looked at outside the stretch that says it was missed.
  */
 function bandFrom(outcomes: Outcome[]): number | null {
   const unseen = outcomes.filter((one) => one.seenAt === null);
   if (!unseen.length) return null;
   const seen = outcomes.flatMap((one) => (one.seenAt === null ? [] : [one.seenAt]));
-  if (seen.length) return Math.max(...seen);
-  return Math.min(...unseen.map((one) => one.startedAt));
+  const oldest = Math.min(...unseen.map((one) => one.startedAt));
+  return seen.length ? Math.min(Math.max(...seen), oldest) : oldest;
 }
 
 function hourTicks(scale: Knot[], start: number, now: number, band: number | null): RibbonTick[] {
@@ -553,8 +557,11 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
     scheduled.push({ ...one.item, x, room, words, align: align(x, shown) });
   });
 
-  const lapses = input.approvals.flatMap((one) =>
-    one.lapsesAt === null
+  // A request from an agent the strip does not know (deleted since it asked)
+  // has nobody to name, and "It stops waiting" says nothing about whose.
+  const lapses = input.approvals.flatMap((one) => {
+    const name = names.get(one.agentId);
+    return one.lapsesAt === null || name === undefined
       ? []
       : [
           {
@@ -562,11 +569,11 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
             agentId: one.agentId,
             at: one.lapsesAt,
             x: xAt(scale, one.lapsesAt),
-            label: `${names.get(one.agentId) ?? "It"} stops waiting`,
+            label: `${name} stops waiting`,
             when: stamp(one.lapsesAt, now),
           },
-        ],
-  );
+        ];
+  });
 
   const width = (1 - TODAY_END) / days;
   const dayTicks = Array.from({ length: days }, (_, i): RibbonTick => {

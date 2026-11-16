@@ -1,10 +1,11 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
 import { clockLabel } from "../lib/time";
 import type { WorkDecision } from "../lib/types";
-import { aDecision, anAgent, anApproval } from "../test-fixtures";
+import { aDecision, aGroup, anAgent, anApproval } from "../test-fixtures";
 import { Home } from "./Home";
 
 vi.mock("../lib/ipc", () => ({
@@ -95,5 +96,162 @@ describe("the quiet screen", () => {
     draw({ decisions: [later] });
     expect(screen.getByText("Nothing needs you.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "1 decision set aside in For you" })).toBeTruthy();
+  });
+});
+
+describe("the field", () => {
+  const noor = anAgent("agent-2", { name: "Noor" });
+
+  function drawField(agents = [dara, noor], pending: ReturnType<typeof anApproval>[] = []) {
+    act(() => {
+      useStore.setState({
+        agents,
+        groups: [],
+        pending,
+        stuck: [],
+        decisions: [],
+        outcomes: [],
+        activity: {},
+        lastActive: {},
+        railGroup: null,
+        refreshOutcomes: async () => {},
+      });
+    });
+    const onSearch = vi.fn();
+    render(<Home onSearch={onSearch} onManageGroups={vi.fn()} />);
+    const input = screen.getByRole("textbox", { name: "What do you need?" }) as HTMLTextAreaElement;
+    return { input, onSearch };
+  }
+
+  beforeEach(() => {
+    vi.mocked(api.sendMessage).mockClear();
+  });
+
+  it("hands what is written to search on the find shortcut", () => {
+    const { input, onSearch } = drawField();
+    fireEvent.change(input, { target: { value: "  the measure fix " } });
+    fireEvent.keyDown(input, { key: "f", ctrlKey: true });
+    expect(onSearch).toHaveBeenCalledWith("the measure fix");
+  });
+
+  it("leaves the find shortcut to the window when nothing is written", () => {
+    const { input, onSearch } = drawField();
+    expect(fireEvent.keyDown(input, { key: "f", ctrlKey: true })).toBe(true);
+    expect(onSearch).not.toHaveBeenCalled();
+  });
+
+  it("lets Tab leave the field when something is written, even with a question waiting", () => {
+    const asked = anApproval({
+      agentId: "agent-1",
+      createdAt: ASKED,
+      request: { kind: "question", options: [] },
+    });
+    const { input } = drawField([dara, noor], [asked]);
+    fireEvent.change(input, { target: { value: "draft it" } });
+    // Not prevented: the browser moves focus on, and the field does not
+    // turn into an answer to Dara.
+    expect(fireEvent.keyDown(input, { key: "Tab" })).toBe(true);
+    expect(screen.getByRole("textbox", { name: "What do you need?" })).toBe(input);
+    expect(input.value).toBe("draft it");
+  });
+
+  it("takes an @Name with nothing after it as a pick, and sends nothing", async () => {
+    const { input } = drawField();
+    expect(screen.getByRole("button", { name: "Writing to Dara. Change who" })).toBeTruthy();
+    fireEvent.change(input, { target: { value: "@Noor" } });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    expect(api.sendMessage).not.toHaveBeenCalled();
+    expect(input.value).toBe("");
+    expect(screen.getByRole("button", { name: "Writing to Noor. Change who" })).toBeTruthy();
+  });
+
+  it("sends nothing and says why when there are no agents", async () => {
+    const { input } = drawField([]);
+    expect(screen.getByRole("button", { name: "Choose who to write to" })).toBeTruthy();
+    expect(screen.getByText("Nothing needs you.")).toBeTruthy();
+    fireEvent.change(input, { target: { value: "hello" } });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    expect(api.sendMessage).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toBe(
+      "There is nobody to write to yet. Add an agent first.",
+    );
+    expect(input.value).toBe("hello");
+  });
+});
+
+describe("the field's recipient picker", () => {
+  const noor = anAgent("agent-2", { name: "Noor" });
+
+  function open() {
+    act(() => {
+      useStore.setState({
+        agents: [dara, noor],
+        groups: [aGroup()],
+        pending: [],
+        stuck: [],
+        decisions: [],
+        outcomes: [],
+        activity: {},
+        lastActive: {},
+        railGroup: null,
+        refreshOutcomes: async () => {},
+      });
+    });
+    render(<Home onSearch={vi.fn()} onManageGroups={vi.fn()} />);
+    const trigger = screen.getByRole("button", { name: "Writing to Dara. Change who" });
+    fireEvent.click(trigger);
+    return { trigger, menu: screen.getByRole("group", { name: "Write to" }) };
+  }
+
+  it("is buttons, not a listbox that ignores the arrows", () => {
+    open();
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.queryByRole("option")).toBeNull();
+  });
+
+  it("opens on whoever is written to and moves with the arrows", () => {
+    const { menu } = open();
+    const dara = within(menu).getByRole("button", { name: "Dara" });
+    expect(document.activeElement).toBe(dara);
+    fireEvent.keyDown(dara, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(within(menu).getByRole("button", { name: "Noor" }));
+    fireEvent.keyDown(document.activeElement as Element, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(
+      within(menu).getByRole("button", { name: "Groups and agents" }),
+    );
+    fireEvent.keyDown(document.activeElement as Element, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(dara);
+    fireEvent.keyDown(dara, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(
+      within(menu).getByRole("button", { name: "Groups and agents" }),
+    );
+  });
+
+  it("closes on Escape and gives focus back to its button", () => {
+    const { trigger } = open();
+    fireEvent.keyDown(document.activeElement as Element, { key: "Escape" });
+    expect(screen.queryByRole("group", { name: "Write to" })).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("closes on a press anywhere else", () => {
+    open();
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole("group", { name: "Write to" })).toBeNull();
+  });
+});
+
+describe("a request whose time has passed", () => {
+  it("shows no time while it is still pending", () => {
+    draw({
+      pending: [
+        anApproval({ agentId: "agent-1", createdAt: NOW - 20 * 60_000, lapsesAt: NOW - 60_000 }),
+      ],
+    });
+    expect(screen.queryByText(/waits until/)).toBeNull();
   });
 });

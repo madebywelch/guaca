@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
+import { ABSENT_ACCENT } from "../avatars/catalog";
 import { decisionTime, needsAnswer, orderedDecisions } from "../lib/decisions";
 import { useDismiss } from "../lib/dismiss";
 import { api } from "../lib/ipc";
@@ -345,7 +346,7 @@ export function FinishedLine({
     <button type="button" className="finished-line" title={outcome.headline} onClick={onOpen}>
       <AgentAvatar
         avatar={agent?.avatar ?? "blank"}
-        color={agent?.color ?? "#8aa0a6"}
+        color={agent?.color ?? ABSENT_ACCENT}
         size="xs"
         lifecycle={agent?.lifecycle}
         seed={agent?.id ?? outcome.runId}

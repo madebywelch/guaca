@@ -175,6 +175,10 @@
   --measure-attention: 46rem;
   --control-touch: 2.75rem;
   --type-touch: max(16px, 1rem);
+  /* The field's recipient popup: room for a long name beside its face, and
+     short enough to stay inside a short window. */
+  --picker-w: 14rem;
+  --picker-h: 24rem;
   /* The window's own three buttons, which a Mac draws over the top left corner
      of the rail. Pixels rather than rems, like the insets below: the buttons
      are the operating system's and do not grow with the interface scale. */
@@ -503,12 +507,12 @@
    be recessed, and recessed from white is a value that disappears on an
    off-white panel. Remapped once here, on the elements every rule in those
    surfaces descends from, rather than at each rule inside: a row added to
-   the inspector tomorrow is then recessed from what it is actually drawn on
+   the agent panel tomorrow is then recessed from what it is actually drawn on
    without having to know which half of the app it is in. `styles.test.ts` is
    the gate, and it reads this rule to know which names are covered. */
 .rail,
 .grail,
-.inspector,
+.agent-panel,
 .menubar {
   --sunken: var(--rail-sunken);
 }
@@ -625,8 +629,6 @@ input[type="file"]::file-selector-button {
 .rail,
 .rail__body,
 .rail__list,
-.inspector,
-.inspector__body,
 .settings__pane {
   min-height: 0;
 }
@@ -6347,7 +6349,8 @@ input[type="file"]:disabled {
 .orb__tag,
 .spend,
 .onboarding-content,
-.statusbar__form {
+.statusbar__form,
+.sheet {
   animation: pop var(--tempo-enter) var(--ease) both;
   transform-origin: var(--pop-origin);
 }
@@ -6822,89 +6825,6 @@ input[type="file"]:disabled {
   }
 }
 
-/* ==========================================================================
-   The inspector
-
-   What an agent has, beside what it says. A third column rather than a panel
-   floating over the transcript: a desktop and a schedule are things you watch
-   while reading, and the reading column keeps its measure either way.
-   ========================================================================== */
-
-.inspector {
-  /* Capped for the same reason as `--rail-w`: it scales and the window's
-     minimum does not. */
-  width: min(20rem, 30vw);
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  /* The rail's ground, not the page's. These are the app's two edges and they
-     have the same job: everything about an agent that is not what it said.
-     Drawn on the page's own white it read as more transcript, which is the one
-     thing it is not, and it made the window three surfaces wide. */
-  border-left: 1px solid var(--rail-edge);
-  background: var(--rail-ground);
-}
-
-/* Closed it is the tab and nothing else, still holding its own sliver of the
-   window so the transcript does not reflow twice on every toggle. */
-.inspector--closed {
-  width: 2.1rem;
-}
-
-/* The agent's profile is the head of its own panel, with the one control
-   that closes the panel in the corner. The close sits at the top of the row
-   rather than centered on it because the profile is three lines tall and a
-   control that floated beside the middle one read as belonging to it. */
-.inspector__head {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-2);
-  padding: var(--space-5) var(--space-3) var(--space-4) var(--space-5);
-}
-
-/* A routine open in the panel: a back arrow, a title and the close. The
-   title is centered between the two controls rather than after the arrow,
-   so it stays put as the arrow appears and disappears. */
-.inspector__head[data-level="routine"] {
-  align-items: center;
-}
-
-.inspector__title {
-  flex: 1;
-  margin: 0;
-  text-align: center;
-  font-family: var(--font-ui);
-  font-size: var(--type-ui);
-  font-weight: 500;
-  color: var(--muted);
-}
-
-.inspector--closed .inspector__tab {
-  margin: var(--space-5) auto 0;
-}
-
-.inspector__tab {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  background: none;
-  cursor: pointer;
-  color: var(--faint);
-  padding: var(--space-2);
-  border-radius: var(--radius-sm);
-  line-height: var(--lead-flush);
-  transition: color var(--tempo-tap) var(--ease), background var(--tempo-tap) var(--ease);
-}
-
-.inspector__tab:hover,
-.inspector__tab:focus-visible {
-  color: var(--text);
-  background: var(--sunken);
-}
-
 /* The panel's front matter: what this page is about, set the way the page
    behind it is set. It was a row — a face, a name, a line and a button — which
    is a contact card. A ledger's first page states the subject and then its
@@ -7154,22 +7074,6 @@ input[type="file"]:disabled {
   font-size: var(--type-small);
   line-height: var(--lead-ui);
   color: var(--faint);
-}
-
-/* Scrolls down and never across, for the reason `.pane__scroll` states its
-   other axis. What pushed it sideways was a path: the terminal's directory and
-   the line that resumes its session are one unbroken token each, much wider
-   than the column. Wrapping breaks them where they would overflow and nowhere
-   else. `break-word` rather than the transcript's `anywhere`, because this is
-   inherited by every row and button in the panel, and `anywhere` would let a
-   squeezed flex item shrink to a letter (see `.md th`). */
-.inspector__body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  overflow-wrap: break-word;
-  padding: 0 var(--space-5) var(--space-6);
 }
 
 /* --- memory --------------------------------------------------------------
@@ -9895,7 +9799,6 @@ button.artifacts__version[aria-pressed="true"] {
 
   .pane__header > .avatar,
   .pane__more,
-  .inspector__head > .inspector__tab:last-child,
   .rail__search,
   .rail__foot > button:last-child {
     display: none;
@@ -9928,7 +9831,6 @@ button.artifacts__version[aria-pressed="true"] {
   .rail__new,
   .rail__gear,
   .pane__more,
-  .inspector__tab,
   .composer__send,
   .composer__attach {
     min-width: var(--control-touch);
@@ -10767,8 +10669,9 @@ button.artifacts__version[aria-pressed="true"] {
   top: calc(100% + var(--space-3));
   left: 0;
   z-index: 40;
-  min-width: 14rem;
-  max-height: 24rem;
+  min-width: var(--picker-w);
+  max-height: var(--picker-h);
+  margin: 0;
   overflow-y: auto;
   padding: var(--space-3);
   background: var(--raised);
@@ -10798,7 +10701,7 @@ button.artifacts__version[aria-pressed="true"] {
 }
 
 .intake__option:hover,
-.intake__option[aria-selected="true"] {
+.intake__option[aria-current="true"] {
   background: var(--sunken);
 }
 
@@ -11091,8 +10994,18 @@ button.artifacts__version[aria-pressed="true"] {
   display: none;
 }
 
+/* Down and never across, for the reason `.pane__scroll` states its other
+   axis. What pushed it sideways was a path: the terminal's directory and the
+   line that resumes its session are one unbroken token each, much wider than
+   the column. Wrapping breaks them where they would overflow and nowhere else.
+   `break-word` rather than the transcript's `anywhere`, because this is
+   inherited by every row and button in the panel, and `anywhere` would let a
+   squeezed flex item shrink to a letter (see `.md th`). */
 .agent-panel {
-  width: min(46rem, 100%);
+  width: min(var(--column-w), 100%);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overflow-wrap: break-word;
   margin: 0 auto;
   padding: var(--space-6) var(--space-7) var(--space-8);
   display: flex;
@@ -11123,22 +11036,6 @@ button.artifacts__version[aria-pressed="true"] {
   display: flex;
   box-shadow: var(--lift-3);
   outline: none;
-  animation: sheet-in var(--tempo-enter) var(--ease) both;
-}
-
-@keyframes sheet-in {
-  from {
-    transform: translateX(-100%);
-  }
-  to {
-    transform: none;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .sheet {
-    animation: none;
-  }
 }
 
 
@@ -11206,6 +11103,17 @@ button.artifacts__version[aria-pressed="true"] {
 
   .intake__send {
     margin-left: auto;
+  }
+
+  .agent-tabs__tab,
+  .topbar__button,
+  .intake__send {
+    min-width: var(--control-touch);
+    min-height: var(--control-touch);
+  }
+
+  .agent-tabs__tab {
+    padding-inline: var(--space-3);
   }
 
   .ribbon__tick {

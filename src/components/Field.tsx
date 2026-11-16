@@ -1,9 +1,10 @@
-import { type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
-import { addressed, defaultTarget, waitingQuestion, writable } from "../lib/field";
+import { useDismiss } from "../lib/dismiss";
+import { addressed, defaultTarget, namedAlone, waitingQuestion, writable } from "../lib/field";
 import { api } from "../lib/ipc";
-import { FIELD_KEY, FIND_KEY } from "../lib/keybinds";
+import { bindingFor, FIELD_KEY, FIND_KEY } from "../lib/keybinds";
 import { useStore } from "../lib/store";
 import { type AgentCard, type AgentId, errorMessage } from "../lib/types";
 import { Icon } from "./Icon";
@@ -79,8 +80,19 @@ export function Field({ onSearch, onManageGroups }: Props) {
         setReceipt({ kind: "answered", agent: asker });
         setAnswering(false);
       } else {
+        // A name and nothing else is a change of recipient, not a message:
+        // sent as written it would hand somebody the literal "@Name".
+        const named = namedAlone(body, agents);
+        if (named) {
+          setPicked(named.id);
+          setText("");
+          return;
+        }
         const to = addressed(body, agents) ?? (target && { agent: target, text: body });
-        if (!to) return;
+        if (!to) {
+          setFailure("There is nobody to write to yet. Add an agent first.");
+          return;
+        }
         await api.sendMessage(to.agent.id, to.text);
         setReceipt({ kind: "sent", agent: to.agent });
       }
@@ -109,6 +121,14 @@ export function Field({ onSearch, onManageGroups }: Props) {
     if (event.key === "Escape" && answering) {
       event.preventDefault();
       setAnswering(false);
+      return;
+    }
+    // Search with what is written, as the row under the field offers. Stopped
+    // here so the window's own shortcut does not open search empty.
+    if (bindingFor(event.nativeEvent)?.id === "search" && text.trim() !== "") {
+      event.preventDefault();
+      event.stopPropagation();
+      onSearch(text.trim());
     }
   };
 
@@ -139,7 +159,9 @@ export function Field({ onSearch, onManageGroups }: Props) {
             onPick={(id) => {
               setPicked(id);
               setPicking(false);
-              input.current?.focus();
+              // After the picker has closed and handed focus back to the
+              // button that opened it: the next thing typed is the message.
+              requestAnimationFrame(() => input.current?.focus());
             }}
             onManageGroups={() => {
               setPicking(false);
@@ -220,6 +242,11 @@ export function Field({ onSearch, onManageGroups }: Props) {
 /**
  * Who the field writes to, and the one place group names are read now that the
  * top of the window is a timeline: each group is a heading over its agents.
+ *
+ * Plain buttons in a popup rather than a listbox: a listbox is one focus stop
+ * with its own selection model, and this one holds a button that opens the
+ * Groups sheet, which no option of a listbox can be. The arrows move between
+ * the buttons, and Escape or a press anywhere else closes it.
  */
 function TargetPicker({
   target,
@@ -238,17 +265,59 @@ function TargetPicker({
   onPick: (id: AgentId) => void;
   onManageGroups: () => void;
 }) {
+  const box = useRef<HTMLDivElement>(null);
+  const menu = useRef<HTMLFieldSetElement>(null);
+  const menuId = useId();
+  useDismiss(() => onOpen(false), open);
+
+  useEffect(() => {
+    if (!open) return;
+    const away = (event: PointerEvent) => {
+      if (event.target instanceof Node && box.current?.contains(event.target)) return;
+      onOpen(false);
+    };
+    document.addEventListener("pointerdown", away);
+    return () => document.removeEventListener("pointerdown", away);
+  }, [open, onOpen]);
+
+  const buttons = () => [...(menu.current?.querySelectorAll<HTMLButtonElement>("button") ?? [])];
+
+  // Onto whoever is written to now, so the arrows start from there.
+  useEffect(() => {
+    if (!open) return;
+    const all = [...(menu.current?.querySelectorAll<HTMLButtonElement>("button") ?? [])];
+    (all.find((one) => one.getAttribute("aria-current") === "true") ?? all[0])?.focus();
+  }, [open]);
+
+  const onKeyDown = (event: KeyboardEvent<HTMLFieldSetElement>) => {
+    const all = buttons();
+    const at = all.indexOf(document.activeElement as HTMLButtonElement);
+    const to =
+      event.key === "ArrowDown"
+        ? (at + 1) % all.length
+        : event.key === "ArrowUp"
+          ? (at - 1 + all.length) % all.length
+          : event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? all.length - 1
+              : null;
+    if (to === null) return;
+    event.preventDefault();
+    all[to]?.focus();
+  };
+
   const shelves = groups
     .map((group) => ({ group, members: agents.filter((agent) => agent.groupId === group.id) }))
     .filter((shelf) => shelf.members.length > 0);
   const named = shelves.length > 1;
   return (
-    <div className="intake__picker">
+    <div className="intake__picker" ref={box}>
       <button
         type="button"
         className="intake__target"
-        aria-haspopup="listbox"
         aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
         aria-label={target ? `Writing to ${target.name}. Change who` : "Choose who to write to"}
         onClick={() => onOpen(!open)}
       >
@@ -259,13 +328,12 @@ function TargetPicker({
         <Icon name="chevron-right" />
       </button>
       {open && (
-        <div
+        <fieldset
+          id={menuId}
+          ref={menu}
           className="intake__menu"
-          role="listbox"
           aria-label="Write to"
-          onKeyDown={(event) => {
-            if (event.key === "Escape") onOpen(false);
-          }}
+          onKeyDown={onKeyDown}
         >
           {shelves.map(({ group, members }) => (
             <div key={group.id}>
@@ -274,8 +342,7 @@ function TargetPicker({
                 <button
                   key={agent.id}
                   type="button"
-                  role="option"
-                  aria-selected={agent.id === target?.id}
+                  aria-current={agent.id === target?.id ? "true" : undefined}
                   className="intake__option"
                   onClick={() => onPick(agent.id)}
                 >
@@ -293,7 +360,7 @@ function TargetPicker({
           <button type="button" className="intake__option intake__manage" onClick={onManageGroups}>
             Groups and agents
           </button>
-        </div>
+        </fieldset>
       )}
     </div>
   );
