@@ -28,6 +28,15 @@ use tokio::net::{UnixListener, UnixStream};
 use super::{Envelope, Reply, Request, State, Window, QUIET_ENV, SOCKET_ENV};
 use crate::tray::Tray;
 
+/// Set by `refuseNextBanner`, taken by the next banner.
+static REFUSE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the banner being handed over now is the one the probe asked to be
+/// refused. Asking takes the refusal, so exactly one banner is refused.
+pub fn refused() -> bool {
+    REFUSE.swap(false, std::sync::atomic::Ordering::SeqCst)
+}
+
 /// How long a page has to answer. A page that is loading answers as soon as
 /// it can; one that has not answered in this long is not going to.
 const PAGE: Duration = Duration::from_secs(10);
@@ -136,6 +145,10 @@ async fn handle(app: &AppHandle, request: Request) -> Result<Value, String> {
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 app.exit(0);
             });
+            Ok(Value::Null)
+        }
+        Request::RefuseNextBanner => {
+            REFUSE.store(true, std::sync::atomic::Ordering::SeqCst);
             Ok(Value::Null)
         }
         Request::Busy { ms } => {

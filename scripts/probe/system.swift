@@ -17,6 +17,10 @@
 //   describe <pid> <scope>     what each group naming <scope> holds: roles,
 //                              text and actions, and nothing outside it
 //   capture <pid> <file>       one PNG of each of that process's windows
+//   click-icon <pid>           a real click, through the window server, on
+//                              that process's menu bar icon; the pointer is
+//                              put back where it was
+//   escape                     a real press of the Escape key
 //
 // Every answer is one JSON value on stdout. A refusal is {"error": "..."} and
 // exit status 2, so the caller can tell "no" from "could not ask".
@@ -216,6 +220,36 @@ case "describe":
     let rest = Array(args.dropFirst())
     guard rest.count == 2, let pid = Int32(rest[0]) else { refuse("describe needs a pid and a scope") }
     emit(scoped(AXUIElementCreateApplication(pid), rest[1]).map { outline($0).joined(separator: " | ") })
+case "click-icon":
+    trusted()
+    guard let pid = Int32(args.dropFirst().first ?? "") else { refuse("click-icon needs a pid") }
+    let bar = attribute(AXUIElementCreateApplication(pid), "AXExtrasMenuBar")
+    guard let item = bar.map({ children($0 as! AXUIElement) })?.first,
+          let place = attribute(item, kAXPositionAttribute as String),
+          let extent = attribute(item, kAXSizeAttribute as String)
+    else { refuse("no menu bar icon for \(pid)") }
+    var origin = CGPoint.zero
+    var size = CGSize.zero
+    AXValueGetValue(place as! AXValue, .cgPoint, &origin)
+    AXValueGetValue(extent as! AXValue, .cgSize, &size)
+    let at = CGPoint(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
+    let back = CGEvent(source: nil)?.location ?? at
+    let source = CGEventSource(stateID: .hidSystemState)
+    for (type, pause) in [(CGEventType.mouseMoved, 80_000), (.leftMouseDown, 60_000), (.leftMouseUp, 80_000)] {
+        CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: at, mouseButton: .left)?
+            .post(tap: .cghidEventTap)
+        usleep(useconds_t(pause))
+    }
+    CGWarpMouseCursorPosition(back)
+    emit(["clicked": [at.x, at.y]])
+case "escape":
+    trusted()
+    let source = CGEventSource(stateID: .hidSystemState)
+    for down in [true, false] {
+        CGEvent(keyboardEventSource: source, virtualKey: 53, keyDown: down)?.post(tap: .cghidEventTap)
+        usleep(40_000)
+    }
+    emit(["escape": true])
 case "capture":
     let rest = Array(args.dropFirst())
     guard rest.count == 2, let pid = Int(rest[0]) else { refuse("capture needs a pid and a file") }
@@ -234,5 +268,5 @@ case "capture":
     }
     emit(["files": files])
 default:
-    refuse("usage: system access|front|watch-front|idle|windows|owner-windows|press|press-group|capture")
+    refuse("usage: system access|front|watch-front|idle|windows|owner-windows|press|press-group|describe|capture|click-icon|escape")
 }

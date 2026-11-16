@@ -66,6 +66,10 @@ pub async fn show(
     body: String,
     click: Option<u32>,
 ) -> Option<Result<(), String>> {
+    #[cfg(feature = "probe")]
+    if crate::probe::channel::refused() {
+        return Some(Err("refused by the probe".into()));
+    }
     imp::show(app, title, body, click).await
 }
 
