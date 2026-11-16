@@ -39,9 +39,12 @@ RUN pnpm build
 FROM rust:1.99-bookworm AS daemon
 WORKDIR /app/src-tauri
 # Dependencies first, so a source-only change reuses the compiled tree. The
-# stubs stand in for every target the manifest names; build.rs is stubbed
-# because the real one only does anything with the desktop feature on.
+# vendored crates come with the manifests because `[patch.crates-io]` points at
+# them and Cargo resolves a patch on every platform. The stubs stand in for
+# every target the manifest names; build.rs is stubbed because the real one
+# only does anything with the desktop feature on.
 COPY src-tauri/Cargo.toml src-tauri/Cargo.lock ./
+COPY src-tauri/vendor ./vendor
 RUN mkdir -p src/bin \
  && echo 'fn main() {}' > src/main.rs \
  && echo 'fn main() {}' > src/bin/guacad.rs \

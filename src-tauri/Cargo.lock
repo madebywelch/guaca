@@ -1583,6 +1583,7 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
+ "objc2-user-notifications",
  "parking_lot 0.12.5",
  "percent-encoding",
  "r2d2",
@@ -2299,8 +2300,6 @@ dependencies = [
 [[package]]
 name = "mac-usernotifications"
 version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08adbb1b9e11709f9ce628dd7471208e5dd3ad35a245dbc81e59a36dce3f3780"
 dependencies = [
  "block2",
  "futures-channel",

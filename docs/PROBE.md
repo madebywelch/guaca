@@ -113,10 +113,33 @@ until the attempt ends. Each diagnostic request uses a separate connection with
 a one-second deadline and a 256 KiB response limit. A missing or stalled channel
 does not prevent normal teardown or replace the original failure.
 
-The launch sets `GUACA_PROBE_TRACE` to `<scratch.channel>/native.jsonl`.
-After stopping the app, the attempt reads at most 1 MiB and 4096 lines from
-this trace. Missing or unreadable traces produce `native.readable: false` and
-an empty row list. A malformed row is skipped.
+Each launch sets `GUACA_PROBE_TRACE` to its own file in `<scratch.channel>`:
+`native.jsonl` for the first launch, then `native-2.jsonl` and so on. The app
+opens the file exclusively at startup, so a relaunch could not reuse the first
+launch's file, and writes a `trace.opened` row first. Its `hello` reply
+carries `trace`, whether that writer is open and has not failed. After
+stopping the app, the attempt reads at most 1 MiB and 4096 lines from each
+launch's trace and joins the rows in launch order. If no trace is readable,
+`native.readable` is false and the row list is empty. A malformed row is skipped.
+
+`traces` gives each launch's `health`. It is `healthy` when the app reported
+an open writer and the file begins with `trace.opened`, and `writer failed`
+otherwise. `events` counts the rows after the marker. A healthy trace with no
+events means the app ran and traced nothing.
+
+Every banner the probe presses is noted with the trace position at the press.
+When a press does not do what its step expects, `presses` attributes it from
+the rows after that press: `no native response arrived`, `a native response
+arrived and no click was emitted`, or `a click was emitted and the page did not
+act`. If that launch's trace is not healthy, the press is not attributed. This
+adds evidence only, and no step's pass condition or timeout depends on it.
+
+`notification.response` is written for every response the native delegate
+hands over, before any filtering. Its `id` is the click number when the
+response is for one of this session's banners, and 0 otherwise. Its `value`
+holds bit 1 for a default action and bit 2 for this session. A press on a
+banner sent without a click identifier, such as the Settings test banner,
+leaves a row with `value` 1.
 
 Evidence has a strict allowlist. Native rows retain only `phase`, numeric `id`,
 numeric or boolean `value`, numeric `us`, and boolean `main`. Page rows retain
@@ -126,9 +149,9 @@ must be finite and no larger in magnitude than an unsigned 64-bit integer.
 Native evidence keeps at most 4096 rows; each page snapshot keeps at most 256.
 Only these phases are accepted:
 
-- Native: `notification.default`, `notification.clicked`, `window.open`,
-  `window.reveal`, `toggle.enter`, `toggle.return`, `app.did_hide`, and
-  `toggle.completed`.
+- Native: `trace.opened`, `notification.response`, `notification.default`,
+  `notification.clicked`, `window.open`, `window.reveal`, `toggle.enter`,
+  `toggle.return`, `app.did_hide`, and `toggle.completed`.
 - Page: `notification.clicked`, `notification.missing`,
   `notification.remembered`, `reveal.agent`, `select.requested`,
   `select.invalid`, and `select.committed`.

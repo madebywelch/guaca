@@ -24,6 +24,14 @@ use serde::Serialize;
 /// number the window raised it with.
 pub const CLICKED: &str = "notification-clicked";
 
+pub fn install(app: &tauri::AppHandle) -> Result<(), String> {
+    imp::install(app)
+}
+
+pub fn shutdown(app: &tauri::AppHandle) {
+    imp::shutdown(app);
+}
+
 /// What macOS will do with a banner from this app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -80,7 +88,103 @@ mod imp {
         AuthorizationStatus, NotificationSettingStatus, NotificationSettings,
     };
     use std::path::Path;
-    use std::sync::LazyLock;
+    use std::sync::{LazyLock, Mutex};
+    use tauri::{Emitter, Manager};
+
+    struct Actions {
+        namespace: String,
+        subscription: Mutex<Option<mac_usernotifications::ResponseSubscription>>,
+    }
+
+    impl Actions {
+        fn shutdown(&self) {
+            let subscription = self.subscription.lock().unwrap().take();
+            if let Some(subscription) = subscription {
+                subscription.detach().wait();
+            }
+        }
+    }
+
+    pub fn install(app: &tauri::AppHandle) -> Result<(), String> {
+        let namespace = format!("guaca:{}:", uuid::Uuid::new_v4());
+        let prefix = namespace.clone();
+        let emitter = app.clone();
+        let subscription = mac_usernotifications::observe_responses(move |response| {
+            #[cfg(feature = "probe")]
+            {
+                let (click, kind) = response_row(&prefix, response);
+                crate::probe::trace::event(
+                    crate::probe::trace::Phase::NotificationResponse,
+                    click,
+                    kind,
+                );
+            }
+            let Some(click) = clicked(&prefix, response) else { return };
+            #[cfg(feature = "probe")]
+            crate::probe::trace::event(
+                crate::probe::trace::Phase::NotificationDefault,
+                u64::from(click),
+                0,
+            );
+            if let Err(err) = emitter.emit(super::CLICKED, click) {
+                tracing::warn!(%err, "could not report a click on a notification");
+            } else {
+                #[cfg(feature = "probe")]
+                crate::probe::trace::event(
+                    crate::probe::trace::Phase::NotificationClicked,
+                    u64::from(click),
+                    0,
+                );
+            }
+        })
+        .ok_or("A native notification observer is already installed.")?;
+        app.manage(Actions { namespace, subscription: Mutex::new(Some(subscription)) });
+        Ok(())
+    }
+
+    pub fn shutdown(app: &tauri::AppHandle) {
+        if let Some(actions) = app.try_state::<Actions>() {
+            actions.shutdown();
+        }
+    }
+
+    /// The click number of a default action on a banner this session raised.
+    /// Banners carry no buttons, so macOS never reports their dismissal.
+    fn clicked(
+        prefix: &str,
+        response: &mac_usernotifications::NotificationResponse,
+    ) -> Option<u32> {
+        let id = response.notification_id.strip_prefix(prefix)?;
+        let click = id.parse::<u32>().ok()?;
+        (click.to_string() == id && response.is_default_action()).then_some(click)
+    }
+
+    #[cfg(feature = "probe")]
+    const RESPONSE_DEFAULT: u64 = 1;
+    #[cfg(feature = "probe")]
+    const RESPONSE_SESSION: u64 = 2;
+
+    /// The probe's row for any response the delegate hands over: the click
+    /// number when it is one of this session's, and bits for a default action
+    /// and for this session. Nothing else of the response is kept.
+    #[cfg(feature = "probe")]
+    fn response_row(
+        prefix: &str,
+        response: &mac_usernotifications::NotificationResponse,
+    ) -> (u64, u64) {
+        let id = response.notification_id.strip_prefix(prefix);
+        let click = id
+            .and_then(|id| id.parse::<u32>().ok().filter(|click| click.to_string() == id))
+            .map_or(0, u64::from);
+        let session = id.is_some();
+        let default = if response.is_default_action() { RESPONSE_DEFAULT } else { 0 };
+        (click, default | if session { RESPONSE_SESSION } else { 0 })
+    }
+
+    /// Without the observer a banner is still shown, only without click-through.
+    fn request_id(actions: Option<&Actions>, click: Option<u32>) -> Option<String> {
+        Some(format!("{}{}", actions?.namespace, click?))
+    }
 
     /// System Settings, Notifications. The list of apps is one click from it.
     const PANE: &str = "x-apple.systempreferences:com.apple.Notifications-Settings.extension";
@@ -119,39 +223,17 @@ mod imp {
         body: String,
         click: Option<u32>,
     ) -> Option<Result<(), String>> {
-        let sent =
-            mac_usernotifications::Notification::new().title(title).message(body).send().await;
-        let handle = match sent {
-            Ok(handle) => handle,
+        let mut notification =
+            mac_usernotifications::Notification::new().title(title).message(body);
+        if let Some(id) = request_id(app.try_state::<Actions>().as_deref(), click) {
+            notification = notification.id(&id);
+        }
+        match mac_usernotifications::send(notification).await {
+            Ok(_) => {}
             Err(err) => {
                 tracing::warn!(%err, "macOS did not accept a notification");
                 return Some(Err(err.to_string()));
             }
-        };
-        if let Some(click) = click {
-            // Awaited, not blocked on: the response arrives through the
-            // delegate on the main run loop, which this only waits to hear.
-            tauri::async_runtime::spawn(async move {
-                if handle.response().await.is_ok_and(|response| response.is_default_action()) {
-                    #[cfg(feature = "probe")]
-                    crate::probe::trace::event(
-                        crate::probe::trace::Phase::NotificationDefault,
-                        u64::from(click),
-                        0,
-                    );
-                    use tauri::Emitter;
-                    if let Err(err) = app.emit(super::CLICKED, click) {
-                        tracing::warn!(%err, "could not report a click on a notification");
-                    } else {
-                        #[cfg(feature = "probe")]
-                        crate::probe::trace::event(
-                            crate::probe::trace::Phase::NotificationClicked,
-                            u64::from(click),
-                            0,
-                        );
-                    }
-                }
-            });
         }
         Some(Ok(()))
     }
@@ -196,6 +278,106 @@ mod imp {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn native_actions_require_this_session_and_a_real_action() {
+            use mac_usernotifications::{CloseReason, NotificationResponse};
+            use objc2_user_notifications::{
+                UNNotificationDefaultActionIdentifier, UNNotificationDismissActionIdentifier,
+            };
+            let prefix = "guaca:current-session:";
+            let mut response = NotificationResponse {
+                notification_id: format!("{prefix}42"),
+                action_identifier: unsafe { UNNotificationDefaultActionIdentifier.to_string() },
+                reply_text: None,
+                close_reason: None,
+            };
+            assert_eq!(clicked(prefix, &response), Some(42));
+            for id in [
+                "guaca:old-session:42",
+                "42",
+                "guaca:current-session:042",
+                "guaca:current-session:-1",
+                "guaca:current-session:4294967296",
+                "guaca:current-session:42x",
+            ] {
+                response.notification_id = id.into();
+                assert_eq!(clicked(prefix, &response), None);
+            }
+            response.notification_id = format!("{prefix}42");
+            response.action_identifier =
+                unsafe { UNNotificationDismissActionIdentifier.to_string() };
+            response.close_reason = Some(CloseReason::Dismissed);
+            assert_eq!(clicked(prefix, &response), None);
+            response.action_identifier.clear();
+            assert_eq!(clicked(prefix, &response), None);
+            response.close_reason = Some(CloseReason::Expired);
+            assert_eq!(clicked(prefix, &response), None);
+            response.close_reason = None;
+            response.action_identifier = "unknown-action".into();
+            assert_eq!(clicked(prefix, &response), None);
+        }
+
+        #[cfg(feature = "probe")]
+        #[test]
+        fn every_native_response_is_traced_by_kind_session_and_click() {
+            use mac_usernotifications::NotificationResponse;
+            use objc2_user_notifications::{
+                UNNotificationDefaultActionIdentifier, UNNotificationDismissActionIdentifier,
+            };
+            let prefix = "guaca:current-session:";
+            let default = unsafe { UNNotificationDefaultActionIdentifier.to_string() };
+            let dismiss = unsafe { UNNotificationDismissActionIdentifier.to_string() };
+            let row = |id: &str, action: &str| {
+                response_row(
+                    prefix,
+                    &NotificationResponse {
+                        notification_id: id.into(),
+                        action_identifier: action.into(),
+                        reply_text: None,
+                        close_reason: None,
+                    },
+                )
+            };
+            assert_eq!(
+                row("guaca:current-session:42", &default),
+                (42, RESPONSE_DEFAULT | RESPONSE_SESSION)
+            );
+            assert_eq!(row("guaca:current-session:42", &dismiss), (42, RESPONSE_SESSION));
+            assert_eq!(
+                row("guaca:current-session:042", &default),
+                (0, RESPONSE_DEFAULT | RESPONSE_SESSION)
+            );
+            assert_eq!(row("guaca:old-session:42", &default), (0, RESPONSE_DEFAULT));
+            assert_eq!(
+                row("5E1A9C2B-0000-4000-8000-000000000000", &default),
+                (0, RESPONSE_DEFAULT)
+            );
+            assert_eq!(row("", "unknown-action"), (0, 0));
+        }
+
+        #[test]
+        fn a_banner_without_the_observer_is_sent_without_a_click_id() {
+            assert_eq!(request_id(None, Some(42)), None);
+            let actions = Actions { namespace: "guaca:s:".into(), subscription: Mutex::new(None) };
+            assert_eq!(request_id(Some(&actions), Some(42)).as_deref(), Some("guaca:s:42"));
+            assert_eq!(request_id(Some(&actions), None), None);
+        }
+
+        #[test]
+        fn action_shutdown_detaches_once_and_allows_a_new_subscription() {
+            let subscription = mac_usernotifications::observe_responses(|_| {}).unwrap();
+            let actions = Actions {
+                namespace: "test-session".into(),
+                subscription: Mutex::new(Some(subscription)),
+            };
+            assert!(mac_usernotifications::observe_responses(|_| {}).is_none());
+            actions.shutdown();
+            actions.shutdown();
+            assert!(actions.subscription.lock().unwrap().is_none());
+            let next = mac_usernotifications::observe_responses(|_| {}).unwrap();
+            next.detach().wait();
+        }
 
         fn settings(
             status: AuthorizationStatus,
@@ -248,6 +430,12 @@ mod imp {
 #[cfg(not(target_os = "macos"))]
 mod imp {
     use super::Permission;
+
+    pub fn install(_app: &tauri::AppHandle) -> Result<(), String> {
+        Ok(())
+    }
+
+    pub fn shutdown(_app: &tauri::AppHandle) {}
 
     pub async fn current() -> Option<Permission> {
         None

@@ -414,6 +414,29 @@ describe("a desktop window on a Mac", () => {
     expect(host.openWindow).toHaveBeenCalledTimes(1);
   });
 
+  it("forgets a rejected send, so a later click on its number does nothing", async () => {
+    mac.now = "allowed";
+    mac.refusal = "notification request rejected";
+    await expect(notify.deliver(delivery("a"), open)).resolves.toBe(false);
+    const attempt = mac.invoke.mock.calls.find(([name]) => name === "show_notification");
+    const payload = attempt?.[1]?.click;
+    expect(typeof payload).toBe("number");
+    if (typeof payload !== "number") throw new Error("missing click number");
+    events.clicked?.({ payload });
+    expect(host.openWindow).not.toHaveBeenCalled();
+  });
+
+  it("keeps only the existing 64 newest click targets", async () => {
+    mac.now = "allowed";
+    for (let i = 0; i < 65; i++) await notify.deliver(delivery(`item-${i}`), open);
+    events.clicked?.({ payload: mac.shown[0]!.click! });
+    expect(host.openWindow).not.toHaveBeenCalled();
+    for (const shown of mac.shown.slice(1)) events.clicked?.({ payload: shown.click! });
+    expect(host.openWindow).toHaveBeenCalledTimes(64);
+    events.clicked?.({ payload: mac.shown[64]!.click! });
+    expect(host.openWindow).toHaveBeenCalledTimes(64);
+  });
+
   it("raises a test with nothing to click through to", async () => {
     mac.now = "allowed";
     const transport = await import("./transport");
