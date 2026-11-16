@@ -5,7 +5,7 @@
 
 **A quiet group of AI agents on your own machine. It works out of sight and tells you only what matters.**
 
-![Guaca's window: a timeline of the group's agents across the top, with Dara asking a question and Marlow at work, the box for writing to an agent under it, and Dara's question waiting for an answer.](docs/img/guaca.png)
+![Guaca's window: a timeline of the group's agents across the top, with Noor, Wren and Pip finished since you last looked, Dara asking a question and Marlow at work, the box for writing to an agent under it, Dara's question waiting for an answer, and the three finished runs below.](docs/img/guaca.png)
 
 Guaca is a group of agents you run yourself. You ask one, and they hand work to
 each other and settle it between themselves. You don't have to watch. A question
