@@ -32,6 +32,7 @@ import { type Banner, useLiveAgents, useStore } from "./lib/store";
 import { attached, desktop } from "./lib/transport";
 import {
   type AgentCard,
+  type AgentId,
   errorMessage,
   type Group,
   type Overlay,
@@ -77,7 +78,7 @@ export default function App() {
 
   const [agentView, setAgentView] = useState<AgentView>("conversation");
   /** Set while a click from outside the window is opening an agent. */
-  const revealing = useRef(false);
+  const revealing = useRef<AgentId | null>(null);
 
   /**
    * Where the window lands when the operator asks to be taken somewhere from
@@ -88,10 +89,11 @@ export default function App() {
   const reveal = useCallback((target: Reveal) => {
     const state = useStore.getState();
     if (target.kind === "forYou") {
+      revealing.current = null;
       state.showForYou(true);
       return;
     }
-    revealing.current = state.selected !== target.id;
+    revealing.current = target.id;
     setAgentView("conversation");
     void state.select(target.id);
   }, []);
@@ -133,9 +135,10 @@ export default function App() {
   // and a landing that reran on that would take the reader off the message
   // to the agent's screen.
   useEffect(() => {
+    const revealed = revealing.current;
+    revealing.current = null;
     if (!selected) return;
-    if (revealing.current) {
-      revealing.current = false;
+    if (revealed === selected) {
       setAgentView("conversation");
       return;
     }

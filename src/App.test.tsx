@@ -572,6 +572,80 @@ describe("App", () => {
     expect(within(page).getByRole("button", { current: "page" }).textContent).toBe("Conversation");
   });
 
+  describe("reveal ordering", () => {
+    async function workingWindow() {
+      const { onRevealRequest } = await import("./lib/ipc");
+      listAgents.mockResolvedValue([agent("Manager"), agent("Chef")]);
+      agentActivity.mockResolvedValue({
+        "id-Manager": { state: "thinking" },
+        "id-Chef": { state: "thinking" },
+      });
+      render(<App />);
+      await waitFor(() => expect(vi.mocked(onRevealRequest)).toHaveBeenCalled());
+      await waitFor(() => expect(useStore.getState().activity["id-Chef"]?.state).toBe("thinking"));
+      return vi.mocked(onRevealRequest).mock.calls.at(-1)![0];
+    }
+
+    function currentTab(name: string) {
+      const page = screen.getByRole("navigation", { name: `${name}'s page` });
+      return within(page).getByRole("button", { current: "page" }).textContent;
+    }
+
+    it("keeps duplicate same-target reveals in one task on Conversation", async () => {
+      const reveal = await workingWindow();
+
+      act(() => {
+        reveal({ kind: "agent", id: "id-Manager" });
+        reveal({ kind: "agent", id: "id-Manager" });
+      });
+
+      expect(currentTab("Manager")).toBe("Conversation");
+    });
+
+    it.each([
+      ["Manager", "Chef"],
+      ["Chef", "Manager"],
+    ])("lands on the last revealed target from %s to %s", async (first, last) => {
+      const reveal = await workingWindow();
+
+      act(() => {
+        reveal({ kind: "agent", id: `id-${first}` });
+        reveal({ kind: "agent", id: `id-${last}` });
+        reveal({ kind: "agent", id: `id-${last}` });
+      });
+
+      expect(currentTab(last)).toBe("Conversation");
+      expect(screen.queryByRole("navigation", { name: `${first}'s page` })).toBeNull();
+    });
+
+    it("does not lend a reveal's Conversation intent to another selected agent", async () => {
+      const reveal = await workingWindow();
+
+      await act(async () => {
+        reveal({ kind: "agent", id: "id-Manager" });
+        await useStore.getState().select("id-Chef");
+      });
+
+      expect(currentTab("Chef")).toBe("Now");
+      fireEvent.click(railRow("Manager"));
+      expect(currentTab("Manager")).toBe("Now");
+    });
+
+    it("opens a working agent on Now after leaving a revealed conversation for Today", async () => {
+      const reveal = await workingWindow();
+      fireEvent.click(railRow("Manager"));
+      expect(currentTab("Manager")).toBe("Now");
+
+      act(() => reveal({ kind: "agent", id: "id-Manager" }));
+      expect(currentTab("Manager")).toBe("Conversation");
+      fireEvent.click(screen.getByRole("button", { name: "Today" }));
+      expect(screen.queryByRole("navigation", { name: "Manager's page" })).toBeNull();
+
+      fireEvent.click(railRow("Manager"));
+      expect(currentTab("Manager")).toBe("Now");
+    });
+  });
+
   it("lists agents and opens a channel", async () => {
     listAgents.mockResolvedValue([agent("Manager"), agent("Chef")]);
     render(<App />);
