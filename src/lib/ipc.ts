@@ -423,7 +423,16 @@ export const api = {
     invoke<WorkDecision>("answer_decision", { id, answer, updatedAt }),
   resumeDecision: (id: string) => invoke<WorkDecision>("resume_decision", { id }),
   snoozeDecision: (id: string, until: number) => invoke<void>("snooze_decision", { id, until }),
-  pendingApprovals: () => invoke<Approval[]>("pending_approvals"),
+  /**
+   * A host before 0.5.0 does not send `lapsesAt`. Read here as no known lapse,
+   * so every reader gets a value the type allows instead of `undefined`, which
+   * passes a `=== null` check and becomes a point at no time on the timeline.
+   */
+  pendingApprovals: async () =>
+    (await invoke<Approval[]>("pending_approvals")).map((one) => ({
+      ...one,
+      lapsesAt: one.lapsesAt ?? null,
+    })),
 
   /**
    * Everything an agent has said it cannot get past without the operator,

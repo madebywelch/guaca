@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 
+import { anApproval } from "../test-fixtures";
 import { api, onFileDrop } from "./ipc";
 import { invoke, invokeLocal } from "./transport";
 
@@ -21,6 +22,21 @@ vi.mock("./transport", async (original) => ({
   workspaceOrigin: () => "http://127.0.0.1:8787",
   token: () => "workspace-token",
 }));
+
+it("reads a pending request from a host that never says when it lapses as one with no known lapse", async () => {
+  // A 0.4.0 host sends the request without the field at all.
+  const { lapsesAt: _, ...older } = anApproval({ agentId: "dara", createdAt: 1_000 });
+  vi.mocked(invoke).mockResolvedValue([older]);
+  const [request] = await api.pendingApprovals();
+  expect(invoke).toHaveBeenCalledWith("pending_approvals");
+  expect(request).toEqual({ ...older, lapsesAt: null });
+});
+
+it("keeps the lapse a host sends with a pending request", async () => {
+  vi.mocked(invoke).mockResolvedValue([anApproval({ agentId: "dara", lapsesAt: 5_000 })]);
+  const [request] = await api.pendingApprovals();
+  expect(request?.lapsesAt).toBe(5_000);
+});
 
 it("downloads through the native client using the connected backend", async () => {
   vi.mocked(invokeLocal).mockResolvedValue("/Downloads/brief.md");
