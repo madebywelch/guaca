@@ -230,7 +230,7 @@ function DeskCard({ request, agent, onDecide, onAnswer, onOpenChannel }: CardPro
         </button>
         {/* The host's time, never a fuse counted here: it owns the window, and
             a request it already let go must not be drawn as still waiting. */}
-        {request.lapsesAt !== null && (
+        {request.lapsesAt !== null && request.lapsesAt > Date.now() && (
           <span className="desk__aside">
             {asker} waits until {clockLabel(request.lapsesAt)}
           </span>
