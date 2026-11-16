@@ -11348,6 +11348,11 @@ button.artifacts__version[aria-pressed="true"] {
   flex: none;
 }
 
+/* Clear of the window's buttons the way the top row is, with the same token. */
+.sheet__head[data-lights] {
+  padding-left: var(--space-lights);
+}
+
 .sheet__title {
   margin: 0;
   font-size: var(--type-ui);

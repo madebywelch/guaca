@@ -1,10 +1,15 @@
 import { type ComponentProps, useEffect, useRef } from "react";
 
 import { useDismiss } from "../lib/dismiss";
+import { IS_MAC } from "../lib/keybinds";
 import { useStore } from "../lib/store";
+import { desktop } from "../lib/transport";
 import { Sidebar } from "./Sidebar";
 
 type Props = ComponentProps<typeof Sidebar> & { onClose: () => void };
+
+/** The sheet opens at the window's left edge, where a Mac draws its window buttons. */
+const LIGHTS = desktop && IS_MAC;
 
 /**
  * Every group and every agent in it, as the rail drew them, in a sheet.
@@ -36,7 +41,7 @@ export function GroupsSheet({ onClose, onOpenChannel, ...rest }: Props) {
         tabIndex={-1}
         ref={panel}
       >
-        <header className="sheet__head">
+        <header className="sheet__head" data-lights={LIGHTS ? "" : undefined}>
           <h2 className="sheet__title">{title}</h2>
           <button type="button" className="btn btn--ghost btn--small" onClick={onClose}>
             Done
