@@ -432,6 +432,28 @@ try {
   await fits(".ribbon");
   await fits(".pane");
   assert.equal(await evaluate("document.querySelector('.app > .rail')"), null, "no rail beside the column");
+  // The tabs with a routine counted on one and a long model in the caption
+  // beside them: the caption gives way, and no tab's label is cut.
+  const draft = { groupId: group.id, name: "Browser check", avatar: "avocado", color: "#7ab55c", systemPrompt: "Answer briefly." };
+  const routine = await call("create_routine", { agentId: agent.id, draft: { name: "Morning check", what: "Say good morning.", trigger: "every:86400", inSecs: null, skipIfWorking: false } });
+  await call("update_agent", { id: agent.id, draft: { ...draft, model: "offline-test-with-a-long-dated-model-identifier-2026-11-16" } });
+  await until(() => evaluate("!!document.querySelector('.agent-tabs__count')"), "the routine count shows on its tab");
+  await until(() => evaluate("document.querySelector('.agent-tabs .pane__meta')?.textContent.includes('long-dated')"), "the long model is in the caption");
+  for (const width of [1280, 900]) {
+    await size(width, 900, false);
+    const row = await evaluate(`(() => {
+      const list = document.querySelector('.agent-tabs__list'), edge = list.getBoundingClientRect().right;
+      const tabs = [...list.querySelectorAll('.agent-tabs__tab')].map((n) => ({ text: n.textContent, right: n.getBoundingClientRect().right, cut: n.scrollWidth - n.clientWidth }));
+      return { edge, overflow: list.scrollWidth - list.clientWidth, tabs, caption: getComputedStyle(document.querySelector('.agent-tabs .pane__meta')).display };
+    })()`);
+    assert.notEqual(row.caption, "none", `the caption is drawn at ${width}: ${JSON.stringify(row)}`);
+    assert.ok(row.overflow <= 1, `the tabs fit their row at ${width}: ${JSON.stringify(row)}`);
+    for (const tab of row.tabs) assert.ok(tab.cut <= 1 && tab.right <= row.edge + 1, `"${tab.text}" is not cut at ${width}: ${JSON.stringify(row)}`);
+    await shoot(`tabs-${width}`);
+  }
+  await size(1280, 900, false);
+  await call("delete_routine", { id: routine.id });
+  await call("update_agent", { id: agent.id, draft: { ...draft, model: "offline-test" } });
   await tap(".topbar__back");
   await until(() => evaluate("!!document.querySelector('.home')"), "Today opens on the desktop");
   await ribbonClear("Today at 1280");

@@ -11271,8 +11271,11 @@ button.artifacts__version[aria-pressed="true"] {
   flex: none;
 }
 
+/* The tabs never give up room to the caption beside them: a label cut short
+   is a tab that can no longer be read. */
 .agent-tabs__list {
   display: flex;
+  flex: none;
   gap: var(--space-2);
   min-width: 0;
   /* A phone is narrower than six tabs: they scroll rather than widen the page. */
@@ -11298,7 +11301,8 @@ button.artifacts__version[aria-pressed="true"] {
    and no longer the second line of its name. */
 .agent-tabs .pane__meta {
   margin-left: auto;
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
   max-width: var(--tabs-meta-share);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -11391,6 +11395,12 @@ button.artifacts__version[aria-pressed="true"] {
   .app[data-page="agent"] .pane__about,
   .agent-tabs .pane__meta {
     display: none;
+  }
+
+  /* With the caption gone the row is the tabs', and what still does not fit
+     scrolls inside it. */
+  .agent-tabs__list {
+    flex: 0 1 auto;
   }
 }
 

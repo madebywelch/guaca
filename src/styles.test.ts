@@ -674,6 +674,29 @@ describe("the composer's mention layer", () => {
   });
 });
 
+describe("the agent's tabs", () => {
+  /**
+   * Six tabs and the model caption share one row, and a routine count makes
+   * the tabs wider. The caption is the one that gives way: it shortens, and a
+   * label is never the thing cut. Read off the rules because jsdom lays out
+   * nothing; the browser check measures the same row at 1280.
+   */
+  it("gives the caption's room up before any tab's label", () => {
+    const at = (selector: string) =>
+      Object.fromEntries(
+        declarations()
+          .filter((d) => d.selector === selector)
+          .map((d) => [d.property, d.value]),
+      );
+    const tabs = at(".agent-tabs__list");
+    const caption = at(".agent-tabs .pane__meta");
+    expect(tabs.flex, "the tabs keep their width").toBe("none");
+    expect(caption.flex?.split(" ")[1], "the caption shrinks").not.toBe("0");
+    expect(caption["min-width"], "the caption can shrink below its text").toBe("0");
+    expect(caption["text-overflow"]).toBe("ellipsis");
+  });
+});
+
 /**
  * Every declaration in the file, with the rule it belongs to.
  *
