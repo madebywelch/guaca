@@ -415,6 +415,10 @@ interruption policy. The turn is told the request is on For you and carries on
 without it. Whenever the operator answers, the answer reaches the agent as a new
 message, as every decision's does.
 
+The window draws that moment from the host: `pending_approvals` sends each
+request's `lapsesAt`, its creation time plus the runtime's current window, so
+the countdown on the card and the lapse it predicts come from the same number.
+
 Four kinds lapse this way: `request_permission`, `ask_operator`, `create_agent`
 and `settings`. Browser consent does not: that press belonged to a page the
 turn has since left, so it expires as it always did, and so does a page pinned

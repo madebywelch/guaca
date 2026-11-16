@@ -196,6 +196,7 @@ it("opens a request's channel behind For you and gets out of the way", async () 
         answer: null,
         createdAt: 0,
         decidedAt: null,
+        lapsesAt: null,
       },
     ],
   });
@@ -222,6 +223,7 @@ describe("Finished", () => {
     answer: null,
     createdAt: 0,
     decidedAt: null,
+    lapsesAt: null,
   };
 
   beforeEach(() => {

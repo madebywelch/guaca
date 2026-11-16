@@ -499,6 +499,10 @@ enum Permission {
 }
 
 /// How a parked request came to an end.
+// One of these exists per parked turn, for as long as one match takes, so the
+// size of the settled row costs nothing worth a box and the change to the
+// park path it would bring.
+#[allow(clippy::large_enum_variant)]
 enum Parked {
     /// Somebody answered, and this is the row as they left it.
     Settled(Approval),
@@ -1286,6 +1290,12 @@ impl Runtime {
 
     pub fn viewer_port(&self) -> u16 {
         self.inner.viewer_port.load(Ordering::SeqCst)
+    }
+
+    /// How long a parked turn waits for the operator before its request
+    /// lapses, read so the window can show when that will be.
+    pub fn approval_window(&self) -> Duration {
+        Duration::from_millis(self.inner.approval_window.load(Ordering::SeqCst))
     }
 
     /// Shortens how long a parked turn waits for the operator, so a test can
@@ -10839,6 +10849,69 @@ mod tests {
         assert!(browser_replacement_notice(true).contains("previous browser was gone"));
         assert_eq!(computer_replacement_notice(false), "");
         assert_eq!(browser_replacement_notice(false), "");
+    }
+
+    fn asked(runtime: &Runtime) -> Approval {
+        let store = &runtime.inner.store;
+        let card = store
+            .create_agent(&CleanDraft {
+                group_id: None,
+                name: "Asker".into(),
+                avatar: "orb".into(),
+                color: "#7fb069".into(),
+                model: "test/model".into(),
+                subscription_model: None,
+                reasoning_effort: None,
+                system_prompt: String::new(),
+                skills: vec![],
+            })
+            .unwrap();
+        store
+            .create_approval(
+                card.id,
+                card.group_id,
+                RunId::new(),
+                Request::Permission { action: ProtectedAction::ActOnBehalf },
+                "Asker wants to send the weekly report",
+                &[],
+            )
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_settled_request_says_nothing_about_when_it_lapses() {
+        // A deadline on a request that has already been answered or has already
+        // moved to For you would draw a countdown to something that will not
+        // happen.
+        let (_dir, runtime) = test_runtime();
+        let approval = asked(&runtime);
+        let settled =
+            runtime.inner.store.settle_approval(approval.id, ApprovalState::Allow).unwrap();
+        assert_eq!(settled.lapses_at, None, "a store read never derives it");
+
+        let shown = settled.lapsing_after(runtime.approval_window());
+        assert_eq!(shown.lapses_at, None);
+        assert_eq!(serde_json::to_value(&shown).unwrap()["lapsesAt"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn a_pending_request_lapses_one_approval_window_after_it_was_asked() {
+        // The window has to show the moment the runtime will act on, so it is
+        // read from the runtime rather than from a second copy of ten minutes.
+        let (_dir, runtime) = test_runtime();
+        let approval = asked(&runtime);
+        assert_eq!(approval.lapses_at, None, "a store read never derives it");
+
+        let shown = approval.clone().lapsing_after(runtime.approval_window());
+        assert_eq!(shown.lapses_at, Some(approval.created_at + 10 * 60 * 1000));
+        assert_eq!(
+            serde_json::to_value(&shown).unwrap()["lapsesAt"],
+            serde_json::json!(approval.created_at + 10 * 60 * 1000)
+        );
+
+        runtime.set_approval_window(Duration::from_millis(50));
+        let shortened = approval.clone().lapsing_after(runtime.approval_window());
+        assert_eq!(shortened.lapses_at, Some(approval.created_at + 50));
     }
 
     #[tokio::test]

@@ -1811,6 +1811,7 @@ impl Store {
             answer: None,
             created_at: now_ms(),
             decided_at: None,
+            lapses_at: None,
         };
 
         // One commit with the row that will announce it, so a request is never
@@ -5113,6 +5114,7 @@ fn row_to_approval(row: &Row<'_>) -> RowResult<Approval> {
             })?,
             created_at: row.get(8)?,
             decided_at: row.get(9)?,
+            lapses_at: None,
         })
     })())
 }

@@ -1309,7 +1309,14 @@ pub async fn approval_answers(state: &AppState) -> Reply<HashMap<ApprovalId, Str
 /// the moment one is missed, and what drifts is the count the operator is using
 /// to decide whether anyone is waiting.
 pub async fn pending_approvals(state: &AppState) -> Reply<Vec<Approval>> {
-    Ok(state.runtime.store().pending_approvals(MAX_PENDING)?)
+    let window = state.runtime.approval_window();
+    Ok(state
+        .runtime
+        .store()
+        .pending_approvals(MAX_PENDING)?
+        .into_iter()
+        .map(|approval| approval.lapsing_after(window))
+        .collect())
 }
 
 /// What this agent no longer has to ask about.
