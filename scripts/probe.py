@@ -607,7 +607,7 @@ class App:
         scratch.track(self.forget)
         scratch.track(self.quit)
 
-    def launch(self, quiet: bool = True, background: bool = True, hidden: bool = True) -> Client:
+    def launch(self, background: bool = True, hidden: bool = True) -> Client:
         if self.socket.exists():
             self.socket.unlink()
         args = ["open", "-n"]
@@ -621,8 +621,6 @@ class App:
             "GUACA_PROBE_SOCKET": str(self.socket),
             "GUAC_LOG": "guac=info,warn",
         }
-        if quiet:
-            env["GUACA_PROBE_QUIET"] = "1"
         for key, value in env.items():
             args += ["--env", f"{key}={value}"]
         log = str(self.scratch.root / "app.log")
@@ -751,14 +749,13 @@ class Record:
 # Scenarios ------------------------------------------------------------------
 
 
-def background_launch(record: Record, app: App, label: str, quiet: bool) -> None:
-    """One launch asked to stay in the background, watched for ten seconds.
-    With quiet, the app's own launch-time activation is turned off, and the
-    launch is held to staying back; without it, what happens is recorded."""
+def background_launch(record: Record, app: App, label: str) -> None:
+    """One launch asked to stay in the background, watched for ten seconds,
+    and held to staying there."""
     person_away("launching where the app may take the front")
     watch = FrontWatch()
     try:
-        app.launch(quiet=quiet, background=True, hidden=False)
+        app.launch(background=True, hidden=False)
         try:
             wait_until("the test build exits", lambda: not app.alive(), 10)
             exited = True
@@ -768,39 +765,32 @@ def background_launch(record: Record, app: App, label: str, quiet: bool) -> None
         focused = [w["label"] for w in app.state()["windows"] if w["focused"]]
         hand_back(app, watch.before)
         record.check(f"{label}: still running after ten seconds", not exited)
+        record.check(f"{label}: did not become the frontmost app", not took,
+                     {"activations": [e for e in watch.events if e.get("pid") == app.pid]})
+        record.check(f"{label}: no window took the keyboard", not focused, {"focused": focused})
         record.check(f"{label}: the app that was in front is in front again",
                      front().get("pid") == watch.before.get("pid"))
-        if quiet:
-            record.check(f"{label}: did not become the frontmost app", not took,
-                         {"activations": [e for e in watch.events if e.get("pid") == app.pid]})
-            record.check(f"{label}: no window took the keyboard", not focused, {"focused": focused})
-        else:
-            record.observe(f"{label}: became the frontmost app", took)
-            record.observe(f"{label}: windows holding the keyboard", focused)
     finally:
         watch.stop()
         app.quit()
 
 
 def scenario_launch(record: Record, scratch: Scratch) -> None:
-    """What a background launch does to the front, and whose doing it is."""
-    plain = App(scratch, fresh_bundle(), "plain")
-    app = App(scratch, fresh_bundle(), "quiet")
-    for copy in (plain, app):
-        signed = codesign(copy.path)
-        record.check("the test build is signed as its own bundle", signed["valid"], signed, stop=True)
+    """A background launch stays in the background; a normal launch comes to the front."""
+    app = App(scratch, fresh_bundle(), "plain")
+    signed = codesign(app.path)
+    record.check("the test build is signed as its own bundle", signed["valid"], signed, stop=True)
     try:
-        background_launch(record, plain, "first background launch of a new bundle", quiet=False)
-        background_launch(record, plain, "second background launch of the same bundle", quiet=False)
-        # Every other scenario launches a bundle macOS has never seen with
-        # the app's own activation turned off. This is that launch, on a
-        # second new bundle, so it is held to what the others rely on.
-        background_launch(record, app, "first background launch of a new bundle, activation off", quiet=True)
+        # macOS 27 brought the first background launch of a bundle it had
+        # never seen to the front when the app asked to be, and not the
+        # second; both are held to staying back.
+        background_launch(record, app, "first background launch of a new bundle")
+        background_launch(record, app, "second background launch of the same bundle")
 
         person_away("launching in the foreground")
         watch = FrontWatch()
         try:
-            app.launch(quiet=False, background=False, hidden=False)
+            app.launch(background=False, hidden=False)
             try:
                 wait_until("the test build comes to the front", lambda: watch.activated(app.pid or -1), 10)
                 took = True
@@ -817,7 +807,6 @@ def scenario_launch(record: Record, scratch: Scratch) -> None:
             watch.stop()
             app.quit()
     finally:
-        plain.forget()
         app.forget()
 
 

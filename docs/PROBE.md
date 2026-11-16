@@ -84,8 +84,8 @@ Every run of every scenario starts from nothing and leaves nothing.
    `CFFIXED_USER_HOME` pointed at a scratch directory, so its WebKit storage,
    preferences, caches and application support all land there and nothing is
    written under `~/Library`. The launch names the socket in
-   `GUACA_PROBE_SOCKET` and sets `GUACA_PROBE_QUIET`, which stops the app
-   activating itself when it finishes launching (see *launch* below for why).
+   `GUACA_PROBE_SOCKET`. It is a background launch (`open -g`), which the app
+   leaves in the background (see *launch* below).
 5. **Point the window at the Host** through the bridge, and wait until it draws
    the seeded group.
 6. **Run the scenario's steps**, each a wait on a condition with a timeout.
@@ -210,7 +210,7 @@ keeps a walk of the tree to a fraction of a second.
 
 | Scenario | What it asserts |
 |---|---|
-| `launch` | A first launch of a new bundle with `open -g` and the app's own launch-time activation turned off, which is how every other scenario launches, does not become frontmost, takes no keyboard focus and is still running after ten seconds. A normal launch takes the front, and hiding it hands the front back. Recorded, not asserted: the same `open -g` launch with the activation left on, first and second time for one new bundle. On macOS 27 the first one comes to the front and focuses the window and the second does not; macOS 26 brought a first launch to the front the same way. |
+| `launch` | Two background launches of a new bundle with `open -g`, first and second, as every other scenario launches: neither becomes frontmost or takes the keyboard, both are still running after ten seconds, and the app in front stays in front. A normal launch takes the front, and hiding it hands the front back. Before the app stopped asking to be activated when it finished launching, macOS 27 brought the first background launch of a new bundle to the front and focused its window. |
 | `permission` | On a bundle macOS has never seen, the app reports "not asked"; with a delivery waiting, connecting asks macOS, macOS shows its question, nothing is claimed while it is unanswered, and macOS takes the question down when the app quits. The probe never answers it. |
 | `notification` | Whatever this Mac allows the probe's own bundle, a waiting delivery and the Settings test button do what the Notifications pane says: claimed and presented as a banner when allowed, asked about when never asked, nothing claimed and nothing presented otherwise. Asserted on the log and the outbox, not on the app's word. |
 | `panel` | With the window closed, a click on the icon opens the panel, the panel lists every agent in the seeded group, a second click closes it, and the app that had the keyboard before has it after. |
@@ -278,7 +278,7 @@ notifications is drawn by Notification Center: `permission` puts it on screen
 once per run, for the few seconds until the app quits and macOS takes it down,
 and so do `allow`, `deny` and `click` until they answer it. `launch`
 brings the test build to the front for a moment in each run, and hides it again
-straight away. Every launch, even a quiet one, puts the test build's icon in
+straight away. Every launch, even a background one, puts the test build's icon in
 the Dock for the length of the run. No banner is raised unless macOS allows the
 test bundle to show one. The delivery the probe seeds says it is a test, and the Settings test
 button's banner carries the test build's name, Guaca Probe.
