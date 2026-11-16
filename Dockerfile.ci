@@ -41,6 +41,9 @@ COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 
 COPY src-tauri/Cargo.toml src-tauri/Cargo.lock* ./src-tauri/
+# The manifest patches crates in from here, and Cargo resolves a patch on every
+# platform, so the fetch cannot run without it.
+COPY src-tauri/vendor ./src-tauri/vendor
 RUN mkdir -p src-tauri/src \
  && echo 'fn main() {}' > src-tauri/src/main.rs \
  && echo '' > src-tauri/src/lib.rs \
