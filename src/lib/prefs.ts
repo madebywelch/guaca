@@ -13,10 +13,10 @@
  * (`Settings.attention`), and a blob an older build wrote with a `notify`
  * block in it loses that block on the next write.
  *
- * So they stay on this side, in `localStorage`, the way the inspector's
- * open-or-closed already does. That is a deliberate exception to "the frontend
- * holds nothing durable" and it is narrow on purpose: nothing in here survives
- * being lost, and none of it is worth a migration.
+ * So they stay on this side, in `localStorage`. That is a deliberate
+ * exception to "the frontend holds nothing durable" and it is narrow on
+ * purpose: nothing in here survives being lost, and none of it is worth a
+ * migration.
  *
  * One blob under one key rather than a key each, so a read is one parse and a
  * write is one string. Every field is validated on the way in: this file is a
@@ -44,7 +44,7 @@ export type SurfaceMode = "light" | "dark" | "system";
  * The scales offered, as percentages.
  *
  * 100 is what the app has always drawn, so an existing operator sees no change
- * until they ask for one. It stops at 125 because the rail and the inspector
+ * until they ask for one. It stops at 125 because the Groups sheet and the agent panel
  * are measured in `rem` and therefore grow too: past that they eat a small
  * window rather than making it legible. Both are capped against the viewport in
  * `styles.css` so the worst case is a narrow reading column, not a lost one.

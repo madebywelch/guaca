@@ -54,7 +54,7 @@
      left with a white page beside it and a white panel on the right, which is
      three surfaces for two jobs: the app's own two edges did not look like
      each other, and the heavier of them was the one carrying the least
-     reading. So the rail and the inspector are the same ground, a shade off
+     reading. So the side surfaces share one ground, a shade off
      the page rather than opposite it, and the page is the only paper on
      screen. What is left with any saturation in it is an agent's own color and
      the one amber, which is the whole point: a column that is itself a color
@@ -347,6 +347,7 @@
   --ribbon-aside: 0.42; /* How far the others step back while one agent's page is open. */
   --column-edge: var(--space-7); /* The top row's side margin, which the timeline keeps. */
   --column-w: 46rem; /* Today and an agent's page: one column, one width. */
+  --tabs-meta-share: 40%; /* The most of the tab row the model id at its end may take. */
   --page: var(--sunken); /* The ground under the column, which its surfaces stand on. */
 
   /* ---- Motion -------------------------------------------------------------
@@ -881,7 +882,7 @@ input[type="file"]::file-selector-button {
 
 /* Outside `main` and outside the two navigation columns, fixed to the window
    rather than to a pane. Three reasons, all of them things that broke a panel
-   put anywhere else: it must not move when the inspector opens, it must not be
+   put anywhere else: it must not move when a panel opens, it must not be
    clipped by the overflow of whatever is scrolling underneath it, and it has to
    survive a view change, which unmounts every pane in the reading column.
 
@@ -6768,7 +6769,7 @@ input[type="file"]:disabled {
   /* Anywhere, not break-word: only `anywhere` lowers the text's min-content
      width, which is the width a flex item will not shrink below. A provider's
      error is JSON with no space in it for a line and a half, and it pushed
-     Dismiss past the column's edge and under the inspector. */
+     Dismiss past the column's edge and under the panel beside it. */
   overflow-wrap: anywhere;
 }
 
@@ -9787,24 +9788,11 @@ button.artifacts__version[aria-pressed="true"] {
     white-space: nowrap;
   }
 
-  .mobile-back {
-    flex: none;
-    min-width: var(--control-touch);
-    font-size: var(--type-title);
-    justify-content: center;
-    align-items: center;
-  }
-
-  .mobile-details {
-    flex: none;
-  }
-
   .palette__query .btn {
     flex: none;
   }
 
   .pane__header > .avatar,
-  .pane__more,
   .rail__search,
   .rail__foot > button:last-child {
     display: none;
@@ -11311,7 +11299,7 @@ button.artifacts__version[aria-pressed="true"] {
 .agent-tabs .pane__meta {
   margin-left: auto;
   flex: none;
-  max-width: 40%;
+  max-width: var(--tabs-meta-share);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

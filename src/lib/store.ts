@@ -1286,9 +1286,9 @@ export const useStore = create<State>((set, get) => ({
         if (open && emptied.has(open)) {
           void get().loadChannel(open, undefined, valid);
         }
-        // The panels beside the transcript hold the two stores a reset also
-        // takes, and neither is read again on its own. Left alone, the inspector
-        // draws a memory and a list of working notes that no longer exist,
+        // The agent's Memory tab holds the two stores a reset also takes, and
+        // neither is read again on its own. Left alone, the tab draws a
+        // memory and a list of working notes that no longer exist,
         // beside the empty channel that says they should not.
         set((state) => {
           const memory = { ...state.memoryVersion };
