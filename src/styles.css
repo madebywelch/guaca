@@ -11386,6 +11386,7 @@ button.artifacts__version[aria-pressed="true"] {
 
   .topbar__day-short {
     display: inline;
+    white-space: nowrap;
   }
 
   /* The agent menu's one way in by touch. */

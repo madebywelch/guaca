@@ -1055,7 +1055,9 @@ describe("the new window's surfaces", () => {
       Number(ruleOf(css, selector).match(new RegExp(`${token}: ([0-9.]+);`))?.[1]);
     const paper = ":root";
     const ink = ':root[data-surface="dark"]';
-    expect(value(ink, "--ribbon-asleep-lift")).toBeGreaterThan(value(paper, "--ribbon-asleep-lift"));
+    expect(value(ink, "--ribbon-asleep-lift")).toBeGreaterThan(
+      value(paper, "--ribbon-asleep-lift"),
+    );
     expect(value(ink, "--ribbon-asleep")).toBeGreaterThan(value(paper, "--ribbon-asleep"));
     expect(ruleOf(css, ".ribbon__pile-faces")).toMatch(/brightness\(var\(--ribbon-asleep-lift\)\)/);
   });

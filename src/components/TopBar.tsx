@@ -45,7 +45,6 @@ export function TopBar({
   // A phone's top row holds the day beside four buttons on one line only
   // when the day is said short.
   const short = new Date(now).toLocaleDateString([], {
-    weekday: "short",
     month: "short",
     day: "numeric",
   });
