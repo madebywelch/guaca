@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../lib/store";
@@ -162,6 +162,21 @@ describe("the desk", () => {
   // A summary is enough to answer most requests and not all of them. The way
   // into the conversation around one has to be on the card, or the desk becomes
   // a surface that asks for decisions it cannot support.
+  it("stops saying when it lapses the moment that time passes, with nothing else redrawing it", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 10, 16, 9, 12));
+      draw([request({ lapsesAt: new Date(2026, 10, 16, 9, 13).getTime() })]);
+      expect(screen.getByText(/waits until/)).toBeTruthy();
+      act(() => {
+        vi.advanceTimersByTime(61_000);
+      });
+      expect(screen.queryByText(/waits until/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("opens the channel the request came from", () => {
     draw([request()]);
 

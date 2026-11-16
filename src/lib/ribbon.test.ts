@@ -273,6 +273,11 @@ describe("where a request stops waiting", () => {
     expect(layoutRibbon(morning({ approvals })).lapses).toEqual([]);
   });
 
+  it("has no point once the moment it lapses has passed", () => {
+    const approvals = [anApproval({ agentId: "dara", createdAt: at(16, 7), lapsesAt: at(16, 8) })];
+    expect(layoutRibbon(morning({ approvals })).lapses).toEqual([]);
+  });
+
   it("is a point at the moment it lapses, named for whose it is", () => {
     const ribbon = layoutRibbon(morning());
     expect(ribbon.lapses).toHaveLength(1);
@@ -355,6 +360,111 @@ describe("crowding", () => {
       expect(faces.length).toBeGreaterThan(0);
     });
   }
+
+  /** Faces of one kind, all at once, as the window's own sizes draw them. */
+  function live(kind: "working" | "needsYou", count: number, width: number) {
+    const agents = NAMES_12.slice(0, count).map((name) => anAgent(name.toLowerCase(), { name }));
+    const faceSpan = 52 / width;
+    const charSpan = 8 / width;
+    const input = morning({
+      agents,
+      outcomes: [],
+      activity:
+        kind === "working"
+          ? Object.fromEntries(agents.map((agent) => [agent.id, { state: "thinking" as const }]))
+          : {},
+      approvals:
+        kind === "needsYou"
+          ? agents.map((agent, i) =>
+              anApproval({
+                id: `ask-${agent.id}`,
+                agentId: agent.id,
+                createdAt: NOW - (i + 1) * 60_000,
+              }),
+            )
+          : [],
+      upcoming: [],
+      occasions: [],
+      faceSpan,
+      charSpan,
+    });
+    return { ribbon: layoutRibbon(input), agents, faceSpan, charSpan };
+  }
+
+  for (const [kind, count] of [
+    ["working", 5],
+    ["working", 8],
+    ["needsYou", 8],
+  ] as const) {
+    for (const width of [1280, 900, 375]) {
+      it(`never lets ${count} ${kind} faces or their names touch at ${width} wide`, () => {
+        const { ribbon, agents, faceSpan, charSpan } = live(kind, count, width);
+        const name = new Map(agents.map((agent) => [agent.id, agent.name]));
+        const drawn = [
+          ...ribbon.faces.map((face) => ({ x: face.x, text: name.get(face.agentId) ?? "" })),
+          ...ribbon.counts.map((one) => ({ x: one.x, text: one.text })),
+        ].sort((a, b) => a.x - b.x);
+        const half = (text: string) => Math.max(faceSpan, text.length * charSpan) / 2;
+        for (let i = 1; i < drawn.length; i++) {
+          const a = drawn[i - 1] as (typeof drawn)[number];
+          const b = drawn[i] as (typeof drawn)[number];
+          expect(b.x - a.x).toBeGreaterThanOrEqual(half(a.text) + half(b.text) + charSpan - 1e-9);
+        }
+        // Everyone is drawn or counted, and nobody who needs you is piled.
+        const counted = ribbon.counts.flatMap((one) => one.agentIds);
+        expect([...ribbon.faces.map((face) => face.agentId), ...counted].sort()).toEqual(
+          agents.map((agent) => agent.id).sort(),
+        );
+        expect(ribbon.pile).toEqual([]);
+        for (const one of ribbon.counts) expect(one.kind).toBe(kind);
+      });
+    }
+  }
+
+  it("says how many more are working or need you, by name, in one counted item", () => {
+    const working = live("working", 8, 375).ribbon.counts[0];
+    expect(working?.text).toMatch(/^\+\d+ working$/);
+    expect(working?.label.startsWith(`${working?.text}: `)).toBe(true);
+    const asking = live("needsYou", 8, 375).ribbon.counts[0];
+    expect(asking?.text).toMatch(/^\+\d+ needs? you$/);
+  });
+
+  it("piles a resting face before an unseen failure, whatever their times", () => {
+    // A failure from 3 AM nobody has seen is news; a run seen at 8 AM is not.
+    const agents = NAMES.map((name) => anAgent(name.toLowerCase(), { name }));
+    const outcomes = [
+      anOutcome({
+        agentId: "researcher",
+        status: "failed",
+        startedAt: at(16, 2, 55),
+        finishedAt: at(16, 3),
+      }),
+      anOutcome({
+        agentId: "critic",
+        startedAt: at(16, 7, 50),
+        finishedAt: at(16, 8),
+        seenAt: at(16, 8, 1),
+      }),
+      ...["manager", "scribe", "planner", "archivist"].map((agentId, i) =>
+        anOutcome({ agentId, startedAt: NOW - 600_000, finishedAt: NOW - (i + 1) * 60_000 }),
+      ),
+    ];
+    const width = 1000;
+    const ribbon = layoutRibbon(
+      morning({
+        agents,
+        outcomes,
+        approvals: [],
+        activity: {},
+        upcoming: [],
+        occasions: [],
+        faceSpan: 52 / width,
+        charSpan: 8 / width,
+      }),
+    );
+    expect(ribbon.pile).toEqual(["critic"]);
+    expect(ribbon.faces.find((face) => face.agentId === "researcher")?.state).toBe("failed");
+  });
 
   it("sends the oldest to the pile, not the newest, when the strip cannot hold them", () => {
     const { ribbon } = crowd(NAMES_12, 375);

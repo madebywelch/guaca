@@ -74,6 +74,27 @@ export interface RibbonFace {
   align: Align;
 }
 
+/** Who a counted item stands for: those working, or those who need you. */
+export type CountKind = "working" | "needsYou";
+
+/** Faces of one kind too many to stand side by side, drawn as one: "+3 working". */
+export interface RibbonCount {
+  key: string;
+  kind: CountKind;
+  agentIds: AgentId[];
+  x: number;
+  /** What is drawn: "+3 working", "+4 need you". */
+  text: string;
+  /** What a screen reader says: "+3 working: Ines, Kit, Pip". */
+  label: string;
+  align: Align;
+}
+
+/** "+3 working", "+1 needs you", "+4 need you". */
+function countText(kind: CountKind, n: number): string {
+  return kind === "working" ? `+${n} working` : `+${n} ${n === 1 ? "needs" : "need"} you`;
+}
+
 export interface RibbonScheduled {
   key: string;
   /** A routine shows its owner's face; a calendar occasion shows a glyph. */
@@ -133,6 +154,8 @@ export interface Ribbon {
   pile: AgentId[];
   /** How many in the pile did something today and were moved there for room. */
   crowded: number;
+  /** Working or needs-you faces too many for their side of now, one item each kind. */
+  counts: RibbonCount[];
   faces: RibbonFace[];
   scheduled: RibbonScheduled[];
   lapses: RibbonLapse[];
@@ -507,24 +530,29 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
   const charSpan = input.charSpan ?? 0;
   // Half of what a label is reckoned to take, never less than half a face.
   const halfOf = (text: string) => Math.max(input.faceSpan, text.length * charSpan) / 2;
+  type Count = { kind: CountKind; agentIds: AgentId[] };
   type Row = {
     face: Omit<RibbonFace, "x" | "label" | "align"> | null;
     item: (typeof runs)[number] | null;
+    count: Count | null;
     at: number;
     x: number;
     text: string;
     width: number;
   };
-  // A face takes its name and a character of air, so two names never touch;
-  // an item takes a face, and says what it is only where there is room.
+  // Every row takes its words and a character of air, so no two faces overlap
+  // and no two names touch; an item takes a face, and says what it is only
+  // where there is room.
+  const takes = (text: string) => 2 * halfOf(text) + charSpan;
   const faceRows: Row[] = wanted.map((face) => {
     const text = names.get(face.agentId) ?? "";
     const x = xAt(scale, face.at);
-    return { face, item: null, at: face.at, x, text, width: 2 * halfOf(text) + charSpan };
+    return { face, item: null, count: null, at: face.at, x, text, width: takes(text) };
   });
   const itemRows: Row[] = [...runs, ...occasions].map((item) => ({
     face: null,
     item,
+    count: null,
     at: item.at,
     x: xAt(scale, item.at),
     text: longest(item.what, item.when),
@@ -547,19 +575,51 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
     const first = rows[0] as Row;
     return nowX + halfOf(first.text) + charSpan - first.width / 2;
   };
+  const fitsBefore = (rows: Row[]) => rows.length === 0 || total(rows) <= beforeHi(rows) + 1e-9;
+  const fitsLater = (rows: Row[]) => rows.length === 0 || total(rows) <= 1 - laterLo(rows) + 1e-9;
 
-  // When the faces left of now cannot stand side by side, the oldest go to
-  // the pile, one at a time, until the rest can; nobody who needs you does.
-  const before = faceRows.filter((one) => !after(one)).sort(byX);
+  // Faces of one kind that cannot all stand side by side: as many as fit are
+  // drawn, the longest waiting first, and the rest are one counted item at
+  // the latest of their moments. Nobody who needs you is ever only "asleep".
+  const fold = (rows: Row[], kind: CountKind, fits: (rows: Row[]) => boolean): Row[] => {
+    const ofKind = rows.filter((one) => one.face?.state === kind).sort((x, y) => x.at - y.at);
+    if (fits(rows) || ofKind.length < 2) return rows;
+    for (let keep = ofKind.length - 1; keep >= 0; keep--) {
+      const folded = ofKind.slice(keep);
+      const at = Math.max(...folded.map((one) => one.at));
+      const text = countText(kind, folded.length);
+      const count: Row = {
+        face: null,
+        item: null,
+        count: { kind, agentIds: folded.flatMap((one) => (one.face ? [one.face.agentId] : [])) },
+        at,
+        x: Math.max(...folded.map((one) => one.x)),
+        text,
+        width: takes(text),
+      };
+      const next = [...rows.filter((one) => !folded.includes(one)), count].sort(byX);
+      if (fits(next) || keep === 0) return next;
+    }
+    return rows;
+  };
+
+  // When the faces left of now cannot stand side by side, some go to the
+  // pile, one at a time, until the rest can: whoever is only resting first,
+  // then the oldest news. Nobody who needs you does; they fold instead.
+  let before = faceRows.filter((one) => !after(one)).sort(byX);
   const piled = new Set<AgentId>();
-  while (before.length > 0 && total(before) > beforeHi(before) + 1e-9) {
-    const oldest = before
-      .filter((one) => one.face?.state !== "needsYou")
-      .reduce<Row | null>((a, b) => (a === null || b.at < a.at ? b : a), null);
-    if (!oldest?.face) break;
-    piled.add(oldest.face.agentId);
-    before.splice(before.indexOf(oldest), 1);
+  while (!fitsBefore(before)) {
+    const movable = before.filter((one) => one.face && one.face.state !== "needsYou");
+    const resting = movable.filter((one) => one.face?.state === "rest");
+    const victim = (resting.length ? resting : movable).reduce<Row | null>(
+      (a, b) => (a === null || b.at < a.at ? b : a),
+      null,
+    );
+    if (!victim?.face) break;
+    piled.add(victim.face.agentId);
+    before = before.filter((one) => one !== victim);
   }
+  before = fold(before, "needsYou", fitsBefore);
   const pile = input.agents
     .map((agent) => agent.id)
     .filter((id) => drowsy.includes(id) || piled.has(id));
@@ -567,13 +627,10 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
   // Faces and what is scheduled share one row right of now, so they are
   // spread as one: spread apart, a run due at eight would sit on top of a
   // face working now. When that side cannot hold them all, the schedule gives
-  // way: who is working comes first.
+  // way first, and then whoever is working folds into one count.
   const liveFaces = faceRows.filter(after);
   const withItems = [...liveFaces, ...itemRows].sort(byX);
-  const later =
-    withItems.length === 0 || total(withItems) <= 1 - laterLo(withItems) + 1e-9
-      ? withItems
-      : liveFaces.sort(byX);
+  const later = fitsLater(withItems) ? withItems : fold(liveFaces.sort(byX), "working", fitsLater);
   const ordered = [...before, ...later];
   const xs = [
     ...(before.length
@@ -598,8 +655,22 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
     x - halfOf(text) < 0 ? "start" : x + halfOf(text) > 1 ? "end" : "center";
   const faces: RibbonFace[] = [];
   const scheduled: RibbonScheduled[] = [];
+  const counts: RibbonCount[] = [];
   ordered.forEach((one, i) => {
     const x = xs[i] as number;
+    if (one.count) {
+      const who = one.count.agentIds.map((id) => names.get(id) ?? "").join(", ");
+      counts.push({
+        key: `count:${one.count.kind}`,
+        kind: one.count.kind,
+        agentIds: one.count.agentIds,
+        x,
+        text: one.text,
+        label: `${one.text}: ${who}`,
+        align: align(x, one.text),
+      });
+      return;
+    }
     if (one.face) {
       const label = faceLabel(names.get(one.face.agentId) ?? "", one.face.state, one.face.at, now);
       faces.push({ ...one.face, x, label, align: align(x, one.text) });
@@ -620,7 +691,9 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
   // has nobody to name, and "It stops waiting" says nothing about whose.
   const lapses = input.approvals.flatMap((one) => {
     const name = names.get(one.agentId);
-    return one.lapsesAt === null || name === undefined
+    // A moment already past is not something coming: the runtime closes the
+    // request on its own, and a time that has gone is noise on the strip.
+    return one.lapsesAt === null || one.lapsesAt <= now || name === undefined
       ? []
       : [
           {
@@ -673,6 +746,7 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
     pile,
     crowded: piled.size,
     faces,
+    counts,
     scheduled,
     lapses,
     ticks: [...hourTicks(scale, start, now, bandLabel ? bandX : null, wordsSpan), ...dayTicks],

@@ -1,4 +1,4 @@
-import { type FormEvent, type ReactNode, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useReducer, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { ABSENT_ACCENT } from "../avatars/catalog";
@@ -143,6 +143,16 @@ interface CardProps {
  */
 function DeskCard({ request, agent, onDecide, onAnswer, onOpenChannel }: CardProps) {
   const [answering, setAnswering] = useState(false);
+  // Drawn again at the moment the request lapses, so a card left open does
+  // not go on naming a time that has passed.
+  const [, lapsed] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    if (request.lapsesAt === null) return;
+    const left = request.lapsesAt - Date.now();
+    if (left <= 0) return;
+    const timer = window.setTimeout(lapsed, left);
+    return () => window.clearTimeout(timer);
+  }, [request.lapsesAt]);
   const asker = agent?.name ?? "A deleted agent";
 
   // Released whichever way it went. A refused decision leaves the request in
