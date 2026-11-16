@@ -122,8 +122,8 @@ export const DEFAULT_PREFS: Prefs = Object.freeze({
   uiScale: 100,
   surface: "system",
   ...DEFAULT_THEME,
-  grays: "slate",
-  temperature: "cool",
+  grays: "neutral",
+  temperature: "plain",
   typeface: "inter",
   reading: "interface",
   readingSize: 16,
@@ -132,6 +132,25 @@ export const DEFAULT_PREFS: Prefs = Object.freeze({
 }) as Prefs;
 
 const KEY = "guac.prefs";
+
+/**
+ * Which default look a stored blob was written under, as a field in the blob.
+ *
+ * Every save writes the whole blob, so a stored slate and cool is either a
+ * choice or the old default written back by an unrelated change, and the blob
+ * alone cannot say which. Builds before this one wrote no mark: loading an
+ * unmarked blob moves the old default to the new one, and every save writes
+ * the mark, so the move happens once and a slate picked afterward stays slate.
+ * In the blob rather than under a key of its own, because one blob under one
+ * key is what keeps a save from being half written.
+ */
+const LOOK = 2;
+
+/** The default this build replaced: Signal's grays at Signal's temperature. */
+function movedFromOldDefault(prefs: Prefs): Prefs {
+  if (prefs.grays !== "slate" || prefs.temperature !== "cool") return prefs;
+  return { ...prefs, grays: DEFAULT_PREFS.grays, temperature: DEFAULT_PREFS.temperature };
+}
 
 const SURFACES: readonly SurfaceMode[] = ["light", "dark", "system"];
 
@@ -203,7 +222,10 @@ export function loadPrefs(): Prefs {
   try {
     const raw = localStorage.getItem(KEY);
     if (raw === null) return DEFAULT_PREFS;
-    return readPrefs(JSON.parse(raw));
+    const parsed: unknown = JSON.parse(raw);
+    const prefs = readPrefs(parsed);
+    const marked = typeof parsed === "object" && parsed !== null && "look" in parsed;
+    return marked && parsed.look === LOOK ? prefs : movedFromOldDefault(prefs);
   } catch {
     return DEFAULT_PREFS;
   }
@@ -212,7 +234,7 @@ export function loadPrefs(): Prefs {
 /** As above: not worth telling the operator about. */
 export function savePrefs(prefs: Prefs): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify(prefs));
+    localStorage.setItem(KEY, JSON.stringify({ ...prefs, look: LOOK }));
   } catch {
     // Nothing to do and nothing to say. The preference holds for this session.
   }

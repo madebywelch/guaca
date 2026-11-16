@@ -1918,7 +1918,7 @@ describe("appearance", () => {
         grays: "avocado",
         attention: "violet",
         contrast: "more",
-        temperature: "cool",
+        temperature: "plain",
       }),
     );
     expect(choice("Grays: Avocado").getAttribute("aria-pressed")).toBe("true");
