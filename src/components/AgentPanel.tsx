@@ -81,7 +81,7 @@ function Profile({ agent, onEdit }: { agent: AgentCard; onEdit: () => void }) {
           facts that are read constantly and were two clicks away.
 
           It used to hold the browser and the computer as well, and those were
-          the same two things the places below say — twice, one above the other,
+          the same two things the places below say, twice, one above the other,
           because a fact and a control about one place are one row and not two.
           A place is granted, watched and taken back, so it lives where its
           switch is; what is left here is what has no control at all. */}
