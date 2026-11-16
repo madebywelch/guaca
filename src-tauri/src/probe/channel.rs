@@ -21,33 +21,16 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
-use super::{Envelope, Reply, Request, State, Window, QUIET_ENV, SOCKET_ENV};
+use super::{Envelope, Reply, Request, State, Window, SOCKET_ENV};
 use crate::tray::Tray;
 
 /// How long a page has to answer. A page that is loading answers as soon as
 /// it can; one that has not answered in this long is not going to.
 const PAGE: Duration = Duration::from_secs(10);
-
-/// The builder, before the app starts, for a launch the probe asked to be
-/// quiet.
-///
-/// The app activates itself when it finishes launching, whatever the launcher
-/// asked, which is the right thing when a person opened it and the wrong one
-/// for a script running beside them: it takes the keyboard from whatever they
-/// were typing in. A quiet launch asks macOS to activate it only if nothing
-/// else is active. The launch scenario leaves this off, because whether the
-/// real app takes the front is the question it is there to answer.
-pub fn prepare<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
-    if std::env::var_os(QUIET_ENV).is_some() {
-        builder.activate_ignoring_other_apps(false)
-    } else {
-        builder
-    }
-}
 
 /// Opens the socket, if this launch named one. Called once the tray exists.
 pub fn start(app: &AppHandle) {

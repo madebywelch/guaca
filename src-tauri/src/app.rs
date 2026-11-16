@@ -172,8 +172,12 @@ pub fn run() {
         .init();
     crate::programs::adopt_operator_path();
     let builder = tauri::Builder::default();
-    #[cfg(feature = "probe")]
-    let builder = crate::probe::channel::prepare(builder);
+    // A launch the person made comes forward because macOS brings it forward.
+    // Asked to on top of that, the app also took the front from a launch that
+    // asked to stay back, such as a login item, an installer's open -g, or the
+    // probe: whatever was being typed into lost the keyboard.
+    #[cfg(target_os = "macos")]
+    let builder = builder.activate_ignoring_other_apps(false);
     builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())

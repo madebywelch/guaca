@@ -25,11 +25,6 @@ pub mod channel;
 /// socket exists only for a launch that asked for it.
 pub const SOCKET_ENV: &str = "GUACA_PROBE_SOCKET";
 
-/// Set to anything, the app does not bring itself forward when it starts.
-/// See `channel::prepare` for why the probe needs it and the launch scenario
-/// leaves it off.
-pub const QUIET_ENV: &str = "GUACA_PROBE_QUIET";
-
 /// One request, one line of JSON, carrying the id its answer echoes.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Envelope {
