@@ -81,6 +81,41 @@ describe("what a screen reader hears", () => {
     expect(within(list).queryByRole("button", { name: /asleep/ })).toBeNull();
   });
 
+  it("reads the strip in the order it is drawn, left to right", () => {
+    const ribbon = morning();
+    const list = draw(ribbon);
+    const items = within(list).getAllByRole("listitem");
+    // The pile leads; everything after it follows its place on the strip.
+    expect(items[0]?.className).toBe("ribbon__pile");
+    const xs = items.slice(1).map((item) => Number(item.style.getPropertyValue("--ribbon-x")));
+    expect(xs).toEqual([...xs].sort((a, b) => a - b));
+    expect(new Set(xs).size).toBe(xs.length);
+  });
+
+  it("draws faces too many to fit as one count that opens the Groups sheet", () => {
+    const crowd = ["kit", "wren", "pip", "ines", "dara", "marlow"];
+    useStore.setState({
+      agents: AGENTS,
+      activity: Object.fromEntries(crowd.map((id) => [id, { state: "thinking" as const }])),
+    });
+    const ribbon = layoutRibbon({
+      now: at(16, 9, 12),
+      agents: AGENTS,
+      activity: Object.fromEntries(crowd.map((id) => [id, { state: "thinking" as const }])),
+      outcomes: [],
+      approvals: [],
+      upcoming: [],
+      occasions: [],
+      faceSpan: 52 / 375,
+      charSpan: 8 / 375,
+    });
+    const list = draw(ribbon);
+    const count = within(list).getByRole("button", { name: /^\+\d+ working: / });
+    expect(count.textContent).toMatch(/^\+\d+ working$/);
+    fireEvent.click(count);
+    expect(openPile).toHaveBeenCalledTimes(1);
+  });
+
   it("reads a scheduled run with its day, and does not offer it as a button", () => {
     const list = draw();
     const run = within(list).getByText("Changelog type check, Tue 9:00 AM");

@@ -10268,7 +10268,8 @@ button.artifacts__version[aria-pressed="true"] {
 }
 
 .ribbon__face,
-.ribbon__item {
+.ribbon__item,
+.ribbon__count {
   position: absolute;
   top: calc(var(--ribbon-line-y) - var(--ribbon-face) / 2);
   left: calc(var(--ribbon-lead) + var(--ribbon-x) * (100% - var(--ribbon-lead)));
@@ -10277,6 +10278,28 @@ button.artifacts__version[aria-pressed="true"] {
   flex-direction: column;
   align-items: center;
   z-index: 2;
+}
+
+/* Faces too many for their side of now, as one: "+3 working". A face's
+   height, so it sits on the line where the faces it stands for would. */
+.ribbon__count-button {
+  height: var(--ribbon-face);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-4);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--sunken);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--type-small);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ribbon__count[data-kind="needsYou"] .ribbon__count-button {
+  color: var(--attention);
 }
 
 /* Its words get the room beside it on the strip and no more. */
@@ -10294,13 +10317,15 @@ button.artifacts__version[aria-pressed="true"] {
 /* Near an end of the strip a label hangs inward from its mark's edge, so
    none of it is past the window's margin. */
 .ribbon__face[data-align="start"],
-.ribbon__item[data-align="start"] {
+.ribbon__item[data-align="start"],
+.ribbon__count[data-align="start"] {
   transform: translateX(calc(var(--ribbon-face) / -2));
   align-items: flex-start;
 }
 
 .ribbon__face[data-align="end"],
-.ribbon__item[data-align="end"] {
+.ribbon__item[data-align="end"],
+.ribbon__count[data-align="end"] {
   transform: translateX(calc(var(--ribbon-face) / 2 - 100%));
   align-items: flex-end;
 }
@@ -10314,6 +10339,7 @@ button.artifacts__version[aria-pressed="true"] {
 
 .ribbon[data-open] .ribbon__face:not([data-open]),
 .ribbon[data-open] .ribbon__item,
+.ribbon[data-open] .ribbon__count,
 .ribbon[data-open] .ribbon__pile,
 .ribbon[data-open] .ribbon__band-label {
   opacity: var(--ribbon-aside);

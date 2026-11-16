@@ -1,4 +1,11 @@
-import { type CSSProperties, type KeyboardEvent, useEffect, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  type KeyboardEvent,
+  type ReactNode,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import type { Ribbon as Layout } from "../lib/ribbon";
@@ -51,7 +58,17 @@ export function Ribbon({ ribbon, onOpenAgent, onOpenPile, openAgentId, onTrackWi
   const activity = useStore((s) => s.activity);
   const byId = new Map(agents.map((agent) => [agent.id, agent]));
 
-  const stops = [...(ribbon.pile.length ? [PILE_KEY] : []), ...ribbon.faces.map((f) => f.agentId)];
+  // Every button on the strip, in the order it is drawn: the pile, then the
+  // faces and the counted items left to right.
+  const stops = [
+    ...(ribbon.pile.length ? [PILE_KEY] : []),
+    ...[
+      ...ribbon.faces.map((face) => ({ x: face.x, key: face.agentId as string })),
+      ...ribbon.counts.map((count) => ({ x: count.x, key: count.key })),
+    ]
+      .sort((a, b) => a.x - b.x)
+      .map((one) => one.key),
+  ];
   const [current, setCurrent] = useState<string | null>(null);
   const active = current !== null && stops.includes(current) ? current : (stops[0] ?? null);
   const buttons = useRef(new Map<string, HTMLButtonElement>());
@@ -92,6 +109,135 @@ export function Ribbon({ ribbon, onOpenAgent, onOpenPile, openAgentId, onTrackWi
     if (node) buttons.current.set(key, node);
     else buttons.current.delete(key);
   };
+
+  // One list in the order it is drawn, left to right, so a screen reader
+  // hears the strip the way it is seen. The pile leads; it sits at the edge.
+  const drawn: { x: number; node: ReactNode }[] = [
+    ...ribbon.lapses.map((lapse) => ({
+      x: lapse.x,
+      node: (
+        <li
+          key={`lapse:${lapse.approvalId}`}
+          className="ribbon__lapse"
+          style={at(lapse.x)}
+          title={`${lapse.label}, ${lapse.when}`}
+        >
+          <span className="ribbon__said">{`${lapse.label}, ${lapse.when}`}</span>
+        </li>
+      ),
+    })),
+    ...ribbon.scheduled.map((item) => {
+      const owner = item.agentId ? byId.get(item.agentId) : undefined;
+      return {
+        x: item.x,
+        node: (
+          <li
+            key={item.key}
+            className="ribbon__item"
+            style={{ ...at(item.x), "--ribbon-room": item.room } as CSSProperties}
+            data-words={item.words ? undefined : "none"}
+            data-align={item.align}
+            title={item.label}
+          >
+            <span className="ribbon__item-mark" aria-hidden="true">
+              {owner ? (
+                <AgentAvatar
+                  avatar={owner.avatar}
+                  color={owner.color}
+                  lifecycle={owner.lifecycle}
+                  seed={owner.id}
+                  size="sm"
+                  title=""
+                />
+              ) : (
+                CALENDAR
+              )}
+            </span>
+            {item.words && (
+              <span className="ribbon__item-what" aria-hidden="true">
+                {item.what}
+              </span>
+            )}
+            <span className="ribbon__item-when" aria-hidden="true">
+              {item.when}
+            </span>
+            <span className="ribbon__said">{item.label}</span>
+          </li>
+        ),
+      };
+    }),
+    ...ribbon.faces.flatMap((face) => {
+      const agent = byId.get(face.agentId);
+      if (!agent) return [];
+      return {
+        x: face.x,
+        node: (
+          <li
+            key={face.agentId}
+            className="ribbon__face"
+            style={at(face.x)}
+            data-state={face.state}
+            data-align={face.align}
+            data-open={face.agentId === openAgentId ? "" : undefined}
+          >
+            <button
+              type="button"
+              ref={keep(face.agentId)}
+              className="ribbon__face-button"
+              aria-label={face.label}
+              aria-current={face.agentId === openAgentId ? "page" : undefined}
+              tabIndex={active === face.agentId ? 0 : -1}
+              onFocus={() => setCurrent(face.agentId)}
+              onClick={() => onOpenAgent(face.agentId)}
+            >
+              <span className="ribbon__portrait">
+                <AgentAvatar
+                  avatar={agent.avatar}
+                  color={agent.color}
+                  activity={activity[agent.id]}
+                  lifecycle={agent.lifecycle}
+                  seed={agent.id}
+                  size="md"
+                  title=""
+                />
+                {face.state === "needsYou" && <span className="ribbon__alert">!</span>}
+                {(face.state === "finished" || face.state === "failed") && (
+                  <span className="ribbon__mark" data-mark={face.state}>
+                    {face.state === "failed" ? "!" : CHECK}
+                  </span>
+                )}
+              </span>
+              <span className="ribbon__name">{agent.name}</span>
+            </button>
+          </li>
+        ),
+      };
+    }),
+    ...ribbon.counts.map((count) => ({
+      x: count.x,
+      node: (
+        <li
+          key={count.key}
+          className="ribbon__count"
+          style={at(count.x)}
+          data-kind={count.kind}
+          data-align={count.align}
+        >
+          <button
+            type="button"
+            ref={keep(count.key)}
+            className="ribbon__count-button"
+            aria-label={count.label}
+            tabIndex={active === count.key ? 0 : -1}
+            onFocus={() => setCurrent(count.key)}
+            onClick={onOpenPile}
+          >
+            {count.text}
+          </button>
+        </li>
+      ),
+    })),
+  ].sort((a, b) => a.x - b.x);
 
   const pileShown = ribbon.pile.slice(0, PILE_SHOWN);
   // The others step back only when the open agent is on the strip to be
@@ -168,99 +314,7 @@ export function Ribbon({ ribbon, onOpenAgent, onOpenPile, openAgentId, onTrackWi
             </li>
           )}
 
-          {ribbon.lapses.map((lapse) => (
-            <li
-              key={`lapse:${lapse.approvalId}`}
-              className="ribbon__lapse"
-              style={at(lapse.x)}
-              title={`${lapse.label}, ${lapse.when}`}
-            >
-              <span className="ribbon__said">{`${lapse.label}, ${lapse.when}`}</span>
-            </li>
-          ))}
-
-          {ribbon.scheduled.map((item) => {
-            const owner = item.agentId ? byId.get(item.agentId) : undefined;
-            return (
-              <li
-                key={item.key}
-                className="ribbon__item"
-                style={{ ...at(item.x), "--ribbon-room": item.room } as CSSProperties}
-                data-words={item.words ? undefined : "none"}
-                data-align={item.align}
-                title={item.label}
-              >
-                <span className="ribbon__item-mark" aria-hidden="true">
-                  {owner ? (
-                    <AgentAvatar
-                      avatar={owner.avatar}
-                      color={owner.color}
-                      lifecycle={owner.lifecycle}
-                      seed={owner.id}
-                      size="sm"
-                      title=""
-                    />
-                  ) : (
-                    CALENDAR
-                  )}
-                </span>
-                {item.words && (
-                  <span className="ribbon__item-what" aria-hidden="true">
-                    {item.what}
-                  </span>
-                )}
-                <span className="ribbon__item-when" aria-hidden="true">
-                  {item.when}
-                </span>
-                <span className="ribbon__said">{item.label}</span>
-              </li>
-            );
-          })}
-
-          {ribbon.faces.map((face) => {
-            const agent = byId.get(face.agentId);
-            if (!agent) return null;
-            return (
-              <li
-                key={face.agentId}
-                className="ribbon__face"
-                style={at(face.x)}
-                data-state={face.state}
-                data-align={face.align}
-                data-open={face.agentId === openAgentId ? "" : undefined}
-              >
-                <button
-                  type="button"
-                  ref={keep(face.agentId)}
-                  className="ribbon__face-button"
-                  aria-label={face.label}
-                  aria-current={face.agentId === openAgentId ? "page" : undefined}
-                  tabIndex={active === face.agentId ? 0 : -1}
-                  onFocus={() => setCurrent(face.agentId)}
-                  onClick={() => onOpenAgent(face.agentId)}
-                >
-                  <span className="ribbon__portrait">
-                    <AgentAvatar
-                      avatar={agent.avatar}
-                      color={agent.color}
-                      activity={activity[agent.id]}
-                      lifecycle={agent.lifecycle}
-                      seed={agent.id}
-                      size="md"
-                      title=""
-                    />
-                    {face.state === "needsYou" && <span className="ribbon__alert">!</span>}
-                    {(face.state === "finished" || face.state === "failed") && (
-                      <span className="ribbon__mark" data-mark={face.state}>
-                        {face.state === "failed" ? "!" : CHECK}
-                      </span>
-                    )}
-                  </span>
-                  <span className="ribbon__name">{agent.name}</span>
-                </button>
-              </li>
-            );
-          })}
+          {drawn.map((one) => one.node)}
         </ul>
       </div>
     </nav>
