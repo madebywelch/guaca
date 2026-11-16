@@ -1,0 +1,78 @@
+[package]
+name = "mac-usernotifications"
+version = "0.3.1"
+authors = ["Hendrik Sollich <hendrik@hoodie.de>"]
+description = "Thin wrapper around macOS UserNotifications."
+edition = "2024"
+rust-version = "1.90"
+
+homepage = "https://github.com/hoodie/mac-usernotifications"
+repository = "https://github.com/hoodie/mac-usernotifications"
+documentation = "https://docs.rs/mac-usernotifications"
+
+license = "MIT OR Apache-2.0"
+keywords = ["notification", "macOS", "osx", "notify"]
+readme = "README.md"
+
+include = ["Cargo.toml", "README.md", "src/*.rs", "examples/"]
+
+
+[features]
+default = ["blocking-wrappers"]
+blocking-wrappers = []
+
+[package.metadata.docs.rs]
+targets = ["aarch64-apple-darwin"]
+
+[lints.rust]
+trivial_numeric_casts = "forbid"
+unused_import_braces = "forbid"
+unstable_features = "warn"
+missing_copy_implementations = "deny"
+missing_debug_implementations = "deny"
+trivial_casts = "deny"
+unused_qualifications = "deny"
+
+[lints.clippy]
+doc_markdown = "warn"
+semicolon_if_nothing_returned = "warn"
+single_match_else = "warn"
+inconsistent_struct_constructor = "warn"
+map_unwrap_or = "warn"
+match_same_arms = "warn"
+
+[dependencies]
+objc2-foundation = { version = "0.3", features = ["NSEnumerator", "NSValue"] }
+objc2 = "0.6"
+objc2-user-notifications = { version = "0.3", features = [
+    "UNNotificationAction",
+    "UNNotificationAttachment",
+    "UNNotificationCategory",
+    "UNNotificationContent",
+    "UNNotificationRequest",
+    "UNNotificationResponse",
+    "UNNotificationSettings",
+    "UNNotificationTrigger",
+    "UNNotification",
+    "UNUserNotificationCenter",
+] }
+
+block2 = "0.6"
+
+thiserror = "2.0.18"
+futures-lite = "2.6.1"
+futures-channel = "0.3.32"
+log = "0.4.32"
+futures-timer = "3.0.4"
+objc2-core-foundation = { version = "0.3.2", features = ["CFRunLoop"] }
+
+[dev-dependencies]
+oslog = "0.2"
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros"] }
+
+[package.metadata.bundle]
+name = "mac-usernotifications-example"
+icon = ["examples/ferris-flat-happy.png"]
+identifier = "de.hoodie.mac-usernotifications.example"
+version = "0.1.0"
+short_description = "mac-usernotifications example"

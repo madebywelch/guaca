@@ -41,6 +41,7 @@ run_scripts() {
   bash scripts/versions.test.sh
   node --test scripts/install-image.test.mjs
   bash scripts/install-host.test.sh
+  python3 scripts/check-docker-deps.py
 
   step "Probe evidence (no app or screen)"
   python3 scripts/probe.test.py
@@ -90,6 +91,11 @@ run_rust() {
 
   step "Rust tests"
   cargo test --manifest-path src-tauri/Cargo.toml
+
+  if [ "$(uname -s)" = Darwin ]; then
+    step "Native notification action ordering and shutdown"
+    python3 scripts/test-notification-actions.py
+  fi
 
   # The daemon is a second host over the same library, and it is built without
   # Tauri on purpose: `app.rs` expands a macro that reads dist/, so a server

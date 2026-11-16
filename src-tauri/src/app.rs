@@ -183,6 +183,9 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .on_window_event(hide_rather_than_quit)
         .setup(|app| {
+            if let Err(err) = crate::notifications::install(app.handle()) {
+                tracing::warn!(%err, "banner clicks will not reach the window this session");
+            }
             let journal = app.path().app_data_dir()?.join("host-update.json");
             std::fs::create_dir_all(journal.parent().unwrap())?;
             app.manage(
@@ -199,7 +202,10 @@ pub fn run() {
                 Err(err) => tracing::warn!(%err, "no menu bar presence this session"),
             }
             #[cfg(feature = "probe")]
-            crate::probe::channel::start(app.handle());
+            {
+                crate::probe::trace::start();
+                crate::probe::channel::start(app.handle());
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -230,6 +236,9 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("could not run Guaca")
         .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                crate::notifications::shutdown(app);
+            }
             if let tauri::RunEvent::ExitRequested { api, .. } = event {
                 if app.state::<LocalHost>().is_updating() {
                     api.prevent_exit();

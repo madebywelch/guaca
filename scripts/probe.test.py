@@ -233,6 +233,109 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(args[args.index(trace) - 1], "--env")
         app.client = app.pid = None
 
+    def launch(self, scratch, app, hello):
+        with patch.object(probe, "Client") as client, patch.object(probe, "wait_until"):
+            client.return_value.ask.return_value = hello
+            app.launch()
+        args = probe.run.call_args.args[0]
+        return next(arg.split("=", 1)[1] for arg in args if arg.startswith("GUACA_PROBE_TRACE="))
+
+    def write_trace(self, path, *phases):
+        rows = [{"phase": phase, "id": 0, "value": 0, "us": index, "main": True}
+                for index, phase in enumerate(phases)]
+        Path(path).write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+    def append_trace(self, path, *phases):
+        with open(path, "a") as trace:
+            for phase in phases:
+                trace.write(json.dumps({"phase": phase, "id": 9, "value": 3, "us": 50, "main": True}) + "\n")
+
+    def retained(self, scratch):
+        directory = scratch.retain_failure()
+        self.assertIsNotNone(directory)
+        return json.loads((directory / "evidence.json").read_text())
+
+    def test_relaunch_in_one_run_writes_a_trace_per_launch(self):
+        scratch = probe.Scratch()
+        self.addCleanup(scratch.close)
+        first, second = probe.App(scratch), probe.App(scratch, folder="second")
+        paths = [self.launch(scratch, first, {"pid": 42, "trace": True}),
+                 self.launch(scratch, first, {"pid": 43, "trace": True}),
+                 self.launch(scratch, second, {"pid": 44, "trace": True})]
+        first.client = first.pid = second.client = second.pid = None
+        self.assertEqual(paths, [str(scratch.channel / name) for name in
+                                 ("native.jsonl", "native-2.jsonl", "native-3.jsonl")])
+        self.write_trace(paths[0], "trace.opened", "app.did_hide")
+        self.write_trace(paths[1], "trace.opened")
+        self.write_trace(paths[2], "trace.opened", "window.open", "window.reveal")
+        evidence = self.retained(scratch)
+        self.assertEqual(evidence["traces"], [
+            {"launch": 1, "health": "healthy", "events": 1},
+            {"launch": 2, "health": "healthy", "events": 0},
+            {"launch": 3, "health": "healthy", "events": 2}])
+        self.assertEqual([row["phase"] for row in evidence["native"]["rows"]], [
+            "trace.opened", "app.did_hide", "trace.opened", "trace.opened", "window.open", "window.reveal"])
+        self.assertTrue(evidence["native"]["readable"])
+
+    def test_a_writer_that_cannot_open_its_file_reads_as_failed(self):
+        scratch = probe.Scratch()
+        self.addCleanup(scratch.close)
+        app = probe.App(scratch)
+        refused = self.launch(scratch, app, {"pid": 42, "trace": False})
+        silent = self.launch(scratch, app, {"pid": 43, "trace": True})
+        empty = self.launch(scratch, app, {"pid": 44, "trace": True})
+        app.client = app.pid = None
+        self.write_trace(refused, "trace.opened")
+        Path(empty).write_text("")
+        evidence = self.retained(scratch)
+        self.assertEqual(evidence["traces"], [
+            {"launch": 1, "health": "writer failed", "events": 0},
+            {"launch": 2, "health": "writer failed", "events": 0},
+            {"launch": 3, "health": "writer failed", "events": 0}])
+        self.assertNotIn(silent, json.dumps(evidence))
+
+    def test_a_missed_banner_press_is_attributed(self):
+        outcomes = {
+            (): "no native response arrived",
+            ("notification.response",): "a native response arrived and no click was emitted",
+            ("notification.response", "notification.default", "notification.clicked"):
+                "a click was emitted and the page did not act",
+        }
+        for after, attribution in outcomes.items():
+            with self.subTest(after=after):
+                scratch = probe.Scratch()
+                self.addCleanup(scratch.close)
+                app = probe.App(scratch)
+                path = self.launch(scratch, app, {"pid": 42, "trace": True})
+                app.client = app.pid = None
+                self.write_trace(path, "trace.opened")
+                self.append_trace(path, "notification.response", "notification.clicked")
+                scratch.press("clicking the first banner")
+                self.append_trace(path, "window.reveal")
+                missed = scratch.press("clicking the second banner")
+                self.append_trace(path, *after)
+                missed["missed"] = True
+                evidence = self.retained(scratch)
+                self.assertEqual(evidence["presses"], [
+                    {"press": "clicking the second banner", "attribution": attribution}])
+
+    def test_a_missed_press_without_a_healthy_trace_is_not_attributed(self):
+        scratch = probe.Scratch()
+        self.addCleanup(scratch.close)
+        app = probe.App(scratch)
+        self.launch(scratch, app, {"pid": 42, "trace": False})
+        app.client = app.pid = None
+        scratch.press("clicking the test banner")["missed"] = True
+        self.assertEqual(self.retained(scratch)["presses"], [
+            {"press": "clicking the test banner",
+             "attribution": "the native trace writer failed, so the press cannot be attributed"}])
+
+    def test_a_press_that_worked_is_not_attributed(self):
+        scratch = probe.Scratch()
+        self.addCleanup(scratch.close)
+        scratch.press("clicking the banner")
+        self.assertEqual(self.retained(scratch)["presses"], [])
+
     def test_silent_channel_has_a_bounded_capture(self):
         def diagnostic(request):
             time.sleep(0.15)
