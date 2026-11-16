@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../lib/store";
@@ -121,6 +121,28 @@ describe("StatusBar", () => {
     host.version = "0.1.0";
     host.build = "aaaaaaa";
     onMessage.mockResolvedValue();
+  });
+
+  it("opens Artifacts, Calendar and For you from the bar's places", () => {
+    seed([]);
+    useStore.setState({ pending: [], stuck: [], decisions: [] });
+    render(<StatusBar onOpen={onOpen} onMessage={onMessage} />);
+    const places = screen.getByRole("navigation", { name: "Places" });
+    fireEvent.click(within(places).getByRole("button", { name: "Calendar" }));
+    expect(onOpen).toHaveBeenLastCalledWith({ kind: "calendar" });
+    fireEvent.click(within(places).getByRole("button", { name: "For you" }));
+    expect(onOpen).toHaveBeenLastCalledWith({ kind: "forYou" });
+    fireEvent.click(within(places).getByRole("button", { name: "Artifacts" }));
+    expect(useStore.getState().artifactsOpen).toEqual({ id: null });
+  });
+
+  it("draws a place once when a quick action already opens it", () => {
+    seed([calendar]);
+    render(<StatusBar onOpen={onOpen} onMessage={onMessage} />);
+    expect(screen.getAllByRole("button", { name: "Calendar" })).toHaveLength(1);
+    const places = screen.getByRole("navigation", { name: "Places" });
+    expect(within(places).queryByRole("button", { name: "Calendar" })).toBeNull();
+    expect(within(places).getByRole("button", { name: "For you" })).toBeTruthy();
   });
 
   it("runs each kind of button, and says who asked for an agent's", async () => {

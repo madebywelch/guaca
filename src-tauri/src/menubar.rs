@@ -511,6 +511,7 @@ mod tests {
             answer: None,
             created_at: 0,
             decided_at: None,
+            lapses_at: None,
         }
     }
 

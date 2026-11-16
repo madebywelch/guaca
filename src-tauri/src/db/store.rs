@@ -31,7 +31,9 @@ use crate::domain::outcome::{Outcome, Settled};
 use crate::domain::plugin::{
     Headers, Plugin, PluginAccess, PluginKind, PluginTool, PluginToolCard, PluginToolset,
 };
-use crate::domain::routine::{EventTrigger, NextSlot, Routine, RoutineRun, RunKind, Trigger};
+use crate::domain::routine::{
+    EventTrigger, NextSlot, Routine, RoutineRun, RunKind, Trigger, UpcomingRun,
+};
 use crate::domain::search::{
     contains_fold, excerpt, like_pattern, links_in, FileHit, LinkHit, MessageHit, SearchHits,
 };
@@ -1220,6 +1222,33 @@ impl Store {
         Ok(out)
     }
 
+    /// Every switched-on routine's next firing up to `until`, across every
+    /// agent that has not been deleted, soonest first.
+    ///
+    /// A paused agent's routines are kept, unlike in `due_routines`: the slot
+    /// is still held and fires once the agent is resumed, so a timeline that
+    /// dropped it would show an empty hour the operator did not choose. An
+    /// event routine needs no clause of its own: its NULL slot compares to
+    /// nothing, so `next_run_at <= until` already leaves it out. Ties break on
+    /// the name and then the id, so two routines in the same minute keep their
+    /// places between reads.
+    pub fn upcoming_runs(&self, until: i64) -> Result<Vec<UpcomingRun>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT r.id, r.agent_id, a.group_id, r.name, r.next_run_at
+               FROM routines r
+               JOIN agents a ON a.id = r.agent_id
+              WHERE r.next_run_at <= ?1 AND r.active = 1 AND a.lifecycle <> 'terminated'
+              ORDER BY r.next_run_at, r.name, r.id",
+        )?;
+        let rows = stmt.query_map(params![until], row_to_upcoming_run)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row??);
+        }
+        Ok(out)
+    }
+
     /// Everything due to run, oldest first.
     ///
     /// Only for agents that can still act: a routine belonging to a deleted or
@@ -1782,6 +1811,7 @@ impl Store {
             answer: None,
             created_at: now_ms(),
             decided_at: None,
+            lapses_at: None,
         };
 
         // One commit with the row that will announce it, so a request is never
@@ -4909,6 +4939,28 @@ fn row_to_routine(row: &Row<'_>) -> RowResult<Routine> {
     })())
 }
 
+fn row_to_upcoming_run(row: &Row<'_>) -> RowResult<UpcomingRun> {
+    let routine_raw: String = row.get(0)?;
+    let agent_raw: String = row.get(1)?;
+    let group_raw: String = row.get(2)?;
+
+    Ok((|| {
+        Ok(UpcomingRun {
+            routine_id: routine_raw
+                .parse::<RoutineId>()
+                .map_err(|e| StoreError::Corrupt(format!("bad routine id {routine_raw:?}: {e}")))?,
+            agent_id: agent_raw
+                .parse::<AgentId>()
+                .map_err(|e| StoreError::Corrupt(format!("bad agent id {agent_raw:?}: {e}")))?,
+            group_id: group_raw
+                .parse::<GroupId>()
+                .map_err(|e| StoreError::Corrupt(format!("bad group id {group_raw:?}: {e}")))?,
+            name: row.get(3)?,
+            next_run_at: row.get(4)?,
+        })
+    })())
+}
+
 fn row_to_routine_run(row: &Row<'_>) -> RowResult<RoutineRun> {
     let run_raw: Option<String> = row.get(0)?;
     let kind_raw: String = row.get(1)?;
@@ -5062,6 +5114,7 @@ fn row_to_approval(row: &Row<'_>) -> RowResult<Approval> {
             })?,
             created_at: row.get(8)?,
             decided_at: row.get(9)?,
+            lapses_at: None,
         })
     })())
 }
@@ -6764,6 +6817,97 @@ mod tests {
         let on = f.store.set_routine_active(made.id, true).unwrap();
         assert_eq!(on.next_run_at, made.next_run_at);
         assert_eq!(f.store.due_routines(2_000).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn upcoming_runs_leave_out_a_routine_that_is_switched_off() {
+        // A switched-off routine keeps its slot so it can resume, and that slot
+        // is not a firing anyone should be shown as coming.
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Scout")).unwrap();
+        let off = f
+            .store
+            .create_routine(card.id, "Off", "nothing", clock(Cadence::Daily), Some(1_000), false)
+            .unwrap();
+        f.store.set_routine_active(off.id, false).unwrap();
+
+        assert!(f.store.upcoming_runs(i64::MAX).unwrap().is_empty());
+    }
+
+    #[test]
+    fn upcoming_runs_leave_out_a_routine_waiting_on_an_event() {
+        // An event routine holds no slot, so there is no moment to place it at.
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Scout")).unwrap();
+        let paid = Trigger::parse("event:stripe/invoice.paid").unwrap();
+        f.store.create_routine(card.id, "Thank them", "say thanks", paid, None, false).unwrap();
+
+        assert!(f.store.upcoming_runs(i64::MAX).unwrap().is_empty());
+    }
+
+    #[test]
+    fn upcoming_runs_leave_out_the_routines_of_a_deleted_agent() {
+        // A deleted agent's rows wait out the compost with it, slots included,
+        // and nothing will fire them while it is there.
+        let f = fixture();
+        let gone = f.store.create_agent(&draft("Gone")).unwrap();
+        f.store
+            .create_routine(gone.id, "Sweep", "check", clock(Cadence::Daily), Some(1_000), false)
+            .unwrap();
+        f.store.discard_agent(gone.id, 500).unwrap();
+
+        assert!(f.store.upcoming_runs(i64::MAX).unwrap().is_empty());
+    }
+
+    #[test]
+    fn upcoming_runs_stop_at_the_moment_asked_for() {
+        // The window asks for a span it can draw; a firing past its edge is
+        // not one it has room for.
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Scout")).unwrap();
+        let at_edge = f
+            .store
+            .create_routine(card.id, "Edge", "check", clock(Cadence::Daily), Some(2_000), false)
+            .unwrap();
+        f.store
+            .create_routine(card.id, "Later", "check", clock(Cadence::Daily), Some(2_001), false)
+            .unwrap();
+
+        let upcoming = f.store.upcoming_runs(2_000).unwrap();
+        let ids: Vec<_> = upcoming.iter().map(|run| run.routine_id).collect();
+        assert_eq!(ids, vec![at_edge.id], "the edge itself is included");
+    }
+
+    #[test]
+    fn upcoming_runs_come_soonest_first_across_agents_then_by_name() {
+        // One timeline for everyone: a routine is placed by its moment, not by
+        // which agent holds it or when it was written.
+        let f = fixture();
+        let scout = f.store.create_agent(&draft("Scout")).unwrap();
+        let clerk = f.store.create_agent(&draft("Clerk")).unwrap();
+        f.store
+            .create_routine(scout.id, "Late", "check", clock(Cadence::Daily), Some(3_000), false)
+            .unwrap();
+        f.store
+            .create_routine(clerk.id, "Beta", "check", clock(Cadence::Daily), Some(2_000), false)
+            .unwrap();
+        f.store
+            .create_routine(scout.id, "Alpha", "check", clock(Cadence::Once), Some(2_000), false)
+            .unwrap();
+        f.store
+            .create_routine(clerk.id, "Early", "check", clock(Cadence::Daily), Some(1_000), false)
+            .unwrap();
+
+        let upcoming = f.store.upcoming_runs(i64::MAX).unwrap();
+        let order: Vec<_> =
+            upcoming.iter().map(|run| (run.name.as_str(), run.next_run_at)).collect();
+        assert_eq!(
+            order,
+            vec![("Early", 1_000), ("Alpha", 2_000), ("Beta", 2_000), ("Late", 3_000)]
+        );
+        assert_eq!(upcoming[0].agent_id, clerk.id);
+        assert_eq!(upcoming[0].group_id, clerk.group_id);
+        assert_eq!(upcoming[1].agent_id, scout.id);
     }
 
     #[test]

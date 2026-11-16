@@ -419,6 +419,8 @@ export interface State {
    * if the crew being opened is not the one it belongs to.
    */
   focusGroup: (id: GroupId | null) => Promise<void>;
+  /** Back to the opening screen: no channel open, the group kept. */
+  leaveChannel: () => void;
   /**
    * Puts an agent somewhere: which group, in front of which row, and whether it
    * is pinned. Absent `pinned` leaves the section it is in alone.
@@ -729,11 +731,8 @@ export const useStore = create<State>((set, get) => ({
       ...(decisionSnapshot === decisionRead ? { decisions, decisionError: null } : {}),
     });
 
-    const live = get().agents.filter((a) => a.lifecycle !== "terminated");
-    const current = get().selected;
-    if (!current && live.length > 0) {
-      await get().select(live[0]!.id, valid);
-    }
+    // Nothing is opened for the operator: the window starts on today, where
+    // whoever needs them is drawn first, and a channel is one press from there.
   },
 
   async resynchronize(valid = () => true) {
@@ -741,7 +740,7 @@ export const useStore = create<State>((set, get) => ({
     if (!valid()) return;
     const { selected, agents } = get();
     const live = agents.filter((a) => a.lifecycle !== "terminated");
-    const next = live.some((a) => a.id === selected) ? selected : (live[0]?.id ?? null);
+    const next = live.some((a) => a.id === selected) ? selected : null;
     set((state) => ({
       selected: next,
       railGroup: state.groups.some((g) => g.id === state.railGroup) ? state.railGroup : null,
@@ -772,16 +771,11 @@ export const useStore = create<State>((set, get) => ({
       railGroup: groups.some((g) => g.id === state.railGroup) ? state.railGroup : null,
     }));
 
-    // If the open channel was just deleted, fall back rather than showing a
-    // dead pane.
+    // If the open channel was just deleted, go back to today rather than show
+    // a dead pane or open someone the operator did not ask for.
     const selected = get().selected;
-    if (selected) {
-      const still = agents.find((a) => a.id === selected && a.lifecycle !== "terminated");
-      if (!still) {
-        const next = agents.find((a) => a.lifecycle !== "terminated");
-        set({ selected: next ? next.id : null });
-        if (next) await get().loadChannel(next.id, undefined, valid);
-      }
+    if (selected && !agents.some((a) => a.id === selected && a.lifecycle !== "terminated")) {
+      set({ selected: null, focused: null });
     }
   },
 
@@ -823,6 +817,10 @@ export const useStore = create<State>((set, get) => ({
   async focusGroup(id) {
     const closing = !keptChannel(get(), id);
     set({ railGroup: id, ...(closing ? { selected: null, focused: null } : {}) });
+  },
+
+  leaveChannel() {
+    set({ selected: null, focused: null });
   },
 
   /**
@@ -1293,9 +1291,9 @@ export const useStore = create<State>((set, get) => ({
         if (open && emptied.has(open)) {
           void get().loadChannel(open, undefined, valid);
         }
-        // The panels beside the transcript hold the two stores a reset also
-        // takes, and neither is read again on its own. Left alone, the inspector
-        // draws a memory and a list of working notes that no longer exist,
+        // The agent's Memory tab holds the two stores a reset also takes, and
+        // neither is read again on its own. Left alone, the tab draws a
+        // memory and a list of working notes that no longer exist,
         // beside the empty channel that says they should not.
         set((state) => {
           const memory = { ...state.memoryVersion };
@@ -1552,6 +1550,18 @@ export const useStore = create<State>((set, get) => ({
  * you get effect -> render -> new reference -> effect, which React aborts by
  * unmounting the whole tree. The window paints its background and nothing else.
  */
+/**
+ * What For you holds for the operator: decisions still open or cut short by a
+ * lapse, requests waiting, and runs that stopped. One count, so the window and
+ * the groups sheet never disagree about it.
+ */
+export function forYouCount(state: State): number {
+  const decisions = state.decisions.filter(
+    (item) => item.status === "pending" || (item.status === "answered" && item.interrupted),
+  ).length;
+  return decisions + state.pending.length + state.stuck.length;
+}
+
 export function useLiveAgents(): AgentCard[] {
   const agents = useStore((s) => s.agents);
 

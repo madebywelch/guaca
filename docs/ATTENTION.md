@@ -2,12 +2,13 @@
 
 Guaca runs unattended. A choice found during an email check must still be
 answerable when the operator returns, without keeping the agent's turn alive.
-`decision` records that choice in SQLite. **For you** is its permanent destination
-in the rail, shared by every group.
+`decision` records that choice in SQLite. **For you** is its permanent destination,
+at the end of the status bar and at the foot of the Groups sheet, shared by
+every group.
 
 ## Three tiers over one queue
 
-The rail's **For you** entry counts unanswered decisions, interrupted
+The **For you** entry counts unanswered decisions, interrupted
 follow-through, live approval requests and operational blockers. Snoozing a
 decision does not remove it from the count. Opening the entry shows three views:
 
@@ -49,7 +50,7 @@ open stays. Runs seen in the last seven days stay one click away under
 **Earlier**. A recurring check that found nothing is not listed anywhere.
 
 Finished is read when there is time, so it never competes with what needs an
-answer. It is not in For you's count, on the rail's For you entry or on the menu
+answer. It is not in For you's count, on either For you entry or on the menu
 bar icon, nothing in it uses the attention color, and the sentence under the
 title names it only when nothing needs the operator. When it is the only thing
 there it is the first thing For you shows, which is where a banner gathering
@@ -426,6 +427,10 @@ and the outbox treats it as any other filed decision: reminders, and the
 interruption policy. The turn is told the request is on For you and carries on
 without it. Whenever the operator answers, the answer reaches the agent as a new
 message, as every decision's does.
+
+The window draws that moment from the host: `pending_approvals` sends each
+request's `lapsesAt`, its creation time plus the runtime's current window, so
+the countdown on the card and the lapse it predicts come from the same number.
 
 Four kinds lapse this way: `request_permission`, `ask_operator`, `create_agent`
 and `settings`. Browser consent does not: that press belonged to a page the

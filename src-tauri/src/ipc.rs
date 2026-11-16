@@ -27,7 +27,7 @@ use crate::domain::plugin::{
     HeaderPair, Plugin, PluginAccess, PluginKind, PluginOffer, ServerReport,
 };
 use crate::domain::policy::{Rule as PermissionRule, RuleDraft as PermissionRuleDraft};
-use crate::domain::routine::{Routine, RoutineRun};
+use crate::domain::routine::{Routine, RoutineRun, UpcomingRun};
 use crate::domain::search::SearchHits;
 use crate::domain::signin::Signin;
 use crate::domain::usage::{GroupUsage, RunUsage};
@@ -415,6 +415,7 @@ surface! {
     stop_run(run_id: RunId) -> bool,
     clear_channel(channel_id: AgentId) -> usize,
     agent_routines(id: AgentId) -> Vec<Routine>,
+    upcoming_runs(until: i64) -> Vec<UpcomingRun>,
     create_routine(agent_id: AgentId, draft: RoutineDraft) -> Routine,
     update_routine(id: RoutineId, draft: RoutineDraft) -> Routine,
     set_routine_active(id: RoutineId, active: bool) -> Routine,

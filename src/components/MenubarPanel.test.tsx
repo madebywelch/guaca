@@ -99,6 +99,7 @@ function waiting(over: Partial<Approval> = {}): Approval {
     answer: null,
     createdAt: 0,
     decidedAt: null,
+    lapsesAt: null,
     ...over,
   };
 }

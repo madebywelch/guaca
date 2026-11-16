@@ -54,7 +54,7 @@
      left with a white page beside it and a white panel on the right, which is
      three surfaces for two jobs: the app's own two edges did not look like
      each other, and the heavier of them was the one carrying the least
-     reading. So the rail and the inspector are the same ground, a shade off
+     reading. So the side surfaces share one ground, a shade off
      the page rather than opposite it, and the page is the only paper on
      screen. What is left with any saturation in it is an agent's own color and
      the one amber, which is the whole point: a column that is itself a color
@@ -175,6 +175,10 @@
   --measure-attention: 46rem;
   --control-touch: 2.75rem;
   --type-touch: max(16px, 1rem);
+  /* The field's recipient popup: room for a long name beside its face, and
+     short enough to stay inside a short window. */
+  --picker-w: 14rem;
+  --picker-h: 24rem;
   /* The window's own three buttons, which a Mac draws over the top left corner
      of the rail. Pixels rather than rems, like the insets below: the buttons
      are the operating system's and do not grow with the interface scale. */
@@ -321,6 +325,31 @@
      be expected to land on, and the one WCAG 2.2 asks for. */
   --control-min: 1.5rem; /* 24px. */
 
+  /* ---- The ribbon ---------------------------------------------------------
+     The strip across the top of the window, in three lanes: the hours and the
+     now pill along the top, the line the faces sit on, and the names under
+     them. A face is `.avatar--md` and a scheduled run's owner `.avatar--sm`,
+     each centered in a box a face tall, so every name under the line starts at
+     the same height whatever drew above it. */
+  --ribbon-h: 6.75rem; /* 108px */
+  --ribbon-axis: 1.125rem; /* The lane the hours and the pill are in. */
+  --ribbon-line-y: 3.25rem; /* Where the line runs, from the top. */
+  --ribbon-face: 2.75rem; /* 44px, the size `.avatar--md` is drawn at. */
+  --ribbon-pile-face: 2rem; /* 32px, `.avatar--sm`. */
+  --ribbon-pile-label: 4.5rem; /* Room for "12 asleep" when the faces are fewer. */
+  --ribbon-mark: 1rem; /* A check, a red mark or the alert on a face. */
+  --ribbon-ring: 0.125rem; /* What lifts a mark off the face it sits on. */
+  --ribbon-now-w: 0.09375rem; /* 1.5px: heavier than a rule, lighter than a stroke. */
+  --ribbon-lapse: 0.375rem; /* The point where a request stops waiting. */
+  --ribbon-glyph: 0.875rem; /* The calendar glyph in a scheduled item's place. */
+  --ribbon-asleep: 0.55; /* How far the pile fades. */
+  --ribbon-asleep-lift: 1; /* How much the pile's gray is lightened, so it reads on a dark ground. */
+  --ribbon-aside: 0.42; /* How far the others step back while one agent's page is open. */
+  --column-edge: var(--space-7); /* The top row's side margin, which the timeline keeps. */
+  --column-w: 46rem; /* Today and an agent's page: one column, one width. */
+  --tabs-meta-share: 40%; /* The most of the tab row the model id at its end may take. */
+  --page: var(--sunken); /* The ground under the column, which its surfaces stand on. */
+
   /* ---- Motion -------------------------------------------------------------
      One curve, three tempos. Cohesion is mostly this: every surface in the app
      arriving on the same curve, at a speed set by how far it travelled. There
@@ -397,6 +426,11 @@
    goes pale enough to be a color rather than a shadow. They stay recognizably
    the same colors; they are not the same values. */
 :root[data-surface="dark"] {
+  /* A gray face faded on a near-black ground all but vanished; the pile is
+     lightened and faded less, and still reads as further back than a face. */
+  --ribbon-asleep: 0.8;
+  --ribbon-asleep-lift: 1.9;
+
   --rail-ground: #19160f;
   --rail-raised: #1e1c18;
   --rail-edge: #2d291d;
@@ -480,12 +514,12 @@
    be recessed, and recessed from white is a value that disappears on an
    off-white panel. Remapped once here, on the elements every rule in those
    surfaces descends from, rather than at each rule inside: a row added to
-   the inspector tomorrow is then recessed from what it is actually drawn on
+   the agent panel tomorrow is then recessed from what it is actually drawn on
    without having to know which half of the app it is in. `styles.test.ts` is
    the gate, and it reads this rule to know which names are covered. */
 .rail,
 .grail,
-.inspector,
+.agent-panel,
 .menubar {
   --sunken: var(--rail-sunken);
 }
@@ -602,8 +636,6 @@ input[type="file"]::file-selector-button {
 .rail,
 .rail__body,
 .rail__list,
-.inspector,
-.inspector__body,
 .settings__pane {
   min-height: 0;
 }
@@ -850,7 +882,7 @@ input[type="file"]::file-selector-button {
 
 /* Outside `main` and outside the two navigation columns, fixed to the window
    rather than to a pane. Three reasons, all of them things that broke a panel
-   put anywhere else: it must not move when the inspector opens, it must not be
+   put anywhere else: it must not move when a panel opens, it must not be
    clipped by the overflow of whatever is scrolling underneath it, and it has to
    survive a view change, which unmounts every pane in the reading column.
 
@@ -931,6 +963,20 @@ input[type="file"]::file-selector-button {
    one of the answers it takes. */
 .desk__open {
   margin-left: auto;
+  flex: none;
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--muted);
+  font-size: var(--type-small);
+  text-decoration: underline;
+  text-decoration-color: var(--rule-hard);
+  text-underline-offset: var(--space-1);
+  cursor: pointer;
+}
+
+.desk__open:hover {
+  color: var(--text);
 }
 
 /* How long it has been true and how many turns have run into it. At the far end
@@ -6310,7 +6356,8 @@ input[type="file"]:disabled {
 .orb__tag,
 .spend,
 .onboarding-content,
-.statusbar__form {
+.statusbar__form,
+.sheet {
   animation: pop var(--tempo-enter) var(--ease) both;
   transform-origin: var(--pop-origin);
 }
@@ -6722,7 +6769,7 @@ input[type="file"]:disabled {
   /* Anywhere, not break-word: only `anywhere` lowers the text's min-content
      width, which is the width a flex item will not shrink below. A provider's
      error is JSON with no space in it for a line and a half, and it pushed
-     Dismiss past the column's edge and under the inspector. */
+     Dismiss past the column's edge and under the panel beside it. */
   overflow-wrap: anywhere;
 }
 
@@ -6783,89 +6830,6 @@ input[type="file"]:disabled {
   .pulse {
     display: none;
   }
-}
-
-/* ==========================================================================
-   The inspector
-
-   What an agent has, beside what it says. A third column rather than a panel
-   floating over the transcript: a desktop and a schedule are things you watch
-   while reading, and the reading column keeps its measure either way.
-   ========================================================================== */
-
-.inspector {
-  /* Capped for the same reason as `--rail-w`: it scales and the window's
-     minimum does not. */
-  width: min(20rem, 30vw);
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  /* The rail's ground, not the page's. These are the app's two edges and they
-     have the same job: everything about an agent that is not what it said.
-     Drawn on the page's own white it read as more transcript, which is the one
-     thing it is not, and it made the window three surfaces wide. */
-  border-left: 1px solid var(--rail-edge);
-  background: var(--rail-ground);
-}
-
-/* Closed it is the tab and nothing else, still holding its own sliver of the
-   window so the transcript does not reflow twice on every toggle. */
-.inspector--closed {
-  width: 2.1rem;
-}
-
-/* The agent's profile is the head of its own panel, with the one control
-   that closes the panel in the corner. The close sits at the top of the row
-   rather than centered on it because the profile is three lines tall and a
-   control that floated beside the middle one read as belonging to it. */
-.inspector__head {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-2);
-  padding: var(--space-5) var(--space-3) var(--space-4) var(--space-5);
-}
-
-/* A routine open in the panel: a back arrow, a title and the close. The
-   title is centered between the two controls rather than after the arrow,
-   so it stays put as the arrow appears and disappears. */
-.inspector__head[data-level="routine"] {
-  align-items: center;
-}
-
-.inspector__title {
-  flex: 1;
-  margin: 0;
-  text-align: center;
-  font-family: var(--font-ui);
-  font-size: var(--type-ui);
-  font-weight: 500;
-  color: var(--muted);
-}
-
-.inspector--closed .inspector__tab {
-  margin: var(--space-5) auto 0;
-}
-
-.inspector__tab {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  background: none;
-  cursor: pointer;
-  color: var(--faint);
-  padding: var(--space-2);
-  border-radius: var(--radius-sm);
-  line-height: var(--lead-flush);
-  transition: color var(--tempo-tap) var(--ease), background var(--tempo-tap) var(--ease);
-}
-
-.inspector__tab:hover,
-.inspector__tab:focus-visible {
-  color: var(--text);
-  background: var(--sunken);
 }
 
 /* The panel's front matter: what this page is about, set the way the page
@@ -7117,22 +7081,6 @@ input[type="file"]:disabled {
   font-size: var(--type-small);
   line-height: var(--lead-ui);
   color: var(--faint);
-}
-
-/* Scrolls down and never across, for the reason `.pane__scroll` states its
-   other axis. What pushed it sideways was a path: the terminal's directory and
-   the line that resumes its session are one unbroken token each, much wider
-   than the column. Wrapping breaks them where they would overflow and nowhere
-   else. `break-word` rather than the transcript's `anywhere`, because this is
-   inherited by every row and button in the panel, and `anywhere` would let a
-   squeezed flex item shrink to a letter (see `.md th`). */
-.inspector__body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  overflow-wrap: break-word;
-  padding: 0 var(--space-5) var(--space-6);
 }
 
 /* --- memory --------------------------------------------------------------
@@ -9791,9 +9739,7 @@ button.artifacts__version[aria-pressed="true"] {
   white-space: nowrap;
 }
 
-/* A phone shows one workspace pane at a time. Keep the transcript mounted so
-   drafts, scroll position and live events survive a trip to the agent list. */
-.mobile-nav,
+/* A phone gets the same single column as a window, at touch sizes. */
 .mobile-crews,
 .mobile-only {
   display: none;
@@ -9816,75 +9762,15 @@ button.artifacts__version[aria-pressed="true"] {
     width: 100%;
     height: var(--viewport-height, 100dvh);
     padding: var(--space-safe-top) var(--space-safe-right) var(--space-safe-bottom) var(--space-safe-left);
-    display: grid;
-    grid-template-rows: minmax(0, 1fr) auto;
-    grid-template-columns: minmax(0, 1fr);
+    display: flex;
+    flex-direction: column;
   }
 
   .mobile-only {
     display: flex;
   }
 
-  .mobile-nav {
-    grid-row: 2;
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    padding: var(--space-2) var(--space-3);
-    border-top: 1px solid var(--rule);
-    background: var(--rail-ground);
-  }
-
-  .mobile-nav > button {
-    min-height: calc(var(--control-touch) + var(--space-4));
-    border: 0;
-    border-radius: var(--radius);
-    background: transparent;
-    color: var(--muted);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: var(--space-2);
-    font-size: var(--type-small);
-    font-weight: 500;
-    cursor: pointer;
-  }
-
-  .mobile-nav [aria-current="page"] {
-    background: var(--rail-raised);
-    color: var(--text);
-  }
-
-  .mobile-nav svg {
-    width: var(--space-7);
-    height: var(--space-7);
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.5;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-  }
-
-  .mobile-nav__icon {
-    position: relative;
-    display: flex;
-  }
-
-  .mobile-nav__badge {
-    position: absolute;
-    left: 100%;
-    top: calc(-1 * var(--space-2));
-    padding: 0 var(--space-2);
-    border-radius: var(--radius-pill);
-    background: var(--attention-fill);
-    color: var(--on-attention-fill);
-    font-size: var(--type-meta);
-  }
-
-  .app > .rail,
-  .app > main,
-  .app > .inspector {
-    grid-row: 1;
+  .app > main {
     min-height: 0;
   }
 
@@ -9902,42 +9788,18 @@ button.artifacts__version[aria-pressed="true"] {
     white-space: nowrap;
   }
 
-  .mobile-back {
-    flex: none;
-    min-width: var(--control-touch);
-    font-size: var(--type-title);
-    justify-content: center;
-    align-items: center;
-  }
-
-  .mobile-details {
-    flex: none;
-  }
-
   .palette__query .btn {
     flex: none;
   }
 
   .pane__header > .avatar,
-  .pane__more,
-  .inspector__head > .inspector__tab:last-child,
   .rail__search,
   .rail__foot > button:last-child {
     display: none;
   }
 
-  .app > .grail,
-  .app:not([data-mobile-pane="agents"]) > .rail,
-  .app:not([data-mobile-pane="conversation"]) > main,
-  .app:not([data-mobile-pane="details"]) > .inspector {
+  .sheet .grail {
     display: none;
-  }
-
-  .app > .rail,
-  .app > .inspector {
-    width: 100%;
-    min-width: 0;
-    border: 0;
   }
 
   .mobile-crews {
@@ -9963,7 +9825,6 @@ button.artifacts__version[aria-pressed="true"] {
   .rail__new,
   .rail__gear,
   .pane__more,
-  .inspector__tab,
   .composer__send,
   .composer__attach {
     min-width: var(--control-touch);
@@ -10261,3 +10122,1347 @@ button.artifacts__version[aria-pressed="true"] {
 .permissions__editor .field { margin-top: var(--space-5); }
 .permissions__agents { display: grid; gap: var(--space-3); margin: var(--space-6) 0; padding: 0; border: 0; }
 .permissions__condition { margin: var(--space-5) 0; padding: var(--space-5); border: 1px solid var(--rule); border-radius: var(--radius); }
+
+
+/* ==========================================================================
+   The ribbon
+   ========================================================================== */
+
+.ribbon {
+  --ribbon-lead: calc(
+    max(
+        var(--ribbon-pile-label),
+        var(--ribbon-pile-face) + (var(--ribbon-pile) - 1) * (var(--ribbon-pile-face) - var(--space-5))
+      ) +
+      var(--space-6)
+  );
+  flex: none;
+  height: var(--ribbon-h);
+  /* A ground of its own, closed with a rule, so the strip reads as the
+     window's head and not as the first thing on the page under it. */
+  background: var(--ground);
+  border-bottom: 1px solid var(--rule);
+}
+
+/* Inset by the top row's own margin: the pile's first face and the last
+   item's words start and end where the day and the buttons above do. */
+.ribbon__inner {
+  position: relative;
+  height: 100%;
+  margin: 0 var(--column-edge);
+}
+
+.ribbon[data-pile="none"] {
+  --ribbon-lead: var(--space-4);
+}
+
+.ribbon__line {
+  position: absolute;
+  top: var(--ribbon-line-y);
+  left: 0;
+  right: 0;
+  border-top: 1px solid var(--rule-hard);
+}
+
+.ribbon__track {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--ribbon-lead);
+  right: 0;
+}
+
+.ribbon__band {
+  position: absolute;
+  top: 0;
+  bottom: var(--space-3);
+  left: calc(var(--ribbon-x) * 100%);
+  width: calc((var(--ribbon-to) - var(--ribbon-x)) * 100%);
+  border-radius: var(--radius);
+  background: var(--sunken);
+}
+
+.ribbon__band-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: var(--ribbon-axis);
+  display: flex;
+  align-items: center;
+  padding-left: var(--space-4);
+  font-size: var(--type-fine);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.ribbon__tick {
+  position: absolute;
+  top: 0;
+  left: calc(var(--ribbon-x) * 100%);
+  height: var(--ribbon-axis);
+  display: flex;
+  align-items: center;
+  transform: translateX(-50%);
+  font-size: var(--type-fine);
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.ribbon__tick--day {
+  transform: none;
+  color: var(--muted);
+}
+
+.ribbon__now {
+  position: absolute;
+  top: var(--ribbon-axis);
+  bottom: var(--space-3);
+  left: calc(var(--ribbon-x) * 100%);
+  border-left: var(--ribbon-now-w) solid var(--text);
+  transform: translateX(-50%);
+  z-index: 1;
+}
+
+.ribbon__pill {
+  position: absolute;
+  top: var(--space-1);
+  left: calc(var(--ribbon-x) * 100%);
+  height: calc(var(--ribbon-axis) - var(--space-1));
+  display: grid;
+  place-items: center;
+  padding: 0 var(--space-3);
+  transform: translateX(-50%);
+  border-radius: var(--radius-pill);
+  background: var(--text);
+  color: var(--ground);
+  font-size: var(--type-fine);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  z-index: 3;
+}
+
+.ribbon__list {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  pointer-events: none;
+}
+
+.ribbon__list > li {
+  pointer-events: auto;
+}
+
+.ribbon__face,
+.ribbon__item,
+.ribbon__count {
+  position: absolute;
+  top: calc(var(--ribbon-line-y) - var(--ribbon-face) / 2);
+  left: calc(var(--ribbon-lead) + var(--ribbon-x) * (100% - var(--ribbon-lead)));
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  z-index: 2;
+}
+
+/* Faces too many for their side of now, as one: "+3 working". A face's
+   height, so it sits on the line where the faces it stands for would. */
+.ribbon__count-button {
+  height: var(--ribbon-face);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-4);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--sunken);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--type-small);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ribbon__count[data-kind="needsYou"] .ribbon__count-button {
+  color: var(--attention);
+}
+
+/* Its words get the room beside it on the strip and no more. */
+.ribbon__item {
+  max-width: calc(var(--ribbon-room, 1) * (100% - var(--ribbon-lead)));
+}
+
+.ribbon__item-what,
+.ribbon__item-when {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Near an end of the strip a label hangs inward from its mark's edge, so
+   none of it is past the window's margin. */
+.ribbon__face[data-align="start"],
+.ribbon__item[data-align="start"],
+.ribbon__count[data-align="start"] {
+  transform: translateX(calc(var(--ribbon-face) / -2));
+  align-items: flex-start;
+}
+
+.ribbon__face[data-align="end"],
+.ribbon__item[data-align="end"],
+.ribbon__count[data-align="end"] {
+  transform: translateX(calc(var(--ribbon-face) / 2 - 100%));
+  align-items: flex-end;
+}
+
+/* On an agent's page the others step back and the open one is underlined. */
+.ribbon__face,
+.ribbon__item,
+.ribbon__pile {
+  transition: left var(--tempo-move) var(--ease), opacity var(--tempo-tap) var(--ease);
+}
+
+.ribbon[data-open] .ribbon__face:not([data-open]),
+.ribbon[data-open] .ribbon__item,
+.ribbon[data-open] .ribbon__count,
+.ribbon[data-open] .ribbon__pile,
+.ribbon[data-open] .ribbon__band-label {
+  opacity: var(--ribbon-aside);
+}
+
+.ribbon__face[data-open] .ribbon__name {
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-thickness: var(--ribbon-now-w);
+  text-underline-offset: var(--space-2);
+}
+
+.ribbon__face-button,
+.ribbon__pile-button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.ribbon__portrait {
+  position: relative;
+  width: var(--ribbon-face);
+  height: var(--ribbon-face);
+}
+
+.ribbon__name,
+.ribbon__item-what,
+.ribbon__pile-label {
+  margin-top: var(--space-2);
+  font-size: var(--type-small);
+  line-height: var(--lead-tight);
+  white-space: nowrap;
+}
+
+.ribbon__name {
+  font-weight: 500;
+  color: var(--muted);
+  transition: color var(--tempo-tap) var(--ease);
+}
+
+.ribbon__face-button:hover .ribbon__name {
+  color: var(--text);
+}
+
+.ribbon__face[data-state="needsYou"] .ribbon__name {
+  color: var(--attention);
+}
+
+.ribbon__face[data-state="rest"] .ribbon__name {
+  color: var(--faint);
+}
+
+/* The alert is its own layer over the face, never part of the drawing, so a
+   face that stops needing anything loses it without being redrawn. */
+.ribbon__alert {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: var(--ribbon-mark);
+  height: var(--ribbon-mark);
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-pill);
+  background: var(--attention-fill);
+  color: var(--on-attention-fill);
+  font-size: var(--type-fine);
+  font-weight: 700;
+  line-height: var(--lead-flush);
+  box-shadow: 0 0 0 var(--ribbon-ring) var(--ground);
+}
+
+.ribbon__mark {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: var(--ribbon-mark);
+  height: var(--ribbon-mark);
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-pill);
+  background: var(--text);
+  color: var(--ground);
+  font-size: var(--type-fine);
+  font-weight: 700;
+  line-height: var(--lead-flush);
+  box-shadow: 0 0 0 var(--ribbon-ring) var(--ground);
+}
+
+.ribbon__mark svg {
+  width: var(--space-5);
+  height: var(--space-5);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ribbon__mark[data-mark="failed"] {
+  background: var(--danger-fill);
+  color: var(--on-danger-fill);
+}
+
+.ribbon__item-mark {
+  height: var(--ribbon-face);
+  display: grid;
+  place-items: center;
+}
+
+.ribbon__glyph {
+  width: var(--ribbon-glyph);
+  height: var(--ribbon-glyph);
+  fill: none;
+  stroke: var(--faint);
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ribbon__item-what {
+  color: var(--muted);
+}
+
+.ribbon__item-when {
+  font-size: var(--type-fine);
+  line-height: var(--lead-tight);
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.ribbon__lapse {
+  position: absolute;
+  top: calc(var(--ribbon-line-y) - var(--ribbon-lapse) / 2);
+  left: calc(var(--ribbon-lead) + var(--ribbon-x) * (100% - var(--ribbon-lead)));
+  width: var(--ribbon-lapse);
+  height: var(--ribbon-lapse);
+  transform: translateX(-50%);
+  border-radius: var(--radius-pill);
+  background: var(--attention-fill);
+  color: var(--on-attention-fill);
+  z-index: 3;
+}
+
+.ribbon__pile {
+  position: absolute;
+  top: calc(var(--ribbon-line-y) - var(--ribbon-face) / 2);
+  left: 0;
+  z-index: 2;
+}
+
+.ribbon__pile-button {
+  align-items: flex-start;
+}
+
+.ribbon__pile-faces {
+  height: var(--ribbon-face);
+  display: flex;
+  align-items: center;
+  opacity: var(--ribbon-asleep);
+  filter: grayscale(1) brightness(var(--ribbon-asleep-lift));
+}
+
+.ribbon__pile-faces .avatar + .avatar {
+  margin-left: calc(var(--space-5) * -1);
+}
+
+.ribbon__pile-label {
+  color: var(--faint);
+}
+
+.ribbon__pile-button:hover .ribbon__pile-label {
+  color: var(--text);
+}
+
+/* Read, not seen: the day a scheduled item falls on is the column's for the
+   eye and this sentence's for a screen reader. */
+.ribbon__said {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ribbon__face,
+  .ribbon__item,
+  .ribbon__name {
+    transition: none;
+  }
+}
+
+/* ==========================================================================
+   The window: a row of places, the timeline, and one column
+
+   The rail and the panel beside the conversation are gone from the window.
+   The top row says where you are and holds the four places that are not a
+   person; the timeline under it is who did what, and when; the column is the
+   field, then what needs you, then what finished. See `components/Home.tsx`.
+   ========================================================================== */
+
+.app {
+  flex-direction: column;
+}
+
+.topbar {
+  --topbar-h: 2.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-5);
+  height: var(--topbar-h);
+  padding: 0 var(--column-edge);
+  background: var(--ground);
+  flex: none;
+  user-select: none;
+}
+
+.topbar[data-lights] {
+  padding-left: var(--space-lights);
+}
+
+.topbar__day {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--type-ui);
+}
+
+.topbar__back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: var(--type-ui);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+}
+
+.topbar__back:hover,
+.topbar__button:hover {
+  background: var(--sunken);
+}
+
+.topbar__places {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.topbar__button,
+.topbar__places .rail__new {
+  display: inline-grid;
+  place-items: center;
+  width: var(--space-8);
+  height: var(--space-8);
+  border: 0;
+  background: none;
+  color: var(--muted);
+  border-radius: var(--radius-sm);
+  transition: background-color var(--tempo-tap) var(--ease);
+}
+
+/* ---- The column ------------------------------------------------------- */
+
+.home {
+  width: min(var(--column-w), 100%);
+  margin: 0 auto;
+  padding: var(--space-7) var(--space-6) var(--space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-7);
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1;
+}
+
+.app > main:has(> .home) {
+  overflow: hidden;
+}
+
+/* ---- The field -------------------------------------------------------- */
+
+.intake__box {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  background: var(--raised);
+  border: 1px solid transparent;
+  border-radius: var(--radius-signal);
+  box-shadow: var(--lift-1);
+}
+
+.intake__box:focus-within {
+  border-color: var(--rule-hard);
+}
+
+.intake {
+  /* The tallest the field grows before it scrolls, the composer's cap. */
+  --intake-max: 12rem;
+}
+
+.intake__input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  resize: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--type-lede);
+  line-height: var(--lead-ui);
+  padding: var(--space-2) 0;
+  outline: none;
+  max-height: var(--intake-max);
+}
+
+.intake__input::placeholder {
+  color: var(--faint);
+}
+
+.intake__picker {
+  position: relative;
+  flex: none;
+}
+
+.intake__target {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  border: 0;
+  background: var(--sunken);
+  color: var(--text);
+  font-size: var(--type-ui);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-pill);
+}
+
+.intake__target[data-answering] {
+  background: var(--attention-wash);
+}
+
+.intake__target .icon {
+  transform: rotate(90deg);
+}
+
+.intake__menu {
+  position: absolute;
+  top: calc(100% + var(--space-3));
+  left: 0;
+  z-index: 40;
+  min-width: var(--picker-w);
+  max-height: var(--picker-h);
+  margin: 0;
+  overflow-y: auto;
+  padding: var(--space-3);
+  background: var(--raised);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  box-shadow: var(--lift-2);
+}
+
+.intake__group {
+  margin: var(--space-4) var(--space-4) var(--space-2);
+  color: var(--muted);
+  font-size: var(--type-meta);
+}
+
+.intake__option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  width: 100%;
+  border: 0;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  font-size: var(--type-ui);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+}
+
+.intake__option:hover,
+.intake__option[aria-current="true"] {
+  background: var(--sunken);
+}
+
+.intake__manage {
+  margin-top: var(--space-3);
+  border-top: 1px solid var(--rule);
+  color: var(--muted);
+}
+
+.intake__key,
+.intake__under kbd {
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  color: var(--muted);
+  background: var(--sunken);
+  border-radius: var(--radius-xs);
+  padding: var(--space-1) var(--space-3);
+}
+
+.intake__send {
+  display: inline-grid;
+  place-items: center;
+  width: var(--space-8);
+  height: var(--space-8);
+  border: 0;
+  /* The field's own corner, so the button reads as part of the box it is in. */
+  border-radius: var(--radius-signal);
+  background: var(--action-fill);
+  color: var(--on-action-fill);
+  transition: opacity var(--tempo-tap) var(--ease);
+}
+
+.intake__send:disabled {
+  background: var(--sunken);
+  color: var(--faint);
+}
+
+.intake__under {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-5);
+  min-height: var(--space-7);
+  padding: var(--space-3) var(--space-4) 0;
+  color: var(--muted);
+  font-size: var(--type-small);
+}
+
+.intake__hint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.intake__search,
+.intake__link,
+.home__link,
+.home__more {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--muted);
+  font-size: var(--type-small);
+  text-decoration: underline;
+  text-decoration-color: var(--rule-hard);
+  text-underline-offset: var(--space-1);
+}
+
+.intake__receipt {
+  margin-left: auto;
+}
+
+.intake__failure {
+  color: var(--danger);
+}
+
+/* ---- What needs you, and what finished -------------------------------- */
+
+.home .for-you__requests {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  /* On the column's edges, as the field above and the list below are: the
+     card is the surface here, not a padded, ruled section of For you. */
+  padding: 0;
+  border-bottom: 0;
+}
+
+.home .for-you__requests > h3,
+.home__head h2 {
+  margin: 0;
+  font-size: var(--type-ui);
+  font-weight: 600;
+}
+
+.home .for-you__requests > h3 {
+  color: var(--attention);
+}
+
+/* The one raised thing under the field: a card standing on the page, edged
+   in the color that means it is waiting, the question set as its title. */
+.home .desk__card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-6) var(--space-7);
+  background: var(--raised);
+  border: 0;
+  border-left: var(--space-2) solid var(--attention-fill);
+  border-radius: var(--radius-signal);
+  box-shadow: var(--lift-1);
+}
+
+.home .desk__who {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--space-4);
+  row-gap: var(--space-4);
+}
+
+.home .desk__whotext {
+  display: contents;
+}
+
+.home .desk__asker {
+  grid-column: 2;
+  grid-row: 1;
+  margin: 0;
+}
+
+.home .desk__summary {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--text);
+  font-size: var(--type-lede);
+  font-weight: 600;
+  line-height: var(--lead-tight);
+  letter-spacing: var(--track-flat);
+}
+
+.home .desk__open {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.home .desk__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.desk__when {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.home__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--rule);
+}
+
+.home__count {
+  color: var(--muted);
+  font-weight: 400;
+  margin-left: var(--space-3);
+}
+
+.home__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.home__list > li + li {
+  border-top: 1px solid var(--rule);
+}
+
+.home__row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-5);
+  width: 100%;
+  border: 0;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  padding: var(--space-5) 0;
+}
+
+.home__rowtext {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.home__meta {
+  color: var(--muted);
+  font-size: var(--type-small);
+}
+
+.home__meta strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.home__headline {
+  font-size: var(--type-body);
+  line-height: var(--lead-read);
+}
+
+.home__row[data-status="failed"] .home__meta {
+  color: var(--danger);
+}
+
+.home__more {
+  align-self: flex-start;
+}
+
+/* ---- Quiet ------------------------------------------------------------ */
+
+.home__quiet {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  padding-top: var(--space-8);
+  text-align: center;
+}
+
+.home__calm {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--type-display);
+  font-weight: 600;
+}
+
+.home__still {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--type-lede);
+}
+
+.home__quiet .home__more {
+  align-self: center;
+  margin-top: var(--space-4);
+}
+
+/* ---- The agent's page ------------------------------------------------- */
+
+.agent-tabs {
+  display: flex;
+  gap: var(--space-6);
+  padding: 0 var(--space-7);
+  border-bottom: 1px solid var(--rule);
+  flex: none;
+  /* A phone is narrower than six tabs: they scroll rather than widen the page. */
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.agent-tabs__tab {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: var(--type-ui);
+  padding: var(--space-4) 0;
+  border-bottom: var(--space-1) solid transparent;
+  transition: color var(--tempo-tap) var(--ease);
+}
+
+.agent-tabs__tab[aria-current="page"] {
+  color: var(--text);
+  border-bottom-color: var(--text);
+}
+
+.pane__body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.pane__body[hidden] {
+  display: none;
+}
+
+/* Down and never across, for the reason `.pane__scroll` states its other
+   axis. What pushed it sideways was a path: the terminal's directory and the
+   line that resumes its session are one unbroken token each, much wider than
+   the column. Wrapping breaks them where they would overflow and nowhere else.
+   `break-word` rather than the transcript's `anywhere`, because this is
+   inherited by every row and button in the panel, and `anywhere` would let a
+   squeezed flex item shrink to a letter (see `.md th`). */
+.agent-panel {
+  width: min(var(--column-w), 100%);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overflow-wrap: break-word;
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-7) var(--space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.agent-panel__level {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.agent-panel__anchor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  scroll-margin-top: var(--space-6);
+}
+
+/* What the agent is doing, at the top of Now. The task reads as a title; its
+   steps are a plain list under the same small heading every section uses. */
+.doing {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.doing__title {
+  margin: 0;
+  font-size: var(--type-body);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.doing__title--steps {
+  margin-top: var(--space-5);
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  font-weight: 400;
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.doing__line {
+  margin: 0;
+  font-size: var(--type-aside);
+  color: var(--muted);
+}
+
+.doing__when {
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+}
+
+.doing__text {
+  color: var(--text);
+}
+
+.doing__steps {
+  margin: 0;
+  padding: 0 0 0 var(--space-7);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  font-size: var(--type-aside);
+  color: var(--text);
+}
+
+.doing__step[data-state="running"] {
+  color: var(--muted);
+}
+
+.doing__step[data-state="failed"],
+.doing__step[data-state="refused"] {
+  color: var(--danger);
+}
+
+/* ---- The groups sheet ------------------------------------------------- */
+
+.sheet-scrim {
+  justify-content: flex-start;
+  padding: 0;
+}
+
+.sheet {
+  position: relative;
+  height: 100%;
+  display: flex;
+  box-shadow: var(--lift-3);
+  outline: none;
+}
+
+
+.home__filed {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.home__card {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-5);
+  padding: var(--space-5);
+  background: var(--raised);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+}
+
+.home__cardtext {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.home__question {
+  margin: 0;
+  font-size: var(--type-body);
+}
+
+/* The places that are not a person, at the far end of the bar, with the one
+   count on it that may be read as an answer. */
+.statusbar__places {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.statusbar__count {
+  margin-left: var(--space-2);
+  font-family: var(--font-mono);
+  font-weight: 500;
+  color: var(--attention);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A phone: the field's input takes a row of its own under who it goes to,
+   and the timeline keeps its faces and the now line, without the hours and
+   days it has no room to letter. */
+@media (max-width: 48rem), (hover: none) and (pointer: coarse) {
+  .intake__box {
+    flex-wrap: wrap;
+  }
+
+  .intake__input {
+    order: 3;
+    flex-basis: 100%;
+  }
+
+  .intake__key {
+    display: none;
+  }
+
+  .intake__send {
+    margin-left: auto;
+  }
+
+  .ribbon__tick {
+    display: none;
+  }
+
+  /* The sheet is the whole screen on a phone, its list the whole sheet. */
+  .sheet {
+    width: 100%;
+  }
+
+  .sheet .rail {
+    flex: 1;
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+/* A short screen, a phone on its side or under its keyboard, keeps what is
+   being written in view: the timeline and the page's kicker give way first. */
+@media (max-height: 32rem) {
+  .ribbon,
+  .pane__kicker,
+  .pane__meta {
+    display: none;
+  }
+}
+
+
+/* ==========================================================================
+   The page under the timeline
+
+   One ground for the column on Today and on an agent's page, a step down from
+   the timeline's, so what stands on it (the field, a card waiting on you)
+   reads as raised without a line drawn round it. An agent's page is the same
+   column as Today: the two are one app, and a page the width of the window
+   was the old channel with the rail taken off.
+   ========================================================================== */
+
+.app > main {
+  background: var(--page);
+}
+
+.app[data-page="agent"] .pane {
+  width: min(var(--column-w), 100%);
+  margin: 0 auto;
+  background: none;
+}
+
+.app[data-page="agent"] .pane__header {
+  align-items: center;
+  gap: var(--space-6);
+  padding: var(--space-7) var(--space-6) var(--space-6);
+  background: none;
+  border-bottom: 0;
+}
+
+.pane__face {
+  flex: none;
+  display: inline-flex;
+}
+
+.pane__identity {
+  flex: 1;
+}
+
+.pane__about {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--type-aside);
+}
+
+.app[data-page="agent"] .pane__title {
+  font-family: var(--font-ui);
+  font-weight: 600;
+}
+
+.agent-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  padding: 0 var(--space-6);
+  border-bottom: 1px solid var(--rule);
+  flex: none;
+}
+
+/* The tabs never give up room to the caption beside them: a label cut short
+   is a tab that can no longer be read. */
+.agent-tabs__list {
+  display: flex;
+  flex: none;
+  gap: var(--space-2);
+  min-width: 0;
+  /* A phone is narrower than six tabs: they scroll rather than widen the page. */
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.agent-tabs__tab {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  flex: none;
+  padding: var(--space-4) var(--space-4);
+}
+
+.agent-tabs__count {
+  color: var(--faint);
+  font-size: var(--type-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+/* What the agent runs on, read at the end of its tabs: still on the page,
+   and no longer the second line of its name. */
+.agent-tabs .pane__meta {
+  margin-left: auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: var(--tabs-meta-share);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pane__scroll[hidden] {
+  display: none;
+}
+
+.app[data-page="agent"] .composer {
+  background: var(--raised);
+}
+
+/* The places at the end of the status bar are where you go, not commands:
+   quiet words, like the day in the top row. */
+.statusbar__place {
+  font: inherit;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-3);
+  cursor: pointer;
+  transition: background var(--tempo-tap) var(--ease), color var(--tempo-tap) var(--ease);
+}
+
+.statusbar__place:hover {
+  background: var(--sunken);
+  color: var(--text);
+}
+
+/* The Groups sheet says what it is and how to leave it, on every width: on
+   a phone it is the whole screen, and a scrim to press is not there. */
+.sheet {
+  flex-direction: column;
+  background: var(--rail-ground);
+}
+
+.sheet__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-5);
+  padding: var(--space-5) var(--space-6);
+  border-bottom: 1px solid var(--rule);
+  flex: none;
+}
+
+/* Clear of the window's buttons the way the top row is, with the same token. */
+.sheet__head[data-lights] {
+  padding-left: var(--space-lights);
+}
+
+.sheet__title {
+  margin: 0;
+  font-size: var(--type-ui);
+  font-weight: 600;
+}
+
+.sheet__body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* For you, Calendar, Artifacts and Settings are in the status bar and the top
+   row. Drawn again at the sheet's foot, each was on screen twice. */
+.sheet .rail__foot {
+  display: none;
+}
+
+/* An agent's page on a phone, or in a short window, is its conversation: the
+   timeline gives way, and the head is one line, face and name, under the top
+   row's way back, so what is said and written keeps most of the height. */
+@media (max-width: 48rem), (hover: none) and (pointer: coarse), (max-height: 45rem) {
+  .app[data-page="agent"] .ribbon {
+    display: none;
+  }
+
+  .app[data-page="agent"] .pane__header {
+    gap: var(--space-4);
+    padding: var(--space-3) var(--space-5);
+  }
+
+  .app[data-page="agent"] .pane__title {
+    font-size: var(--type-body);
+  }
+
+  .app[data-page="agent"] .pane__about,
+  .agent-tabs .pane__meta {
+    display: none;
+  }
+
+  /* With the caption gone the row is the tabs', and what still does not fit
+     scrolls inside it. */
+  .agent-tabs__list {
+    flex: 0 1 auto;
+  }
+}
+
+.topbar__day-short {
+  display: none;
+}
+
+@media (max-width: 48rem), (hover: none) and (pointer: coarse) {
+  .topbar__day-long {
+    display: none;
+  }
+
+  .topbar__day-short {
+    display: inline;
+    white-space: nowrap;
+  }
+
+  /* The agent menu's one way in by touch. */
+  .pane__more {
+    display: inline-flex;
+  }
+
+  .agent-tabs {
+    padding: 0 var(--space-4);
+  }
+
+  .agent-tabs__tab,
+  .topbar__button,
+  .intake__send,
+  .desk__open,
+  .intake__target,
+  .intake__option {
+    min-width: var(--control-touch);
+    min-height: var(--control-touch);
+  }
+
+  .agent-tabs__tab {
+    align-items: center;
+    justify-content: center;
+    padding-inline: var(--space-3);
+  }
+
+  /* One row: what does not fit scrolls sideways rather than taking a second
+     line from the conversation above it. */
+  .statusbar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .statusbar > * {
+    flex: none;
+  }
+
+  /* Adding a quick action is a desk errand; on a phone the row is the host
+     and the places, which fit it. */
+  .statusbar__edit {
+    display: none;
+  }
+
+  .statusbar__place {
+    min-height: var(--control-touch);
+  }
+}
+

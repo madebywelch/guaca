@@ -39,16 +39,17 @@ const KEY = "guac.prefs";
 /**
  * The defaults, written out independently of the module's own constant.
  *
- * Signal and the system surface are the first look a new operator gets.
+ * Neutral grays on a plain page and the system surface are the first look a
+ * new operator gets.
  * Asserting against the module constant would pass whatever it said.
  */
 const DEFAULTS: Prefs = {
   uiScale: 100,
   surface: "system",
-  grays: "slate",
+  grays: "neutral",
   attention: "amber",
   contrast: "standard",
-  temperature: "cool",
+  temperature: "plain",
   typeface: "inter",
   reading: "interface",
   readingSize: 16,
@@ -160,7 +161,11 @@ describe("a blob that cannot be trusted", () => {
     }
     localStorage.setItem(KEY, JSON.stringify({ surface: "dark", notify: { on: false } }));
     savePrefs(loadPrefs());
-    expect(JSON.parse(localStorage.getItem(KEY) ?? "{}")).toEqual({ ...DEFAULTS, surface: "dark" });
+    expect(JSON.parse(localStorage.getItem(KEY) ?? "{}")).toEqual({
+      ...DEFAULTS,
+      surface: "dark",
+      look: 2,
+    });
     expect(DEFAULT_PREFS).toEqual(DEFAULTS);
   });
 });
@@ -197,6 +202,43 @@ describe("storage that will not cooperate", () => {
       expect(() => savePrefs({ ...DEFAULTS, surface: "dark" })).not.toThrow();
     });
     expect(refused).toHaveBeenCalledOnce();
+  });
+});
+
+describe("the default look this build replaced", () => {
+  /** What every build before this one wrote back, chosen or not. */
+  const oldDefault = { ...DEFAULTS, grays: "slate", temperature: "cool" };
+
+  it("does not move a slate that was saved under this build", () => {
+    savePrefs({ ...DEFAULTS, ...THEME_PRESETS.Signal!, surface: "dark" });
+    expect(loadPrefs()).toMatchObject({ grays: "slate", temperature: "cool", surface: "dark" });
+  });
+
+  it("does not move slate grays on a temperature the old default never had", () => {
+    localStorage.setItem(KEY, JSON.stringify({ ...oldDefault, temperature: "warm" }));
+    expect(loadPrefs()).toMatchObject({ grays: "slate", temperature: "warm" });
+  });
+
+  it("moves an unmarked old default to the new one and keeps everything else", () => {
+    localStorage.setItem(KEY, JSON.stringify({ ...oldDefault, surface: "dark", uiScale: 125 }));
+    expect(loadPrefs()).toEqual({ ...DEFAULTS, surface: "dark", uiScale: 125 });
+  });
+
+  it("moves it once: slate picked again after the move stays slate", () => {
+    localStorage.setItem(KEY, JSON.stringify(oldDefault));
+    const moved = loadPrefs();
+    savePrefs({ ...moved, grays: "slate", temperature: "cool" });
+    expect(loadPrefs()).toMatchObject({ grays: "slate", temperature: "cool" });
+  });
+
+  it("does not move a slate saved by a newer build", () => {
+    localStorage.setItem(KEY, JSON.stringify({ ...oldDefault, look: 3 }));
+    expect(loadPrefs()).toMatchObject({ grays: "slate", temperature: "cool" });
+  });
+
+  it("still moves a blob whose mark is older than this build's", () => {
+    localStorage.setItem(KEY, JSON.stringify({ ...oldDefault, look: 1 }));
+    expect(loadPrefs()).toEqual(DEFAULTS);
   });
 });
 

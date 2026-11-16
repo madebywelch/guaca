@@ -494,7 +494,7 @@ describe("BrowserScreen", () => {
 
   it.each([
     ["Settings", ","],
-    ["Search", "k"],
+    ["Search", "f"],
   ])("keeps the expanded browser under %s and restores focus", async (name, key) => {
     agentBrowser.mockResolvedValue(HAS_ONE);
     render(<ScreenWorkspace />);

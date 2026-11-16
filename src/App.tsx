@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { AgentAvatar } from "./avatars/AgentAvatar";
 import { AgentEditor } from "./components/AgentEditor";
@@ -6,19 +6,21 @@ import { AgentMenu, type MenuTarget } from "./components/AgentMenu";
 import { Artifacts } from "./components/Artifacts";
 import { Cafeteria } from "./components/Cafeteria";
 import { Calendar } from "./components/Calendar";
-import { ChannelView } from "./components/ChannelView";
+import { type AgentView, ChannelView } from "./components/ChannelView";
 import { ForYou } from "./components/ForYou";
 import { GroupEditor } from "./components/GroupEditor";
+import { GroupsSheet } from "./components/GroupsSheet";
+import { Home } from "./components/Home";
 import { HostUpdateNotice } from "./components/HostUpdates";
-import { Inspector } from "./components/Inspector";
-import { MobileNavigation } from "./components/MobileNavigation";
 import { Onboarding } from "./components/Onboarding";
 import { Search } from "./components/Search";
 import { SettingsDialog } from "./components/SettingsDialog";
-import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
+import { Timeline } from "./components/Timeline";
+import { TopBar } from "./components/TopBar";
 import { applyAppearance, watchSystemSurface } from "./lib/appearance";
 import { diagnostic } from "./lib/diagnostic";
+import { dismissing } from "./lib/dismiss";
 import { unreachableHint } from "./lib/host";
 import { api, onRevealRequest } from "./lib/ipc";
 import { bindingFor } from "./lib/keybinds";
@@ -31,6 +33,7 @@ import { type Banner, useLiveAgents, useStore } from "./lib/store";
 import { attached, desktop } from "./lib/transport";
 import {
   type AgentCard,
+  type AgentId,
   errorMessage,
   type Group,
   type Overlay,
@@ -74,16 +77,27 @@ export default function App() {
   const dropAgent = useStore((s) => s.dropAgent);
   const prefs = useStore((s) => s.prefs);
 
+  const [agentView, setAgentView] = useState<AgentView>("conversation");
+  /** Set while a click from outside the window is opening an agent. */
+  const revealing = useRef<AgentId | null>(null);
+
   /**
    * Where the window lands when the operator asks to be taken somewhere from
    * outside it: the menu bar panel, or a click on a notification. Read from
-   * the store at the moment it is asked, so it can be made once.
+   * the store at the moment it is asked, so it can be made once. An agent
+   * opens on the conversation, working or not: what was clicked was a message.
    */
   const reveal = useCallback((target: Reveal) => {
     if (target.kind === "agent") diagnostic("reveal.agent", target.id);
     const state = useStore.getState();
-    if (target.kind === "forYou") state.showForYou(true);
-    else void state.select(target.id);
+    if (target.kind === "forYou") {
+      revealing.current = null;
+      state.showForYou(true);
+      return;
+    }
+    revealing.current = target.id;
+    setAgentView("conversation");
+    void state.select(target.id);
   }, []);
 
   /**
@@ -108,23 +122,48 @@ export default function App() {
   const artifactsOpen = useStore((state) => state.artifactsOpen);
   const showArtifacts = useStore((state) => state.showArtifacts);
   const [showSettings, setShowSettings] = useState<Section | true | null>(null);
-  const [searching, setSearching] = useState(false);
+  const [searching, setSearching] = useState<string | false>(false);
+  const [showGroups, setShowGroups] = useState(false);
   const [showCafeteria, setShowCafeteria] = useState(false);
   const [showCalendar, setShowCalendar] = useState(false);
   // The pane inside whichever settings dialog is open, reported by the dialog.
   const [openSection, setOpenSection] = useState<string | null>(null);
-  const [mobilePane, setMobilePane] = useState<"agents" | "conversation" | "details">(
-    "conversation",
-  );
-  const openConversation = useCallback(() => setMobilePane("conversation"), []);
-  const openDetails = useCallback(() => setMobilePane("details"), []);
+  const leaveChannel = useStore((state) => state.leaveChannel);
+  const focused = useStore((state) => state.focused);
 
-  // Search and notifications can select a channel without going through the rail.
+  // Opening someone lands on what they are doing when they are doing
+  // something, and on the conversation otherwise. Decided once, as the agent
+  // is opened: the found message's mark is cleared a moment after it is shown,
+  // and a landing that reran on that would take the reader off the message
+  // to the agent's screen.
   useEffect(() => {
-    if (selected) setMobilePane("conversation");
+    const revealed = revealing.current;
+    revealing.current = null;
+    if (!selected) return;
+    if (revealed === selected) {
+      setAgentView("conversation");
+      return;
+    }
+    const state = useStore.getState();
+    const busy = state.activity[selected]?.state === "thinking";
+    setAgentView(busy && !state.focused ? "now" : "conversation");
   }, [selected]);
 
-  // The three shortcuts that work wherever the operator is, matched against
+  // A message asked for by search is in the conversation, including one in the
+  // agent already open on another tab.
+  useEffect(() => {
+    if (focused) setAgentView("conversation");
+  }, [focused]);
+
+  // A fired routine clicked in the transcript. The panel that opens it is
+  // only drawn on a tab other than the conversation, so the request goes there
+  // and the panel takes it as it mounts.
+  const openingRoutine = useStore((state) => state.openingRoutine);
+  useEffect(() => {
+    if (openingRoutine !== null) setAgentView("routines");
+  }, [openingRoutine]);
+
+  // The four shortcuts that work wherever the operator is, matched against
   // the same table the Shortcuts pane draws from, so a key listed there is a key
   // that works. Everything else in that table belongs to the surface it acts
   // on: see `lib/keybinds`.
@@ -134,7 +173,18 @@ export default function App() {
       if (!binding) return;
       event.preventDefault();
 
-      if (binding.id === "search") setSearching(true);
+      if (binding.id === "field") {
+        // Not from under a dialog or the Groups sheet: the box is behind it,
+        // and focus moved there would be typing into something out of sight.
+        if (dismissing()) return;
+        // The field on the opening screen, or the open conversation's box:
+        // whichever box writes to someone from where the operator is.
+        if (useStore.getState().selected) setAgentView("conversation");
+        requestAnimationFrame(() =>
+          document.querySelector<HTMLElement>("[data-field]:not([disabled])")?.focus(),
+        );
+      }
+      if (binding.id === "search") setSearching("");
       if (binding.id === "settings") setShowSettings(true);
       if (binding.id === "shortcuts") setShowSettings("shortcuts");
     };
@@ -256,7 +306,6 @@ export default function App() {
     switch (place.kind) {
       case "channel":
         void select(place.agentId);
-        setMobilePane("conversation");
         break;
       case "calendar":
         setShowCalendar(true);
@@ -278,7 +327,7 @@ export default function App() {
   // it goes to, which is then on screen for the answer.
   const sendFromBar = async (agentId: string, text: string) => {
     await select(agentId);
-    setMobilePane("conversation");
+    setAgentView("conversation");
     await api.sendMessage(agentId, text);
   };
 
@@ -290,7 +339,7 @@ export default function App() {
     ...(showCalendar ? ["calendar" as const] : []),
     ...(artifactsOpen ? ["artifacts" as const] : []),
     ...(showSettings ? ["settings" as const] : []),
-    ...(searching ? ["search" as const] : []),
+    ...(searching !== false ? ["search" as const] : []),
   ];
   const [dialogOrder, setDialogOrder] = useState<Overlay[]>([]);
   const orderedDialogs = [
@@ -309,12 +358,18 @@ export default function App() {
   });
   const currentGroup = groups.find((group) => group.id === (openAgent?.groupId ?? railGroup));
   // Read the same group-over-workspace provider and key choices as the backend.
+  // On Today no group is in front of the operator, so the banner speaks for
+  // every group with someone in it, and only when none of them can reply.
+  const unpaid = (group: Group | undefined) =>
+    settings !== null &&
+    (group?.inference.provider ?? settings.provider) === "compatible" &&
+    !group?.apiKeySet &&
+    !settings.apiKeySet;
+  const peopled = groups.filter((group) => agents.some((agent) => agent.groupId === group.id));
   const needsKey =
     ready &&
     settings !== null &&
-    (currentGroup?.inference.provider ?? settings.provider) === "compatible" &&
-    !currentGroup?.apiKeySet &&
-    !settings.apiKeySet;
+    (currentGroup || peopled.length === 0 ? unpaid(currentGroup) : peopled.every(unpaid));
   const firstRun =
     ready &&
     settings !== null &&
@@ -330,26 +385,26 @@ export default function App() {
     <div
       className="app"
       data-link={link === "down" ? "down" : undefined}
-      data-mobile-pane={firstRun ? "conversation" : openAgent ? mobilePane : "agents"}
+      data-page={selected === null ? "today" : "agent"}
     >
-      <MobileNavigation
-        onChats={() => setMobilePane("agents")}
-        onSearch={() => setSearching(true)}
+      <TopBar
+        open={openAgent?.name ?? null}
+        onHome={leaveChannel}
+        onSearch={() => setSearching("")}
+        onGroups={() => setShowGroups(true)}
         onSettings={() => setShowSettings(true)}
-      />
-      <Sidebar
-        onOpenChannel={openConversation}
-        onEditAgent={(agent) => setEditing(agent)}
-        onOpenCafeteria={() => setShowCafeteria(true)}
-        onOpenCalendar={() => setShowCalendar(true)}
-        onOpenArtifacts={() => showArtifacts({ id: null })}
-        onEditGroup={(group) => setEditingGroup(group)}
-        onOpenSettings={() => setShowSettings(true)}
-        onOpenSearch={() => setSearching(true)}
         onNewAgent={() => setEditing("new")}
         onNewGroup={() => setEditingGroup("new")}
-        onOpenMenu={(agent, at) => setMenu({ agent, ...at })}
+        onOpenCafeteria={() => setShowCafeteria(true)}
       />
+
+      {ready && (
+        <Timeline
+          onOpenAgent={(id) => void select(id)}
+          onOpenPile={() => setShowGroups(true)}
+          openAgentId={selected}
+        />
+      )}
 
       <main>
         {needsKey && !firstRun && (
@@ -424,36 +479,25 @@ export default function App() {
             </div>
           </div>
         ) : selected === null ? (
-          // Nothing open. Reached by going inside a crew the open channel was
-          // not in, and by deleting the last agent that had one: both are the
-          // operator ending up somewhere with no conversation attached, and
-          // picking one for them would put an agent's history on screen as a
-          // side effect of a click that was about something else.
-          <div className="empty" style={{ margin: "auto" }}>
-            <p className="empty__body">Pick someone in the rail to open their channel.</p>
-          </div>
+          // Nothing open: the opening screen. Also where going inside a group
+          // the open channel was not in, and deleting the agent that was open,
+          // both leave the operator, rather than on somebody picked for them.
+          <Home
+            onSearch={(query) => setSearching(query)}
+            onManageGroups={() => setShowGroups(true)}
+          />
         ) : (
           <ChannelView
             channel={selected}
             onOpenMenu={(agent, at) => setMenu({ agent, ...at })}
-            onBack={() => setMobilePane("agents")}
-            onDetails={openDetails}
+            view={agentView}
+            onView={setAgentView}
+            onEditProfile={(agent) => setEditing(agent)}
           />
         )}
 
         {ready && <StatusBar onOpen={openPlace} onMessage={sendFromBar} />}
       </main>
-
-      {ready && agents.length > 0 && !firstRun && (
-        <Inspector
-          agent={openAgent}
-          onEditProfile={(agent) => setEditing(agent)}
-          onOpenActions={(agent, at) => setMenu({ agent, ...at })}
-          reveal={mobilePane === "details"}
-          onReveal={openDetails}
-          onHide={openConversation}
-        />
-      )}
 
       {menu && (
         <AgentMenu
@@ -496,6 +540,22 @@ export default function App() {
           // every channel it said it in, and a view that emptied itself would
           // read as the transcript having gone too.
           onDelete={(agent) => void onAgent(() => api.deleteAgent(agent.id))}
+        />
+      )}
+
+      {showGroups && (
+        <GroupsSheet
+          onClose={() => setShowGroups(false)}
+          onEditAgent={(agent) => setEditing(agent)}
+          onOpenCafeteria={() => setShowCafeteria(true)}
+          onOpenCalendar={() => setShowCalendar(true)}
+          onOpenArtifacts={() => showArtifacts({ id: null })}
+          onEditGroup={(group) => setEditingGroup(group)}
+          onOpenSettings={() => setShowSettings(true)}
+          onOpenSearch={() => setSearching("")}
+          onNewAgent={() => setEditing("new")}
+          onNewGroup={() => setEditingGroup("new")}
+          onOpenMenu={(agent, at) => setMenu({ agent, ...at })}
         />
       )}
 
@@ -545,7 +605,7 @@ export default function App() {
             return (
               <Search
                 key={dialog}
-                onOpenChannel={openConversation}
+                initial={searching === false ? "" : searching}
                 onClose={() => setSearching(false)}
                 onEditAgent={(agent) => setEditing(agent)}
                 onEditGroup={(group) => setEditingGroup(group)}

@@ -579,6 +579,7 @@ export function Composer({
             value={text}
             placeholder={disabled ? (disabledReason ?? placeholder) : placeholder}
             disabled={disabled}
+            data-field=""
             onChange={(event) => {
               setText(event.target.value);
               setCaret(event.target.selectionStart ?? 0);
@@ -657,7 +658,7 @@ export function Composer({
             </>
           )}
         </span>
-        <span className="composer__keys">{FIND_KEY} commands</span>
+        <span className="composer__keys">{FIND_KEY} search</span>
       </div>
     </div>
   );

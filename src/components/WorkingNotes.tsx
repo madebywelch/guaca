@@ -149,7 +149,7 @@ export function WorkingNotes({ agentId }: Props) {
   const notes = read.kind === "ready" ? read.notes : null;
   const error = read.kind === "loading" ? null : read.error;
   const busy = state.agentId === agentId && state.busy;
-  // One choice across agents, like the inspector itself. The panel remounts
+  // One choice across agents, like the agent panel itself. The panel remounts
   // on an agent switch, but the operator's preferred density does not.
   const [all, setAll] = useState(false);
   const [expanded, setExpanded] = useState(remembered);

@@ -8,7 +8,7 @@ import { FIND_KEY, IS_MAC } from "../lib/keybinds";
 import { prefersReducedMotion } from "../lib/motion";
 import { newestByAgent } from "../lib/outcomes";
 import { type DropTarget, railOrder } from "../lib/rail";
-import { useLiveAgents, useStore } from "../lib/store";
+import { forYouCount, useLiveAgents, useStore } from "../lib/store";
 import { useNow } from "../lib/time";
 import { desktop } from "../lib/transport";
 import type { AgentCard, AgentId, Group, GroupId } from "../lib/types";
@@ -82,12 +82,8 @@ export function Sidebar({
   const groups = useStore((s) => s.groups);
   const activity = useStore((s) => s.activity);
   const stuck = useStore((s) => s.stuck);
-  const decisions = useStore((s) => s.decisions);
   const pending = useStore((s) => s.pending);
   const showForYou = useStore((s) => s.showForYou);
-  const decisionCount = decisions.filter(
-    (item) => item.status === "pending" || (item.status === "answered" && item.interrupted),
-  ).length;
   /* The rail is the one surface that draws a whole crew at once, so it is the
      one that pays for the signals the quieter moods are read from. */
   const trail = useStore((s) => s.trail);
@@ -449,7 +445,7 @@ export function Sidebar({
   /** The agent the hand is holding, which the box at the pointer draws. */
   const heldAgent = inHand?.kind === "agent" ? agents.find((a) => a.id === inHand.id) : undefined;
 
-  const waiting = decisionCount + pending.length + stuck.length;
+  const waiting = useStore(forYouCount);
 
   return (
     // Two columns, one gesture. The crews and the crew are separate surfaces on
@@ -650,8 +646,7 @@ export function Sidebar({
         {/* The places the rail does not list, as one row. Four stacked links
             were a fifth of the column's height taken from the agents, and a
             row per place is a footer that gets taller every time the app gains
-            one. Settings stays last: a phone hides it, because it has a tab of
-            its own there. */}
+            one. Settings stays last. */}
         <div className="rail__foot">
           <button
             type="button"

@@ -30,11 +30,13 @@ and *Every length is named* in `docs/INVARIANTS.md` is the rule they all sit und
   answer takes what is left, the chip clips the rest, and the refusal opens
   underneath where a command opens. `styles.test.ts` is the gate, because no
   DOM assertion sees a layout.
-- **The rail and the inspector are one ground, and it is not the page's.** They
-  were a near-black column on the left and a white panel on the right, which is
-  three surfaces for two jobs: the app's own two edges did not look like each
-  other and the heavier of them carried the least reading. They do the same job,
-  so they are the same off-white, the page is the only paper on screen,
+- **The rail and the groups' column are one ground, and it is not the page's.**
+  The rail and the inspector (the panel that stood beside the conversation until
+  the window became one column) were a near-black column on the left and a white
+  panel on the right, which is three surfaces for two jobs: the app's own two
+  edges did not look like each other and the heavier of them carried the least
+  reading. The columns that are not the page do one job, so they are one
+  off-white, the page is the only paper on screen,
   and the only saturation left is an agent's color and the one amber. The
   columns used to pin `--attention` and `--attention-wash`, and the groups' column
   `--danger` too, because they were ink under a reading column that could go dark. Nothing
@@ -98,9 +100,9 @@ and *Every length is named* in `docs/INVARIANTS.md` is the rule they all sit und
   invisible.
 - **A column's recessed surface is not the page's either.** `--sunken` is a hair
   off white, which is a field on paper and nothing at all on an off-white panel,
-  so the three columns remap it onto `--rail-sunken` in one rule that names all
-  of them. Remapped there rather than at each rule inside, so a row added to the
-  inspector tomorrow is recessed from what it is actually drawn on.
+  so the Groups sheet's two columns, the menu bar panel and the agent panel
+  remap it onto `--rail-sunken` in one rule that names all of them. Remapped there rather than at each rule inside, so a row added to the
+  Groups sheet tomorrow is recessed from what it is actually drawn on.
 - **One surface is ink whichever surface the operator picked, and it says so
   itself.** The full-window machine viewer pins `--stage-*` on `.screen`,
   shadow included: a pale chrome around somebody else's desktop is a chrome the
@@ -113,7 +115,7 @@ and *Every length is named* in `docs/INVARIANTS.md` is the rule they all sit und
   item does not shrink below its longest unbroken word, and `break-word` does
   not lower that width; only `anywhere` does. A failure arrived as
   a provider's JSON with no space in it for a line and a half, and it pushed
-  Dismiss past the column's edge and under the inspector.
+  Dismiss past the column's edge and under the panel beside it.
 - **A composer needs a visible control boundary.** Its border uses
   `--edge-control`, not the decorative `--rule-hard`, so the operator can find
   the field against the surrounding surface.

@@ -25,6 +25,7 @@
  * less.
  */
 
+import { ABSENT_ACCENT } from "../avatars/catalog";
 import { sendBody, sendRecipients } from "./toolArgs";
 import type { AgentCard, AgentId, Envelope, MessageId, Part, ToolOutcome } from "./types";
 import { plainText } from "./types";
@@ -61,7 +62,7 @@ export function toPeer(
 ): WirePeer {
   return card
     ? { id: card.id, name: card.name, color: card.color, avatar: card.avatar }
-    : { id: fallbackId, name: fallbackName, color: "#8aa0a6", avatar: "blank" };
+    : { id: fallbackId, name: fallbackName, color: ABSENT_ACCENT, avatar: "blank" };
 }
 
 /** One peer's share of a burst of traffic. */

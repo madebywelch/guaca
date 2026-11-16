@@ -19,7 +19,7 @@
 use chrono::{Datelike, Duration, NaiveDate, Weekday};
 use serde::{Deserialize, Serialize};
 
-use super::ids::{AgentId, RoutineId, RunId};
+use super::ids::{AgentId, GroupId, RoutineId, RunId};
 // Shared with the calendar, which crosses the same line for a different reason.
 use super::{instant, local};
 
@@ -501,6 +501,23 @@ pub struct RoutineRun {
     /// at those slots: a row per slot would read as firings, and one silent
     /// catch-up row reads as a routine that was never late.
     pub missed: u32,
+}
+
+/// One routine's next firing on the clock, as the main window's timeline draws it.
+///
+/// Only what a timeline places and labels, across every agent at once, so the
+/// window asks once rather than agent by agent. `next_run_at` is not optional
+/// here because a routine with no slot has nothing to place and is left out.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpcomingRun {
+    pub routine_id: RoutineId,
+    pub agent_id: AgentId,
+    /// Carried so the timeline can color or filter by group without a second
+    /// lookup per agent.
+    pub group_id: GroupId,
+    pub name: String,
+    pub next_run_at: i64,
 }
 
 impl Routine {

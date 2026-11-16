@@ -39,9 +39,11 @@ and expose photos and files through the system picker. Preserve drafts per
 workspace and channel. An attachment belongs to the message being composed,
 never to whichever group becomes selected while its upload finishes.
 
-The agent inspector becomes a separate screen or sheet. Search is an explicit
-action. Group switching requires a tap; the desktop's pointer-proximity column
-does not translate to touch. Preserve Guaca's paper/ink surfaces, character
+The agent's details are tabs on its page, as they are in the window. Search is
+an explicit action. Group switching requires a tap; the desktop's
+pointer-proximity column does not translate to touch. The web UI already draws
+the window's single column at touch sizes, with no bottom tab bar: see *A phone
+gets the same single column* in `docs/WORKSPACE.md`. Preserve Guaca's paper/ink surfaces, character
 geometry and restrained animation. Add named spacing and target-size tokens
 through the existing CSS contract when implementation starts.
 

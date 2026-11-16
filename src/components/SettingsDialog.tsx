@@ -1885,7 +1885,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                 <div className="field">
                   <span
                     className="field__label"
-                    title="Everything, not just the type: the rail, the rows and the spacing scale with it. The rail and the inspector stop growing before they would crowd out the reading column in a small window."
+                    title="Everything, not just the type: the timeline, the rows and the spacing scale with it. The Groups sheet stops growing before it would cover a small window."
                   >
                     Interface scale
                   </span>
@@ -2223,7 +2223,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
               <>
                 <h3 className="settings__title">Shortcuts</h3>
                 <p className="settings__lede">
-                  Every key the app answers to. The three under Anywhere work wherever you are; the
+                  Every key the app answers to. The four under Anywhere work wherever you are; the
                   rest belong to the surface they are listed under.
                 </p>
 

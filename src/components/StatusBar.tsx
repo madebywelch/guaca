@@ -8,7 +8,7 @@ import { hostLabel, hostPlace } from "../lib/host";
 import { api } from "../lib/ipc";
 import { quickTitle } from "../lib/quick";
 import { skew } from "../lib/releases";
-import { useStore } from "../lib/store";
+import { forYouCount, useStore } from "../lib/store";
 import { desktop } from "../lib/transport";
 import {
   type AgentId,
@@ -46,6 +46,8 @@ export function StatusBar({ onOpen, onMessage }: Props) {
   const agents = useStore((s) => s.agents);
   const link = useStore((s) => s.link);
   const lastHeard = useStore((s) => s.lastHeard);
+  const showArtifacts = useStore((s) => s.showArtifacts);
+  const waiting = useStore(forYouCount);
   const host = useHostState();
   const look = useBarLook();
   const [editing, setEditing] = useState(false);
@@ -107,6 +109,12 @@ export function StatusBar({ onOpen, onMessage }: Props) {
       setError(errorMessage(caught));
     }
   };
+
+  // A quick action that opens a place is the operator's own door to it, so
+  // the bar draws that place once rather than two buttons with one name.
+  const opened = new Set(
+    actions.flatMap((action) => (action.does.kind === "open" ? [action.does.place.kind] : [])),
+  );
 
   return (
     <footer className="statusbar">
@@ -173,6 +181,37 @@ export function StatusBar({ onOpen, onMessage }: Props) {
           {editing ? "Done" : empty ? "Add a quick action" : "Edit"}
         </button>
       </div>
+      {/* The places that are not a person, where the rail's foot kept them:
+          the timeline above draws who, and this end of the window says where. */}
+      <nav className="statusbar__places" aria-label="Places">
+        <button
+          type="button"
+          className="statusbar__place"
+          onClick={() => showArtifacts({ id: null })}
+        >
+          Artifacts
+        </button>
+        {!opened.has("calendar") && (
+          <button
+            type="button"
+            className="statusbar__place"
+            onClick={() => onOpen({ kind: "calendar" })}
+          >
+            Calendar
+          </button>
+        )}
+        {!opened.has("forYou") && (
+          <button
+            type="button"
+            className="statusbar__place"
+            aria-label={waiting > 0 ? `For you, ${waiting} waiting` : "For you"}
+            onClick={() => onOpen({ kind: "forYou" })}
+          >
+            For you
+            {waiting > 0 && <b className="statusbar__count">{waiting}</b>}
+          </button>
+        )}
+      </nav>
       {error && (
         <span className="statusbar__error" role="alert">
           {error}

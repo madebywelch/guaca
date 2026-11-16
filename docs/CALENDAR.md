@@ -142,7 +142,7 @@ guess at, including an impossible date: `2026-09-31` is an error rather than the
 
 ## What the operator sees is every group, a month at a time
 
-One surface, reached from the rail's footer, drawn like the cafeteria and the
+One surface, reached from the status bar's places, drawn like the cafeteria and the
 compost because it is the same kind of thing: somewhere you go, look at the
 whole workspace, and come back from. A pane would have to live inside a group,
 which is the framing this exists to escape.

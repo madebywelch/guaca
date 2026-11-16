@@ -265,6 +265,14 @@ pub struct Approval {
     pub answer: Option<String>,
     pub created_at: i64,
     pub decided_at: Option<i64>,
+    /// When a pending request stops waiting and moves to For you, so the card
+    /// can show the deadline instead of leaving the operator to guess it.
+    ///
+    /// Not stored: it is derived from the runtime's approval window, which is
+    /// the host's to know, so a store read leaves it empty and only the
+    /// command that lists pending requests fills it in. Empty on anything
+    /// already settled, which has no deadline left.
+    pub lapses_at: Option<i64>,
 }
 
 /// What the operator picks to let a lapsed permission through, and to refuse
@@ -296,6 +304,13 @@ pub fn fingerprint(action: ProtectedAction, what: &serde_json::Value) -> String 
 }
 
 impl Approval {
+    /// The same request, with when it lapses if it is still waiting.
+    pub fn lapsing_after(self, window: std::time::Duration) -> Self {
+        let lapses_at = (self.state == ApprovalState::Pending)
+            .then(|| self.created_at + window.as_millis() as i64);
+        Self { lapses_at, ..self }
+    }
+
     /// The same request, as a decision the operator can answer later.
     ///
     /// What a request becomes when nobody answers it in time. The question is
@@ -403,6 +418,7 @@ mod tests {
             answer: None,
             created_at: 0,
             decided_at: None,
+            lapses_at: None,
         };
         let permission = request(
             Request::Permission { action: ProtectedAction::ChangeSettings },

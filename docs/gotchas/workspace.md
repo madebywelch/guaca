@@ -1,6 +1,7 @@
 # The workspace
 
-The rail, the groups' column, and what deleting an agent does for thirty days.
+The Groups sheet's list (the rail), the groups' column, and what deleting an
+agent does for thirty days.
 `docs/WORKSPACE.md`, then `src/lib/rail.ts`, `src/lib/orb.ts` and the two halves
 of `Runtime::discard_agent` and `Runtime::purge_agent`.
 
@@ -38,7 +39,7 @@ of `Runtime::discard_agent` and `Runtime::purge_agent`.
   busy group filling that window would hand a quiet one an empty board.
   `docs/WORKSPACE.md`.
 - **The profile's name is a paragraph, not a heading, and the aside is
-  named after the agent.** The channel's `h1` is already that name. A second
+  named after the agent.** The agent page's `h1` is already that name. A second
   heading with it made every lookup of the agent by heading name ambiguous and
   announced the agent twice; `App.test.tsx` finds the channel by heading and
   the panel by its `complementary` label, so each has exactly one.
@@ -113,8 +114,9 @@ of `Runtime::discard_agent` and `Runtime::purge_agent`.
   fallback group, which is the first in the list rather than the oldest.
   `docs/WORKSPACE.md`.
 - **`select` follows an agent into its group; `focusGroup` lets a channel go.**
-  One invariant from two ends — the rail draws the row of whatever the pane is
-  showing — and the asymmetry is deliberate. `select` is the operator naming an
+  One invariant from two ends (the Groups sheet, whenever it is opened, draws
+  the row of whatever the page behind it shows), and the asymmetry is
+  deliberate. `select` is the operator naming an
   agent, so going to that agent's group is what they asked for. `focusGroup` is
   them naming a group, and following the channel back out of it would undo the
   click. Before the groups had a column of their own, `select` dropped out to the

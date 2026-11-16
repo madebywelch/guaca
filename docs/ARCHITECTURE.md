@@ -236,7 +236,7 @@ rounds nobody notices. On a turn of forty, which is what a group with a raised
 between an agent that can be corrected and one that cannot.
 
 **An operator cannot steer work they are watching.** They type a correction into
-the channel, it is delivered, the rail shows the agent working, and the message
+the channel, it is delivered, the timeline shows the agent working, and the message
 is read when the turn ends. The correction arrives after the thing it was meant
 to correct was finished and published.
 
@@ -648,8 +648,8 @@ rewrite is filed as any is, so the memory diff under the tidy's line shows it.
 **What survives it.** The rewrite, notebook writes and working notes, and the
 calls that made them, filed in the channel as any turn's are, so a rewrite shows
 as the memory diff under the tidy's line. Nothing the model says is filed or
-drawn. A tidy writes no outcome: nothing in For you, nothing unseen on the rail
-or the menu bar, nothing in the outbox, never a line under *What you have
+drawn. A tidy writes no outcome: nothing in For you, nothing unseen on the
+timeline or the menu bar, nothing in the outbox, never a line under *What you have
 already reported*, and so never the reason for the next night's tidy. The tidy
 message itself is left out of every later turn's history and does not take a
 place in the window, because its lists are stale by morning and the prompt
@@ -1402,13 +1402,13 @@ Two lessons are encoded in `Store::open`:
   see 0 and both try to create the tables.
 
 Agents are ordered by `rowid`. `created_at` is not a total order at millisecond
-resolution, and falling back to the UUID sorts the sidebar randomly.
+resolution, and falling back to the UUID sorts the Groups sheet randomly.
 
 ## Deleting an agent is a soft delete
 
 Hard deletion would punch holes in transcripts belonging to other agents, which
 had nothing to do with this one. Instead the agent is marked terminated: it
-leaves the rail and the directory, its actor stops, it can never be messaged
+leaves the timeline, the Groups sheet and the directory, its actor stops, it can never be messaged
 again, and its name is freed for reuse by a partial unique index over live rows.
 What it already said stays readable.
 
