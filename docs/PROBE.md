@@ -230,7 +230,7 @@ keeps a walk of the tree to a fraction of a second.
 | `push` | Every window closed: a question and a finished run each reach a push address on loopback once, with what they are about. |
 | `hiddenpush` | Screen: at the window once, then Guaca hidden; a run that finishes reaches the push address once. |
 | `refused` | Screen: a question whose banner the system refuses is given back by the window, pushed once although the window is present, and not taken again by that window. |
-| `escape` | Screen: with the window closed and Finder in front, a real click on the icon, through the window server, opens the panel and gives it the keyboard; a real Escape closes it, and Finder is in front again. The hand-back is asserted only once the panel had the keyboard. On macOS 27 today the panel opens without the keyboard and Escape goes to Finder, so this scenario fails. |
+| `escape` | Screen: with the window closed and Finder in front, a real click on the icon, through the window server, opens the panel and gives it the keyboard; a real Escape closes it, and Finder is in front again. The hand-back is asserted only once the panel had the keyboard. |
 | `draft` | Screen: a draft typed to one agent in the panel is not in another agent's box and is still there after going back, and after the panel closes and opens; read through Accessibility, as assistive technology reads it. |
 
 The screen scenarios press system UI found by accessibility role and name, only
@@ -257,7 +257,7 @@ password when its display sleeps.
   front, and it allows that in answer to a person's input. Opened from the
   channel with the window closed, the panel does not take the keyboard, so the
   hand-back the `panel` scenario asserts holds without having been tested
-  under load. A real click needs the screen layer.
+  under load. A real click needs the screen layer, which is what `escape` makes.
 - **What anything looks like.** The probe reads text, roles and state, never
   pixels. `capture` saves images for a person to look at.
 - **macOS's own wording.** The labels `allow` and `deny` press are the ones

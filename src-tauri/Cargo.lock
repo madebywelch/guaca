@@ -1579,6 +1579,8 @@ dependencies = [
  "iana-time-zone",
  "mac-usernotifications",
  "notify-rust",
+ "objc2",
+ "objc2-app-kit",
  "parking_lot 0.12.5",
  "percent-encoding",
  "r2d2",
