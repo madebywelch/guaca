@@ -183,7 +183,9 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .on_window_event(hide_rather_than_quit)
         .setup(|app| {
-            crate::notifications::install(app.handle())?;
+            if let Err(err) = crate::notifications::install(app.handle()) {
+                tracing::warn!(%err, "banner clicks will not reach the window this session");
+            }
             let journal = app.path().app_data_dir()?.join("host-update.json");
             std::fs::create_dir_all(journal.parent().unwrap())?;
             app.manage(

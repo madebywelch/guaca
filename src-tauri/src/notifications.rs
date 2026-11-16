@@ -150,6 +150,11 @@ mod imp {
         (click.to_string() == id && response.is_default_action()).then_some(click)
     }
 
+    /// Without the observer a banner is still shown, only without click-through.
+    fn request_id(actions: Option<&Actions>, click: Option<u32>) -> Option<String> {
+        Some(format!("{}{}", actions?.namespace, click?))
+    }
+
     /// System Settings, Notifications. The list of apps is one click from it.
     const PANE: &str = "x-apple.systempreferences:com.apple.Notifications-Settings.extension";
 
@@ -189,9 +194,8 @@ mod imp {
     ) -> Option<Result<(), String>> {
         let mut notification =
             mac_usernotifications::Notification::new().title(title).message(body);
-        if let Some(click) = click {
-            let actions = app.state::<Actions>();
-            notification = notification.id(&format!("{}{click}", actions.namespace));
+        if let Some(id) = request_id(app.try_state::<Actions>().as_deref(), click) {
+            notification = notification.id(&id);
         }
         match mac_usernotifications::send(notification).await {
             Ok(_) => {}
@@ -281,6 +285,14 @@ mod imp {
             response.close_reason = None;
             response.action_identifier = "unknown-action".into();
             assert_eq!(clicked(prefix, &response), None);
+        }
+
+        #[test]
+        fn a_banner_without_the_observer_is_sent_without_a_click_id() {
+            assert_eq!(request_id(None, Some(42)), None);
+            let actions = Actions { namespace: "guaca:s:".into(), subscription: Mutex::new(None) };
+            assert_eq!(request_id(Some(&actions), Some(42)).as_deref(), Some("guaca:s:42"));
+            assert_eq!(request_id(Some(&actions), None), None);
         }
 
         #[test]
