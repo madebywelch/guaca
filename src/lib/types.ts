@@ -1569,6 +1569,21 @@ export interface Routine {
 }
 
 /**
+ * One routine's next firing on the clock, from every agent at once, so a
+ * timeline can place the whole workspace's schedule from a single read.
+ * Switched-off routines, routines waiting on an event and deleted agents'
+ * routines are not in the list, which is why `nextRunAt` is never null here.
+ */
+export interface UpcomingRun {
+  routineId: RoutineId;
+  agentId: AgentId;
+  groupId: GroupId;
+  /** Empty on anything an agent set unnamed, as on {@link Routine}. */
+  name: string;
+  nextRunAt: number;
+}
+
+/**
  * What happened at one firing. A test is the operator's button, not the clock;
  * a skip is a firing the routine dropped because the agent was already working;
  * an event is a post to the receiver, which moved nothing on the clock.

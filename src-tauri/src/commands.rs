@@ -34,7 +34,7 @@ use crate::domain::occasion::{self, Occasion};
 use crate::domain::plugin::{
     self, HeaderPair, Headers, Plugin, PluginAccess, PluginKind, PluginOffer, ServerReport,
 };
-use crate::domain::routine::{self, Routine, RoutineRun, Trigger};
+use crate::domain::routine::{self, Routine, RoutineRun, Trigger, UpcomingRun};
 use crate::domain::search::SearchHits;
 use crate::domain::signin::Signin;
 use crate::domain::skill::{Scope as SkillScope, Skill};
@@ -2746,6 +2746,12 @@ pub async fn clear_channel(state: &AppState, channel_id: AgentId) -> Reply<usize
 /// An agent's own schedule, as the operator sees it.
 pub async fn agent_routines(state: &AppState, id: AgentId) -> Reply<Vec<Routine>> {
     Ok(state.runtime.store().agent_routines(id)?)
+}
+
+/// Everyone's next firings up to `until`, in one read, for a timeline that
+/// would otherwise ask once per agent and draw the answers as they straggle in.
+pub async fn upcoming_runs(state: &AppState, until: i64) -> Reply<Vec<UpcomingRun>> {
+    Ok(state.runtime.store().upcoming_runs(until)?)
 }
 
 /// What an operator can set on a routine.

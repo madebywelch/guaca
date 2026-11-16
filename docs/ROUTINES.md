@@ -5,6 +5,12 @@ A routine is an instruction an agent gives itself when a trigger comes due.
 `RoutineList` and `RoutineDetail` draw them. `lib/routine.ts` is the webview's
 half: the only file on that side that reads a trigger's stored text.
 
+`upcoming_runs` is the same schedule read across every agent at once, for a
+timeline that would otherwise ask agent by agent: each switched-on routine's
+next slot up to a moment, soonest first, leaving out routines waiting on an
+event and those of deleted agents. A paused agent's routines stay in, because
+the slot is still held and fires once the agent is resumed.
+
 ## A trigger is one string, in both places it lives, and two kinds of thing
 
 The column is text and so is the wire form, which is why `Trigger` has a

@@ -109,6 +109,7 @@ import type {
   SubscriptionStatus,
   ToolSummary,
   UiEvent,
+  UpcomingRun,
   WebhookAddress,
   WidgetWidth,
   WorkDecision,
@@ -788,6 +789,7 @@ export const api = {
   /** Resets a whole group: transcripts, routines, memories and spend. */
   clearGroup: (groupId: GroupId) => invoke<GroupReset>("clear_group", { groupId }),
   agentRoutines: (id: AgentId) => invoke<Routine[]>("agent_routines", { id }),
+  upcomingRuns: (until: number) => invoke<UpcomingRun[]>("upcoming_runs", { until }),
   createRoutine: (agentId: AgentId, draft: RoutineDraft) =>
     invoke<Routine>("create_routine", { agentId, draft }),
   updateRoutine: (id: RoutineId, draft: RoutineDraft) =>
