@@ -174,8 +174,11 @@ const MAX_DAYS = 4;
 /** How close two hour labels may sit, and how close one may come to the now pill. */
 const TICK_GAP = 0.12;
 const TICK_CLEAR_NOW = 0.05;
-/** The band's label takes this much of the strip after where it starts. */
+/** What the band's label is reckoned to take when nothing says how wide a character is. */
 const BAND_LABEL_SPAN = 0.14;
+/** The band label's lead, and the now pill's padding on both sides, in characters. */
+const BAND_LABEL_LEAD_CHARS = 1;
+const PILL_PAD_CHARS = 2;
 
 /** Local midnight `days` after the one `at` falls in, honest across a clock change. */
 function dayStart(at: number, days: number): number {
@@ -375,8 +378,17 @@ function bandFrom(outcomes: Outcome[]): number | null {
   return seen.length ? Math.min(Math.max(...seen), oldest) : oldest;
 }
 
-/** `bandX` is where the band's words start, or null when it has none. */
-function hourTicks(scale: Knot[], start: number, now: number, bandX: number | null): RibbonTick[] {
+/**
+ * `bandX` is where the band's words start, or null when it has none, and
+ * `wordsSpan` how much of the strip they take.
+ */
+function hourTicks(
+  scale: Knot[],
+  start: number,
+  now: number,
+  bandX: number | null,
+  wordsSpan: number,
+): RibbonTick[] {
   // From the first local hour, since not every zone is a whole hour off UTC.
   const first = new Date(start);
   first.setMinutes(0, 0, 0);
@@ -396,7 +408,7 @@ function hourTicks(scale: Knot[], start: number, now: number, bandX: number | nu
     const x = xAt(scale, at);
     if (x > TODAY_END - TICK_GAP / 2) continue;
     if (Math.abs(x - nowX) < TICK_CLEAR_NOW) continue;
-    if (bandX !== null && x > bandX - TICK_CLEAR_NOW && x < bandX + BAND_LABEL_SPAN) continue;
+    if (bandX !== null && x > bandX - TICK_CLEAR_NOW && x < bandX + wordsSpan) continue;
     if (kept.some((tick) => Math.abs(tick.x - x) < TICK_GAP)) continue;
     kept.push({ at, x, label: hourLabel(at), kind: "hour" });
   }
@@ -599,16 +611,23 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
     ),
   );
   // Words that would run under the now pill are left off; the ground still says it.
-  const bandLabel = nowX - bandX >= BAND_LABEL_SPAN ? BAND_LABEL : null;
+  // Reckoned in characters where the width is known, since the pill and the
+  // words keep their size as the window narrows and a share of it does not.
+  const nowLabel = bareClock(now);
+  const wordsSpan = charSpan
+    ? (BAND_LABEL.length + BAND_LABEL_LEAD_CHARS) * charSpan
+    : BAND_LABEL_SPAN;
+  const pillHalf = ((nowLabel.length + PILL_PAD_CHARS) / 2) * charSpan;
+  const bandLabel = nowX - pillHalf - bandX >= wordsSpan ? BAND_LABEL : null;
 
   return {
-    now: { at: now, x: xAt(scale, now), label: bareClock(now) },
+    now: { at: now, x: xAt(scale, now), label: nowLabel },
     band: bandAt === null ? null : { from: bandAt, x: bandX, label: bandLabel },
     pile,
     faces,
     scheduled,
     lapses,
-    ticks: [...hourTicks(scale, start, now, bandLabel ? bandX : null), ...dayTicks],
+    ticks: [...hourTicks(scale, start, now, bandLabel ? bandX : null, wordsSpan), ...dayTicks],
     scale,
   };
 }

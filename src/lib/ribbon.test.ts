@@ -223,6 +223,34 @@ describe("the band", () => {
     }
   });
 
+  it("keeps its words clear of the now pill at every width", () => {
+    let drawn = 0;
+    for (const width of [480, 720, 1024, 1440]) {
+      const charSpan = 8 / width;
+      for (let minutes = 10; minutes <= 180; minutes += 5) {
+        const seenAt = NOW - minutes * 60_000;
+        const outcomes = [
+          anOutcome({
+            agentId: "kit",
+            startedAt: seenAt - 120_000,
+            finishedAt: seenAt - 60_000,
+            seenAt,
+          }),
+          anOutcome({ agentId: "ines", startedAt: NOW - 120_000, finishedAt: NOW - 60_000 }),
+        ];
+        const ribbon = layoutRibbon(
+          morning({ outcomes, approvals: [], activity: {}, faceSpan: 52 / width, charSpan }),
+        );
+        if (!ribbon.band?.label) continue;
+        drawn += 1;
+        const wordsEnd = ribbon.band.x + ribbon.band.label.length * charSpan;
+        const pillStart = ribbon.now.x - (ribbon.now.label.length / 2) * charSpan;
+        expect(wordsEnd).toBeLessThanOrEqual(pillStart);
+      }
+    }
+    expect(drawn).toBeGreaterThan(0);
+  });
+
   it("leaves its words off when it is too narrow to hold them clear of the now pill", () => {
     const outcomes = [
       anOutcome({
