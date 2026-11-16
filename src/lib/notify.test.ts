@@ -542,6 +542,21 @@ describe("what was offered while this page was not connected", () => {
   });
 });
 
+describe("the window that claims", () => {
+  const read = (path: string) => readFileSync(resolve(__dirname, "../..", path), "utf8");
+
+  it("is never suspended by WebKit while nobody can see it", () => {
+    // A suspended page hears an offer and claims nothing until it is woken:
+    // on a Mac, hidden or covered for a few minutes, no question was ever a
+    // banner (docs/ATTENTION.md, *What interrupts the operator*).
+    const conf = JSON.parse(read("src-tauri/tauri.conf.json")) as {
+      app: { windows: { label?: string; backgroundThrottling?: string }[] };
+    };
+    const main = conf.app.windows.filter((window) => (window.label ?? "main") === "main");
+    expect(main.map((window) => window.backgroundThrottling)).toEqual(["disabled"]);
+  });
+});
+
 describe("the menu bar panel", () => {
   // A second page on the same Host, offered every delivery the window is. It
   // must never claim one, or a banner would be taken away from the window and
