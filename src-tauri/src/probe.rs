@@ -65,6 +65,9 @@ pub enum Request {
     /// enough that the window still answers, so its run loop is almost never
     /// idle: what a window drawing a long reply does to it. Answered at once.
     Busy { ms: u64 },
+    /// The next banner handed to the system is refused as macOS refuses one,
+    /// so the window gives back what it claimed. Answered at once.
+    RefuseNextBanner,
 }
 
 /// The answer to one request.
@@ -228,6 +231,7 @@ mod tests {
             (r#"{"id":5,"op":"hide"}"#, Request::Hide),
             (r#"{"id":6,"op":"quit"}"#, Request::Quit),
             (r#"{"id":8,"op":"busy","ms":5000}"#, Request::Busy { ms: 5000 }),
+            (r#"{"id":10,"op":"refuseNextBanner"}"#, Request::RefuseNextBanner),
         ];
         for (line, request) in cases {
             let envelope = parse(line).unwrap_or_else(|reply| panic!("{line}: {reply:?}"));

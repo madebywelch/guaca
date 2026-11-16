@@ -109,6 +109,7 @@ with the same `id` and either `value` or `error`.
 | `close` | A window's close button: for the main window, hiding it. |
 | `hide` | The app hidden, which hands the keyboard to whatever is next. |
 | `quit` | The app quits. |
+| `refuseNextBanner` | The next banner the window hands to macOS is refused as macOS refuses one, so the window gives back what it claimed. Answered at once. |
 | `busy` | The main thread held in 20 ms slices for `ms` milliseconds, answered at once. The window keeps answering between slices, but its run loop is almost never idle, as when it draws a long reply. |
 
 The bridge answers `ready`, `view` (which conversation is open and the agents
@@ -177,6 +178,15 @@ the app says it did.
 - **The signature**, from `codesign`.
 - **The Host's outbox**, read only, for whether a delivery was claimed.
 
+`log stream` drops lines when the daemons it watches are busy: usernoted,
+sweeping the bundles earlier runs registered, has lost the very line a step
+waited for while the persisted log still held it. So the stream answers "seen"
+quickly, and only `log show` over the same window answers "not there": a wait
+that runs out asks the persisted log before it fails, a count or an absence is
+asserted on both, and a log that cannot be read back makes the step unknown,
+never absent. A line only the persisted log had is listed in the run's
+`streamMissed`, so a run says how often its live observer was wrong.
+
 `scripts/probe/system.swift` is compiled on first use into
 `src-tauri/target/probe/system`.
 
@@ -212,6 +222,16 @@ keeps a walk of the tree to a fraction of a second.
 | `away` | Screen: four deliveries waiting when the window connects, then Allow; all four are claimed and macOS presents exactly one banner, the "While you were away" fold. |
 | `capture` | Screen: one image of each of the test build's own windows, the panel open, and nothing else. |
 | `longaway` | Screen: at the window once, then Guaca hidden for six real minutes, long enough for WebKit to suspend a page nobody can see; a question and a finished run, on a Host with a six-second minute, are each claimed and drawn as a banner. On a build whose main window lets WebKit suspend its page, both stay unclaimed. |
+| `question` | Screen: a run on the loopback stand-in model that asks the operator a question is claimed and drawn as a banner at once, and a click on it opens the conversation. |
+| `hidden` | Screen: at the window once, then Guaca hidden; a run that finishes is drawn as a banner, and its click opens the conversation. The Host's minute is 30 seconds here, so the two minutes before away outlast the window's 45 second heartbeat: a window that kept saying it was there would hold the run back as seen. |
+| `switched` | Screen: the same, with Finder brought to the front instead of Guaca hidden. |
+| `fold` | Screen: two runs that finish while the operator is away are gathered into one banner, and its click opens For you. |
+| `testclick` | Screen: a click on the Settings test banner brings Guaca forward. |
+| `push` | Every window closed: a question and a finished run each reach a push address on loopback once, with what they are about. |
+| `hiddenpush` | Screen: at the window once, then Guaca hidden; a run that finishes reaches the push address once. |
+| `refused` | Screen: a question whose banner the system refuses is given back by the window, pushed once although the window is present, and not taken again by that window. |
+| `escape` | Screen: with the window closed and Finder in front, a real click on the icon, through the window server, opens the panel and gives it the keyboard; a real Escape closes it, and Finder is in front again. The hand-back is asserted only once the panel had the keyboard. On macOS 27 today the panel opens without the keyboard and Escape goes to Finder, so this scenario fails. |
+| `draft` | Screen: a draft typed to one agent in the panel is not in another agent's box and is still there after going back, and after the panel closes and opens; read through Accessibility, as assistive technology reads it. |
 
 The screen scenarios press system UI found by accessibility role and name, only
 inside the group whose text names the test build, and only while nobody has
@@ -244,7 +264,12 @@ password when its display sleeps.
   macOS shows in English, "Allow" and "Don’t Allow" with a curly apostrophe.
 - **How many times a test bundle is listed.** Each fresh bundle that asks
   about notifications can appear in System Settings, Notifications, until macOS
-  forgets the copy.
+  forgets the copy. Before every run the probe unregisters each copy Launch
+  Services still lists from a probe's folder of copies once it is gone from
+  disk, a run killed before its teardown included, and the summary says how
+  many (`forgotten`). What usernoted remembers about a bundle and the line
+  System Settings shows for it belong to the system; they cannot be removed
+  without an administrator, and the probe does not try.
 
 ## What shows on screen
 
