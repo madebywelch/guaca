@@ -222,9 +222,10 @@ export interface Approval {
   createdAt: number;
   decidedAt: number | null;
   /**
-   * When a pending request stops waiting and moves to For you. The host owns
-   * the window this is measured from, so the card reads the deadline here
-   * rather than adding its own ten minutes to `createdAt`. Null once settled.
+   * When a pending request stops waiting. Most are then filed to For you;
+   * browser consent and a pinned page's request just close. The host owns the
+   * window this is measured from, so the card reads the moment here rather than
+   * adding its own ten minutes to `createdAt`. Null once settled.
    */
   lapsesAt: number | null;
 }

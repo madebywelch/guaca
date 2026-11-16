@@ -39,10 +39,20 @@ export function elapsed(now: number, since: number): string {
 }
 
 /** Local midnight, so a day is a day and not a fixed number of milliseconds. */
-function midnight(at: number): number {
+export function midnight(at: number): number {
   const day = new Date(at);
   day.setHours(0, 0, 0, 0);
   return day.getTime();
+}
+
+/**
+ * A time of day, written the way it is said: `9:05 AM`.
+ *
+ * A leading zero is for a column of times that have to line up. This is one
+ * time in a sentence or under a face.
+ */
+export function clockLabel(at: number): string {
+  return new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
 /**
@@ -55,9 +65,7 @@ function midnight(at: number): number {
  * or 25 hours twice a year.
  */
 export function whenLabel(at: number, now: number): string {
-  // A leading zero is for a column of times that have to line up. This is one
-  // time in a sentence, so it is written the way it is said.
-  const clock = new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const clock = clockLabel(at);
   const days = Math.round((midnight(now) - midnight(at)) / 86_400_000);
 
   if (days <= 0) return `Today ${clock}`;
