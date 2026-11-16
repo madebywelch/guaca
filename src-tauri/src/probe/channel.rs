@@ -104,6 +104,7 @@ async fn handle(app: &AppHandle, request: Request) -> Result<Value, String> {
         Request::Hello => Ok(json!({
             "pid": std::process::id(),
             "identifier": app.config().identifier,
+            "trace": super::trace::healthy(),
         })),
         Request::State => state(app).await,
         Request::Page { window, call } => page(app, &window, &call).await,

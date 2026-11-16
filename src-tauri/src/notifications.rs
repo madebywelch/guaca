@@ -110,6 +110,15 @@ mod imp {
         let prefix = namespace.clone();
         let emitter = app.clone();
         let subscription = mac_usernotifications::observe_responses(move |response| {
+            #[cfg(feature = "probe")]
+            {
+                let (click, kind) = response_row(&prefix, response);
+                crate::probe::trace::event(
+                    crate::probe::trace::Phase::NotificationResponse,
+                    click,
+                    kind,
+                );
+            }
             let Some(click) = clicked(&prefix, response) else { return };
             #[cfg(feature = "probe")]
             crate::probe::trace::event(
@@ -148,6 +157,28 @@ mod imp {
         let id = response.notification_id.strip_prefix(prefix)?;
         let click = id.parse::<u32>().ok()?;
         (click.to_string() == id && response.is_default_action()).then_some(click)
+    }
+
+    #[cfg(feature = "probe")]
+    const RESPONSE_DEFAULT: u64 = 1;
+    #[cfg(feature = "probe")]
+    const RESPONSE_SESSION: u64 = 2;
+
+    /// The probe's row for any response the delegate hands over: the click
+    /// number when it is one of this session's, and bits for a default action
+    /// and for this session. Nothing else of the response is kept.
+    #[cfg(feature = "probe")]
+    fn response_row(
+        prefix: &str,
+        response: &mac_usernotifications::NotificationResponse,
+    ) -> (u64, u64) {
+        let id = response.notification_id.strip_prefix(prefix);
+        let click = id
+            .and_then(|id| id.parse::<u32>().ok().filter(|click| click.to_string() == id))
+            .map_or(0, u64::from);
+        let session = id.is_some();
+        let default = if response.is_default_action() { RESPONSE_DEFAULT } else { 0 };
+        (click, default | if session { RESPONSE_SESSION } else { 0 })
     }
 
     /// Without the observer a banner is still shown, only without click-through.
@@ -285,6 +316,44 @@ mod imp {
             response.close_reason = None;
             response.action_identifier = "unknown-action".into();
             assert_eq!(clicked(prefix, &response), None);
+        }
+
+        #[cfg(feature = "probe")]
+        #[test]
+        fn every_native_response_is_traced_by_kind_session_and_click() {
+            use mac_usernotifications::NotificationResponse;
+            use objc2_user_notifications::{
+                UNNotificationDefaultActionIdentifier, UNNotificationDismissActionIdentifier,
+            };
+            let prefix = "guaca:current-session:";
+            let default = unsafe { UNNotificationDefaultActionIdentifier.to_string() };
+            let dismiss = unsafe { UNNotificationDismissActionIdentifier.to_string() };
+            let row = |id: &str, action: &str| {
+                response_row(
+                    prefix,
+                    &NotificationResponse {
+                        notification_id: id.into(),
+                        action_identifier: action.into(),
+                        reply_text: None,
+                        close_reason: None,
+                    },
+                )
+            };
+            assert_eq!(
+                row("guaca:current-session:42", &default),
+                (42, RESPONSE_DEFAULT | RESPONSE_SESSION)
+            );
+            assert_eq!(row("guaca:current-session:42", &dismiss), (42, RESPONSE_SESSION));
+            assert_eq!(
+                row("guaca:current-session:042", &default),
+                (0, RESPONSE_DEFAULT | RESPONSE_SESSION)
+            );
+            assert_eq!(row("guaca:old-session:42", &default), (0, RESPONSE_DEFAULT));
+            assert_eq!(
+                row("5E1A9C2B-0000-4000-8000-000000000000", &default),
+                (0, RESPONSE_DEFAULT)
+            );
+            assert_eq!(row("", "unknown-action"), (0, 0));
         }
 
         #[test]

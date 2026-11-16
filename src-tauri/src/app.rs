@@ -202,7 +202,10 @@ pub fn run() {
                 Err(err) => tracing::warn!(%err, "no menu bar presence this session"),
             }
             #[cfg(feature = "probe")]
-            crate::probe::channel::start(app.handle());
+            {
+                crate::probe::trace::start();
+                crate::probe::channel::start(app.handle());
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

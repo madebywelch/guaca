@@ -82,6 +82,7 @@ NATIVE_ROWS = 4096
 PAGE_ROWS = 256
 EVIDENCE_SNAPSHOTS = 16
 NATIVE_PHASES = frozenset({
+    "trace.opened", "notification.response",
     "notification.default", "notification.clicked", "window.open", "window.reveal",
     "toggle.enter", "toggle.return", "app.did_hide", "toggle.completed",
 })
@@ -446,32 +447,80 @@ class Scratch:
         self.started: list[Callable[[], None]] = []
         self.logs: list[UnifiedLog] = []
         self.snapshots: list[dict] = []
+        # One per launch: whether the app said its trace writer opened. Each
+        # launch gets its own trace file, because the app opens it exclusively.
+        self.launches: list[bool | None] = []
+        self.presses: list[dict] = []
+
+    def trace_path(self, launch: int) -> Path:
+        return self.channel / ("native.jsonl" if launch == 1 else f"native-{launch}.jsonl")
+
+    def traces(self) -> list[tuple[bool, list[dict]]]:
+        """Each launch's trace, readable or not, with its allowlisted rows."""
+        traces = []
+        for launch in range(1, max(len(self.launches), 1) + 1):
+            trace = self.trace_path(launch)
+            try:
+                if not trace.is_file():
+                    traces.append((False, []))
+                    continue
+                with trace.open("rb") as source:
+                    data = source.read(NATIVE_BYTES)
+            except OSError:
+                traces.append((False, []))
+                continue
+            rows = []
+            for line in data.splitlines()[:NATIVE_ROWS]:
+                try:
+                    rows.append(json.loads(line))
+                except (ValueError, UnicodeError, RecursionError):
+                    pass
+            traces.append((True, evidence_rows(rows, NATIVE_PHASES, "us")))
+        return traces
+
+    def press(self, what: str) -> dict:
+        """A banner about to be pressed. A scenario sets `missed` when the
+        press did not do what it should, and the evidence then says how far
+        the press got."""
+        entry = {"press": what, "launch": len(self.launches),
+                 "after": sum(len(rows) for _, rows in self.traces()), "missed": False}
+        self.presses.append(entry)
+        return entry
 
     def retain_failure(self) -> Path | None:
         """Persist only allowlisted evidence, never the scratch profile or logs."""
         directory = FAILURES / uuid.uuid4().hex
         try:
-            native: dict = {"readable": False, "rows": []}
-            trace = self.channel / "native.jsonl"
-            try:
-                if trace.is_file():
-                    with trace.open("rb") as source:
-                        data = source.read(NATIVE_BYTES)
-                    rows = []
-                    for line in data.splitlines()[:NATIVE_ROWS]:
-                        try:
-                            rows.append(json.loads(line))
-                        except (ValueError, UnicodeError, RecursionError):
-                            pass
-                    native = {"readable": True, "rows": evidence_rows(rows, NATIVE_PHASES, "us")}
-            except OSError:
-                pass
+            traces = self.traces()
+            native = {"readable": any(readable for readable, _ in traces),
+                      "rows": [row for _, rows in traces for row in rows][:NATIVE_ROWS]}
+            healthy = [reported is not False and readable and bool(rows) and rows[0]["phase"] == "trace.opened"
+                       for reported, (readable, rows) in zip(self.launches, traces)]
+            health = [{"launch": launch, "health": "healthy" if ok else "writer failed",
+                       "events": sum(row["phase"] != "trace.opened" for row in rows)}
+                      for launch, (ok, (_, rows)) in enumerate(zip(healthy, traces), 1)]
+            presses = []
+            for index, press in enumerate(self.presses):
+                if not press["missed"]:
+                    continue
+                end = self.presses[index + 1]["after"] if index + 1 < len(self.presses) else None
+                phases = {row["phase"] for row in native["rows"][press["after"]:end]}
+                if not (0 < press["launch"] <= len(healthy) and healthy[press["launch"] - 1]):
+                    attribution = "the native trace writer failed, so the press cannot be attributed"
+                elif "notification.response" not in phases:
+                    attribution = "no native response arrived"
+                elif "notification.clicked" not in phases:
+                    attribution = "a native response arrived and no click was emitted"
+                else:
+                    attribution = "a click was emitted and the page did not act"
+                presses.append({"press": press["press"], "attribution": attribution})
             FAILURES.mkdir(parents=True, exist_ok=True, mode=0o700)
             FAILURES.chmod(0o700)
             directory.mkdir(mode=0o700)
             fd = os.open(directory / "evidence.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "w") as target:
-                target.write(json.dumps({"native": native, "snapshots": self.snapshots},
+                target.write(json.dumps({"native": native, "traces": health, "presses": presses,
+                                         "snapshots": self.snapshots},
                                         indent=2, allow_nan=False) + "\n")
             return directory
         except Exception:
@@ -750,19 +799,22 @@ class App:
             "HOME": str(self.scratch.home),
             "CFFIXED_USER_HOME": str(self.scratch.home),
             "GUACA_PROBE_SOCKET": str(self.socket),
-            "GUACA_PROBE_TRACE": str(self.scratch.channel / "native.jsonl"),
+            "GUACA_PROBE_TRACE": str(self.scratch.trace_path(len(self.scratch.launches) + 1)),
             "GUAC_LOG": "guac=info,warn",
         }
         for key, value in env.items():
             args += ["--env", f"{key}={value}"]
         log = str(self.scratch.root / "app.log")
         args += ["--stdout", log, "--stderr", log, "-a", str(self.path)]
+        self.scratch.launches.append(None)
         opened = run(args)
         if opened.returncode != 0:
             raise Failed(f"could not launch the test build: {opened.stderr.strip()}")
         wait_until("the probe channel opens", self.socket.exists, 30)
         self.client = Client(self.socket)
-        self.pid = self.client.ask("hello")["pid"]
+        hello = self.client.ask("hello")
+        self.scratch.launches[-1] = hello.get("trace") if type(hello.get("trace")) is bool else None
+        self.pid = hello["pid"]
         return self.client
 
     def alive(self) -> bool:
@@ -1314,9 +1366,14 @@ def scenario_busy(record: Record, scratch: Scratch) -> None:
         record.check("a delivery handed over while the main thread is busy is drawn", True)
         record.check("another conversation is open first", client.page("main", do="view")["selected"] != critic)
         screen_step("clicking the banner")
+        pressed = scratch.press("clicking the banner")
         press_when_shown("clicking the banner", "press-group", DELIVERY_TITLE)
-        wait_until("the window opens the conversation",
-                   lambda: client.page("main", do="view")["selected"] == critic, 15)
+        try:
+            wait_until("the window opens the conversation",
+                       lambda: client.page("main", do="view")["selected"] == critic, 15)
+        except Failed:
+            pressed["missed"] = True
+            raise
         record.check("its click opens the conversation", True)
 
 
@@ -1354,9 +1411,14 @@ def scenario_click(record: Record, scratch: Scratch) -> None:
         # A banner stays up for a few seconds, so it is pressed as soon as it
         # can be found, and found as soon as it is drawn.
         screen_step("clicking the banner")
+        pressed = scratch.press("clicking the banner")
         press_when_shown("clicking the banner", "press-group", DELIVERY_TITLE)
-        wait_until("the window opens the conversation",
-                   lambda: client.page("main", do="view")["selected"] == critic, 10)
+        try:
+            wait_until("the window opens the conversation",
+                       lambda: client.page("main", do="view")["selected"] == critic, 10)
+        except Failed:
+            pressed["missed"] = True
+            raise
         record.check("the click opens the conversation the delivery is about", True)
 
 
@@ -1437,9 +1499,11 @@ def click_banner(record: Record, app: App, scope: str, what: str, give_back: boo
     front back."""
     before = front()
     screen_step(what)
+    pressed = app.scratch.press(what)
     press_when_shown(what, "press-group", scope)
-    record.check(f"{what}: the test build comes forward",
-                 bool(wait_quietly(lambda: front().get("pid") == app.pid, 5)))
+    came = bool(wait_quietly(lambda: front().get("pid") == app.pid, 5))
+    pressed["missed"] = not came
+    record.check(f"{what}: the test build comes forward", came)
     if give_back:
         hand_back(app, before)
 
@@ -1806,8 +1870,13 @@ def scenario_longaway(record: Record, scratch: Scratch) -> None:
         host.use(StandIn(scratch))
         before = front()
         screen_step("clicking the first banner, to be at the window")
+        pressed = scratch.press("clicking the first banner")
         press_when_shown("clicking the first banner", "press-group", DELIVERY_TITLE)
-        wait_until("the test build comes forward", lambda: front().get("pid") == app.pid, 5)
+        try:
+            wait_until("the test build comes forward", lambda: front().get("pid") == app.pid, 5)
+        except Failed:
+            pressed["missed"] = True
+            raise
         hand_back(app, before)
         hidden = time.monotonic()
         while time.monotonic() < hidden + LONG_AWAY_S:
