@@ -82,8 +82,8 @@ export function TopBar({
         <button
           type="button"
           className="topbar__button"
-          aria-label="Settings"
-          title="Settings"
+          aria-label="App settings"
+          title="App settings"
           onClick={onSettings}
         >
           <Icon name="settings" />

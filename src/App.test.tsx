@@ -270,6 +270,13 @@ describe("App", () => {
     expect(within(groupsSheet()).getByText("guaca")).toBeTruthy();
   });
 
+  it("names the top row's settings button App settings, apart from each group's own", async () => {
+    render(<App />);
+    const row = await screen.findByRole("navigation", { name: "Window" });
+    fireEvent.click(within(row).getByRole("button", { name: "App settings" }));
+    expect(await screen.findByRole("dialog", { name: "Settings" })).toBeTruthy();
+  });
+
   it("offers a way in when there are no agents", async () => {
     render(<App />);
     expect(await screen.findByRole("button", { name: /open the cafeteria/i })).toBeTruthy();

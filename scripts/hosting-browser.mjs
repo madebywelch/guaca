@@ -376,7 +376,7 @@ try {
     await evaluate(`(() => { const n=document.querySelector('.composer__input');
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(n,'');
       n.dispatchEvent(new Event('input',{bubbles:true})); n.blur(); })()`);
-    await tap('.topbar__places button[aria-label="Settings"]');
+    await tap('.topbar__places button[aria-label="App settings"]');
     await until(() => evaluate("!!document.querySelector('.dialog--settings')"),"settings opens on phone");
     await delay(250);
     await fits(".dialog--settings");
