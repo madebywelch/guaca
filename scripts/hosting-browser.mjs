@@ -339,6 +339,8 @@ try {
     await tap(".topbar__back");
     await until(() => evaluate("!!document.querySelector('.home')"), "Today opens from the top row");
     await fits(".home");
+    const day = await evaluate("(() => { const n=document.querySelector('.topbar__day'); return {height:n.getBoundingClientRect().height, line:parseFloat(getComputedStyle(n).lineHeight) || 24}; })()");
+    assert.ok(day.height <= day.line * 1.5, `the day in the top row is one line at ${width}: ${JSON.stringify(day)}`);
     await fits(".ribbon");
     await ribbonClear(`Today at ${width}`);
     await tap('.topbar__places button[aria-label="Groups and agents"], .topbar__places button[aria-label="Agents"]');

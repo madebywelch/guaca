@@ -159,7 +159,11 @@ export function Ribbon({ ribbon, onOpenAgent, onOpenPile, openAgentId, onTrackWi
                     ) : null;
                   })}
                 </span>
-                <span className="ribbon__pile-label">{ribbon.pile.length} asleep</span>
+                {/* Asleep is true only of agents with nothing today; once the pile also
+                    holds faces moved off a full strip, it says how many more. */}
+                <span className="ribbon__pile-label">
+                  {ribbon.pile.length} {ribbon.crowded ? "more" : "asleep"}
+                </span>
               </button>
             </li>
           )}

@@ -75,6 +75,12 @@ describe("what a screen reader hears", () => {
     expect(within(list).getByRole("button", { name: "3 asleep" })).toBeTruthy();
   });
 
+  it("calls the pile how many more, not asleep, once it holds faces moved there for room", () => {
+    const list = draw({ ...morning(), pile: ["kit", "wren", "pip", "ines"], crowded: 1 });
+    expect(within(list).getByRole("button", { name: "4 more" })).toBeTruthy();
+    expect(within(list).queryByRole("button", { name: /asleep/ })).toBeNull();
+  });
+
   it("reads a scheduled run with its day, and does not offer it as a button", () => {
     const list = draw();
     const run = within(list).getByText("Changelog type check, Tue 9:00 AM");

@@ -42,6 +42,13 @@ export function TopBar({
     month: "long",
     day: "numeric",
   });
+  // A phone's top row holds the day beside four buttons on one line only
+  // when the day is said short.
+  const short = new Date(now).toLocaleDateString([], {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
   return (
     <header className="topbar" data-lights={LIGHTS || undefined} data-tauri-drag-region>
       {open ? (
@@ -52,7 +59,8 @@ export function TopBar({
       ) : (
         // Text is part of the row a window is dragged by; only a control is not.
         <p className="topbar__day" data-tauri-drag-region>
-          {day}
+          <span className="topbar__day-long">{day}</span>
+          <span className="topbar__day-short">{short}</span>
         </p>
       )}
       <nav className="topbar__places" aria-label="Window">

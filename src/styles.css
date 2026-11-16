@@ -11375,7 +11375,19 @@ button.artifacts__version[aria-pressed="true"] {
   }
 }
 
+.topbar__day-short {
+  display: none;
+}
+
 @media (max-width: 48rem), (hover: none) and (pointer: coarse) {
+  .topbar__day-long {
+    display: none;
+  }
+
+  .topbar__day-short {
+    display: inline;
+  }
+
   /* The agent menu's one way in by touch. */
   .pane__more {
     display: inline-flex;

@@ -131,6 +131,8 @@ export interface Ribbon {
   band: { from: number; x: number; label: string | null } | null;
   /** Agents with nothing to show, for the pile at the left edge. */
   pile: AgentId[];
+  /** How many in the pile did something today and were moved there for room. */
+  crowded: number;
   faces: RibbonFace[];
   scheduled: RibbonScheduled[];
   lapses: RibbonLapse[];
@@ -669,6 +671,7 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
     now: { at: now, x: xAt(scale, now), label: nowLabel },
     band: bandAt === null ? null : { from: bandAt, x: bandX, label: bandLabel },
     pile,
+    crowded: piled.size,
     faces,
     scheduled,
     lapses,
