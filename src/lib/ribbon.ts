@@ -375,7 +375,8 @@ function bandFrom(outcomes: Outcome[]): number | null {
   return seen.length ? Math.min(Math.max(...seen), oldest) : oldest;
 }
 
-function hourTicks(scale: Knot[], start: number, now: number, band: number | null): RibbonTick[] {
+/** `bandX` is where the band's words start, or null when it has none. */
+function hourTicks(scale: Knot[], start: number, now: number, bandX: number | null): RibbonTick[] {
   // From the first local hour, since not every zone is a whole hour off UTC.
   const first = new Date(start);
   first.setMinutes(0, 0, 0);
@@ -390,7 +391,6 @@ function hourTicks(scale: Knot[], start: number, now: number, band: number | nul
     return hour % 12 === 0 ? 0 : hour % 6 === 0 ? 1 : hour % 3 === 0 ? 2 : 3;
   };
   const nowX = xAt(scale, now);
-  const bandX = band === null ? null : xAt(scale, band);
   const kept: RibbonTick[] = [];
   for (const at of candidates.sort((a, b) => rank(a) - rank(b) || a - b)) {
     const x = xAt(scale, at);
@@ -608,7 +608,7 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
     faces,
     scheduled,
     lapses,
-    ticks: [...hourTicks(scale, start, now, band), ...dayTicks],
+    ticks: [...hourTicks(scale, start, now, bandLabel ? bandX : null), ...dayTicks],
     scale,
   };
 }

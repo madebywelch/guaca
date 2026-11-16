@@ -11339,6 +11339,12 @@ button.artifacts__version[aria-pressed="true"] {
     flex: none;
   }
 
+  /* Adding a quick action is a desk errand; on a phone the row is the host
+     and the places, which fit it. */
+  .statusbar__edit {
+    display: none;
+  }
+
   .statusbar__place {
     min-height: var(--control-touch);
   }

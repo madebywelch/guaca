@@ -203,6 +203,26 @@ describe("the band", () => {
     }
   });
 
+  it("keeps the hours clear of its words where a crowd pulled it left", () => {
+    const outcomes = [
+      anOutcome({
+        agentId: "kit",
+        startedAt: at(16, 8),
+        finishedAt: at(16, 8, 1),
+        seenAt: at(16, 8, 50),
+      }),
+      ...["ines", "tomas", "noor", "wren", "pip"].map((agentId) =>
+        anOutcome({ agentId, startedAt: at(16, 8, 55), finishedAt: at(16, 9) }),
+      ),
+    ];
+    const ribbon = layoutRibbon(morning({ outcomes, approvals: [], activity: {}, faceSpan: 0.08 }));
+    expect(ribbon.band?.label).toBe(BAND_LABEL);
+    const from = ribbon.band?.x ?? 0;
+    for (const tick of ribbon.ticks.filter((one) => one.kind === "hour")) {
+      expect(tick.x < from - 0.04 || tick.x > from + 0.14).toBe(true);
+    }
+  });
+
   it("leaves its words off when it is too narrow to hold them clear of the now pill", () => {
     const outcomes = [
       anOutcome({
