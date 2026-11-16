@@ -41,7 +41,12 @@ window shut* in `docs/WORKSPACE.md`, then `menubar.rs`, `tray.rs`, `app.rs` and
   would read as "open" and bring it straight back. `REOPEN` in `tray.rs` is the
   window in which a click after a hide is the click that caused it.
 - **The panel is an ordinary window, and that is why closing it hides the
-  app.** Showing it activates Guaca. Put away from the icon or with Escape
+  app.** Showing it activates Guaca, and the activation has to be asked for
+  inside the click's own handler: `set_focus` alone runs on a later turn of
+  the event loop, and macOS 27 then left the panel open without the keyboard.
+  `Tray::toggle` calls `activateIgnoringOtherApps` there itself; the newer
+  `activate()`, which waits for the app in front to yield, did not take the
+  front either. Put away from the icon or with Escape
   while the window is not open, it hides the app, which is what hands the
   keyboard back to whatever had it. Put away by clicking somewhere else, it
   does nothing more, because somewhere else already has the keyboard. Making it

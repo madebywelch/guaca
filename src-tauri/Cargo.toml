@@ -125,6 +125,8 @@ tauri-plugin-notification = { version = "2.3.3", optional = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 notify-rust = { version = "4.18.2", default-features = false, features = ["preview-macos-un"], optional = true }
 mac-usernotifications = { version = "0.3.1", optional = true }
+objc2 = { version = "0.6", optional = true }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder"], optional = true }
 
 [[test]]
 name = "server"
@@ -161,6 +163,8 @@ desktop = [
   "dep:tauri-plugin-notification",
   "dep:notify-rust",
   "dep:mac-usernotifications",
+  "dep:objc2",
+  "dep:objc2-app-kit",
 ]
 
 # Serves the bundled `dist/` instead of the dev server. Its own feature because
