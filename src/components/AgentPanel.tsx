@@ -136,6 +136,17 @@ function latest(messages: Envelope[] | undefined, test: (one: Envelope) => boole
 
 const firstLine = (one: Envelope) => plainText(one).trim().split("\n")[0] ?? "";
 
+/** The notice Guaca writes when a run fails or is cut off, if this is one. */
+function ended(one: Envelope) {
+  if (one.from.kind !== "system") return null;
+  for (const part of one.parts) {
+    if (part.type === "notice" && (part.kind === "upstreamError" || part.kind === "interrupted")) {
+      return part;
+    }
+  }
+  return null;
+}
+
 /** How a turn that has a request behind it is said ahead of whose it is. */
 const doingWords: Record<"thinking" | "queued", string> = {
   thinking: "Working on a request from",
@@ -161,14 +172,25 @@ function Doing({ agent }: { agent: AgentCard }) {
   const state = activity?.state ?? "idle";
 
   if (state === "idle" || state === "paused") {
-    const said = latest(messages, (one) => own(one.from));
+    // A run that failed or was cut off ends in Guaca's notice, not in the
+    // agent's words, so that notice is where the last run ended.
+    const said = latest(messages, (one) => own(one.from) || (own(one.to) && ended(one) !== null));
+    const end = said && ended(said);
     return (
       <section className="doing" aria-labelledby={`doing-${agent.id}`}>
         <h3 id={`doing-${agent.id}`} className="doing__title">
           {state === "paused" ? "Paused, so nothing is running" : "Nothing is running"}
         </h3>
         <p className="doing__line">
-          {said ? (
+          {end ? (
+            <>
+              <span className="doing__when">
+                Last run {end.kind === "upstreamError" ? "failed" : "was cut off"}{" "}
+                {whenLabel(said.createdAt, now)}
+              </span>{" "}
+              <span className="doing__text">{end.text}</span>
+            </>
+          ) : said ? (
             <>
               <span className="doing__when">Last finished {whenLabel(said.createdAt, now)}</span>{" "}
               <span className="doing__text">{firstLine(said)}</span>

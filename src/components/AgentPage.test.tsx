@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../lib/store";
+import { whenLabel } from "../lib/time";
 import type { AgentCard, Browser, Computer } from "../lib/types";
 import { AgentPanel } from "./AgentPanel";
 import { VIEWS } from "./ChannelView";
@@ -217,6 +218,60 @@ describe("the agent's page, past the conversation", () => {
       "Routines",
       "Profile",
     ]);
+  });
+
+  it("says the last run failed, and when, for an idle agent whose run failed", async () => {
+    // A failed run ends in Guaca's notice, not in anything the agent said: a
+    // line reading "Last finished" over an empty reply said it went well.
+    const at = Date.now() - 3_600_000;
+    const base = {
+      runId: "r1",
+      channelId: "a1",
+      trust: "system",
+      hop: 0,
+      expectsReply: false,
+      intent: "work",
+      cause: null,
+    } as const;
+    useStore.setState({
+      agents: [card("a1", "Cook")],
+      activity: { a1: { state: "idle" } },
+      activeRun: {},
+      trail: {},
+      messages: {
+        a1: [
+          {
+            ...base,
+            id: "m1",
+            from: { kind: "agent", id: "a1" },
+            to: { kind: "human" },
+            parts: [],
+            createdAt: at - 1000,
+          },
+          {
+            ...base,
+            id: "m2",
+            from: { kind: "system" },
+            to: { kind: "agent", id: "a1" },
+            parts: [
+              {
+                type: "notice",
+                kind: "upstreamError",
+                text: "Cook could not reply: could not reach the inference endpoint",
+              },
+            ],
+            createdAt: at,
+          },
+        ],
+      },
+    });
+    render(<AgentPanel section="now" agent={card("a1", "Cook")} onEditProfile={vi.fn()} />);
+
+    const line = (await screen.findByRole("heading", { name: "Nothing is running" }))
+      .nextElementSibling as HTMLElement;
+    expect(line.textContent).toMatch(new RegExp(`^Last run failed ${whenLabel(at, Date.now())} `));
+    expect(line.textContent).toContain("could not reach the inference endpoint");
+    expect(line.textContent).not.toContain("Last finished");
   });
 
   it("says only that it is working when the run it is on is not known", async () => {
