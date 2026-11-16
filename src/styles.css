@@ -343,6 +343,7 @@
   --ribbon-lapse: 0.375rem; /* The point where a request stops waiting. */
   --ribbon-glyph: 0.875rem; /* The calendar glyph in a scheduled item's place. */
   --ribbon-asleep: 0.55; /* How far the pile fades. */
+  --ribbon-asleep-lift: 1; /* How much the pile's gray is lightened, so it reads on a dark ground. */
   --ribbon-aside: 0.42; /* How far the others step back while one agent's page is open. */
   --column-edge: var(--space-7); /* The top row's side margin, which the timeline keeps. */
   --column-w: 46rem; /* Today and an agent's page: one column, one width. */
@@ -424,6 +425,11 @@
    goes pale enough to be a color rather than a shadow. They stay recognizably
    the same colors; they are not the same values. */
 :root[data-surface="dark"] {
+  /* A gray face faded on a near-black ground all but vanished; the pile is
+     lightened and faded less, and still reads as further back than a face. */
+  --ribbon-asleep: 0.8;
+  --ribbon-asleep-lift: 1.9;
+
   --rail-ground: #19160f;
   --rail-raised: #1e1c18;
   --rail-edge: #2d291d;
@@ -10474,7 +10480,7 @@ button.artifacts__version[aria-pressed="true"] {
   display: flex;
   align-items: center;
   opacity: var(--ribbon-asleep);
-  filter: grayscale(1);
+  filter: grayscale(1) brightness(var(--ribbon-asleep-lift));
 }
 
 .ribbon__pile-faces .avatar + .avatar {
@@ -11346,14 +11352,10 @@ button.artifacts__version[aria-pressed="true"] {
   display: none;
 }
 
-@media (max-width: 48rem), (hover: none) and (pointer: coarse) {
-  /* The agent menu's one way in by touch. */
-  .pane__more {
-    display: inline-flex;
-  }
-
-  /* An agent's page on a phone is its conversation: the timeline gives way,
-     and the head is one line, face and name, under the top row's way back. */
+/* An agent's page on a phone, or in a short window, is its conversation: the
+   timeline gives way, and the head is one line, face and name, under the top
+   row's way back, so what is said and written keeps most of the height. */
+@media (max-width: 48rem), (hover: none) and (pointer: coarse), (max-height: 45rem) {
   .app[data-page="agent"] .ribbon {
     display: none;
   }
@@ -11370,6 +11372,13 @@ button.artifacts__version[aria-pressed="true"] {
   .app[data-page="agent"] .pane__about,
   .agent-tabs .pane__meta {
     display: none;
+  }
+}
+
+@media (max-width: 48rem), (hover: none) and (pointer: coarse) {
+  /* The agent menu's one way in by touch. */
+  .pane__more {
+    display: inline-flex;
   }
 
   .agent-tabs {

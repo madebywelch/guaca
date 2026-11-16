@@ -297,12 +297,16 @@ try {
       const nowX = now.left + now.width / 2;
       const labels = [...document.querySelectorAll('.ribbon__name, .ribbon__item-what, .ribbon__item-when, .ribbon__pile-label, .ribbon__pile-faces')]
         .filter((n) => n.getClientRects().length)
-        .map((n) => { const r = n.getBoundingClientRect(); return {text:n.textContent, left:r.left, right:r.right}; });
+        .map((n) => { const r = n.getBoundingClientRect(); return {text:n.textContent, left:r.left, right:r.right, name:n.classList.contains('ribbon__name')}; });
       return {edge, nowX, vw: innerWidth, labels};
     })()`);
     for (const label of facts.labels) {
       assert.ok(label.left >= facts.edge - 1 && label.right <= facts.vw - facts.edge + 1, `${where}: "${label.text}" is inside the margins: ${JSON.stringify({...label, edge:facts.edge, vw:facts.vw})}`);
       if (label.text) assert.ok(label.right <= facts.nowX - 1 || label.left >= facts.nowX + 1, `${where}: "${label.text}" is clear of the now line at ${facts.nowX}: ${JSON.stringify(label)}`);
+    }
+    const names = facts.labels.filter((label) => label.text && label.name).sort((a, b) => a.left - b.left);
+    for (let i = 1; i < names.length; i++) {
+      assert.ok(names[i].left >= names[i - 1].right, `${where}: "${names[i - 1].text}" and "${names[i].text}" do not touch: ${JSON.stringify([names[i - 1], names[i]])}`);
     }
   };
   for (const width of [320,390,430,768]) {
@@ -414,6 +418,13 @@ try {
   await size(844,390);
   await fits(".pane");
   await fits(".composer");
+  // The smallest window the desktop app allows keeps the same rule as a
+  // phone: the conversation and its composer take at least 60% of the height.
+  await size(900,600,false);
+  await fits(".pane");
+  await fits(".composer");
+  const short = await evaluate("(() => { const log=document.querySelector('.pane__scroll[role=log]').getBoundingClientRect(); const c=document.querySelector('.composer').getBoundingClientRect(); return (c.bottom - log.top) / innerHeight; })()");
+  assert.ok(short >= 0.6, `at 900 by 600, conversation and composer take at least 60% of the height: ${short}`);
   await size(1280,900,false);
   await fits(".topbar");
   await fits(".ribbon");
