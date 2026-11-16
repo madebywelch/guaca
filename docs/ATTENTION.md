@@ -329,7 +329,7 @@ is about, when the address is removed
 that answered or saw it, like the window's row.
 
 **What it says.** Decided when the row is written, by `push::say`, from the
-`content` setting (Robert's call, D3):
+`content` setting:
 
 | Row | Title | Body, `outcome` | Body, `generic` |
 |---|---|---|---|
