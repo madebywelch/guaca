@@ -320,9 +320,15 @@ back the flicker the sentence rule in `lib/reasoning.ts` takes out. What the
 line is for is the wait an operator notices, so a call has to become one before
 it earns the line.
 
-## The panel is the agent's, and opens on its profile
+## The details page is the agent's, and starts with its profile
 
-The side panel opened on "Routines", under a gear and two typed arrows, and
+Every tab of an agent's page except Conversation draws one page,
+`AgentPanel.tsx`, scrolled to the section the tab names. It was the inspector,
+a panel beside the transcript, until the window became one column; *An agent's
+page is tabs, and opens where the agent is* has the tabs. What follows is what
+the page itself holds.
+
+It opened on "Routines", under a gear and two typed arrows, and
 nothing in it said whose routines. Every section in it is something one agent
 carries, so the agent heads it: its face, its name, the group it is in and what
 answers for it, and one Edit that opens the profile dialog the gear used to.
@@ -331,12 +337,14 @@ the panel; two glyphs a few pixels apart, one of which loses your place.
 
 Ledger sets that head as a ledger's first page: *The agent*, the name in the
 display face, the group and the model in the machine texture, the creature on a
-plate of its own, what it is doing now, and then a table of the facts that are
-read constantly — the model, whether it has a browser, whether it has a
-computer. It was a row of four things beside a 44-pixel portrait, which is a
-contact card. Two of those facts were only ever legible by opening a screen:
-"off" is the answer half the time, and it is an answer a reader wants without
-waiting for a panel to connect to a machine to find out.
+plate of its own, what it is doing now, and then a table of the one fact that
+is read constantly: the model. It was a row of four things beside a 44-pixel
+portrait, which is a contact card. The browser and the computer were rows of
+that table too, and they were the same two things the screens below already
+say. A place is granted, watched and taken back, so it lives where its switch
+is, under Now, and the table keeps only what has no control at all. The skills
+the agent can read are listed under the table, which is where the Skills tab
+lands.
 
 The table is short on purpose. Ledger's mockup also counts the working notes
 there, and this app has no count to give it without a second IPC read of a list
@@ -346,19 +354,17 @@ a day, and a per-agent spend is not a number this app has.
 
 The line under the name is `runsOn` in `lib/profile.ts`, which resolves the
 model the way a turn does, agent over group over app, and draws an inherited one
-a shade lighter. That shade is the point: down a rail of agents, which ones
+a shade lighter. That shade is the point: across a group of agents, which ones
 answered for themselves is otherwise a dialog each. It reads the subscription
 field under a ChatGPT group and the key's under an endpoint, never the other,
 because the two providers share no model names and a slug kept for one drawn
 under the other is a lie about what is running. A Claude subscription chooses
 nothing and is named rather than given a model.
 
-The name in the profile is not a heading. The channel beside it already heads
-the page with the same name and the aside is labeled with it, so a second
-heading was the same agent announced twice to a screen reader and found twice
-by anything that looks a heading up by name. On a phone the profile is the head
-of the Details pane, and carries the Actions menu the channel's header cannot
-show there.
+The name in the profile is not a heading. The page's header above the tabs
+already heads the page with the same name and the aside is labeled with it, so
+a second heading was the same agent announced twice to a screen reader and
+found twice by anything that looks a heading up by name.
 
 Every section under it is one shape, `.detail`: a title, at most one control
 beside it, and one line when it is empty. The title is set as a ledger labels a
@@ -387,10 +393,9 @@ way down the profile dialog, behind a right click. That put the one thing about
 an agent that changes on its own behind a modal opened to change the things that
 do not: the name, the look, the instructions. Memory is the opposite shape. It
 is read constantly, written rarely by hand, and rewritten by the agent itself in
-the middle of a turn. So it moved to the panel beside the transcript, and it is
-first in it, because it is the only section there that every agent has something
-in: a screen is usually an offer rather than a picture, and a new agent keeps no
-routines.
+the middle of a turn. So it moved to the agent's page, where the Memory tab lands
+on it with the working notes above it: the two halves of what an agent carries
+between conversations, read against each other.
 
 The stored page is shown as text, with Edit opening the textarea. The textarea
 shows the markdown characters the agent will actually be shown. Save and Cancel
@@ -453,8 +458,8 @@ Four stores, each answering one question: memory is what an agent needs every
 turn, working notes are where its work stands, the notebook is anything longer
 it wants to come back to, and a skill is how its group does something. Nothing
 in a notebook expires, because unlike a working note it is something the agent
-chose to keep; the tool says what a stale file costs. The operator reads it in
-the inspector and may delete a file, and nothing else, for the reason working
+chose to keep; the tool says what a stale file costs. The operator reads it
+under the Notebook tab and may delete a file, and nothing else, for the reason working
 notes are read-only there. A path is plain names inside the agent's own folder,
 checked for links on the way, and the folder goes when the agent is purged.
 
@@ -540,10 +545,10 @@ that never asks.
 
 **The panel draws the newest four and keeps the rest behind a button.** Its
 bound and the store's answer different questions: sixteen is what an agent may
-carry, four is what one section of a shared column can show. A note wraps to
-three lines in a sidebar that narrow, so a full list is a screen of text with
-the schedule and the memory below it, and the operator scrolls past what the
-agent is doing now to reach anything else. The newest are what stay, because
+carry, four is what one section of a shared page can show. A note can wrap to
+three lines, so a full list is a screen of text between the schedule and the
+memory, and the operator scrolls past what the agent is doing now to reach
+anything else. The newest are what stay, because
 the list reads oldest first and the tail is where the work got to; the button
 carries the count of what it hides, since a list of six and a list of sixteen
 are otherwise the same closed section.
@@ -566,8 +571,8 @@ thought it was in the middle of, and every one of them is about the
 conversation that just went. Left behind, a reset group's first act is to chase
 work whose record it no longer has. `clear_group` takes both, reports each
 separately, and the panels are sent back to read again on `ChannelsCleared`:
-neither refreshes on its own, so the inspector would otherwise draw a memory
-and a list of notes beside the empty channel that says they are gone.
+neither refreshes on its own, so the agent's page would otherwise draw a memory
+and a list of notes under a conversation that says they are gone.
 
 **The tool is `update_memory`, and `update_notes` still parses.** `notes` meant
 memory everywhere the code named it for a year, which is exactly the ambiguity a
@@ -1062,7 +1067,7 @@ not change the recipient.
 
 The permanent row names the model that will answer and says that `@` names an
 agent. Its shortcut comes from `FIND_KEY` in `lib/keybinds.ts`, shared with the
-rail's search field.
+field's search row and the Groups sheet's search button.
 
 What it names is `runsOn(agent, group, settings)`: the model a turn will
 actually resolve, this agent's own over its group's over the app's, and "Claude
@@ -1070,9 +1075,174 @@ subscription" where a plan is what answers. A row that showed the app's default
 would be a line about settings where the operator is being told who is going to
 answer.
 
-## The rail is an index, and its footer is the back matter
+## The window is a timeline over one column
 
-The column lists each agent with a small colored creature, a name, and its
+The window is four rows: the top bar, the timeline, one column, and the status
+bar. There is no list of agents down the left edge and no panel beside the
+conversation. Both left the window when the timeline arrived: it says who did
+what and when, which is what the list was mostly read for, and two lists of the
+same agents side by side say it twice. What the list also did, arranging, is in
+the Groups sheet.
+
+The top bar is `TopBar.tsx`. On the left it says where the operator is: the
+day, on Today, or a Today button back to it while an agent is open. On the right
+is a nav of four buttons: Search, the people button, the New menu and Settings.
+The people button opens the Groups sheet and is named "Groups and agents", or
+"Agents" while there is one group, because a sheet with one group in it is a
+list of agents.
+
+The column under the timeline is Today while nobody is open and an agent's page
+while someone is. The status bar closes the window.
+
+**The window opens on Today, and opens nobody.** `bootstrap` reads the
+workspace and selects no agent: whoever needs the operator is drawn first on
+Today, and every agent is one press away on the timeline. Opening someone the
+operator did not name would put a history on screen as a side effect of starting
+the app. For the same reason, when the open agent is deleted `refreshAgents`
+puts the window back on Today rather than on a dead page or on somebody else.
+
+## The timeline puts each agent at a moment of today
+
+`lib/ribbon.ts` lays it out, `Ribbon.tsx` draws it, and `Timeline.tsx` hands it
+the store and the two reads only it needs: every agent's upcoming runs, in one
+call to `upcoming_runs`, and the calendar, both through the end of next week. To
+assistive technology it is a nav named "Agents" holding a list named "Today's
+timeline".
+
+Each agent is one face, placed by the first of these that holds:
+
+1. It has a request waiting on the operator. The face sits at the oldest one and
+   carries an alert mark.
+2. It is working. The face sits at now.
+3. It finished a run nobody has seen. The face sits at that run's end, marked
+   finished or failed.
+4. It did anything today. The face sits at the last of it, unmarked.
+
+An agent none of those hold for goes to a pile at the left edge, labeled "N
+asleep", and the pile opens the Groups sheet. Faces that would overlap are
+spread as one cluster centered on where they wanted to be, because pushing each
+one right of the last would drag a crowd past the moment it belongs to.
+
+A band labeled "Since you last looked" runs from the latest `seenAt` of any
+finished run to now, and is drawn only while something is unseen; with nothing
+ever seen it starts where the oldest unseen run began. A now line carries the
+clock. Right of it are the rest of today and a narrow column for each coming
+day through Sunday, at most four, and on a Sunday the four after it. Upcoming
+routine runs sit there with their owner's face, and calendar dates with a
+calendar glyph. A pending request that will lapse puts a point at its lapse
+time: "Dara stops waiting".
+
+The scale is bent rather than linear. The stretch before the last hour or so is
+compressed, the hours either side of now are wide, the rest of today is narrow,
+and a day column spends its width on 6 AM to 9 PM. A linear day would spend most
+of the strip on hours where nothing happened. The layout takes `now` as input and
+keeps no clock, so `ribbon.test.ts` can stand at 9:12 on a Monday.
+
+**Each face is a button named with the agent, its state and its time:** "Dara,
+needs you, asked 9:05 AM", "Dara, working now", "Dara, finished 2:56 AM", "Dara,
+last active 11:40 AM". The faces and the pile are one stop on the Tab key, and
+the arrow keys, Home and End move along the list, so a dozen agents are not a
+dozen stops on the way to the field. Pressing a face opens that agent's page.
+
+A read of upcoming runs or of the calendar that fails leaves the timeline
+drawing what it has, with a warning in the console. It is a picture of the day,
+and a picture with one row missing is better than a banner over it.
+
+## The field writes to someone and leaves you where you are
+
+`Field.tsx` is the first thing in Today's column, and `lib/field.ts` decides
+what it does with what was typed before anything is sent. Command K focuses it.
+On an agent's page the same key switches to Conversation and focuses that
+composer instead, because both are the box that writes to someone from where
+the operator is.
+
+It is a field rather than a composer. It sends one message and stays where it
+is, which is the whole of the most common errand: tell someone something, then
+leave. A line under it says who it went to, with a button that opens the
+conversation. A draft, a file or a thread is a conversation, and the
+conversation is one press away with the composer it needs.
+
+**Who it writes to** before the operator picks is whoever was talked to last in
+the group the Groups sheet is inside, else whoever was talked to last at all,
+else the first agent, and never a deleted one. The picker lists agents under
+their group names, with a heading only when more than one group has members,
+and its last row, "Groups and agents", opens the sheet.
+
+**Tab answers the question that is waiting.** From an empty field, Tab turns the
+field into an answer to the oldest pending question, says whose and what in its
+placeholder, and Escape turns it back. A permission is never answered here: it
+takes a verdict rather than words, and a field that turned a typed sentence
+into Allow would be granting by accident.
+
+**`@` addresses one agent.** `@Name` at the very start, followed by a space,
+sends to that agent instead of the picked one, for that message. The longest
+name wins, so "@Ines Marie" is not read as Ines when both exist. An `@` anywhere
+else is a mention the message carries, which is the composer's business and the
+runtime's.
+
+**With text in it, the field offers to search for it.** A row under it reads
+"Search for" and the text, with the search key beside it, and hands the text to
+search. The field does not search as it is typed into: a sentence meant for an
+agent is not a query, and the row is there for the times it was one.
+
+## Today is what needs you, then what finished
+
+`Home.tsx` is the column while nobody is open, in the order a person opens the
+window for:
+
+1. The field.
+2. What needs the operator: requests waiting and agents that cannot go on, the
+   same desk For you draws, answered where they are drawn.
+3. Filed decisions that are due, three as cards and the rest as a count, each
+   answered in For you.
+4. What finished while they were away, with its count and Mark all seen. A row
+   opens the run's closing note, or the agent's conversation, and marks it
+   seen.
+
+With none of those it is one sentence, "Nothing needs you.", with who is still
+working under it and one way back into what already happened today. That is
+the screen seen most, and it is the one that has to be calm.
+
+## An agent's page is tabs, and opens where the agent is
+
+`ChannelView.tsx` heads the page with the agent, then a nav of tabs: Now,
+Conversation, Memory, Notebook, Routines and Skills. Conversation is the
+transcript and the composer. Every other tab draws the details page,
+`AgentPanel.tsx`, scrolled to its section: the profile at the head, the screens
+for Now, the routines, the working notes with the memory, and the notebook last.
+One page rather than a page per tab, because its order is its design, and a tab
+per section would leave each one a page with one thing on it.
+
+The transcript is hidden rather than unmounted while another tab is drawn, so
+the composer keeps its draft and the transcript its place.
+
+**Opening lands on Now when the agent is working, and on Conversation
+otherwise.** Somebody mid-turn is best read by what they are doing; somebody
+idle, by what was said. A message opened from search is always in the
+conversation, because the message is what was asked for.
+
+## The Groups sheet is where groups are switched and managed
+
+`GroupsSheet.tsx` slides in from the left edge of the window, full height, and
+holds the list that used to stand there, `Sidebar.tsx`, unchanged: every group
+and the agents in it, their order, pins, moving an agent between groups, each
+group's settings, the groups' column for going inside one, search, the plus for
+making something, and a foot of places. Opening an agent from it closes it.
+Escape or a press outside closes it too.
+
+Three things open it: the people button in the top bar, the "asleep" pile on
+the timeline, and the last row of the field's picker. Group names are read in
+two places now, here and in that picker, which sets each group's name over its
+agents so the group an agent belongs to is said where the agent is chosen. The timeline draws agents
+by when they did something, not by whose they are.
+
+The code still calls the sheet's list the rail (`.rail`, `lib/rail.ts`) and its
+column of groups the groups' column (`GroupRail.tsx`, `.grail`). The sections
+below use the same words, and what they say about the rail is about the sheet.
+
+## The sheet's list is an index, and its foot is the back matter
+
+The list shows each agent with a small colored creature, a name, and its
 activity. The selected row has a filled lane and a left marker, so selection
 does not depend on color alone. That marker uses the system color, not the
 attention color reserved for requests that need the operator. Group names are
@@ -1090,11 +1260,11 @@ the decision is already counted in For you. Opening the channel, or the line in
 For you, is what clears it. `lib/doing.ts` holds the order, for the rail and for
 the panel under the menu bar icon alike.
 
-The four places at the bottom are back matter: one line each, the name at the
-left and whatever the app can say about it at the right — For you's count,
-today's weekday, and nothing for Artifacts or Settings, which have no count to
-give. It was a row of four icon-and-word columns, 40 pixels of the column spent
-on four marks that each said what their word already said.
+The places at the bottom of the sheet are back matter: one line each, the name
+at the left and whatever the app can say about it at the right: For you's
+count, today's weekday, and nothing for Artifacts or Settings, which have no
+count to give. It was a row of four icon-and-word columns, 40 pixels of the
+column spent on four marks that each said what their word already said.
 
 ## The rail is arranged by hand, and lends the top of a section out
 
@@ -1211,8 +1381,8 @@ portrait and six on a ring, and the tag under the pointer says it in words. A
 number in the rail as well was a fourth thing on a line that could not hold
 three.
 
-The circles live in a column of their own on the far left, and that column is
-the second change here. They were a strip inside the rail: a wrapping row of
+The circles live in a column of their own at the sheet's left edge, and that
+column is the second change here. They were a strip inside the rail: a wrapping row of
 circles that fit four across, went to a second line at five and a third at nine.
 It did not overflow and it did not scroll. It ate the rail's own height, so a
 workspace with a dozen groups spent the top third of its agent list on the
@@ -1221,16 +1391,16 @@ is the one there is room on, and the groups that do not fit scroll instead of
 folding.
 
 Two things follow from the column that the strip could not buy. The groups are
-reachable wherever the operator is, including while the rail is inside one of
+reachable wherever the sheet is, including while the rail is inside one of
 them, which is what lets a circle carry a permanent statement about the groups
 nobody is looking at. And "which group am I in" stops being something the rail has
 to answer, because the answer is a lit circle in a fixed place.
 
 **The column does not stand open, and that is the third change.** Standing open
-it charged every window four rem of its width for a choice most operators make a
+it charged the sheet four rem of its width for a choice most operators make a
 few times a day, in front of the rail that is read constantly. So what is left in
-the layout is a band of its own ground at the edge of the window — enough to say
-there is something here, not enough to be a column — and the column slides out
+the layout is a band of its own ground at the sheet's left edge (enough to say
+there is something here, not enough to be a column) and the column slides out
 over the rail when the pointer comes at it. Over rather than beside: nothing
 reflows, the rail keeps its measure, and the gesture is the one somebody heading
 for the left edge of the window is already making.
@@ -1415,9 +1585,11 @@ choice of one is a drop target that cannot move anybody anywhere, and with one
 group the rail *is* that group: every row of it is already on screen saying what
 the badge would.
 
-The group being looked inside is in the store rather than in the sidebar, because
+The group being looked inside is in the store rather than in the sheet, because
 it and the open channel have to agree, and both are in the store. One invariant
-holds them together: the rail draws the row of whatever the pane is showing. A
+holds them together: the sheet, whenever it is opened, draws the row of whatever
+the page behind it is showing. The same group is where the field's default
+recipient comes from. A
 search hit can land on an agent in another group, and `select` repairs that by
 following the agent into its group. It used to drop out
 to the overview instead, which was the only honest answer while the groups were a
@@ -1624,14 +1796,15 @@ under Tailwind's line height, plus its padding, for a word nobody reads after
 the second day.
 
 So the row is gone, and the corner is the icon. The two creatures from the
-app's icon stand in the strip beside the window's own buttons, which was empty,
-with the plus at the other end of it, and the group starts 45 pixels higher. On
-a Mac window the strip is inset by `--space-lights`, in pixels because the
-buttons are the operating system's and do not scale with the interface; nothing
-else draws buttons over the page, so nothing else is inset.
+app's icon stand in the strip at the head of the Groups sheet, with the plus at
+the other end of it, and the group starts 45 pixels higher. On a Mac window the
+strip is inset by `--space-lights`, in pixels because the buttons are the
+operating system's and do not scale with the interface. The top bar is inset
+the same way, and for the same buttons; nothing else is.
 
-The name is on screen for the first few seconds after the app opens and while
-the pointer is on the corner. On launch the pair arrive one at a time, look at
+The name is on screen for the first few seconds after the corner is drawn and
+while the pointer is on it. The corner is mounted with the sheet, so the
+performance starts when the sheet opens, not when the app does. On launch the pair arrive one at a time, look at
 each other, one throws something and the other catches it, the name writes in
 beside them and both turn to the operator; at `HOLD` the name folds back into
 them. That is four seconds of the product doing what it is for, which is the
@@ -1716,7 +1889,7 @@ every run. A reader finds a chunk by its type rather than by where it stands, so
 sorting costs nothing and leaves an artifact that only changes when the drawing
 does.
 
-## Making something is one plus, at the top of the rail
+## Making something is one plus, in the top bar
 
 The rail's footer used to carry four rows: the cafeteria, a new agent, a new
 group, and settings. Two of those are places you go and two are things you make,
@@ -1724,51 +1897,57 @@ and the two kinds sat together because the footer was where there was room. It
 also grew by a row every time something new became makeable, which is a footer
 that gets worse as the app gets better.
 
-Now there is one plus, in the title strip at the top of the rail beside the
-icon's pair, and it lists what can be made. The cafeteria is on it too, though
+Now there is one plus, `NewMenu`, and it lists what can be made. It is in the
+top bar between the people button and Settings, and the same menu heads the
+Groups sheet beside the icon's pair. The cafeteria is on it too, though
 it spent a while in the footer as a place: nothing is ever left in it, and an
 operator goes in to come out with agents, so what it is for is making them.
 
 It spent a release at the end of the channel header instead, on the argument
 that the rail is a list of agents and making one is about none of them. That is
-the wrong half of the argument, and the report that ended it came from the
-person who wrote it: an agent is a row in the rail and a group is a heading in
-it, so the rail is where somebody looks to add one, and a plus glyph at the far
-right of the reading column, beside the agent's own actions menu, is not
-somewhere anybody looks at all. The channel header was also the one place the
-plus could not be drawn on an empty workspace, because there is no channel open
-to hang a header on, and that is the state where making an agent is the only
-thing left to do.
+the wrong half of the argument: an agent is a row in a list and a group is a
+heading in it, so the list is where somebody looks to add one, and a plus glyph
+at the far right of the reading column, beside the agent's own actions menu, is
+not somewhere anybody looks at all. The channel header was also the one place
+the plus could not be drawn on an empty workspace, because there is no channel
+open to hang a header on, and that is the state where making an agent is the
+only thing left to do. The top bar is drawn whatever is open, including
+nothing.
 
 It is the shared menu, so it closes on Escape, on a click that lands away from
 it, and on anything that moves the button underneath it. The listeners are bound
 by name rather than as inline arrows, which is not a style point: `removeEventListener`
 matches by reference, so two arrows leave a listener behind on every open.
 
-## The footer is the places, in one row
+## The places are at the end of the status bar, and at the foot of the sheet
 
-Calendar, Artifacts and Settings: the three things in the app an operator goes
-to rather than makes, and which no row in the rail already reaches. Each is a
-mark over its name, in equal shares of one row, the way a tab bar is drawn.
+Artifacts, Calendar and For you: the things in the app an operator goes to
+rather than makes, and which no agent on the timeline already reaches. They are
+the last group on the status bar, a nav named "Places", because the timeline
+above draws who and this end of the window says where. For you carries its
+count, `forYouCount` in `lib/store.ts`, which the sheet's foot reads too, so the
+two never disagree about it. A place one of the operator's quick actions
+already opens is drawn once, as that action, rather than as two buttons with one
+name.
 
-It was a stack of links, one row each, and it grew the way the plus's argument
-said it would: the cafeteria and settings, then the calendar, then artifacts,
-until the footer took a fifth of the column's height from the agents it sits
-under. A row is the unit that let it, because a row costs nothing to add and
-the column pays for it. A cell in a row of three is shared width, so a fourth
-place has to be argued for against the other three rather than slipped in
-under them.
+The Groups sheet keeps its own foot of four: For you with the same count,
+Calendar with today's weekday, Artifacts, and Settings. It was a stack of links,
+one row each, and it grew the way the plus's argument said it would: the
+cafeteria and settings, then the calendar, then artifacts, until the footer
+took a fifth of the column's height from the agents it sits under. A row is the
+unit that let it, because a row costs nothing to add and the column pays for
+it. A cell in a row is shared width, so another place has to be argued for
+against the ones already there rather than slipped in under them.
 
-The calendar's mark carries today's date. It is the one thing any of the three
-can say before it is opened, and it is what makes a box with two rings on top
-read as a calendar at twenty pixels. The other two say nothing: neither has a
-state the operator needs before opening it, and a number in the rail is a claim
-on attention that has to earn it like any other interruption.
+The weekday is the one thing the calendar can say before it is opened.
+Artifacts and Settings say nothing: neither has a state the operator needs
+before opening it, and a number in a list is a claim on attention that has to
+earn it like any other interruption.
 
 Settings is last, and named *App settings* to anything that reads the label
-rather than the position, because a group's own settings are a gear at the top of
-the same column. A phone hides it, since the phone has a Settings tab of its
-own, and the other two split the row between them.
+rather than the position, because a group's own settings are a gear at the top
+of the same column. A phone hides it there, since the top bar's Settings is
+always on screen.
 
 ## A first task comes before a first group
 
@@ -1952,7 +2131,7 @@ sweep should never wait behind. Swept once before the first wait, so an app left
 closed for a month empties on the next launch rather than an hour into it.
 
 Compost is a pane in app settings. It is available even when empty and stays
-out of the navigation rail. Each deleted agent has a countdown and controls to
+out of the timeline and the Groups sheet. Each deleted agent has a countdown and controls to
 restore it or delete it permanently. The pane says once what is still held:
 memory, working notes, schedule and sign-ins. An empty list says there are no
 deleted agents. Restoring selects the agent's channel and keeps settings open,
@@ -2035,7 +2214,7 @@ commitment nobody asked to double.
 
 The workspace is held in two places, so it is matched in two: messages, files,
 links and routines are in SQLite and are matched there, while agents and groups
-are already in the webview's store to draw the rail and actions are not stored
+are already in the webview's store to draw the timeline and actions are not stored
 anywhere at all. Reading the transcript into the renderer to search it would
 copy the database across IPC on every keystroke; going to IPC for two agent
 names would make the commonest search the slow one. What must not be split is
@@ -2214,6 +2393,8 @@ The last row of the reading column names the host this window shows, marks it
 when its build and this window's are not one build, holds the pages pinned to
 it, and the operator's quick actions. Both are settings on the host, so every
 window draws the same bar and a change reaches them through `settingsChanged`.
+The places end it: *The places are at the end of the status bar, and at the
+foot of the sheet*.
 
 **The host's name is the status, and its version is a click away.** The item
 read `Host 0.2.0`, which is the least useful half of what it knows: a version
@@ -2357,23 +2538,28 @@ it early.
 
 ## The workspace follows the selected surface
 
-Signal uses a cool, layered workspace with a distinct navigation rail and a
-raised composer. The same layout is used by every preset. The light and dark
+Every preset draws the same window: the top bar, the timeline, one column and
+the status bar, with a raised composer. The light and dark
 surfaces are solved independently, and Match system follows the operating
 system as its appearance changes. `data-surface` is always `light` or `dark`;
 the system preference is resolved before it reaches the document.
 
 The machine viewer keeps its own dark surroundings so its chrome does not
 compete with the screen it shows. Interface scale changes the root font size;
-the rail and inspector are capped against the viewport so they cannot consume
-the reading column in a small window. Both scale and surface are operator
+the Groups sheet's two columns are capped against the viewport (`--rail-w` and
+`--grail-w`) so they cannot cover a small window. Both scale and surface are operator
 preferences in `localStorage`, not runtime settings.
 
 ## A theme is four choices, and every color in it is solved
 
-Appearance offers Signal, Field, Violet and Paper presets. Signal is the
-default. A preset chooses the palette and reading face; it does not change the
-layout. Each has a light and a dark surface, and Match system is the default.
+Appearance offers Signal, Field, Violet and Paper presets. The default is
+neutral grays at a plain temperature, with amber attention and the interface
+reading face, which are the same choices as Violet. Signal is the blue-gray
+look that used to be the default. A look saved before the default changed, by a
+build that wrote no mark, is moved from Signal's grays and temperature to the
+new default once on load (`LOOK` in `lib/prefs.ts`); every save writes the
+mark, so a Signal chosen afterward stays. A preset chooses the palette and
+reading face; it does not change the layout. Each has a light and a dark surface, and Match system is the default.
 The choice stays in local preferences and never reaches the runtime.
 Signal uses cool blue-gray and blue actions, Field uses mineral greens and teal,
 Violet uses neutral grounds and violet actions, and Paper retains the warmer
@@ -2461,8 +2647,8 @@ outbox, and docs/ATTENTION.md has the table it decides from.
 - **Something that needs the operator**, a parked permission request, a
   question, an agent that cannot go on, or decisions due for review, reaches
   them as it happens, unless the window with focus already shows that agent's
-  channel. Nobody finds a parked turn by noticing a row change color three
-  screens up the rail.
+  channel. Nobody finds a parked turn by noticing a face change on the
+  timeline.
 - **A run that failed**, or that a restart cut off, is the same: it interrupts
   unless its channel is the one on screen.
 - **A run that finished** interrupts only an operator who is away, and not one
@@ -2669,9 +2855,11 @@ keys are handled by the component that owns the surface they act on — Escape b
 whatever is open, Enter and the arrows by the composer and the palette — so
 rebinding would mean routing all nine through one dispatcher, and a setting that
 appears to rebind a key while only moving one of them is worse than no setting.
-The fixed ones are listed as fixed, and the three that are genuinely global are
+The fixed ones are listed as fixed, and the four listed under *Anywhere* are
 matched from the same table the pane draws, so a key listed there is a key that
-works.
+works: Command K focuses the field (or the open conversation's composer),
+Command F opens search, Command comma opens settings, and Command slash opens
+the list itself.
 
 `mod` means Command or Control on every platform, both accepted. Only the label
 follows the platform: a label naming a key the keyboard does not have is worse
@@ -2692,27 +2880,24 @@ the run settles. Not read from what `sendMessage` returned, which only knows
 about conversations the operator started — a routine's work and a peer's request
 are exactly as worth stopping.
 
-## A phone shows one pane at a time
+## A phone gets the same single column
 
-Below 48rem, and on touch-only devices in either orientation, the workspace
-shows one pane at a time. A bottom bar keeps Chats, For you (with its attention
-count), Search and Settings within thumb reach. Chats opens the group and agent
-list; a conversation has a back button, its group name and a Details button.
-Details has its own back button and an Actions menu. The rail and inspector
-no longer take width from the conversation. Hidden panes stay mounted: changing views must not discard a
-draft, move the transcript or reconnect the event stream. Selecting an agent,
-including the one already selected, returns to Chat. A routine opened from the
-transcript reveals Details.
+Below 48rem, and on touch-only devices in either orientation, the window is the
+same window: the top bar, the timeline, one column and the status bar, at touch
+sizes. There is no bottom tab bar and no set of panes to switch between, because
+the window stopped having more than one column to fit. Today, an agent's page
+and its tabs, the field and the Groups sheet are the ones a desktop draws.
 
-Groups are selected by name on a phone. The desktop's proximity column is hidden,
-and a touch scrolling the agent list never starts a reorder. Settings uses a
-labeled section picker above its pane, and Search has a visible Cancel button; dialogs fit the viewport, controls have
-touch-sized targets and inputs stay large enough to avoid Safari's focus zoom.
-The visual viewport sizes the workspace while the keyboard is up and follows
-Safari's pan. Pinch zoom does not resize that layout.
+Groups are chosen by name on a phone: the Groups sheet draws a labeled select
+above the list, and a touch scrolling the agent list never starts a reorder.
+Settings uses a labeled section picker above its pane, and Search has a visible
+Cancel button; dialogs fit the viewport, controls have touch-sized targets and
+inputs stay large enough to avoid Safari's focus zoom. The visual viewport
+sizes the workspace while the keyboard is up and follows Safari's pan. Pinch
+zoom does not resize that layout.
 
-`scripts/hosting-browser.mjs` checks actual touch hit targets, phone widths,
-draft preservation, constrained viewport height, dialogs and the wide layout
-against a scratch daemon. Set `GUACA_BROWSER_SHOTS` to retain screenshots for
-visual review. The viewport event suite covers keyboard resize, pan and zoom
-without depending on a particular device keyboard.
+`scripts/hosting-browser.mjs` checks touch hit targets, phone widths, draft
+preservation, constrained viewport height, dialogs and the wide layout against
+a scratch daemon. Set `GUACA_BROWSER_SHOTS` to retain screenshots for visual
+review. The viewport event suite covers keyboard resize, pan and zoom without
+depending on a particular device keyboard.

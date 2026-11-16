@@ -2,12 +2,13 @@
 
 Guaca runs unattended. A choice found during an email check must still be
 answerable when the operator returns, without keeping the agent's turn alive.
-`decision` records that choice in SQLite. **For you** is its permanent destination
-in the rail, shared by every group.
+`decision` records that choice in SQLite. **For you** is its permanent destination,
+at the end of the status bar and at the foot of the Groups sheet, shared by
+every group.
 
 ## Three tiers over one queue
 
-The rail's **For you** entry counts unanswered decisions, interrupted
+The **For you** entry counts unanswered decisions, interrupted
 follow-through, live approval requests and operational blockers. Snoozing a
 decision does not remove it from the count. Opening the entry shows three views:
 
@@ -49,7 +50,7 @@ open stays. Runs seen in the last seven days stay one click away under
 **Earlier**. A recurring check that found nothing is not listed anywhere.
 
 Finished is read when there is time, so it never competes with what needs an
-answer. It is not in For you's count, on the rail's For you entry or on the menu
+answer. It is not in For you's count, on either For you entry or on the menu
 bar icon, nothing in it uses the attention color, and the sentence under the
 title names it only when nothing needs the operator. When it is the only thing
 there it is the first thing For you shows, which is where a banner gathering
