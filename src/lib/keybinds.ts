@@ -58,13 +58,22 @@ export const IS_MAC = /mac/i.test(navigator.platform || navigator.userAgent);
  * the composer's hint row are the same claim about the same binding, and two
  * copies of it is one of them going stale.
  */
-export const FIND_KEY = IS_MAC ? "⌘K" : "Ctrl K";
+export const FIND_KEY = IS_MAC ? "⌘F" : "Ctrl F";
+
+/** How this machine writes the shortcut to the field, for the field itself. */
+export const FIELD_KEY = IS_MAC ? "⌘K" : "Ctrl K";
 
 export const BINDINGS: Binding[] = [
   {
+    id: "field",
+    what: "Write to an agent, or answer the one waiting",
+    combo: { key: "k", mod: true },
+    where: "Anywhere",
+  },
+  {
     id: "search",
     what: "Search agents, messages and actions",
-    combo: { key: "k", mod: true },
+    combo: { key: "f", mod: true },
     where: "Anywhere",
   },
   { id: "settings", what: "Open settings", combo: { key: ",", mod: true }, where: "Anywhere" },

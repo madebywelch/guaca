@@ -131,11 +131,13 @@ describe("which binding a keystroke is", () => {
     expect(bindingFor(press("/"))).toBeUndefined();
   });
 
-  it("answers with the three that work wherever the operator is", () => {
-    expect(bindingFor(press("k", { metaKey: true }))?.id).toBe("search");
+  it("answers with the four that work wherever the operator is", () => {
+    expect(bindingFor(press("k", { metaKey: true }))?.id).toBe("field");
+    expect(bindingFor(press("f", { metaKey: true }))?.id).toBe("search");
     expect(bindingFor(press(",", { metaKey: true }))?.id).toBe("settings");
     expect(bindingFor(press("/", { metaKey: true }))?.id).toBe("shortcuts");
-    expect(bindingFor(press("k", { ctrlKey: true }))?.id).toBe("search");
+    expect(bindingFor(press("k", { ctrlKey: true }))?.id).toBe("field");
+    expect(bindingFor(press("f", { ctrlKey: true }))?.id).toBe("search");
     expect(bindingFor(press(",", { ctrlKey: true }))?.id).toBe("settings");
     expect(bindingFor(press("/", { ctrlKey: true }))?.id).toBe("shortcuts");
   });
@@ -148,7 +150,8 @@ describe("which binding a keystroke is", () => {
  * makes them fail instead of agreeing with it.
  */
 const SHORTCUTS: { what: string; key: string; id: string }[] = [
-  { what: "search", key: "k", id: "search" },
+  { what: "field", key: "k", id: "field" },
+  { what: "search", key: "f", id: "search" },
   { what: "settings", key: ",", id: "settings" },
   { what: "shortcuts", key: "/", id: "shortcuts" },
 ];
@@ -259,13 +262,20 @@ describe("a global shortcut with the modifiers it wants", () => {
     // Caps lock or a shifted layout reports "K". These are the dispatched
     // variants the generic matcher tests do not reach, so a lost lowercasing
     // here is a shortcut that works in lower case and silently not in caps.
-    expect(bindingFor(press("K", { ctrlKey: true }))?.id).toBe("search");
-    expect(bindingFor(press("K", { ctrlKey: true, shiftKey: true }))?.id).toBe("search");
-    expect(bindingFor(press("K", { metaKey: true, ctrlKey: true }))?.id).toBe("search");
+    expect(bindingFor(press("K", { ctrlKey: true }))?.id).toBe("field");
+    expect(bindingFor(press("K", { ctrlKey: true, shiftKey: true }))?.id).toBe("field");
+    expect(bindingFor(press("K", { metaKey: true, ctrlKey: true }))?.id).toBe("field");
     expect(bindingFor(press("K", { metaKey: true, ctrlKey: true, shiftKey: true }))?.id).toBe(
-      "search",
+      "field",
     );
     expect(bindingFor(press("K", { shiftKey: true }))).toBeUndefined();
+    expect(bindingFor(press("F", { ctrlKey: true }))?.id).toBe("search");
+    expect(bindingFor(press("F", { ctrlKey: true, shiftKey: true }))?.id).toBe("search");
+    expect(bindingFor(press("F", { metaKey: true, ctrlKey: true }))?.id).toBe("search");
+    expect(bindingFor(press("F", { metaKey: true, ctrlKey: true, shiftKey: true }))?.id).toBe(
+      "search",
+    );
+    expect(bindingFor(press("F", { shiftKey: true }))).toBeUndefined();
   });
 });
 
@@ -298,11 +308,11 @@ describe("the table", () => {
     }
   });
 
-  it("offers the one global handler exactly the three ids it dispatches", () => {
-    // App.tsx switches on these by name. A fourth non-fixed row is a shortcut
+  it("offers the one global handler exactly the four ids it dispatches", () => {
+    // App.tsx switches on these by name. A fifth non-fixed row is a shortcut
     // the panel promises and nothing answers, and it works everywhere or it is
     // not global, so its section has to say so.
-    expect(GLOBAL).toEqual(["search", "settings", "shortcuts"]);
+    expect(GLOBAL).toEqual(["field", "search", "settings", "shortcuts"]);
     for (const id of GLOBAL) {
       expect(row(BINDINGS, id).where).toBe("Anywhere");
     }
@@ -347,9 +357,11 @@ describe("how a shortcut is written down", () => {
 
   it("matches the same keystroke on the platform whose glyphs it does not use", async () => {
     // The glyphs follow the machine and the matching deliberately does not, so
-    // a Control-holding operator on a Mac still gets search.
+    // a Control-holding operator on a Mac still gets the field and search.
     const mac = await loadedOn("MacIntel");
-    expect(mac.bindingFor(press("k", { ctrlKey: true }))?.id).toBe("search");
-    expect(mac.bindingFor(press("k", { metaKey: true }))?.id).toBe("search");
+    expect(mac.bindingFor(press("k", { ctrlKey: true }))?.id).toBe("field");
+    expect(mac.bindingFor(press("k", { metaKey: true }))?.id).toBe("field");
+    expect(mac.bindingFor(press("f", { ctrlKey: true }))?.id).toBe("search");
+    expect(mac.bindingFor(press("f", { metaKey: true }))?.id).toBe("search");
   });
 });

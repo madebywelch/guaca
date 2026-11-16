@@ -94,6 +94,8 @@ vi.mock("./lib/ipc", () => ({
     activityFeed: async () => [],
     agentRoutines: () => agentRoutines(),
     calendar: async () => [],
+    upcomingRuns: async () => [],
+    listOutcomes: async () => [],
     artifacts: async () => [],
     agentComputer: async () => null,
     agentMemory: async () => "",
@@ -110,7 +112,7 @@ vi.mock("./lib/ipc", () => ({
     callback({ type: "liveSnapshot", activity: await agentActivity(), streams: {}, building: {} });
     return () => {};
   }),
-  onRevealRequest: async () => () => {},
+  onRevealRequest: vi.fn(async () => () => {}),
   onFileDrop: async () => () => {},
 }));
 
@@ -145,14 +147,25 @@ function agent(name: string, railOrder = 0): AgentCard {
 }
 
 /**
+ * The Groups sheet, where the rail now lives, opened from the window's people
+ * button when it is not open already.
+ */
+function groupsSheet(): HTMLElement {
+  const open = screen.queryByRole("dialog", { name: "Groups and agents" });
+  if (open) return open;
+  fireEvent.click(screen.getByRole("button", { name: /^(Groups and agents|Agents)$/ }));
+  return screen.getByRole("dialog", { name: "Groups and agents" });
+}
+
+/**
  * The row in the rail, specifically.
  *
- * An agent's name is on its row, on its channel header and in any menu open
- * over it, so a bare text query is ambiguous the moment more than one of those
- * is on screen.
+ * An agent's name is on its row, on its channel header, on its face on the
+ * timeline and in any menu open over it, so a bare text query is ambiguous the
+ * moment more than one of those is on screen.
  */
 function railRow(name: string): HTMLElement {
-  const rail = screen.getByRole("navigation", { name: /agents/i });
+  const rail = within(groupsSheet()).getByRole("navigation", { name: /agents/i });
   const row = [...rail.querySelectorAll(".agent-row__name")].find((n) => n.textContent === name);
   if (!row) throw new Error(`no row for ${name} in the rail`);
   return row as HTMLElement;
@@ -160,7 +173,7 @@ function railRow(name: string): HTMLElement {
 
 /** Every row in the rail, top to bottom. */
 function railNames(): (string | null)[] {
-  const rail = screen.getByRole("navigation", { name: /agents/i });
+  const rail = within(groupsSheet()).getByRole("navigation", { name: /agents/i });
   return [...rail.querySelectorAll(".agent-row__name")].map((n) => n.textContent);
 }
 
@@ -249,12 +262,12 @@ describe("when the host goes away", () => {
 });
 
 describe("App", () => {
-  it("renders the rail", async () => {
+  it("renders the ribbon and reaches every agent through the Groups sheet", async () => {
     render(<App />);
-    // The rail is always present, whether or not there are agents. If this is
+    // The ribbon is always present, whether or not there are agents. If this is
     // missing, the window is blank.
     expect(await screen.findByRole("navigation", { name: /agents/i })).toBeTruthy();
-    expect(screen.getByText("guaca")).toBeTruthy();
+    expect(within(groupsSheet()).getByText("guaca")).toBeTruthy();
   });
 
   it("offers a way in when there are no agents", async () => {
@@ -292,7 +305,7 @@ describe("App", () => {
     const cafeteria = await screen.findByRole("dialog", { name: /cafeteria/i });
     fireEvent.keyDown(window, { key: ",", ctrlKey: true });
     const settings = await screen.findByRole("dialog", { name: /settings/i });
-    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "f", ctrlKey: true });
     const search = await screen.findByRole("dialog", { name: /search/i });
     expect(settings.closest(".scrim")?.nextElementSibling).toBe(search.closest(".scrim"));
     fireEvent.keyDown(window, { key: "Escape" });
@@ -304,7 +317,7 @@ describe("App", () => {
   it("opens settings above search and dismisses it first", async () => {
     render(<App />);
     await screen.findByRole("heading", { name: "What would you like help with?" });
-    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "f", ctrlKey: true });
     const search = await screen.findByRole("dialog", { name: "Search" });
     fireEvent.keyDown(window, { key: ",", ctrlKey: true });
     const settings = await screen.findByRole("dialog", { name: "Settings" });
@@ -353,7 +366,7 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${name}`) }));
     const lower = await screen.findByRole("dialog", { name });
     await waitFor(() => expect(document.activeElement).toBe(lower));
-    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "f", ctrlKey: true });
     const search = await screen.findByRole("dialog", { name: /search/i });
     fireEvent.keyDown(window, { key: "Escape" });
     expect(search.isConnected).toBe(false);
@@ -365,11 +378,11 @@ describe("App", () => {
 
   it.each([
     ["Settings", ","],
-    ["Search", "k"],
+    ["Search", "f"],
   ])("keeps For you open under %s and restores focus", async (upperName, key) => {
     render(<App />);
     await screen.findByRole("heading", { name: "What would you like help with?" });
-    const opener = within(screen.getByRole("navigation", { name: "Agents" })).getByRole("button", {
+    const opener = within(screen.getByRole("navigation", { name: "Places" })).getByRole("button", {
       name: /^For you/,
     });
     opener.focus();
@@ -389,7 +402,7 @@ describe("App", () => {
 
   it.each([
     ["Settings", ","],
-    ["Search", "k"],
+    ["Search", "f"],
   ])("keeps the calendar editor under %s and unwinds each layer", async (upperName, key) => {
     render(<App />);
     await screen.findByRole("heading", { name: "What would you like help with?" });
@@ -419,7 +432,7 @@ describe("App", () => {
 
   it.each([
     ["Settings", ","],
-    ["Search", "k"],
+    ["Search", "f"],
   ])("keeps an agent submenu under %s and unwinds each layer", async (upperName, key) => {
     listAgents.mockResolvedValue([agent("Manager")]);
     listGroups.mockResolvedValue([
@@ -470,9 +483,9 @@ describe("App", () => {
 
   it.each([
     ["New agent", "Settings", ","],
-    ["New agent", "Search", "k"],
+    ["New agent", "Search", "f"],
     ["New group", "Settings", ","],
-    ["New group", "Search", "k"],
+    ["New group", "Search", "f"],
   ])("keeps %s open under %s", async (name, upperName, key) => {
     render(<App />);
     await screen.findByRole("heading", { name: "What would you like help with?" });
@@ -490,12 +503,75 @@ describe("App", () => {
     expect(lower.isConnected).toBe(false);
   });
 
+  it("opens on today rather than on the first agent's channel", async () => {
+    // The window used to open whoever was first in the rail, so the first thing
+    // on screen was one agent's transcript and not what needed the operator.
+    listAgents.mockResolvedValue([agent("Manager"), agent("Chef")]);
+    render(<App />);
+    await waitFor(() => expect(useStore.getState().agents).toHaveLength(2));
+    await act(async () => {});
+    expect(useStore.getState().selected).toBeNull();
+    expect(screen.queryByRole("navigation", { name: "Manager's page" })).toBeNull();
+  });
+
+  it("goes back to today when the open agent is deleted", async () => {
+    listAgents.mockResolvedValue([agent("Manager"), agent("Chef")]);
+    render(<App />);
+    await waitFor(() => expect(railRow("Manager")).toBeTruthy());
+    fireEvent.click(railRow("Manager"));
+    await screen.findByRole("navigation", { name: "Manager's page" });
+    listAgents.mockResolvedValue([agent("Chef")]);
+    await act(() => useStore.getState().refreshAgents());
+    expect(useStore.getState().selected).toBeNull();
+    expect(screen.queryByRole("navigation", { name: "Manager's page" })).toBeNull();
+    expect(screen.queryByRole("navigation", { name: "Chef's page" })).toBeNull();
+  });
+
+  it("lands a notification for an agent on that agent's conversation", async () => {
+    // Nothing is open when the window starts, so a click from outside it is
+    // the whole journey to the agent: it has to open them, on the conversation,
+    // whatever was on screen before.
+    const { onRevealRequest } = await import("./lib/ipc");
+    listAgents.mockResolvedValue([agent("Manager"), agent("Chef")]);
+    render(<App />);
+    await waitFor(() => expect(vi.mocked(onRevealRequest)).toHaveBeenCalled());
+    const reveal = vi.mocked(onRevealRequest).mock.calls.at(-1)![0];
+    await waitFor(() => expect(railRow("Chef")).toBeTruthy());
+    fireEvent.click(railRow("Chef"));
+    const chef = await screen.findByRole("navigation", { name: "Chef's page" });
+    fireEvent.click(within(chef).getByRole("button", { name: "Memory" }));
+
+    await act(async () => reveal({ kind: "agent", id: "id-Manager" }));
+
+    const page = await screen.findByRole("navigation", { name: "Manager's page" });
+    expect(within(page).getByRole("button", { current: "page" }).textContent).toBe("Conversation");
+    expect(screen.getByRole("log", { name: "Conversation with Manager" })).toBeTruthy();
+  });
+
+  it("lands a notification on the conversation even while that agent is working", async () => {
+    // Opening a working agent shows what it is doing. A click on a message
+    // from it is a request to read that message, which is in the conversation.
+    const { onRevealRequest } = await import("./lib/ipc");
+    listAgents.mockResolvedValue([agent("Manager"), agent("Chef")]);
+    agentActivity.mockResolvedValue({ "id-Manager": { state: "thinking" } });
+    render(<App />);
+    await waitFor(() => expect(vi.mocked(onRevealRequest)).toHaveBeenCalled());
+    const reveal = vi.mocked(onRevealRequest).mock.calls.at(-1)![0];
+    await waitFor(() => expect(useStore.getState().activity["id-Manager"]?.state).toBe("thinking"));
+
+    await act(async () => reveal({ kind: "agent", id: "id-Manager" }));
+
+    const page = await screen.findByRole("navigation", { name: "Manager's page" });
+    expect(within(page).getByRole("button", { current: "page" }).textContent).toBe("Conversation");
+  });
+
   it("lists agents and opens a channel", async () => {
     listAgents.mockResolvedValue([agent("Manager"), agent("Chef")]);
     render(<App />);
 
     await waitFor(() => expect(screen.getByText("Manager")).toBeTruthy());
     expect(railRow("Chef")).toBeTruthy();
+    fireEvent.click(railRow("Manager"));
     // A channel header, meaning the pane rendered rather than staying empty.
     await waitFor(() => expect(screen.getByRole("heading", { name: "Manager" })).toBeTruthy());
   });
@@ -508,7 +584,7 @@ describe("App", () => {
     agentLastActive.mockResolvedValue({ "id-Host": 900, "id-Chef": 500 });
     render(<App />);
 
-    await waitFor(() => expect(screen.getByText("Manager")).toBeTruthy());
+    await waitFor(() => expect(railRow("Manager")).toBeTruthy());
     expect(railNames()).toEqual(["Manager", "Chef", "Host"]);
   });
 
@@ -679,7 +755,7 @@ describe("App", () => {
     listAgents.mockResolvedValue([agent("Manager"), { ...agent("Chef"), pinned: true }]);
     render(<App />);
 
-    await waitFor(() => expect(screen.getByText("Chef")).toBeTruthy());
+    await waitFor(() => expect(railRow("Chef")).toBeTruthy());
     expect(screen.queryByText("Pinned")).toBeNull();
     const crew = railRow("Chef").closest(".rail__group");
     expect(crew?.textContent).toContain("Everyone");
@@ -722,7 +798,7 @@ describe("App", () => {
     expect(await screen.findByRole("dialog", { name: /edit agent/i })).toBeTruthy();
   });
 
-  it("shows the open agent's screen and routines beside the transcript", async () => {
+  it("shows the open agent's screen and routines on the agent's page", async () => {
     // Both used to be behind the dialog, which meant a standing commitment and
     // a live desktop were things you had to open a modal to find.
     listAgents.mockResolvedValue([agent("Manager")]);
@@ -741,6 +817,16 @@ describe("App", () => {
       },
     ]);
     render(<App />);
+    await waitFor(() => expect(railRow("Manager")).toBeTruthy());
+    fireEvent.click(railRow("Manager"));
+    fireEvent.click(
+      within(await screen.findByRole("navigation", { name: "Manager's page" })).getByRole(
+        "button",
+        {
+          name: "Routines",
+        },
+      ),
+    );
 
     expect(await screen.findByText("Boss commitment nudge")).toBeTruthy();
     expect(screen.getByText(/Weekdays at 9:28/)).toBeTruthy();
@@ -863,25 +949,27 @@ describe("when the connection to the host is lost", () => {
 });
 
 describe("phone navigation", () => {
-  it("opens the same channel again and preserves its draft across panes", async () => {
+  it("opens the same channel again and preserves its draft across its tabs and Today", async () => {
     listAgents.mockResolvedValue([agent("Ada")]);
     localStorage.setItem("guac.inspector", "closed");
     const { container } = render(<App />);
-    await screen.findByText("Ada");
+    await waitFor(() => expect(railRow("Ada")).toBeTruthy());
     fireEvent.click(railRow("Ada"));
     await screen.findByRole("heading", { name: "Ada" });
-    const pane = () => container.querySelector(".app")?.getAttribute("data-mobile-pane");
+    const page = () => screen.getByRole("navigation", { name: "Ada's page" });
+    const pane = () => within(page()).queryByRole("button", { current: "page" })?.textContent;
     const input = container.querySelector(".composer__input") as HTMLTextAreaElement;
     fireEvent.change(input, { target: { value: "Keep this draft" } });
-    fireEvent.click(screen.getByRole("button", { name: "Details" }));
-    expect(pane()).toBe("details");
-    expect(container.querySelector(".inspector--closed")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Back to conversation" }));
-    expect(pane()).toBe("conversation");
-    fireEvent.click(screen.getByRole("button", { name: "Chats" }));
-    expect(pane()).toBe("agents");
+    fireEvent.click(within(page()).getByRole("button", { name: "Now" }));
+    expect(pane()).toBe("Now");
+    expect(screen.getByRole("complementary", { name: "Ada: details" })).toBeTruthy();
+    fireEvent.click(within(page()).getByRole("button", { name: "Conversation" }));
+    expect(pane()).toBe("Conversation");
+    fireEvent.click(screen.getByRole("button", { name: "Today" }));
+    expect(screen.queryByRole("navigation", { name: "Ada's page" })).toBeNull();
     fireEvent.click(railRow("Ada"));
-    expect(pane()).toBe("conversation");
+    await screen.findByRole("heading", { name: "Ada" });
+    expect(pane()).toBe("Conversation");
     expect((container.querySelector(".composer__input") as HTMLTextAreaElement).value).toBe(
       "Keep this draft",
     );
@@ -891,13 +979,13 @@ describe("phone navigation", () => {
     const other = aGroup({ id: "crew-other", name: "Research" });
     listGroups.mockResolvedValue([aGroup(), other]);
     listAgents.mockResolvedValue([agent("Ada"), { ...agent("Lin"), groupId: other.id }]);
-    const { container } = render(<App />);
-    await screen.findByText("Ada");
-    fireEvent.change(screen.getByRole("combobox", { name: "Group" }), {
+    render(<App />);
+    await waitFor(() => expect(railRow("Ada")).toBeTruthy());
+    fireEvent.change(within(groupsSheet()).getByRole("combobox", { name: "Group" }), {
       target: { value: other.id },
     });
     await waitFor(() => expect(useStore.getState().railGroup).toBe(other.id));
     expect(railNames()).toEqual(["Lin"]);
-    expect(container.querySelector(".app")?.getAttribute("data-mobile-pane")).toBe("agents");
+    expect(screen.getByRole("dialog", { name: "Groups and agents" }).isConnected).toBe(true);
   });
 });

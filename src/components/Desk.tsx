@@ -2,7 +2,7 @@ import { type FormEvent, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { useStore } from "../lib/store";
-import { relativeTime } from "../lib/time";
+import { clockLabel, relativeTime } from "../lib/time";
 import type { AgentCard, AgentId, Approval, Decision, Escalation } from "../lib/types";
 
 /**
@@ -155,7 +155,9 @@ function DeskCard({ request, agent, onDecide, onAnswer, onOpenChannel }: CardPro
           seed={agent?.id ?? request.id}
         />
         <div className="desk__whotext">
-          <p className="desk__asker">{asker}</p>
+          <p className="desk__asker">
+            {asker} <span className="desk__when">asked at {clockLabel(request.createdAt)}</span>
+          </p>
           <p className="desk__summary">{request.summary}</p>
         </div>
       </header>
@@ -226,6 +228,13 @@ function DeskCard({ request, agent, onDecide, onAnswer, onOpenChannel }: CardPro
         >
           Open channel
         </button>
+        {/* The host's time, never a fuse counted here: it owns the window, and
+            a request it already let go must not be drawn as still waiting. */}
+        {request.lapsesAt !== null && (
+          <span className="desk__aside">
+            {asker} waits until {clockLabel(request.lapsesAt)}
+          </span>
+        )}
       </div>
     </article>
   );

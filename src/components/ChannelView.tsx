@@ -25,6 +25,7 @@ import {
   plainText,
   type Settings,
 } from "../lib/types";
+import { AgentPanel, type AgentSection } from "./AgentPanel";
 import { Composer } from "./Composer";
 import { Answering } from "./HtmlArtifact";
 import { Icon } from "./Icon";
@@ -34,12 +35,32 @@ import { TrailRow } from "./Trail";
 import { TurnWork } from "./TurnWork";
 import { PeerBurstRow, RefusedRow, WritingRow } from "./WireRow";
 
+/** The agent page's views: the conversation, or a section of what it has. */
+export type AgentView = "conversation" | AgentSection;
+
+/** The tabs, in the order a person reaches for them. */
+const VIEWS: { view: AgentView; label: string }[] = [
+  { view: "now", label: "Now" },
+  { view: "conversation", label: "Conversation" },
+  { view: "memory", label: "Memory" },
+  { view: "notebook", label: "Notebook" },
+  { view: "routines", label: "Routines" },
+  { view: "skills", label: "Skills" },
+];
+
 interface Props {
   channel: ChannelKey;
   onBack?: () => void;
   onDetails?: () => void;
   /** Where the operator asked for an agent's actions, and on whom. */
   onOpenMenu: (agent: AgentCard, at: { x: number; y: number }) => void;
+  /**
+   * Which view of the agent is drawn. Without it the page is the conversation
+   * alone, which is how a page with no tabs is still a channel.
+   */
+  view?: AgentView;
+  onView?: (view: AgentView) => void;
+  onEditProfile?: (agent: AgentCard) => void;
 }
 
 /** How long a message arrived at from search stays marked. */
@@ -55,7 +76,15 @@ const FLASH_MS = 1800;
  */
 const WAITED_MS = 1000;
 
-export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
+export function ChannelView({
+  channel,
+  onOpenMenu,
+  onBack,
+  onDetails,
+  view = "conversation",
+  onView,
+  onEditProfile,
+}: Props) {
   const lookups = useAgentLookup();
   const messages = useStore((s) => s.messages[channel]);
   const activity = useStore((s) => s.activity);
@@ -231,134 +260,162 @@ export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
         )}
       </header>
 
-      {/* A log rather than a plain box, so a screen reader offers it as the
+      {agent && onView && (
+        <nav className="agent-tabs" aria-label={`${agent.name}'s page`}>
+          {VIEWS.map((tab) => (
+            <button
+              key={tab.view}
+              type="button"
+              className="agent-tabs__tab"
+              aria-current={tab.view === view ? "page" : undefined}
+              onClick={() => onView(tab.view)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+      )}
+
+      {agent && view !== "conversation" && (
+        <div className="pane__scroll">
+          <AgentPanel agent={agent} section={view} onEditProfile={(one) => onEditProfile?.(one)} />
+        </div>
+      )}
+
+      {/* Hidden rather than unmounted while another view is drawn: the
+          transcript keeps its place and the composer its draft, so coming back
+          to the conversation is coming back to where it was left. */}
+      <div className="pane__body" hidden={view !== "conversation"}>
+        {/* A log rather than a plain box, so a screen reader offers it as the
           transcript it is. `aria-live` is off deliberately: the role would
           otherwise announce politely, and opening a channel replaces three
           hundred rows at once, which is the whole history read aloud for the
           crime of clicking a name. What is worth hearing is announced by
           `Arrivals` below, one message at a time, as it lands. */}
-      <div
-        className="pane__scroll"
-        ref={scrollRef}
-        role="log"
-        aria-live="off"
-        aria-label={`Conversation with ${agent?.name ?? "this agent"}`}
-      >
-        {/* Who a page in this transcript may answer. Only here: the operator
+        <div
+          className="pane__scroll"
+          ref={scrollRef}
+          role="log"
+          aria-live="off"
+          aria-label={`Conversation with ${agent?.name ?? "this agent"}`}
+        >
+          {/* Who a page in this transcript may answer. Only here: the operator
               is one of the two participants in a channel, so a value handed
               back has an obvious next message and an obvious recipient. */}
-        <Answering.Provider value={answering}>
-          {messages === undefined ? (
-            <p className="hint" style={{ padding: "1rem 1.15rem" }}>
-              Loading…
-            </p>
-          ) : messages.length === 0 ? (
-            <div className="empty">
-              <p className="empty__body">No messages with {agent?.name ?? "this agent"} yet.</p>
-            </div>
-          ) : (
-            rows.map((row, index) => {
-              const stands = rowStandsFor(row);
-              const number = footnotes[index] ?? 0;
-              return (
-                // Wrapped rather than marked on the entry itself: a row renders
-                // as several different shapes depending on who sent what to
-                // whom, and one of them is several rows.
-                <div
-                  key={row.key}
-                  data-message={stands.join(" ")}
-                  data-found={focused && stands.includes(focused) ? "true" : undefined}
-                  ref={(node) => {
-                    if (!node || row.kind !== "peers") return;
-                    const peers = row.peers.filter((peer) => peer.agentId !== null);
-                    node
-                      .querySelectorAll<HTMLButtonElement>("button.footnote__send")
-                      .forEach((button, i) => {
-                        button.dataset.dismissId = JSON.stringify([
-                          channel,
-                          row.key,
-                          peers[i]?.agentId,
-                        ]);
-                      });
-                  }}
-                  onClickCapture={(event) => {
-                    if (!agent || row.kind !== "peers" || !(event.target instanceof Element))
-                      return;
-                    const button = event.target.closest<HTMLButtonElement>("button.footnote__send");
-                    if (button) rememberDismissOpener(button);
-                  }}
-                >
-                  {row.kind === "peers" ? (
-                    <PeerBurstRow
-                      peers={row.peers}
-                      number={number}
-                      at={row.at}
-                      onOpen={setReading}
-                    />
-                  ) : row.kind === "refused" ? (
-                    <RefusedRow
-                      peer={row.peer}
-                      at={row.at}
-                      number={number}
-                      body={row.body}
-                      reason={row.reason}
-                    />
-                  ) : row.kind === "when" ? (
-                    <WhenRow at={row.at} />
-                  ) : (
-                    // Two participants, one of them named at the top of the
-                    // pane and the other reading this. Nothing here needs
-                    // telling whose words it is looking at.
-                    <MessageItem
-                      message={row.message}
-                      lookups={lookups}
-                      continued={row.continued}
-                      footnote={number || undefined}
-                    />
-                  )}
-                </div>
-              );
-            })
-          )}
+          <Answering.Provider value={answering}>
+            {messages === undefined ? (
+              <p className="hint" style={{ padding: "1rem 1.15rem" }}>
+                Loading…
+              </p>
+            ) : messages.length === 0 ? (
+              <div className="empty">
+                <p className="empty__body">No messages with {agent?.name ?? "this agent"} yet.</p>
+              </div>
+            ) : (
+              rows.map((row, index) => {
+                const stands = rowStandsFor(row);
+                const number = footnotes[index] ?? 0;
+                return (
+                  // Wrapped rather than marked on the entry itself: a row renders
+                  // as several different shapes depending on who sent what to
+                  // whom, and one of them is several rows.
+                  <div
+                    key={row.key}
+                    data-message={stands.join(" ")}
+                    data-found={focused && stands.includes(focused) ? "true" : undefined}
+                    ref={(node) => {
+                      if (!node || row.kind !== "peers") return;
+                      const peers = row.peers.filter((peer) => peer.agentId !== null);
+                      node
+                        .querySelectorAll<HTMLButtonElement>("button.footnote__send")
+                        .forEach((button, i) => {
+                          button.dataset.dismissId = JSON.stringify([
+                            channel,
+                            row.key,
+                            peers[i]?.agentId,
+                          ]);
+                        });
+                    }}
+                    onClickCapture={(event) => {
+                      if (!agent || row.kind !== "peers" || !(event.target instanceof Element))
+                        return;
+                      const button =
+                        event.target.closest<HTMLButtonElement>("button.footnote__send");
+                      if (button) rememberDismissOpener(button);
+                    }}
+                  >
+                    {row.kind === "peers" ? (
+                      <PeerBurstRow
+                        peers={row.peers}
+                        number={number}
+                        at={row.at}
+                        onOpen={setReading}
+                      />
+                    ) : row.kind === "refused" ? (
+                      <RefusedRow
+                        peer={row.peer}
+                        at={row.at}
+                        number={number}
+                        body={row.body}
+                        reason={row.reason}
+                      />
+                    ) : row.kind === "when" ? (
+                      <WhenRow at={row.at} />
+                    ) : (
+                      // Two participants, one of them named at the top of the
+                      // pane and the other reading this. Nothing here needs
+                      // telling whose words it is looking at.
+                      <MessageItem
+                        message={row.message}
+                        lookups={lookups}
+                        continued={row.continued}
+                        footnote={number || undefined}
+                      />
+                    )}
+                  </div>
+                );
+              })
+            )}
 
-          {agent && <TurnWork key={agent.id} agent={agent.id} follow={follow} />}
-          <LiveStreams channel={channel} lookups={lookups} follow={follow} />
-        </Answering.Provider>
-      </div>
+            {agent && <TurnWork key={agent.id} agent={agent.id} follow={follow} />}
+            <LiveStreams channel={channel} lookups={lookups} follow={follow} />
+          </Answering.Provider>
+        </div>
 
-      {/* Outside the log on purpose. Inside it the sentence is a second
+        {/* Outside the log on purpose. Inside it the sentence is a second
               copy of the newest message for anybody reading the transcript
               itself, which is the cost of announcing it to everybody else. */}
-      <Arrivals channel={channel} messages={messages} lookups={lookups} />
-      {/* Keyed by agent, so the disclosure below does not arrive already
+        <Arrivals channel={channel} messages={messages} lookups={lookups} />
+        {/* Keyed by agent, so the disclosure below does not arrive already
               open on a channel the operator has just switched to. */}
-      {agent && <TurnFooter key={agent.id} agent={agent} state={activity[agent.id]} />}
-      <Composer
-        key={`composer-${channel}`}
-        draftKey={channel}
-        recipient={agent ? { id: agent.id, name: agent.name } : undefined}
-        onRecipientChange={(id) => void select(id)}
-        placeholder={`Write to ${agent?.name ?? "agent"}…`}
-        model={model}
-        group={agent?.groupId ?? null}
-        disabled={!agent || agent.lifecycle === "terminated"}
-        disabledReason="This agent has been deleted."
-        onSend={async (text, files, key) => {
-          if (!agent) return;
-          // Typing into the box is a decision to be at the end of the
-          // transcript, so this is the one thing besides opening a channel
-          // that overrides where the operator was reading. Their own
-          // message landing off screen, with nothing following it, is the
-          // same bug in the other direction.
-          pin();
-          try {
-            return await api.sendMessage(agent.id, text, files, key);
-          } catch (error) {
-            showFailure(error);
-            throw error;
-          }
-        }}
-      />
+        {agent && <TurnFooter key={agent.id} agent={agent} state={activity[agent.id]} />}
+        <Composer
+          key={`composer-${channel}`}
+          draftKey={channel}
+          recipient={agent ? { id: agent.id, name: agent.name } : undefined}
+          onRecipientChange={(id) => void select(id)}
+          placeholder={`Write to ${agent?.name ?? "agent"}…`}
+          model={model}
+          group={agent?.groupId ?? null}
+          disabled={!agent || agent.lifecycle === "terminated"}
+          disabledReason="This agent has been deleted."
+          onSend={async (text, files, key) => {
+            if (!agent) return;
+            // Typing into the box is a decision to be at the end of the
+            // transcript, so this is the one thing besides opening a channel
+            // that overrides where the operator was reading. Their own
+            // message landing off screen, with nothing following it, is the
+            // same bug in the other direction.
+            pin();
+            try {
+              return await api.sendMessage(agent.id, text, files, key);
+            } catch (error) {
+              showFailure(error);
+              throw error;
+            }
+          }}
+        />
+      </div>
     </section>
   );
 }

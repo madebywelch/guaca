@@ -329,7 +329,7 @@ describe("ComputerScreen", () => {
 
   it.each([
     ["Settings", ","],
-    ["Search", "k"],
+    ["Search", "f"],
   ])("keeps the expanded computer under %s and restores focus", async (name, key) => {
     agentComputer.mockResolvedValue(HAS_ONE);
     render(<ScreenWorkspace />);

@@ -17,6 +17,8 @@ import { useNow } from "../lib/time";
 import type { AgentCard, Group, SearchHits } from "../lib/types";
 
 interface Props {
+  /** What was already typed when search was asked for, from the field. */
+  initial?: string;
   onClose: () => void;
   onOpenChannel?: () => void;
   onEditAgent: (agent: AgentCard) => void;
@@ -71,6 +73,7 @@ export function searchRequest(state: Request, event: RequestEvent): Request {
  * pressing Enter is the wrong place to keep an irreversible action.
  */
 export function Search({
+  initial = "",
   onClose,
   onOpenChannel,
   onEditAgent,
@@ -89,7 +92,7 @@ export function Search({
   const showArtifacts = useStore((s) => s.showArtifacts);
   const now = useNow(30_000);
 
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initial);
   const [scope, setScope] = useState<Scope>("all");
   const [hits, setHits] = useState<SearchHits | null>(null);
   const [cursor, setCursor] = useState(0);

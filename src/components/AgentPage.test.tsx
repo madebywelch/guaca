@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../lib/store";
 import type { AgentCard, Browser, Computer } from "../lib/types";
-import { Inspector } from "./Inspector";
+import { AgentPanel } from "./AgentPanel";
 
 const agentComputer = vi.fn<(id: string) => Promise<Computer | null>>();
 const agentBrowser = vi.fn<(id: string) => Promise<Browser | null>>();
@@ -94,7 +94,7 @@ function configure() {
   });
 }
 
-describe("Inspector", () => {
+describe("the agent's page, past the conversation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     agentComputer.mockResolvedValue(null);
@@ -111,14 +111,16 @@ describe("Inspector", () => {
     // key, so the duplicate overwrote the entry it would have deleted through.
     // Every switch added another dead card, and only closing the panel, which
     // unmounts their container, cleared them.
-    const view = render(<Inspector agent={card("a1", "Cook")} onEditProfile={vi.fn()} />);
+    const view = render(
+      <AgentPanel section="now" agent={card("a1", "Cook")} onEditProfile={vi.fn()} />,
+    );
     await screen.findByRole("region", { name: "Cook's computer" });
 
     for (const [id, name] of [
       ["a2", "Scribe"],
       ["a3", "Runner"],
     ] as const) {
-      view.rerender(<Inspector agent={card(id, name)} onEditProfile={vi.fn()} />);
+      view.rerender(<AgentPanel section="now" agent={card(id, name)} onEditProfile={vi.fn()} />);
       await screen.findByRole("region", { name: `${name}'s computer` });
     }
 
@@ -136,7 +138,7 @@ describe("Inspector", () => {
     // The order is the whole content of this panel's design and nothing else
     // in the tree asserts it: every section renders either way, and a swap
     // that reads as deliberate in a diff is invisible in every other test.
-    render(<Inspector agent={card("a1", "Cook")} onEditProfile={vi.fn()} />);
+    render(<AgentPanel section="now" agent={card("a1", "Cook")} onEditProfile={vi.fn()} />);
     await screen.findByRole("heading", { name: "Routines" });
     await waitFor(() =>
       expect(screen.getByRole("heading", { name: /Working notes/ }).textContent).toBe(
@@ -165,10 +167,14 @@ describe("Inspector", () => {
     // One key on the level they share is the whole mechanism, and a memory
     // left behind is the worst of the three to leave: an operator editing what
     // they believe is one agent's memory would save it onto another's.
-    const view = render(<Inspector agent={card("a1", "Cook")} onEditProfile={vi.fn()} />);
+    const view = render(
+      <AgentPanel section="now" agent={card("a1", "Cook")} onEditProfile={vi.fn()} />,
+    );
     expect(await screen.findByText("a1 remembers this")).toBeTruthy();
 
-    view.rerender(<Inspector agent={card("a2", "Scribe")} onEditProfile={vi.fn()} />);
+    view.rerender(
+      <AgentPanel section="now" agent={card("a2", "Scribe")} onEditProfile={vi.fn()} />,
+    );
 
     expect(await screen.findByText("a2 remembers this")).toBeTruthy();
     expect(screen.queryByText("a1 remembers this")).toBeNull();

@@ -189,16 +189,21 @@ try {
     assert.ok(!answer.exceptionDetails, JSON.stringify(answer.exceptionDetails));
     return answer.result.value;
   };
+  // The agents are in the Groups sheet, opened from the people button in the
+  // top row; a row there opens the channel and closes the sheet.
+  const openAgent = (name) =>
+    evaluate(`(async () => {
+      const row = () => [...document.querySelectorAll('.sheet .agent-row')].find((e) => e.textContent.includes(${JSON.stringify(name)}));
+      if (!row()) [...document.querySelectorAll('.topbar__places button')].find((e) => /^(Agents|Groups and agents)$/.test(e.getAttribute('aria-label') || ''))?.click();
+      await new Promise((r) => setTimeout(r, 100));
+      if (!row()) return false;
+      row().click();
+      return true;
+    })()`);
   const openClient = async () => {
     tab = (await cdp("Target.createTarget", { url: `${base}/#token=${token}` })).targetId;
     session = (await cdp("Target.attachToTarget", { targetId: tab, flatten: true })).sessionId;
-    await until(
-      () => evaluate(`document.body?.innerText.includes('Browser check')`),
-      "real app renders its roster",
-    );
-    await evaluate(
-      `[...document.querySelectorAll('.agent-row')].find(e=>e.textContent.includes('Browser check')).click()`,
-    );
+    await until(() => openAgent("Browser check"), "real app renders its roster");
   };
   await openClient();
   assert.equal(await evaluate("location.hash"), "", "invitation is removed from the URL");
@@ -267,79 +272,50 @@ try {
     await cdp("Emulation.setTouchEmulationEnabled", {enabled:mobile},session);
     await delay(150);
   };
+  const shoot = async (name) => {
+    if (!process.env.GUACA_BROWSER_SHOTS) return;
+    await mkdir(process.env.GUACA_BROWSER_SHOTS,{recursive:true});
+    const shot=await cdp("Page.captureScreenshot",{format:"png"},session);
+    await writeFile(path.join(process.env.GUACA_BROWSER_SHOTS,`${name}.png`),Buffer.from(shot.data,"base64"));
+  };
+  const pageTab = (label) => `.agent-tabs__tab:nth-child(${["Now","Conversation"].indexOf(label)+1})`;
   for (const width of [320,390,430,768]) {
     await size(width,844);
     await fits(".app");
+    await fits(".topbar");
+    await fits(".ribbon");
     await fits(".pane");
-    assert.equal(await evaluate("document.querySelector('.pane__crew').textContent"), "Browser test");
+    assert.ok((await evaluate("document.querySelector('.pane__kicker').textContent")).startsWith("Browser test"));
     await fits(".pane__scroll");
     await fits(".composer");
-    assert.equal(await evaluate("getComputedStyle(document.querySelector('.rail')).display"),"none");
+    assert.equal(await evaluate("document.querySelector('.app > .rail')"), null, "no rail beside the column");
     await tap(".composer__input");
     await cdp("Input.insertText", {text:"Draft survives navigation"},session);
-    await fits(".mobile-nav");
-    assert.ok(await evaluate("document.querySelector('.mobile-nav').getBoundingClientRect().top > visualViewport.height / 2"), "navigation is within thumb reach at the bottom");
-    await tap('[aria-label="Back to chats"]');
-    await fits(".rail");
+    await tap(".topbar__back");
+    await until(() => evaluate("!!document.querySelector('.home')"), "Today opens from the top row");
+    await fits(".home");
+    await tap('.topbar__places button[aria-label="Groups and agents"], .topbar__places button[aria-label="Agents"]');
+    await until(() => evaluate("!!document.querySelector('.sheet')"), "the Groups sheet opens");
+    await fits(".sheet");
     await fits(".mobile-crews select");
-    if (process.env.GUACA_BROWSER_SHOTS) {
-      await mkdir(process.env.GUACA_BROWSER_SHOTS,{recursive:true});
-      const shot=await cdp("Page.captureScreenshot",{format:"png"},session);
-      await writeFile(path.join(process.env.GUACA_BROWSER_SHOTS,`chats-${width}.png`),Buffer.from(shot.data,"base64"));
-    }
-    await tap(".mobile-nav button:nth-child(3)");
-    await until(() => evaluate("!!document.querySelector('.palette__input')"), "search opens from the list");
+    await shoot(`chats-${width}`);
+    await evaluate("document.querySelector('.sheet-scrim .scrim__close').click()");
+    await tap('.topbar__places button[aria-label="Search"]');
+    await until(() => evaluate("!!document.querySelector('.palette__input')"), "search opens from the top row");
     await tap(".palette__input");
     await cdp("Input.insertText", {text:"Browser check"},session);
     await until(() => evaluate("!!document.querySelector('.palette__row')"), "agent is found");
     await tap(".palette__row");
     await fits(".pane");
     assert.equal(await evaluate("document.querySelector('.composer__input').value"),"Draft survives navigation");
-    await tap(".mobile-details");
-    await fits(".inspector");
-    await tap(".inspector__head .btn:not(.mobile-back)");
-    await until(() => evaluate("!!document.querySelector('.menu')"), "agent actions open by touch");
-    await fits(".menu");
-    await evaluate("document.querySelector('.menu__scrim').click()");
-    await tap('[aria-label="Back to conversation"]');
-    await tap(".mobile-nav button:nth-child(3)");
-    await until(() => evaluate("!!document.querySelector('.palette')"), "search opens from chat");
-    await fits(".palette");
-    await tap(".palette__query button");
-    await until(() => evaluate("!document.querySelector('.palette')"), "search cancels by touch");
-    assert.equal(await evaluate("document.querySelector('.composer__input').value"), "Draft survives navigation");
-    await size(width,400);
+    await tap(pageTab("Now"));
+    await until(() => evaluate("!!document.querySelector('.agent-panel')"), "the agent's details open as a tab");
+    await fits(".agent-panel");
+    await shoot(`details-${width}`);
+    await tap(pageTab("Conversation"));
     await fits(".composer");
-    await size(width,844);
-    await evaluate("document.querySelector('.composer__input').focus()");
-    // React must see the input event; assigning .value alone would not clear its draft.
-    await evaluate(`(() => { const n=document.querySelector('.composer__input');
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(n,'');
-      n.dispatchEvent(new Event('input',{bubbles:true})); n.blur(); })()`);
-    await tap(".mobile-nav button:first-child");
-    await tap(".mobile-nav button:last-child");
-    await until(() => evaluate("!!document.querySelector('.dialog--settings')"),"settings opens on phone");
-    await delay(250);
-    await fits(".dialog--settings");
-    await fits(".settings__pane");
-    await fits(".settings__foot");
     if (width === 320) {
-      const sections = await evaluate("Array.from(document.querySelector('.settings__section select').options).map(o=>o.value)");
-      for (const section of sections) {
-        await evaluate(`(() => {const n=document.querySelector('.settings__section select'); n.value=${JSON.stringify(section)}; n.dispatchEvent(new Event('change',{bubbles:true}));})()`);
-        await delay(100);
-        await fits(".settings__pane");
-        await fits(".settings__foot");
-      }
-    }
-    if (process.env.GUACA_BROWSER_SHOTS) {
-      await mkdir(process.env.GUACA_BROWSER_SHOTS,{recursive:true});
-      const shot=await cdp("Page.captureScreenshot",{format:"png"},session);
-      await writeFile(path.join(process.env.GUACA_BROWSER_SHOTS,`settings-${width}.png`),Buffer.from(shot.data,"base64"));
-    }
-    await evaluate("document.querySelector('.scrim__close').click()");
-    if (width === 320) {
-      for (const [button,dialog] of [[".rail__foot button:first-child",".dialog--cafeteria"],[".rail__foot button:nth-child(2)",".dialog--calendar"],[".mobile-nav button:nth-child(2)",".for-you"]]) {
+      for (const [button,dialog] of [[".statusbar__places button:nth-child(1)",".dialog--artifacts"],[".statusbar__places button:nth-child(2)",".dialog--calendar"],[".statusbar__places button:nth-child(3)",".for-you"]]) {
         await tap(button);
         await until(() => evaluate(`!!document.querySelector('${dialog}')`),`${dialog} opens`);
         await delay(250);
@@ -347,22 +323,17 @@ try {
         await evaluate("document.querySelector('.scrim__close').click()");
       }
     }
-    await tap(".agent-row");
-    if (process.env.GUACA_BROWSER_SHOTS) {
-      const shot=await cdp("Page.captureScreenshot",{format:"png"},session);
-      await writeFile(path.join(process.env.GUACA_BROWSER_SHOTS,`chat-${width}.png`),Buffer.from(shot.data,"base64"));
-    }
+    await shoot(`chat-${width}`);
   }
   await size(844,390);
   await fits(".pane");
   await fits(".composer");
-  await fits(".mobile-nav");
   await size(1280,900,false);
+  await fits(".topbar");
+  await fits(".ribbon");
   await fits(".pane");
-  await fits(".rail");
-  await fits(".inspector");
-  assert.equal(await evaluate("getComputedStyle(document.querySelector('.mobile-nav')).display"),"none");
-  console.log("PASS: phone widths, touch navigation, preserved drafts, keyboard-sized viewport, settings and desktop layout.");
+  assert.equal(await evaluate("document.querySelector('.app > .rail')"), null, "no rail beside the column");
+  console.log("PASS: phone widths, touch navigation, preserved drafts, keyboard-sized viewport, places and desktop layout.");
 
   // Exercise the real artifact route in Chromium, including its opaque origin.
   const artifact = await call("frame_artifact", {

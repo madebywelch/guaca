@@ -151,7 +151,7 @@ function Workspace() {
 describe("a wire detail under a workspace dialog", () => {
   it.each([
     ["Settings", ","],
-    ["Search", "k"],
+    ["Search", "f"],
   ])("dismisses %s before the wire detail and restores focus", async (name, key) => {
     render(<Workspace />);
     const opener = screen.getByRole("button", { name: /Not delivered to Government Procurement/ });

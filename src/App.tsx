@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { AgentAvatar } from "./avatars/AgentAvatar";
 import { AgentEditor } from "./components/AgentEditor";
@@ -6,17 +6,18 @@ import { AgentMenu, type MenuTarget } from "./components/AgentMenu";
 import { Artifacts } from "./components/Artifacts";
 import { Cafeteria } from "./components/Cafeteria";
 import { Calendar } from "./components/Calendar";
-import { ChannelView } from "./components/ChannelView";
+import { type AgentView, ChannelView } from "./components/ChannelView";
 import { ForYou } from "./components/ForYou";
 import { GroupEditor } from "./components/GroupEditor";
+import { GroupsSheet } from "./components/GroupsSheet";
+import { Home } from "./components/Home";
 import { HostUpdateNotice } from "./components/HostUpdates";
-import { Inspector } from "./components/Inspector";
-import { MobileNavigation } from "./components/MobileNavigation";
 import { Onboarding } from "./components/Onboarding";
 import { Search } from "./components/Search";
 import { SettingsDialog } from "./components/SettingsDialog";
-import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
+import { Timeline } from "./components/Timeline";
+import { TopBar } from "./components/TopBar";
 import { applyAppearance, watchSystemSurface } from "./lib/appearance";
 import { unreachableHint } from "./lib/host";
 import { api, onRevealRequest } from "./lib/ipc";
@@ -73,15 +74,25 @@ export default function App() {
   const dropAgent = useStore((s) => s.dropAgent);
   const prefs = useStore((s) => s.prefs);
 
+  const [agentView, setAgentView] = useState<AgentView>("conversation");
+  /** Set while a click from outside the window is opening an agent. */
+  const revealing = useRef(false);
+
   /**
    * Where the window lands when the operator asks to be taken somewhere from
    * outside it: the menu bar panel, or a click on a notification. Read from
-   * the store at the moment it is asked, so it can be made once.
+   * the store at the moment it is asked, so it can be made once. An agent
+   * opens on the conversation, working or not: what was clicked was a message.
    */
   const reveal = useCallback((target: Reveal) => {
     const state = useStore.getState();
-    if (target.kind === "forYou") state.showForYou(true);
-    else void state.select(target.id);
+    if (target.kind === "forYou") {
+      state.showForYou(true);
+      return;
+    }
+    revealing.current = state.selected !== target.id;
+    setAgentView("conversation");
+    void state.select(target.id);
   }, []);
 
   /**
@@ -106,21 +117,28 @@ export default function App() {
   const artifactsOpen = useStore((state) => state.artifactsOpen);
   const showArtifacts = useStore((state) => state.showArtifacts);
   const [showSettings, setShowSettings] = useState<Section | true | null>(null);
-  const [searching, setSearching] = useState(false);
+  const [searching, setSearching] = useState<string | false>(false);
+  const [showGroups, setShowGroups] = useState(false);
   const [showCafeteria, setShowCafeteria] = useState(false);
   const [showCalendar, setShowCalendar] = useState(false);
   // The pane inside whichever settings dialog is open, reported by the dialog.
   const [openSection, setOpenSection] = useState<string | null>(null);
-  const [mobilePane, setMobilePane] = useState<"agents" | "conversation" | "details">(
-    "conversation",
-  );
-  const openConversation = useCallback(() => setMobilePane("conversation"), []);
-  const openDetails = useCallback(() => setMobilePane("details"), []);
+  const leaveChannel = useStore((state) => state.leaveChannel);
+  const focused = useStore((state) => state.focused);
 
-  // Search and notifications can select a channel without going through the rail.
+  // Opening someone lands on what they are doing when they are doing
+  // something, and on the conversation otherwise. A message asked for by
+  // search or a notification is always in the conversation.
   useEffect(() => {
-    if (selected) setMobilePane("conversation");
-  }, [selected]);
+    if (!selected) return;
+    if (revealing.current) {
+      revealing.current = false;
+      setAgentView("conversation");
+      return;
+    }
+    const busy = useStore.getState().activity[selected]?.state === "thinking";
+    setAgentView(busy && !focused ? "now" : "conversation");
+  }, [selected, focused]);
 
   // The three shortcuts that work wherever the operator is, matched against
   // the same table the Shortcuts pane draws from, so a key listed there is a key
@@ -132,7 +150,15 @@ export default function App() {
       if (!binding) return;
       event.preventDefault();
 
-      if (binding.id === "search") setSearching(true);
+      if (binding.id === "field") {
+        // The field on the opening screen, or the open conversation's box:
+        // whichever box writes to someone from where the operator is.
+        if (useStore.getState().selected) setAgentView("conversation");
+        requestAnimationFrame(() =>
+          document.querySelector<HTMLElement>("[data-field]:not([disabled])")?.focus(),
+        );
+      }
+      if (binding.id === "search") setSearching("");
       if (binding.id === "settings") setShowSettings(true);
       if (binding.id === "shortcuts") setShowSettings("shortcuts");
     };
@@ -254,7 +280,6 @@ export default function App() {
     switch (place.kind) {
       case "channel":
         void select(place.agentId);
-        setMobilePane("conversation");
         break;
       case "calendar":
         setShowCalendar(true);
@@ -276,7 +301,7 @@ export default function App() {
   // it goes to, which is then on screen for the answer.
   const sendFromBar = async (agentId: string, text: string) => {
     await select(agentId);
-    setMobilePane("conversation");
+    setAgentView("conversation");
     await api.sendMessage(agentId, text);
   };
 
@@ -288,7 +313,7 @@ export default function App() {
     ...(showCalendar ? ["calendar" as const] : []),
     ...(artifactsOpen ? ["artifacts" as const] : []),
     ...(showSettings ? ["settings" as const] : []),
-    ...(searching ? ["search" as const] : []),
+    ...(searching !== false ? ["search" as const] : []),
   ];
   const [dialogOrder, setDialogOrder] = useState<Overlay[]>([]);
   const orderedDialogs = [
@@ -325,29 +350,21 @@ export default function App() {
   // `data-link` is the one attribute the whole window reads: whether what it
   // draws is current. `styles.css` is where the transcript loses its weight.
   return (
-    <div
-      className="app"
-      data-link={link === "down" ? "down" : undefined}
-      data-mobile-pane={firstRun ? "conversation" : openAgent ? mobilePane : "agents"}
-    >
-      <MobileNavigation
-        onChats={() => setMobilePane("agents")}
-        onSearch={() => setSearching(true)}
+    <div className="app" data-link={link === "down" ? "down" : undefined}>
+      <TopBar
+        open={openAgent?.name ?? null}
+        onHome={leaveChannel}
+        onSearch={() => setSearching("")}
+        onGroups={() => setShowGroups(true)}
         onSettings={() => setShowSettings(true)}
-      />
-      <Sidebar
-        onOpenChannel={openConversation}
-        onEditAgent={(agent) => setEditing(agent)}
-        onOpenCafeteria={() => setShowCafeteria(true)}
-        onOpenCalendar={() => setShowCalendar(true)}
-        onOpenArtifacts={() => showArtifacts({ id: null })}
-        onEditGroup={(group) => setEditingGroup(group)}
-        onOpenSettings={() => setShowSettings(true)}
-        onOpenSearch={() => setSearching(true)}
         onNewAgent={() => setEditing("new")}
         onNewGroup={() => setEditingGroup("new")}
-        onOpenMenu={(agent, at) => setMenu({ agent, ...at })}
+        onOpenCafeteria={() => setShowCafeteria(true)}
       />
+
+      {ready && (
+        <Timeline onOpenAgent={(id) => void select(id)} onOpenPile={() => setShowGroups(true)} />
+      )}
 
       <main>
         {needsKey && !firstRun && (
@@ -422,36 +439,25 @@ export default function App() {
             </div>
           </div>
         ) : selected === null ? (
-          // Nothing open. Reached by going inside a crew the open channel was
-          // not in, and by deleting the last agent that had one: both are the
-          // operator ending up somewhere with no conversation attached, and
-          // picking one for them would put an agent's history on screen as a
-          // side effect of a click that was about something else.
-          <div className="empty" style={{ margin: "auto" }}>
-            <p className="empty__body">Pick someone in the rail to open their channel.</p>
-          </div>
+          // Nothing open: the opening screen. Also where going inside a group
+          // the open channel was not in, and deleting the agent that was open,
+          // both leave the operator, rather than on somebody picked for them.
+          <Home
+            onSearch={(query) => setSearching(query)}
+            onManageGroups={() => setShowGroups(true)}
+          />
         ) : (
           <ChannelView
             channel={selected}
             onOpenMenu={(agent, at) => setMenu({ agent, ...at })}
-            onBack={() => setMobilePane("agents")}
-            onDetails={openDetails}
+            view={agentView}
+            onView={setAgentView}
+            onEditProfile={(agent) => setEditing(agent)}
           />
         )}
 
         {ready && <StatusBar onOpen={openPlace} onMessage={sendFromBar} />}
       </main>
-
-      {ready && agents.length > 0 && !firstRun && (
-        <Inspector
-          agent={openAgent}
-          onEditProfile={(agent) => setEditing(agent)}
-          onOpenActions={(agent, at) => setMenu({ agent, ...at })}
-          reveal={mobilePane === "details"}
-          onReveal={openDetails}
-          onHide={openConversation}
-        />
-      )}
 
       {menu && (
         <AgentMenu
@@ -494,6 +500,22 @@ export default function App() {
           // every channel it said it in, and a view that emptied itself would
           // read as the transcript having gone too.
           onDelete={(agent) => void onAgent(() => api.deleteAgent(agent.id))}
+        />
+      )}
+
+      {showGroups && (
+        <GroupsSheet
+          onClose={() => setShowGroups(false)}
+          onEditAgent={(agent) => setEditing(agent)}
+          onOpenCafeteria={() => setShowCafeteria(true)}
+          onOpenCalendar={() => setShowCalendar(true)}
+          onOpenArtifacts={() => showArtifacts({ id: null })}
+          onEditGroup={(group) => setEditingGroup(group)}
+          onOpenSettings={() => setShowSettings(true)}
+          onOpenSearch={() => setSearching("")}
+          onNewAgent={() => setEditing("new")}
+          onNewGroup={() => setEditingGroup("new")}
+          onOpenMenu={(agent, at) => setMenu({ agent, ...at })}
         />
       )}
 
@@ -543,7 +565,7 @@ export default function App() {
             return (
               <Search
                 key={dialog}
-                onOpenChannel={openConversation}
+                initial={searching === false ? "" : searching}
                 onClose={() => setSearching(false)}
                 onEditAgent={(agent) => setEditing(agent)}
                 onEditGroup={(group) => setEditingGroup(group)}

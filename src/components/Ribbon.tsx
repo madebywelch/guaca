@@ -94,8 +94,9 @@ export function Ribbon({ ribbon, onOpenAgent, onOpenPile, onTrackWidth }: Props)
   const pileShown = ribbon.pile.slice(0, PILE_SHOWN);
 
   return (
-    <div
+    <nav
       className="ribbon"
+      aria-label="Agents"
       data-pile={ribbon.pile.length ? "some" : "none"}
       style={{ "--ribbon-pile": pileShown.length } as CSSProperties}
     >
@@ -238,6 +239,6 @@ export function Ribbon({ ribbon, onOpenAgent, onOpenPile, onTrackWidth }: Props)
           );
         })}
       </ul>
-    </div>
+    </nav>
   );
 }

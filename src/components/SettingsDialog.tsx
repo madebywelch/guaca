@@ -2223,7 +2223,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
               <>
                 <h3 className="settings__title">Shortcuts</h3>
                 <p className="settings__lede">
-                  Every key the app answers to. The three under Anywhere work wherever you are; the
+                  Every key the app answers to. The four under Anywhere work wherever you are; the
                   rest belong to the surface they are listed under.
                 </p>
 

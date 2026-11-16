@@ -9810,9 +9810,7 @@ button.artifacts__version[aria-pressed="true"] {
   white-space: nowrap;
 }
 
-/* A phone shows one workspace pane at a time. Keep the transcript mounted so
-   drafts, scroll position and live events survive a trip to the agent list. */
-.mobile-nav,
+/* A phone gets the same single column as a window, at touch sizes. */
 .mobile-crews,
 .mobile-only {
   display: none;
@@ -9835,75 +9833,15 @@ button.artifacts__version[aria-pressed="true"] {
     width: 100%;
     height: var(--viewport-height, 100dvh);
     padding: var(--space-safe-top) var(--space-safe-right) var(--space-safe-bottom) var(--space-safe-left);
-    display: grid;
-    grid-template-rows: minmax(0, 1fr) auto;
-    grid-template-columns: minmax(0, 1fr);
+    display: flex;
+    flex-direction: column;
   }
 
   .mobile-only {
     display: flex;
   }
 
-  .mobile-nav {
-    grid-row: 2;
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    padding: var(--space-2) var(--space-3);
-    border-top: 1px solid var(--rule);
-    background: var(--rail-ground);
-  }
-
-  .mobile-nav > button {
-    min-height: calc(var(--control-touch) + var(--space-4));
-    border: 0;
-    border-radius: var(--radius);
-    background: transparent;
-    color: var(--muted);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: var(--space-2);
-    font-size: var(--type-small);
-    font-weight: 500;
-    cursor: pointer;
-  }
-
-  .mobile-nav [aria-current="page"] {
-    background: var(--rail-raised);
-    color: var(--text);
-  }
-
-  .mobile-nav svg {
-    width: var(--space-7);
-    height: var(--space-7);
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.5;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-  }
-
-  .mobile-nav__icon {
-    position: relative;
-    display: flex;
-  }
-
-  .mobile-nav__badge {
-    position: absolute;
-    left: 100%;
-    top: calc(-1 * var(--space-2));
-    padding: 0 var(--space-2);
-    border-radius: var(--radius-pill);
-    background: var(--attention-fill);
-    color: var(--on-attention-fill);
-    font-size: var(--type-meta);
-  }
-
-  .app > .rail,
-  .app > main,
-  .app > .inspector {
-    grid-row: 1;
+  .app > main {
     min-height: 0;
   }
 
@@ -9945,18 +9883,8 @@ button.artifacts__version[aria-pressed="true"] {
     display: none;
   }
 
-  .app > .grail,
-  .app:not([data-mobile-pane="agents"]) > .rail,
-  .app:not([data-mobile-pane="conversation"]) > main,
-  .app:not([data-mobile-pane="details"]) > .inspector {
+  .sheet .grail {
     display: none;
-  }
-
-  .app > .rail,
-  .app > .inspector {
-    width: 100%;
-    min-width: 0;
-    border: 0;
   }
 
   .mobile-crews {
@@ -10601,3 +10529,521 @@ button.artifacts__version[aria-pressed="true"] {
     transition: none;
   }
 }
+
+/* ==========================================================================
+   The window: a row of places, the timeline, and one column
+
+   The rail and the panel beside the conversation are gone from the window.
+   The top row says where you are and holds the four places that are not a
+   person; the timeline under it is who did what, and when; the column is the
+   field, then what needs you, then what finished. See `components/Home.tsx`.
+   ========================================================================== */
+
+.app {
+  flex-direction: column;
+}
+
+.topbar {
+  --topbar-h: 2.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-5);
+  height: var(--topbar-h);
+  padding: 0 var(--space-6);
+  flex: none;
+  user-select: none;
+}
+
+.topbar[data-lights] {
+  padding-left: var(--space-lights);
+}
+
+.topbar__day {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--type-ui);
+}
+
+.topbar__back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: var(--type-ui);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+}
+
+.topbar__back:hover,
+.topbar__button:hover {
+  background: var(--sunken);
+}
+
+.topbar__places {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.topbar__button,
+.topbar__places .rail__new {
+  display: inline-grid;
+  place-items: center;
+  width: var(--space-8);
+  height: var(--space-8);
+  border: 0;
+  background: none;
+  color: var(--muted);
+  border-radius: var(--radius-sm);
+  transition: background-color var(--tempo-tap) var(--ease);
+}
+
+/* ---- The column ------------------------------------------------------- */
+
+.home {
+  --column-w: 46rem;
+  width: min(var(--column-w), 100%);
+  margin: 0 auto;
+  padding: var(--space-7) var(--space-6) var(--space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-7);
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1;
+}
+
+.app > main:has(> .home) {
+  overflow: hidden;
+}
+
+/* ---- The field -------------------------------------------------------- */
+
+.ask__box {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-4) var(--space-4) var(--space-4);
+  background: var(--raised);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-signal);
+  box-shadow: var(--lift-1);
+}
+
+.ask__box:focus-within {
+  border-color: var(--rule-hard);
+}
+
+.ask__input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  resize: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--type-lede);
+  line-height: var(--lead-ui);
+  padding: var(--space-2) 0;
+  outline: none;
+}
+
+.ask__input::placeholder {
+  color: var(--faint);
+}
+
+.ask__picker {
+  position: relative;
+  flex: none;
+}
+
+.ask__target {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  border: 0;
+  background: var(--sunken);
+  color: var(--text);
+  font-size: var(--type-ui);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-pill);
+}
+
+.ask__target[data-answering] {
+  background: var(--attention-wash);
+}
+
+.ask__target .icon {
+  transform: rotate(90deg);
+}
+
+.ask__menu {
+  position: absolute;
+  top: calc(100% + var(--space-3));
+  left: 0;
+  z-index: 40;
+  min-width: 14rem;
+  max-height: 24rem;
+  overflow-y: auto;
+  padding: var(--space-3);
+  background: var(--raised);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  box-shadow: var(--lift-2);
+}
+
+.ask__group {
+  margin: var(--space-4) var(--space-4) var(--space-2);
+  color: var(--muted);
+  font-size: var(--type-meta);
+}
+
+.ask__option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  width: 100%;
+  border: 0;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  font-size: var(--type-ui);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+}
+
+.ask__option:hover,
+.ask__option[aria-selected="true"] {
+  background: var(--sunken);
+}
+
+.ask__manage {
+  margin-top: var(--space-3);
+  border-top: 1px solid var(--rule);
+  color: var(--muted);
+}
+
+.ask__key,
+.ask__under kbd {
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  color: var(--muted);
+  background: var(--sunken);
+  border-radius: var(--radius-xs);
+  padding: var(--space-1) var(--space-3);
+}
+
+.ask__send {
+  display: inline-grid;
+  place-items: center;
+  width: var(--space-8);
+  height: var(--space-8);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--action-fill);
+  color: var(--on-action-fill);
+  transition: opacity var(--tempo-tap) var(--ease);
+}
+
+.ask__send:disabled {
+  background: var(--sunken);
+  color: var(--faint);
+}
+
+.ask__under {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-5);
+  min-height: var(--space-7);
+  padding: var(--space-3) var(--space-4) 0;
+  color: var(--muted);
+  font-size: var(--type-small);
+}
+
+.ask__hint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.ask__search,
+.ask__link,
+.home__link,
+.home__more {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--muted);
+  font-size: var(--type-small);
+  text-decoration: underline;
+  text-decoration-color: var(--rule-hard);
+  text-underline-offset: var(--space-1);
+}
+
+.ask__receipt {
+  margin-left: auto;
+}
+
+.ask__failure {
+  color: var(--danger);
+}
+
+/* ---- What needs you, and what finished -------------------------------- */
+
+.home .for-you__requests {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.home .for-you__requests > h3,
+.home__head h2 {
+  margin: 0;
+  font-size: var(--type-ui);
+  font-weight: 600;
+}
+
+.home .for-you__requests > h3 {
+  color: var(--attention);
+}
+
+.home .desk__card {
+  border-left: var(--space-1) solid var(--attention);
+}
+
+.desk__when {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.home__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--rule);
+}
+
+.home__count {
+  color: var(--muted);
+  font-weight: 400;
+  margin-left: var(--space-3);
+}
+
+.home__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.home__list > li + li {
+  border-top: 1px solid var(--rule);
+}
+
+.home__row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-5);
+  width: 100%;
+  border: 0;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  padding: var(--space-5) 0;
+}
+
+.home__rowtext {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.home__meta {
+  color: var(--muted);
+  font-size: var(--type-small);
+}
+
+.home__meta strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.home__headline {
+  font-size: var(--type-body);
+  line-height: var(--lead-read);
+}
+
+.home__row[data-status="failed"] .home__meta {
+  color: var(--danger);
+}
+
+.home__more {
+  align-self: flex-start;
+}
+
+/* ---- Quiet ------------------------------------------------------------ */
+
+.home__quiet {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  padding-top: var(--space-8);
+  text-align: center;
+}
+
+.home__calm {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--type-display);
+  font-weight: 600;
+}
+
+.home__still {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--type-lede);
+}
+
+.home__quiet .home__more {
+  align-self: center;
+  margin-top: var(--space-4);
+}
+
+/* ---- The agent's page ------------------------------------------------- */
+
+.agent-tabs {
+  display: flex;
+  gap: var(--space-6);
+  padding: 0 var(--space-7);
+  border-bottom: 1px solid var(--rule);
+  flex: none;
+}
+
+.agent-tabs__tab {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: var(--type-ui);
+  padding: var(--space-4) 0;
+  border-bottom: var(--space-1) solid transparent;
+  transition: color var(--tempo-tap) var(--ease);
+}
+
+.agent-tabs__tab[aria-current="page"] {
+  color: var(--text);
+  border-bottom-color: var(--text);
+}
+
+.pane__body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.pane__body[hidden] {
+  display: none;
+}
+
+.agent-panel {
+  width: min(46rem, 100%);
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-7) var(--space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.agent-panel__level {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.agent-panel__anchor {
+  scroll-margin-top: var(--space-6);
+}
+
+/* ---- The groups sheet ------------------------------------------------- */
+
+.sheet-scrim {
+  justify-content: flex-start;
+  padding: 0;
+}
+
+.sheet {
+  position: relative;
+  height: 100%;
+  display: flex;
+  box-shadow: var(--lift-3);
+  outline: none;
+  animation: sheet-in var(--tempo-enter) var(--ease) both;
+}
+
+@keyframes sheet-in {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sheet {
+    animation: none;
+  }
+}
+
+
+.home__filed {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.home__card {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-5);
+  padding: var(--space-5);
+  background: var(--raised);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+}
+
+.home__cardtext {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.home__question {
+  margin: 0;
+  font-size: var(--type-body);
+}
+
+/* The places that are not a person, at the far end of the bar, with the one
+   count on it that may be read as an answer. */
+.statusbar__places {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.statusbar__count {
+  margin-left: var(--space-2);
+  font-family: var(--font-mono);
+  font-weight: 500;
+  color: var(--attention);
+  font-variant-numeric: tabular-nums;
+}
+
