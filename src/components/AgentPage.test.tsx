@@ -323,6 +323,25 @@ describe("moving to a section", () => {
     configure();
   });
 
+  it("opens each tab at its top, wherever the last one was left", async () => {
+    const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+    try {
+      const view = render(
+        <AgentPanel section="memory" agent={card("a1", "Cook")} onEditProfile={vi.fn()} />,
+      );
+      view.rerender(
+        <AgentPanel section="notebook" agent={card("a1", "Cook")} onEditProfile={vi.fn()} />,
+      );
+      await waitFor(() => expect(scrolled).toHaveBeenCalled());
+      const last = scrolled.mock.contexts.at(-1) as Element;
+      expect(last.id).toBe("agent-notebook");
+      expect(last.parentElement?.firstElementChild).toBe(last);
+      expect(scrolled).toHaveBeenLastCalledWith({ block: "start", behavior: "auto" });
+    } finally {
+      scrolled.mockRestore();
+    }
+  });
+
   it("jumps rather than glides when the operator asked for less motion", async () => {
     vi.stubGlobal("matchMedia", (query: string) => ({
       matches: query === "(prefers-reduced-motion: reduce)",
