@@ -1019,3 +1019,84 @@ describe("phone navigation", () => {
     expect(screen.getByRole("dialog", { name: "Groups and agents" }).isConnected).toBe(true);
   });
 });
+
+describe("where an agent's page lands", () => {
+  const nudge: Routine = {
+    id: "r1",
+    agentId: "id-Manager",
+    name: "Boss commitment nudge",
+    what: "check what I promised",
+    trigger: "weekdays",
+    active: true,
+    skipIfWorking: false,
+    nextRunAt: new Date(2025, 5, 10, 9, 28).getTime(),
+    lastRunAt: null,
+    createdAt: 0,
+  };
+
+  it("opens a fired routine from the conversation on the Routines tab", async () => {
+    listAgents.mockResolvedValue([agent("Manager")]);
+    agentRoutines.mockResolvedValue([nudge]);
+    render(<App />);
+    await waitFor(() => expect(railRow("Manager")).toBeTruthy());
+    fireEvent.click(railRow("Manager"));
+    const page = await screen.findByRole("navigation", { name: "Manager's page" });
+    expect(within(page).getByRole("button", { current: "page" }).textContent).toBe("Conversation");
+
+    // What the chip in the transcript does, as MessageItem's suite pins.
+    act(() => useStore.getState().openRoutine("r1"));
+
+    expect(within(page).getByRole("button", { current: "page" }).textContent).toBe("Routines");
+    expect(await screen.findByRole("switch")).toBeTruthy();
+    expect(useStore.getState().openingRoutine).toBeNull();
+    // Taken where it was asked for, so it does not pop open on a later tab.
+    fireEvent.click(within(page).getByRole("button", { name: "Memory" }));
+    fireEvent.click(within(page).getByRole("button", { name: "Routines" }));
+    expect(useStore.getState().openingRoutine).toBeNull();
+  });
+
+  it("stays on a found message after its mark clears, while the agent works", async () => {
+    listAgents.mockResolvedValue([agent("Manager")]);
+    agentActivity.mockResolvedValue({ "id-Manager": { state: "thinking" } });
+    render(<App />);
+    await waitFor(() => expect(useStore.getState().activity["id-Manager"]?.state).toBe("thinking"));
+
+    await act(() => useStore.getState().openMessage("id-Manager", "m1"));
+    const page = await screen.findByRole("navigation", { name: "Manager's page" });
+    expect(within(page).getByRole("button", { current: "page" }).textContent).toBe("Conversation");
+
+    act(() => useStore.getState().clearFocus());
+
+    expect(within(page).getByRole("button", { current: "page" }).textContent).toBe("Conversation");
+  });
+
+  it("still opens a working agent on Now", async () => {
+    listAgents.mockResolvedValue([agent("Manager")]);
+    agentActivity.mockResolvedValue({ "id-Manager": { state: "thinking" } });
+    render(<App />);
+    await waitFor(() => expect(useStore.getState().activity["id-Manager"]?.state).toBe("thinking"));
+    fireEvent.click(railRow("Manager"));
+    const page = await screen.findByRole("navigation", { name: "Manager's page" });
+    expect(within(page).getByRole("button", { current: "page" }).textContent).toBe("Now");
+  });
+});
+
+describe("the field's shortcut", () => {
+  it("does not reach the field from under the Groups sheet", async () => {
+    listAgents.mockResolvedValue([agent("Manager")]);
+    render(<App />);
+    const field = await screen.findByRole("textbox", { name: "What do you need?" });
+    groupsSheet();
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    await act(() => new Promise<void>((done) => requestAnimationFrame(() => done())));
+    expect(document.activeElement).not.toBe(field);
+  });
+
+  it("reaches the field when nothing is open over it", async () => {
+    listAgents.mockResolvedValue([agent("Manager")]);
+    render(<App />);
+    const field = await screen.findByRole("textbox", { name: "What do you need?" });
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    await waitFor(() => expect(document.activeElement).toBe(field));
+  });
+});

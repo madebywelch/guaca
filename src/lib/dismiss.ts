@@ -35,6 +35,11 @@ function onKey(event: KeyboardEvent) {
   top.dismiss();
 }
 
+/** Whether anything dismissable (a dialog, a sheet, a menu) is open. */
+export function dismissing(): boolean {
+  return stack.length > 0;
+}
+
 export function useDismiss(dismiss: () => void, enabled = true) {
   const latest = useRef(dismiss);
   const current = useRef<{ dismiss: () => void } | null>(null);

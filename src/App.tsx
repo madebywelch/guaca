@@ -19,6 +19,7 @@ import { StatusBar } from "./components/StatusBar";
 import { Timeline } from "./components/Timeline";
 import { TopBar } from "./components/TopBar";
 import { applyAppearance, watchSystemSurface } from "./lib/appearance";
+import { dismissing } from "./lib/dismiss";
 import { unreachableHint } from "./lib/host";
 import { api, onRevealRequest } from "./lib/ipc";
 import { bindingFor } from "./lib/keybinds";
@@ -127,8 +128,10 @@ export default function App() {
   const focused = useStore((state) => state.focused);
 
   // Opening someone lands on what they are doing when they are doing
-  // something, and on the conversation otherwise. A message asked for by
-  // search or a notification is always in the conversation.
+  // something, and on the conversation otherwise. Decided once, as the agent
+  // is opened: the found message's mark is cleared a moment after it is shown,
+  // and a landing that reran on that would take the reader off the message
+  // to the agent's screen.
   useEffect(() => {
     if (!selected) return;
     if (revealing.current) {
@@ -136,9 +139,24 @@ export default function App() {
       setAgentView("conversation");
       return;
     }
-    const busy = useStore.getState().activity[selected]?.state === "thinking";
-    setAgentView(busy && !focused ? "now" : "conversation");
-  }, [selected, focused]);
+    const state = useStore.getState();
+    const busy = state.activity[selected]?.state === "thinking";
+    setAgentView(busy && !state.focused ? "now" : "conversation");
+  }, [selected]);
+
+  // A message asked for by search is in the conversation, including one in the
+  // agent already open on another tab.
+  useEffect(() => {
+    if (focused) setAgentView("conversation");
+  }, [focused]);
+
+  // A fired routine clicked in the transcript. The panel that opens it is
+  // only drawn on a tab other than the conversation, so the request goes there
+  // and the panel takes it as it mounts.
+  const openingRoutine = useStore((state) => state.openingRoutine);
+  useEffect(() => {
+    if (openingRoutine !== null) setAgentView("routines");
+  }, [openingRoutine]);
 
   // The three shortcuts that work wherever the operator is, matched against
   // the same table the Shortcuts pane draws from, so a key listed there is a key
@@ -151,6 +169,9 @@ export default function App() {
       event.preventDefault();
 
       if (binding.id === "field") {
+        // Not from under a dialog or the Groups sheet: the box is behind it,
+        // and focus moved there would be typing into something out of sight.
+        if (dismissing()) return;
         // The field on the opening screen, or the open conversation's box:
         // whichever box writes to someone from where the operator is.
         if (useStore.getState().selected) setAgentView("conversation");
