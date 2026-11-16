@@ -167,6 +167,19 @@ describe("the field", () => {
     expect(screen.getByRole("button", { name: "Writing to Noor. Change who" })).toBeTruthy();
   });
 
+  it("moves the recipient to whoever an @ names as soon as it names them", () => {
+    const { input } = drawField();
+    expect(screen.getByRole("button", { name: "Writing to Dara. Change who" })).toBeTruthy();
+    fireEvent.change(input, { target: { value: "@No" } });
+    expect(screen.getByRole("button", { name: "Writing to Dara. Change who" })).toBeTruthy();
+    fireEvent.change(input, { target: { value: "@Noor" } });
+    expect(screen.getByRole("button", { name: "Writing to Noor. Change who" })).toBeTruthy();
+    fireEvent.change(input, { target: { value: "@Noor check the" } });
+    expect(screen.getByRole("button", { name: "Writing to Noor. Change who" })).toBeTruthy();
+    fireEvent.change(input, { target: { value: "check the" } });
+    expect(screen.getByRole("button", { name: "Writing to Dara. Change who" })).toBeTruthy();
+  });
+
   it("sends nothing and says why when there are no agents", async () => {
     const { input } = drawField([]);
     expect(screen.getByRole("button", { name: "Choose who to write to" })).toBeTruthy();

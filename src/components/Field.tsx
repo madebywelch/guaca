@@ -59,8 +59,13 @@ export function Field({ onSearch, onManageGroups }: Props) {
   const live = writable(agents);
   const question = waitingQuestion(pending);
   const asker = question && live.find((agent) => agent.id === question.agentId);
+  // An @ that names somebody moves the chip as it is typed, so the chip never
+  // says one agent while the message is on its way to another.
+  const named = addressed(text, agents)?.agent ?? namedAlone(text, agents);
   const target =
-    live.find((agent) => agent.id === picked) ?? defaultTarget(agents, lastActive, railGroup);
+    named ??
+    live.find((agent) => agent.id === picked) ??
+    defaultTarget(agents, lastActive, railGroup);
   const asking = answering && question && asker;
 
   // A question answered elsewhere takes the field out of answering it, rather
