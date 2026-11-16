@@ -230,6 +230,16 @@ describe("the default look this build replaced", () => {
     savePrefs({ ...moved, grays: "slate", temperature: "cool" });
     expect(loadPrefs()).toMatchObject({ grays: "slate", temperature: "cool" });
   });
+
+  it("does not move a slate saved by a newer build", () => {
+    localStorage.setItem(KEY, JSON.stringify({ ...oldDefault, look: 3 }));
+    expect(loadPrefs()).toMatchObject({ grays: "slate", temperature: "cool" });
+  });
+
+  it("still moves a blob whose mark is older than this build's", () => {
+    localStorage.setItem(KEY, JSON.stringify({ ...oldDefault, look: 1 }));
+    expect(loadPrefs()).toEqual(DEFAULTS);
+  });
 });
 
 describe("a preference that outlives the window", () => {
