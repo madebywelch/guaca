@@ -1572,6 +1572,7 @@ version = "0.4.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
+ "block2",
  "chrono",
  "futures-util",
  "hyper",
@@ -1581,6 +1582,7 @@ dependencies = [
  "notify-rust",
  "objc2",
  "objc2-app-kit",
+ "objc2-foundation",
  "objc2-user-notifications",
  "parking_lot 0.12.5",
  "percent-encoding",

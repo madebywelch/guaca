@@ -112,8 +112,25 @@ mod imp {
         let emitter = app.clone();
         let subscription = mac_usernotifications::observe_responses(move |response| {
             let Some((event, click)) = action(&prefix, response) else { return };
+            #[cfg(feature = "probe")]
+            if event == super::CLICKED {
+                crate::probe::trace::event(
+                    crate::probe::trace::Phase::NotificationDefault,
+                    u64::from(click),
+                    0,
+                );
+            }
             if let Err(err) = emitter.emit(event, click) {
                 tracing::warn!(%err, "could not report a notification action");
+            } else {
+                #[cfg(feature = "probe")]
+                if event == super::CLICKED {
+                    crate::probe::trace::event(
+                        crate::probe::trace::Phase::NotificationClicked,
+                        u64::from(click),
+                        0,
+                    );
+                }
             }
         })
         .ok_or("A native notification observer is already installed.")?;

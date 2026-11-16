@@ -5,7 +5,7 @@
 #
 #   ./scripts/ci.sh          everything
 #   ./scripts/ci.sh assets   just the icons and tray glyphs against their scripts
-#   ./scripts/ci.sh scripts  just the version floors the installer checks
+#   ./scripts/ci.sh scripts  installer checks and probe unit tests
 #   ./scripts/ci.sh rust     just the Rust suite
 #   ./scripts/ci.sh web      just the frontend
 
@@ -41,6 +41,9 @@ run_scripts() {
   bash scripts/versions.test.sh
   node --test scripts/install-image.test.mjs
   bash scripts/install-host.test.sh
+
+  step "Probe evidence (no app or screen)"
+  python3 scripts/probe.test.py
 }
 
 run_connector() {
