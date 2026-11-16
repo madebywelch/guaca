@@ -180,3 +180,28 @@ describe("the agent's page, past the conversation", () => {
     expect(screen.queryByText("a1 remembers this")).toBeNull();
   });
 });
+
+describe("moving to a section", () => {
+  beforeEach(() => {
+    agentComputer.mockResolvedValue(null);
+    agentBrowser.mockResolvedValue(null);
+    agentRoutines.mockResolvedValue([]);
+    agentMemory.mockResolvedValue("");
+    configure();
+  });
+
+  it("jumps rather than glides when the operator asked for less motion", async () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(prefers-reduced-motion: reduce)",
+    }));
+    const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+    try {
+      render(<AgentPanel section="memory" agent={card("a1", "Cook")} onEditProfile={vi.fn()} />);
+      await waitFor(() => expect(scrolled).toHaveBeenCalled());
+      expect(scrolled).toHaveBeenLastCalledWith({ block: "start", behavior: "auto" });
+    } finally {
+      vi.unstubAllGlobals();
+      scrolled.mockRestore();
+    }
+  });
+});

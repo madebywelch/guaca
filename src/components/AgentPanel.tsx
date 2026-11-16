@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
+import { prefersReducedMotion } from "../lib/motion";
 import { runsOn } from "../lib/profile";
 import { useStore } from "../lib/store";
 import type { Activity, AgentCard, RoutineId } from "../lib/types";
@@ -156,7 +157,7 @@ export function AgentPanel({ agent, section, onEditProfile }: Props) {
     if (routine !== null) return;
     document
       .getElementById(`agent-${section}`)
-      ?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+      ?.scrollIntoView?.({ block: "start", behavior: prefersReducedMotion() ? "auto" : "smooth" });
   }, [section, routine]);
 
   return (
