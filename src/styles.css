@@ -11105,17 +11105,6 @@ button.artifacts__version[aria-pressed="true"] {
     margin-left: auto;
   }
 
-  .agent-tabs__tab,
-  .topbar__button,
-  .intake__send {
-    min-width: var(--control-touch);
-    min-height: var(--control-touch);
-  }
-
-  .agent-tabs__tab {
-    padding-inline: var(--space-3);
-  }
-
   .ribbon__tick {
     display: none;
   }
@@ -11325,9 +11314,17 @@ button.artifacts__version[aria-pressed="true"] {
     padding: 0 var(--space-4);
   }
 
-  .agent-tabs__tab {
+  .agent-tabs__tab,
+  .topbar__button,
+  .intake__send {
+    min-width: var(--control-touch);
     min-height: var(--control-touch);
+  }
+
+  .agent-tabs__tab {
     align-items: center;
+    justify-content: center;
+    padding-inline: var(--space-3);
   }
 
   /* One row: what does not fit scrolls sideways rather than taking a second

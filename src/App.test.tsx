@@ -1045,7 +1045,7 @@ describe("where an agent's page lands", () => {
     // What the chip in the transcript does, as MessageItem's suite pins.
     act(() => useStore.getState().openRoutine("r1"));
 
-    expect(within(page).getByRole("button", { current: "page" }).textContent).toBe("Routines");
+    expect(within(page).getByRole("button", { current: "page", name: "Routines" })).toBeTruthy();
     expect(await screen.findByRole("switch")).toBeTruthy();
     expect(useStore.getState().openingRoutine).toBeNull();
     // Taken where it was asked for, so it does not pop open on a later tab.
