@@ -236,27 +236,38 @@ function buildScale(start: number, now: number, days: number): Knot[] {
 }
 
 /**
- * Spreads sorted positions so no two are nearer than `gap`, moving each as
- * little as it can.
+ * Spreads sorted positions so no two overlap, moving each as little as it can.
+ * `widths` is what each one takes, or one width for all of them; two
+ * neighbors stand half of each one's width apart.
  *
- * A run of positions that collide is laid out as one cluster at `gap` steps,
+ * A run of positions that collide is laid out as one cluster, side by side,
  * centered on where its members wanted to be, and clusters that then collide
  * merge. Pushing each one right of the last would drag a crowd past the moment
  * it belongs to, all to one side.
  */
-export function spread(xs: number[], gap: number, lo = 0, hi = 1): number[] {
+export function spread(xs: number[], widths: number | number[], lo = 0, hi = 1): number[] {
+  const w = (i: number) => (typeof widths === "number" ? widths : (widths[i] as number));
+  // Where each one's center sits from the left edge of a cluster it starts.
+  const offset = new Array<number>(xs.length);
+  xs.forEach((_, i) => {
+    offset[i] = i === 0 ? w(0) / 2 : (offset[i - 1] as number) + (w(i - 1) + w(i)) / 2;
+  });
+  const at = (first: number, k: number) =>
+    (offset[first + k] as number) - (offset[first] as number) + w(first) / 2;
   const clusters: { first: number; n: number; left: number }[] = [];
   xs.forEach((x, i) => {
-    let next = { first: i, n: 1, left: x };
+    let next = { first: i, n: 1, left: x - w(i) / 2 };
     for (;;) {
       const prev = clusters[clusters.length - 1];
-      if (!prev || prev.left + prev.n * gap <= next.left + 1e-9) break;
+      if (!prev) break;
+      const end = prev.left + at(prev.first, prev.n - 1) + w(prev.first + prev.n - 1) / 2;
+      if (end <= next.left + 1e-9) break;
       clusters.pop();
       const n = prev.n + next.n;
       // The left edge every member agrees on best: the mean of where each
       // would put it, which is its own x less its place in the cluster.
       let sum = 0;
-      for (let k = 0; k < n; k++) sum += (xs[prev.first + k] as number) - k * gap;
+      for (let k = 0; k < n; k++) sum += (xs[prev.first + k] as number) - at(prev.first, k);
       next = { first: prev.first, n, left: sum / n };
     }
     clusters.push(next);
@@ -264,18 +275,19 @@ export function spread(xs: number[], gap: number, lo = 0, hi = 1): number[] {
 
   const out = new Array<number>(xs.length);
   for (const c of clusters) {
-    for (let k = 0; k < c.n; k++) out[c.first + k] = c.left + k * gap;
+    for (let k = 0; k < c.n; k++) out[c.first + k] = c.left + at(c.first, k);
   }
   // Kept between `lo` and `hi`, the strip unless told otherwise. A crowd too
   // big for the room overlaps rather than leaving it.
-  const half = gap / 2;
+  const apart = (i: number) => (w(i - 1) + w(i)) / 2;
   for (let i = 0; i < out.length; i++) {
-    const floor = i === 0 ? lo + half : (out[i - 1] as number) + gap;
+    const floor = i === 0 ? lo + w(0) / 2 : (out[i - 1] as number) + apart(i);
     out[i] = Math.max(out[i] as number, floor);
   }
   for (let i = out.length - 1; i >= 0; i--) {
-    const ceiling = i === out.length - 1 ? hi - half : (out[i + 1] as number) - gap;
-    out[i] = Math.max(lo + half, Math.min(out[i] as number, ceiling));
+    const last = out.length - 1;
+    const ceiling = i === last ? hi - w(last) / 2 : (out[i + 1] as number) - apart(i + 1);
+    out[i] = Math.max(lo + w(i) / 2, Math.min(out[i] as number, ceiling));
   }
   return out;
 }
@@ -432,7 +444,7 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
   const names = new Map(input.agents.map((agent) => [agent.id, agent.name]));
 
   const placed = input.agents.map((agent) => ({ agent, face: placeFace(agent, input, today) }));
-  const pile = placed.filter(({ face }) => !face).map(({ agent }) => agent.id);
+  const drowsy = placed.filter(({ face }) => !face).map(({ agent }) => agent.id);
   const wanted = placed.flatMap(({ face }) => (face ? [face] : []));
 
   const band = bandFrom(input.outcomes);
@@ -489,59 +501,92 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
         label: one.allDay ? `${one.title}, ${day}, all day` : `${one.title}, ${day} ${when}`,
       };
     });
-  // Faces and what is scheduled share one row, so they are spread as one:
-  // spread apart, a run due at eight would sit on top of a face working now.
-  // When the strip cannot hold every face and every item a face apart, the
-  // schedule gives way: who needs you and who is working come first.
-  const fits = (wanted.length + runs.length + occasions.length) * input.faceSpan <= 1;
   const longest = (...texts: string[]) => texts.reduce((a, b) => (b.length > a.length ? b : a), "");
-  const row = [
-    ...wanted.map((face) => ({
-      face,
-      item: null,
-      at: face.at,
-      x: xAt(scale, face.at),
-      text: names.get(face.agentId) ?? "",
-    })),
-    ...(fits ? [...runs, ...occasions] : []).map((item) => ({
-      face: null,
-      item,
-      at: item.at,
-      x: xAt(scale, item.at),
-      text: longest(item.what, item.when),
-    })),
-  ].sort((a, b) => a.x - b.x || a.at - b.at);
-
-  // Half of what a label is reckoned to take, never less than half a face.
   const charSpan = input.charSpan ?? 0;
+  // Half of what a label is reckoned to take, never less than half a face.
   const halfOf = (text: string) => Math.max(input.faceSpan, text.length * charSpan) / 2;
+  type Row = {
+    face: Omit<RibbonFace, "x" | "label" | "align"> | null;
+    item: (typeof runs)[number] | null;
+    at: number;
+    x: number;
+    text: string;
+    width: number;
+  };
+  // A face takes its name and a character of air, so two names never touch;
+  // an item takes a face, and says what it is only where there is room.
+  const faceRows: Row[] = wanted.map((face) => {
+    const text = names.get(face.agentId) ?? "";
+    const x = xAt(scale, face.at);
+    return { face, item: null, at: face.at, x, text, width: 2 * halfOf(text) + charSpan };
+  });
+  const itemRows: Row[] = [...runs, ...occasions].map((item) => ({
+    face: null,
+    item,
+    at: item.at,
+    x: xAt(scale, item.at),
+    text: longest(item.what, item.when),
+    width: input.faceSpan,
+  }));
+  const byX = (a: Row, b: Row) => a.x - b.x || a.at - b.at;
+  const total = (rows: Row[]) => rows.reduce((sum, one) => sum + one.width, 0);
 
   // No label is drawn under the now line. What happened is spread left of it
   // and what is live or still coming right of it, each side kept a label's
   // half and a character clear: Marlow working at 9:12 sits just after the
   // line rather than with his name cut through by it.
   const nowX = xAt(scale, now);
-  const after = (one: (typeof row)[number]) => one.at > now || one.face?.state === "working";
-  const before = row.filter((one) => !after(one));
-  const later = row.filter(after);
-  const gap = input.faceSpan;
-  const last = before[before.length - 1];
-  const first = later[0];
+  const after = (one: Row) => one.at > now || one.face?.state === "working";
+  const beforeHi = (rows: Row[]) => {
+    const last = rows[rows.length - 1] as Row;
+    return nowX - halfOf(last.text) - charSpan + last.width / 2;
+  };
+  const laterLo = (rows: Row[]) => {
+    const first = rows[0] as Row;
+    return nowX + halfOf(first.text) + charSpan - first.width / 2;
+  };
+
+  // When the faces left of now cannot stand side by side, the oldest go to
+  // the pile, one at a time, until the rest can; nobody who needs you does.
+  const before = faceRows.filter((one) => !after(one)).sort(byX);
+  const piled = new Set<AgentId>();
+  while (before.length > 0 && total(before) > beforeHi(before) + 1e-9) {
+    const oldest = before
+      .filter((one) => one.face?.state !== "needsYou")
+      .reduce<Row | null>((a, b) => (a === null || b.at < a.at ? b : a), null);
+    if (!oldest?.face) break;
+    piled.add(oldest.face.agentId);
+    before.splice(before.indexOf(oldest), 1);
+  }
+  const pile = input.agents
+    .map((agent) => agent.id)
+    .filter((id) => drowsy.includes(id) || piled.has(id));
+
+  // Faces and what is scheduled share one row right of now, so they are
+  // spread as one: spread apart, a run due at eight would sit on top of a
+  // face working now. When that side cannot hold them all, the schedule gives
+  // way: who is working comes first.
+  const liveFaces = faceRows.filter(after);
+  const withItems = [...liveFaces, ...itemRows].sort(byX);
+  const later =
+    withItems.length === 0 || total(withItems) <= 1 - laterLo(withItems) + 1e-9
+      ? withItems
+      : liveFaces.sort(byX);
   const ordered = [...before, ...later];
   const xs = [
-    ...(last
+    ...(before.length
       ? spread(
           before.map((one) => one.x),
-          gap,
+          before.map((one) => one.width),
           0,
-          nowX - halfOf(last.text) - charSpan + gap / 2,
+          beforeHi(before),
         )
       : []),
-    ...(first
+    ...(later.length
       ? spread(
           later.map((one) => one.x),
-          gap,
-          nowX + halfOf(first.text) + charSpan - gap / 2,
+          later.map((one) => one.width),
+          laterLo(later),
           1,
         )
       : []),

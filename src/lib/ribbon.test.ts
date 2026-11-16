@@ -286,6 +286,87 @@ describe("where a request stops waiting", () => {
 });
 
 describe("crowding", () => {
+  const NAMES = ["Researcher", "Critic", "Manager", "Scribe", "Planner", "Archivist"];
+  const NAMES_12 = [
+    ...NAMES,
+    "Translator",
+    "Navigator",
+    "Editor",
+    "Auditor",
+    "Reviewer",
+    "Builder",
+  ];
+
+  /** Who finished within six minutes of now, as at the window's own sizes. */
+  function crowd(names: string[], width: number) {
+    const agents = names.map((name) => anAgent(name.toLowerCase(), { name }));
+    const outcomes = agents.map((agent, i) =>
+      anOutcome({
+        agentId: agent.id,
+        startedAt: NOW - 600_000,
+        finishedAt: NOW - (i % 6) * 60_000,
+      }),
+    );
+    const faceSpan = 52 / width;
+    const charSpan = 8 / width;
+    const input = morning({
+      agents,
+      outcomes,
+      approvals: [],
+      activity: {},
+      upcoming: [],
+      occasions: [],
+      faceSpan,
+      charSpan,
+    });
+    return { ribbon: layoutRibbon(input), agents, faceSpan, charSpan };
+  }
+
+  for (const [names, width] of [
+    [NAMES, 1280],
+    [NAMES, 900],
+    [NAMES, 375],
+    [NAMES_12, 1280],
+    [NAMES_12, 900],
+    [NAMES_12, 375],
+  ] as const) {
+    it(`never lets ${names.length} faces or their names touch at ${width} wide`, () => {
+      const { ribbon, agents, faceSpan, charSpan } = crowd([...names], width);
+      const name = new Map(agents.map((agent) => [agent.id, agent.name]));
+      const half = (id: string) => Math.max(faceSpan, (name.get(id) ?? "").length * charSpan) / 2;
+      const faces = [...ribbon.faces].sort((a, b) => a.x - b.x);
+      for (let i = 1; i < faces.length; i++) {
+        const a = faces[i - 1] as (typeof faces)[number];
+        const b = faces[i] as (typeof faces)[number];
+        expect(b.x - a.x).toBeGreaterThanOrEqual(
+          half(a.agentId) + half(b.agentId) + charSpan - 1e-9,
+        );
+      }
+      for (const face of faces) {
+        expect(face.x).toBeGreaterThanOrEqual(faceSpan / 2 - 1e-9);
+        expect(face.x).toBeLessThanOrEqual(1 - faceSpan / 2 + 1e-9);
+        const off = Math.abs(face.x - ribbon.now.x);
+        expect(off).toBeGreaterThanOrEqual(half(face.agentId) - 1e-9);
+      }
+      // Nobody is lost: whoever does not fit is in the pile, newest kept.
+      expect([...faces.map((face) => face.agentId), ...ribbon.pile].sort()).toEqual(
+        agents.map((agent) => agent.id).sort(),
+      );
+      expect(faces.length).toBeGreaterThan(0);
+    });
+  }
+
+  it("sends the oldest to the pile, not the newest, when the strip cannot hold them", () => {
+    const { ribbon } = crowd(NAMES_12, 375);
+    expect(ribbon.pile.length).toBeGreaterThan(0);
+    const finished = new Map(
+      NAMES_12.map((name, i) => [name.toLowerCase(), NOW - (i % 6) * 60_000] as const),
+    );
+    const newestPiled = Math.max(...ribbon.pile.map((id) => finished.get(id) ?? 0));
+    const oldestDrawn = Math.min(...ribbon.faces.map((face) => finished.get(face.agentId) ?? 0));
+    expect(newestPiled).toBeLessThanOrEqual(oldestDrawn);
+  });
+
   it("pushes faces at one moment a face apart", () => {
     const outcomes = ["ines", "tomas", "noor"].map((agentId) =>
       anOutcome({ agentId, startedAt: at(16, 4), finishedAt: at(16, 4, 10) }),
@@ -396,7 +477,16 @@ describe("what is scheduled", () => {
     // A phone's strip holds five faces' width. Five faces and four items
     // drawn on it overlapped every name; the faces are what it is for.
     const ribbon = layoutRibbon(morning({ faceSpan: 0.2 }));
-    expect(ribbon.faces).toHaveLength(layoutRibbon(morning()).faces.length);
+    const drawn = ribbon.faces.map((one) => one.agentId);
+    for (const one of layoutRibbon(morning()).faces) {
+      expect(drawn.includes(one.agentId) || ribbon.pile.includes(one.agentId)).toBe(true);
+    }
+    expect(drawn).toContain("dara");
+    expect(drawn).toContain("marlow");
+    const xs = ribbon.faces.map((one) => one.x).sort((a, b) => a - b);
+    for (let i = 1; i < xs.length; i++) {
+      expect((xs[i] as number) - (xs[i - 1] as number)).toBeGreaterThanOrEqual(0.2 - 1e-9);
+    }
     expect(ribbon.scheduled).toEqual([]);
   });
 
@@ -483,7 +573,7 @@ describe("labels", () => {
     expect(note?.words).toBe(true);
     expect(note?.align).toBe("end");
     const tomas = ribbon.faces[0];
-    expect(tomas?.align).toBe("start");
+    expect((tomas?.x ?? 0) - half("Tomás Villanueva-Ortega")).toBeGreaterThanOrEqual(-1e-9);
     // Hung from the mark's edge, each label then ends a half face from it.
     expect((note?.x ?? 1) + SPAN / 2).toBeLessThanOrEqual(1);
     expect((tomas?.x ?? 0) - SPAN / 2).toBeGreaterThanOrEqual(0);
