@@ -317,11 +317,71 @@ def free_port() -> int:
         return probe.getsockname()[1]
 
 
+class StandIn:
+    """An OpenAI-compatible endpoint on loopback that the scratch Host is
+    pointed at, so a scenario can make an agent really run without a key and
+    without spending anything.
+
+    A turn whose newest message from the operator contains `ASK` asks the
+    operator a question with `ask_operator`; every other turn answers with
+    REPLY, whose first line is the run's headline. The Host's own code does
+    everything else: the outcome, the parked question, the outbox row.
+    """
+
+    ASK = "PROBE-ASK"
+    REPLY = "Probe test run finished.\nNothing here needs you; this is a scripted reply."
+    QUESTION = "Probe test question: which one?"
+
+    def __init__(self, scratch: Scratch) -> None:
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        stand_in = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *_: Any) -> None:
+                pass
+
+            def do_POST(self) -> None:
+                body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
+                frames = stand_in.answer(body.get("messages", []))
+                self.send_response(200)
+                self.send_header("content-type", "text/event-stream")
+                self.end_headers()
+                for frame in frames:
+                    self.wfile.write(f"data: {json.dumps(frame)}\n\n".encode())
+                self.wfile.write(b"data: [DONE]\n\n")
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.base = f"http://127.0.0.1:{self.server.server_address[1]}/v1"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        scratch.track(self.server.shutdown)
+
+    def answer(self, messages: list[dict]) -> list[dict]:
+        """The stream for one call, in the shape every compatible provider sends."""
+        asked = next((m for m in reversed(messages) if m.get("role") == "user"), {})
+        text = asked.get("content") or ""
+        if isinstance(text, list):
+            text = " ".join(part.get("text", "") for part in text if isinstance(part, dict))
+        answered = any(m.get("role") == "tool" for m in messages[messages.index(asked) + 1:]) if asked else False
+        usage = {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}
+        if self.ASK in text and not answered:
+            call = {"index": 0, "id": "call_ask", "type": "function",
+                    "function": {"name": "ask_operator",
+                                 "arguments": json.dumps({"question": self.QUESTION, "options": ["First", "Second"]})}}
+            return [{"choices": [{"index": 0, "delta": {"tool_calls": [call]}}]},
+                    {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}], "usage": usage}]
+        return [{"choices": [{"index": 0, "delta": {"content": self.REPLY}}]},
+                {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}], "usage": usage}]
+
+
 class Host:
     """guacad on loopback, with a data directory nobody else uses."""
 
-    def __init__(self, scratch: Scratch) -> None:
+    def __init__(self, scratch: Scratch, minute_ms: int | None = None) -> None:
         self.scratch = scratch
+        # A shorter minute for the outbox's two waits (src-tauri/src/probe_clock.rs),
+        # so a scenario about being away does not take twelve real minutes.
+        self.minute_ms = minute_ms
         self.port = free_port()
         self.origin = f"http://127.0.0.1:{self.port}"
         self.token = secrets.token_hex(32)
@@ -338,6 +398,8 @@ class Host:
             "GUACA_TOKEN": self.token,
             "GUAC_LOG": "guac=info,warn",
         }
+        if self.minute_ms:
+            env["GUACA_PROBE_MINUTE_MS"] = str(self.minute_ms)
         log = open(self.scratch.root / "host.log", "ab")
         self.proc = subprocess.Popen(
             [str(GUACAD)], env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True
@@ -406,6 +468,35 @@ class Host:
     def agent_id(self, name: str) -> str:
         with sqlite3.connect(f"file:{self.db}?mode=ro", uri=True) as conn:
             return conn.execute("SELECT id FROM agents WHERE name=?", (name,)).fetchone()[0]
+
+    def call(self, name: str, **args: Any) -> Any:
+        """One command on the Host, over the route a browser uses."""
+        request = urllib.request.Request(
+            f"{self.origin}/v1/call",
+            data=json.dumps({"name": name, "args": args}).encode(),
+            headers={"content-type": "application/json", "authorization": f"Bearer {self.token}"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=30) as answer:
+            return json.loads(answer.read())["ok"]
+
+    def use(self, model: StandIn) -> None:
+        """Turns paid for by the stand-in. The key is a placeholder the
+        provider check needs; it is sent nowhere but loopback."""
+        self.call("update_settings", patch={"provider": "compatible", "baseUrl": model.base,
+                                            "apiKey": "probe-stand-in", "defaultModel": "probe/stand-in"})
+
+    def send(self, agent: str, text: str) -> None:
+        """The operator writes to an agent, which starts a run."""
+        self.call("send_message", agentId=self.agent_id(agent), text=text)
+
+    def rows(self, kind: str | None = None) -> list[dict]:
+        with sqlite3.connect(f"file:{self.db}?mode=ro", uri=True) as conn:
+            conn.row_factory = sqlite3.Row
+            found = [dict(row) for row in conn.execute(
+                "SELECT id, kind, destination, status, title, body, target, last_error, next_attempt_at "
+                "FROM outbox ORDER BY created_at")]
+        return [row for row in found if kind is None or row["kind"] == kind]
 
 
 class Client:
@@ -928,7 +1019,9 @@ class Prompted:
     pressing a button on it. Whatever was started is stopped on the way out,
     however far it got: a question nobody answers is left on someone's screen."""
 
-    def __init__(self, record: Record, scratch: Scratch, button: str, count: int = 1, busy: int = 0) -> None:
+    def __init__(self, record: Record, scratch: Scratch, button: str, count: int = 1, busy: int = 0,
+                 minute_ms: int | None = None) -> None:
+        self.minute_ms = minute_ms
         self.record = record
         self.scratch = scratch
         self.button = button
@@ -950,7 +1043,7 @@ class Prompted:
     def _answer(self) -> None:
         screen_step(f"pressing {self.button}")
         bundle = fresh_bundle()
-        self.host = Host(self.scratch)
+        self.host = Host(self.scratch, self.minute_ms)
         self.record.secrets.append(self.host.token)
         delivery = self.host.seed({"agent": "Critic"}, self.count)
         assert delivery
@@ -1120,6 +1213,55 @@ def scenario_capture(record: Record, scratch: Scratch) -> None:
         host.stop()
         app.forget()
 
+LONG_AWAY_S = 6 * 60
+"""How long the operator stays away in the long-away scenario, in real
+seconds. WebKit suspends a page nobody can see after about five minutes, by
+the wall clock; no shorter minute on the Host stands in for that."""
+
+
+def scenario_longaway(record: Record, scratch: Scratch) -> None:
+    """Screen: Guaca hidden for six minutes; a question and a finished run are each a banner."""
+    # The Host's minute is short so the finished run's ten-minute gathering
+    # does not add ten more; the six minutes hidden are real.
+    with Prompted(record, scratch, "Allow", minute_ms=6000) as it:
+        assert it.app and it.host and it.log and it.app.client
+        host, app, log = it.host, it.app, it.log
+        log.wait_for("macOS presents the waiting delivery", banner(app.bundle), 15)
+        host.use(StandIn(scratch))
+        before = front()
+        screen_step("clicking the first banner, to be at the window")
+        press_when_shown("clicking the first banner", "press-group", DELIVERY_TITLE)
+        wait_until("the test build comes forward", lambda: front().get("pid") == app.pid, 5)
+        hand_back(app, before)
+        hidden = time.monotonic()
+        while time.monotonic() < hidden + LONG_AWAY_S:
+            time.sleep(5)
+        shown = len(log.matching(banner(app.bundle)))
+        host.send("Researcher", f"{StandIn.ASK}: ask me something")
+        host.send("Scribe", "Say something short; this is a probe test.")
+        wait_until("both runs leave a row", lambda: len(
+            [r for r in host.rows() if r["kind"] == "outcome" or "question" in r["title"]]) == 2, 30)
+        def both() -> list[dict]:
+            return [{k: r[k] for k in ("kind", "status")} for r in host.rows()
+                    if r["kind"] == "outcome" or "question" in r["title"]]
+
+        # The question is offered at once and the finished run when its
+        # gathering closes, a minute on this Host; then a few seconds each.
+        claimed = wait_quietly(lambda: all(r["status"] == "delivered" for r in both()), 90)
+        record.check("after six minutes hidden: the window takes the question and the finished run",
+                     claimed is not None, None if claimed else {"rows": both()})
+        if claimed:
+            presented = wait_quietly(lambda: len(log.matching(banner(app.bundle))) >= shown + 2, 10)
+            record.check("and each is a banner", presented is not None,
+                         {"banners": len(log.matching(banner(app.bundle))) - shown})
+
+
+def wait_quietly(check: Callable[[], Any], seconds: float) -> Any:
+    try:
+        return wait_until("x", check, seconds)
+    except Failed:
+        return None
+
 
 SCENARIOS: dict[str, Callable[[Record, Scratch], None]] = {
     "launch": scenario_launch,
@@ -1133,6 +1275,7 @@ SCENARIOS: dict[str, Callable[[Record, Scratch], None]] = {
     "click": scenario_click,
     "away": scenario_away,
     "capture": scenario_capture,
+    "longaway": scenario_longaway,
 }
 
 

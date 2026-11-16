@@ -211,6 +211,7 @@ keeps a walk of the tree to a fraction of a second.
 | `click` | Screen: a delivery about one conversation is shown as a banner; clicking it opens that conversation. |
 | `away` | Screen: four deliveries waiting when the window connects, then Allow; all four are claimed and macOS presents exactly one banner, the "While you were away" fold. |
 | `capture` | Screen: one image of each of the test build's own windows, the panel open, and nothing else. |
+| `longaway` | Screen: at the window once, then Guaca hidden for six real minutes, long enough for WebKit to suspend a page nobody can see; a question and a finished run, on a Host with a six-second minute, are each claimed and drawn as a banner. On a build whose main window lets WebKit suspend its page, both stay unclaimed. |
 
 The screen scenarios press system UI found by accessibility role and name, only
 inside the group whose text names the test build, and only while nobody has
