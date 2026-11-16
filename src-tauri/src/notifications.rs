@@ -133,9 +133,22 @@ mod imp {
             // delegate on the main run loop, which this only waits to hear.
             tauri::async_runtime::spawn(async move {
                 if handle.response().await.is_ok_and(|response| response.is_default_action()) {
+                    #[cfg(feature = "probe")]
+                    crate::probe::trace::event(
+                        crate::probe::trace::Phase::NotificationDefault,
+                        u64::from(click),
+                        0,
+                    );
                     use tauri::Emitter;
                     if let Err(err) = app.emit(super::CLICKED, click) {
                         tracing::warn!(%err, "could not report a click on a notification");
+                    } else {
+                        #[cfg(feature = "probe")]
+                        crate::probe::trace::event(
+                            crate::probe::trace::Phase::NotificationClicked,
+                            u64::from(click),
+                            0,
+                        );
                     }
                 }
             });

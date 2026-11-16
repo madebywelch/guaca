@@ -18,6 +18,7 @@ import { SettingsDialog } from "./components/SettingsDialog";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { applyAppearance, watchSystemSurface } from "./lib/appearance";
+import { diagnostic } from "./lib/diagnostic";
 import { unreachableHint } from "./lib/host";
 import { api, onRevealRequest } from "./lib/ipc";
 import { bindingFor } from "./lib/keybinds";
@@ -79,6 +80,7 @@ export default function App() {
    * the store at the moment it is asked, so it can be made once.
    */
   const reveal = useCallback((target: Reveal) => {
+    if (target.kind === "agent") diagnostic("reveal.agent", target.id);
     const state = useStore.getState();
     if (target.kind === "forYou") state.showForYou(true);
     else void state.select(target.id);

@@ -482,6 +482,13 @@ impl Tray {
     /// Shown *and* unminimized *and* focused, because the window can be in any
     /// of the three states and only one of the three calls fixes each.
     pub fn open_window(&self, target: Option<Reveal>) {
+        #[cfg(feature = "probe")]
+        let trace_id = match &target {
+            Some(Reveal::Agent { id }) => crate::probe::trace::opaque(&id.to_string()),
+            _ => 0,
+        };
+        #[cfg(feature = "probe")]
+        crate::probe::trace::event(crate::probe::trace::Phase::WindowOpen, trace_id, 0);
         if let Some(panel) = self.app.get_webview_window(PANEL) {
             self.put_away(&panel, false);
         }
@@ -508,6 +515,9 @@ impl Tray {
             // nowhere to go.
             if let Err(err) = self.app.emit_to(window.label(), REVEAL, target) {
                 tracing::debug!(%err, "could not ask the window to go anywhere");
+            } else {
+                #[cfg(feature = "probe")]
+                crate::probe::trace::event(crate::probe::trace::Phase::WindowReveal, trace_id, 0);
             }
         }
     }
@@ -533,14 +543,22 @@ impl Tray {
     /// A left click on the icon, where macOS has put it: the same `toggle` a
     /// click runs, from the same place, so the panel opens or closes exactly
     /// as it would for a person.
-    pub fn probe_click(&self) -> Result<(), String> {
+    pub fn probe_click(&self) -> Result<bool, String> {
         let rect = self
             .icon
             .rect()
             .map_err(|err| err.to_string())?
             .ok_or("the menu bar icon is not on screen")?;
+        let closing = self.host.lock().ready()
+            && self
+                .app
+                .get_webview_window(PANEL)
+                .is_some_and(|panel| panel.is_visible().unwrap_or(false))
+            && !main_window(&self.app).is_some_and(|window| window.is_visible().unwrap_or(false));
+        crate::probe::trace::event(crate::probe::trace::Phase::ToggleEnter, 0, u64::from(closing));
         self.toggle(rect);
-        Ok(())
+        crate::probe::trace::event(crate::probe::trace::Phase::ToggleReturn, 0, u64::from(closing));
+        Ok(closing)
     }
 }
 
