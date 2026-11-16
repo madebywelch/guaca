@@ -1,6 +1,7 @@
 /** One backend transport for browsers and the native desktop client. */
 
 import { COMMIT, VERSION } from "./build";
+import { diagnostic } from "./diagnostic";
 import { compatibility, parseHealth } from "./releases";
 import type { NotificationAccess, UiEvent } from "./types";
 
@@ -998,6 +999,7 @@ let listeningOnMac: Promise<unknown> | null = null;
 /** Keeps what a click on a notification should do, and the id to find it by. */
 function remember(onClick: () => void): number {
   const id = nextClick++ % 2 ** 31;
+  diagnostic("notification.remembered", id);
   clicks.set(id, onClick);
   for (const oldest of clicks.keys()) {
     if (clicks.size <= CLICKS_KEPT) break;
@@ -1008,8 +1010,12 @@ function remember(onClick: () => void): number {
 
 /** Runs what a click on the notification raised with this id should do, once. */
 function clicked(id: number | undefined) {
+  diagnostic("notification.clicked", id ?? 0);
   const go = id === undefined ? undefined : clicks.get(id);
-  if (id === undefined || !go) return;
+  if (id === undefined || !go) {
+    diagnostic("notification.missing", id ?? 0);
+    return;
+  }
   clicks.delete(id);
   go();
 }

@@ -44,6 +44,10 @@ const PAGE: Duration = Duration::from_secs(10);
 /// Opens the socket, if this launch named one. Called once the tray exists.
 pub fn start(app: &AppHandle) {
     let Some(path) = std::env::var_os(SOCKET_ENV).map(PathBuf::from) else { return };
+    if let Err(err) = super::toggle::native::install(app) {
+        tracing::error!(%err, "the probe hide observer did not start");
+        return;
+    }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(err) = serve(app, &path).await {
@@ -103,11 +107,7 @@ async fn handle(app: &AppHandle, request: Request) -> Result<Value, String> {
         })),
         Request::State => state(app).await,
         Request::Page { window, call } => page(app, &window, &call).await,
-        Request::ClickIcon => {
-            let tray = app.try_state::<Arc<Tray>>().ok_or("this launch has no menu bar icon")?;
-            let tray = Arc::clone(&tray);
-            blocking(move || tray.probe_click()).await?.map(|()| Value::Null)
-        }
+        Request::ClickIcon => super::toggle::native::click(app).await.map(|()| Value::Null),
         Request::Close { window } => {
             let window = app
                 .get_webview_window(&window)

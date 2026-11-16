@@ -8,7 +8,7 @@
 
 import { useCallback, useMemo } from "react";
 import { create } from "zustand";
-
+import { diagnostic } from "./diagnostic";
 import { api } from "./ipc";
 import { forgetRestart, type Link, restarting } from "./link";
 import { loadPrefs, type Prefs, savePrefs } from "./prefs";
@@ -780,17 +780,22 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async select(key, valid = () => true) {
+    diagnostic("select.requested", key);
     // A pending routine request goes with the channel it was asked from, for
     // the same reason `focused` does: it is about a row on the screen the
     // operator is leaving, and honoring it later would open something they
     // asked for somewhere else.
-    if (!valid()) return;
+    if (!valid()) {
+      diagnostic("select.invalid", key);
+      return;
+    }
     set((state) => ({
       selected: key,
       focused: null,
       openingRoutine: null,
       railGroup: keptFocus(state, key),
     }));
+    diagnostic("select.committed", get().selected);
     await get().loadChannel(key, undefined, valid);
   },
 

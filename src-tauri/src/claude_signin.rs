@@ -81,7 +81,9 @@ impl Signin {
             sessions.clear();
             let program = program.to_owned();
             let task = tokio::spawn(async move {
-                let outcome = run(&program, url_tx, code_rx, cancel_rx, EXPIRES).await;
+                // Lazy, so the deadline is set when the program has spawned.
+                let expired = async { tokio::time::sleep(EXPIRES).await };
+                let outcome = run(&program, url_tx, code_rx, cancel_rx, expired).await;
                 let _ = result_tx.send(outcome);
             });
             let starting = CancelOnDrop(Some(cancel_tx.clone()));
@@ -165,7 +167,7 @@ async fn run(
     url_tx: oneshot::Sender<String>,
     code_rx: oneshot::Receiver<String>,
     mut cancel: watch::Receiver<bool>,
-    expires: Duration,
+    expired: impl std::future::Future<Output = ()>,
 ) -> Outcome {
     let Ok(mut child) = tokio::process::Command::new(program)
         .args(["auth", "login", "--claudeai"])
@@ -182,7 +184,7 @@ async fn run(
         result = perform(program, &mut child, url_tx, code_rx) => if result { Outcome::SignedIn } else { Outcome::Failed },
         _ = invalid_code(stderr) => Outcome::InvalidCode,
         _ = cancel.changed() => Outcome::Cancelled,
-        _ = tokio::time::sleep(expires) => Outcome::Expired,
+        _ = expired => Outcome::Expired,
     };
     if child.try_wait().ok().flatten().is_none() {
         let _ = child.kill().await;
@@ -376,15 +378,27 @@ mod tests {
 
     #[tokio::test]
     async fn an_expired_attempt_returns_timeout_and_reaps_the_child() {
-        let (_dir, path) = program(&format!("{PROMPTS}\nexec sleep 60"));
+        let (dir, path) = program(&format!("echo $$ > \"$0.pid\"\n{PROMPTS}\nexec sleep 60"));
         let (url_tx, url_rx) = oneshot::channel();
         let (_code_tx, code_rx) = oneshot::channel();
         let (_cancel_tx, cancel_rx) = watch::channel(false);
+        let (expire, expired) = oneshot::channel::<()>();
         let task = tokio::spawn(async move {
-            run(&path, url_tx, code_rx, cancel_rx, Duration::from_secs(1)).await
+            run(&path, url_tx, code_rx, cancel_rx, async {
+                let _ = expired.await;
+            })
+            .await
         });
         url_rx.await.unwrap();
+        expire.send(()).unwrap();
         assert!(matches!(task.await.unwrap(), Outcome::Expired));
+        let pid = std::fs::read_to_string(dir.path().join("claude.pid")).unwrap();
+        assert!(!std::process::Command::new("kill")
+            .args(["-0", pid.trim()])
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success());
     }
 
     #[tokio::test]

@@ -19,6 +19,7 @@ import { StatusBar } from "./components/StatusBar";
 import { Timeline } from "./components/Timeline";
 import { TopBar } from "./components/TopBar";
 import { applyAppearance, watchSystemSurface } from "./lib/appearance";
+import { diagnostic } from "./lib/diagnostic";
 import { dismissing } from "./lib/dismiss";
 import { unreachableHint } from "./lib/host";
 import { api, onRevealRequest } from "./lib/ipc";
@@ -87,6 +88,7 @@ export default function App() {
    * opens on the conversation, working or not: what was clicked was a message.
    */
   const reveal = useCallback((target: Reveal) => {
+    if (target.kind === "agent") diagnostic("reveal.agent", target.id);
     const state = useStore.getState();
     if (target.kind === "forYou") {
       revealing.current = null;
