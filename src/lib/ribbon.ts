@@ -70,6 +70,15 @@ export interface RibbonScheduled {
   when: string;
   /** The whole of it, day included: "Changelog type check, Tue 9:00 AM". */
   label: string;
+  /**
+   * The distance to the nearest thing beside it on the strip, as a share of
+   * the strip. Its words get that much width and no more, and none at all
+   * when it is less than a face: a crowd of names written over each other
+   * says nothing, and the label above is still read out.
+   */
+  room: number;
+  /** Whether there is room for its words beside it at all: two faces' width. */
+  words: boolean;
 }
 
 export interface RibbonLapse {
@@ -111,6 +120,9 @@ export interface Ribbon {
 
 /** A face on the ribbon and the air beside it, in CSS pixels at 100%. */
 export const RIBBON_FACE_PX = 52;
+
+/** How many faces' width a scheduled item needs free beside it to say what it is. */
+const WORDS_SPANS = 2;
 
 export const BAND_LABEL = "Since you last looked";
 
@@ -384,31 +396,30 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
   const start = Math.max(now - 24 * HOUR, Math.floor((earliest - LEAD) / HOUR) * HOUR);
   const scale = buildScale(start, now, days);
 
-  const order = wanted
-    .map((face) => ({ ...face, x: xAt(scale, face.at) }))
-    .sort((a, b) => a.x - b.x || a.at - b.at);
-  const faceXs = spread(
-    order.map((face) => face.x),
-    input.faceSpan,
-  );
-  const faces = order.map((face, i) => ({
-    ...face,
-    x: faceXs[i] as number,
-    label: faceLabel(names.get(face.agentId) ?? "", face.state, face.at, now),
-  }));
-
   const dayName = (at: number) =>
     at < dayStart(now, 1) ? "today" : new Date(at).toLocaleDateString([], { weekday: "short" });
-  const runs = input.upcoming
-    .filter((run) => names.has(run.agentId) && run.nextRunAt >= now && run.nextRunAt < weekEnd)
-    .map((run) => ({
+  // The same routine at the same moment for several agents is one item: nine
+  // copies of it side by side would push the last of them days away from
+  // the moment all nine are at.
+  const together = new Map<string, UpcomingRun[]>();
+  for (const run of input.upcoming) {
+    if (!names.has(run.agentId) || run.nextRunAt < now || run.nextRunAt >= weekEnd) continue;
+    const key = `${run.name} at ${Math.floor(run.nextRunAt / MINUTE)}`;
+    together.set(key, [...(together.get(key) ?? []), run]);
+  }
+  const runs = [...together.values()].map((same) => {
+    const run = same[0] as UpcomingRun;
+    const agents = new Set(same.map((one) => one.agentId)).size;
+    const who = agents > 1 ? ` for ${agents} agents` : "";
+    return {
       key: `run:${run.routineId}`,
       agentId: run.agentId as AgentId | null,
       at: run.nextRunAt,
       what: run.name,
       when: clockLabel(run.nextRunAt),
-      label: `${run.name}, ${dayName(run.nextRunAt)} ${clockLabel(run.nextRunAt)}`,
-    }));
+      label: `${run.name}${who}, ${dayName(run.nextRunAt)} ${clockLabel(run.nextRunAt)}`,
+    };
+  });
   const occasions = input.occasions
     .filter((one) => (one.allDay ? one.startsAt > today : one.startsAt >= now))
     .filter((one) => one.startsAt < weekEnd)
@@ -430,14 +441,36 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
         label: one.allDay ? `${one.title}, ${day}, all day` : `${one.title}, ${day} ${when}`,
       };
     });
-  const items = [...runs, ...occasions]
-    .map((item) => ({ ...item, x: xAt(scale, item.at) }))
-    .sort((a, b) => a.x - b.x || a.at - b.at);
-  const itemXs = spread(
-    items.map((item) => item.x),
+  // Faces and what is scheduled share one row, so they are spread as one:
+  // spread apart, a run due at eight would sit on top of a face working now.
+  const row = [
+    ...wanted.map((face) => ({ face, item: null, at: face.at, x: xAt(scale, face.at) })),
+    ...[...runs, ...occasions].map((item) => ({
+      face: null,
+      item,
+      at: item.at,
+      x: xAt(scale, item.at),
+    })),
+  ].sort((a, b) => a.x - b.x || a.at - b.at);
+  const xs = spread(
+    row.map((one) => one.x),
     input.faceSpan,
   );
-  const scheduled = items.map((item, i) => ({ ...item, x: itemXs[i] as number }));
+  const faces: RibbonFace[] = [];
+  const scheduled: RibbonScheduled[] = [];
+  row.forEach((one, i) => {
+    const x = xs[i] as number;
+    if (one.face) {
+      const label = faceLabel(names.get(one.face.agentId) ?? "", one.face.state, one.face.at, now);
+      faces.push({ ...one.face, x, label });
+      return;
+    }
+    if (!one.item) return;
+    const before = i > 0 ? x - (xs[i - 1] as number) : 2 * x;
+    const after = i < xs.length - 1 ? (xs[i + 1] as number) - x : 2 * (1 - x);
+    const room = Math.min(before, after);
+    scheduled.push({ ...one.item, x, room, words: room >= WORDS_SPANS * input.faceSpan });
+  });
 
   const lapses = input.approvals.flatMap((one) =>
     one.lapsesAt === null

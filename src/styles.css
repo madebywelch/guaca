@@ -10342,6 +10342,23 @@ button.artifacts__version[aria-pressed="true"] {
   transition: left var(--tempo-move) var(--ease);
 }
 
+/* Its words get the room beside it on the strip and no more. */
+.ribbon__item {
+  max-width: calc(var(--ribbon-room, 1) * (100% - var(--ribbon-lead)));
+}
+
+.ribbon__item-what,
+.ribbon__item-when {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ribbon__item[data-words="none"] .ribbon__item-what,
+.ribbon__item[data-words="none"] .ribbon__item-when {
+  display: none;
+}
+
 .ribbon__face-button,
 .ribbon__pile-button {
   display: flex;
@@ -10622,7 +10639,7 @@ button.artifacts__version[aria-pressed="true"] {
 
 /* ---- The field -------------------------------------------------------- */
 
-.ask__box {
+.intake__box {
   display: flex;
   align-items: center;
   gap: var(--space-4);
@@ -10633,11 +10650,16 @@ button.artifacts__version[aria-pressed="true"] {
   box-shadow: var(--lift-1);
 }
 
-.ask__box:focus-within {
+.intake__box:focus-within {
   border-color: var(--rule-hard);
 }
 
-.ask__input {
+.intake {
+  /* The tallest the field grows before it scrolls, the composer's cap. */
+  --intake-max: 12rem;
+}
+
+.intake__input {
   flex: 1;
   min-width: 0;
   border: 0;
@@ -10649,18 +10671,19 @@ button.artifacts__version[aria-pressed="true"] {
   line-height: var(--lead-ui);
   padding: var(--space-2) 0;
   outline: none;
+  max-height: var(--intake-max);
 }
 
-.ask__input::placeholder {
+.intake__input::placeholder {
   color: var(--faint);
 }
 
-.ask__picker {
+.intake__picker {
   position: relative;
   flex: none;
 }
 
-.ask__target {
+.intake__target {
   display: inline-flex;
   align-items: center;
   gap: var(--space-3);
@@ -10672,15 +10695,15 @@ button.artifacts__version[aria-pressed="true"] {
   border-radius: var(--radius-pill);
 }
 
-.ask__target[data-answering] {
+.intake__target[data-answering] {
   background: var(--attention-wash);
 }
 
-.ask__target .icon {
+.intake__target .icon {
   transform: rotate(90deg);
 }
 
-.ask__menu {
+.intake__menu {
   position: absolute;
   top: calc(100% + var(--space-3));
   left: 0;
@@ -10695,13 +10718,13 @@ button.artifacts__version[aria-pressed="true"] {
   box-shadow: var(--lift-2);
 }
 
-.ask__group {
+.intake__group {
   margin: var(--space-4) var(--space-4) var(--space-2);
   color: var(--muted);
   font-size: var(--type-meta);
 }
 
-.ask__option {
+.intake__option {
   display: flex;
   align-items: center;
   gap: var(--space-4);
@@ -10715,19 +10738,19 @@ button.artifacts__version[aria-pressed="true"] {
   border-radius: var(--radius-sm);
 }
 
-.ask__option:hover,
-.ask__option[aria-selected="true"] {
+.intake__option:hover,
+.intake__option[aria-selected="true"] {
   background: var(--sunken);
 }
 
-.ask__manage {
+.intake__manage {
   margin-top: var(--space-3);
   border-top: 1px solid var(--rule);
   color: var(--muted);
 }
 
-.ask__key,
-.ask__under kbd {
+.intake__key,
+.intake__under kbd {
   font-family: var(--font-mono);
   font-size: var(--type-fine);
   color: var(--muted);
@@ -10736,7 +10759,7 @@ button.artifacts__version[aria-pressed="true"] {
   padding: var(--space-1) var(--space-3);
 }
 
-.ask__send {
+.intake__send {
   display: inline-grid;
   place-items: center;
   width: var(--space-8);
@@ -10748,12 +10771,12 @@ button.artifacts__version[aria-pressed="true"] {
   transition: opacity var(--tempo-tap) var(--ease);
 }
 
-.ask__send:disabled {
+.intake__send:disabled {
   background: var(--sunken);
   color: var(--faint);
 }
 
-.ask__under {
+.intake__under {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -10764,14 +10787,14 @@ button.artifacts__version[aria-pressed="true"] {
   font-size: var(--type-small);
 }
 
-.ask__hint {
+.intake__hint {
   display: inline-flex;
   align-items: center;
   gap: var(--space-3);
 }
 
-.ask__search,
-.ask__link,
+.intake__search,
+.intake__link,
 .home__link,
 .home__more {
   border: 0;
@@ -10784,11 +10807,11 @@ button.artifacts__version[aria-pressed="true"] {
   text-underline-offset: var(--space-1);
 }
 
-.ask__receipt {
+.intake__receipt {
   margin-left: auto;
 }
 
-.ask__failure {
+.intake__failure {
   color: var(--danger);
 }
 

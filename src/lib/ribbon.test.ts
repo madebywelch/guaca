@@ -285,6 +285,44 @@ describe("what is scheduled", () => {
     expect(layoutRibbon(morning({ upcoming, occasions: [] })).scheduled).toEqual([]);
   });
 
+  it("is one item when the same routine is due for several agents at once", () => {
+    // Nine copies side by side pushed the last of them days past the moment
+    // all nine were due at.
+    const upcoming = ["dara", "kit", "wren"].map((agentId) =>
+      run({ agentId, routineId: `review-${agentId}`, name: "Page review", nextRunAt: at(16, 10) }),
+    );
+    const scheduled = layoutRibbon(morning({ upcoming, occasions: [] })).scheduled;
+    expect(scheduled.map((one) => one.label)).toEqual(["Page review for 3 agents, today 10:00 AM"]);
+  });
+
+  it("counts agents, not routines, when one agent has the same routine twice", () => {
+    const upcoming = ["first", "second"].map((routineId) =>
+      run({ agentId: "dara", routineId, name: "Page review", nextRunAt: at(16, 10) }),
+    );
+    const scheduled = layoutRibbon(morning({ upcoming, occasions: [] })).scheduled;
+    expect(scheduled.map((one) => one.label)).toEqual(["Page review, today 10:00 AM"]);
+  });
+
+  it("shares the row with the faces and is never nearer to one than a face", () => {
+    const ribbon = layoutRibbon(morning());
+    const xs = [...ribbon.faces, ...ribbon.scheduled].map((one) => one.x).sort((a, b) => a - b);
+    for (let i = 1; i < xs.length; i++) {
+      expect((xs[i] as number) - (xs[i - 1] as number)).toBeGreaterThanOrEqual(0.05 - 1e-9);
+    }
+  });
+
+  it("keeps its words only where there is room for them beside it", () => {
+    const upcoming = [0, 5, 10].map((minute) =>
+      run({ agentId: "ines", name: `Check ${minute}`, nextRunAt: at(18, 9, minute) }),
+    );
+    const scheduled = layoutRibbon(morning({ upcoming, occasions: [] })).scheduled;
+    const middle = scheduled.find((one) => one.what === "Check 5");
+    expect(middle?.words).toBe(false);
+    expect(middle?.label).toBe("Check 5, Wed 9:05 AM");
+    const alone = layoutRibbon(morning()).scheduled.find((one) => one.what === "Type check");
+    expect(alone?.words).toBe(true);
+  });
+
   it("is never a face: an agent's routine leaves its face where it was", () => {
     const ribbon = layoutRibbon(morning());
     expect(ribbon.faces.filter((one) => one.agentId === "ines")).toHaveLength(1);

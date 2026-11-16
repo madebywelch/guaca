@@ -332,12 +332,18 @@ export default function App() {
   });
   const currentGroup = groups.find((group) => group.id === (openAgent?.groupId ?? railGroup));
   // Read the same group-over-workspace provider and key choices as the backend.
+  // On Today no group is in front of the operator, so the banner speaks for
+  // every group with someone in it, and only when none of them can reply.
+  const unpaid = (group: Group | undefined) =>
+    settings !== null &&
+    (group?.inference.provider ?? settings.provider) === "compatible" &&
+    !group?.apiKeySet &&
+    !settings.apiKeySet;
+  const peopled = groups.filter((group) => agents.some((agent) => agent.groupId === group.id));
   const needsKey =
     ready &&
     settings !== null &&
-    (currentGroup?.inference.provider ?? settings.provider) === "compatible" &&
-    !currentGroup?.apiKeySet &&
-    !settings.apiKeySet;
+    (currentGroup || peopled.length === 0 ? unpaid(currentGroup) : peopled.every(unpaid));
   const firstRun =
     ready &&
     settings !== null &&

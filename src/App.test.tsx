@@ -668,6 +668,36 @@ describe("App", () => {
   });
 
   it.each([
+    { paid: true, banner: false },
+    { paid: false, banner: true },
+  ])(
+    "on Today, asks for a key only when no group with agents can reply: %j",
+    async ({ paid, banner }) => {
+      // Nobody is open on Today, so there is no group to read the key from. The
+      // window used to fall back to the workspace's own key, which a group with
+      // its own key never sets, and asked for a key that was already there.
+      getSettings.mockResolvedValue({
+        ...(await getSettings()),
+        provider: "compatible",
+        apiKeySet: false,
+      });
+      const first = aGroup({ apiKeySet: paid });
+      const second = aGroup({ id: "other-group", name: "Other", apiKeySet: false });
+      listGroups.mockResolvedValue([first, second]);
+      listAgents.mockResolvedValue([
+        agent("Manager"),
+        { ...agent("Other agent"), groupId: second.id },
+      ]);
+      render(<App />);
+      await waitFor(() => expect(useStore.getState().agents).toHaveLength(2));
+      await waitFor(() => expect(useStore.getState().settings).not.toBeNull());
+      await act(async () => {});
+      expect(useStore.getState().selected).toBeNull();
+      expect(screen.queryByText(/Add an API key/i) !== null).toBe(banner);
+    },
+  );
+
+  it.each([
     { provider: "compatible" as const, apiKeySet: true },
     { provider: "chatgpt" as const, apiKeySet: false },
   ])("uses the selected group's provider and credentials: %j", async ({ provider, apiKeySet }) => {

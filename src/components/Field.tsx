@@ -46,6 +46,15 @@ export function Field({ onSearch, onManageGroups }: Props) {
   const [failure, setFailure] = useState<string | null>(null);
   const input = useRef<HTMLTextAreaElement>(null);
 
+  // Grows with what is written, to the cap the stylesheet sets, the way the
+  // composer does: a one-line box scrolled a long request out of sight.
+  useEffect(() => {
+    const node = input.current;
+    if (!node) return;
+    node.style.height = "auto";
+    node.style.height = `${node.scrollHeight}px`;
+  }, [text]);
+
   const live = writable(agents);
   const question = waitingQuestion(pending);
   const asker = question && live.find((agent) => agent.id === question.agentId);
@@ -106,9 +115,9 @@ export function Field({ onSearch, onManageGroups }: Props) {
   const placeholder = asking ? `Answer ${asker.name}: ${question.summary}` : "What do you need?";
 
   return (
-    <div className="ask">
+    <div className="intake">
       <form
-        className="ask__box"
+        className="intake__box"
         data-answering={asking ? "" : undefined}
         onSubmit={(event) => {
           event.preventDefault();
@@ -116,7 +125,7 @@ export function Field({ onSearch, onManageGroups }: Props) {
         }}
       >
         {asking ? (
-          <span className="ask__target" data-answering="">
+          <span className="intake__target" data-answering="">
             <AgentAvatar avatar={asker.avatar} color={asker.color} size="xs" seed={asker.id} />
             Answer
           </span>
@@ -140,7 +149,7 @@ export function Field({ onSearch, onManageGroups }: Props) {
         )}
         <textarea
           ref={input}
-          className="ask__input"
+          className="intake__input"
           data-field=""
           rows={1}
           value={text}
@@ -153,45 +162,45 @@ export function Field({ onSearch, onManageGroups }: Props) {
           }}
           onKeyDown={onKeyDown}
         />
-        <kbd className="ask__key">{FIELD_KEY}</kbd>
+        <kbd className="intake__key">{FIELD_KEY}</kbd>
         <button
           type="submit"
-          className="ask__send"
+          className="intake__send"
           aria-label={asking ? "Send answer" : "Send"}
           disabled={busy || text.trim() === ""}
         >
           <Icon name="arrow-up" />
         </button>
       </form>
-      <div className="ask__under">
+      <div className="intake__under">
         {question && asker && !answering && (
-          <span className="ask__hint">
+          <span className="intake__hint">
             <kbd>Tab</kbd> answer {asker.name}
           </span>
         )}
         {asking && (
-          <span className="ask__hint">
+          <span className="intake__hint">
             <kbd>Esc</kbd> write to someone instead
           </span>
         )}
         {!asking && (
-          <span className="ask__hint">
+          <span className="intake__hint">
             <kbd>@</kbd> someone
           </span>
         )}
         {text.trim() !== "" && !asking && (
-          <button type="button" className="ask__search" onClick={() => onSearch(text.trim())}>
+          <button type="button" className="intake__search" onClick={() => onSearch(text.trim())}>
             <kbd>{FIND_KEY}</kbd> Search for “{text.trim()}”
           </button>
         )}
         {receipt && (
-          <span className="ask__receipt" role="status">
+          <span className="intake__receipt" role="status">
             {receipt.kind === "sent"
               ? `Sent to ${receipt.agent.name}.`
               : `Answered ${receipt.agent.name}.`}{" "}
             <button
               type="button"
-              className="ask__link"
+              className="intake__link"
               onClick={() => void select(receipt.agent.id)}
             >
               Open the conversation
@@ -199,7 +208,7 @@ export function Field({ onSearch, onManageGroups }: Props) {
           </span>
         )}
         {failure && (
-          <span className="ask__failure" role="alert">
+          <span className="intake__failure" role="alert">
             {failure}
           </span>
         )}
@@ -234,10 +243,10 @@ function TargetPicker({
     .filter((shelf) => shelf.members.length > 0);
   const named = shelves.length > 1;
   return (
-    <div className="ask__picker">
+    <div className="intake__picker">
       <button
         type="button"
-        className="ask__target"
+        className="intake__target"
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={target ? `Writing to ${target.name}. Change who` : "Choose who to write to"}
@@ -251,7 +260,7 @@ function TargetPicker({
       </button>
       {open && (
         <div
-          className="ask__menu"
+          className="intake__menu"
           role="listbox"
           aria-label="Write to"
           onKeyDown={(event) => {
@@ -260,14 +269,14 @@ function TargetPicker({
         >
           {shelves.map(({ group, members }) => (
             <div key={group.id}>
-              {named && <p className="ask__group">{group.name}</p>}
+              {named && <p className="intake__group">{group.name}</p>}
               {members.map((agent) => (
                 <button
                   key={agent.id}
                   type="button"
                   role="option"
                   aria-selected={agent.id === target?.id}
-                  className="ask__option"
+                  className="intake__option"
                   onClick={() => onPick(agent.id)}
                 >
                   <AgentAvatar
@@ -281,7 +290,7 @@ function TargetPicker({
               ))}
             </div>
           ))}
-          <button type="button" className="ask__option ask__manage" onClick={onManageGroups}>
+          <button type="button" className="intake__option intake__manage" onClick={onManageGroups}>
             Groups and agents
           </button>
         </div>

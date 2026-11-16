@@ -171,7 +171,13 @@ export function Ribbon({ ribbon, onOpenAgent, onOpenPile, onTrackWidth }: Props)
         {ribbon.scheduled.map((item) => {
           const owner = item.agentId ? byId.get(item.agentId) : undefined;
           return (
-            <li key={item.key} className="ribbon__item" style={at(item.x)}>
+            <li
+              key={item.key}
+              className="ribbon__item"
+              style={{ ...at(item.x), "--ribbon-room": item.room } as CSSProperties}
+              data-words={item.words ? undefined : "none"}
+              title={item.label}
+            >
               <span className="ribbon__item-mark" aria-hidden="true">
                 {owner ? (
                   <AgentAvatar
