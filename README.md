@@ -3,14 +3,25 @@
   <img src="design/wordmarks/eye-contact.svg" alt="guaca" width="271" height="74">
 </picture>
 
-**A desktop app for AI agents that work together.**
+**A quiet group of AI agents on your own machine. It works out of sight and tells you only what matters.**
 
 ![A group conversation in Guaca: Manager responds to a question about planning a neighborhood garden after consulting Researcher. The composer is visible below.](docs/img/guaca-signal.png)
 
-Run Guaca locally on your computer or connect it to a VPS. The backend runs in a
-container; you choose where it lives. The desktop is your window into that host.
-On an always-on VPS, your agents keep working when you close your laptop. A local
-host runs while your computer is awake.
+Guaca is a group of agents you run yourself. You ask one, and they hand work to
+each other and settle it between themselves. You don't have to watch. A question
+that needs you, or a batch of finished work, reaches you as a notification, and
+as a push to your phone if you set one up. Everything waits under **For you**
+until you get to it, and a recurring check that found nothing stays silent.
+
+Each agent is a drawn character, and its face is its real state: working,
+waiting on you, stuck or asleep. A glance at the group tells you whether
+anything needs you.
+
+Guaca is free and open source under the AGPL. The agents run in one host,
+`guacad`, in a container on your Mac or on a server you own, and the desktop
+app is your window into it. On an always-on server your agents keep working
+when you close your laptop; a local host runs while your computer is awake. Use
+the model providers you choose, and no account is needed.
 
 ## Download
 

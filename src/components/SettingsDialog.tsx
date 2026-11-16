@@ -184,7 +184,7 @@ const PUSH_FORMATS: { value: PushFormat; label: string }[] = [
   { value: "json", label: "JSON webhook" },
 ];
 
-/** How much a push says (D3). The line is the default; the other is one press away. */
+/** How much a push says. The line is the default; the other is one press away. */
 const PUSH_CONTENTS: { value: PushContent; label: string }[] = [
   { value: "outcome", label: "Include what finished" },
   { value: "generic", label: "Only say that something finished" },

@@ -108,8 +108,9 @@ First build, test, and publish the backend from that same source commit:
    shell that will build the desktop. Replace `THE_DIGEST` with the real digest.
 
 Without that variable, the app defaults to
-`ghcr.io/madebywelch/guaca/guacad:0.1.0`. Do not rely on this fallback unless it
-is published and matches the desktop. A local `guacad:...` image works only on
+`ghcr.io/madebywelch/guaca/guacad:<its own version>`, the tag of the package
+version it was built from. Do not rely on this fallback unless that tag is
+published and matches the desktop. A local `guacad:...` image works only on
 the builder's Mac. `scripts/release-candidate.sh` checks a candidate but builds
 only an app bundle; use the command below for the universal DMG.
 
@@ -294,8 +295,8 @@ the public download and checksum and that the remote tag resolves to the built
 commit. Future fixes use a new version; do not silently overwrite a live build.
 
 Rebasing the source does not update a DMG already on disk. A binary built
-before the container-host changes is an older release even if its filename
-still says `0.1.0`. Rebuild and notarize again to ship the current application.
+from an older source is an older release even if its filename carries the
+same version. Rebuild and notarize again to ship the current application.
 
 Upload only the verified disk image and its SHA-256 checksum as release assets,
 and identify the source commit in the release. Inspect `git remote -v` first and

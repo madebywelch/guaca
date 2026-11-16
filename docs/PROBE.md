@@ -84,8 +84,8 @@ Every run of every scenario starts from nothing and leaves nothing.
    `CFFIXED_USER_HOME` pointed at a scratch directory, so its WebKit storage,
    preferences, caches and application support all land there and nothing is
    written under `~/Library`. The launch names the socket in
-   `GUACA_PROBE_SOCKET` and sets `GUACA_PROBE_QUIET`, which stops the app
-   activating itself when it finishes launching (see *launch* below for why).
+   `GUACA_PROBE_SOCKET`. It is a background launch (`open -g`), which the app
+   leaves in the background (see *launch* below).
 5. **Point the window at the Host** through the bridge, and wait until it draws
    the seeded group.
 6. **Run the scenario's steps**, each a wait on a condition with a timeout.
@@ -109,6 +109,7 @@ with the same `id` and either `value` or `error`.
 | `close` | A window's close button: for the main window, hiding it. |
 | `hide` | The app hidden, which hands the keyboard to whatever is next. |
 | `quit` | The app quits. |
+| `refuseNextBanner` | The next banner the window hands to macOS is refused as macOS refuses one, so the window gives back what it claimed. Answered at once. |
 | `busy` | The main thread held in 20 ms slices for `ms` milliseconds, answered at once. The window keeps answering between slices, but its run loop is almost never idle, as when it draws a long reply. |
 
 The bridge answers `ready`, `view` (which conversation is open and the agents
@@ -177,6 +178,15 @@ the app says it did.
 - **The signature**, from `codesign`.
 - **The Host's outbox**, read only, for whether a delivery was claimed.
 
+`log stream` drops lines when the daemons it watches are busy: usernoted,
+sweeping the bundles earlier runs registered, has lost the very line a step
+waited for while the persisted log still held it. So the stream answers "seen"
+quickly, and only `log show` over the same window answers "not there": a wait
+that runs out asks the persisted log before it fails, a count or an absence is
+asserted on both, and a log that cannot be read back makes the step unknown,
+never absent. A line only the persisted log had is listed in the run's
+`streamMissed`, so a run says how often its live observer was wrong.
+
 `scripts/probe/system.swift` is compiled on first use into
 `src-tauri/target/probe/system`.
 
@@ -200,7 +210,7 @@ keeps a walk of the tree to a fraction of a second.
 
 | Scenario | What it asserts |
 |---|---|
-| `launch` | A first launch of a new bundle with `open -g` and the app's own launch-time activation turned off, which is how every other scenario launches, does not become frontmost, takes no keyboard focus and is still running after ten seconds. A normal launch takes the front, and hiding it hands the front back. Recorded, not asserted: the same `open -g` launch with the activation left on, first and second time for one new bundle. On macOS 27 the first one comes to the front and focuses the window and the second does not; macOS 26 brought a first launch to the front the same way. |
+| `launch` | Two background launches of a new bundle with `open -g`, first and second, as every other scenario launches: neither becomes frontmost or takes the keyboard, both are still running after ten seconds, and the app in front stays in front. A normal launch takes the front, and hiding it hands the front back. Before the app stopped asking to be activated when it finished launching, macOS 27 brought the first background launch of a new bundle to the front and focused its window. |
 | `permission` | On a bundle macOS has never seen, the app reports "not asked"; with a delivery waiting, connecting asks macOS, macOS shows its question, nothing is claimed while it is unanswered, and macOS takes the question down when the app quits. The probe never answers it. |
 | `notification` | Whatever this Mac allows the probe's own bundle, a waiting delivery and the Settings test button do what the Notifications pane says: claimed and presented as a banner when allowed, asked about when never asked, nothing claimed and nothing presented otherwise. Asserted on the log and the outbox, not on the app's word. |
 | `panel` | With the window closed, a click on the icon opens the panel, the panel lists every agent in the seeded group, a second click closes it, and the app that had the keyboard before has it after. |
@@ -211,6 +221,17 @@ keeps a walk of the tree to a fraction of a second.
 | `click` | Screen: a delivery about one conversation is shown as a banner; clicking it opens that conversation. |
 | `away` | Screen: four deliveries waiting when the window connects, then Allow; all four are claimed and macOS presents exactly one banner, the "While you were away" fold. |
 | `capture` | Screen: one image of each of the test build's own windows, the panel open, and nothing else. |
+| `longaway` | Screen: at the window once, then Guaca hidden for six real minutes, long enough for WebKit to suspend a page nobody can see; a question and a finished run, on a Host with a six-second minute, are each claimed and drawn as a banner. On a build whose main window lets WebKit suspend its page, both stay unclaimed. |
+| `question` | Screen: a run on the loopback stand-in model that asks the operator a question is claimed and drawn as a banner at once, and a click on it opens the conversation. |
+| `hidden` | Screen: at the window once, then Guaca hidden; a run that finishes is drawn as a banner, and its click opens the conversation. The Host's minute is 30 seconds here, so the two minutes before away outlast the window's 45 second heartbeat: a window that kept saying it was there would hold the run back as seen. |
+| `switched` | Screen: the same, with Finder brought to the front instead of Guaca hidden. |
+| `fold` | Screen: two runs that finish while the operator is away are gathered into one banner, and its click opens For you. |
+| `testclick` | Screen: a click on the Settings test banner brings Guaca forward. |
+| `push` | Every window closed: a question and a finished run each reach a push address on loopback once, with what they are about. |
+| `hiddenpush` | Screen: at the window once, then Guaca hidden; a run that finishes reaches the push address once. |
+| `refused` | Screen: a question whose banner the system refuses is given back by the window, pushed once although the window is present, and not taken again by that window. |
+| `escape` | Screen: with the window closed and Finder in front, a real click on the icon, through the window server, opens the panel and gives it the keyboard; a real Escape closes it, and Finder is in front again. The hand-back is asserted only once the panel had the keyboard. |
+| `draft` | Screen: a draft typed to one agent in the panel is not in another agent's box and is still there after going back, and after the panel closes and opens; read through Accessibility, as assistive technology reads it. |
 
 The screen scenarios press system UI found by accessibility role and name, only
 inside the group whose text names the test build, and only while nobody has
@@ -236,14 +257,19 @@ password when its display sleeps.
   front, and it allows that in answer to a person's input. Opened from the
   channel with the window closed, the panel does not take the keyboard, so the
   hand-back the `panel` scenario asserts holds without having been tested
-  under load. A real click needs the screen layer.
+  under load. A real click needs the screen layer, which is what `escape` makes.
 - **What anything looks like.** The probe reads text, roles and state, never
   pixels. `capture` saves images for a person to look at.
 - **macOS's own wording.** The labels `allow` and `deny` press are the ones
   macOS shows in English, "Allow" and "Don’t Allow" with a curly apostrophe.
 - **How many times a test bundle is listed.** Each fresh bundle that asks
   about notifications can appear in System Settings, Notifications, until macOS
-  forgets the copy.
+  forgets the copy. Before every run the probe unregisters each copy Launch
+  Services still lists from a probe's folder of copies once it is gone from
+  disk, a run killed before its teardown included, and the summary says how
+  many (`forgotten`). What usernoted remembers about a bundle and the line
+  System Settings shows for it belong to the system; they cannot be removed
+  without an administrator, and the probe does not try.
 
 ## What shows on screen
 
@@ -252,7 +278,7 @@ notifications is drawn by Notification Center: `permission` puts it on screen
 once per run, for the few seconds until the app quits and macOS takes it down,
 and so do `allow`, `deny` and `click` until they answer it. `launch`
 brings the test build to the front for a moment in each run, and hides it again
-straight away. Every launch, even a quiet one, puts the test build's icon in
+straight away. Every launch, even a background one, puts the test build's icon in
 the Dock for the length of the run. No banner is raised unless macOS allows the
 test bundle to show one. The delivery the probe seeds says it is a test, and the Settings test
 button's banner carries the test build's name, Guaca Probe.

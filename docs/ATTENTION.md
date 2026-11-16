@@ -296,6 +296,18 @@ A page that may not notify never claims (`willNotify` is asked first), so it
 has nothing to give back, and the Settings test banner is no delivery and
 gives back nothing. The menu bar panel never claims at all.
 
+**The window's page runs while nobody can see it.** The claim is made by the
+page, so a page that is not running claims nothing. WebKit suspends a page that
+has been hidden for a few minutes: the app hidden, its window closed to the
+menu bar, or the window covered by another. On a Mac that meant an offer made
+six minutes after the operator hid Guaca sat unclaimed, question or finished
+work, until something woke the page, and no banner was raised. The main window
+is built with `backgroundThrottling` set to `"disabled"` in `tauri.conf.json`,
+which keeps WebKit from suspending or slowing its page. The panel keeps the
+default: it never claims, and nothing it does is waited on while it is closed.
+`scripts/probe.py longaway` holds the window hidden for six real minutes and
+expects both banners.
+
 ## Reaching the operator with every window closed
 
 A window that is closed claims nothing, so an offer alone reaches nobody while
@@ -318,7 +330,7 @@ is about, when the address is removed
 that answered or saw it, like the window's row.
 
 **What it says.** Decided when the row is written, by `push::say`, from the
-`content` setting (Robert's call, D3):
+`content` setting:
 
 | Row | Title | Body, `outcome` | Body, `generic` |
 |---|---|---|---|

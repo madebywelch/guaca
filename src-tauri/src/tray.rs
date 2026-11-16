@@ -383,6 +383,15 @@ impl Tray {
         if let Err(err) = self.app.show() {
             tracing::debug!(%err, "could not unhide Guaca");
         }
+        // Activated here, while the click is still the event being handled.
+        // `set_focus` is queued to a later turn of the event loop, and by then
+        // the click no longer vouches for it: macOS 27 left the panel without
+        // the keyboard, and Escape went to the app behind it.
+        #[cfg(target_os = "macos")]
+        if let Some(main) = objc2::MainThreadMarker::new() {
+            #[allow(deprecated)]
+            objc2_app_kit::NSApplication::sharedApplication(main).activateIgnoringOtherApps(true);
+        }
         for (what, result) in [("show", panel.show()), ("focus", panel.set_focus())] {
             if let Err(err) = result {
                 tracing::debug!(%err, "could not {what} the menu bar panel");

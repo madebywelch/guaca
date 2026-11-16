@@ -21,33 +21,25 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
-use super::{Envelope, Reply, Request, State, Window, QUIET_ENV, SOCKET_ENV};
+use super::{Envelope, Reply, Request, State, Window, SOCKET_ENV};
 use crate::tray::Tray;
+
+/// Set by `refuseNextBanner`, taken by the next banner.
+static REFUSE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the banner being handed over now is the one the probe asked to be
+/// refused. Asking takes the refusal, so exactly one banner is refused.
+pub fn refused() -> bool {
+    REFUSE.swap(false, std::sync::atomic::Ordering::SeqCst)
+}
 
 /// How long a page has to answer. A page that is loading answers as soon as
 /// it can; one that has not answered in this long is not going to.
 const PAGE: Duration = Duration::from_secs(10);
-
-/// The builder, before the app starts, for a launch the probe asked to be
-/// quiet.
-///
-/// The app activates itself when it finishes launching, whatever the launcher
-/// asked, which is the right thing when a person opened it and the wrong one
-/// for a script running beside them: it takes the keyboard from whatever they
-/// were typing in. A quiet launch asks macOS to activate it only if nothing
-/// else is active. The launch scenario leaves this off, because whether the
-/// real app takes the front is the question it is there to answer.
-pub fn prepare<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
-    if std::env::var_os(QUIET_ENV).is_some() {
-        builder.activate_ignoring_other_apps(false)
-    } else {
-        builder
-    }
-}
 
 /// Opens the socket, if this launch named one. Called once the tray exists.
 pub fn start(app: &AppHandle) {
@@ -136,6 +128,10 @@ async fn handle(app: &AppHandle, request: Request) -> Result<Value, String> {
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 app.exit(0);
             });
+            Ok(Value::Null)
+        }
+        Request::RefuseNextBanner => {
+            REFUSE.store(true, std::sync::atomic::Ordering::SeqCst);
             Ok(Value::Null)
         }
         Request::Busy { ms } => {

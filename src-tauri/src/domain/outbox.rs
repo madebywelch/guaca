@@ -8,7 +8,7 @@
 //! one row per thing to deliver, written in the commit that caused it, and
 //! [`decide`] is the one place that says what earns a banner.
 //!
-//! Start quiet (Robert's call, D6). What needs the operator and what failed
+//! Start quiet. What needs the operator and what failed
 //! interrupts them. Finished work interrupts only an operator who is away,
 //! gathered over [`GATHER_MS`] into one item, and is otherwise only listed in
 //! For you. A run the operator stopped, or a check that found nothing, is
@@ -549,7 +549,7 @@ mod tests {
 
     #[test]
     fn the_defaults_start_quiet() {
-        // D6. Every switch on means what needs you, failures, and finished
+        // Every switch on means what needs you, failures, and finished
         // work only while away: being here is what keeps finished work quiet.
         let attention = Attention::default();
         assert!(attention.needs_you && attention.failures && attention.finished);

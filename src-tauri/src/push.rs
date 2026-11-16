@@ -37,7 +37,7 @@ pub enum Format {
     Json,
 }
 
-/// How much a push may say (Robert's call, D3).
+/// How much a push may say.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Content {

@@ -25,11 +25,6 @@ pub mod channel;
 /// socket exists only for a launch that asked for it.
 pub const SOCKET_ENV: &str = "GUACA_PROBE_SOCKET";
 
-/// Set to anything, the app does not bring itself forward when it starts.
-/// See `channel::prepare` for why the probe needs it and the launch scenario
-/// leaves it off.
-pub const QUIET_ENV: &str = "GUACA_PROBE_QUIET";
-
 /// One request, one line of JSON, carrying the id its answer echoes.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Envelope {
@@ -65,6 +60,9 @@ pub enum Request {
     /// enough that the window still answers, so its run loop is almost never
     /// idle: what a window drawing a long reply does to it. Answered at once.
     Busy { ms: u64 },
+    /// The next banner handed to the system is refused as macOS refuses one,
+    /// so the window gives back what it claimed. Answered at once.
+    RefuseNextBanner,
 }
 
 /// The answer to one request.
@@ -228,6 +226,7 @@ mod tests {
             (r#"{"id":5,"op":"hide"}"#, Request::Hide),
             (r#"{"id":6,"op":"quit"}"#, Request::Quit),
             (r#"{"id":8,"op":"busy","ms":5000}"#, Request::Busy { ms: 5000 }),
+            (r#"{"id":10,"op":"refuseNextBanner"}"#, Request::RefuseNextBanner),
         ];
         for (line, request) in cases {
             let envelope = parse(line).unwrap_or_else(|reply| panic!("{line}: {reply:?}"));

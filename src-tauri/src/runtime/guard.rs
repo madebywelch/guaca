@@ -819,7 +819,7 @@ mod tests {
 
     #[test]
     fn a_broadcast_storm_across_five_agents_stays_within_default_budget() {
-        // The scenario from the brief: Manager introduces itself to everyone,
+        // The scenario: Manager introduces itself to everyone,
         // everyone replies. This must complete rather than hit a limit.
         let limits = GuardLimits::default();
         let mut state = RunState::new(limits);

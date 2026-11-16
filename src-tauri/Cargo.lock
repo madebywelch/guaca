@@ -1568,7 +1568,7 @@ dependencies = [
 
 [[package]]
 name = "guac"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -1579,6 +1579,8 @@ dependencies = [
  "iana-time-zone",
  "mac-usernotifications",
  "notify-rust",
+ "objc2",
+ "objc2-app-kit",
  "parking_lot 0.12.5",
  "percent-encoding",
  "r2d2",
