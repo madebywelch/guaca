@@ -10,8 +10,8 @@ which reports acceptance without registering a response waiter.
 
 ```rust,ignore
 let subscription = observe_responses(move |response| {
-    // Only this session's IDs and real native default/dismiss actions qualify.
-    // Emit notification-clicked or notification-dismissed with the click number.
+    // Only a default action on this session's IDs qualifies.
+    // Emit notification-clicked with the click number.
 });
 send(notification.id(&session_request_id)).await?;
 // On actual exit, outside any response callback:
@@ -23,11 +23,18 @@ poll, inferred disappearance, or timeout cannot invoke it. The dependency's
 existing `response()` API remains unchanged for other callers.
 
 The frontend's existing 64-entry map remains the consumption authority. A
-default action deletes the entry before navigating. A genuine dismiss deletes
-it without navigating. Later duplicates, including default after dismiss,
-cannot navigate. Silent disappearance does neither. Rejected sending removes
-the frontend entry as before. Old-session and malformed request IDs are ignored.
-No notification body, reply, or credential enters these events.
+default action deletes the entry before navigating, so a duplicate cannot
+navigate again. Disappearance consumes nothing. A real dismissal of one of
+these banners never reaches the app: the send code registers a category, and
+with it the custom dismiss action, only for a notification with action buttons,
+and Guaca's banners have none. An entry nobody clicks therefore leaves the map
+only by eviction. Rejected sending removes the frontend entry as before.
+Old-session and malformed request IDs and every non-default action are
+ignored. No notification body, reply, or credential enters these events.
+
+If the subscription cannot be installed, the app logs a warning and starts
+anyway. Banners are then sent without a click identifier, so the worst case is
+a banner without click-through, never a failed launch or a crash.
 
 ## Observer API
 
@@ -55,8 +62,8 @@ can run. Waiting inside its own callback is invalid because it would join itself
 The app drains only on actual exit, not an exit request that may be prevented.
 
 One subscription and its active callback leases are the only native observer
-state. There are no per-banner tasks or registrations to grow when silent
-dismissals omit a callback. The frontend retention bound is unchanged.
+state. There are no per-banner tasks or registrations to grow when a banner is
+never clicked. The frontend retention bound is unchanged.
 
 ## Scope and alternatives
 
@@ -75,12 +82,13 @@ native adapter would take over unrelated permission and presentation behavior.
 
 The pristine-source assay preserves the behavioral counterexample: polling can
 finish before the default callback and cancel its response receiver. The
-amended delegate dispatch is exercised with both event orders, native dismissal,
-duplicates, observer replacement/detachment, and in-flight shutdown. Frontend
-tests exercise the actual event listeners and map, including rejection and
-eviction. A synthetic disappearance must never consume the callback, and a
-native default must navigate exactly once while its map entry is retained.
-These schedules prove a mechanism, not the cause of an earlier untraced failure.
+amended delegate dispatch is exercised with both event orders, duplicates,
+observer replacement and detachment, and in-flight shutdown. The app's filter
+is tested to map only a default action on this session's IDs to a click.
+Frontend tests cover the click map, including rejection and eviction. A
+synthetic disappearance must never consume the callback, and a native default
+must navigate exactly once while its map entry is retained. These schedules
+prove a mechanism, not the cause of an earlier untraced failure.
 
 Run `python3 scripts/test-notification-actions.py` on macOS. It verifies the
 published archive checksum and unchanged upstream files, controls only the
@@ -89,9 +97,3 @@ The pristine implementation must fail the desired click-preservation assertion;
 the amended dispatch must pass both orders. Standalone tests use the app's
 locked runtime dependency versions without the upstream examples' dev dependencies.
 The normal Rust gate runs this check on macOS.
-
-### Existing test change
-
-| Test | Changed assertion | Reason |
-| --- | --- | --- |
-| `notify.test.ts`: listens for clicks before it hands anything over, and lands on the channel clicked | Listener count: 1 to 2; additionally checks exact event names and both registrations before sending | A real native dismissal needs its own handler. Navigation and duplicate assertions are unchanged. |

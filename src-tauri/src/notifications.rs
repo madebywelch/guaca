@@ -23,7 +23,6 @@ use serde::Serialize;
 /// The event a click on a banner raised by [`show`] arrives as, carrying the
 /// number the window raised it with.
 pub const CLICKED: &str = "notification-clicked";
-pub const DISMISSED: &str = "notification-dismissed";
 
 pub fn install(app: &tauri::AppHandle) -> Result<(), String> {
     imp::install(app)
@@ -111,26 +110,22 @@ mod imp {
         let prefix = namespace.clone();
         let emitter = app.clone();
         let subscription = mac_usernotifications::observe_responses(move |response| {
-            let Some((event, click)) = action(&prefix, response) else { return };
+            let Some(click) = clicked(&prefix, response) else { return };
             #[cfg(feature = "probe")]
-            if event == super::CLICKED {
+            crate::probe::trace::event(
+                crate::probe::trace::Phase::NotificationDefault,
+                u64::from(click),
+                0,
+            );
+            if let Err(err) = emitter.emit(super::CLICKED, click) {
+                tracing::warn!(%err, "could not report a click on a notification");
+            } else {
+                #[cfg(feature = "probe")]
                 crate::probe::trace::event(
-                    crate::probe::trace::Phase::NotificationDefault,
+                    crate::probe::trace::Phase::NotificationClicked,
                     u64::from(click),
                     0,
                 );
-            }
-            if let Err(err) = emitter.emit(event, click) {
-                tracing::warn!(%err, "could not report a notification action");
-            } else {
-                #[cfg(feature = "probe")]
-                if event == super::CLICKED {
-                    crate::probe::trace::event(
-                        crate::probe::trace::Phase::NotificationClicked,
-                        u64::from(click),
-                        0,
-                    );
-                }
             }
         })
         .ok_or("A native notification observer is already installed.")?;
@@ -144,22 +139,15 @@ mod imp {
         }
     }
 
-    fn action(
+    /// The click number of a default action on a banner this session raised.
+    /// Banners carry no buttons, so macOS never reports their dismissal.
+    fn clicked(
         prefix: &str,
         response: &mac_usernotifications::NotificationResponse,
-    ) -> Option<(&'static str, u32)> {
+    ) -> Option<u32> {
         let id = response.notification_id.strip_prefix(prefix)?;
         let click = id.parse::<u32>().ok()?;
-        if click.to_string() != id {
-            return None;
-        }
-        if response.is_default_action() {
-            Some((super::CLICKED, click))
-        } else if response.is_dismiss_action() && !response.action_identifier.is_empty() {
-            Some((super::DISMISSED, click))
-        } else {
-            None
-        }
+        (click.to_string() == id && response.is_default_action()).then_some(click)
     }
 
     /// System Settings, Notifications. The list of apps is one click from it.
@@ -269,7 +257,7 @@ mod imp {
                 reply_text: None,
                 close_reason: None,
             };
-            assert_eq!(action(prefix, &response), Some((crate::notifications::CLICKED, 42)));
+            assert_eq!(clicked(prefix, &response), Some(42));
             for id in [
                 "guaca:old-session:42",
                 "42",
@@ -279,20 +267,20 @@ mod imp {
                 "guaca:current-session:42x",
             ] {
                 response.notification_id = id.into();
-                assert_eq!(action(prefix, &response), None);
+                assert_eq!(clicked(prefix, &response), None);
             }
             response.notification_id = format!("{prefix}42");
             response.action_identifier =
                 unsafe { UNNotificationDismissActionIdentifier.to_string() };
             response.close_reason = Some(CloseReason::Dismissed);
-            assert_eq!(action(prefix, &response), Some((crate::notifications::DISMISSED, 42)));
+            assert_eq!(clicked(prefix, &response), None);
             response.action_identifier.clear();
-            assert_eq!(action(prefix, &response), None);
+            assert_eq!(clicked(prefix, &response), None);
             response.close_reason = Some(CloseReason::Expired);
-            assert_eq!(action(prefix, &response), None);
+            assert_eq!(clicked(prefix, &response), None);
             response.close_reason = None;
             response.action_identifier = "unknown-action".into();
-            assert_eq!(action(prefix, &response), None);
+            assert_eq!(clicked(prefix, &response), None);
         }
 
         #[test]
