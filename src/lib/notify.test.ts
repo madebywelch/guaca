@@ -78,8 +78,10 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: mac.invoke }));
 /** The app's events, as far as a click on a banner it handed to macOS goes. */
 const events = vi.hoisted(() => ({
   clicked: undefined as ((message: { payload: number }) => void) | undefined,
+  dismissed: undefined as ((message: { payload: number }) => void) | undefined,
   listen: vi.fn(async (name: string, handler: (message: { payload: number }) => void) => {
     if (name === "notification-clicked") events.clicked = handler;
+    if (name === "notification-dismissed") events.dismissed = handler;
     return () => {};
   }),
 }));
@@ -145,6 +147,7 @@ beforeEach(async () => {
   mac.refusal = null;
   mac.invoke.mockClear();
   events.clicked = undefined;
+  events.dismissed = undefined;
   events.listen.mockClear();
 });
 
@@ -397,12 +400,17 @@ describe("a desktop window on a Mac", () => {
     mac.now = "allowed";
     await notify.deliver(delivery("a"), open);
     await notify.deliver(delivery("b"), open);
-    expect(events.listen).toHaveBeenCalledTimes(1);
+    expect(events.listen).toHaveBeenCalledTimes(2);
+    expect(events.listen.mock.calls.map(([name]) => name)).toEqual([
+      "notification-clicked",
+      "notification-dismissed",
+    ]);
     const order = (name: string) =>
       mac.invoke.mock.invocationCallOrder[
         mac.invoke.mock.calls.findIndex(([call]) => call === name)
       ];
     expect(events.listen.mock.invocationCallOrder[0]).toBeLessThan(order("show_notification") ?? 0);
+    expect(events.listen.mock.invocationCallOrder[1]).toBeLessThan(order("show_notification") ?? 0);
     const [first, second] = mac.shown.map((shown) => shown.click);
     expect(first).not.toBe(second);
 
@@ -412,6 +420,71 @@ describe("a desktop window on a Mac", () => {
     events.clicked?.({ payload: second! });
     events.clicked?.({ payload: 12 });
     expect(host.openWindow).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { actions: ["dismiss", "click", "dismiss", "click"], navigations: 0 },
+    { actions: ["click", "dismiss", "click", "dismiss"], navigations: 1 },
+  ])("consumes native actions in order $actions", async ({ actions, navigations }) => {
+    mac.now = "allowed";
+    await notify.deliver(delivery("a"), open);
+    const payload = mac.shown[0]!.click!;
+    expect(events.dismissed).toBeDefined();
+    for (const action of actions) {
+      if (action === "click") events.clicked?.({ payload });
+      else events.dismissed?.({ payload });
+    }
+    expect(host.openWindow).toHaveBeenCalledTimes(navigations);
+  });
+
+  it("forgets rejected sends before any later native action", async () => {
+    mac.now = "allowed";
+    mac.refusal = "notification request rejected";
+    await expect(notify.deliver(delivery("a"), open)).resolves.toBe(false);
+    const attempt = mac.invoke.mock.calls.find(([name]) => name === "show_notification");
+    const payload = attempt?.[1]?.click;
+    expect(typeof payload).toBe("number");
+    if (typeof payload !== "number") throw new Error("missing click number");
+    events.clicked?.({ payload });
+    events.dismissed?.({ payload });
+    expect(host.openWindow).not.toHaveBeenCalled();
+  });
+
+  it("keeps only the existing 64 newest click targets", async () => {
+    mac.now = "allowed";
+    for (let i = 0; i < 65; i++) await notify.deliver(delivery(`item-${i}`), open);
+    events.clicked?.({ payload: mac.shown[0]!.click! });
+    expect(host.openWindow).not.toHaveBeenCalled();
+    for (const shown of mac.shown.slice(1)) events.clicked?.({ payload: shown.click! });
+    expect(host.openWindow).toHaveBeenCalledTimes(64);
+    events.clicked?.({ payload: mac.shown[64]!.click! });
+    expect(host.openWindow).toHaveBeenCalledTimes(64);
+  });
+
+  it("does not send when the click listener cannot be registered", async () => {
+    mac.now = "allowed";
+    events.listen.mockRejectedValueOnce(new Error("listener unavailable"));
+    await expect(notify.deliver(delivery("a"), open)).resolves.toBe(false);
+    expect(mac.shown).toEqual([]);
+    expect(host.releaseDelivery).toHaveBeenCalledWith("a");
+    await expect(notify.deliver(delivery("b"), open)).resolves.toBe(true);
+    expect(mac.shown).toHaveLength(1);
+  });
+
+  it("removes a partial listener registration before refusing to send", async () => {
+    mac.now = "allowed";
+    const unlisten = vi.fn();
+    events.listen
+      .mockResolvedValueOnce(unlisten)
+      .mockRejectedValueOnce(new Error("dismiss listener unavailable"));
+    await expect(notify.deliver(delivery("a"), open)).resolves.toBe(false);
+    expect(unlisten).toHaveBeenCalledTimes(1);
+    expect(mac.shown).toEqual([]);
+    expect(host.releaseDelivery).toHaveBeenCalledWith("a");
+    await expect(notify.deliver(delivery("b"), open)).resolves.toBe(true);
+    expect(mac.shown).toHaveLength(1);
+    expect(events.clicked).toBeDefined();
+    expect(events.dismissed).toBeDefined();
   });
 
   it("raises a test with nothing to click through to", async () => {

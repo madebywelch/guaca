@@ -948,6 +948,7 @@ async function permitted(): Promise<boolean> {
 
 /** What a click on a banner the app handed to macOS arrives as (notifications.rs). */
 const NOTIFICATION_CLICKED = "notification-clicked";
+const NOTIFICATION_DISMISSED = "notification-dismissed";
 
 /** The one question to macOS in flight, so a burst of offers puts it once. */
 let askingMac: Promise<NotificationAccess | null> | null = null;
@@ -1037,10 +1038,23 @@ export async function notify(title: string, body: string, onClick?: () => void):
       let click: number | null = null;
       if (onClick) {
         listeningOnMac ??= import("@tauri-apps/api/event")
-          .then((events) =>
-            events.listen<number>(NOTIFICATION_CLICKED, (message) => clicked(message.payload)),
-          )
-          .catch(() => {});
+          .then(async (events) => {
+            const unlistenClicked = await events.listen<number>(NOTIFICATION_CLICKED, (message) =>
+              clicked(message.payload),
+            );
+            try {
+              return await events.listen<number>(NOTIFICATION_DISMISSED, (message) =>
+                clicks.delete(message.payload),
+              );
+            } catch (error) {
+              unlistenClicked();
+              throw error;
+            }
+          })
+          .catch((error: unknown) => {
+            listeningOnMac = null;
+            throw error;
+          });
         await listeningOnMac;
         click = remember(onClick);
       }

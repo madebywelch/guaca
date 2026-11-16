@@ -15,6 +15,9 @@ default-run = "guac"
 # `fetch_update`, is stable from 1.95, so lowering the floor is one edit.
 rust-version = "1.99"
 
+[patch.crates-io]
+mac-usernotifications = { path = "vendor/mac-usernotifications" }
+
 [lib]
 name = "guac_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -146,6 +149,9 @@ required-features = ["server"]
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time", "test-util"] }
 axum = "0.7"
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2-user-notifications = "0.3"
 
 [features]
 default = ["desktop", "custom-protocol"]

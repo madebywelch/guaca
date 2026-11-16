@@ -88,6 +88,11 @@ run_rust() {
   step "Rust tests"
   cargo test --manifest-path src-tauri/Cargo.toml
 
+  if [ "$(uname -s)" = Darwin ]; then
+    step "Native notification action ordering and shutdown"
+    python3 scripts/test-notification-actions.py
+  fi
+
   # The daemon is a second host over the same library, and it is built without
   # Tauri on purpose: `app.rs` expands a macro that reads dist/, so a server
   # that needed the desktop feature could not be built in a container that has

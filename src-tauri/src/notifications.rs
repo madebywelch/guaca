@@ -23,6 +23,15 @@ use serde::Serialize;
 /// The event a click on a banner raised by [`show`] arrives as, carrying the
 /// number the window raised it with.
 pub const CLICKED: &str = "notification-clicked";
+pub const DISMISSED: &str = "notification-dismissed";
+
+pub fn install(app: &tauri::AppHandle) -> Result<(), String> {
+    imp::install(app)
+}
+
+pub fn shutdown(app: &tauri::AppHandle) {
+    imp::shutdown(app);
+}
 
 /// What macOS will do with a banner from this app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -80,7 +89,61 @@ mod imp {
         AuthorizationStatus, NotificationSettingStatus, NotificationSettings,
     };
     use std::path::Path;
-    use std::sync::LazyLock;
+    use std::sync::{LazyLock, Mutex};
+    use tauri::{Emitter, Manager};
+
+    struct Actions {
+        namespace: String,
+        subscription: Mutex<Option<mac_usernotifications::ResponseSubscription>>,
+    }
+
+    impl Actions {
+        fn shutdown(&self) {
+            let subscription = self.subscription.lock().unwrap().take();
+            if let Some(subscription) = subscription {
+                subscription.detach().wait();
+            }
+        }
+    }
+
+    pub fn install(app: &tauri::AppHandle) -> Result<(), String> {
+        let namespace = format!("guaca:{}:", uuid::Uuid::new_v4());
+        let prefix = namespace.clone();
+        let emitter = app.clone();
+        let subscription = mac_usernotifications::observe_responses(move |response| {
+            let Some((event, click)) = action(&prefix, response) else { return };
+            if let Err(err) = emitter.emit(event, click) {
+                tracing::warn!(%err, "could not report a notification action");
+            }
+        })
+        .ok_or("A native notification observer is already installed.")?;
+        app.manage(Actions { namespace, subscription: Mutex::new(Some(subscription)) });
+        Ok(())
+    }
+
+    pub fn shutdown(app: &tauri::AppHandle) {
+        if let Some(actions) = app.try_state::<Actions>() {
+            actions.shutdown();
+        }
+    }
+
+    fn action(
+        prefix: &str,
+        response: &mac_usernotifications::NotificationResponse,
+    ) -> Option<(&'static str, u32)> {
+        let id = response.notification_id.strip_prefix(prefix)?;
+        let click = id.parse::<u32>().ok()?;
+        if click.to_string() != id {
+            return None;
+        }
+        if response.is_default_action() {
+            Some((super::CLICKED, click))
+        } else if response.is_dismiss_action() && !response.action_identifier.is_empty() {
+            Some((super::DISMISSED, click))
+        } else {
+            None
+        }
+    }
 
     /// System Settings, Notifications. The list of apps is one click from it.
     const PANE: &str = "x-apple.systempreferences:com.apple.Notifications-Settings.extension";
@@ -119,26 +182,18 @@ mod imp {
         body: String,
         click: Option<u32>,
     ) -> Option<Result<(), String>> {
-        let sent =
-            mac_usernotifications::Notification::new().title(title).message(body).send().await;
-        let handle = match sent {
-            Ok(handle) => handle,
+        let mut notification =
+            mac_usernotifications::Notification::new().title(title).message(body);
+        if let Some(click) = click {
+            let actions = app.state::<Actions>();
+            notification = notification.id(&format!("{}{click}", actions.namespace));
+        }
+        match mac_usernotifications::send(notification).await {
+            Ok(_) => {}
             Err(err) => {
                 tracing::warn!(%err, "macOS did not accept a notification");
                 return Some(Err(err.to_string()));
             }
-        };
-        if let Some(click) = click {
-            // Awaited, not blocked on: the response arrives through the
-            // delegate on the main run loop, which this only waits to hear.
-            tauri::async_runtime::spawn(async move {
-                if handle.response().await.is_ok_and(|response| response.is_default_action()) {
-                    use tauri::Emitter;
-                    if let Err(err) = app.emit(super::CLICKED, click) {
-                        tracing::warn!(%err, "could not report a click on a notification");
-                    }
-                }
-            });
         }
         Some(Ok(()))
     }
@@ -183,6 +238,60 @@ mod imp {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn native_actions_require_this_session_and_a_real_action() {
+            use mac_usernotifications::{CloseReason, NotificationResponse};
+            use objc2_user_notifications::{
+                UNNotificationDefaultActionIdentifier, UNNotificationDismissActionIdentifier,
+            };
+            let prefix = "guaca:current-session:";
+            let mut response = NotificationResponse {
+                notification_id: format!("{prefix}42"),
+                action_identifier: unsafe { UNNotificationDefaultActionIdentifier.to_string() },
+                reply_text: None,
+                close_reason: None,
+            };
+            assert_eq!(action(prefix, &response), Some((crate::notifications::CLICKED, 42)));
+            for id in [
+                "guaca:old-session:42",
+                "42",
+                "guaca:current-session:042",
+                "guaca:current-session:-1",
+                "guaca:current-session:4294967296",
+                "guaca:current-session:42x",
+            ] {
+                response.notification_id = id.into();
+                assert_eq!(action(prefix, &response), None);
+            }
+            response.notification_id = format!("{prefix}42");
+            response.action_identifier =
+                unsafe { UNNotificationDismissActionIdentifier.to_string() };
+            response.close_reason = Some(CloseReason::Dismissed);
+            assert_eq!(action(prefix, &response), Some((crate::notifications::DISMISSED, 42)));
+            response.action_identifier.clear();
+            assert_eq!(action(prefix, &response), None);
+            response.close_reason = Some(CloseReason::Expired);
+            assert_eq!(action(prefix, &response), None);
+            response.close_reason = None;
+            response.action_identifier = "unknown-action".into();
+            assert_eq!(action(prefix, &response), None);
+        }
+
+        #[test]
+        fn action_shutdown_detaches_once_and_allows_a_new_subscription() {
+            let subscription = mac_usernotifications::observe_responses(|_| {}).unwrap();
+            let actions = Actions {
+                namespace: "test-session".into(),
+                subscription: Mutex::new(Some(subscription)),
+            };
+            assert!(mac_usernotifications::observe_responses(|_| {}).is_none());
+            actions.shutdown();
+            actions.shutdown();
+            assert!(actions.subscription.lock().unwrap().is_none());
+            let next = mac_usernotifications::observe_responses(|_| {}).unwrap();
+            next.detach().wait();
+        }
 
         fn settings(
             status: AuthorizationStatus,
@@ -235,6 +344,12 @@ mod imp {
 #[cfg(not(target_os = "macos"))]
 mod imp {
     use super::Permission;
+
+    pub fn install(_app: &tauri::AppHandle) -> Result<(), String> {
+        Ok(())
+    }
+
+    pub fn shutdown(_app: &tauri::AppHandle) {}
 
     pub async fn current() -> Option<Permission> {
         None
