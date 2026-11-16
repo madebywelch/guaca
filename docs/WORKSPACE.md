@@ -1124,13 +1124,16 @@ spread as one cluster centered on where they wanted to be, because pushing each
 one right of the last would drag a crowd past the moment it belongs to.
 
 A band labeled "Since you last looked" runs from the latest `seenAt` of any
-finished run to now, and is drawn only while something is unseen; with nothing
-ever seen it starts where the oldest unseen run began. A now line carries the
+finished run to now, or from where the oldest unseen run began when that is
+earlier, and is drawn only while something is unseen. Seeing is per run, so
+opening one agent marks its run seen now, and a band that started there would
+leave every older unseen run outside it. A now line carries the
 clock. Right of it are the rest of today and a narrow column for each coming
 day through Sunday, at most four, and on a Sunday the four after it. Upcoming
 routine runs sit there with their owner's face, and calendar dates with a
 calendar glyph. A pending request that will lapse puts a point at its lapse
-time: "Dara stops waiting".
+time: "Dara stops waiting". A request from an agent the strip does not know has
+no point, since there is nobody to name.
 
 The scale is bent rather than linear. The stretch before the last hour or so is
 compressed, the hours either side of now are wide, the rest of today is narrow,
@@ -1151,7 +1154,9 @@ and a picture with one row missing is better than a banner over it.
 ## The field writes to someone and leaves you where you are
 
 `Field.tsx` is the first thing in Today's column, and `lib/field.ts` decides
-what it does with what was typed before anything is sent. Command K focuses it.
+what it does with what was typed before anything is sent. Command K focuses it,
+except from under a dialog, a menu or the Groups sheet, where the box is out of
+sight.
 On an agent's page the same key switches to Conversation and focuses that
 composer instead, because both are the box that writes to someone from where
 the operator is.
@@ -1166,7 +1171,10 @@ conversation is one press away with the composer it needs.
 the group the Groups sheet is inside, else whoever was talked to last at all,
 else the first agent, and never a deleted one. The picker lists agents under
 their group names, with a heading only when more than one group has members,
-and its last row, "Groups and agents", opens the sheet.
+and its last row, "Groups and agents", opens the sheet. It is plain buttons rather
+than a listbox, because that last row is not a choice of recipient. It opens on
+whoever the field writes to, the arrow keys, Home and End move through it, and
+Escape or a press anywhere else closes it.
 
 **Tab answers the question that is waiting.** From an empty field, Tab turns the
 field into an answer to the oldest pending question, says whose and what in its
@@ -1176,13 +1184,15 @@ into Allow would be granting by accident.
 
 **`@` addresses one agent.** `@Name` at the very start, followed by a space,
 sends to that agent instead of the picked one, for that message. The longest
-name wins, so "@Ines Marie" is not read as Ines when both exist. An `@` anywhere
+name wins, so "@Ines Marie" is not read as Ines when both exist. `@Name` with
+nothing after it is a pick: it changes who the field writes to and sends
+nothing, rather than sending the name as the message. An `@` anywhere
 else is a mention the message carries, which is the composer's business and the
 runtime's.
 
 **With text in it, the field offers to search for it.** A row under it reads
 "Search for" and the text, with the search key beside it, and hands the text to
-search. The field does not search as it is typed into: a sentence meant for an
+search. The search key does the same from the field while it holds text. The field does not search as it is typed into: a sentence meant for an
 agent is not a query, and the row is there for the times it was one.
 
 ## Today is what needs you, then what finished
@@ -1218,12 +1228,16 @@ the composer keeps its draft and the transcript its place.
 
 **Opening lands on Now when the agent is working, and on Conversation
 otherwise.** Somebody mid-turn is best read by what they are doing; somebody
-idle, by what was said. A message opened from search is always in the
-conversation, because the message is what was asked for.
+idle, by what was said. The landing is decided as the agent is opened, and
+only then. A message opened from search is always in the conversation, because
+the message is what was asked for, and it stays there after its mark fades. A
+fired routine pressed in the transcript opens the Routines tab with that
+routine open.
 
 ## The Groups sheet is where groups are switched and managed
 
-`GroupsSheet.tsx` slides in from the left edge of the window, full height, and
+`GroupsSheet.tsx` opens at the left edge of the window, full height, arriving the
+way every other surface does, and
 holds the list that used to stand there, `Sidebar.tsx`, unchanged: every group
 and the agents in it, their order, pins, moving an agent between groups, each
 group's settings, the groups' column for going inside one, search, the plus for
@@ -1783,7 +1797,7 @@ operator arranged at the top looks exactly like a pin that did nothing, and bein
 first is not a state anything on screen can say by itself.
 
 An agent is drawn once, wherever it is drawn: two rows for one agent would be two
-nodes in the sidebar's `rowRefs`, and the wire would have to pick one to throw a
+nodes in `Sidebar`'s `rowRefs`, and the wire would have to pick one to throw a
 message at.
 
 ## The corner is the icon's pair, and the name is out when it is worth reading
