@@ -266,7 +266,7 @@ function TargetPicker({
   onManageGroups: () => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
-  const menu = useRef<HTMLDivElement>(null);
+  const menu = useRef<HTMLFieldSetElement>(null);
   const menuId = useId();
   useDismiss(() => onOpen(false), open);
 
@@ -289,7 +289,7 @@ function TargetPicker({
     (all.find((one) => one.getAttribute("aria-current") === "true") ?? all[0])?.focus();
   }, [open]);
 
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+  const onKeyDown = (event: KeyboardEvent<HTMLFieldSetElement>) => {
     const all = buttons();
     const at = all.indexOf(document.activeElement as HTMLButtonElement);
     const to =
@@ -328,11 +328,10 @@ function TargetPicker({
         <Icon name="chevron-right" />
       </button>
       {open && (
-        <div
+        <fieldset
           id={menuId}
           ref={menu}
           className="intake__menu"
-          role="group"
           aria-label="Write to"
           onKeyDown={onKeyDown}
         >
@@ -361,7 +360,7 @@ function TargetPicker({
           <button type="button" className="intake__option intake__manage" onClick={onManageGroups}>
             Groups and agents
           </button>
-        </div>
+        </fieldset>
       )}
     </div>
   );

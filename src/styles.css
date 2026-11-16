@@ -10612,6 +10612,7 @@ button.artifacts__version[aria-pressed="true"] {
   z-index: 40;
   min-width: var(--picker-w);
   max-height: var(--picker-h);
+  margin: 0;
   overflow-y: auto;
   padding: var(--space-3);
   background: var(--raised);
