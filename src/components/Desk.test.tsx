@@ -131,6 +131,26 @@ describe("the desk", () => {
     expect(screen.getByRole("button", { name: "Allow" })).toBeTruthy();
   });
 
+  it("draws every word a model wrote as text, never as markup", () => {
+    const summary = "**Pay** the <button>vendor</button> [now](https://example.com)";
+    const label = "<b>To</b>";
+    const value = '<img src="x" alt="sent"> and _all_ of them';
+    const options = ["<i>Yes</i>", "**No**"];
+    const { container } = draw([
+      request({ summary, detail: [{ label, value }] }),
+      asks(options, { id: "req-2" as ApprovalId, summary: "# Choose" }),
+    ]);
+
+    for (const text of [summary, label, value, "# Choose"]) {
+      expect(screen.getByText(text)).toBeTruthy();
+    }
+    for (const option of options) {
+      expect(screen.getByRole("button", { name: option })).toBeTruthy();
+    }
+    expect(container.querySelectorAll("strong, em, b, i, img, a, h1").length).toBe(0);
+    expect(screen.queryByRole("button", { name: "vendor" })).toBeNull();
+  });
+
   it("counts the queue rather than saying there is one", () => {
     draw([request(), request({ id: "req-2" as ApprovalId })]);
     expect(screen.getByText("2 turns are waiting on you")).toBeTruthy();
