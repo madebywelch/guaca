@@ -13,9 +13,17 @@ ensure_dist() {
   fi
 }
 
+grants_tests_as() {
+  step "The grants lint's tests, run as CI runs them on a $1"
+  shift
+  env "$@" node --test scripts/check-grants.test.mjs
+}
+
 run_grants() {
+  grants_tests_as "pull request" GITHUB_ACTIONS=true GITHUB_EVENT_NAME=pull_request     GITHUB_REF=refs/pull/1/merge GITHUB_BASE_REF=main GRANTS_BASE= GRANTS_APPROVALS=grants-approved-000000000000
+  grants_tests_as "push to main" GITHUB_ACTIONS=true GITHUB_EVENT_NAME=push     GITHUB_REF=refs/heads/main GITHUB_BASE_REF= GRANTS_BASE= GRANTS_APPROVALS=
+
   step "No comment, suppression or prose file without the owner's grant"
-  node --test scripts/check-grants.test.mjs
   node scripts/check-grants.mjs
 }
 
