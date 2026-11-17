@@ -206,6 +206,18 @@ mod tests {
     use crate::db::RunLock;
 
     #[test]
+    fn the_native_client_builds_no_runtime() {
+        let client = include_str!("app.rs");
+        for reach in ["Runtime::new", "Runtime::with_handle", "boot::open", "start_all"] {
+            assert!(
+                !client.contains(reach),
+                "app.rs names {reach}, but agents run only in guacad: the window asks the host \
+                 through its commands instead"
+            );
+        }
+    }
+
+    #[test]
     fn a_server_keeps_both_directories_under_one_root() {
         let paths = Paths::under(Path::new("/srv/guaca"));
         assert!(paths.db().starts_with("/srv/guaca"));
