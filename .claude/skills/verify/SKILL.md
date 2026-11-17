@@ -61,6 +61,14 @@ A run is ready when the Host answers `/health` and the page has exchanged the
 invitation's token for a session and drawn the App settings button. That is
 usable, not just alive: the schema is migrated and the page is admitted.
 
+Before the first scenario starts its clock, `verify.py` starts Chromium once on
+a throwaway profile and waits, for at most three minutes, until it has opened a
+tab. A cold browser on a loaded runner can take longer than a scenario's
+30-second answer to its first tab, and that start belongs to the run, not to
+whichever scenario happens to go first. The summary reports it as
+`browserStartSeconds`. A browser that never starts runs no scenario and exits 2,
+naming the browser under `missing`.
+
 To drive the product by hand against the same stand-in model:
 
 ```sh
