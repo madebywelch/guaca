@@ -585,6 +585,10 @@ def scenario_routine(w: World) -> None:
     masked_after_copy = "Authorization: Bearer " + "•" * 8 in ui.text()
     copied = ui.send("Runtime.evaluate", {"expression": "navigator.clipboard.readText()",
                                           "awaitPromise": True, "returnByValue": True})["result"].get("value") or ""
+    w.wait("Copied goes back to Copy", lambda: ui.find("button", "Copy"))
+    w.check("Copied goes back to Copy on its own",
+            ui.find("button", "Copy") and not ui.find("button", "Copied"),
+            observed={"labels": [name for name in ui.names("button") if name.startswith("Cop")]})
     ui.click("button", "Show secret")
     shown = w.wait("the secret is shown once asked for", lambda: re.search(
         r"Authorization: Bearer ([\w-]+)", ui.text()))
@@ -816,6 +820,7 @@ SCENARIOS: dict[str, Scenario] = {
     (
         "the secret is shown only when asked for, and no event carried it",
         "Copy puts the line with the real secret on the clipboard and leaves it masked on the page",
+        "Copied goes back to Copy on its own",
         "Hide secret masks the line again",
         "the routine is kept, switched on, waiting on the event",
         "a post without the secret, or to an event nobody waits on, fires nothing",

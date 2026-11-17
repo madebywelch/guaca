@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "../lib/ipc";
 import {
   anchorFor,
+  COPIED_MS,
   choiceFor,
   clockTime,
   eventFields,
@@ -131,6 +132,12 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), COPIED_MS);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
 
   const run = async (action: () => Promise<unknown>) => {
     setBusy(true);

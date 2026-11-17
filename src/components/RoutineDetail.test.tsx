@@ -1,6 +1,6 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
+import { COPIED_MS } from "../lib/routine";
 import type { Routine, RoutineDraft, RoutineRun, WebhookAddress } from "../lib/types";
 import { RoutineDetail } from "./RoutineDetail";
 
@@ -345,6 +345,26 @@ describe("RoutineDetail", () => {
     expect(await screen.findByRole("button", { name: "Copied" })).toBeTruthy();
     expect(line.textContent).not.toContain("s3cr3t");
     expect(screen.getByRole("button", { name: "Show secret" })).toBeTruthy();
+  });
+
+  it("goes back to Copy once the copy has been acknowledged for its while", async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    open({ trigger: "event:stripe/invoice.payment_failed", nextRunAt: null });
+    await act(async () => {});
+    await act(async () => {});
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    await act(async () => {});
+    await act(async () => {});
+    expect(screen.getByRole("button", { name: "Copied" })).toBeTruthy();
+
+    await act(async () => vi.advanceTimersByTime(COPIED_MS - 1));
+    expect(screen.getByRole("button", { name: "Copied" })).toBeTruthy();
+    await act(async () => vi.advanceTimersByTime(1));
+    expect(screen.getByRole("button", { name: "Copy" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Copied" })).toBeNull();
   });
 
   it("says why the line was not copied when the secret cannot be fetched", async () => {
