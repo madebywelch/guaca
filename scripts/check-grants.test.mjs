@@ -828,6 +828,74 @@ describe("the command", () => {
   );
 });
 
+describe("judge", () => {
+  const judgeOf = (repo, approvals = []) => check(repo.dir, { base: repo.base, head: "HEAD", approvals, judge: true }).problems;
+  const labelIn = (problems) => /judge-approved-[0-9a-f]{12}/.exec(problems.map((p) => p.message).join("\n"))?.[0];
+  for (const [what, path, text] of [
+    ["the lint", "scripts/check-grants.mjs", "export const weaker = true;\n"],
+    ["a helper of the lint", "scripts/grants/lex.mjs", "export const weaker = true;\n"],
+    ["a workflow", ".github/workflows/ci.yml", "name: ci\n"],
+    ["a new workflow", ".github/workflows/other.yml", "name: other\n"],
+  ]) {
+    it(
+      "fails a change to " + what + " until the owner approves that judge",
+      scenario({ "src/a.ts": SOURCE, "scripts/check-grants.mjs": "export const a = 1;\n", "scripts/grants/lex.mjs": "export const b = 1;\n", ".github/workflows/ci.yml": "name: gate\n" }, (repo) => {
+        write(repo.dir, { [path]: text });
+        git(repo.dir, "add", "-A");
+        git(repo.dir, "commit", "-qm", "judge");
+        const refused = judgeOf(repo);
+        assert.equal(refused.length, 1);
+        assert.equal(refused[0].path, path);
+        assert.match(refused[0].message, /never approves their own/);
+        assert.deepEqual(judgeOf(repo, [labelIn(refused)]), []);
+      }),
+    );
+  }
+  it(
+    "fails a judge deleted",
+    scenario({ "src/a.ts": SOURCE, "scripts/grants/lex.mjs": "export const b = 1;\n" }, (repo) => {
+      git(repo.dir, "rm", "-q", "scripts/grants/lex.mjs");
+      git(repo.dir, "commit", "-qm", "delete");
+      assert.match(labelIn(judgeOf(repo)) ?? "", /judge-approved-/);
+    }),
+  );
+  it(
+    "fails again when the judge changes after its approval",
+    scenario({ "src/a.ts": SOURCE, "scripts/check-grants.mjs": "export const a = 1;\n" }, (repo) => {
+      write(repo.dir, { "scripts/check-grants.mjs": "export const a = 2;\n" });
+      git(repo.dir, "commit", "-qam", "first");
+      const approved = labelIn(judgeOf(repo));
+      write(repo.dir, { "scripts/check-grants.mjs": "export const a = 3;\n" });
+      git(repo.dir, "commit", "-qam", "second");
+      const refused = judgeOf(repo, [approved]);
+      assert.equal(refused.length, 1);
+      assert.notEqual(labelIn(refused), approved);
+    }),
+  );
+  it(
+    "passes a change that leaves the judge alone",
+    scenario({ "src/a.ts": SOURCE, "scripts/check-grants.mjs": "export const a = 1;\n" }, (repo) => {
+      write(repo.dir, { "src/a.ts": SOURCE + "export const c = 3;\n" });
+      git(repo.dir, "commit", "-qam", "ordinary");
+      assert.deepEqual(judgeOf(repo), []);
+    }),
+  );
+  it(
+    "judges the committed head from the command, not the files on disk",
+    scenario({ "src/a.ts": SOURCE, "scripts/check-grants.mjs": "export const a = 1;\n" }, (repo) => {
+      write(repo.dir, { "scripts/check-grants.mjs": "export const a = 2;\n" });
+      git(repo.dir, "commit", "-qam", "judge");
+      write(repo.dir, { "src/a.ts": SOURCE + "// only on disk\n" });
+      const refused = cli(repo, ["judge", "--base", repo.base]);
+      assert.equal(refused.status, 1, refused.stdout);
+      assert.doesNotMatch(refused.stdout, /only on disk/);
+      const label = /judge-approved-[0-9a-f]{12}/.exec(refused.stdout)[0];
+      const approved = cli(repo, ["judge", "--base", repo.base], { GRANTS_APPROVALS: "other " + label });
+      assert.equal(approved.status, 0, approved.stdout);
+    }),
+  );
+});
+
 describe("hash", () => {
   it(
     "prints the approval a ledger needs, from its content with keys in sorted order",

@@ -7,6 +7,7 @@ import { languageOf, lineEnd, lineStarts, scanFiles } from "./grants/lex.mjs";
 import { fillEmptyPythonBodies, stripComments } from "./grants/strip.mjs";
 
 export const LEDGER = "grants.json";
+export const JUDGE = ["scripts/check-grants.mjs", "scripts/grants", ".github/workflows"];
 export const PROSE = /(\.(md|mdx|markdown|rst|adoc|asciidoc|txt|text|org|html?)|(^|\/)(LICENSE|COPYING|NOTICE)(-[^/]*)?)$/i;
 export const DATA = [
   {
@@ -406,7 +407,26 @@ function shippedMigrations(repo, ledger, head, problems) {
   return shipped;
 }
 
-export function check(repo, { base, head = null, ledgerOverride, proseByDiff = false, approvals = [], ledgerGate = true }) {
+function judgeChange(repo, base, head, approvals) {
+  const edited = git(repo, ["diff", "--name-only", "--no-renames", base, head, "--", ...JUDGE]).split("\n").filter(Boolean);
+  if (edited.length === 0) return [];
+  const approval = "judge-approved-" + hashText(git(repo, ["ls-tree", "-r", head, "--", ...JUDGE])).slice(0, 12);
+  if (approvals.includes(approval)) return [];
+  return [
+    {
+      path: edited.join(", "),
+      message:
+        "changes the lint that judges every pull request, and only the owner approves a change to the judge. Stop here: report what the change does to the judge to whoever directs the work, and wait. The author never approves their own change to the judge. The approval is the pull request label " +
+        approval +
+        ", made from the SHA-256 of every file of the judge at this head (" +
+        JUDGE.join(", ") +
+        "), so any later change to them needs a new approval.",
+    },
+  ];
+}
+
+export function check(repo, { base, head = null, ledgerOverride, proseByDiff = false, approvals = [], ledgerGate = true, judge = false }) {
+  if (judge && head === null) throw new Error("the judge reads a committed head as data; name it with --head");
   const problems = [];
   const findings = [];
   const ledgerText = ledgerOverride === undefined ? readLedger(repo, head) : ledgerOverride;
@@ -527,6 +547,7 @@ export function check(repo, { base, head = null, ledgerOverride, proseByDiff = f
       });
     }
   }
+  if (judge) problems.push(...judgeChange(repo, base, head, approvals));
   return { findings, problems, filesRead: texts.length, approval, ledgerChanges: ledger ? ledgerChanges(baseText, ledger, unitsByPath) : null };
 }
 
@@ -772,7 +793,9 @@ function main() {
   }
   const base = options.base ? { rev: git(repo, ["rev-parse", options.base]).trim(), label: options.base } : resolveBase(repo);
   const pushToMain = process.env.GITHUB_EVENT_NAME === "push" && process.env.GITHUB_REF === "refs/heads/main";
-  const result = check(repo, { base: base.rev, head: options.head ?? null, approvals: approvalsFrom(), ledgerGate: !pushToMain });
+  const judge = options.positional[0] === "judge";
+  const head = options.head ?? (judge ? "HEAD" : null);
+  const result = check(repo, { base: base.rev, head, approvals: approvalsFrom(), ledgerGate: !pushToMain, judge });
   annotate(result);
   console.log(report(result, base));
   return result.findings.length + result.problems.length > 0 ? 1 : 0;
