@@ -8857,3 +8857,174 @@ async fn a_restart_the_same_night_does_not_tidy_again() {
     let asked = stub.transcript.lock().iter().filter(|body| a_tidy(body)).count();
     assert_eq!(asked, 1);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stopping_a_turn_hands_back_a_message_it_took_in_and_never_acted_on() {
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let stub = {
+        let (gate, calls) = (gate.clone(), calls.clone());
+        serve(move |_| match calls.fetch_add(1, Ordering::SeqCst) {
+            0 => {
+                let deadline = Instant::now() + Duration::from_secs(20);
+                while !gate.load(Ordering::SeqCst) && Instant::now() < deadline {
+                    std::thread::yield_now();
+                }
+                Script::Progress("Looking up the vendor.".into())
+            }
+            1 => Script::Hang,
+            _ => Script::Say("Their number is 555-0100.".into()),
+        })
+        .await
+    };
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let (first, second) = taken_in_mid_turn(&h, &stub, &gate, &calls).await;
+
+    assert!(h.runtime.stop_run(first));
+    h.settle(first).await;
+    h.settle(second).await;
+
+    let answered =
+        h.runtime.store().channel_messages(h.id("Researcher"), 200).unwrap().into_iter().any(|m| {
+            m.run_id == second && m.to == Participant::Human && m.plain_text().contains("555-0100")
+        });
+    assert!(answered, "the second conversation was never answered:\n{}", h.transcript());
+    let outcome =
+        h.runtime.store().outcome(second).unwrap().expect("the second run has an outcome");
+    assert_eq!(outcome.status, OutcomeStatus::Done, "{}", h.transcript());
+    assert_eq!(h.runtime.store().outcome(first).unwrap().unwrap().status, OutcomeStatus::Stopped);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stopping_a_turn_keeps_a_message_it_acted_on_owed_for_the_next_host() {
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let stub = {
+        let (gate, calls) = (gate.clone(), calls.clone());
+        serve(move |_| match calls.fetch_add(1, Ordering::SeqCst) {
+            0 => {
+                let deadline = Instant::now() + Duration::from_secs(20);
+                while !gate.load(Ordering::SeqCst) && Instant::now() < deadline {
+                    std::thread::yield_now();
+                }
+                Script::Progress("Looking up the vendor.".into())
+            }
+            1 => Script::Progress("Looking up the number.".into()),
+            _ => Script::Hang,
+        })
+        .await
+    };
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let researcher = h.id("Researcher");
+    let (first, second) = taken_in_mid_turn(&h, &stub, &gate, &calls).await;
+    h.wait_until("the call after the second was taken in", |_| calls.load(Ordering::SeqCst) == 3)
+        .await;
+
+    assert!(h.runtime.stop_run(first));
+    h.settle(first).await;
+    h.wait_until("the turn to end", |h| h.runtime.live_runs() == 0).await;
+
+    assert_eq!(calls.load(Ordering::SeqCst), 3, "the message a call acted on was carried on blind");
+    assert!(!settled_on(&h.sink, second), "a message the turn acted on was settled unanswered");
+    assert!(h.runtime.store().outcome(second).unwrap().is_none());
+
+    h.runtime.stop_agent(researcher);
+    let store = Store::open(&h._dir.path().join("guac.db")).unwrap();
+    let recovered = guac_lib::boot::recover(&store).unwrap();
+    assert!(recovered.resumed.is_empty(), "a message a turn acted on was delivered again");
+    assert_eq!(recovered.interrupted, 1);
+    let reported: Vec<RunId> = store
+        .channel_messages(researcher, 50)
+        .unwrap()
+        .into_iter()
+        .filter(|m| {
+            matches!(m.parts.first(), Some(Part::Notice { kind: NoticeKind::Interrupted, .. }))
+        })
+        .map(|m| m.run_id)
+        .collect();
+    assert_eq!(reported, vec![second]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stopped_message_taken_into_a_turn_is_not_put_down_for_the_next_host() {
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let stub = gated_researcher(gate.clone(), calls.clone()).await;
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let (first, second) = taken_in_mid_turn(&h, &stub, &gate, &calls).await;
+    let asked = h
+        .runtime
+        .store()
+        .channel_messages(h.id("Researcher"), 50)
+        .unwrap()
+        .into_iter()
+        .find(|m| m.run_id == second)
+        .unwrap()
+        .id;
+
+    assert!(h.runtime.stop_run(second));
+    let drained = h.runtime.drain(Duration::from_secs(5)).await;
+    assert!(drained.is_complete(), "{drained:?}");
+
+    let conn = h.runtime.store().conn().unwrap();
+    let put: i64 = conn
+        .query_row("SELECT count(*) FROM put_down WHERE message_id=?1", [asked.to_string()], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    let whole: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM put_down_runs WHERE run_id=?1",
+            [second.to_string()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    drop(conn);
+    assert_eq!((put, whole), (0, 0), "the stopped conversation was put down for the next host");
+    assert_eq!(h.runtime.store().outcome(second).unwrap().unwrap().status, OutcomeStatus::Stopped);
+
+    let (h, _) = h.restart(Duration::from_secs(5)).await;
+    h.settle(first).await;
+    assert!(!settled_on(&h.sink, second), "the next host picked up a stopped conversation");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_start_mark_leaves_the_message_owed_and_the_next_host_answers_it() {
+    let stub = serve(|_| Script::Say("The room is booked.".into())).await;
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    h.runtime
+        .store()
+        .conn()
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER reject_start BEFORE UPDATE OF started_at ON pending_runs \
+             BEGIN SELECT RAISE(ABORT,'disk failure'); END;",
+        )
+        .unwrap();
+    let run = h.runtime.send_from_human(h.id("Researcher"), "Book the room.").unwrap();
+    h.wait_until("the start mark to fail and the run to leave the process", |h| {
+        h.runtime.live_runs() == 0
+    })
+    .await;
+
+    assert_eq!(stub.calls.load(Ordering::SeqCst), 0);
+    assert!(!settled_on(&h.sink, run), "a run that never started was reported settled");
+    assert!(h.runtime.store().outcome(run).unwrap().is_none());
+    let pending: i64 = h
+        .runtime
+        .store()
+        .conn()
+        .unwrap()
+        .query_row("SELECT count(*) FROM pending_runs WHERE run_id=?1", [run.to_string()], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(pending, 1, "the conversation is no longer owed anywhere");
+
+    h.runtime.store().conn().unwrap().execute_batch("DROP TRIGGER reject_start;").unwrap();
+    let (h, _) = h.restart(Duration::from_secs(5)).await;
+    h.settle(run).await;
+    assert_eq!(stub.calls.load(Ordering::SeqCst), 1);
+    assert!(h.channel_texts("Researcher").iter().any(|t| t.contains("The room is booked.")));
+    assert_eq!(h.runtime.store().outcome(run).unwrap().unwrap().status, OutcomeStatus::Done);
+}

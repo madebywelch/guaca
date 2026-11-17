@@ -153,6 +153,7 @@ impl Runtime {
         booked: &[Envelope],
         absorbed: &[Envelope],
         taken: &[Envelope],
+        acted_on: usize,
         records: &[MessageId],
     ) {
         let routine = |envelope: &Envelope| {
@@ -190,17 +191,48 @@ impl Runtime {
                     .map(|card| (envelope.run_id, self.limits_for(&card)))
             })
             .collect();
-        let messages: Vec<(MessageId, &[MessageId])> = booked
+        let mut runs = self.inner.runs.lock();
+        let called_off: HashSet<RunId> =
+            touched.iter().copied().filter(|run| runs.stopped.contains(run)).collect();
+        let live = |run: &RunId| !called_off.contains(run);
+        let carried = booked.iter().any(|envelope| live(&envelope.run_id));
+        let owed: HashSet<RunId> = taken[..acted_on]
+            .iter()
+            .filter(|envelope| !carried && !routine(envelope) && live(&envelope.run_id))
+            .map(|envelope| envelope.run_id)
+            .collect();
+        let mut ended = Vec::new();
+        for envelope in booked.iter().chain(taken.iter().filter(|envelope| !routine(envelope))) {
+            if owed.contains(&envelope.run_id) {
+                runs.absorbed.remove(&envelope.run_id);
+                if Self::release_bookings(&mut runs, envelope.run_id, 1) {
+                    self.inner.guard.lock().unpin(envelope.run_id);
+                }
+                continue;
+            }
+            if live(&envelope.run_id) {
+                Self::release_bookings(&mut runs, envelope.run_id, 1);
+                continue;
+            }
+            runs.absorbed.remove(&envelope.run_id);
+            ended.push(envelope.run_id);
+        }
+        let kept: Vec<&Envelope> =
+            booked.iter().filter(|envelope| live(&envelope.run_id)).collect();
+        let messages: Vec<(MessageId, &[MessageId])> = kept
             .iter()
             .enumerate()
             .map(|(at, envelope)| (envelope.id, if at == 0 { records } else { &[][..] }))
-            .chain(other_absorbed.iter().map(|envelope| (envelope.id, &[][..])))
+            .chain(
+                other_absorbed
+                    .iter()
+                    .filter(|envelope| live(&envelope.run_id) && !owed.contains(&envelope.run_id))
+                    .map(|envelope| (envelope.id, &[][..])),
+            )
             .collect();
-
-        let mut runs = self.inner.runs.lock();
-        for envelope in booked.iter().chain(taken.iter().filter(|envelope| !routine(envelope))) {
-            Self::release_bookings(&mut runs, envelope.run_id, 1);
-        }
+        let routine_absorbed: &[MessageId] = if kept.is_empty() { &[] } else { &routine_absorbed };
+        let touched: HashSet<RunId> =
+            touched.iter().filter(|run| live(run) && !owed.contains(run)).copied().collect();
         runs.put_down.extend(touched.iter().copied());
         let mut guard = self.inner.guard.lock();
         let whole: Vec<_> = touched
@@ -217,9 +249,13 @@ impl Runtime {
         drop(guard);
         // Under the lock, so `whole` is still true when it is written.
         if let Err(err) =
-            self.inner.store.put_down_with_absorbed(&messages, &whole, &routine_absorbed)
+            self.inner.store.put_down_with_absorbed(&messages, &whole, routine_absorbed)
         {
             tracing::error!(%err, "could not put work down; the next host reports it interrupted");
+        }
+        drop(runs);
+        for run in ended {
+            self.track_inflight(run, -1);
         }
     }
 
@@ -291,7 +327,7 @@ impl Runtime {
                     tracing::error!("could not read an absorbed routine while putting work down");
                     continue;
                 };
-                self.put_down(&[envelope], &absorbed, &[], &records);
+                self.put_down(&[envelope], &absorbed, &[], 0, &records);
             }
         }
         self.idle(agent);
@@ -315,6 +351,7 @@ impl Runtime {
         batch: &[Envelope],
         absorbed: &[Envelope],
         taken_in: &[Envelope],
+        acted_on: usize,
         text: String,
         mut parts: Vec<Part>,
         mut records: Vec<MessageId>,
@@ -364,7 +401,7 @@ impl Runtime {
             }
             Err(err) => tracing::warn!(%err, "could not note a stopped turn in its channel"),
         }
-        self.put_down(batch, absorbed, taken_in, &records);
+        self.put_down(batch, absorbed, taken_in, acted_on, &records);
         self.idle(card.id);
     }
 
