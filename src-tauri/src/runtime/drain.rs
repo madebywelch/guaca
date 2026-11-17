@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, Notify};
 
-use super::{Intake, Runtime};
+use super::{Intake, RunGuard, Runs, Runtime};
 use crate::db::Recovered;
 use crate::domain::agent::AgentCard;
 use crate::domain::envelope::{Envelope, Intent, NoticeKind, Part, Participant, Trust};
@@ -200,6 +200,7 @@ impl Runtime {
             .collect();
         drop(guard);
         let written = match self.inner.store.put_down_with_absorbed(
+            &runs,
             &messages,
             &whole,
             &with_carrier,
@@ -223,7 +224,7 @@ impl Runtime {
         written && !kept.is_empty()
     }
 
-    pub(super) fn mark_whole(&self, runs: &[RunId]) {
+    pub(super) fn mark_whole(&self, held: &RunGuard<'_, Runs>, runs: &[RunId]) {
         let guard = self.inner.guard.lock();
         let whole: Vec<_> = runs
             .iter()
@@ -232,7 +233,7 @@ impl Runtime {
             })
             .collect();
         drop(guard);
-        if let Err(err) = self.inner.store.put_down(&[], &whole) {
+        if let Err(err) = self.inner.store.put_down(held, &[], &whole) {
             tracing::error!(%err, "could not hand a conversation on; the next host reports it interrupted");
         }
     }

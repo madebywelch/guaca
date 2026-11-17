@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::{params, TransactionBehavior};
 
 use super::store::row_to_envelope;
-use super::{Store, StoreError};
+use super::{RunGuard, Store, StoreError};
 use crate::domain::envelope::{Envelope, Intent, NoticeKind, Part, Participant, Trust};
 use crate::domain::ids::{MessageId, RunId};
 use crate::domain::now_ms;
@@ -40,16 +40,18 @@ pub(super) const UNTOUCHED: &str = "p.started_at IS NULL \
          WHERE f.id=p.message_id AND f.to_kind='agent' AND a.lifecycle<>'terminated')";
 
 impl Store {
-    pub fn put_down(
+    pub fn put_down<T>(
         &self,
+        runs: &RunGuard<'_, T>,
         messages: &[(MessageId, &[MessageId])],
         whole: &[(RunId, u32, GuardSnapshot)],
     ) -> Result<(), StoreError> {
-        self.put_down_with_absorbed(messages, whole, &[])
+        self.put_down_with_absorbed(runs, messages, whole, &[])
     }
 
-    pub fn put_down_with_absorbed(
+    pub fn put_down_with_absorbed<T>(
         &self,
+        _runs: &RunGuard<'_, T>,
         messages: &[(MessageId, &[MessageId])],
         whole: &[(RunId, u32, GuardSnapshot)],
         absorbed: &[MessageId],
@@ -367,6 +369,7 @@ fn interrupted(original: &Envelope) -> Envelope {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::RunLock;
     use crate::domain::agent::{AgentCard, CleanDraft};
 
     fn fixture() -> (tempfile::TempDir, Store, AgentCard) {
@@ -424,6 +427,7 @@ mod tests {
         store.append_delivery(&original).unwrap();
         store
             .put_down(
+                &RunLock::new(()).lock(),
                 &[(original.id, &[])],
                 &[(run, 3, RunState::new(Default::default()).snapshot())],
             )
@@ -445,6 +449,7 @@ mod tests {
         store.conn().unwrap().execute_batch("CREATE TRIGGER fail_whole BEFORE INSERT ON put_down_runs BEGIN SELECT RAISE(ABORT, 'crash'); END;").unwrap();
         assert!(store
             .put_down(
+                &RunLock::new(()).lock(),
                 &[(original.id, &[])],
                 &[(run, 0, RunState::new(Default::default()).snapshot())]
             )
@@ -462,6 +467,7 @@ mod tests {
         store.append_delivery(&original).unwrap();
         store
             .put_down(
+                &RunLock::new(()).lock(),
                 &[(original.id, &[])],
                 &[(run, 0, RunState::new(Default::default()).snapshot())],
             )
@@ -494,7 +500,13 @@ mod tests {
                     let mut state = RunState::new(Default::default());
                     state.resume_at(steps);
                     barrier.wait();
-                    store.put_down(&[(id, &[])], &[(run, steps, state.snapshot())]).unwrap();
+                    store
+                        .put_down(
+                            &RunLock::new(()).lock(),
+                            &[(id, &[])],
+                            &[(run, steps, state.snapshot())],
+                        )
+                        .unwrap();
                 })
             })
             .collect();
@@ -515,7 +527,13 @@ mod tests {
         let record = MessageId::new();
         let mut state = RunState::new(Default::default());
         state.resume_at(7);
-        store.put_down(&[(original.id, &[record])], &[(run, 7, state.snapshot())]).unwrap();
+        store
+            .put_down(
+                &RunLock::new(()).lock(),
+                &[(original.id, &[record])],
+                &[(run, 7, state.snapshot())],
+            )
+            .unwrap();
 
         let recovered = store.recover().unwrap();
         assert_eq!(recovered.interrupted, 0);
@@ -539,7 +557,7 @@ mod tests {
         store.append_delivery(&original).unwrap();
         let queued = asked(&agent, run, "and this");
         store.append_delivery(&queued).unwrap();
-        store.put_down(&[(queued.id, &[])], &[]).unwrap();
+        store.put_down(&RunLock::new(()).lock(), &[(queued.id, &[])], &[]).unwrap();
 
         let recovered = store.recover().unwrap();
         assert!(recovered.resumed.is_empty());
@@ -557,7 +575,7 @@ mod tests {
         let original = asked(&agent, run, "a correction, taken into another turn");
         store.append_delivery(&original).unwrap();
         store.settle_run(run).unwrap();
-        store.put_down(&[(original.id, &[])], &[]).unwrap();
+        store.put_down(&RunLock::new(()).lock(), &[(original.id, &[])], &[]).unwrap();
 
         let recovered = store.recover().unwrap();
         assert_eq!(recovered.interrupted, 1);

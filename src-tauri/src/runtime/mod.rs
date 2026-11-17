@@ -380,7 +380,7 @@ fn browser_answer(permission: &Permission, service: &str, unchecked: bool) -> Op
         )),
     }
 }
-use crate::db::{Store, StoreError};
+use crate::db::{RunGuard, RunLock, Store, StoreError};
 use crate::domain::agent::{
     copy_name, AgentCard, CleanDraft, Consent, DirectoryEntry, Lifecycle, COMPOST_MS,
 };
@@ -594,7 +594,7 @@ struct Inner {
     inboxes: Mutex<HashMap<AgentId, Inbox>>,
     activity: Mutex<HashMap<AgentId, Activity>>,
     routine_delivery: Mutex<()>,
-    runs: Mutex<Runs>,
+    runs: RunLock<Runs>,
     waiting: Mutex<HashMap<ApprovalId, tokio::sync::oneshot::Sender<()>>>,
     approval_window: AtomicU64,
     workspace: Workspace,
@@ -695,7 +695,7 @@ impl Runtime {
                 inboxes: Mutex::new(HashMap::new()),
                 activity: Mutex::new(HashMap::new()),
                 routine_delivery: Mutex::new(()),
-                runs: Mutex::new(Runs::default()),
+                runs: RunLock::default(),
                 waiting: Mutex::new(HashMap::new()),
                 approval_window: AtomicU64::new(crate::probe_clock::scaled(
                     APPROVAL_WINDOW.as_millis() as i64,
@@ -2216,7 +2216,7 @@ impl Runtime {
                 let absorbed = runs.absorbed.remove(&run);
                 let cut_short = runs.cut_short.remove(&run);
                 if runs.put_down.contains(&run) {
-                    self.mark_whole(&[run]);
+                    self.mark_whole(&runs, &[run]);
                     None
                 } else {
                     let ending = if cut_short {

@@ -441,6 +441,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::RunLock;
     use crate::domain::agent::CleanDraft;
     fn fixture() -> (tempfile::TempDir, Store, crate::domain::agent::AgentCard) {
         let dir = tempfile::tempdir().unwrap();
@@ -638,7 +639,12 @@ mod tests {
         s.start_deliveries(&[started.id], started.run_id).unwrap();
 
         let state = crate::runtime::guard::RunState::new(Default::default());
-        s.put_down(&[(delivery.id, &[])], &[(delivery.run_id, 0, state.snapshot())]).unwrap();
+        s.put_down(
+            &RunLock::new(()).lock(),
+            &[(delivery.id, &[])],
+            &[(delivery.run_id, 0, state.snapshot())],
+        )
+        .unwrap();
         assert_eq!(s.recover_decisions().unwrap(), 1, "only the other one");
         let decisions = s.decisions(None).unwrap();
         let carried = decisions.iter().find(|x| x.id == d.id).unwrap();

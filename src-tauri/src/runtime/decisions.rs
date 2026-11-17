@@ -1,5 +1,5 @@
 use super::guard::RunState;
-use super::{AgentCard, Runs, Runtime, RuntimeError, UiEvent};
+use super::{AgentCard, RunGuard, Runs, Runtime, RuntimeError, UiEvent};
 use crate::domain::decision::{self, DecisionAction, DecisionStatus, WorkDecision};
 use crate::domain::envelope::{Envelope, Part, Participant, ToolOutcome};
 use crate::domain::ids::{DecisionId, RunId};
@@ -55,11 +55,16 @@ impl Runtime {
         Ok((decision, run))
     }
 
-    fn put_down_answer(&self, runs: &mut Runs, envelope: &Envelope) -> Result<(), RuntimeError> {
+    fn put_down_answer(
+        &self,
+        runs: &mut RunGuard<'_, Runs>,
+        envelope: &Envelope,
+    ) -> Result<(), RuntimeError> {
         let Participant::Agent { id } = envelope.to else { return Ok(()) };
         let card = self.inner.store.get_agent(id)?.ok_or(RuntimeError::UnknownAgent(id))?;
         let state = RunState::new(self.limits_for(&card));
         self.inner.store.put_down(
+            runs,
             &[(envelope.id, &[])],
             &[(envelope.run_id, state.steps_used(), state.snapshot())],
         )?;

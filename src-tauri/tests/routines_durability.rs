@@ -1,4 +1,4 @@
-use guac_lib::db::Store;
+use guac_lib::db::{RunLock, Store};
 use guac_lib::domain::agent::CleanDraft;
 use guac_lib::domain::envelope::{Envelope, Intent, Part, Participant, Trust};
 use guac_lib::domain::ids::{MessageId, RunId};
@@ -227,6 +227,7 @@ fn absorbed_firing_is_recovered_only_with_its_whole_owner() {
     let snapshot = RunState::new(GuardLimits::default()).snapshot();
     store
         .put_down_with_absorbed(
+            &RunLock::new(()).lock(),
             &[(parent.id, &[])],
             &[(parent.run_id, 0, snapshot)],
             &[envelope.id],
@@ -344,7 +345,13 @@ fn failed_recovery_keeps_the_entire_put_down_for_the_next_restart() {
         )
         .unwrap();
     let snapshot = RunState::new(GuardLimits::default()).snapshot();
-    store.put_down(&[(envelope.id, &[])], &[(envelope.run_id, 0, snapshot)]).unwrap();
+    store
+        .put_down(
+            &RunLock::new(()).lock(),
+            &[(envelope.id, &[])],
+            &[(envelope.run_id, 0, snapshot)],
+        )
+        .unwrap();
     store.conn().unwrap().execute_batch("CREATE TRIGGER inject BEFORE DELETE ON put_down_runs BEGIN SELECT RAISE(ABORT, 'injected'); END;").unwrap();
     assert!(store.recover().is_err());
     store.conn().unwrap().execute_batch("DROP TRIGGER inject").unwrap();
