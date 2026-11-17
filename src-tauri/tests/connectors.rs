@@ -46,7 +46,7 @@ fn credentials_holding(var: &str) -> Option<ProcessEnv> {
 struct Machine {
     client: E2bClient,
     id: String,
-    token: String,
+    token: guac_lib::secrets::Secret,
 }
 
 impl Machine {

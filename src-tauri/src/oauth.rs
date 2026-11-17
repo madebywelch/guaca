@@ -93,7 +93,7 @@ impl Grant {
 #[derive(Clone, Default)]
 pub struct Gate<'a> {
     origin: String,
-    headers: &'a [(String, String)],
+    headers: &'a [(String, Secret)],
 }
 
 impl<'a> Gate<'a> {
@@ -101,7 +101,7 @@ impl<'a> Gate<'a> {
         Gate::default()
     }
 
-    pub fn on(resource: &str, headers: &'a [(String, String)]) -> Gate<'a> {
+    pub fn on(resource: &str, headers: &'a [(String, Secret)]) -> Gate<'a> {
         Gate {
             origin: split_origin(resource).map(|(origin, _)| origin).unwrap_or_default(),
             headers,
@@ -118,7 +118,7 @@ impl<'a> Gate<'a> {
         }
         let mut request = request;
         for (name, value) in self.headers {
-            request = request.header(name.as_str(), value.as_str());
+            request = request.header(name.as_str(), value.expose());
         }
         request
     }

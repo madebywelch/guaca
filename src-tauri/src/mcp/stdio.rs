@@ -49,7 +49,7 @@ pub(super) async fn open(dial: Dial<'_>) -> Result<Session, McpError> {
         .args(args)
         .env_clear()
         .envs(BASELINE.iter().filter_map(|name| std::env::var(name).ok().map(|v| (*name, v))))
-        .envs(dial.headers.iter().map(|(name, value)| (name.as_str(), value.as_str())))
+        .envs(dial.headers.iter().map(|(name, value)| (name.as_str(), value.expose())))
         .current_dir(std::env::temp_dir())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -263,7 +263,7 @@ mod tests {
     #[tokio::test]
     async fn a_program_is_started_asked_and_answered_over_its_own_pipes() {
         let endpoint = fixture("");
-        let env = [("FIXTURE_TOKEN".to_string(), "abc".to_string())];
+        let env = [("FIXTURE_TOKEN".to_string(), "abc".into())];
         let dial = Dial { endpoint: &endpoint, token: None, headers: &env, legacy_transport: true };
         let session = open(dial).await.expect("the program starts and shakes hands");
         assert!(session.stdio());

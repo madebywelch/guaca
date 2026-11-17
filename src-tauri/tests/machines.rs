@@ -341,7 +341,7 @@ async fn a_second_command_in_one_turn_runs_on_the_machine_the_first_rented() {
     );
     assert_eq!(fleet.e2b.lock().made_for(&card.name), 1, "one machine");
     assert_eq!(
-        second.envd_token,
+        second.envd_token.expose(),
         format!("envd-{}", first.id),
         "and the token that reaches it is the one that machine was issued"
     );

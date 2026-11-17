@@ -736,7 +736,9 @@ impl Runtime {
             .unwrap_or(crate::account::DEFAULT_ORIGIN)
     }
 
-    pub async fn account_token(&self) -> Result<String, crate::account::AccountError> {
+    pub async fn account_token(
+        &self,
+    ) -> Result<crate::secrets::Secret, crate::account::AccountError> {
         let Some(account) = self.inner.account.get() else {
             return Err(crate::account::AccountError::NotSignedIn);
         };
@@ -5432,7 +5434,7 @@ impl Runtime {
                         .store
                         .finish_sandbox_resume(
                             card.id,
-                            (&woken.id, &woken.envd_token, &woken.traffic_token),
+                            (&woken.id, woken.envd_token.expose(), woken.traffic_token.expose()),
                         )
                         .map_err(|err| {
                             E2bError::Local(format!(
@@ -5463,11 +5465,10 @@ impl Runtime {
             .await
             .map_err(uncertain_computer_action)?;
 
-        if let Err(err) = self
-            .inner
-            .store
-            .record_created_sandbox(card.id, (&fresh.id, &fresh.envd_token, &fresh.traffic_token))
-        {
+        if let Err(err) = self.inner.store.record_created_sandbox(
+            card.id,
+            (&fresh.id, fresh.envd_token.expose(), fresh.traffic_token.expose()),
+        ) {
             tracing::error!(%err, sandbox = %fresh.id, "could not record a sandbox; killing it");
             if let Err(cleanup) = client.kill(&fresh.id).await {
                 tracing::error!(%cleanup, provider = "e2b", resource = %fresh.id, "created resource could not be recorded or released");

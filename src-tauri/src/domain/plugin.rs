@@ -71,7 +71,7 @@ pub const MAX_CUSTOM_NAME: usize = 32;
 
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct Headers {
-    pairs: Vec<(String, String)>,
+    pairs: Vec<(String, crate::secrets::Secret)>,
     env: bool,
 }
 
@@ -211,7 +211,7 @@ impl Headers {
         if rows.len() > MAX_HEADERS {
             return Err(HeaderError::TooMany);
         }
-        let mut out: Vec<(String, String)> = Vec::new();
+        let mut out: Vec<(String, crate::secrets::Secret)> = Vec::new();
         for row in rows {
             let name = row.name.trim().to_ascii_lowercase();
             let value = row.value.expose().trim().to_string();
@@ -236,7 +236,7 @@ impl Headers {
             if out.iter().any(|(held, _)| held == &name) {
                 return Err(HeaderError::Repeated(name));
             }
-            out.push((name, value));
+            out.push((name, value.into()));
         }
         Ok(Headers { pairs: out, env: false })
     }
@@ -245,7 +245,7 @@ impl Headers {
         if rows.len() > MAX_ENV {
             return Err(HeaderError::TooManyEnv);
         }
-        let mut out: Vec<(String, String)> = Vec::new();
+        let mut out: Vec<(String, crate::secrets::Secret)> = Vec::new();
         for row in rows {
             let name = row.name.trim().to_string();
             let value = row.value.expose().trim().to_string();
@@ -269,7 +269,7 @@ impl Headers {
             if out.iter().any(|(held, _)| held == &name) {
                 return Err(HeaderError::Repeated(name));
             }
-            out.push((name, value));
+            out.push((name, value.into()));
         }
         Ok(Headers { pairs: out, env: true })
     }
@@ -282,7 +282,7 @@ impl Headers {
         let rows: Vec<serde_json::Value> = self
             .pairs
             .iter()
-            .map(|(name, value)| serde_json::json!({ "name": name, "value": value }))
+            .map(|(name, value)| serde_json::json!({ "name": name, "value": value.expose() }))
             .collect();
         let value =
             if self.env { serde_json::json!({ "env": rows }) } else { serde_json::json!(rows) };
@@ -315,7 +315,7 @@ impl Headers {
         self.pairs.is_empty()
     }
 
-    pub fn wire(&self) -> &[(String, String)] {
+    pub fn wire(&self) -> &[(String, crate::secrets::Secret)] {
         &self.pairs
     }
 }
@@ -664,6 +664,13 @@ pub struct Plugin {
 mod tests {
 
     #[test]
+    fn header_values_are_held_as_secrets() {
+        let headers = Headers::parse(&[header("X-API-Key", "abc")]).unwrap();
+        let held: &[(String, crate::secrets::Secret)] = headers.wire();
+        assert_eq!(held[0].1.expose(), "abc");
+    }
+
+    #[test]
     fn a_command_is_split_into_words_the_way_a_shell_would_and_never_run_by_one() {
         let split = |text: &str| command_line(&format!("{STDIO}{text}"));
         assert_eq!(
@@ -785,7 +792,7 @@ mod tests {
     #[test]
     fn a_header_is_stored_lowercased_and_goes_out_that_way() {
         let headers = Headers::parse(&[header("X-API-Key", " abc ")]).unwrap();
-        assert_eq!(headers.wire(), [("x-api-key".to_string(), "abc".to_string())]);
+        assert_eq!(headers.wire(), [("x-api-key".to_string(), "abc".into())]);
         assert_eq!(headers.names(), ["x-api-key"]);
     }
 
@@ -816,7 +823,7 @@ mod tests {
         assert!(matches!(Headers::parse(&[header("x-key", "a\r\nX-Admin: 1")]), Err(BadValue(_))));
         assert_eq!(
             Headers::parse(&[header("x-key", "abc\n")]).unwrap().wire(),
-            [("x-key".to_string(), "abc".to_string())]
+            [("x-key".to_string(), "abc".into())]
         );
     }
 

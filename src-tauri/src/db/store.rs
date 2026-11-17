@@ -3793,8 +3793,8 @@ fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
                     .map_err(|e| StoreError::Corrupt(format!("bad group id {raw:?}: {e}")))?
             },
             sandbox_id: row.get(12)?,
-            sandbox_envd_token: row.get(13)?,
-            sandbox_traffic_token: row.get(14)?,
+            sandbox_envd_token: row.get::<_, Option<String>>(13)?.map(Secret::from),
+            sandbox_traffic_token: row.get::<_, Option<String>>(14)?.map(Secret::from),
             pinned: row.get::<_, i64>(15)? != 0,
             rail_order: row.get(16)?,
             browser_id: row.get(17)?,

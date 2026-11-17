@@ -116,7 +116,8 @@ pub async fn connect(
             return Err(PluginError::NoAccount { label: kind.label().to_string() });
         };
         let (_session, tools) =
-            ask(dial(kind.is_custom(), endpoint, headers).with_token(Some(used.token))).await?;
+            ask(dial(kind.is_custom(), endpoint, headers).with_token(Some(used.token.expose())))
+                .await?;
         return Ok(store.save_plugin(group, kind, "", &tools, None, used.connection, headers)?);
     }
 
@@ -260,7 +261,7 @@ pub async fn check(
     let crate::db::store::Dialed { kind, grant, generation, headers, .. } = dialed;
     if kind.account_backed() {
         let used = account.spend(&kind)?;
-        return inspect(kind.is_custom(), endpoint, Some(used.token), &headers).await;
+        return inspect(kind.is_custom(), endpoint, Some(used.token.expose()), &headers).await;
     }
     let grant = match grant {
         Some(held) if held.stale(now_ms()) => {
@@ -303,7 +304,7 @@ async fn account_label(session: &mcp::Session, kind: &PluginKind) -> String {
 
 #[derive(Clone, Copy)]
 pub struct AccountUse<'a> {
-    pub token: &'a str,
+    pub token: &'a crate::secrets::Secret,
     pub connection: &'a str,
 }
 
@@ -333,7 +334,10 @@ impl std::fmt::Debug for Held<'_> {
 }
 
 impl<'a> Held<'a> {
-    pub fn read(read: &'a Result<String, AccountError>, connection: &'a str) -> Self {
+    pub fn read(
+        read: &'a Result<crate::secrets::Secret, AccountError>,
+        connection: &'a str,
+    ) -> Self {
         match read {
             Ok(token) => Held::Token(AccountUse { token, connection }),
             Err(AccountError::NotSignedIn) => Held::Absent,
@@ -408,7 +412,7 @@ pub async fn call(
         let used = account.spend(kind)?;
         return run(
             dial(kind.is_custom(), endpoint, &headers),
-            Some(used.token),
+            Some(used.token.expose()),
             tool,
             arguments,
             schema.as_ref(),
@@ -545,6 +549,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_account_token_is_held_as_a_secret() {
+        let read: Result<crate::secrets::Secret, AccountError> = Ok("acct-token".into());
+        let Held::Token(used) = Held::read(&read, "acct_1") else { panic!("a token is a token") };
+        let token: &crate::secrets::Secret = used.token;
+        assert_eq!(token.expose(), "acct-token");
+    }
+
+    #[test]
     fn agent_errors_never_include_provider_response_bodies() {
         let failure = PluginError::Server(McpError::Status {
             endpoint: "https://example.invalid/private-value".into(),
@@ -558,7 +570,7 @@ mod tests {
 
     #[test]
     fn an_account_invalid_grant_requires_a_new_signin() {
-        let error: Result<String, AccountError> = Err(AccountError::Upstream {
+        let error: Result<crate::secrets::Secret, AccountError> = Err(AccountError::Upstream {
             origin: "https://example.invalid".into(),
             status: 400,
             message: r#"{"error":"invalid_grant","detail":"private-value"}"#.into(),
@@ -659,20 +671,20 @@ mod tests {
 
     #[test]
     fn a_read_of_the_account_sorts_into_the_three_states_one_way() {
-        let nothing: Result<String, AccountError> = Err(AccountError::NotSignedIn);
+        let nothing: Result<crate::secrets::Secret, AccountError> = Err(AccountError::NotSignedIn);
         assert!(matches!(Held::read(&nothing, ""), Held::Absent));
 
-        let refused: Result<String, AccountError> = Err(AccountError::Upstream {
+        let refused: Result<crate::secrets::Secret, AccountError> = Err(AccountError::Upstream {
             origin: "https://guaca.bot".into(),
             status: 400,
             message: "invalid_grant".into(),
         });
         assert!(matches!(Held::read(&refused, ""), Held::Refused(_)));
 
-        let held: Result<String, AccountError> = Ok("token".into());
+        let held: Result<crate::secrets::Secret, AccountError> = Ok("token".into());
         match Held::read(&held, "acct_1") {
             Held::Token(used) => {
-                assert_eq!(used.token, "token");
+                assert_eq!(used.token.expose(), "token");
                 assert_eq!(used.connection, "acct_1");
             }
             other => panic!("a token is a token: {other:?}"),
@@ -681,7 +693,7 @@ mod tests {
 
     #[test]
     fn a_held_token_debugs_without_the_token() {
-        let read = Ok("acct-hunter2".to_string());
+        let read = Ok("acct-hunter2".into());
         let printed = format!("{:?}", Held::read(&read, "acct_1"));
         assert!(printed.contains("acct_1"), "{printed}");
         assert!(!printed.contains("hunter2"), "a token reached Debug: {printed}");

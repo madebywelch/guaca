@@ -688,8 +688,8 @@ async fn one_renewal_serves_everybody_who_wanted_a_token_at_once() {
 
     let (first, second) = tokio::join!(account.access(), account.access());
 
-    assert_eq!(first.unwrap(), "at-2");
-    assert_eq!(second.unwrap(), "at-2", "the second caller took the first one's answer");
+    assert_eq!(first.unwrap().expose(), "at-2");
+    assert_eq!(second.unwrap().expose(), "at-2", "the second caller took the first one's answer");
     assert_eq!(refreshes(&stub), 1, "one renewal went out, not one per caller");
 }
 
