@@ -221,7 +221,7 @@ const LANGUAGES = [
       ["<script>const a = 1; // why</script>", "comment"],
       ["<style>a { color: red; } /* why */</style>", "comment"],
     ],
-    pass: ['<p title="<!-- no -->">// text</p>', '<script type="application/json">{"a": "//"}</script>'],
+    pass: ['<p title="<!-- no -->">// text</p>', '<script type="application/json">{"a": "//"}</script>', "<head>\n  <!--head-->\n</head>\n<body><!--app--></body>"],
   },
   {
     path: "migrations/0001.sql",
@@ -617,6 +617,18 @@ describe("a change", () => {
     }),
   );
   it(
+    "fails on a deleted ledger nobody approved, and passes it with the approval hash prints",
+    scenario({ "src/a.ts": SOURCE }, (repo) => {
+      rmSync(join(repo.dir, "grants.json"));
+      const refused = cli(repo, ["--base", repo.base]);
+      assert.equal(refused.status, 1, refused.stdout);
+      const label = cli(repo, ["hash"]).stdout.trim();
+      assert.match(label, /^grants-approved-[0-9a-f]{12}$/);
+      assert.match(refused.stdout, new RegExp("grants\\.json .*" + label));
+      assert.equal(cli(repo, ["--base", repo.base], { GRANTS_APPROVALS: label }).status, 0);
+    }),
+  );
+  it(
     "keeps an approval when only the ledger's formatting changes",
     scenario({ "src/a.ts": OLD }, (repo) => {
       setLedger(repo.dir, (ledger) => ledger.grants.push(grantOf("comment", "src/a.ts", "// an old comment")));
@@ -701,17 +713,21 @@ describe("a change", () => {
     }),
   );
   it(
-    "judges an old suppression and an old comment in a prose file only on the lines a change touches",
-    scenario(
-      {
-        "src/a.ts": "export function a() {\n  // biome-ignore lint/style/useConst: old\n  let b = 1;\n  return b;\n}\n",
-        "index.html": "<!-- an old note -->\n<p>old</p>\n",
-      },
-      (repo, run) => {
-        write(repo.dir, { "src/a.ts": "export function a() {\n    // biome-ignore lint/style/useConst: old\n  let b = 1;\n  return b + 1;\n}\n", "index.html": "<!-- an old note -->\n<p>new</p>\n" });
-        assert.deepEqual([...run().findings, ...run().problems], []);
-      },
-    ),
+    "judges an old suppression only on the lines a change touches",
+    scenario({ "src/a.ts": "export function a() {\n  // biome-ignore lint/style/useConst: old\n  let b = 1;\n  return b;\n}\n" }, (repo, run) => {
+      write(repo.dir, { "src/a.ts": "export function a() {\n    // biome-ignore lint/style/useConst: old\n  let b = 1;\n  return b + 1;\n}\n" });
+      assert.deepEqual([...run().findings, ...run().problems], []);
+    }),
+  );
+  it(
+    "fails an old comment in an HTML page the change never touched",
+    scenario({ "src/a.ts": SOURCE, "index.html": "<p>a</p>\n<!-- an old note -->\n" }, (repo, run) => {
+      write(repo.dir, { "src/a.ts": SOURCE + "export const c = 3;\n" });
+      assert.deepEqual(
+        run().findings.map((f) => [f.path, f.line, f.kind]),
+        [["index.html", 2, "comment"]],
+      );
+    }),
   );
   it(
     "passes the comments in a migration the ledger lists as shipped, unchanged",
@@ -778,6 +794,53 @@ describe("the command", () => {
       assert.match(out.stdout, /docs\/X\.md {2}new document/);
       assert.match(out.stdout, /encode it as a type, an assertion or a test/);
       assert.match(out.stdout, /node \S*check-grants\.mjs grant <file>:<line> --words/);
+    }),
+  );
+  for (const head of [null, "HEAD"]) {
+    it(
+      "judges a file whose name is not ASCII, " + (head ? "committed" : "in the work tree"),
+      scenario({ "src/a.ts": SOURCE }, (repo) => {
+        write(repo.dir, { "src/café.ts": SOURCE + "// a comment\n" });
+        git(repo.dir, "add", "-A");
+        git(repo.dir, "commit", "-qm", "café");
+        const out = cli(repo, ["--base", repo.base, ...(head ? ["--head", head] : [])]);
+        assert.equal(out.status, 1, out.stdout + out.stderr);
+        assert.match(out.stdout, /src\/café\.ts:5 {2}comment/);
+      }),
+    );
+    it(
+      "refuses a file name git would quote, " + (head ? "committed" : "in the work tree"),
+      scenario({ "src/a.ts": SOURCE }, (repo) => {
+        write(repo.dir, { 'src/a"b.ts': SOURCE, "src/tab\there.ts": SOURCE });
+        git(repo.dir, "add", "-A");
+        git(repo.dir, "commit", "-qm", "names");
+        const out = cli(repo, ["--base", repo.base, ...(head ? ["--head", head] : [])]);
+        assert.equal(out.status, 1, out.stdout + out.stderr);
+        assert.match(out.stdout, /"src\/a\\"b\.ts" {2}a file name git quotes/);
+        assert.match(out.stdout, /"src\/tab\\there\.ts" {2}a file name git quotes/);
+        assert.match(out.stdout, /Rename the file/);
+      }),
+    );
+  }
+  it(
+    "runs no workflow command a file name or a grant's words brings",
+    scenario({ "src/a.ts": SOURCE }, (repo) => {
+      const forged = "::error file=forged.ts::forged";
+      write(repo.dir, { ["src/x\n" + forged + "\n.ts"]: SOURCE + "// a comment\n" });
+      setLedger(repo.dir, (ledger) => ledger.grants.push({ ...grantOf("comment", "src/a.ts", "// gone"), words: "ok\n::warning::forged" }));
+      const out = cli(repo, ["--base", repo.base], { GITHUB_ACTIONS: "true" });
+      assert.equal(out.status, 1, out.stdout);
+      const lines = out.stdout.split("\n");
+      const stop = lines.findIndex((line) => line.startsWith("::stop-commands::"));
+      assert.notEqual(stop, -1, out.stdout);
+      const token = lines[stop].slice("::stop-commands::".length);
+      assert.match(token, /^[0-9a-f-]{36}$/);
+      const resume = lines.indexOf("::" + token + "::");
+      assert.ok(resume > stop, out.stdout);
+      const live = [...lines.slice(0, stop), ...lines.slice(resume + 1)].filter((line) => line.startsWith("::"));
+      assert.ok(live.some((line) => line.startsWith("::error file=src/x%0A%3A%3Aerror file=forged.ts%3A%3Aforged%0A.ts::")), out.stdout);
+      assert.deepEqual(live.filter((line) => line.includes("forged") && !line.startsWith("::error file=src/x%0A")), []);
+      assert.ok(lines.slice(stop + 1, resume).some((line) => line.startsWith("::warning::forged")), out.stdout);
     }),
   );
   it(
@@ -1012,17 +1075,17 @@ describe("strip", () => {
     }),
   );
   it(
-    "keeps lines a tool reads, suppressions, granted comments, prose and shipped migrations",
+    "keeps lines a tool reads, suppressions, granted comments and shipped migrations, and strips an HTML comment",
     stripped(
       {
         "scripts/a.sh": "#!/usr/bin/env bash\n# shellcheck disable=SC2086\necho $A\n",
         "src/b.ts": "// the owner wants this\nexport const b = 1;\n",
-        "index.html": "<!-- a note -->\n<p>a</p>\n",
+        "index.html": "<!-- a note -->\n<p>a</p>\n<!--app-->\n",
         "migrations/0000_init.sql": "-- why\nCREATE TABLE a (id INTEGER);\n",
       },
       (repo, result, read) => {
         assert.equal(read("scripts/a.sh"), "#!/usr/bin/env bash\n# shellcheck disable=SC2086\necho $A\n");
-        assert.equal(read("index.html"), "<!-- a note -->\n<p>a</p>\n");
+        assert.equal(read("index.html"), "<p>a</p>\n<!--app-->\n");
         assert.equal(read("migrations/0000_init.sql"), "CREATE TABLE a (id INTEGER);\n");
         write(repo.dir, { "migrations/0000_init.sql": "-- why\nCREATE TABLE a (id INTEGER);\n", "src/b.ts": "// the owner wants this\nexport const b = 1;\n" });
         shipMigrations(repo, ["migrations/0000_init.sql"]);

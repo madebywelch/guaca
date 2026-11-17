@@ -140,6 +140,7 @@ lists what has already been broken by changing it.
 | Whether a model can be shown a picture: an attachment, a screen, what an agent is told it is | *What a model can be sent is asked of the endpoint, not assumed* in `docs/ARCHITECTURE.md`, then `llm/modality.rs` and the four places `Modalities` is spent from `Runtime::run_turn` |
 | A prompt, or anything that changes how much a group talks | *Three test suites, asking different questions*, then run the live evals |
 | What a real group of eight does with one directive, and what is different when you ask twice | *A group is watched rather than asserted*, then `src-tauri/tests/crew.rs` |
+| Anything guaca.bot's tests read from this repository: a file it vendors, a value or block it holds equal to the app's, moving or reshaping one | `SITE_READS` in `src/lib/siteReads.ts`, which names each read and the pattern that extracts it, and `siteReads.test.ts`, which is the gate. guaca.bot reads by name, so a move is a change to the entry's path or pattern, never to the name |
 | A comment, a suppression, a new Markdown file, a grant in `grants.json`, or the lint that refuses them, and the judge workflow that runs `main`'s copy of it on a pull request | *A comment, a suppression or a new prose file needs the owner's grant* in `docs/INVARIANTS.md`, then `scripts/check-grants.mjs`, `scripts/grants/lex.mjs` and `.github/workflows/judge.yml`, and run `./scripts/ci.sh grants` |
 
 Unqualified section names are headings in `docs/ARCHITECTURE.md`. Every row

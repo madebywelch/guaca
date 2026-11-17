@@ -1907,6 +1907,14 @@ every run. A reader finds a chunk by its type rather than by where it stands, so
 sorting costs nothing and leaves an artifact that only changes when the drawing
 does.
 
+The wordmarks are held the same way. `wordmarks.py` reads its colors from the
+two token blocks in `src/styles.css` (the rail's ground, edge, raised, text and
+muted, and `--attention` for the bubble), and exits naming any one it cannot
+find. `scripts/check-wordmarks.py` runs `make.sh` into a temp directory and
+fails on a byte of difference, so a theme that re-solves the rail fails the gate
+until the marks are drawn again. `make.sh` reaches fontTools through `uv`, or
+through `pipx run uv` on a machine that has only pipx.
+
 ## Making something is one plus, in the top bar
 
 The rail's footer used to carry four rows: the cafeteria, a new agent, a new

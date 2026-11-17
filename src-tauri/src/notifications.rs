@@ -2,12 +2,29 @@ use serde::Serialize;
 
 pub const CLICKED: &str = "notification-clicked";
 
-pub fn install(app: &tauri::AppHandle) -> Result<(), String> {
-    imp::install(app)
+pub struct Observer(imp::Subscription);
+
+pub fn install(app: &tauri::AppHandle) -> Result<Observer, String> {
+    imp::install(app).map(Observer)
 }
 
-pub fn shutdown(app: &tauri::AppHandle) {
-    imp::shutdown(app);
+pub fn shutdown(observer: Observer) {
+    imp::shutdown(observer.0);
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn relay(
+    emit: impl Fn(u32) + Send + 'static,
+) -> std::io::Result<impl Fn(u32) + Send + Sync + 'static> {
+    let (clicks, arrived) = std::sync::mpsc::channel::<u32>();
+    std::thread::Builder::new()
+        .name("notification-clicks".into())
+        .spawn(move || arrived.into_iter().for_each(emit))?;
+    Ok(move |click| {
+        if clicks.send(click).is_err() {
+            tracing::warn!(click, "the thread that reports banner clicks has stopped");
+        }
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -47,31 +64,35 @@ pub async fn show(
 #[cfg(target_os = "macos")]
 mod imp {
     use super::Permission;
+    pub use mac_usernotifications::ResponseSubscription as Subscription;
     use mac_usernotifications::{
         AuthorizationStatus, NotificationSettingStatus, NotificationSettings,
     };
     use std::path::Path;
-    use std::sync::{LazyLock, Mutex};
+    use std::sync::LazyLock;
     use tauri::{Emitter, Manager};
 
     struct Actions {
         namespace: String,
-        subscription: Mutex<Option<mac_usernotifications::ResponseSubscription>>,
     }
 
-    impl Actions {
-        fn shutdown(&self) {
-            let subscription = self.subscription.lock().unwrap().take();
-            if let Some(subscription) = subscription {
-                subscription.detach().wait();
-            }
-        }
-    }
-
-    pub fn install(app: &tauri::AppHandle) -> Result<(), String> {
+    pub fn install(app: &tauri::AppHandle) -> Result<Subscription, String> {
         let namespace = format!("guaca:{}:", uuid::Uuid::new_v4());
         let prefix = namespace.clone();
         let emitter = app.clone();
+        let forward = super::relay(move |click| {
+            if let Err(err) = emitter.emit(super::CLICKED, click) {
+                tracing::warn!(%err, "could not report a click on a notification");
+            } else {
+                #[cfg(feature = "probe")]
+                crate::probe::trace::event(
+                    crate::probe::trace::Phase::NotificationClicked,
+                    u64::from(click),
+                    0,
+                );
+            }
+        })
+        .map_err(|err| format!("No thread could be started to report banner clicks: {err}"))?;
         let subscription = mac_usernotifications::observe_responses(move |response| {
             #[cfg(feature = "probe")]
             {
@@ -89,26 +110,15 @@ mod imp {
                 u64::from(click),
                 0,
             );
-            if let Err(err) = emitter.emit(super::CLICKED, click) {
-                tracing::warn!(%err, "could not report a click on a notification");
-            } else {
-                #[cfg(feature = "probe")]
-                crate::probe::trace::event(
-                    crate::probe::trace::Phase::NotificationClicked,
-                    u64::from(click),
-                    0,
-                );
-            }
+            forward(click);
         })
         .ok_or("A native notification observer is already installed.")?;
-        app.manage(Actions { namespace, subscription: Mutex::new(Some(subscription)) });
-        Ok(())
+        app.manage(Actions { namespace });
+        Ok(subscription)
     }
 
-    pub fn shutdown(app: &tauri::AppHandle) {
-        if let Some(actions) = app.try_state::<Actions>() {
-            actions.shutdown();
-        }
+    pub fn shutdown(subscription: Subscription) {
+        subscription.detach().wait();
     }
 
     fn clicked(
@@ -309,22 +319,16 @@ mod imp {
         #[test]
         fn a_banner_without_the_observer_is_sent_without_a_click_id() {
             assert_eq!(request_id(None, Some(42)), None);
-            let actions = Actions { namespace: "guaca:s:".into(), subscription: Mutex::new(None) };
+            let actions = Actions { namespace: "guaca:s:".into() };
             assert_eq!(request_id(Some(&actions), Some(42)).as_deref(), Some("guaca:s:42"));
             assert_eq!(request_id(Some(&actions), None), None);
         }
 
         #[test]
-        fn action_shutdown_detaches_once_and_allows_a_new_subscription() {
+        fn shutdown_detaches_and_allows_a_new_subscription() {
             let subscription = mac_usernotifications::observe_responses(|_| {}).unwrap();
-            let actions = Actions {
-                namespace: "test-session".into(),
-                subscription: Mutex::new(Some(subscription)),
-            };
             assert!(mac_usernotifications::observe_responses(|_| {}).is_none());
-            actions.shutdown();
-            actions.shutdown();
-            assert!(actions.subscription.lock().unwrap().is_none());
+            shutdown(subscription);
             let next = mac_usernotifications::observe_responses(|_| {}).unwrap();
             next.detach().wait();
         }
@@ -381,11 +385,13 @@ mod imp {
 mod imp {
     use super::Permission;
 
-    pub fn install(_app: &tauri::AppHandle) -> Result<(), String> {
-        Ok(())
+    pub struct Subscription;
+
+    pub fn install(_app: &tauri::AppHandle) -> Result<Subscription, String> {
+        Ok(Subscription)
     }
 
-    pub fn shutdown(_app: &tauri::AppHandle) {}
+    pub fn shutdown(_subscription: Subscription) {}
 
     pub async fn current() -> Option<Permission> {
         None
@@ -406,5 +412,27 @@ mod imp {
         _click: Option<u32>,
     ) -> Option<Result<(), String>> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::relay;
+    use std::sync::mpsc;
+    use std::thread;
+
+    #[test]
+    fn a_click_is_emitted_off_the_thread_that_ran_the_native_callback() {
+        let (seen, emitted) = mpsc::channel();
+        let forward =
+            relay(move |click| seen.send((click, thread::current().id())).unwrap()).unwrap();
+        forward(42);
+        forward(7);
+        let callback = thread::current().id();
+        for expected in [42, 7] {
+            let (click, emitter) = emitted.recv().unwrap();
+            assert_eq!(click, expected);
+            assert_ne!(emitter, callback);
+        }
     }
 }

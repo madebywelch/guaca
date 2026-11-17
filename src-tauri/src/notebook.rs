@@ -239,12 +239,11 @@ impl Notebooks {
         }
     }
 
-    pub fn remove_all(&self, agent: AgentId) {
+    pub fn remove_all(&self, agent: AgentId) -> Result<(), NotebookError> {
         let dir = self.dir(agent);
-        if let Err(err) = fs::remove_dir_all(&dir) {
-            if err.kind() != io::ErrorKind::NotFound {
-                tracing::warn!(%err, dir = %dir.display(), "could not remove a notebook");
-            }
+        match fs::remove_dir_all(&dir) {
+            Err(err) if err.kind() != io::ErrorKind::NotFound => Err(io(&dir)(err)),
+            _ => Ok(()),
         }
     }
 }
