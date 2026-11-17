@@ -68,8 +68,9 @@ impl Store {
         Ok(())
     }
 
-    pub fn append_put_down(
+    pub fn append_put_down<T>(
         &self,
+        _runs: &RunGuard<'_, T>,
         envelope: &Envelope,
         whole: Option<(u32, GuardSnapshot)>,
     ) -> Result<(), StoreError> {
@@ -588,7 +589,11 @@ mod tests {
         let run = RunId::new();
         let late = asked(&agent, run, "sent during the update");
         store
-            .append_put_down(&late, Some((0, RunState::new(Default::default()).snapshot())))
+            .append_put_down(
+                &RunLock::new(()).lock(),
+                &late,
+                Some((0, RunState::new(Default::default()).snapshot())),
+            )
             .unwrap();
 
         let recovered = store.recover().unwrap();
@@ -635,7 +640,11 @@ mod tests {
         let run = RunId::new();
         let late = asked(&agent, run, "sent during the update");
         store
-            .append_put_down(&late, Some((0, RunState::new(Default::default()).snapshot())))
+            .append_put_down(
+                &RunLock::new(()).lock(),
+                &late,
+                Some((0, RunState::new(Default::default()).snapshot())),
+            )
             .unwrap();
         assert_eq!(store.recover().unwrap().resumed.len(), 1);
 

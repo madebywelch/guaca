@@ -1356,7 +1356,7 @@ impl Runtime {
             let mut runs = self.inner.runs.lock();
             if runs.draining && !runs.stopped.contains(&envelope.run_id) {
                 if runs.outstanding.contains_key(&envelope.run_id) {
-                    self.inner.store.append_put_down(&envelope, None)?;
+                    self.inner.store.append_put_down(&runs, &envelope, None)?;
                     if let (
                         Some(limits),
                         Participant::Agent { id: from },
@@ -1392,7 +1392,7 @@ impl Runtime {
                     state.note_sent(from, to, envelope.expects_reply);
                 }
                 let whole = Some((state.steps_used(), state.snapshot()));
-                self.inner.store.append_put_down(&envelope, whole)?;
+                self.inner.store.append_put_down(&runs, &envelope, whole)?;
                 self.hand_on(&mut runs, envelope.run_id, state);
                 drop(runs);
                 self.inner.events.emit(UiEvent::MessageAppended { message: Box::new(envelope) });
