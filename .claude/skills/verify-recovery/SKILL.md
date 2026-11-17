@@ -45,7 +45,7 @@ prints `ok` or `FAIL`. The rows come in three kinds:
 - **finding**: the code as it is breaks the property, and the row expects that. A FAIL here saying it "now holds" means a fix landed. Change the row to `holds` and extend the first holds row's configuration to cover it.
 - **broken**: a switch is set to FALSE, which removes one piece of the code, and the property must break. A FAIL here means the model lost the step that piece guards.
 
-To see a counterexample, run `./scripts/formal.sh --trace "OperatorStops=TRUE StartCanFail=FALSE" NothingLost`. It prints the raw TLC output for the code's switches with those two scope settings.
+To see a counterexample, run `./scripts/formal.sh --trace "OperatorStops=TRUE StartCanFail=FALSE" NothingLost`. It prints the raw TLC output for the code's switches with those two scope settings; `TurnsCanFail` is FALSE unless you name it.
 Read every result, passing or failing, with the `/statechart` skill on `formal/recovery/Recovery.tla`. It turns a violation into its shortest path in plain words, and when the check passes it draws how a conversation moves between states.
 
 ## Model to code
@@ -73,14 +73,14 @@ Each action is one SQLite commit, or one section the code runs under `Runtime.in
 | `TakeIn`, `Think` | `Runtime::take_in` (greedy, one `start_deliveries` per message) and the model call of a round |
 | `Call`, `Returned` | a tool call from the completion, and its return |
 | `CalledOff` | the round loop's `self.stopped(run_id)` checks, and the stop select in `stream_with_retries` |
-| `Answer`, `HaltStopped`, `FinishOne` | the end of `run_turn`: the reply or the GuardStop notice, then for a stopped turn `Runtime::hand_back`, then `finish_turn`, where each `track_inflight` is either `Store::settle_run_as` or `Runtime::mark_whole` |
+| `Answer`, `HaltStopped`, `TurnEnds`, `FinishOne` | the end of `run_turn`: the reply, the GuardStop notice, or the notice for a failed model call or an exhausted budget, then for a stopped turn or one of those endings `Runtime::hand_back`, then `finish_turn`, where each `track_inflight` is either `Store::settle_run_as` or `Runtime::mark_whole` |
 | `PutTurnDown`, `PutTurnDownCommit` | `Runtime::put_turn_down`: the record `deliver`, then `Runtime::put_down` and `Store::put_down_with_absorbed` |
 | `Stop` | `Runtime::stop_run` and `Store::stop_routine_run` |
 | `Drain` | `Runtime::drain` setting `draining` |
 | `End` | the process ending: everything in `Runtime` is gone |
 | `Recover` | `boot::recover` (`Store::recover`), then `Runtime::pick_up` |
 
-The six switches `MarkBeforeRead`, `AcceptOneCommit`, `RecoverUntouched`, `RecoverClears`, `KeepLink`, `SkipStartNote` are TRUE in the code. `OperatorStops` and `StartCanFail` are scope settings: they decide whether the operator may stop a conversation, and whether the `start_deliveries` commit may fail.
+The six switches `MarkBeforeRead`, `AcceptOneCommit`, `RecoverUntouched`, `RecoverClears`, `KeepLink`, `SkipStartNote` are TRUE in the code. `OperatorStops`, `StartCanFail` and `TurnsCanFail` are scope settings: they decide whether the operator may stop a conversation, whether the `start_deliveries` commit may fail, and whether a turn may end on a failed model call or an exhausted budget.
 
 ## What it does not cover
 
@@ -90,7 +90,7 @@ The model has one agent and two operator messages, each in its own conversation,
 - Routine occurrences (`routine_occurrences`) and absorbed routines.
 - Decision answers (`Store::recover_decisions`).
 - Paused and deleted agents.
-- Budget exhaustion.
+- Budget exhaustion before a turn starts (a turn that runs out mid-way is `TurnEnds`).
 - Approvals that park a turn.
 - Failures of any commit other than `start_deliveries`.
 - SQLite itself: each commit is assumed atomic and durable, so power loss under `synchronous = NORMAL` is out.

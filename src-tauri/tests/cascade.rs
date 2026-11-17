@@ -8060,7 +8060,7 @@ async fn stopping_a_turn_tells_a_message_it_acted_on_at_once_and_settles_it() {
 
     assert_eq!(calls.load(Ordering::SeqCst), 3, "the message a call acted on was carried on blind");
     h.settle(second).await;
-    assert_cut_short(&h, second);
+    assert_cut_short(&h, second, STOPPED_ANOTHER);
 
     h.runtime.stop_agent(researcher);
     let store = Store::open(&h._dir.path().join("guac.db")).unwrap();
@@ -8069,7 +8069,18 @@ async fn stopping_a_turn_tells_a_message_it_acted_on_at_once_and_settles_it() {
     assert_eq!(recovered.interrupted, 0, "the conversation was reported a second time");
 }
 
-fn assert_cut_short(h: &Harness, run: RunId) {
+const STOPPED_ANOTHER: &str = "You stopped another conversation while Researcher was working on \
+     this one too, so this was not finished. Review any actions already taken before retrying.";
+
+const FAILED_TOGETHER: &str = "Researcher was working on this and another conversation together \
+     when a model call failed, so this was not finished. Review any actions already taken before \
+     retrying.";
+
+const SPENT_TOGETHER: &str = "Researcher was working on this and another conversation together \
+     when the other conversation hit its budget, so this was not finished. Review any actions \
+     already taken before retrying.";
+
+fn assert_cut_short(h: &Harness, run: RunId, text: &str) {
     let messages = h.runtime.store().channel_messages(h.id("Researcher"), 200).unwrap();
     let asked = messages.iter().find(|m| m.run_id == run && m.from == Participant::Human).unwrap();
     let notices: Vec<&Envelope> = messages
@@ -8080,12 +8091,7 @@ fn assert_cut_short(h: &Harness, run: RunId) {
     assert_eq!(notices[0].cause, Some(asked.id), "Try again would not send this message");
     assert_eq!(
         notices[0].parts,
-        vec![Part::Notice {
-            kind: NoticeKind::Interrupted,
-            text: "You stopped another conversation while Researcher was working on this one too, \
-                   so this was not finished. Review any actions already taken before retrying."
-                .into(),
-        }]
+        vec![Part::Notice { kind: NoticeKind::Interrupted, text: text.into() }]
     );
     let outcome = h.runtime.store().outcome(run).unwrap().expect("the conversation has an outcome");
     assert_eq!(outcome.status, OutcomeStatus::Interrupted);
@@ -8217,7 +8223,7 @@ async fn a_message_handed_on_beside_the_turn_that_acted_on_it_never_runs_without
     );
     assert!(!h.channel_texts("Researcher").iter().any(|t| t.contains("Calling the vendor again.")));
     assert!(settled_on(&h.sink, second), "the second conversation waited for another host");
-    assert_cut_short(&h, second);
+    assert_cut_short(&h, second, STOPPED_ANOTHER);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -8334,4 +8340,93 @@ async fn a_message_whose_start_cannot_be_recorded_is_delivered_after_two_crashes
     let second = guac_lib::boot::recover(&store).unwrap();
     assert_eq!(second.interrupted, 0, "a message no turn started was reported interrupted");
     assert_eq!(second.resumed.iter().map(|put| put.envelope.run_id).collect::<Vec<_>>(), vec![run]);
+}
+
+async fn acted_on_then(gate: Arc<std::sync::atomic::AtomicBool>, calls: Arc<AtomicUsize>) -> Stub {
+    serve(move |_| match calls.fetch_add(1, Ordering::SeqCst) {
+        0 => {
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while !gate.load(Ordering::SeqCst) && Instant::now() < deadline {
+                std::thread::yield_now();
+            }
+            Script::Progress("Looking up the vendor.".into())
+        }
+        1 => Script::Progress("Looking up the number.".into()),
+        _ => Script::Unavailable,
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_model_call_tells_a_conversation_the_turn_acted_on_at_once() {
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let stub = acted_on_then(gate.clone(), calls.clone()).await;
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let (first, second) = taken_in_mid_turn(&h, &stub, &gate, &calls).await;
+
+    h.settle(first).await;
+    h.settle(second).await;
+
+    assert_cut_short(&h, second, FAILED_TOGETHER);
+    assert_eq!(h.runtime.store().outcome(first).unwrap().unwrap().status, OutcomeStatus::Failed);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_exhausted_budget_tells_a_conversation_the_turn_acted_on_at_once() {
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let stub = acted_on_then(gate.clone(), calls.clone()).await;
+    let h = harness(
+        &stub,
+        &["Researcher"],
+        GuardLimits { max_steps_per_run: 2, ..GuardLimits::default() },
+    );
+    let (first, second) = taken_in_mid_turn(&h, &stub, &gate, &calls).await;
+
+    h.settle(first).await;
+    h.settle(second).await;
+
+    assert_eq!(calls.load(Ordering::SeqCst), 2, "the budget allowed a third model call");
+    assert_cut_short(&h, second, SPENT_TOGETHER);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_model_call_hands_back_a_message_the_turn_never_acted_on() {
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let stub = {
+        let (gate, calls) = (gate.clone(), calls.clone());
+        serve(move |body| {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                let deadline = Instant::now() + Duration::from_secs(20);
+                while !gate.load(Ordering::SeqCst) && Instant::now() < deadline {
+                    std::thread::yield_now();
+                }
+                return Script::Progress("Looking up the vendor.".into());
+            }
+            if has_tool_result(body) {
+                return Script::Unavailable;
+            }
+            Script::Say("Their number is 555-0100.".into())
+        })
+        .await
+    };
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let (first, second) = taken_in_mid_turn(&h, &stub, &gate, &calls).await;
+
+    h.settle(first).await;
+    h.settle(second).await;
+
+    let answered =
+        h.runtime.store().channel_messages(h.id("Researcher"), 200).unwrap().into_iter().any(|m| {
+            m.run_id == second && m.to == Participant::Human && m.plain_text().contains("555-0100")
+        });
+    assert!(
+        answered,
+        "the unread conversation was not answered in a turn of its own:
+{}",
+        h.transcript()
+    );
+    assert_eq!(h.runtime.store().outcome(second).unwrap().unwrap().status, OutcomeStatus::Done);
 }
