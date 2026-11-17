@@ -1,26 +1,4 @@
 #!/bin/sh
-# Installs Guaca on a Linux box with Docker, as a host its operator can update
-# from the app.
-#
-#   curl -fsSL https://raw.githubusercontent.com/madebywelch/guaca/main/deploy/box/install.sh | sudo sh
-#
-# It makes two containers. `guaca-updater` holds the Docker socket and runs
-# nothing else; `guacad`, the host, is made and replaced by it and never sees
-# the socket. The host is published to 127.0.0.1:$GUACA_PORT only: put a tunnel
-# in front of it (Tailscale Serve, or a TLS reverse proxy) and give people that
-# address. Running this again reconfigures the box and keeps its workspace.
-#
-#   GUACA_ENV     settings handed to the host, one NAME=value per line
-#                 (GUACA_TOKEN, GUACA_ORIGIN, ANTHROPIC_API_KEY; the full
-#                 list is HOST_ENV in src-tauri/src/updater.rs).
-#                 Default /etc/guaca/guaca.env, if it exists. Keep it 0600.
-#   GUACA_CHANNEL release, the default, or main. A box on main is offered
-#                 every build of main a few minutes after it is pushed, and
-#                 installs only builds signed with the key CI holds.
-#   GUACA_IMAGE   the image to install. Default: the newest on the channel.
-#   GUACA_PORT    the loopback port. Default 8787.
-#   GUACA_VOLUME  the workspace volume. Default guacad-data. Name an existing
-#                 one to adopt its workspace, e.g. a Compose host's.
 set -eu
 
 case "${1:-}" in
@@ -74,8 +52,6 @@ case "$CHANNEL" in
   *) fail "GUACA_CHANNEL is '$CHANNEL'. Set it to release or main, or leave it out for release." ;;
 esac
 
-# The first image is taken on the channel's word; every later one is checked
-# against its signature by the updater, which is the part that has to hold.
 if [ -z "$IMAGE" ]; then
   if [ "$CHANNEL" = main ]; then
     feed=$(curl -fsSL https://raw.githubusercontent.com/madebywelch/guaca/refs/heads/main-feed/guaca-main.json) ||
@@ -90,8 +66,6 @@ if [ -z "$IMAGE" ]; then
   [ -n "$IMAGE" ] || fail "The latest Guaca $CHANNEL build names no host image. Try again later."
 fi
 
-# A container by either name that guaca-updater did not make is somebody
-# else's. Said here rather than discovered as a name conflict halfway through.
 for pair in guacad:bot.guaca.box guaca-updater:bot.guaca.updater; do
   name=${pair%%:*}
   label=${pair#*:}
@@ -120,7 +94,6 @@ if [ -n "${GUACA_CHANNEL:-}" ]; then
 fi
 docker run "$@" "$IMAGE" install "$IMAGE"
 
-# The updater makes the host once it is serving. Wait for the host to answer.
 tries=0
 until curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; do
   tries=$((tries + 1))

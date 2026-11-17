@@ -1,12 +1,4 @@
 #!/usr/bin/env bash
-#
-# Builds design/brandmark.html: three ways the name folds away and leaves the
-# cast in the title bar, every creature live and drawn by src/avatars itself.
-#
-#   ./design/brandmark/make.sh
-#
-# The page is self-contained (script, the app's stylesheet and its three fonts
-# are inlined), so it opens from anywhere with no server and no network.
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."

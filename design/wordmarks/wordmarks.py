@@ -1,34 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["fonttools>=4.60", "brotli>=1.1"]
-# ///
-"""
-Five wordmark prototypes for Guaca, and the page that compares them.
-
-The name in the rail's corner is `guaca`, lowercase in the display face, and
-the wordmark that ships is the drawn one below: `eye-contact.svg`, a word made
-of circles and one round stroke. Each prototype here makes one drawn move, and
-every move is taken from something the app already has rather than invented for
-the logo:
-
-  conversation-g  the Paper scratchpad's icon, whose G is a reply bubble
-  eye-contact     the shipped icon, two creatures looking at each other
-  crew            the five silhouettes every creature is cut from
-  mashed          the name, which is something mashed together
-  drawn           the drawn cast's brush
-
-Everything is written out as outlines. A wordmark set as live text is a
-wordmark that changes with the font file, the renderer and the kerning table,
-and the point of drawing one is that it does not.
-
-The three typeset prototypes are cut from `--font-display`, Literata, which is
-the face `.brand__name` sets the rail's name in (`src/styles.css`), so the page
-compares the app's own type rather than a face the app once shipped. The two
-drawn ones are the cast's geometry and use no font at all.
-
-Run through ./design/wordmarks/make.sh, which samples the silhouettes first.
-"""
-
 import base64
 import json
 import math
@@ -45,13 +14,9 @@ from fontTools.varLib import instancer
 ROOT = Path(__file__).resolve().parents[2]
 HERE = ROOT / "design" / "wordmarks"
 FONTS = ROOT / "node_modules" / "@fontsource-variable"
-# `--font-display` from the token block at the top of src/styles.css, and the
-# same file the app loads for it (`literata/opsz.css` in src/page.ts), so the
-# outlines here come from the cut the window draws.
 DISPLAY = FONTS / "literata" / "files" / "literata-latin-opsz-normal.woff2"
 SILHOUETTES = json.loads((ROOT / "node_modules" / ".cache" / "silhouettes.json").read_text())
 
-# The rail's two surfaces, from the token blocks at the top of src/styles.css.
 PAPER = {"ground": "#F5F3EE", "edge": "#E5E2DA", "raised": "#FFFFFF", "ink": "#0B0B0A",
          "muted": "#54524D", "amber": "#B4530A"}
 DARK = {"ground": "#151513", "edge": "#2B2A27", "raised": "#1F1F1C", "ink": "#F7F5F0",
@@ -63,13 +28,6 @@ def num(v: float) -> str:
 
 
 def bold():
-    """Literata Bold, at the optical size the rail's name is read at.
-
-    14px is `--type-aside`, the size `.brand__name` is set in, so the outlines
-    come from the cut the operator actually sees. Both axes are named rather
-    than left to the file's defaults: an outline that followed a new default
-    would redraw every prototype without anybody asking for it.
-    """
     return instancer.instantiateVariableFont(TTFont(DISPLAY), {"wght": 700, "opsz": 14})
 
 
@@ -77,7 +35,6 @@ B700 = bold()
 
 
 def glyph(font, ch: str, x: float = 0, baseline: float = 0, scale: float = 1):
-    """One glyph's outline in SVG space (y down), baked at a position, plus its metrics."""
     gs = font.getGlyphSet()
     g = gs[font.getBestCmap()[ord(ch)]]
     pen = SVGPathPen(gs, ntos=num)
@@ -92,21 +49,11 @@ def svg(x: float, y: float, w: float, h: float, body: str) -> str:
             f'width="{num(w)}" height="{num(h)}">{body}</svg>')
 
 
-# --- 1. Conversation G -------------------------------------------------------
-#
-# The font's own C, with the icon's bubble laid in as the crossbar. Drawing a
-# G to match the icon was tried first: its terminals were cut radially, the
-# typeface cuts them flat, and the one letter that was not the typeface was the
-# one everybody looked at. In one color the bubble is only a crossbar, which is
-# the test the mark has to pass on a fax, a favicon or an engraving.
-
 def conversation_g(c=PAPER) -> str:
     d, _, (x0, _, x1, _) = glyph(B700, "C", 0, 720)
     body = f'<path d="{d}" fill="{c["ink"]}"/>'
     top, bot = 295, 458
     left, right, r = (x0 + x1) / 2 - 20, x1 + 70, 52
-    # The tail's left edge is vertical and its point hangs into the aperture, as
-    # on the icon, with paper left between it and the C's lower lip.
     tail0, tail1, tip = right - 92, right - 160, bot + 96
     bubble = (f"M{num(left + r)} {top}H{num(right - r)}Q{num(right)} {top} {num(right)} {top + r}"
               f"V{bot - r}Q{num(right)} {bot} {num(right - r)} {bot}H{num(tail0)}L{num(tail1)} {tip}"
@@ -122,14 +69,7 @@ def conversation_g(c=PAPER) -> str:
     return svg(x0 - 10, -20, x - track - x0 + 10, 760, body)
 
 
-# --- 2. Eye contact ----------------------------------------------------------
-#
-# Circles and one round stroke, which is what the cast is made of. The bowls of
-# the two a's are eyes, and they look at each other across the c: agents
-# talking to agents, which is what the shipped icon says with two bodies.
-# `look` is where the pupils sit, in x-heights; the page moves it.
-
-EYES = ((280, 1), (489, -1))  # each a's center, and which way it faces the other
+EYES = ((280, 1), (489, -1))
 
 
 def eye_contact(c=PAPER, look=(10, 0)) -> str:
@@ -140,8 +80,6 @@ def eye_contact(c=PAPER, look=(10, 0)) -> str:
         '<path d="M128 12V50A38 38 0 0 0 204 50M204 12V88"/>',
         f'<circle cx="280" cy="50" r="{r}"/><path d="M318 12V88"/>',
     ]
-    # The c opens 52 degrees either side of level: round caps close an aperture
-    # by their own radius, so what is drawn at 45 reads as 30.
     a, cx = math.radians(52), 394
     ux, uy = cx + r * math.cos(a), 50 - r * math.sin(a)
     lines.append(f'<path d="M{num(ux)} {num(uy)}A38 38 0 1 0 {num(ux)} {num(100 - uy)}"/>')
@@ -154,16 +92,7 @@ def eye_contact(c=PAPER, look=(10, 0)) -> str:
     return svg(-2, -2, 543, 148, strokes + f'<g fill="{c["ink"]}">{pupils}</g>')
 
 
-# --- 3. Crew -----------------------------------------------------------------
-#
-# Each letter knocked out of one of the five silhouettes, sampled from
-# src/avatars/silhouette.ts rather than traced, so the outlines are the ones
-# the cast is cut from. The A that stands in the drop is the one whose apex
-# agrees with it.
-
 CREW = (("G", "circle"), ("U", "square"), ("A", "drop"), ("C", "cloud"), ("A", "octagon"))
-# Where the mass of each shape sits below its box's middle: a drop and a cloud
-# carry their weight low, and a letter centered on the box floats in them.
 SETTLE = {"circle": 0, "square": 0, "octagon": 0, "drop": 6, "cloud": 3}
 
 
@@ -189,14 +118,6 @@ def crew(c=PAPER, gap=9, cap=44) -> str:
     return svg(-2, -4, edge - gap + 4, 110, "".join(body))
 
 
-# --- 4. Mashed ---------------------------------------------------------------
-#
-# Literata Bold, thickened by a round-joined stroke of its own color,
-# which softens every corner toward the cast's geometry, then kerned until the
-# round letters touch. Two straights never touch: g against u would fuse into
-# one slab the height of the x-height, so that pair keeps a gap and every other
-# pair kisses.
-
 SOFTEN = 26
 KERN = {"gu": -70, "ua": -78, "ac": -66, "ca": -70}
 
@@ -212,15 +133,6 @@ def mashed(c=PAPER) -> str:
             + "".join(parts) + "</g>")
     return svg(0, -30, x + 20, 775, body)
 
-
-# --- 5. Drawn ----------------------------------------------------------------
-#
-# Lettered with the drawn cast's brush: `stroke` below is src/avatars/drawn.ts's
-# own, ported line for line, so a change of mind about the brush there is a
-# change here. Pressure follows direction (a downstroke is the full width, an
-# upstroke under a third of it), the ends come to a point rather than a knob,
-# and the pigment is printed a little down and right of the line inside each
-# bowl, which is what the cast does with a body.
 
 def spline(pts, per):
     n = len(pts)
@@ -251,7 +163,6 @@ def loop(pts, per):
 
 
 def stroke(center, widths) -> str:
-    """drawn.ts `stroke`: a filled stroke along a centerline, its own width at every point, round ends."""
     n = len(center)
 
     def tangent(i):
@@ -287,7 +198,6 @@ LETTERS = {
     "c": [[(78, 22), (62, 5), (38, 1), (16, 15), (7, 44), (11, 74), (30, 95), (55, 99), (77, 86)]],
 }
 ADVANCE = {"g": 104, "u": 100, "a": 104, "c": 90}
-# A hand does not set five letters on one line at one angle.
 BOUNCE = (0, -2, 1, -1, 2)
 TILT = (-1.5, 1.0, -0.5, 1.5, -1.0)
 
@@ -320,10 +230,6 @@ def drawn(c=PAPER, pigment="#F2D9BE", weight=17) -> str:
     return svg(-10, -12, x + 16, 184, f'<g fill="{pigment}">{"".join(color)}</g><g fill="{c["ink"]}">{"".join(ink)}</g>')
 
 
-# --- the set -----------------------------------------------------------------
-
-# How tall each one stands in the rail, in CSS pixels: set by eye against the
-# plus beside it and the names under it, so the five carry the same weight.
 MARKS = [
     {
         "key": "conversation-g", "name": "Conversation G", "rail": 20,
@@ -374,7 +280,6 @@ MARKS = [
 
 
 def sized(markup: str, height: float) -> str:
-    """The same drawing at a height, with the width that keeps its proportions."""
     head, rest = markup.split(">", 1)
     vb = head.split('viewBox="')[1].split('"')[0].split()
     w = float(vb[2]) * height / float(vb[3])
@@ -395,9 +300,6 @@ def rail(markup: str, surface: dict, label: str) -> str:
             '<div class="row">Research crew</div><div class="row muted">Scout</div></div>')
 
 
-# The rail's own name, at the size and tracking `.brand__name` gives it, so the
-# lineup compares the five against what ships rather than against a treatment
-# the app no longer has.
 CURRENT = '<span class="current">guaca</span>'
 
 

@@ -1,16 +1,4 @@
 #!/usr/bin/env python3
-"""Hold each image's cached dependency step to the paths Cargo.toml points at.
-
-The Dockerfiles copy the Rust manifests on their own and run Cargo before the
-sources arrive, so a dependency change rebuilds once and a source change does
-not. Cargo resolves every `path =` dependency and every `[patch]` entry on
-every platform, so a path the manifest names and the stage has not copied yet
-stops the image build at that step. Nothing else in the gate builds an image,
-so this checks the copies instead: every Cargo command in a Dockerfile must
-come after a COPY that brings in each path the manifest names.
-
-  python3 scripts/check-docker-deps.py [Dockerfile ...]
-"""
 
 from __future__ import annotations
 
@@ -23,7 +11,6 @@ MANIFEST = ROOT / "src-tauri" / "Cargo.toml"
 
 
 def manifest_paths() -> list[str]:
-    """Paths of dependencies and patches, not of the crate's own targets."""
     paths, section = set(), ""
     for line in MANIFEST.read_text().splitlines():
         header = re.match(r"\s*\[+([^\]]+)\]+", line)

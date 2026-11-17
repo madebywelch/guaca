@@ -61,8 +61,6 @@ APP_NAME = "Guaca Probe"
 AGENTS = ["Manager", "Researcher", "Critic", "Scribe"]
 GROUP = "00000000-0000-4000-8000-000000000001"
 
-# What the Notifications pane says about macOS, by the app's own reading.
-# Kept equal to MAC_ACCESS in src/components/SettingsDialog.tsx.
 PANE = {
     "allowed": "macOS allows Guaca to show notifications.",
     "notAsked": "macOS has not asked you about Guaca yet.",
@@ -70,7 +68,6 @@ PANE = {
 }
 SENT = "Sent. It should be on your screen now."
 
-# A banner the probe raises says what it is.
 DELIVERY_TITLE = "Guaca probe: test notification"
 DELIVERY_BODY = "Raised by scripts/probe.py while testing a build. Nothing needs you."
 
@@ -93,16 +90,15 @@ PAGE_PHASES = frozenset({
 
 
 class Failed(Exception):
-    """A step that did not hold. The scenario stops at it."""
+    pass
 
 
 class Refused(Exception):
-    """The app answered a request with why it could not do it. Inside a wait,
-    that is "not yet"; anywhere else it fails the step."""
+    pass
 
 
 class Deferred(Exception):
-    """A screen step that did not run because someone is using the Mac."""
+    pass
 
 
 def redact(text: str, secrets_: list[str]) -> str:
@@ -113,7 +109,6 @@ def redact(text: str, secrets_: list[str]) -> str:
 
 
 def wait_until(what: str, check: Callable[[], Any], timeout: float, every: float = 0.1) -> Any:
-    """The value of check() once it is truthy, or Failed naming what never happened."""
     deadline = time.monotonic() + timeout
     last = ""
     while True:
@@ -121,7 +116,7 @@ def wait_until(what: str, check: Callable[[], Any], timeout: float, every: float
             value = check()
         except Failed:
             raise
-        except Exception as error:  # a condition that cannot be read yet is not one that failed
+        except Exception as error:
             value, last = None, str(error)
         if value:
             return value
@@ -134,11 +129,8 @@ def run(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
     return subprocess.run(args, capture_output=True, text=True, **kwargs)
 
 
-# Observers ------------------------------------------------------------------
-
 
 def helper(*args: str) -> Any:
-    """One question to macOS through scripts/probe/system.swift."""
     if not HELPER.exists() or HELPER.stat().st_mtime < HELPER_SOURCE.stat().st_mtime:
         HELPER.parent.mkdir(parents=True, exist_ok=True)
         built = run(["swiftc", "-O", str(HELPER_SOURCE), "-o", str(HELPER)])
@@ -156,10 +148,9 @@ def front() -> dict:
 
 
 class FrontWatch:
-    """Every app that becomes frontmost while it runs, from macOS's own event."""
 
     def __init__(self) -> None:
-        helper("front")  # builds the helper before the clock matters
+        helper("front")
         self.events: list[dict] = []
         self.proc = subprocess.Popen(
             [str(HELPER), "watch-front"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True
@@ -189,16 +180,6 @@ class FrontWatch:
 
 
 class UnifiedLog:
-    """macOS's log, from the moment it starts, filtered to one predicate.
-
-    Two readers of one predicate. `log stream` is live, and it drops lines
-    when the daemons it watches are busy: usernoted, sweeping the bundles every
-    earlier run registered, has lost the very line a step waited for while the
-    persisted log still held it. So the stream answers "seen" quickly, and
-    only `log show` over the same window answers "not there". A line only
-    the second reader found is listed in `missed`, so a run says how often
-    its live observer was wrong.
-    """
 
     def __init__(self, path: Path, predicate: str) -> None:
         self.path = path
@@ -229,9 +210,6 @@ class UnifiedLog:
         return self._messages(self.path.read_text(errors="replace"))
 
     def persisted(self) -> list[str]:
-        """The same predicate read back from the log macOS kept. Raises Failed
-        when it cannot be read, which makes the question unknown rather than
-        answered."""
         shown = run(["log", "show", "--style", "ndjson", "--info", "--debug",
                      "--start", self.since, "--predicate", self.predicate], timeout=60)
         if shown.returncode != 0:
@@ -243,8 +221,6 @@ class UnifiedLog:
         return [m for m in self.messages() if rx.search(m)]
 
     def settled(self, pattern: str) -> list[str]:
-        """Every matching line, the stream's and the persisted log's: what a
-        count or an absence is asserted on."""
         rx = re.compile(pattern)
         streamed = [m for m in self.messages() if rx.search(m)]
         kept = [m for m in self.persisted() if rx.search(m)]
@@ -262,8 +238,6 @@ class UnifiedLog:
             raise
 
     def reaches(self, what: str, pattern: str, count: int, timeout: float) -> bool:
-        """Whether at least `count` lines match within `timeout`: the stream
-        first, and the persisted log before saying no."""
         try:
             wait_until(what, lambda: len(self.matching(pattern)) >= count, timeout, every=0.25)
             return True
@@ -282,7 +256,6 @@ class UnifiedLog:
 
 
 def notification_log(scratch: Scratch, bundle: str) -> UnifiedLog:
-    """What the notification daemons and the app itself say about this bundle."""
     predicate = (
         f'(eventMessage CONTAINS "{bundle}") '
         'AND (process == "usernoted" OR process == "NotificationCenter" OR process == "guac" '
@@ -306,7 +279,6 @@ def codesign(app: Path) -> dict:
 
 
 AWAY = 5.0
-"""Seconds without a key or the pointer before the Mac counts as left alone."""
 
 
 def idle_seconds() -> float:
@@ -314,15 +286,11 @@ def idle_seconds() -> float:
 
 
 def person_away(what: str) -> None:
-    """Before a step that moves the keyboard: only while nobody is typing or
-    pointing. A step that would take the front from someone at work is put
-    off, never forced."""
     if idle_seconds() < AWAY:
         raise Deferred(f"{what}: someone is using the Mac; try again later")
 
 
 def screen_step(what: str) -> None:
-    """Before a step that acts on system UI: Accessibility, and nobody at the Mac."""
     access = helper("access")
     if not access["accessibility"]:
         raise Failed(
@@ -330,11 +298,6 @@ def screen_step(what: str) -> None:
             "(System Settings, Privacy & Security, Accessibility)"
         )
     if access["locked"]:
-        # Behind the lock screen Notification Center draws neither the
-        # question nor a banner, so there is nothing to press. A display that
-        # went to sleep raises the same shield with no password asked, and
-        # waking it lowers the shield: only a session still locked after a
-        # wake needs a person.
         run(["caffeinate", "-u", "-t", "2"])
         try:
             wait_until("the lock screen lowers once the display wakes", lambda: not helper("access")["locked"], 10, every=0.5)
@@ -342,8 +305,6 @@ def screen_step(what: str) -> None:
             raise Failed(f"{what}: the screen is locked, and only a person can unlock it") from None
     person_away(what)
 
-
-# The scratch world ----------------------------------------------------------
 
 
 def evidence_number(value: Any) -> bool:
@@ -373,7 +334,6 @@ def evidence_rows(rows: Any, phases: frozenset[str], clock: str) -> list[dict]:
 
 
 def diagnostic(path: Path, **request: Any) -> Any:
-    """A separate, bounded connection, even if the scenario's channel is broken."""
     try:
         deadline = time.monotonic() + DIAGNOSTIC_TIMEOUT
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
@@ -430,7 +390,6 @@ def diagnostic_snapshot(path: Path) -> dict:
 
 
 class Scratch:
-    """One run's directories, all under one temporary root, removed at the end."""
 
     def __init__(self) -> None:
         self.root = Path(tempfile.mkdtemp(prefix="guaca-probe-"))
@@ -439,16 +398,11 @@ class Scratch:
         self.host = self.root / "host"
         for dir_ in (self.home, self.channel, self.host):
             dir_.mkdir(mode=0o700)
-        # Not beside the rest: macOS will not show notifications for an app
-        # in a temporary directory ("Failed to find or validate client"), so
-        # the copy lives under the build's own output, out of the repository.
         self.apps = APPS / self.root.name
         self.apps.mkdir(parents=True)
         self.started: list[Callable[[], None]] = []
         self.logs: list[UnifiedLog] = []
         self.snapshots: list[dict] = []
-        # One per launch: whether the app said its trace writer opened. Each
-        # launch gets its own trace file, because the app opens it exclusively.
         self.launches: list[bool | None] = []
         self.presses: list[dict] = []
 
@@ -456,7 +410,6 @@ class Scratch:
         return self.channel / ("native.jsonl" if launch == 1 else f"native-{launch}.jsonl")
 
     def traces(self) -> list[tuple[bool, list[dict]]]:
-        """Each launch's trace, readable or not, with its allowlisted rows."""
         traces = []
         for launch in range(1, max(len(self.launches), 1) + 1):
             trace = self.trace_path(launch)
@@ -479,16 +432,12 @@ class Scratch:
         return traces
 
     def press(self, what: str) -> dict:
-        """A banner about to be pressed. A scenario sets `missed` when the
-        press did not do what it should, and the evidence then says how far
-        the press got."""
         entry = {"press": what, "launch": len(self.launches),
                  "after": sum(len(rows) for _, rows in self.traces()), "missed": False}
         self.presses.append(entry)
         return entry
 
     def retain_failure(self) -> Path | None:
-        """Persist only allowlisted evidence, never the scratch profile or logs."""
         directory = FAILURES / uuid.uuid4().hex
         try:
             traces = self.traces()
@@ -527,8 +476,6 @@ class Scratch:
             return None
 
     def track(self, stop: Callable[[], None]) -> None:
-        """Something this run started, stopped when the run ends however it
-        ends, so a scenario that fails half way leaves nothing behind."""
         self.started.append(stop)
 
     def stop_all(self) -> None:
@@ -551,15 +498,6 @@ def free_port() -> int:
 
 
 class StandIn:
-    """An OpenAI-compatible endpoint on loopback that the scratch Host is
-    pointed at, so a scenario can make an agent really run without a key and
-    without spending anything.
-
-    A turn whose newest message from the operator contains `ASK` asks the
-    operator a question with `ask_operator`; every other turn answers with
-    REPLY, whose first line is the run's headline. The Host's own code does
-    everything else: the outcome, the parked question, the outbox row.
-    """
 
     ASK = "PROBE-ASK"
     REPLY = "Probe test run finished.\nNothing here needs you; this is a scripted reply."
@@ -590,7 +528,6 @@ class StandIn:
         scratch.track(self.server.shutdown)
 
     def answer(self, messages: list[dict]) -> list[dict]:
-        """The stream for one call, in the shape every compatible provider sends."""
         asked = next((m for m in reversed(messages) if m.get("role") == "user"), {})
         text = asked.get("content") or ""
         if isinstance(text, list):
@@ -608,12 +545,9 @@ class StandIn:
 
 
 class Host:
-    """guacad on loopback, with a data directory nobody else uses."""
 
     def __init__(self, scratch: Scratch, minute_ms: int | None = None) -> None:
         self.scratch = scratch
-        # A shorter minute for the outbox's two waits (src-tauri/src/probe_clock.rs),
-        # so a scenario about being away does not take twelve real minutes.
         self.minute_ms = minute_ms
         self.port = free_port()
         self.origin = f"http://127.0.0.1:{self.port}"
@@ -657,12 +591,6 @@ class Host:
                 self.proc.wait()
 
     def seed(self, delivery: dict | None = None, count: int = 1) -> str | None:
-        """The seeded group, and `count` deliveries waiting for a window if
-        asked. Returns the first one's id; `self.waiting` holds them all.
-
-        The schema is the Host's to make, so it is started once and stopped
-        before anything is written, and started again to read it.
-        """
         self.start()
         self.stop()
         seeded = run([sys.executable, str(SEED), "--db", str(self.db)])
@@ -703,7 +631,6 @@ class Host:
             return conn.execute("SELECT id FROM agents WHERE name=?", (name,)).fetchone()[0]
 
     def call(self, name: str, **args: Any) -> Any:
-        """One command on the Host, over the route a browser uses."""
         request = urllib.request.Request(
             f"{self.origin}/v1/call",
             data=json.dumps({"name": name, "args": args}).encode(),
@@ -714,13 +641,10 @@ class Host:
             return json.loads(answer.read())["ok"]
 
     def use(self, model: StandIn) -> None:
-        """Turns paid for by the stand-in. The key is a placeholder the
-        provider check needs; it is sent nowhere but loopback."""
         self.call("update_settings", patch={"provider": "compatible", "baseUrl": model.base,
                                             "apiKey": "probe-stand-in", "defaultModel": "probe/stand-in"})
 
     def send(self, agent: str, text: str) -> None:
-        """The operator writes to an agent, which starts a run."""
         self.call("send_message", agentId=self.agent_id(agent), text=text)
 
     def rows(self, kind: str | None = None) -> list[dict]:
@@ -733,7 +657,6 @@ class Host:
 
 
 class Client:
-    """The probe's control channel: one JSON line out, one back."""
 
     def __init__(self, path: Path) -> None:
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -766,7 +689,6 @@ class Client:
 
 
 class App:
-    """A copy of the test build in the scratch directory, and the process it becomes."""
 
     def __init__(self, scratch: Scratch, bundle: str = IDENTIFIER, folder: str = "") -> None:
         self.scratch = scratch
@@ -776,8 +698,6 @@ class App:
         plist = self.path / "Contents/Info.plist"
         if bundle != IDENTIFIER:
             run(["plutil", "-replace", "CFBundleIdentifier", "-string", bundle, str(plist)], check=True)
-        # The build is only linker-signed. Signed whole, with the identifier
-        # it now has, it is the bundle macOS keys its notification switch on.
         signed = run(["codesign", "--force", "--deep", "--sign", "-", "--identifier", bundle, str(self.path)])
         if signed.returncode != 0:
             raise Failed(f"could not sign the test build: {signed.stderr.strip()}")
@@ -852,20 +772,14 @@ class App:
             if self.pid:
                 os.kill(self.pid, 9)
         self.pid = None
-        # A launch whose channel never opened has no pid to ask; the copy's
-        # own path still names its process, and nothing else runs from it.
         run(["pkill", "-9", "-f", str(self.path / "Contents/MacOS/")])
 
     def forget(self) -> None:
-        """Out of Launch Services, so no trace of the copy outlives the run."""
         run([LSREGISTER, "-u", str(self.path)])
 
 
-# Steps a scenario shares ----------------------------------------------------
-
 
 def connect(app: App, host: Host) -> None:
-    """Points the test window at the scratch Host and waits for its workspace."""
     assert app.client
     client = app.client
     wait_until("the window's page answers", lambda: client.page("main", do="ready")["loaded"] == "complete", 30)
@@ -879,7 +793,6 @@ def connect(app: App, host: Host) -> None:
 
 
 def open_notifications(client: Client) -> str:
-    """Settings, then its Notifications section, as a person would press them."""
     client.page("main", do="click", role="button", name="App settings")
     wait_until(
         "Settings opens",
@@ -899,13 +812,11 @@ def pane_text(client: Client) -> str:
 
 
 def macos_line(text: str) -> str | None:
-    """The sentence the Notifications pane writes about macOS, if any."""
     found = re.search(r"(macOS [^.]*\.|This copy of Guaca is not running[^.]*\.)", text)
     return found.group(1) if found else None
 
 
 class Record:
-    """One run of one scenario: the steps, in order, each passing or not."""
 
     def __init__(self, scenario: str, index: int, secrets_: list[str]) -> None:
         self.scenario = scenario
@@ -915,8 +826,6 @@ class Record:
         self.deferred = False
 
     def check(self, step: str, holds: bool, detail: Any = None, stop: bool = False) -> bool:
-        """Records a step. With stop, a step that fails ends the run: what
-        follows depends on it."""
         entry: dict = {"step": step, "pass": bool(holds)}
         if detail is not None:
             entry["detail"] = json.loads(redact(json.dumps(detail), self.secrets))
@@ -937,12 +846,8 @@ class Record:
                 "deferred": self.deferred, "steps": self.steps}
 
 
-# Scenarios ------------------------------------------------------------------
-
 
 def background_launch(record: Record, app: App, label: str) -> None:
-    """One launch asked to stay in the background, watched for ten seconds,
-    and held to staying there."""
     person_away("launching where the app may take the front")
     watch = FrontWatch()
     try:
@@ -967,14 +872,10 @@ def background_launch(record: Record, app: App, label: str) -> None:
 
 
 def scenario_launch(record: Record, scratch: Scratch) -> None:
-    """A background launch stays in the background; a normal launch comes to the front."""
     app = App(scratch, fresh_bundle(), "plain")
     signed = codesign(app.path)
     record.check("the test build is signed as its own bundle", signed["valid"], signed, stop=True)
     try:
-        # macOS 27 brought the first background launch of a bundle it had
-        # never seen to the front when the app asked to be, and not the
-        # second; both are held to staying back.
         background_launch(record, app, "first background launch of a new bundle")
         background_launch(record, app, "second background launch of the same bundle")
 
@@ -1002,7 +903,6 @@ def scenario_launch(record: Record, scratch: Scratch) -> None:
 
 
 def hand_back(app: App, before: dict) -> None:
-    """If the test build is in front, hide it, which gives the keyboard back."""
     if app.client and front().get("pid") == app.pid:
         app.client.ask("hide")
         wait_until("the app that was in front is in front again",
@@ -1010,8 +910,6 @@ def hand_back(app: App, before: dict) -> None:
 
 
 def holds_for(what: str, check: Callable[[], Any], seconds: float) -> bool:
-    """Whether check() stays truthy for the whole window: how an absence is
-    observed. The window is the assertion, not a guess at how long to wait."""
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         if not check():
@@ -1034,13 +932,6 @@ def banner(bundle: str) -> str:
 
 
 def held_back(log: UnifiedLog, bundle: str) -> str | None:
-    """Why macOS kept the bundle's banner off the screen, if it did.
-
-    usernoted logs "Presenting ... as banner" either way; the decision is the
-    Do Not Disturb resolution before it. A Focus, or the display being shared
-    or mirrored ("display shared", the default while Screen Sharing is
-    connected), silences everything but the system's own questions.
-    """
     pattern = (rf"interruptionSuppression: silence;.*resolutionReason: ([^;]+);"
                rf".*bundleIdentifier: {re.escape(bundle)};")
     for message in log.settled(pattern):
@@ -1051,7 +942,6 @@ def held_back(log: UnifiedLog, bundle: str) -> str | None:
 
 
 def drawn(record: Record, log: UnifiedLog, bundle: str) -> None:
-    """A banner macOS says it presented is on screen only if nothing silenced it."""
     reason = held_back(log, bundle)
     record.check("macOS does not hold the banner back", reason is None,
                  {"reason": reason} if reason else None, stop=True)
@@ -1069,12 +959,6 @@ def notification_center() -> int:
 
 
 def press_when_shown(what: str, *press: str) -> Any:
-    """Presses system UI as soon as Notification Center has drawn it.
-
-    The log says macOS presented something a moment before the element exists,
-    and a banner is up for only a few seconds, so the press is retried until it
-    lands, and a miss says what was there instead.
-    """
     center = str(notification_center())
     last = ""
 
@@ -1093,7 +977,6 @@ def press_when_shown(what: str, *press: str) -> Any:
 
 
 def scenario_permission(record: Record, scratch: Scratch) -> None:
-    """A bundle macOS has never seen: not asked, then asked when a delivery waits."""
     bundle = fresh_bundle()
     host = Host(scratch)
     record.secrets.append(host.token)
@@ -1141,7 +1024,6 @@ BRANCHES = {
 
 
 def scenario_notification(record: Record, scratch: Scratch) -> None:
-    """Whatever this Mac allows the test bundle, a delivery and the test button do what the pane says."""
     host = Host(scratch)
     record.secrets.append(host.token)
     delivery = host.seed({})
@@ -1154,8 +1036,6 @@ def scenario_notification(record: Record, scratch: Scratch) -> None:
         client = app.client
         permission = app.state()["notifications"]
         record.observe("what macOS allows the test bundle", permission)
-        # A pass means a different thing on each branch, and only "allowed"
-        # shows a banner, so the run says which one it took.
         branch = BRANCHES.get(permission, "nothing claimed, nothing presented")
         record.observe("branch exercised", branch)
         print(f"notification: macOS says {permission}, so this run checks: {branch}", file=sys.stderr)
@@ -1206,7 +1086,6 @@ def scenario_notification(record: Record, scratch: Scratch) -> None:
 
 
 def scenario_panel(record: Record, scratch: Scratch) -> None:
-    """The menu bar panel opens, lists the group, and closing it hands the keyboard back."""
     host = Host(scratch)
     record.secrets.append(host.token)
     host.seed()
@@ -1216,8 +1095,6 @@ def scenario_panel(record: Record, scratch: Scratch) -> None:
         connect(app, host)
         wait_until("the panel is made for the window's host", lambda: app.state()["menubar"]["attached"], 20)
         record.check("the panel knows the window's host", True)
-        # Closed the way a person closes it, which hides it: the panel hands
-        # the keyboard back only when there is no window to stay in.
         client.ask("close", window="main")
         wait_until("the window closes", lambda: not visible(app, "main"), 10)
         record.check("closing the window hides it and keeps the app running", app.alive())
@@ -1259,9 +1136,6 @@ def visible(app: App, label: str) -> bool:
 
 
 class Prompted:
-    """A fresh bundle, a waiting delivery, and the question answered by
-    pressing a button on it. Whatever was started is stopped on the way out,
-    however far it got: a question nobody answers is left on someone's screen."""
 
     def __init__(self, record: Record, scratch: Scratch, button: str, count: int = 1, busy: int = 0,
                  minute_ms: int | None = None) -> None:
@@ -1300,8 +1174,6 @@ class Prompted:
         self.record.check("macOS asks about the fresh bundle", True)
         person_away(f"pressing {self.button}")
         if self.busy:
-            # From here the window's main thread is kept busy, so the answer,
-            # the claim and the hand-off to macOS all happen while it is.
             assert self.app.client
             self.app.client.ask("busy", ms=self.busy)
         pressed = press_when_shown(f"pressing {self.button}", "press", "AXButton", self.button, APP_NAME)
@@ -1320,7 +1192,6 @@ class Prompted:
 
 
 def scenario_allow(record: Record, scratch: Scratch) -> None:
-    """Screen: Allow on the question, and the waiting delivery is shown as a banner."""
     with Prompted(record, scratch, "Allow") as it:
         assert it.app and it.host and it.log
         host, app = it.host, it.app
@@ -1338,7 +1209,6 @@ def scenario_allow(record: Record, scratch: Scratch) -> None:
 
 
 def scenario_button(record: Record, scratch: Scratch) -> None:
-    """Screen: once macOS allows the bundle, the Settings test button raises a banner."""
     with Prompted(record, scratch, "Allow") as it:
         assert it.app and it.log and it.app.client
         app, client = it.app, it.app.client
@@ -1347,16 +1217,12 @@ def scenario_button(record: Record, scratch: Scratch) -> None:
         open_notifications(client)
         wait_until("the pane says macOS allows it", lambda: PANE["allowed"] in pane_text(client), 5)
         client.page("main", do="click", role="button", name="Send a test notification")
-        # Nothing asks the app anything until macOS has answered, so that if a
-        # banner is only handed over while the main run loop is idle, as it was
-        # through the notification plugin, this test still sees it fail.
         shown = it.log.reaches("macOS presents the test", banner(app.bundle), 2, 10)
         record.check("the test button's banner is presented", shown,
                      None if shown else {"pane says sent": SENT in pane_text(client)})
 
 
 def scenario_busy(record: Record, scratch: Scratch) -> None:
-    """Screen: a delivery handed over while the window's main thread is busy is drawn, and its click opens the conversation."""
     with Prompted(record, scratch, "Allow", busy=10000) as it:
         assert it.app and it.host and it.log and it.app.client
         client, bundle = it.app.client, it.app.bundle
@@ -1378,7 +1244,6 @@ def scenario_busy(record: Record, scratch: Scratch) -> None:
 
 
 def scenario_deny(record: Record, scratch: Scratch) -> None:
-    """Screen: Don't Allow on the question, and the pane says notifications are off."""
     with Prompted(record, scratch, "Don\u2019t Allow") as it:
         assert it.app and it.host and it.log and it.app.client
         host, app = it.host, it.app
@@ -1399,7 +1264,6 @@ def scenario_deny(record: Record, scratch: Scratch) -> None:
 
 
 def scenario_click(record: Record, scratch: Scratch) -> None:
-    """Screen: a delivery's banner, clicked, opens the conversation it is about."""
     with Prompted(record, scratch, "Allow") as it:
         assert it.app and it.host and it.log and it.app.client
         client = it.app.client
@@ -1408,8 +1272,6 @@ def scenario_click(record: Record, scratch: Scratch) -> None:
         drawn(record, it.log, it.app.bundle)
         record.check("the delivery is on screen as a banner", True)
         record.check("another conversation is open first", client.page("main", do="view")["selected"] != critic)
-        # A banner stays up for a few seconds, so it is pressed as soon as it
-        # can be found, and found as soon as it is drawn.
         screen_step("clicking the banner")
         pressed = scratch.press("clicking the banner")
         press_when_shown("clicking the banner", "press-group", DELIVERY_TITLE)
@@ -1423,7 +1285,6 @@ def scenario_click(record: Record, scratch: Scratch) -> None:
 
 
 def scenario_away(record: Record, scratch: Scratch) -> None:
-    """Screen: four deliveries waiting when the window connects are one banner, and all four are taken."""
     with Prompted(record, scratch, "Allow", count=4) as it:
         assert it.app and it.host and it.log
         host, log, bundle = it.host, it.log, it.app.bundle
@@ -1438,7 +1299,6 @@ def scenario_away(record: Record, scratch: Scratch) -> None:
 
 
 def scenario_capture(record: Record, scratch: Scratch) -> None:
-    """Screen: one image of the test build's panel and one of its window, and nothing else."""
     out = Path(os.environ.get("GUACA_PROBE_CAPTURES", ROOT / "src-tauri/target/probe/captures"))
     if not helper("access")["screenCapture"]:
         raise Failed("capturing: Screen Recording is not allowed for the app that runs this command "
@@ -1464,27 +1324,12 @@ def scenario_capture(record: Record, scratch: Scratch) -> None:
         app.forget()
 
 
-# Scenarios that run agents ---------------------------------------------------
-#
-# These point the scratch Host at a StandIn, so what reaches macOS is a real
-# outbox row a real run wrote, not one seeded into SQLite.
-
 MINUTE_MS = 6000
-"""A minute on the Host of a scenario about being away: two minutes become
-twelve seconds, and the ten-minute gathering one minute."""
 
 PRESENCE_MINUTE_MS = 30000
-"""A minute on the Host of a scenario about whether the operator left. The
-window says it is still there every HEARTBEAT_MS (45 seconds, in view.ts), so
-the two minutes before away have to stay longer than that: at MINUTE_MS a
-window that wrongly keeps saying it is there would still go away between two
-of its own heartbeats, and the scenario could not tell it from one that said
-it had left."""
 
 
 def ready(record: Record, scratch: Scratch, minute_ms: int | None = None) -> Prompted:
-    """A fresh bundle allowed to notify, its first banner shown, and its Host
-    answering through a StandIn."""
     it = Prompted(record, scratch, "Allow", minute_ms=minute_ms)
     it.__enter__()
     assert it.app and it.host and it.log
@@ -1494,9 +1339,6 @@ def ready(record: Record, scratch: Scratch, minute_ms: int | None = None) -> Pro
 
 
 def click_banner(record: Record, app: App, scope: str, what: str, give_back: bool = True) -> None:
-    """Presses the test build's banner that names `scope`; the test build
-    comes forward, and unless asked not to, the app that was in front gets the
-    front back."""
     before = front()
     screen_step(what)
     pressed = app.scratch.press(what)
@@ -1520,8 +1362,6 @@ def wait_quietly(check: Callable[[], Any], seconds: float) -> Any:
 
 
 def leave(app: App, how: str) -> None:
-    """The operator leaves the window: by hiding Guaca, or by switching to
-    Finder, which every Mac has and which holds nothing of anyone's here."""
     if how == "hide":
         assert app.client
         app.client.ask("hide")
@@ -1531,7 +1371,6 @@ def leave(app: App, how: str) -> None:
 
 
 def scenario_question(record: Record, scratch: Scratch) -> None:
-    """Screen: a run that asks the operator a question is a banner at once, and its click opens the conversation."""
     it = ready(record, scratch)
     try:
         assert it.app and it.host and it.log and it.app.client
@@ -1553,7 +1392,6 @@ def scenario_question(record: Record, scratch: Scratch) -> None:
 
 
 def finished_after_leaving(record: Record, scratch: Scratch, how: str) -> None:
-    """At the window once, then gone: a run that finishes is a banner."""
     it = ready(record, scratch, PRESENCE_MINUTE_MS)
     try:
         assert it.app and it.host and it.log and it.app.client
@@ -1562,12 +1400,10 @@ def finished_after_leaving(record: Record, scratch: Scratch, how: str) -> None:
         click_banner(record, app, DELIVERY_TITLE, "clicking the first banner, to be at the window",
                      give_back=False)
         record.check("the window has focus", wait_quietly(lambda: focused(app), 5) is not None, stop=True)
-        # The window had focus; now the operator leaves it.
         leave(app, how)
         shown = len(log.settled(banner(app.bundle)))
         host.send("Scribe", "Say something short; this is a probe test.")
         wait_until("the run finishes", lambda: host.rows("outcome"), 30)
-        # Two minutes away and ten gathering, on this Host's minute, and some room.
         presented = log.reaches("macOS presents the finished run", banner(app.bundle), shown + 1,
                                 14 * PRESENCE_MINUTE_MS / 1000 + 20)
         record.check(f"after {how}: the finished run is presented as a banner", presented,
@@ -1583,23 +1419,19 @@ def finished_after_leaving(record: Record, scratch: Scratch, how: str) -> None:
 
 
 def scenario_hidden(record: Record, scratch: Scratch) -> None:
-    """Screen: at the window once, then Guaca hidden; a run that finishes is a banner."""
     finished_after_leaving(record, scratch, "hide")
 
 
 def scenario_switched(record: Record, scratch: Scratch) -> None:
-    """Screen: at the window once, then another app in front; a run that finishes is a banner."""
     finished_after_leaving(record, scratch, "switch")
 
 
 def scenario_fold(record: Record, scratch: Scratch) -> None:
-    """Screen: two runs that finish while the operator is away are one banner, and its click opens For you."""
     it = ready(record, scratch, MINUTE_MS)
     try:
         assert it.app and it.host and it.log and it.app.client
         host, app, log, client = it.host, it.app, it.log, it.app.client
         click_banner(record, app, DELIVERY_TITLE, "clicking the first banner, to be at the window")
-        # Away is two minutes after the last focus, on this Host's minute.
         time.sleep(2 * MINUTE_MS / 1000 + 2)
         shown = len(log.settled(banner(app.bundle)))
         host.send("Scribe", "Say something short; this is a probe test.")
@@ -1620,7 +1452,6 @@ def scenario_fold(record: Record, scratch: Scratch) -> None:
 
 
 def scenario_testclick(record: Record, scratch: Scratch) -> None:
-    """Screen: a click on the Settings test banner brings Guaca forward."""
     with Prompted(record, scratch, "Allow") as it:
         assert it.app and it.log and it.app.client
         app, client = it.app, it.app.client
@@ -1633,12 +1464,9 @@ def scenario_testclick(record: Record, scratch: Scratch) -> None:
 
 
 TEST_BODY = "This is what a notification looks like."
-"""The Settings test banner's body, kept equal to SettingsDialog.tsx."""
 
 
 class Listener:
-    """A push address on loopback: every POST the Host sends is kept, with
-    its headers, so a scenario reads back what a phone would have shown."""
 
     def __init__(self, scratch: Scratch) -> None:
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1668,7 +1496,6 @@ class Listener:
 
 
 def scenario_push(record: Record, scratch: Scratch) -> None:
-    """Every window closed: a question and a finished run each reach the push address once."""
     host = Host(scratch, MINUTE_MS)
     record.secrets.append(host.token)
     host.seed()
@@ -1695,7 +1522,6 @@ def scenario_push(record: Record, scratch: Scratch) -> None:
 
 
 def scenario_hiddenpush(record: Record, scratch: Scratch) -> None:
-    """Screen: at the window once, then Guaca hidden; a run that finishes reaches the push address once."""
     it = ready(record, scratch, MINUTE_MS)
     try:
         assert it.app and it.host and it.log and it.app.client
@@ -1708,7 +1534,6 @@ def scenario_hiddenpush(record: Record, scratch: Scratch) -> None:
         leave(app, "hide")
         host.send("Scribe", "Say something short; this is a probe test.")
         wait_until("the run finishes", lambda: host.rows("outcome"), 30)
-        # Two minutes away and ten gathering, on this Host's minute, and some room.
         pushed = wait_quietly(lambda: phone.titled("Scribe"), 14 * MINUTE_MS / 1000 + 20)
         record.check("after hide: the finished run is pushed", bool(pushed),
                      {"body": pushed[0]["body"]} if pushed else
@@ -1722,7 +1547,6 @@ def scenario_hiddenpush(record: Record, scratch: Scratch) -> None:
 
 
 def scenario_refused(record: Record, scratch: Scratch) -> None:
-    """Screen: a banner the system refuses is given back, and pushed once although the window is present."""
     it = ready(record, scratch)
     try:
         assert it.app and it.host and it.log and it.app.client
@@ -1758,7 +1582,6 @@ def rows_released(host: Host, delivery: str) -> bool:
 
 
 def scenario_panelstable(record: Record, scratch: Scratch) -> None:
-    """A channel-close followed immediately by a channel-reopen leaves the panel visible and focused for three seconds."""
     host = Host(scratch)
     record.secrets.append(host.token)
     host.seed()
@@ -1796,7 +1619,6 @@ def scenario_panelstable(record: Record, scratch: Scratch) -> None:
 
 
 def scenario_draft(record: Record, scratch: Scratch) -> None:
-    """Screen: a draft typed to one agent in the panel is not on another, and is there when you come back; read through Accessibility."""
     host = Host(scratch)
     record.secrets.append(host.token)
     host.seed()
@@ -1814,7 +1636,6 @@ def scenario_draft(record: Record, scratch: Scratch) -> None:
         draft = "probe draft meant for Researcher only"
 
         def field(agent: str) -> str:
-            """What the message box holds, as assistive technology reads it."""
             groups = helper("describe", str(app.pid), f"Conversation with {agent}")
             return " ".join(line for group in groups for line in group.split(" | ") if "AXTextArea" in line)
 
@@ -1854,15 +1675,9 @@ def scenario_draft(record: Record, scratch: Scratch) -> None:
 
 
 LONG_AWAY_S = 6 * 60
-"""How long the operator stays away in the long-away scenario, in real
-seconds. WebKit suspends a page nobody can see after about five minutes, by
-the wall clock; no shorter minute on the Host stands in for that."""
 
 
 def scenario_longaway(record: Record, scratch: Scratch) -> None:
-    """Screen: Guaca hidden for six minutes; a question and a finished run are each a banner."""
-    # The Host's minute is short so the finished run's ten-minute gathering
-    # does not add ten more; the six minutes hidden are real.
     with Prompted(record, scratch, "Allow", minute_ms=6000) as it:
         assert it.app and it.host and it.log and it.app.client
         host, app, log = it.host, it.app, it.log
@@ -1890,8 +1705,6 @@ def scenario_longaway(record: Record, scratch: Scratch) -> None:
             return [{k: r[k] for k in ("kind", "status")} for r in host.rows()
                     if r["kind"] == "outcome" or "question" in r["title"]]
 
-        # The question is offered at once and the finished run when its
-        # gathering closes, a minute on this Host; then a few seconds each.
         claimed = wait_quietly(lambda: all(r["status"] == "delivered" for r in both()), 90)
         record.check("after six minutes hidden: the window takes the question and the finished run",
                      claimed is not None, None if claimed else {"rows": both()})
@@ -1902,7 +1715,6 @@ def scenario_longaway(record: Record, scratch: Scratch) -> None:
 
 
 def scenario_escape(record: Record, scratch: Scratch) -> None:
-    """Screen: a real click on the icon gives the panel the keyboard; a real Escape closes it and gives the keyboard back."""
     host = Host(scratch)
     record.secrets.append(host.token)
     host.seed()
@@ -1927,7 +1739,6 @@ def scenario_escape(record: Record, scratch: Scratch) -> None:
         closed = wait_quietly(lambda: not app.state()["menubar"]["panelVisible"], 5)
         record.check("a real Escape closes the panel", closed is not None)
         if keyboard is None:
-            # Never having left, the app in front proves nothing about the hand-back.
             record.observe("the app that was in front is in front again", "not reached: the panel never had the keyboard")
         else:
             record.check("the app that was in front is in front again",
@@ -1994,15 +1805,8 @@ SUMMARIES: dict[str, str] = {
 }
 
 
-# The command ----------------------------------------------------------------
-
 
 def sweep() -> int:
-    """Forgets every copy of the test build Launch Services still lists from a
-    probe's folder of copies, in this checkout or another, once the copy is
-    gone from disk: a run killed before its teardown leaves one behind.
-    Returns how many. What usernoted remembers about a bundle, and the line
-    System Settings lists for it, belong to the system and stay."""
     listed = run([LSREGISTER, "-dump"]).stdout
     copies = set(re.findall(rf"path:\s+(/\S[^\n]*?/target/probe/apps/guaca-probe-[^/\n]+/{re.escape(APP_NAME)}\.app)", listed))
     stale = sorted(path for path in copies if not Path(path).exists())
@@ -2024,7 +1828,6 @@ def build() -> None:
 
 
 def attempt(name: str, index: int, keep: bool) -> tuple[Record, dict]:
-    """One run of one scenario in its own scratch world."""
     scratch = Scratch()
     record = Record(name, index, [])
     evidence = None
@@ -2051,8 +1854,6 @@ def attempt(name: str, index: int, keep: bool) -> tuple[Record, dict]:
     if not record.passed and not record.deferred:
         entry["evidence"] = str(evidence) if evidence else None
     entry["seconds"] = round(time.monotonic() - started, 1)
-    # Lines the live stream never delivered and the persisted log had: each
-    # one a step that would have been read as macOS doing nothing.
     missed = [line[:200] for log in scratch.logs for line in log.missed]
     if missed:
         entry["streamMissed"] = missed
@@ -2060,9 +1861,6 @@ def attempt(name: str, index: int, keep: bool) -> tuple[Record, dict]:
 
 
 def patient(patience: float, deferrals: list[dict], entry: dict) -> bool:
-    """A run put off because someone was at the Mac is tried again once
-    nobody has touched it for AWAY seconds, for as long as patience allows.
-    Returns whether to try again."""
     deferrals.append({"scenario": entry["scenario"], "run": entry["run"], "step": entry["steps"][-1]["step"]})
     print(f"{entry['scenario']} run {entry['run']}: put off, someone is using the Mac", file=sys.stderr)
     deadline = time.monotonic() + patience
@@ -2095,8 +1893,6 @@ def main() -> int:
     if unknown:
         print(f"no such scenario: {', '.join(unknown)} (see --list)", file=sys.stderr)
         return 2
-    # Stopped from outside, the run still cleans up: the app was started by
-    # open and the Host in its own session, so neither dies with this process.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     if not args.no_build:
         build()
@@ -2104,12 +1900,6 @@ def main() -> int:
         print("no test build; run without --no-build", file=sys.stderr)
         return 2
 
-    # A banner, the permission question and a capture all need a lit
-    # display, and a display that sleeps raises the lock screen's shield even
-    # with no password asked. One assertion wakes the display, declares the
-    # user active and keeps the display and the Mac awake from before the
-    # first screen step to after the last, without touching the Mac's own
-    # sleep settings. -w ends it with this process however that exits.
     awake = subprocess.Popen(["caffeinate", "-u", "-d", "-i", "-w", str(os.getpid())])
     results = []
     deferrals: list[dict] = []

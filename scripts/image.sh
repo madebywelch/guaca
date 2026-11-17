@@ -1,13 +1,4 @@
 #!/usr/bin/env bash
-#
-# Builds the daemon's image and proves it answers.
-#
-#   ./scripts/image.sh          build, run, check, remove
-#   KEEP=1 ./scripts/image.sh   leave the container running afterward
-#
-# The checks are the ones a box fails silently: the process is up, the token
-# gate holds, the page is served, and the build the container reports is the
-# build that was asked for. Nothing here needs a key or spends anything.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -70,8 +61,6 @@ esac
 
 curl -fsS "${BASE}/" | grep -q '<div id="root">' || fail "the page is not served at /"
 
-# The programs the host runs. Asked inside the container, because an image
-# that lost one of these fails only when a turn or a connector first needs it.
 [ "$(docker exec "${NAME}" printenv HOME)" = "/var/lib/guaca" ] || fail "CLI home is not persistent"
 docker exec "${NAME}" claude --version >/dev/null || fail "claude is not in the image"
 docker exec "${NAME}" node --version >/dev/null || fail "node is not in the image"
@@ -87,7 +76,6 @@ curl -fsS -X POST "${BASE}/v1/call" \
   -d '{"name":"update_settings","args":{"patch":{"operatorName":"volume-check"}}}' \
   | grep -q '"operatorName":"volume-check"' || fail "settings were not saved"
 docker restart "${NAME}" >/dev/null
-# Docker can allocate a different ephemeral host port when it restarts.
 PORT="$(docker port "${NAME}" 8787/tcp | head -1 | sed -E 's/.*:([0-9]+)$/\1/')"
 BASE="http://127.0.0.1:${PORT}"
 for _ in $(seq 1 30); do
@@ -103,7 +91,6 @@ curl -fsS -X POST "${BASE}/v1/call" \
 
 step "Stopping"
 docker stop "${NAME}" >/dev/null
-# `--rm` took the container; the trap's remove is then a no-op.
 docker logs "${NAME}" >/dev/null 2>&1 && fail "the container did not stop"
 
 step "Image ${IMAGE} answers"

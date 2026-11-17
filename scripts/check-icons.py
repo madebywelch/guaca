@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-"""Hold the committed icons to the scripts that draw them.
-
-`src-tauri/icons/` is the one generated directory in the repo that nothing
-checked. `scripts/make-icon.py` draws the app icon, `tauri icon` derives the
-platform set from it (both inside `scripts/make-icons.sh`), and
-`scripts/make-tray.py` draws the three menu bar glyphs. Edit the species and
-nothing fails; the dock keeps the old drawing until somebody opens the app on a
-Mac and notices. So this runs the whole pipeline into a temp directory and
-compares it with what is committed.
-
-Every file is a byte comparison, and the pipeline is reproducible: both
-generators are arithmetic and PNG encoding with nothing time-, path- or
-order-dependent in them, and `make-icons.sh` sorts icon.icns's chunks, which
-`tauri icon` otherwise packs in a different order on every run.
-
-  python3 scripts/check-icons.py
-"""
 
 from __future__ import annotations
 
@@ -28,7 +11,6 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 ICONS = ROOT / "src-tauri" / "icons"
 
-# Finder and Explorer leave these behind; they are nobody's icon.
 SKIP = {".DS_Store", "Thumbs.db"}
 
 
@@ -37,7 +19,6 @@ def files_under(root: Path) -> set[Path]:
 
 
 def compare(drawn: Path, kept: Path) -> list[str]:
-    """Every difference between what the scripts draw and what is committed."""
     problems = []
 
     def shown(name: Path) -> str:

@@ -88,8 +88,6 @@ def main() -> int:
     add("human", None, "agent", manager,
         [{"type": "text", "text": "Check the top three stories on cnn, then summarize them."}], "operator")
 
-    # One turn writes one envelope, however many tools it reached for. This is
-    # what the trail row folds.
     add("agent", manager, "system", None, [
         tool("directory", {}, ok("3 agent(s): Researcher, Critic, Scribe")),
         tool("browse", {"action": "open", "url": "https://www.cnn.com"}, ok("open in the browser")),
@@ -98,10 +96,8 @@ def main() -> int:
         tool("browse", {"action": "read"}, ok("read in the browser")),
         tool("run_command", {"command": "python3 -c 'import sys; print(len(sys.stdin.read()))'"},
              ok("exit 0, 4 bytes out")),
-        # Never folds: the operator's audit trail for their own tokens.
         tool("run_command", {"command": 'curl -s -H "Authorization: Bearer $STRIPE_KEY" https://api.stripe.com/v1/charges'},
              ok("used Stripe ($STRIPE_KEY) · exit 0, 812 bytes out")),
-        # Never folds either.
         tool("run_command", {"command": "cat /tmp/headlines.json"},
              {"status": "failed", "error": "your computer is not available (sandbox timed out)"}),
         tool("use_screen", {"action": "look"}, ok("looked at the screen (1280x800)")),
@@ -109,7 +105,6 @@ def main() -> int:
              ok("Memory saved (62 characters).")),
     ], "system", intent="courtesy")
 
-    # Peer traffic, which the channel collapses into a burst.
     add("agent", researcher, "agent", manager,
         [{"type": "text", "text": "The market number matches Reuters."}], "peer")
     add("agent", researcher, "agent", manager,
@@ -122,7 +117,6 @@ def main() -> int:
         "3. **Politics** — the vote moved to Thursday.\n\n"
         "Want me to keep watching any of these?")}], "peer")
 
-    # A guard stop, and a send that named nobody: neither folds.
     add("agent", manager, "system", None, [
         tool("send_message", {"text": "keeping an eye on this"},
              {"status": "refused", "reason": "Refused: name a recipient. Put one or more agent names in `to`."}),

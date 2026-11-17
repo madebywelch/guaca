@@ -1,12 +1,3 @@
-"""The release image's Finder layout, held without a Mac.
-
-A disk image needs hdiutil, so the gate cannot make one on Linux. What decides
-how the image opens is the .DS_Store the script writes, and that is plain
-bytes: this reads them back with a reader of its own and holds them to the
-records Finder wrote for the 0.4.0 image, which opened arranged. Opening a
-packaged image in Finder is a release step in docs/RELEASING.md.
-"""
-
 import importlib.util
 import plistlib
 import struct
@@ -22,7 +13,6 @@ spec.loader.exec_module(package_dmg)
 
 
 def read_ds_store(data: bytes) -> list[tuple[str, str, object]]:
-    """Every record in a .DS_Store, decoded independently of the writer."""
     assert data[:8] == b"\0\0\0\1Bud1", "not a .DS_Store"
     body = data[4:]
     offset, size, again = struct.unpack(">III", body[4:16])
@@ -74,8 +64,6 @@ def icon_at(x: int, y: int) -> bytes:
     return struct.pack(">II", x, y) + bytes.fromhex("ffffffffffff0000")
 
 
-# Decoded from the .DS_Store in Guaca_0.4.0_universal.dmg, the last image
-# whose window opened arranged.
 ARRANGED = [
     (".", "bwsp", {
         "ContainerShowSidebar": False, "ShowSidebar": False, "ShowStatusBar": False,
