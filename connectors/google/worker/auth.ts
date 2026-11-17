@@ -6,6 +6,7 @@ import { drizzle } from "drizzle-orm/d1";
 
 import { PROVIDERS } from "./connectors";
 import { CODE_TTL_MINUTES, sendSignInCode } from "./email";
+import { origin } from "./origin";
 import { schema } from "./schema";
 
 const instances = new WeakMap<object, Auth>();
@@ -91,8 +92,8 @@ export function authPlugins(env?: Env) {
 }
 
 function build(env: Env) {
-  const baseURL = env.BETTER_AUTH_URL;
-  if (!baseURL) throw new Error("BETTER_AUTH_URL is not set");
+  if (!env.BETTER_AUTH_URL) throw new Error("BETTER_AUTH_URL is not set");
+  const baseURL = origin(env.BETTER_AUTH_URL);
   if (!env.BETTER_AUTH_SECRET) throw new Error("BETTER_AUTH_SECRET is not set");
 
   return betterAuth({

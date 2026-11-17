@@ -1,6 +1,8 @@
 import { applyD1Migrations, env, fetchMock, SELF } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 
+import { getAuth } from "./auth";
+
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env { MIGRATIONS: D1Migration[] }
 }
@@ -12,6 +14,19 @@ beforeAll(async () => {
   await applyD1Migrations(env.DB, env.MIGRATIONS);
   await env.DB.exec("CREATE TABLE handoff (hash TEXT PRIMARY KEY, expires_at INTEGER NOT NULL)");
   await env.DB.exec("INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt) VALUES ('selfhost-operator', 'Operator', 'operator@localhost.invalid', 1, unixepoch(), unixepoch())");
+});
+
+describe("BETTER_AUTH_URL", () => {
+  it.each(["http://localhost:8787/", "http://localhost:8787/app", "http://localhost:8787?x=1", "localhost:8787"])(
+    "refuses %j, which is not an origin",
+    (value) => {
+      expect(() => getAuth({ ...env, BETTER_AUTH_URL: value })).toThrow(/BETTER_AUTH_URL is "/);
+    },
+  );
+
+  it("builds for an origin with a port", () => {
+    expect(getAuth({ ...env, BETTER_AUTH_URL: origin })).toBeTruthy();
+  });
 });
 
 describe("self-hosted handoff", () => {
