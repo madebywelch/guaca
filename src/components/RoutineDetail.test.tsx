@@ -12,6 +12,7 @@ const setRoutineActive = vi.fn<(id: string, active: boolean) => Promise<Routine>
 const testRoutine = vi.fn<(id: string) => Promise<string>>();
 const deleteRoutine = vi.fn<(id: string) => Promise<void>>();
 const webhookAddress = vi.fn<() => Promise<WebhookAddress>>();
+const revealWebhookSecret = vi.fn<() => Promise<string>>();
 
 vi.mock("../lib/ipc", () => ({
   api: {
@@ -23,6 +24,7 @@ vi.mock("../lib/ipc", () => ({
     testRoutine: (id: string) => testRoutine(id),
     deleteRoutine: (id: string) => deleteRoutine(id),
     webhookAddress: () => webhookAddress(),
+    revealWebhookSecret: () => revealWebhookSecret(),
   },
 }));
 
@@ -69,10 +71,8 @@ describe("RoutineDetail", () => {
     setRoutineActive.mockImplementation(async (_id, active) => routine({ active }));
     testRoutine.mockResolvedValue("run-1");
     deleteRoutine.mockResolvedValue(undefined);
-    webhookAddress.mockResolvedValue({
-      url: "http://127.0.0.1:4711/events",
-      secret: "s3cr3t-s3cr3t",
-    });
+    webhookAddress.mockResolvedValue({ url: "http://127.0.0.1:4711/events" });
+    revealWebhookSecret.mockResolvedValue("s3cr3t-s3cr3t");
   });
 
   afterEach(() => {
@@ -283,7 +283,12 @@ describe("RoutineDetail", () => {
     expect(line.textContent).toContain(
       "http://127.0.0.1:4711/events/stripe/invoice.payment_failed",
     );
-    expect(line.textContent).toContain("Authorization: Bearer s3cr3t-s3cr3t");
+    expect(line.textContent).not.toContain("s3cr3t");
+    expect(revealWebhookSecret).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Show secret" }));
+    await waitFor(() => expect(line.textContent).toContain("Authorization: Bearer s3cr3t-s3cr3t"));
+    expect(revealWebhookSecret).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Show secret" })).toBeNull();
     expect(screen.queryByLabelText("Time of day")).toBeNull();
     expect(screen.queryByLabelText("Date")).toBeNull();
     expect(screen.getByRole("button", { name: "Test run" })).toBeTruthy();
@@ -291,7 +296,7 @@ describe("RoutineDetail", () => {
   });
 
   it("says an event can only be posted to a Host when there is no address", async () => {
-    webhookAddress.mockResolvedValue({ secret: "s3cr3t-s3cr3t" });
+    webhookAddress.mockResolvedValue({});
     open({ trigger: "event:stripe/invoice.payment_failed", nextRunAt: null });
 
     expect(

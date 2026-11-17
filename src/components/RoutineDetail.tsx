@@ -48,6 +48,8 @@ interface Editing {
 
 const DEFAULT_TRIGGER = "daily";
 
+const HIDDEN_SECRET = "••••••••";
+
 function editingFor(routine: Routine): Editing {
   return {
     name: routine.name,
@@ -102,6 +104,7 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
   const [note, setNote] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [address, setAddress] = useState<WebhookAddress | null>(null);
+  const [secret, setSecret] = useState<string | null>(null);
   const now = useNow(30_000);
 
   const load = useCallback(async () => {
@@ -431,8 +434,22 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
         {event && address?.url && parseTrigger(draft.trigger).kind === "event" && (
           <>
             <pre className="webhook">
-              {webhookLine(address.url, address.secret, event.service, event.topic)}
+              {webhookLine(address.url, secret ?? HIDDEN_SECRET, event.service, event.topic)}
             </pre>
+            {secret === null && (
+              <button
+                type="button"
+                className="btn btn--small btn--ghost"
+                onClick={() => {
+                  api
+                    .revealWebhookSecret()
+                    .then(setSecret)
+                    .catch((caught) => setError(errorMessage(caught)));
+                }}
+              >
+                Show secret
+              </button>
+            )}
             <span className="field__hint">
               The body, if there is one, reaches the agent under the instruction as data. Guaca
               calls nobody and polls nothing: whatever posts this is yours to wire.

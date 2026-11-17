@@ -899,7 +899,6 @@ export interface RoutineRun {
 
 export interface WebhookAddress {
   url?: string | null;
-  secret: string;
 }
 
 export interface RoutineDraft {

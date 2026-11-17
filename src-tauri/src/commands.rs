@@ -2020,15 +2020,17 @@ pub async fn test_routine(state: &AppState, id: RoutineId) -> Reply<RunId> {
 pub async fn webhook_address(state: &AppState) -> Reply<WebhookAddress> {
     Ok(WebhookAddress {
         url: state.reach.origin().map(|origin| format!("{}/events", origin.trim_end_matches('/'))),
-        secret: state.runtime.config().webhook.secret.expose().to_string(),
     })
+}
+
+pub async fn reveal_webhook_secret(state: &AppState) -> Reply<String> {
+    Ok(state.runtime.config().webhook.secret.expose().to_string())
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WebhookAddress {
     pub url: Option<String>,
-    pub secret: String,
 }
 
 pub async fn routine_runs(state: &AppState, id: RoutineId) -> Reply<Vec<RoutineRun>> {

@@ -530,10 +530,18 @@ def scenario_routine(w: World) -> None:
     ui.fill("textbox", "Service", "billing")
     ui.fill("textbox", "Event", "invoice.failed")
     ui.click("button", "Create routine")
-    shown = w.wait("the routine shows where to post", lambda: re.search(
-        r"curl -X POST (\S+) .*Authorization: Bearer ([\w-]+)", ui.text(), re.S))
-    address, secret = shown.group(1), shown.group(2)
+    hidden = w.wait("the routine shows where to post", lambda: re.search(
+        r"curl -X POST (\S+) .*Authorization: Bearer ([^'\s]+)", ui.text(), re.S))
+    address = hidden.group(1)
+    ui.click("button", "Show secret")
+    shown = w.wait("the secret is shown once asked for", lambda: re.search(
+        r"Authorization: Bearer ([\w-]+)", ui.text()))
+    secret = shown.group(1)
     w.secrets.append(secret)
+    carried = sum(secret in json.dumps(event) for event in w.events)
+    w.check("the secret is shown only when asked for, and no event carried it",
+            hidden.group(2) == "•" * 8 and carried == 0,
+            observed={"before": hidden.group(2), "events_carrying_it": carried})
     w.check("the routine is kept, switched on, waiting on the event",
             w.host.rows("SELECT name, fires, active FROM routines")
             == [{"name": "Invoice watch", "fires": "event:billing/invoice.failed", "active": 1}]
@@ -733,10 +741,12 @@ SCENARIOS: dict[str, Scenario] = {
         "Try again sends the cut-short message once more and it is answered",
         "every model call was one the scenario scripted",
     )),
-    "routine": Scenario(scenario_routine, "A person adds a routine on an event, one delivery fires it once and the "
-                        "agent acts on it; a retry of that delivery does not fire it again, and a post without the "
-                        "secret or to an event nobody waits on fires nothing.",
+    "routine": Scenario(scenario_routine, "A person adds a routine on an event, reveals its secret, and one delivery "
+                        "fires it once and the agent acts on it; the secret is hidden until asked for, a retry of "
+                        "that delivery does not fire it again, and a post without the secret or to an event nobody "
+                        "waits on fires nothing.",
     (
+        "the secret is shown only when asked for, and no event carried it",
         "the routine is kept, switched on, waiting on the event",
         "a post without the secret, or to an event nobody waits on, fires nothing",
         "one delivery fires the routine once, with its body, in a run of its own",
