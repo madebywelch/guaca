@@ -207,7 +207,16 @@ ledger says needs a new one, a change to its formatting alone does not, and the
 author never approves their own. `node scripts/check-grants.mjs hash` prints
 the label. A push to `main`
 prints the change and passes, since `main` only takes a pull request whose
-gate was green. The error says what to do instead: encode a constraint as a
+gate was green. A pull request is judged a second time by `main`'s copy of the
+lint, because one that edits the lint or its workflow would otherwise be judged
+by its own edit: `.github/workflows/judge.yml` runs on `pull_request_target`,
+so the workflow is the one on `main`, checks the head out beside `main` as
+data, and runs only `main`'s scripts, `node scripts/check-grants.mjs judge`,
+with a token that can only read and no secret. The judge also fails a pull
+request that changes the judge (the lint, `scripts/grants/` or anything under
+`.github/workflows`) until the owner approves that judge with the label
+`judge-approved-` followed by the first 12 hex digits of the SHA-256 of
+`git ls-tree -r <head> -- scripts/check-grants.mjs scripts/grants .github/workflows`. The error says what to do instead: encode a constraint as a
 type, an assertion or a test, put the why in the commit message, fix the cause
 of a workaround, and put a document's knowledge where it is enforced.
 

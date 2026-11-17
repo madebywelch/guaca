@@ -911,6 +911,49 @@ describe("judge", () => {
   );
 });
 
+describe("the judge workflow", () => {
+  const WORKFLOW = join(dirname(CLI), "..", ".github", "workflows", "judge.yml");
+  const unsafeIn = (text) => {
+    const lines = text.split("\n");
+    const count = (pattern) => lines.filter((line) => pattern.test(line)).length;
+    return [
+      [/^\s+(pull_request|push|workflow_run|workflow_dispatch|issue_comment|schedule):/m.test(text), "runs on an event other than pull_request_target"],
+      [!/^on:\n {2}pull_request_target:\n {4}branches: \[main\]\n/m.test(text), "is not defined by main for pull requests to main"],
+      [count(/permissions:/) !== 1 || !/^permissions:\n {2}contents: read\n\n/m.test(text), "holds a token that can do more than read the repository"],
+      [/secrets/.test(text), "names a secret"],
+      [count(/uses: actions\/checkout@/) !== count(/^\s+persist-credentials: false$/), "leaves a token in a checkout"],
+      [count(/^\s+(- )?run: \S/) !== count(/^\s+- working-directory: main$/), "runs a command outside main's checkout"],
+      [lines.some((line) => /^\s+(- )?run:.*\$\{\{/.test(line)), "expands an expression inside a command"],
+      [!/^ {10}ref: \$\{\{ github\.event\.pull_request\.head\.sha \}\}\n {10}path: head$/m.test(text), "does not read the pull request's head as data"],
+      [!/^ {8}run: node scripts\/check-grants\.mjs judge --repo \.\.\/head$/m.test(text), "does not run main's judge on the head"],
+      [!/^ {4}name: judge \(main's grants lint on the pull request\)$/m.test(text), "renames the check branch protection requires"],
+    ]
+      .filter(([broken]) => broken)
+      .map(([, reason]) => reason);
+  };
+  it("judges the head with main's lint, as data, with a read-only token and no secret", () => {
+    assert.deepEqual(unsafeIn(readFileSync(WORKFLOW, "utf8")), []);
+  });
+  for (const [reason, from, to] of [
+    ["runs on an event other than pull_request_target", "  pull_request_target:\n", "  pull_request_target:\n  push:\n"],
+    ["holds a token that can do more than read the repository", "  contents: read\n", "  contents: write\n"],
+    ["holds a token that can do more than read the repository", "    runs-on:", "    permissions:\n      pull-requests: write\n    runs-on:"],
+    ["names a secret", "GRANTS_APPROVALS: ", "TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          GRANTS_APPROVALS: "],
+    ["leaves a token in a checkout", "          path: head\n          persist-credentials: false\n", "          path: head\n"],
+    ["runs a command outside main's checkout", "      - working-directory: main\n        run: pnpm", "      - working-directory: head\n        run: pnpm"],
+    ["expands an expression inside a command", "judge --repo ../head\n", "judge --repo ../head\n      - working-directory: main\n        run: echo ${{ github.event.pull_request.title }}\n"],
+    ["does not read the pull request's head as data", "pull_request.head.sha", "pull_request.base.sha"],
+    ["does not run main's judge on the head", "judge --repo ../head", "--repo ../head"],
+    ["renames the check branch protection requires", "name: judge (main", "name: lint (main"],
+  ]) {
+    it("refuses a workflow that " + reason + " (" + to.trim().split("\n").pop().trim() + ")", () => {
+      const text = readFileSync(WORKFLOW, "utf8");
+      assert.ok(text.includes(from), from);
+      assert.ok(unsafeIn(text.replace(from, to)).includes(reason));
+    });
+  }
+});
+
 describe("hash", () => {
   it(
     "prints the approval a ledger needs, from its content with keys in sorted order",
