@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
@@ -462,6 +462,19 @@ describe("a change", () => {
       });
       const result = run();
       assert.deepEqual([...result.findings, ...result.problems], []);
+    }),
+  );
+  it(
+    "reads a symbolic link as a link, not as the file or folder it points to",
+    scenario({ "src/a.ts": SOURCE }, (repo) => {
+      symlinkSync("src", join(repo.dir, "code"));
+      symlinkSync("src/a.ts", join(repo.dir, "AGENTS"));
+      const untracked = check(repo.dir, { base: repo.base });
+      assert.deepEqual([...untracked.findings, ...untracked.problems], []);
+      git(repo.dir, "add", "-A");
+      git(repo.dir, "commit", "-qm", "links");
+      const committed = check(repo.dir, { base: repo.base, head: "HEAD" });
+      assert.deepEqual([...committed.findings, ...committed.problems], []);
     }),
   );
   it(

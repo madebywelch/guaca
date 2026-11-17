@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { languageOf, lineEnd, lineStarts, scanFiles } from "./grants/lex.mjs";
@@ -276,6 +276,17 @@ export function classOf(path, text) {
   return null;
 }
 
+function linksAmong(repo, rev, paths) {
+  if (!rev) return new Set(paths.filter((path) => existsSync(join(repo, path)) && lstatSync(join(repo, path)).isSymbolicLink()));
+  if (paths.length === 0) return new Set();
+  return new Set(
+    git(repo, ["ls-tree", "-r", "-z", rev, "--", ...paths])
+      .split("\u0000")
+      .filter((entry) => entry.startsWith("120000 "))
+      .map((entry) => entry.slice(entry.indexOf("\t") + 1)),
+  );
+}
+
 function touchedPaths(repo, base, head, changes) {
   const args = ["diff", "-M", "--name-only", "--diff-filter=ACMRT", "--no-ext-diff", base];
   if (head) args.push(head);
@@ -358,8 +369,10 @@ export function check(repo, { base, head = null, ledgerOverride, proseByDiff = f
   const changes = changedLines(repo, base, head);
   const grants = ledger?.grants ?? [];
   const grantFiles = grants.filter((grant) => grant.kind !== "document").map((grant) => grant.path);
-  const touched = [...touchedPaths(repo, base, head, changes)].filter((path) => !upstream(path));
-  const wanted = [...new Set([...touched, ...grantFiles])].filter((path) => !upstream(path));
+  const candidates = [...touchedPaths(repo, base, head, changes)].filter((path) => !upstream(path));
+  const links = linksAmong(repo, head, candidates);
+  const touched = candidates.filter((path) => !links.has(path));
+  const wanted = [...new Set([...touched, ...grantFiles])].filter((path) => !upstream(path) && !links.has(path));
   const blobs = readBlobs(repo, head, wanted);
   for (const path of touched) {
     const blob = blobs.get(path);
