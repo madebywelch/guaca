@@ -215,6 +215,7 @@ def scenario_resume(w: World) -> None:
     write(w, AGENT, first)
     write(w, AGENT, second)
     w.wait("both messages are queued", lambda: w.host.scalar("SELECT count(*) FROM pending_runs") == 2)
+    w.wait("both queued messages are visible", lambda: first in conversation(w) and second in conversation(w))
     w.check("a paused agent keeps both messages queued without calling the model",
             len(w.model.calls) == calls and first in conversation(w) and second in conversation(w),
             observed={"queued": w.host.scalar("SELECT count(*) FROM pending_runs"),
