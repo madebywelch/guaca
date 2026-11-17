@@ -182,6 +182,56 @@ def scenario_reply(w: World) -> None:
     no_unscripted(w)
 
 
+def scenario_resume(w: World) -> None:
+    first = "First thing to do."
+    second = "Second thing, while you are at it."
+    answer = "Both noted."
+    seen = []
+
+    def script(c: Call) -> Reply | None:
+        if c.last_user == "ping":
+            return say("pong")
+        if c.speaker != AGENT:
+            return None
+        if c.said(first):
+            counts = [sum(text_of(m).count(text) for m in c.messages if m.get("role") != "system")
+                      for text in (first, second)]
+            seen.append(counts)
+            return say(answer) if counts == [1, 1] else None
+        if c.last_user.endswith("Say hello."):
+            return say(HELLO)
+        return None
+
+    w.model.script = script
+    w.start()
+    first_run(w)
+    settled(w, 1)
+    ui = w.ui
+    ui.click("button", f"Actions for {AGENT}")
+    ui.click("button", "Pause")
+    w.wait("the agent is paused", lambda: w.host.scalar(
+        "SELECT lifecycle FROM agents WHERE name = ?", AGENT) == "paused")
+    calls = len(w.model.calls)
+    write(w, AGENT, first)
+    write(w, AGENT, second)
+    w.wait("both messages are queued", lambda: w.host.scalar("SELECT count(*) FROM pending_runs") == 2)
+    w.check("a paused agent keeps both messages queued without calling the model",
+            len(w.model.calls) == calls and first in conversation(w) and second in conversation(w),
+            observed={"queued": w.host.scalar("SELECT count(*) FROM pending_runs"),
+                      "calledModel": len(w.model.calls) != calls}, shot=True)
+    ui.click("button", f"Actions for {AGENT}")
+    ui.click("button", "Resume")
+    w.wait("the resumed agent answers", lambda: answer in conversation(w))
+    w.wait("both queued conversations settle", lambda: w.host.scalar(
+        "SELECT count(*) FROM pending_runs") == 0
+        and sum(e.get("type") == "runSettled" for e in w.events) == 3)
+    w.check("Resume answers both queued messages once and releases both conversations",
+            seen == [[1, 1]] and said(w, AGENT) == [HELLO, answer],
+            observed={"promptCopies": seen, "said": said(w, AGENT),
+                      "queued": w.host.scalar("SELECT count(*) FROM pending_runs")}, shot=True)
+    no_unscripted(w)
+
+
 CRITIC = "Critic"
 ASK_CRITIC = "Ask Critic whether the plan holds."
 QUESTION = "Does the plan hold up? Answer in one line."
@@ -837,6 +887,13 @@ def unproved(claims: tuple[str, ...], steps: list[dict]) -> list[str]:
 
 
 SCENARIOS: dict[str, Scenario] = {
+    "resume": Scenario(scenario_resume, "A person queues two messages while an agent is paused and resumes it; "
+                       "paused work calls no model, and Resume answers each message without duplicating its prompt.",
+    (
+        "a paused agent keeps both messages queued without calling the model",
+        "Resume answers both queued messages once and releases both conversations",
+        "every model call was one the scenario scripted",
+    )),
     "reply": Scenario(scenario_reply, "A person sets up their first agent, writes to it and gets a reply; a key the "
                       "endpoint rejects is refused before anything is saved.",
     (
