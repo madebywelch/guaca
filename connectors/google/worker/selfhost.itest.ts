@@ -1,7 +1,7 @@
 import { applyD1Migrations, env, fetchMock, SELF } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { getAuth } from "./auth";
+import { getAuth, REFUSED_AUTH_PATHS, SERVED_AUTH_PATHS } from "./auth";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env { MIGRATIONS: D1Migration[] }
@@ -27,6 +27,24 @@ describe("BETTER_AUTH_URL", () => {
   it("builds for an origin with a port", () => {
     expect(getAuth({ ...env, BETTER_AUTH_URL: origin })).toBeTruthy();
   });
+});
+
+describe("every route Better Auth registers", () => {
+  it("is either served or refused, and never both", () => {
+    const { SELFHOST_BEARER: _, ...hosted } = env;
+    const registered = Object.values(getAuth(hosted as Env).api as Record<string, { path?: string }>)
+      .flatMap((endpoint) => (endpoint.path ? [endpoint.path] : []))
+      .sort();
+    expect([...new Set(registered)]).toEqual([...SERVED_AUTH_PATHS, ...REFUSED_AUTH_PATHS].sort());
+  });
+
+  it.each(["/api/auth/oauth2/token", "/api/auth/oauth2/create-client", "/api/auth/update-user"])(
+    "serves nothing but the Google callback at %s on a self-hosted broker",
+    async (path) => {
+      const res = await SELF.fetch(`${origin}${path}`, { method: "POST", body: "{}" });
+      expect(res.status).toBe(404);
+    },
+  );
 });
 
 describe("self-hosted handoff", () => {

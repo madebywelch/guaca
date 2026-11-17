@@ -10,7 +10,7 @@ import type { ReactNode } from "react";
 
 import { renderDocument } from "../src/account/document";
 import * as pages from "../src/account/pages";
-import { type Auth, CONNECTORS_SCOPE, getAuth, MCP_SCOPES } from "./auth";
+import { type Auth, CONNECTORS_SCOPE, getAuth, MCP_SCOPES, SERVED_AUTH_PATHS } from "./auth";
 import { codeAlreadySent } from "./codes";
 import { readConnection, readConnections } from "./connections";
 import {
@@ -188,12 +188,16 @@ app.get("/api/auth/.well-known/openid-configuration", async (c) =>
   withPublicClientCorrections(await c.var.auth.handler(c.req.raw)),
 );
 
-app.all("/api/auth/*", (c) => {
-  if (c.env.SELFHOST_BEARER && c.req.path !== "/api/auth/callback/google") {
-    return c.notFound();
-  }
-  return c.var.auth.handler(c.req.raw);
-});
+for (const path of SERVED_AUTH_PATHS) {
+  app.all(`/api/auth${path}`, (c) => {
+    if (c.env.SELFHOST_BEARER && c.req.path !== "/api/auth/callback/google") {
+      return c.notFound();
+    }
+    return c.var.auth.handler(c.req.raw);
+  });
+}
+
+app.all("/api/auth/*", (c) => c.notFound());
 
 app.post("/api/selfhost/handoff", async (c) => {
   if (!c.env.SELFHOST_BEARER || !(await matchesBearer(c.req.header("Authorization"), c.env.SELFHOST_BEARER))) {
