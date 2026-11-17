@@ -89,19 +89,23 @@ impl Redactor {
 }
 
 #[cfg(test)]
+macro_rules! assert_lacks {
+    ($kind:path, $ty:ty) => {{
+        trait Ambiguous<A> {
+            const HELD: () = ();
+        }
+        impl<T: ?Sized> Ambiguous<()> for T {}
+        impl<T: ?Sized + $kind> Ambiguous<u8> for T {}
+        let () = <$ty as Ambiguous<_>>::HELD;
+    }};
+}
+
+#[cfg(test)]
+pub(crate) use assert_lacks;
+
+#[cfg(test)]
 mod tests {
     use super::*;
-
-    macro_rules! assert_lacks {
-        ($kind:path, $ty:ty) => {{
-            trait Ambiguous<A> {
-                const HELD: () = ();
-            }
-            impl<T: ?Sized> Ambiguous<()> for T {}
-            impl<T: ?Sized + $kind> Ambiguous<u8> for T {}
-            let () = <$ty as Ambiguous<_>>::HELD;
-        }};
-    }
 
     #[test]
     fn a_process_env_cannot_be_serialized_or_displayed() {
