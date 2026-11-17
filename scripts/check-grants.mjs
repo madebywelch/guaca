@@ -2,12 +2,13 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { lineEnd, lineStarts, scanFiles } from "./grants/lex.mjs";
 
 export const LEDGER = "grants.json";
 export const PROSE = /\.(md|mdx|markdown|rst|adoc|txt)$/i;
 const KINDS = new Set(["comment", "suppression", "document"]);
-const GRANT_COMMAND = "node scripts/check-grants.mjs grant";
+const GRANT_COMMAND = "node " + relative(process.cwd(), fileURLToPath(import.meta.url)) + " grant";
 
 const DIRECTIVES = [
   (unit) => unit.line === 1 && unit.raw.startsWith("#!"),

@@ -498,7 +498,7 @@ describe("the command", () => {
       assert.match(out.stdout, /src\/a\.ts:5 {2}comment {2}\/\/ we retry because it flakes/);
       assert.match(out.stdout, /docs\/X\.md {2}new document/);
       assert.match(out.stdout, /encode it as a type, an assertion or a test/);
-      assert.match(out.stdout, /node scripts\/check-grants\.mjs grant <file>:<line> --words/);
+      assert.match(out.stdout, /node \S*check-grants\.mjs grant <file>:<line> --words/);
     }),
   );
   it(
