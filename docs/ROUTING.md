@@ -132,6 +132,7 @@ lists what has already been broken by changing it.
 | Preset agents, hiring a group | *The cafeteria is a copy machine* in `docs/WORKSPACE.md`, then `src/lib/cafeteria.ts` |
 | Settings, the surface, the scale, the theme, what may interrupt the operator | *Settings is a nav and a pane*, *The workspace follows the selected surface*, *A theme is four choices, and every color in it is solved* and *An interruption has to earn it* in `docs/WORKSPACE.md` |
 | What About says this build is, and where that string comes from | *About says which commit it is* in `docs/WORKSPACE.md`, then `src/lib/build.ts` and the `define` in `vite.config.ts` |
+| Building, signing, notarizing or publishing a macOS release, and checking its download | `docs/RELEASING.md`, then `.claude/skills/guaca-release/SKILL.md`, which has to agree with it |
 | The group editor: what a group overrides and what it inherits | *A group's settings are the app's, with its own answer on top* in `docs/WORKSPACE.md`, then `src/components/GroupEditor.tsx` |
 | What model an agent is offered, and how its job is guessed at | *The model field suggests three, and is still a text box* in `docs/WORKSPACE.md`, then `src/lib/roles.ts` and `llm/catalog.rs`, whose twelve use cases have to agree |
 | Whether a model can be shown a picture: an attachment, a screen, what an agent is told it is | *What a model can be sent is asked of the endpoint, not assumed* in `docs/ARCHITECTURE.md`, then `llm/modality.rs` and the four places `Modalities` is spent from `Runtime::run_turn` |

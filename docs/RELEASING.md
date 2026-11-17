@@ -112,7 +112,7 @@ Without that variable, the app defaults to
 version it was built from. Do not rely on this fallback unless that tag is
 published and matches the desktop. A local `guacad:...` image works only on
 the builder's Mac. `scripts/release-candidate.sh` checks a candidate but builds
-only an app bundle; use the command below for the universal DMG.
+only an app bundle; use the command below for the universal release.
 
 ```sh
 : "${GUACA_BACKEND_IMAGE:?Set the published backend image digest first}"
@@ -121,9 +121,15 @@ export GUACA_COMMIT="$GUACA_SOURCE"
 pnpm install --frozen-lockfile
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 ./scripts/ci.sh
-APPLE_SIGNING_IDENTITY='Developer ID Application: Robert Welch (LN79XLHFLT)' \
+CI=true APPLE_SIGNING_IDENTITY='Developer ID Application: Robert Welch (LN79XLHFLT)' \
   pnpm tauri build --target universal-apple-darwin --bundles app,dmg -- --locked
 ```
+
+The release is built on a Mac someone is working on, so the build must not open
+Finder windows or ask for permission to control Finder. `CI=true` does that: it
+makes Tauri pass `--skip-jenkins` to `bundle_dmg.sh`. The bundler reads the
+variable itself and accepts only the value `true`. The `--ci` flag does not set
+it, so the flag alone still drives Finder.
 
 The universal binary contains both Apple Silicon and Intel code. Tauri enables
 the hardened runtime by default and signs with the Keychain identity. No private
@@ -133,17 +139,20 @@ the build environment, Tauri reports that notarization was skipped; the next ste
 performs it explicitly using Keychain.
 
 The app is in `src-tauri/target/universal-apple-darwin/release/bundle/macos/`.
-The disk image is in the sibling `dmg/` directory. Verify the actual output before
-uploading it:
+The sibling `dmg/` directory holds a disk image too, with the `bundle_dmg.sh`
+script and volume icon Tauri made it with. That disk image was packaged before
+the app was notarized, so it is never a release asset; the release disk image is
+packaged later from the stapled app, with the same script. Verify the app before
+submitting it:
 
 ```sh
-GUACA_APP=src-tauri/target/universal-apple-darwin/release/bundle/macos/Guaca.app
-GUACA_DMG="src-tauri/target/universal-apple-darwin/release/bundle/dmg/Guaca_${GUACA_VERSION}_universal.dmg"
+GUACA_BUNDLE=src-tauri/target/universal-apple-darwin/release/bundle
+GUACA_APP="$GUACA_BUNDLE/macos/Guaca.app"
+GUACA_OUT="$HOME/guaca-releases/v$GUACA_VERSION-$(git rev-parse --short=7 "$GUACA_SOURCE")"
+mkdir -p "$GUACA_OUT"
 codesign --verify --deep --strict --all-architectures --verbose=2 "$GUACA_APP"
 codesign --display --verbose=4 "$GUACA_APP"
 lipo -archs "$GUACA_APP/Contents/MacOS/guac"
-codesign --verify --verbose=2 "$GUACA_DMG"
-hdiutil verify "$GUACA_DMG"
 ```
 
 The app's
@@ -154,10 +163,20 @@ signature by default.
 
 ## Notarize and verify
 
-Submit the signed disk image. Apple's service checks the app inside it too:
+A stapled ticket lives inside the file it was stapled to. Packaging an app copies
+the ticket it already has, and stapling it afterwards never reaches the copy
+already packaged. So the order is fixed: notarize and staple the app, package that
+stapled app into the disk image, then notarize and staple the disk image. Tauri's
+build packages the app before any of this, which is why its disk image is not used.
+
+### Notarize and staple the app
+
+`notarytool` takes an app as a zip archive. Make one with `ditto` and submit it:
 
 ```sh
-xcrun notarytool submit "$GUACA_DMG" --keychain-profile guaca-notary \
+GUACA_APP_ZIP="$GUACA_OUT/Guaca.app.zip"
+ditto -c -k --keepParent "$GUACA_APP" "$GUACA_APP_ZIP"
+xcrun notarytool submit "$GUACA_APP_ZIP" --keychain-profile guaca-notary \
   --no-progress --output-format json --wait --timeout 10m
 ```
 
@@ -177,41 +196,131 @@ that ID first. A local SIGBUS occurred during the initial upload; one retry with
 progress disabled and S3 acceleration disabled succeeded:
 
 ```sh
-xcrun notarytool submit "$GUACA_DMG" --keychain-profile guaca-notary \
+xcrun notarytool submit "$GUACA_APP_ZIP" --keychain-profile guaca-notary \
   --no-progress --no-s3-acceleration --output-format json --wait --timeout 10m
 ```
 
 Use this retry only for an apparent upload/client failure, not an ordinary
 `In Progress` response after a confirmed upload. If the retry also fails, retain
 both IDs and diagnose the failure instead of submitting in a loop. Preserve the
-accepted submission's JSON log locally, and inspect any reported issues.
+accepted submission's JSON log locally, and inspect any reported issues. These
+rules hold for the disk image's submission below as well.
+
+After acceptance, staple the app itself. The zip was only the upload and cannot
+carry a ticket:
+
+```sh
+xcrun stapler staple "$GUACA_APP"
+xcrun stapler validate "$GUACA_APP"
+```
+
+### Package the stapled app
+
+Run the script Tauri generated on the stapled app, with the arguments Tauri passes
+it under `CI=true`. `--skip-jenkins` skips the AppleScript step, so packaging
+drives no Finder window. That step is the only reader of the icon positions,
+the window size and `--hide-extension`, so those arguments have no effect here
+and are kept only to match Tauri's own call. The disk image opens with Finder's
+default arrangement, as the build's own disk image does. The volume name, the
+volume icon and the link to Applications are still applied:
+
+```sh
+GUACA_DMG="$GUACA_OUT/Guaca_${GUACA_VERSION}_universal.dmg"
+rm -f "$GUACA_DMG"
+(
+  cd "$GUACA_BUNDLE/macos"
+  ../dmg/bundle_dmg.sh --skip-jenkins --volname Guaca \
+    --icon Guaca.app 180 170 --app-drop-link 480 170 \
+    --window-size 660 400 --hide-extension Guaca.app \
+    --volicon ../dmg/icon.icns "$GUACA_DMG" Guaca.app
+)
+codesign --force --timestamp \
+  --sign 'Developer ID Application: Robert Welch (LN79XLHFLT)' "$GUACA_DMG"
+codesign --verify --verbose=2 "$GUACA_DMG"
+hdiutil verify "$GUACA_DMG"
+```
+
+### Notarize and staple the disk image
+
+Submit the signed disk image under the same rules as the app:
+
+```sh
+xcrun notarytool submit "$GUACA_DMG" --keychain-profile guaca-notary \
+  --no-progress --output-format json --wait --timeout 10m
+```
 
 After acceptance, attach the ticket and check Gatekeeper:
 
 ```sh
 xcrun stapler staple "$GUACA_DMG"
 xcrun stapler validate "$GUACA_DMG"
-xcrun stapler staple "$GUACA_APP"
-xcrun stapler validate "$GUACA_APP"
 spctl --assess --type open --context context:primary-signature --verbose=2 "$GUACA_DMG"
-spctl --assess --type execute --verbose=2 "$GUACA_APP"
-xcrun syspolicy_check distribution "$GUACA_APP"
 shasum -a 256 "$GUACA_DMG"
 ```
 
-Mount the final DMG read-only and run the signature, architecture, and Gatekeeper
-checks against the `Guaca.app` inside it, then detach the volume. Stapling the
-separate build-directory app does not modify the app already packaged in the DMG.
 Do not repack the DMG after notarization; changing it requires a new submission.
 
+### Check the app inside the final disk image
+
+This check is required. Mount the final DMG read-only and check the `Guaca.app`
+inside it, which is the copy a user drags into Applications:
+
+```sh
+GUACA_MOUNT="$(mktemp -d /private/tmp/guaca-mount.XXXXXX)"
+hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "$GUACA_MOUNT" "$GUACA_DMG"
+xcrun stapler validate "$GUACA_MOUNT/Guaca.app"
+codesign --verify --deep --strict --all-architectures --verbose=2 "$GUACA_MOUNT/Guaca.app"
+lipo -archs "$GUACA_MOUNT/Guaca.app/Contents/MacOS/guac"
+spctl --assess --type execute --verbose=2 "$GUACA_MOUNT/Guaca.app"
+xcrun syspolicy_check distribution "$GUACA_MOUNT/Guaca.app"
+cmp "$GUACA_APP/Contents/MacOS/guac" "$GUACA_MOUNT/Guaca.app/Contents/MacOS/guac"
+hdiutil detach "$GUACA_MOUNT"
+```
+
+`stapler validate` must exit 0 and print, with the mount's own path:
+
+```text
+Processing: /private/tmp/guaca-mount.XXXXXX/Guaca.app
+The validate action worked!
+```
+
+Exit 65 with `Guaca.app does not have a ticket stapled to it.` means the disk
+image was packaged from an app that was not yet stapled. Stop, package the
+stapled app again, and submit the new disk image. Nothing else stands in for this
+check. A stapled app in the build directory is a different copy, and stapling it
+after packaging changes nothing in the image. A Gatekeeper pass is not evidence
+either: online, `spctl` finds the ticket through Apple's lookup and accepts an
+app that carries none, so the defect stays hidden until the app is opened
+without a connection. Two releases were built with this defect while every
+other check passed, and one of them shipped.
+
 The app assessment should report `accepted` and `source=Notarized Developer ID`.
-Test the final disk image as a real download on a clean Mac or VM: open it in
-Finder, drag Guaca into Applications, and launch it with Gatekeeper enabled.
-Confirm first-run settings work without cloning the repo, Node, or Rust. The
-`claude` program for the Claude provider is included in the backend image; its
-sign-in must be set up on the backend. Test **On this Mac** with Docker and **Remote host** against
-a matching host. A universal build still needs a launch check on both Intel
-and Apple Silicon.
+
+### Check the download on a second Mac
+
+Before publishing, a clean Mac or VM that did not build the release downloads the
+draft's assets and checks them on its own, without relying on the build Mac's
+results:
+
+1. The disk image matches its checksum: `shasum -a 256 -c` on the downloaded
+   `.sha256` file.
+2. The disk image passes `hdiutil verify`, `xcrun stapler validate`, and the
+   `spctl --type open` assessment above.
+3. Mounted read-only, the app inside it passes `xcrun stapler validate` with the
+   output above and exit 0, and the signature, architecture and Gatekeeper checks
+   from the previous section. A stapled app elsewhere or a Gatekeeper pass does
+   not replace the staple check.
+4. Opened in Finder, Guaca drags into Applications and launches with Gatekeeper
+   enabled. First-run settings work without cloning the repo, Node, or Rust.
+   The `claude` program for the Claude provider is included in the backend
+   image; its sign-in must be set up on the backend.
+5. **On this Mac** works with Docker, and **Remote host** works against a
+   matching host.
+6. A universal build launches on both Intel and Apple Silicon.
+7. The downloaded `guaca-release.json` verifies against `release-keys.pub` with
+   its `.sig`, and names the released version, the source commit and the
+   backend image digest. Use the check in
+   [Release checks in browser and desktop](#release-checks-in-browser-and-desktop).
 
 ## Upload manually to GitHub Releases
 
@@ -284,9 +393,10 @@ reporting success. After any write, use `gh release view` again and verify the
 expected draft state, source SHA, notes, filenames, sizes, and uploaded asset
 SHA-256 digests. Download and hash the assets if GitHub does not return digests.
 
-Keep the final stapled DMG, checksum, notes, source SHA, backend digest, build
-logs, and notarization receipt in an ignored directory such as
-`src-tauri/target/releases/<source-sha>/` before removing the build worktree.
+Keep the final stapled DMG, checksum, manifest pair, notes, source SHA, backend
+digest, build logs, and both notarization receipts in `$GUACA_OUT`,
+`~/guaca-releases/v<version>-<short sha>/`. It is outside the build worktree,
+so removing the worktree leaves them in place.
 Only the DMG and checksum belong in release assets. Report the absolute local
 artifact directory and release URL to the operator.
 
@@ -327,7 +437,7 @@ after recording the image digest:
 
 ```sh
 GUACA_BACKEND_IMAGE=ghcr.io/madebywelch/guaca/guacad@sha256:THE_DIGEST \
-  node scripts/release-manifest.mjs /path/to/artifacts/guaca-release.json
+  node scripts/release-manifest.mjs "$GUACA_OUT/guaca-release.json"
 ```
 
 The generator verifies the frontend, Cargo and desktop versions agree and
@@ -336,10 +446,33 @@ exact bytes it writes with the Ed25519 key at
 `~/.config/guaca/release-signing-key.pem` (override with
 `GUACA_RELEASE_SIGNING_KEY=/path/to/key.pem`), and refuses to write anything
 when that key's public half is not in `release-keys.pub`, because no updater
-would install the release. Upload both files alongside the verified DMG and
-checksum before publishing the release. A release without the signature is
-shown as available and refused by every box's updater, which says so; a box
-cannot install it until a signed release follows.
+would install the release.
+
+Check a downloaded pair the way an updater does, from a checkout of the release
+tag so `release-keys.pub` is the one that release ships. Set `GUACA_DOWNLOAD` to
+the directory holding the two files. The command exits nonzero unless the
+signature verifies against `release-keys.pub` and the manifest names this
+version and the tag's commit, and it prints the backend image the manifest pins.
+That image must equal the digest recorded for the release:
+
+```sh
+node --input-type=module -e '
+import { readFileSync } from "node:fs";
+import { trusted } from "./scripts/release-manifest.mjs";
+const [dir, version, commit] = process.argv.slice(1);
+const bytes = readFileSync(dir + "/guaca-release.json");
+const said = readFileSync(dir + "/guaca-release.json.sig", "utf8");
+if (!trusted(bytes, said, readFileSync("release-keys.pub", "utf8"))) throw new Error("The signature does not verify against release-keys.pub.");
+const { version: named, commit: built, image } = JSON.parse(bytes);
+if (named !== version || built !== commit) throw new Error("The manifest names " + named + " at " + built + ".");
+console.log(image);
+' "$GUACA_DOWNLOAD" "$GUACA_VERSION" "$(git rev-parse "$GUACA_TAG^{commit}")"
+```
+
+Upload both files alongside the verified DMG and checksum before publishing the
+release. A release without the signature is shown as available and refused by
+every box's updater, which says so; a box cannot install it until a signed
+release follows.
 
 The key is the one thing that lets a box install a release, so it is not in
 this repository and should not live only on the release machine. Keep a copy

@@ -28,8 +28,9 @@ before following the relative documentation link.
 
 Use a clean detached worktree at the recorded full SHA. Run `scripts/ci.sh` and
 relevant live checks for changed integrations; record real results. Build the
-universal DMG with locked dependencies, not `scripts/install.sh`, which installs
-and may re-sign the operator's local app.
+universal app with locked dependencies and `CI=true`, which keeps Tauri's disk
+image step from driving Finder, not `scripts/install.sh`, which installs and may
+re-sign the operator's local app.
 
 The local signing identity is `Developer ID Application: Robert Welch (LN79XLHFLT)`.
 Verify it is still valid using `security find-identity -v -p codesigning`.
@@ -43,12 +44,24 @@ pulls and pin `GUACA_BACKEND_IMAGE` to its digest for distribution. A signed app
 with an unavailable image cannot complete local setup. A draft can document that
 unresolved condition; signing is not evidence that Docker or remote-host flows work.
 
-Submit the signed DMG with `notarytool`, retain its ID, and require acceptance.
-A pending submission is not a reason to upload again. The release procedure
-includes the bounded retry for an upload crash. Staple and validate the DMG and
-app, then verify the app mounted from the final DMG. Create the checksum after
-stapling. Keep artifacts and receipts under an ignored directory named for the
-source revision.
+A ticket stapled to the app after it was packaged never reaches the packaged
+copy, so the order is fixed. Notarize the app first as a zip, retain each
+submission ID, and require acceptance. A pending submission is not a reason to
+upload again. The release procedure includes the bounded retry for an upload
+crash. Staple and validate the app, then package that stapled app into the
+release DMG with Tauri's generated `bundle_dmg.sh` and `--skip-jenkins`. The
+DMG the Tauri build writes holds the app from before notarization and is never
+uploaded. Sign, notarize, staple and validate the release DMG.
+
+Then mount the final DMG read-only and run `xcrun stapler validate` on the
+`Guaca.app` inside it. It must print "The validate action worked!" and exit 0;
+exit 65, "does not have a ticket stapled to it", means the DMG was packaged too
+early. This check is required. A stapled app in the build directory is a
+different copy, and Gatekeeper accepts an unstapled app through its online
+lookup, so neither stands in for it. The second-Mac download check repeats it.
+Create the checksum after stapling. Keep artifacts and receipts in
+`~/guaca-releases/v<version>-<short sha>/`, outside the build worktree, so
+removing the worktree does not delete them.
 
 ## Upload and report
 
