@@ -55,8 +55,6 @@ function input(over: Partial<SearchInput> = {}): SearchInput {
 
 describe("score", () => {
   it("ranks by where the match falls, not by whether there is one", () => {
-    // Somebody typing "man" wants Manager, not the message that says
-    // "command". Both contain it; only one is what was meant.
     const name = score("Manager", "man");
     const inside = score("she ran the command herself", "man");
     expect(name).toBeGreaterThan(inside);
@@ -147,8 +145,6 @@ describe("searchResults", () => {
       input({ query: "budget", agents: [agent("Chef")], groups: [group("Budget")], hits }),
     );
     const kinds = new Set(results.map((r) => r.kind));
-    // Seven of the eight. No agent is called Budget, and "Budget settings" is,
-    // so the action for the group is in here and the agent row is not.
     expect(kinds).toEqual(
       new Set(["messages", "files", "links", "routines", "artifacts", "groups", "actions"]),
     );
@@ -165,8 +161,6 @@ describe("searchResults", () => {
           channelId: "id-Chef",
           from: { kind: "human" },
           to: { kind: "agent", id: "id-Chef" },
-          // Newer than the agent has ever been active, so recency alone would
-          // put this first. Scoring has to win that.
           excerpt: "ask the Manager about it",
           createdAt: NOW,
         },
@@ -191,7 +185,6 @@ describe("searchResults", () => {
   });
 
   it("keeps a deleted agent out of the results but still uses its name", () => {
-    // It is not somewhere you can go, and it is still who sent the message.
     const ghost = agent("Ghost", { lifecycle: "terminated" });
     const hits: SearchHits = {
       ...NOTHING,
@@ -235,16 +228,12 @@ describe("searchResults", () => {
   });
 
   it("has nothing that deletes, pauses or sends", () => {
-    // A list you drive by typing and pressing Enter is the wrong place to keep
-    // an action you cannot take back.
     const results = searchResults(input({ agents: [agent("Chef")], groups: [group("Kitchen")] }));
     const verbs = results.map((r) => r.action.do);
     expect(verbs.every((v) => !/delete|clear|pause|send|remove/i.test(v))).toBe(true);
   });
 
   it("shows the newest of everything before anybody types", () => {
-    // The palette opens on an empty query, and an empty list there reads as a
-    // workspace with nothing in it.
     const agents = [agent("Chef"), agent("Manager")];
     const results = searchResults(
       input({ query: "", agents, lastActive: { "id-Manager": NOW, "id-Chef": NOW - 5000 } }),
@@ -253,8 +242,6 @@ describe("searchResults", () => {
   });
 
   it("keeps a store hit even when this side would score it zero", () => {
-    // The store already decided it matched. Dropping it here would be the
-    // search disagreeing with itself in front of the operator.
     const hits: SearchHits = {
       ...NOTHING,
       messages: [
@@ -304,26 +291,16 @@ describe("searchResults", () => {
     };
     const rows = inScope(searchResults(input({ agents: [agent("Chef")], hits })), "routines");
 
-    // A routine the operator named is titled by the name; one an agent set for
-    // itself falls back to its instruction. Which field becomes the title is
-    // this module's decision, so it is asserted literally.
     expect(rows.map((r) => r.title).sort()).toEqual(["Watering", "one off"]);
 
-    // The wording is not: it comes from the same helpers the schedule panel
-    // uses, and a palette that phrased a cadence its own way would be a second
-    // place to fix when that phrasing changes.
     expect(rows.find((r) => r.title === "Watering")?.meta).toBe(describeTrigger("every:7200", NOW));
     expect(rows.find((r) => r.title === "one off")?.meta).toBe(describeTrigger("once", NOW));
     expect(rows[0]?.detail).toBe("Chef");
 
-    // The schedule lives in the panel beside the conversation now, so a hit
-    // opens the channel rather than the profile dialog it used to be in.
     expect(rows[0]?.action).toEqual({ do: "openChannel", agentId: "id-Chef" });
   });
 
   it("gives every result a key of its own", () => {
-    // Two rows sharing a key make React reuse one of them, and the palette
-    // draws a file where a message should be.
     const hits: SearchHits = {
       ...NOTHING,
       links: [

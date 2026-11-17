@@ -1,4 +1,3 @@
-//! Native client wiring. Agent execution belongs exclusively to guacad.
 use crate::host::{Connection, LocalHost, Status};
 use crate::tray::{self, Tray};
 use std::sync::Arc;
@@ -57,12 +56,10 @@ async fn open_docker() -> Result<(), String> {
     }
     Err("Open Docker Desktop from your applications, then check again.".into())
 }
-/// What macOS will do with a banner from this app; `None` off macOS.
 #[tauri::command]
 async fn notification_access() -> Option<crate::notifications::Permission> {
     crate::notifications::current().await
 }
-/// The same, after asking if macOS never has.
 #[tauri::command]
 async fn ask_notification_access() -> Option<crate::notifications::Permission> {
     crate::notifications::ask().await
@@ -71,8 +68,6 @@ async fn ask_notification_access() -> Option<crate::notifications::Permission> {
 async fn open_notification_settings() -> Result<(), String> {
     crate::notifications::open_settings().await
 }
-/// A banner handed to macOS: true once macOS has it, an error if it refused,
-/// false off macOS, where the window raises it through the plugin.
 #[tauri::command]
 async fn show_notification(
     app: tauri::AppHandle,
@@ -112,7 +107,6 @@ async fn report_presence(app: tauri::AppHandle, presence: Option<crate::menubar:
         tray.feed(presence);
     }
 }
-/// The window's host, which the menu bar panel is made or reloaded to show.
 #[tauri::command]
 async fn report_host(
     app: tauri::AppHandle,
@@ -172,10 +166,6 @@ pub fn run() {
         .init();
     crate::programs::adopt_operator_path();
     let builder = tauri::Builder::default();
-    // A launch the person made comes forward because macOS brings it forward.
-    // Asked to on top of that, the app also took the front from a launch that
-    // asked to stay back, such as a login item, an installer's open -g, or the
-    // probe: whatever was being typed into lost the keyboard.
     #[cfg(target_os = "macos")]
     let builder = builder.activate_ignoring_other_apps(false);
     builder

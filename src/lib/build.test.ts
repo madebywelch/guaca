@@ -24,9 +24,6 @@ describe("buildLabel", () => {
   });
 
   it("is built from a version and a commit, which is what the defines are for", () => {
-    // Guards the wiring rather than the value: an undefined `__VERSION__` is a
-    // config that stopped substituting, and every other test here would still
-    // pass while About drew a dash forever.
     expect(typeof VERSION).toBe("string");
     expect(VERSION).toMatch(/^\d+\.\d+\.\d+/);
     expect(typeof COMMIT).toBe("string");

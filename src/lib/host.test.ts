@@ -1,17 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-/**
- * What to check when the host does not answer, in the words of the workspace
- * this page shows.
- *
- * Three arrangements and three answers, and they are three files here because
- * the module reads which host it is in once, on import: the setup file gives
- * jsdom Tauri's bridge, so the desktop is what a static import of `./host`
- * finds. A browser is the same import with the bridge taken off, and the
- * desktop pointed at a box is a box on record when it is made.
- */
 const REMOTE = "guaca.workspace.remote";
-/** The bridge the setup file gives every suite, put back after a test takes it. */
 const BRIDGE = (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 
 afterEach(() => {
@@ -62,8 +51,6 @@ describe("what to check when nothing answers", () => {
   });
 
   it("is the host, for a browser, which cannot tell a box from a container", async () => {
-    // A browser only knows the address it was opened with: naming Docker for a
-    // server in another country is the wrong afternoon for somebody.
     delete (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
     vi.resetModules();
     const { unreachableHint } = await import("./host");
@@ -88,9 +75,6 @@ describe("which host the bar names, and whether its build agrees", () => {
   });
 
   it("is a box only when the chooser says the host is remote", async () => {
-    // The desktop reaches a container on this Mac and a box by the same kind
-    // of address, so the stored mode is the only thing that can tell them
-    // apart; the address alone would call Docker a server.
     window.localStorage.setItem(
       REMOTE,
       JSON.stringify({ origin: "https://box.example:8787", token: "t" }),
@@ -121,8 +105,6 @@ describe("which host the bar names, and whether its build agrees", () => {
 
   it("says the drift in words, because a color is not a difference everybody reads", async () => {
     const { hostLabel } = await import("./host");
-    // The same version on two commits is the case the bar used to draw as a
-    // bare hash beside a version that otherwise read "same".
     const other = hostLabel({
       place: "thisMac",
       drift: "otherBuild",
@@ -153,18 +135,13 @@ describe("which host the bar names, and whether its build agrees", () => {
 
   it("says when the host was last heard from, instead of a build it is not running", async () => {
     const { hostLabel } = await import("./host");
-    // Two in the afternoon on a Tuesday, local: what the transcript's margin
-    // would write for a message, because these are the two times on screen.
     const at = new Date(2026, 10, 3, 14, 32).getTime();
     const gone = hostLabel({ place: "remote", drift: "same", host: null, lastHeard: at });
     expect(gone.text).toMatch(/^Remote host · last heard \d{1,2}:\d{2}/);
-    // The hover says the same time the line does, and what it means.
     const said = /last heard (.+)$/.exec(gone.text)?.[1];
     expect(said).toBeTruthy();
     expect(gone.title).toContain(said!);
     expect(gone.title).toContain("has not answered since");
-    // A skew is a fact about the build two halves are running, and this row is
-    // not claiming to know either while nothing is arriving.
     expect(gone.drift).toBe(false);
     expect(gone.text).not.toContain("build");
   });
@@ -175,8 +152,6 @@ describe("which host the bar names, and whether its build agrees", () => {
     expect(same.text).toBe("This Mac");
     expect(same.drift).toBe(false);
     expect(same.title).toBe("This Mac runs Guaca 0.2.0, the same build as this app.");
-    // A host old enough to answer without a version says nothing it does not
-    // know, and never words a drift it could not compare.
     const old = hostLabel({
       place: "thisMac",
       drift: "unknown",
@@ -187,15 +162,6 @@ describe("which host the bar names, and whether its build agrees", () => {
   });
 });
 
-/**
- * The two sentences a pane about the runtime has to get right.
- *
- * `hostPlace` names three arrangements and the bar draws all three, but a
- * sentence about where the runtime is or what this client holds of it was
- * written when there was only one: "this machine", and "this app keeps the
- * token". Both are false from a browser, and About and Account are exactly
- * where somebody goes to learn what is on which side of the wire.
- */
 describe("the host, said in a sentence", () => {
   it("is this Mac only while the runtime is in this window", async () => {
     const { hostAt } = await import("./host");
@@ -204,8 +170,6 @@ describe("the host, said in a sentence", () => {
 
   it("is your host for the two arrangements where it is somewhere else", async () => {
     const { hostAt } = await import("./host");
-    // A desktop window showing a box and a browser on one are the same fact
-    // about which machine holds the keys, and neither is this one.
     expect(hostAt("remote")).toBe("your host");
     expect(hostAt("browser")).toBe("your host");
   });
@@ -213,8 +177,6 @@ describe("the host, said in a sentence", () => {
   it("is a cookie and no token, for a browser", async () => {
     const { clientKeeps } = await import("./host");
     const said = clientKeeps({ desktop: false, attached: false });
-    // #258 moved the session into an HttpOnly cookie the daemon sets, so there
-    // is no token for a page to keep and none for a script to find.
     expect(said).toContain("a cookie the host sets");
     expect(said).toContain("the host's token is not stored here");
     expect(said).not.toContain("keeps the host's address");

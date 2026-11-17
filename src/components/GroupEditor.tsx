@@ -1,18 +1,3 @@
-/**
- * A group's name, its wall, and the settings its agents run on.
- *
- * Sectioned like Settings, and for the same reason: a group now decides who
- * pays for its turns, which model answers them and how far a conversation may
- * run, which is more than one scroll can hold without the name and the delete
- * button ending up a page apart. Every piece of state lives in the shell, so
- * changing section cannot discard a half-typed endpoint.
- *
- * Everything except the name is an override, and blank means inherit. That is
- * why the placeholders show what the app would use instead of a value: an
- * operator has to be able to tell "this group uses the app model" apart from
- * "this group pins that exact model".
- */
-
 import { useEffect, useRef, useState } from "react";
 
 import { useDismiss } from "../lib/dismiss";
@@ -40,14 +25,11 @@ import { ProviderPresets, SubscriptionModel } from "./ProviderFields";
 import { SkillList } from "./SkillList";
 import { ToolList } from "./ToolList";
 
-/** Every hour a group can tidy at, midnight first. */
 const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
 
 interface Props {
-  /** Absent means create. */
   group?: Group;
   onClose: () => void;
-  /** Told which section is open, so the host can tell an agent what is on screen. */
   onSection?: (section: string) => void;
 }
 
@@ -79,17 +61,10 @@ const SECTION_LABELS: Record<Section, string> = {
   transfer: "Import / export",
 };
 
-/**
- * The sections that are about something attached to a crew, so a crew has to
- * exist first. A sign-in and a credential both have to belong to something,
- * and there is no row to hang either on until the group is created.
- */
 const NEEDS_GROUP: readonly Section[] = ["plugins", "secrets", "skills", "activity", "permissions"];
 
-/** What a group says when it has no opinion about who pays. */
 const INHERIT = "inherit";
 
-/** A number an operator may leave blank, as it is typed and as it is stored. */
 const asText = (value: number | null | undefined) => (value === null ? "" : String(value ?? ""));
 const asNumber = (text: string) => (text.trim() ? Number(text) : null);
 
@@ -118,8 +93,6 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
     group?.inference.reasoningEffort ?? null,
   );
   const [timeout, setTimeoutSecs] = useState(asText(group?.inference.requestTimeoutSecs));
-  // Null until the operator types, because absent and blank are different
-  // instructions: one keeps the stored key, the other clears it.
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [tidy, setTidy] = useState<GroupTidy>(group?.tidy ?? { on: false, hour: 3 });
   const [limits, setLimits] = useState<Record<string, string>>(() =>
@@ -143,9 +116,6 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
 
   useDismiss(onClose);
 
-  // Read when the pane that shows it is opened, not on mount: a group's name is
-  // what most edits here are, and a status nobody is looking at is a round trip
-  // spent for nothing.
   useEffect(() => {
     if (section !== "provider" || subscription) return;
     let live = true;
@@ -172,8 +142,6 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
       reasoningEffort,
       requestTimeoutSecs: asNumber(timeout),
     },
-    // Only sent once the operator has touched it. Sending the redacted hint
-    // back would overwrite the real key with its own placeholder.
     ...(apiKey !== null ? { apiKey } : {}),
     limits: {
       maxHops: asNumber(limits.maxHops ?? ""),
@@ -185,21 +153,6 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
     tidy,
   });
 
-  /**
-   * Whether anything here is waiting to be saved.
-   *
-   * Read across every pane, because the shell holds all of their state: an
-   * endpoint typed on Provider and left there while the operator signs a plugin
-   * in is still unsaved, and a Save that went missing on the way past is how it
-   * would get lost.
-   *
-   * What it buys is a foot that offers nothing on the two panes that stage
-   * nothing. A plugin is signed in and a secret is saved at the moment the
-   * operator does it, so a Save under either was a button offering to save work
-   * that had already been saved, beside a Cancel implying it could be taken
-   * back. A group that does not exist yet is always waiting: there is nothing
-   * to compare it with, and Create is the only way out that leaves one behind.
-   */
   const dirty =
     !group ||
     name !== group.name ||
@@ -209,24 +162,13 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
     subscriptionModel !== (group.inference.subscriptionModel ?? "") ||
     reasoningEffort !== (group.inference.reasoningEffort ?? null) ||
     timeout !== asText(group.inference.requestTimeoutSecs) ||
-    // Typed at all, including typed and then emptied, which is the one
-    // instruction that puts a group back on the app's key.
     apiKey !== null ||
     LIMITS.some((field) => limits[field.key] !== asText(group.limits[field.key])) ||
     tidy.on !== group.tidy.on ||
     tidy.hour !== group.tidy.hour;
 
-  /** Live agents. Terminated ones are not in the count and are not deleted twice. */
   const crew = group?.agentCount ?? 0;
 
-  /**
-   * The crew itself, for the plugins panel: who a plugin can be narrowed to.
-   *
-   * Read from the rail's own list rather than fetched, so a rename or a hiring
-   * is on this screen at the moment it is anywhere else. A terminated agent is
-   * left out because it cannot be given anything; the runtime drops its place
-   * on every plugin when it goes.
-   */
   const members = agents.filter(
     (agent) => agent.groupId === group?.id && agent.lifecycle !== "terminated",
   );
@@ -239,10 +181,6 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
         ? await api.updateGroup(group.id, draft())
         : await api.createGroup(draft());
       await refreshAgents();
-      // Read the limits back rather than leaving what was typed. The runtime
-      // clamps what it stores, so a relay depth of 40 is kept as 16, and
-      // closing over a box still reading 40 would say something untrue about
-      // what this crew runs on.
       setLimits(
         Object.fromEntries(LIMITS.map((field) => [field.key, asText(saved.limits[field.key])])),
       );
@@ -258,8 +196,6 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
     setBusy(true);
     setStatus(null);
     try {
-      // Sends what is on screen and resolves it over the app settings, so this
-      // reports on what this crew's next turn would actually do.
       setStatus({ tone: "ok", text: await api.testGroupConnection(group?.id ?? null, draft()) });
     } catch (caught) {
       setStatus({ tone: "error", text: errorMessage(caught) });
@@ -268,16 +204,6 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
     }
   };
 
-  /**
-   * Start fresh: the crew stays, everything it has accumulated goes.
-   *
-   * Transcripts, schedules, both stores and spend together, because clearing
-   * only the transcript left agents acting on a memory of a conversation that
-   * no longer existed and keeping appointments nobody could see the reason for.
-   * The working notes go for the same reason the memories do, and they are the
-   * half that says what the crew was in the middle of: left behind, every agent
-   * opens tomorrow waiting on somebody about a conversation nobody can read.
-   */
   const clear = async () => {
     if (!group) return;
     setBusy(true);
@@ -294,20 +220,6 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
     }
   };
 
-  /**
-   * The group, and whoever is still standing in it.
-   *
-   * One button rather than two, because "delete this crew" is one intent an
-   * operator arrives with and an empty group is the same act with nothing in
-   * the way. Two buttons would mean the one for a populated group had a single
-   * outcome, which was an error telling the operator to go and delete four
-   * agents by hand first.
-   *
-   * What changes is the confirmation, which names the count before it is
-   * pressed. The count is the roster's, so a group emptied elsewhere since the
-   * dialog opened takes the plain delete and a stale zero is refused by the
-   * runtime rather than quietly widened.
-   */
   const remove = async () => {
     if (!group) return;
     setBusy(true);
@@ -318,23 +230,17 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
       await refreshAgents();
       onClose();
     } catch (caught) {
-      // The last group must remain. Show the runtime's refusal without losing
-      // the operator's edits.
       setStatus({ tone: "error", text: errorMessage(caught) });
       setBusy(false);
     }
   };
 
-  /** Choosing an endpoint is also choosing to pay with a key, exactly as it is
-   *  in Settings: a group left following the app would have the operator fill
-   *  in a URL that nothing read, with no error to explain it. */
   const choose = (preset: Preset) => {
     setProvider("compatible");
     setBaseUrl(preset.baseUrl);
     if (preset.model) setModel(preset.model);
   };
 
-  /** What this group would run on if it said nothing, written for a person. */
   const inherited =
     settings?.provider === "chatgpt"
       ? `ChatGPT subscription · ${settings.subscriptionModel}`
@@ -346,13 +252,6 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
   const onClaude = provider === "claude";
   const onEndpoint = provider === "compatible";
 
-  /**
-   * The same sentence for whatever this crew is actually set to.
-   *
-   * Read from what is on screen rather than from what is stored, so the
-   * General pane is a summary of the edit in progress and not of the edit
-   * before it.
-   */
   const paying = onSubscription
     ? `ChatGPT subscription · ${subscriptionModel || settings?.subscriptionModel || ""}`
     : onClaude
@@ -402,9 +301,6 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
             ))}
           </div>
 
-          {/* The board brings its own scrolling and wants the whole pane, so
-              the pane stops being a padded column of prose for that one
-              section. See `.settings__pane--board`. */}
           <div
             className={
               section === "activity" ? "settings__pane settings__pane--board" : "settings__pane"
@@ -431,9 +327,6 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                   />
                 </label>
 
-                {/* A summary rather than more controls. Whatever is set lives
-                    one tab away, and the question this pane is opened with is
-                    what this crew is doing now. */}
                 <div className="field">
                   <span className="field__label">Turns paid for by</span>
                   <span className="field__hint">{paying}</span>
@@ -448,9 +341,6 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                   </span>
                 </div>
 
-                {/* The hour is drawn the way a routine's time is, so the two
-                    never disagree on a twelve or a twenty-four hour clock. It
-                    is kept while the switch is off. */}
                 <div className="field field--row">
                   <label className="field--row">
                     <input
@@ -508,10 +398,6 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                   </span>
                 </button>
 
-                {/* Its own block, above the endpoint list, because it is not an
-                    endpoint. The sign-in itself belongs to the app: it is one
-                    credential on this machine, and a group only decides whether
-                    to spend it. */}
                 <div className="preset preset--plain" aria-current={onSubscription}>
                   <span className="preset__text">
                     <span className="preset__name">ChatGPT subscription</span>
@@ -541,12 +427,6 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                     ))}
                 </div>
 
-                {/* Said in both states, not only when nobody is signed in.
-                    Whichever it is, this row is the whole subscription as far
-                    as a group is concerned, and an operator whose turns are
-                    being refused reads "signed in" here and has nothing to
-                    press: signing out and back in is two panes away and this
-                    was the only place saying so. */}
                 <p className="hint">
                   Signing in and out happens in Settings → Provider. There is one sign-in on this
                   machine and every group spends the same one.
@@ -567,10 +447,6 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                   />
                 )}
 
-                {/* Beside the other subscription and above the endpoint list,
-                    for the reason that one gives. No sign-in state to draw and
-                    no model to pick: both belong to the program, and a group
-                    only decides whether its turns are spent through it. */}
                 <div className="preset preset--plain" aria-current={onClaude}>
                   <span className="preset__text">
                     <span className="preset__name">Claude subscription</span>
@@ -601,11 +477,6 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                   )}
                 </div>
 
-                {/* Said here rather than only in Settings, for the reason the
-                    subscription's hint above is said in both states: this row
-                    is the whole of Claude as far as a group is concerned, and
-                    an operator whose crew is ignoring its model field has
-                    nothing else on screen that would explain it. */}
                 <p className="hint">
                   Which model runs, and which account pays, are Claude's own settings. A model named
                   on this group or on one of its agents is not used while Claude is the provider.
@@ -713,10 +584,6 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
               </>
             )}
 
-            {/* What a crew can reach is signed in to once, here, and handing it
-                out is a second decision: a plugin can be narrowed to named
-                agents, because the one that files issues has no business
-                holding the account that issues refunds. Secrets have their own pane and agent grants. */}
             {section === "plugins" && group && (
               <>
                 <h3 className="settings__title">Connectors</h3>
@@ -795,10 +662,6 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
           </div>
         </div>
 
-        {/* What the second click costs, written where the operator is already
-            looking. The button below carries the count; this is the part a
-            count does not say: the machines are rented, and destroying them is
-            the half of a disband that cannot be undone. */}
         {group && confirmDelete && crew > 0 && (
           <div className="banner banner--error" style={{ margin: "0.75rem 1.35rem 0" }}>
             <span>
@@ -885,10 +748,6 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
               </button>
             ))}
           <span style={{ flex: 1 }} />
-          {/* Cancel only while there is something to cancel. With nothing
-              staged this button closes a dialog, and saying otherwise invites
-              the operator to think the plugin they just signed in goes with
-              it. */}
           <button type="button" className="btn" onClick={onClose}>
             {dirty ? "Cancel" : "Close"}
           </button>

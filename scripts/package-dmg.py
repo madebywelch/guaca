@@ -1,20 +1,4 @@
 #!/usr/bin/env python3
-"""Package a signed, stapled Guaca.app into the release disk image.
-
-    scripts/package-dmg.py path/to/Guaca.app path/to/Guaca_X.Y.Z_universal.dmg
-
-The image opens in Finder as a drag-to-install window: 660 by 400, large icons,
-Guaca on the left and Applications on the right. Finder reads that arrangement
-from the volume's .DS_Store. The usual way to get one is to open the mounted
-volume in Finder and arrange it with AppleScript, which takes over the screen
-of the Mac doing the release and needs permission to control Finder. This
-script writes the .DS_Store itself instead, so packaging opens no window and
-runs no AppleScript.
-
-The app is copied with ditto and compared afterward, so the image holds it
-byte for byte, stapled ticket included. The image is unsigned; the release
-procedure signs and notarizes it next.
-"""
 
 from __future__ import annotations
 
@@ -27,6 +11,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+USAGE = "scripts/package-dmg.py path/to/Guaca.app path/to/Guaca_X.Y.Z_universal.dmg"
+
 VOLUME = "Guaca"
 WINDOW = "{{10, 657}, {660, 400}}"
 ICON_SIZE = 128.0
@@ -34,9 +20,6 @@ TEXT_SIZE = 16.0
 APP_AT = (180, 170)
 APPLICATIONS_AT = (480, 170)
 
-# The .DS_Store is a buddy-allocated file holding one B-tree. Its blocks sit
-# where Finder put them in the 0.4.0 image, and its records decode to the ones
-# Finder wrote there; the gate holds them to that.
 HEADER = (0x0, 0x20)
 DSDB = (0x40, 0x20)
 NODE = (0x400, 0x400)
@@ -51,8 +34,6 @@ def address(block: tuple[int, int]) -> int:
 
 
 def free_blocks(offset: int, size: int, used: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    """The buddy allocator's free list: every largest aligned block that holds
-    nothing in use, found by halving whatever does."""
     inside = [u for u in used if offset <= u[0] < offset + size]
     if not inside:
         return [(offset, size)]
@@ -102,8 +83,6 @@ def location(point: tuple[int, int]) -> bytes:
 
 
 def layout(app_name: str) -> bytes:
-    """The window and icon records, keyed by file name only, so they hold for
-    any volume name; nothing in them refers to the volume."""
     window = {
         "ContainerShowSidebar": False,
         "ShowSidebar": False,
@@ -138,8 +117,6 @@ def layout(app_name: str) -> bytes:
     ])
 
 
-# A volume's own icon shows only when its root carries the custom-icon Finder
-# flag (kHasCustomIcon, byte 8 of FinderInfo).
 CUSTOM_ICON = "00" * 8 + "04" + "00" * 23
 
 
@@ -151,7 +128,6 @@ def hdiutil(*args: str) -> str:
 
 
 def snapshot(root: Path) -> dict[str, tuple]:
-    """Every file, link and directory under root, with what it holds."""
     seen: dict[str, tuple] = {}
     for path in sorted([root, *root.rglob("*")]):
         key = str(path.relative_to(root))
@@ -204,7 +180,7 @@ def package(app: Path, out: Path) -> None:
 
 def main(argv: list[str]) -> int:
     if len(argv) != 2:
-        print(__doc__.strip().splitlines()[2].strip(), file=sys.stderr)
+        print(USAGE, file=sys.stderr)
         return 2
     app, out = Path(argv[0]), Path(argv[1])
     if app.suffix != ".app" or not (app / "Contents/Info.plist").is_file():

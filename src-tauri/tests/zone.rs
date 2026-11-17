@@ -1,9 +1,3 @@
-//! The host's schedules in the operator's zone, once the host is given it.
-//!
-//! Its own binary because it sets `TZ` for the whole process: in the library's
-//! tests it would move the local clock under every other test that reads it.
-//! One test, so nothing reads the clock before the zone is set.
-
 use chrono::{NaiveDate, NaiveTime, TimeZone, Utc};
 use guac_lib::domain::decision::next_briefing;
 use guac_lib::domain::instant;
@@ -23,8 +17,6 @@ fn a_host_given_new_york_keeps_new_york_hours() {
     assert_eq!(next_briefing(at(2026, 11, 14, 8)), at(2026, 11, 14, 9));
     assert_eq!(next_briefing(at(2026, 11, 14, 10)), at(2026, 11, 14, 16));
 
-    // 2026-11-13 is a Friday. At 21:00 in New York it is already Saturday in
-    // UTC, which a host on UTC would have judged the weekday by.
     let friday = at(2026, 11, 13, 21);
     let next = Cadence::Weekdays.next_after(friday, friday + 1000).unwrap();
     assert_eq!(next, at(2026, 11, 16, 21), "Monday at 21:00 New York time");

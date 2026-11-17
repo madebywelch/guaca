@@ -29,8 +29,6 @@ const REV: WirePeer = { id: "rev", name: "Revenue Operations", color: "#8bbf6a",
 
 describe("why", () => {
   it("keeps what happened and drops the instructions to the model", () => {
-    // Guard refusals are written for a model reading them mid-turn: a label, a
-    // reason, and what to do instead. A chip wants the middle one.
     expect(
       why(
         "Refused: you already sent Chef this exact message in this run. Repeating it will not produce a different reply. Move on.",
@@ -46,9 +44,6 @@ describe("why", () => {
 
 describe("a system notice", () => {
   it("keeps its paragraphs apart rather than running the second onto the first", () => {
-    // The runtime writes a failure and then what the turn had already done as
-    // two paragraphs. Wrapped as normal text the break between them was gone
-    // and the two read as one sentence: "...exploded It had already made 2".
     const text =
       "Analyst could not reply: upstream exploded\n\nIt had already made 2 calls in this turn, listed above.";
     const { container } = render(<NoticeRow kind="upstreamError" text={text} />);
@@ -61,16 +56,10 @@ describe("a system notice", () => {
 });
 
 describe("a peer message arriving", () => {
-  /** What a note says, ignoring the live-only dots. */
   const said = (root: HTMLElement) =>
     [...root.querySelectorAll(".footnote__send")].map((one) => one.textContent);
 
   it("is announced as the line it settles into", () => {
-    // One message landing must not read as two events. The live row was a
-    // sentence with an arrow and no face, and the settled row a chip with a
-    // face and different words, so a message arriving moved, renamed itself and
-    // grew an avatar in one frame. Both are the same line of the same page now,
-    // and the only thing that changes is the dots giving way to the gist.
     const live = render(<WritingRow peer={GOV} />);
     const settled = render(
       <PeerBurstRow
@@ -88,9 +77,6 @@ describe("a peer message arriving", () => {
   });
 
   it("keeps a burst on one line, with the count it stands for", () => {
-    // The row is the page's apparatus: one line under the turn, however many
-    // peers were involved. A line apiece is the burial the burst was collapsed
-    // to fix in the first place.
     const { container } = render(
       <PeerBurstRow
         peers={[
@@ -109,7 +95,6 @@ describe("a peer message arriving", () => {
       "2 messages with Government Procurement",
       "Message from Revenue Operations",
     ]);
-    // And it is numbered, because a note is a position in a page.
     expect(container.querySelector(".footnote__number")?.textContent).toBe("2");
   });
 });

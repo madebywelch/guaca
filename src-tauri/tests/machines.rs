@@ -1,19 +1,3 @@
-//! The two places an agent can be given, against scripted control planes.
-//!
-//! A sixth suite, and it is here for the reason `plugins.rs` is here: nothing
-//! else in the build reaches a provider, so every other test passes with a turn
-//! renting a machine on every tool call. What that costs is not visible from
-//! inside the app. E2B charges for the second sandbox and says nothing; Kernel
-//! refuses the second browser by name, which arrives in a transcript as
-//! `Kernel rejected the request (409)` on every page an agent tries to open
-//! after its first.
-//!
-//! What is scripted is the far side, and only the control plane: creating,
-//! looking up, listing and deleting. Driving a browser is CDP on a socket the
-//! control plane hands out, and a machine is worked through envd at an address
-//! it hands out; neither is what these tests are about. Everything above the
-//! wire is the real `Runtime`, the real store and the real clients.
-
 mod harness;
 
 use std::collections::HashMap;
@@ -32,9 +16,6 @@ use guac_lib::runtime::guard::GuardLimits;
 
 use harness::*;
 
-// ---- scripted Kernel -----------------------------------------------------
-
-/// One browser the scripted provider is holding.
 #[derive(Debug, Clone)]
 struct Browser {
     id: String,
@@ -42,21 +23,11 @@ struct Browser {
     agent: String,
 }
 
-/// What the scripted Kernel has been asked to do, and what it did.
-///
-/// Counted per agent rather than in total, because one of these servers is
-/// shared by every test in the binary and a total is whatever order they
-/// happened to run in.
 #[derive(Debug, Default)]
 struct KernelBooks {
     profiles: Vec<String>,
-    /// Live browsers only. A deleted one frees its name, which is what the
-    /// real service does: an expired session's name is free to reuse and a
-    /// live one's is not.
     live: Vec<Browser>,
-    /// Every browser it ever made, oldest first, kept after a delete.
     made: Vec<Browser>,
-    /// The agent behind every conflict it answered.
     refused: Vec<String>,
 }
 
@@ -95,8 +66,6 @@ async fn kernel_profile(
     let name = body["name"].as_str().unwrap_or_default().to_string();
     let mut books = books.lock();
     if books.profiles.contains(&name) {
-        // What the real service answers, and what `ensure_profile` reads as
-        // the profile already being there.
         return refused("conflict", "profile name already exists in project");
     }
     books.profiles.push(name.clone());
@@ -159,11 +128,8 @@ async fn kernel_delete(
     }
 }
 
-// ---- scripted E2B --------------------------------------------------------
-
 #[derive(Debug, Default)]
 struct E2bBooks {
-    /// Every sandbox it ever made, as `(id, agent)`.
     made: Vec<(String, String)>,
 }
 
@@ -185,9 +151,6 @@ async fn e2b_create(
     let mut books = books.lock();
     let id = format!("sbx{}", books.made.len() + 1);
     books.made.push((id.clone(), agent));
-    // Both tokens, because a sandbox created secure and with public traffic
-    // restricted answers with both, and a client that lost them holds a
-    // machine it cannot reach.
     Json(json!({
         "sandboxID": id,
         "envdAccessToken": format!("envd-{id}"),
@@ -208,26 +171,11 @@ async fn e2b_timeout() -> StatusCode {
     StatusCode::NO_CONTENT
 }
 
-// ---- the fleet -----------------------------------------------------------
-
 struct Fleet {
     kernel: Arc<Mutex<KernelBooks>>,
     e2b: Arc<Mutex<E2bBooks>>,
 }
 
-/// Started once for the whole binary, on a runtime of its own.
-///
-/// Once, because the seam is an environment variable and a process has one
-/// environment: a server per test would leave the tests racing over where the
-/// providers are. Sharing costs nothing, because each test builds its own
-/// workspace and the ids and names everything here is keyed on come from a
-/// fresh store.
-///
-/// On its own runtime because `#[tokio::test]` builds a current-thread one per
-/// test and drops it at the end: a listener spawned on the first test's runtime
-/// stops accepting the moment that test returns, and the tests still running
-/// see a connection refused rather than a provider. This thread outlives all of
-/// them and drives nothing else.
 static FLEET: OnceLock<Fleet> = OnceLock::new();
 
 fn fleet() -> &'static Fleet {
@@ -240,7 +188,6 @@ fn fleet() -> &'static Fleet {
                 .expect("a runtime for the scripted providers");
             runtime.block_on(async move {
                 ready.send(start().await).expect("the test thread is waiting on this");
-                // Nothing else to do, and returning would drop the servers.
                 std::future::pending::<()>().await;
             });
         });
@@ -279,14 +226,9 @@ async fn listen(app: Router) -> String {
     format!("http://{addr}")
 }
 
-/// A workspace whose model is never called: every test here drives the
-/// provisioning path directly, which is the path a tool call reaches and the
-/// one no scripted model can exercise.
 async fn quiet() -> Stub {
     serve(|_| Script::Say("nothing to say".into())).await
 }
-
-// ---- browsers ------------------------------------------------------------
 
 #[tokio::test]
 async fn a_second_browse_in_one_turn_uses_the_browser_the_first_made() {
@@ -294,8 +236,6 @@ async fn a_second_browse_in_one_turn_uses_the_browser_the_first_made() {
     let stub = quiet().await;
     let h = harness_with_browser(&stub, &["Scout"], GuardLimits::default());
 
-    // The turn's own snapshot: read once, before anything is provisioned,
-    // exactly as `run_turn` reads it and holds it for every round after.
     let card = h.agent_named("Scout").unwrap();
     assert!(card.browser_id.is_none(), "a fresh agent is holding nothing");
 
@@ -330,9 +270,6 @@ async fn a_live_browser_no_row_points_at_is_adopted_rather_than_refused() {
     let card = h.agent_named("Stray").unwrap();
 
     let (_, orphan) = h.runtime.ensure_browser(&card).await.expect("the first browse");
-    // A crash between creating a browser and writing it down, or a row cleared
-    // while the browser was up: the browser is running, it is holding this
-    // agent's name, and nothing in the app can see it.
     h.runtime.store().set_agent_browser(card.id, None).unwrap();
 
     let (_, adopted) = h.runtime.ensure_browser(&card).await.expect("the browse after the crash");
@@ -353,8 +290,6 @@ async fn a_live_browser_no_row_points_at_is_adopted_rather_than_refused() {
         "and the row is written back, so the next turn does not have to find it again"
     );
 }
-
-// ---- computers -----------------------------------------------------------
 
 #[tokio::test]
 async fn a_second_command_in_one_turn_runs_on_the_machine_the_first_rented() {

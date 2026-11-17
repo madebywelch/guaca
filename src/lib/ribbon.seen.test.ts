@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import { anAgent, anApproval, anOutcome } from "../test-fixtures";
 import { layoutRibbon, type RibbonInput } from "./ribbon";
 
-/** Monday, November 16, 2026, local time. */
 const at = (day: number, hour: number, minute = 0) =>
   new Date(2026, 10, day, hour, minute).getTime();
 
@@ -23,8 +22,6 @@ function strip(over: Partial<RibbonInput>): RibbonInput {
 
 describe("the band after looking at one agent", () => {
   it("still holds every run nobody has seen", () => {
-    // Ines and Tomás finished overnight, unseen. Opening Noor just now marked
-    // Noor's run seen, and that must not push the band past the other two.
     const outcomes = [
       anOutcome({ agentId: "ines", startedAt: at(16, 2, 40), finishedAt: at(16, 2, 56) }),
       anOutcome({ agentId: "tomas", startedAt: at(16, 4), finishedAt: at(16, 4, 10) }),

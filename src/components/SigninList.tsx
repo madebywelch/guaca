@@ -8,30 +8,11 @@ interface Props {
   agent: AgentCard;
 }
 
-/**
- * What an agent is signed in to, and where. Read, not written.
- *
- * There is nothing to fill in here on purpose. Whatever holds the cookies
- * knows, so Guaca asks it rather than asking the operator to keep a list up to
- * date: sign in and it appears, log out and it goes. The list is also on every
- * peer's roster, which is what lets a crew route work to the one agent that can
- * do it.
- *
- * Each row says which of the agent's two places holds the session, and that is
- * not decoration. A computer and a browser have unrelated cookie jars, so an
- * operator looking at "LinkedIn" needs to know which window the agent will find
- * it in, and which one to sign in through next time.
- *
- * The scan runs when this opens and again whenever the agent has been working,
- * so the usual case is that it is already right by the time anyone looks.
- */
 export function SigninList({ agent }: Props) {
   const [signins, setSignins] = useState<Signin[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const now = useNow(30_000);
-  // Whether there is anything to ask. Either place can hold a session, so an
-  // agent that has only ever used the web is still worth scanning.
   const somewhere = Boolean(agent.sandboxId || agent.browserId);
 
   const load = useCallback(async () => {
@@ -47,8 +28,6 @@ export function SigninList({ agent }: Props) {
     void load();
   }, [load]);
 
-  // Asking the machine costs a round trip, so the stored answer is drawn first
-  // and corrected a moment later rather than leaving the panel empty.
   useEffect(() => {
     if (!somewhere) return;
     let canceled = false;
@@ -76,10 +55,6 @@ export function SigninList({ agent }: Props) {
   };
 
   if (signins === null) return <p className="field__hint">Loading sessions…</p>;
-  // Nothing to show and nothing to press: an agent with neither place cannot
-  // be signed in to anything, and a disabled Check beside a sentence saying so
-  // was a row the operator read on every new agent and could do nothing with.
-  // The row appears the moment a place is given, which is the answer.
   if (!somewhere) return null;
 
   return (

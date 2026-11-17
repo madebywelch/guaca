@@ -1,22 +1,3 @@
-//! Reaching a person with every window closed: what a push says, the request
-//! it travels as, and when to try again.
-//!
-//! The dispatcher offers what earns an interruption to every window, which
-//! reaches nobody while every window is closed. So for what it offers while
-//! the operator is away it also writes a second row, for an address the
-//! operator configured: an ntfy topic, which the free ntfy app shows on a
-//! phone, or any receiver that takes a JSON POST. Both are one POST of the
-//! same few lines; only the shape differs.
-//!
-//! Pure: no clock, no socket and no store. `runtime/outbox.rs` sends what this
-//! builds and records what came back.
-//!
-//! The address and the token are credentials. An ntfy topic on a public
-//! server is a password by another name, since anyone who knows it can read
-//! it. So nothing here puts either into text that is shown or logged: what a
-//! failure says is built from the status code alone, never from the error a
-//! client library formats, which names the address.
-
 use base64::Engine;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
@@ -24,47 +5,31 @@ use serde::{Deserialize, Serialize};
 use crate::domain::outbox::{Gathered, Kind};
 use crate::domain::outcome::Status as Ended;
 
-/// The two shapes a push can take.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Format {
-    /// A plain-text body with the title and the rest in headers, which is what
-    /// an ntfy server takes.
     #[default]
     Ntfy,
-    /// One JSON object, for Home Assistant, n8n, a chat bridge, or anything
-    /// else that takes a webhook.
     Json,
 }
 
-/// How much a push may say.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Content {
-    /// The agent's own line about what finished. It goes to an address the
-    /// operator chose, so it says what came of the work.
     #[default]
     Outcome,
-    /// Only that something finished, or failed, or is waiting: no names and
-    /// no lines, for an address the operator would rather not trust with them.
     Generic,
 }
 
-/// What a push says, decided when it is written. Fixed from then on, so a
-/// push switched to generic after it was written still says what it said;
-/// in exchange, a generic push never has the line stored anywhere.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Said {
     pub title: String,
     pub body: String,
 }
 
-/// What a push about this item says. `count` is how many rows the item
-/// carries: more than one only for gathered finished work.
 pub fn say(kind: Kind, item: &Gathered, count: usize, content: Content) -> Said {
     let said = |title: &str, body: &str| Said { title: title.into(), body: body.into() };
     match (kind, content) {
-        // A reminder names nothing anyone wrote, so it reads the same both ways.
         (Kind::Reminder, _) => said("Needs you", &item.body),
         (Kind::NeedsYou, Content::Outcome) => {
             said("Needs you", &format!("{}. {}", item.title, item.body))
@@ -86,8 +51,6 @@ pub fn say(kind: Kind, item: &Gathered, count: usize, content: Content) -> Said 
     }
 }
 
-/// An agent that closed with nothing written still finished, and ntfy shows a
-/// placeholder of its own for an empty body.
 fn or_title<'a>(body: &'a str, title: &'a str) -> &'a str {
     if body.trim().is_empty() {
         title
@@ -96,37 +59,26 @@ fn or_title<'a>(body: &'a str, title: &'a str) -> &'a str {
     }
 }
 
-/// One push, as the dispatcher reads it back to send it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Push {
-    /// The outbox row's id. Sent on every attempt, so a receiver that got the
-    /// first one and lost the answer can drop the second.
     pub id: String,
     pub kind: Kind,
     pub title: String,
     pub body: String,
-    /// The agent and group it is about, by name. None for gathered work and
-    /// reminders, and for generic content.
     pub agent: Option<String>,
     pub group: Option<String>,
-    /// How the run ended, for a push about one run.
     pub status: Option<Ended>,
     pub created_at: i64,
 }
 
-/// The header a receiver drops a repeat by.
 pub const DELIVERY_HEADER: &str = "X-Guaca-Delivery";
 
-/// A POST, built but not sent. Not `Debug`: it carries the token.
 #[derive(Clone, PartialEq)]
 pub struct Request {
     pub headers: Vec<(&'static str, String)>,
     pub body: String,
 }
 
-/// ntfy's scale is 1 to 5, with 3 its default. What needs the operator and
-/// what failed is one step up, which is a sound and a pop-over on a phone;
-/// finished work is the default.
 pub fn priority(kind: Kind) -> u8 {
     match kind {
         Kind::NeedsYou | Kind::Reminder | Kind::Failure => 4,
@@ -134,8 +86,6 @@ pub fn priority(kind: Kind) -> u8 {
     }
 }
 
-/// The request for one push. `token` is sent as a bearer token unless it
-/// already says which scheme it is; `link` is where a tap opens.
 pub fn request(format: Format, push: &Push, token: Option<&str>, link: Option<&str>) -> Request {
     let mut headers = vec![(DELIVERY_HEADER, push.id.clone())];
     if let Some(token) = token.map(str::trim).filter(|token| !token.is_empty()) {
@@ -171,8 +121,6 @@ pub fn request(format: Format, push: &Push, token: Option<&str>, link: Option<&s
     }
 }
 
-/// A pasted `Bearer tk_...` or `Basic ...` is used as it is; anything else is
-/// an access token, which is what ntfy issues.
 fn authorization(token: &str) -> String {
     let scheme = token.split_once(' ').map(|(scheme, _)| scheme.to_ascii_lowercase());
     match scheme.as_deref() {
@@ -181,9 +129,6 @@ fn authorization(token: &str) -> String {
     }
 }
 
-/// A header value a client will send. Line breaks would end the header, and
-/// an agent's name may not be ASCII, which not every client sends as is; ntfy
-/// reads RFC 2047 encoded words for exactly that.
 fn header_text(value: &str) -> String {
     let flat: String = value.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
     let flat = flat.trim();
@@ -194,69 +139,34 @@ fn header_text(value: &str) -> String {
     format!("=?UTF-8?B?{encoded}?=")
 }
 
-// ---- what came back, and what next ---------------------------------------
-
-/// How long a push is tried for. After a day it is news about yesterday, and
-/// For you still lists what it said.
 pub const GIVE_UP_MS: i64 = 24 * 60 * 60 * 1000;
 
-/// The waits after each failed attempt: 30 seconds, 2 minutes, 10 minutes,
-/// then an hour, and hourly from there until [`GIVE_UP_MS`].
 const BACKOFF_MS: [i64; 4] = [30_000, 2 * 60_000, 10 * 60_000, 60 * 60_000];
 
-/// How long a client waits for an answer before it counts as none.
 pub const TIMEOUT_SECS: u64 = 10;
 
-/// What an attempt got.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Answer {
-    /// A 2xx.
     Accepted,
-    /// Any other status. `retry_after_ms` is a 429's `Retry-After`, which is
-    /// in seconds on the wire.
     Refused { status: u16, retry_after_ms: Option<i64> },
-    /// No status at all.
     Unreachable(Unreachable),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unreachable {
-    /// Nothing answered within [`TIMEOUT_SECS`].
     Timeout,
-    /// Nothing accepted the connection: a wrong host, a wrong port, no network.
     Connect,
-    /// The address or the token cannot be put into a request as written.
     Invalid,
-    /// Anything else that ended the request before an answer.
     Other,
 }
 
-/// What to do with a row after an attempt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Next {
     Sent,
-    /// Try again at `at`. `error` is what the operator is shown meanwhile.
-    Again {
-        at: i64,
-        error: String,
-    },
-    /// Stop: the address refused in a way trying again will not change, or a
-    /// day has gone by.
-    Failed {
-        error: String,
-    },
+    Again { at: i64, error: String },
+    Failed { error: String },
 }
 
-/// Decides what follows an attempt. `attempts` counts this one.
-///
-/// A 4xx is the address or the token, and sending the same request again gets
-/// the same answer, so it fails at once. The exceptions are the two a server
-/// uses to say "not now": 408 and 429, and 429's `Retry-After` is honored. A
-/// 3xx is not followed, because following one would send the token wherever
-/// it points. Anything else, a 5xx or no answer, is tried again later.
-///
-/// At least once, not exactly once: an answer lost after the receiver took
-/// the push gets it sent again, which is why every attempt names the row.
 pub fn next(answer: Answer, attempts: u32, created_at: i64, now: i64) -> Next {
     let (error, wait) = match answer {
         Answer::Accepted => return Next::Sent,
@@ -287,8 +197,6 @@ fn backoff(attempts: u32) -> i64 {
     BACKOFF_MS[index]
 }
 
-/// What a refusal is called, from its status alone, with what to check when
-/// the status says which.
 pub fn refused(status: u16) -> String {
     let reason = StatusCode::from_u16(status)
         .ok()
@@ -302,7 +210,6 @@ pub fn refused(status: u16) -> String {
     format!("{status} {reason}.{check}")
 }
 
-/// What no answer is called.
 pub fn unreachable(why: Unreachable) -> String {
     match why {
         Unreachable::Timeout => format!("No answer within {TIMEOUT_SECS} seconds."),
@@ -314,20 +221,12 @@ pub fn unreachable(why: Unreachable) -> String {
     }
 }
 
-/// What the Notifications pane says about the address: when something last
-/// went out, and how the last attempt ended. Never the address itself.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Report {
-    /// When a push was last accepted.
     pub last_sent_at: Option<i64>,
-    /// When the address was last tried, accepted or not.
     pub last_attempt_at: Option<i64>,
-    /// How the last attempt failed, if it did, in the words of [`refused`] or
-    /// [`unreachable`].
     pub last_error: Option<String>,
-    /// When a push that failed will be tried again. None once it has been
-    /// given up on, and when nothing is waiting.
     pub retry_at: Option<i64>,
 }
 

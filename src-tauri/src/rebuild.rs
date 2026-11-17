@@ -1,18 +1,3 @@
-//! Rebuilding this app from the checkout it was built from.
-//!
-//! A source build has no release to download. Its latest is the tip of the
-//! branch its checkout follows, and `scripts/install.sh` is already the one
-//! sequence that fetches that, builds it, swaps the bundle and opens the new
-//! one. This starts the script and reports on it, and repeats none of it.
-//!
-//! The script quits this app once the new bundle is built, so it runs in a
-//! process group of its own, which launchd does not end with the app.
-//! The only outcome reported back is failure: success is this app closing and
-//! a newer one opening in its place.
-//!
-//! On a box, the host is updated before the app, from the channel's own
-//! build; `docs/UPDATES.md`, *The main channel*, says why that order.
-
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
@@ -20,20 +5,13 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use serde::Serialize;
 
-/// Where this app came from and where it lives, when both are a place a
-/// rebuild can start from and land in.
 #[derive(Clone, Debug, Default)]
 pub struct Origin {
-    /// The repository `install.sh` is run in.
     pub checkout: Option<PathBuf>,
-    /// The directory holding the running `Guaca.app`, which `install.sh`
-    /// replaces as `GUACA_DEST`.
     pub dest: Option<PathBuf>,
 }
 
 impl Origin {
-    /// This process. A release is updated by downloading a release, so it
-    /// has no checkout to rebuild from even on the machine that built it.
     pub fn this_app() -> Self {
         if option_env!("GUACA_RELEASE") == Some("1") {
             return Self::default();
@@ -44,9 +22,6 @@ impl Origin {
     }
 }
 
-/// The directory an installed `Guaca.app` is in, from the path of its
-/// executable. Anything else, such as `target/debug/guac` under `pnpm app`,
-/// is not a bundle `install.sh` can replace.
 fn installed_in(executable: &Path) -> Option<PathBuf> {
     let macos = executable.parent()?;
     let contents = macos.parent()?;
@@ -62,20 +37,13 @@ fn installed_in(executable: &Path) -> Option<PathBuf> {
 #[derive(Serialize, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
-    /// The checkout a rebuild runs in, when there is one it can run in.
     pub checkout: Option<String>,
-    /// Why this app cannot rebuild itself, when it cannot.
     pub unavailable: Option<String>,
-    /// The branch the checkout follows.
     pub branch: Option<String>,
-    /// The commit that branch is at on `origin`, when it could be read.
     pub upstream: Option<String>,
     pub running: bool,
-    /// The step `install.sh` last announced, while it runs.
     pub stage: Option<String>,
-    /// The end of the log of the rebuild that last failed.
     pub failure: Option<String>,
-    /// Where the whole log is.
     pub log: String,
 }
 
@@ -86,8 +54,6 @@ pub struct Rebuild {
     failure: Mutex<Option<String>>,
 }
 
-/// How much of a failed log is shown. The error is in the last few lines;
-/// the whole log is one click further.
 const TAIL: usize = 12;
 
 impl Rebuild {
@@ -95,8 +61,6 @@ impl Rebuild {
         Self { origin, log, child: Mutex::new(None), failure: Mutex::new(None) }
     }
 
-    /// The checkout and the destination, or what is missing, said so the
-    /// operator knows what to run instead.
     fn usable(&self) -> Result<(&Path, &Path), String> {
         let Some(checkout) = self.origin.checkout.as_deref() else {
             return Err(
@@ -115,7 +79,6 @@ impl Rebuild {
         Ok((checkout, dest))
     }
 
-    /// Whether a rebuild is running, and how the last one ended if it failed.
     fn settle(&self) -> bool {
         let mut child = self.child.lock();
         let Some(running) = child.as_mut() else { return false };
@@ -170,8 +133,6 @@ impl Rebuild {
         status
     }
 
-    /// Starts `install.sh` and returns. It builds while this app keeps
-    /// running, then quits it and opens the new one.
     pub fn start(&self) -> Result<(), String> {
         let mut child = self.child.lock();
         if let Some(running) = child.as_mut() {
@@ -204,8 +165,6 @@ impl Rebuild {
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
-            // Its own group: launchd ends what is left of an app's process
-            // group when the app exits, and the script is what quits it.
             command.process_group(0);
         }
         let started =
@@ -217,7 +176,6 @@ impl Rebuild {
     }
 }
 
-/// The last lines of the log, which is where `install.sh` says what stopped it.
 fn tail(log: &Path) -> String {
     let text = std::fs::read_to_string(log).unwrap_or_default();
     let lines: Vec<&str> = text.lines().filter(|line| !line.trim().is_empty()).collect();
@@ -229,9 +187,6 @@ fn tail(log: &Path) -> String {
     }
 }
 
-/// The step `install.sh` last announced in its log. Its `step` function prints
-/// each as a line of its own, in bold, and nothing else in the log is written
-/// that way: a line merely containing `==> ` is some tool's output, not a step.
 fn announced(log: &str) -> Option<String> {
     log.lines().rev().find_map(|line| {
         let said = line.strip_prefix("\u{1b}[1m==> ")?.strip_suffix("\u{1b}[0m")?;
@@ -262,7 +217,6 @@ async fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
 mod tests {
     use super::*;
 
-    /// A checkout whose `install.sh` is `script`, with an origin of its own.
     fn checkout(script: &str) -> (tempfile::TempDir, Origin) {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("guaca");
@@ -341,14 +295,12 @@ mod tests {
         assert!(failure.contains(&dest.display().to_string()), "installs where this app is");
         assert!(!failure.contains("line 1\n"), "only the end: {failure}");
         rebuild.start().unwrap();
-        // Read without settling: the script may already have failed again.
         assert!(rebuild.failure.lock().is_none(), "a new attempt clears the last failure");
         settled(&rebuild).await;
     }
 
     #[tokio::test]
     async fn a_second_rebuild_is_refused_while_one_runs() {
-        // `exec`, so the process killed below is the whole of it.
         let (dir, origin) = checkout("exec sleep 30\n");
         let rebuild = Rebuild::new(origin, dir.path().join("rebuild.log"));
         rebuild.start().unwrap();
@@ -420,7 +372,6 @@ exec sleep 30
         }
     }
 
-    /// A stand-in for the installed app, ended when the test is.
     #[cfg(target_os = "macos")]
     struct Running(std::process::Child);
 
@@ -432,13 +383,6 @@ exec sleep 30
         }
     }
 
-    /// The real `install.sh`, started by the installed app the way `start`
-    /// starts it: whether the app was still running when the script reached
-    /// the copy, and the script's log. The app is `bash` reached through a
-    /// symlink at the installed executable's path, so `pgrep -f` sees what it
-    /// sees for Guaca, and it exits when asked to quit unless `stubborn`.
-    /// Every tool that builds, signs or quits is a stub; the one that copies
-    /// records what it found and fails, so nothing is replaced.
     #[cfg(target_os = "macos")]
     fn install_from_the_app(stubborn: bool, within: Duration) -> (String, String) {
         use std::os::unix::fs::{symlink, PermissionsExt};
@@ -534,7 +478,6 @@ exec sleep 30
         let (app, log) = install_from_the_app(false, Duration::from_secs(10));
         assert_eq!(app, "gone", "{log}");
         assert!(log.contains("Quitting the running Guaca"), "{log}");
-        // The copy is where the stubs stop it, so that is the step it is at.
         assert_eq!(announced(&log).as_deref(), Some("Installing"), "{log}");
         assert!(!log.contains("did not quit on its own"), "{log}");
     }

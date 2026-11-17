@@ -9,14 +9,6 @@ interface Props {
   agentId: AgentId;
 }
 
-/**
- * The files an agent keeps for itself, for the operator to read.
- *
- * Read-only apart from deleting a file, for the reason working notes are: the
- * notebook is the agent's own account of its work, and a file the operator
- * half-rewrote is one neither of them can trust. A file that is wrong is taken
- * away, and the agent is told in the channel if it matters.
- */
 export function Notebook({ agentId }: Props) {
   const [entries, setEntries] = useState<NotebookEntry[] | null>(null);
   const [open, setOpen] = useState<{ path: string; text: string } | null>(null);

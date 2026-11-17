@@ -1,95 +1,3 @@
-//! The Claude backend, which is where an Anthropic subscription can be spent.
-//!
-//! Guaca speaks one shape of model API everywhere else: a list of messages in,
-//! a stream of deltas and a set of tool calls out. This backend is not an
-//! endpoint at all. It runs the `claude` program once per model call, writes the
-//! conversation to its stdin and reads its stdout, so this file is a
-//! translation in the same sense [`super::codex`] is, against a process rather
-//! than a wire.
-//!
-//! ## Why a program and not a token
-//!
-//! Anthropic restricts a consumer OAuth token to the program it was issued to,
-//! server-side. Guaca holding one and dialling the Messages API is refused; the
-//! `claude` program on the same machine and the same account runs the work off
-//! the plan. So the way to spend a subscription is to *be* the program.
-//! `docs/PROTOCOL.md` has the dates and the sources.
-//!
-//! ## Guaca keeps its own loop
-//!
-//! This is the decision the rest of the file follows from.
-//!
-//! `claude` is an agent harness: given tools it can reach, it runs its own
-//! rounds and hands back a conclusion. Letting it do that here would move
-//! `max_tool_rounds`, `reserve_step` and every stop check inside a program this
-//! app does not control, and the guard would be enforced by a process boundary
-//! instead of by `runtime/guard.rs`. A turn cannot afford that: it is the unit
-//! the five limits are written in.
-//!
-//! So the program is given no tools at all (`--tools ""`, no MCP servers) and
-//! asked for one structured answer per call, through `--json-schema`. What comes
-//! back is what this app's own tool call already looks like: something to say,
-//! and a list of calls to make. Guaca dispatches them, exactly as it does for
-//! the other two providers, and the round loop in `runtime/mod.rs` never learns
-//! there was a third.
-//!
-//! The schema is built from the turn's own [`ToolSpec`]s as a discriminated
-//! union, so the program validates a call against the tool's real parameters
-//! before this app ever sees it. A malformed tool call is not unlikely here, it
-//! is unrepresentable.
-//!
-//! ## The program is run with the operator's settings switched off
-//!
-//! Every isolation flag in [`argv`] is load-bearing, and the measurement is in
-//! its doc comment. `claude` started the ordinary way loads the operator's own
-//! MCP servers, hooks and settings, and an agent in this app would inherit all
-//! of it: their connected Gmail, their Grafana, their `SessionStart` hooks, and
-//! a hundred thousand tokens of tool definitions on every call. What the
-//! operator configures *for Claude* that this app does want is the part they
-//! cannot pass another way: the sign-in and the model.
-//!
-//! ## The program is started in an empty directory this app owns
-//!
-//! A child process inherits its parent's working directory, and a
-//! double-clicked app's is `/`: `launchd` starts one there, which is the same
-//! finding [`crate::programs`] is built on, from the other end. `claude` takes
-//! the directory it is started in as the project it is working on and asks the
-//! operating system what it may reach inside it. Started in `/` that question
-//! covers every protected folder on the machine, and macOS answers a child's
-//! request in the name of the *responsible* process rather than the child, so
-//! the operator is asked whether **Guaca** may read their photos, their music
-//! library, their Desktop and their Downloads, once per model call, about
-//! folders this app has never read and has no tool that could.
-//!
-//! Measured on 2026-08-27 against 2.1.247: one turn produced
-//! `kTCCServiceMediaLibrary`, `kTCCServicePhotos`,
-//! `kTCCServiceSystemPolicyDesktopFolder`,
-//! `kTCCServiceSystemPolicyDownloadsFolder` and a refused
-//! `kTCCServiceSystemPolicyAllFiles`, each logged by `tccd` as
-//! `responsible=com.madebywelch.guac, accessing=com.anthropic.claude-code`.
-//! [`scratch`] is what takes the disk back out of that question. It is not
-//! tidiness: a permission dialog naming this app for something it does not do
-//! is one an operator either denies, and then distrusts the app, or accepts,
-//! and then has granted a real reach to a program that asked under a borrowed
-//! name.
-//!
-//! ## A refusal is not a failure of the program
-//!
-//! The model's own safety check can stop an answer on a call that succeeded,
-//! and when it does the program has nothing to report but the model's account
-//! of it. That arrives in the same place a spent plan does and has to be told
-//! apart from one, because the two want opposite handling: a plan is over until
-//! the operator does something, and a refusal ran on what the model was
-//! writing, so the next draw is a different question. [`REFUSED`] is the field
-//! that separates them and [`LlmError::ModelRefused`] is what the turn's three
-//! attempts then apply to.
-//!
-//! ## What it does not report
-//!
-//! Money that moved. `total_cost_usd` on a plan is the equivalent API price
-//! rather than a charge. It is dropped rather than recorded, so the usage table
-//! keeps meaning what it has always meant; the tokens are real and are counted.
-
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
@@ -103,53 +11,17 @@ use crate::llm::openrouter::{
     UserContent, THOUGHT_BREAK,
 };
 
-/// The program, found on `PATH` rather than configured: a second place to say
-/// where it lives is a second place for it to be wrong.
 pub const PROGRAM: &str = "claude";
 
-/// What to do about it not being there. Named once so the refusal and the
-/// documentation cannot drift.
 pub const INSTALL: &str = "npm install -g @anthropic-ai/claude-code";
 
-/// What this provider reports as its model.
-///
-/// A label, not a model id. Which model runs is the program's own setting and
-/// this app does not pass `--model`, so there is nothing truthful to put here
-/// but the name of the thing that decided.
 pub const MODEL_LABEL: &str = "claude";
 
-/// The field the reply goes in.
 const SAY: &str = "say";
-/// The field the tool calls go in.
 const CALLS: &str = "calls";
 
-/// What the program puts on the turn's stop reason when the model stopped on
-/// its own safety check rather than on an answer.
-///
-/// The one failure of this program with no status behind it, and the reason
-/// [`failure`] has to look here rather than at `is_error` alone. The request was
-/// answered, the tokens were spent, and the check ran on what was being written,
-/// so measured against 2.1.247 the frame is `subtype: "success"` with `is_error`
-/// true, `api_error_status` null, no `structured_output`, and a `result` that
-/// opens `API Error:` and closes with the category that fired. Read without
-/// this, it lands in the arm that means a dead sign-in or a spent plan: not
-/// retried, and answered with a paragraph of the program's own advice about
-/// rephrasing in a new session or changing `/model`, neither of which exists
-/// here.
 const REFUSED: &str = "refusal";
 
-/// Builds the schema the program is held to.
-///
-/// One object with two fields, and `calls` is a discriminated union over the
-/// tools this turn was actually offered: `name` is a `const`, and `arguments`
-/// is that tool's own parameter schema. The program validates against it before
-/// answering, so a call naming a tool that does not exist, or carrying the
-/// wrong arguments for one that does, cannot reach [`Completion`].
-///
-/// A turn with no tools gets no `calls` field rather than an empty union.
-/// `oneOf: []` matches nothing, so a model that decided to call something would
-/// be held at a schema it cannot satisfy and the call would fail rather than
-/// the tool being refused, which is the wrong error in the wrong place.
 pub fn schema(tools: &[ToolSpec]) -> serde_json::Value {
     let mut properties = serde_json::Map::new();
     properties.insert(
@@ -199,35 +71,6 @@ pub fn schema(tools: &[ToolSpec]) -> serde_json::Value {
     })
 }
 
-/// The argument vector, which is the part of this file a test can hold still.
-///
-/// Every flag below either isolates the run or is required by another flag, and
-/// the isolation is not hygiene. Measured against this program at 2.1.247, one
-/// trivial reply cost 104,371 input tokens and named 200-odd tools with these
-/// flags off, and 783 tokens naming none with them on: the operator's own MCP
-/// servers, settings and hooks are otherwise part of every turn every agent in
-/// this app takes.
-///
-/// - **`--tools ""`** drops the built-ins. An agent here has this app's tools
-///   and no `Bash`, `Edit` or `Read`.
-/// - **`--strict-mcp-config`** with an empty **`--mcp-config`** drops the
-///   operator's MCP servers. Without the strict flag the empty config is merged
-///   with theirs rather than replacing it.
-/// - **`--setting-sources ""`** drops their settings files, and with them their
-///   hooks, which otherwise run on every call.
-/// - **`--disable-slash-commands`** drops the skills, which are prompt weight
-///   for a surface nothing here can reach.
-/// - **`--no-session-persistence`** because this app holds the conversation.
-///   A session on disk would be a second, diverging copy of it.
-/// - **`--include-partial-messages`** is what makes the thinking and the
-///   narration arrive while the call is running rather than at the end of it.
-/// - **`--input-format stream-json`** keeps the conversation off the command
-///   line, which is where a screenshot would not fit, and it is the only input
-///   format that carries an image. It requires `--output-format stream-json`,
-///   which requires `--verbose`.
-///
-/// No `--model`, for the reason [`MODEL_LABEL`] exists. No `--permission-mode`:
-/// there is nothing to permit, because there are no tools.
 pub fn argv(schema: &serde_json::Value, system_prompt: &str) -> Vec<String> {
     [
         "-p",
@@ -256,26 +99,9 @@ pub fn argv(schema: &serde_json::Value, system_prompt: &str) -> Vec<String> {
     .collect()
 }
 
-/// Splits this app's messages into the two things the program takes.
-///
-/// The system prompt goes on the command line and everything else becomes the
-/// content of a single user message. That is not a simplification of the
-/// conversation, it is where the conversation has to go: the program's streaming
-/// input carries user messages, so there is nowhere to put an assistant turn or
-/// a tool result as itself. They are written into the one message instead,
-/// labeled, which is also what keeps this app the authority on the history.
-/// Nothing is resumed and no session is kept, so the whole conversation is
-/// rebuilt on every call, exactly as [`super::codex`] rebuilds its input.
-///
-/// A user message is passed through unlabeled. It is what `prompt.rs` wrote and
-/// it already says what it is; a label here would be this file editing a prompt
-/// that belongs to another file.
 pub fn conversation(messages: &[ChatMessage]) -> (String, Vec<serde_json::Value>) {
     let mut system = Vec::new();
     let mut blocks: Vec<serde_json::Value> = Vec::new();
-    // A tool result names the call it answers and not the tool it ran, so the
-    // name has to be carried down from the assistant turn that asked. Without
-    // it a round of results reads as a list of unattributed strings.
     let mut names: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
 
     let text = |blocks: &mut Vec<serde_json::Value>, body: String| {
@@ -294,12 +120,6 @@ pub fn conversation(messages: &[ChatMessage]) -> (String, Vec<serde_json::Value>
                         match part {
                             ContentPart::Text { text: body } => text(&mut blocks, body.clone()),
                             ContentPart::ImageUrl { image_url } => {
-                                // Only a `data:` URL, because that is the only
-                                // kind this app makes: a screenshot never leaves
-                                // the machine as a file. Anything else is
-                                // dropped rather than fetched, which would be
-                                // this transport reaching the network on a
-                                // model's say-so.
                                 if let Some(image) = image_block(&image_url.url) {
                                     blocks.push(image);
                                 }
@@ -330,9 +150,6 @@ pub fn conversation(messages: &[ChatMessage]) -> (String, Vec<serde_json::Value>
     (system.join("\n\n"), blocks)
 }
 
-/// Turns a `data:` URL into the image block the program's input format takes.
-///
-/// `None` for anything that is not one, which the caller drops.
 fn image_block(url: &str) -> Option<serde_json::Value> {
     let rest = url.strip_prefix("data:")?;
     let (meta, data) = rest.split_once(',')?;
@@ -346,18 +163,6 @@ fn image_block(url: &str) -> Option<serde_json::Value> {
     }))
 }
 
-// ---- the stream ----------------------------------------------------------
-
-/// The result frame, which is the last line the program writes.
-///
-/// Only the fields this app acts on. The frame carries a great deal more, and
-/// deserializing all of it would be this file promising to keep up with a
-/// program that adds a field a release.
-/// Snake case on the wire, and deliberately not renamed. The frame mixes both
-/// conventions (`modelUsage` sits beside `total_cost_usd`), so a blanket rule
-/// here would be right about the fields it happened to be written against and
-/// silently wrong about the next one: an absent field deserializes to its
-/// default rather than failing, so the symptom is a reply that went missing.
 #[derive(Debug, Default, Deserialize)]
 struct ResultFrame {
     #[serde(default)]
@@ -372,13 +177,10 @@ struct ResultFrame {
     stop_reason: Option<String>,
     #[serde(default)]
     api_error_status: Option<serde_json::Value>,
-    /// The program's own words when it failed, which is the only description of
-    /// the failure that exists.
     #[serde(default)]
     result: Option<String>,
 }
 
-/// What the schema in [`schema`] produces.
 #[derive(Debug, Default, Deserialize)]
 struct StructuredOutput {
     #[serde(default)]
@@ -394,7 +196,6 @@ struct StructuredCall {
     arguments: serde_json::Value,
 }
 
-/// The program counts cache tokens apart from fresh ones. All three were read.
 #[derive(Debug, Default, Deserialize)]
 struct ProgramUsage {
     #[serde(default)]
@@ -408,21 +209,12 @@ struct ProgramUsage {
 }
 
 impl ProgramUsage {
-    /// Cost is `None` on purpose, and it is not an omission.
-    ///
-    /// The program reports `total_cost_usd` on a plan as the equivalent API
-    /// price rather than a charge. Recording it would put money in the usage
-    /// table that nobody spent, and the table is what an operator reads to
-    /// decide whether a crew is affordable.
     fn tally(&self) -> Usage {
         Usage {
             prompt_tokens: self
                 .input_tokens
                 .saturating_add(self.cache_creation_input_tokens)
                 .saturating_add(self.cache_read_input_tokens),
-            // Counted in the prompt above as well, which is what the other two
-            // transports' prompt counts already include: cached is a share of
-            // the prompt there, and has to mean the same here.
             cached_tokens: self.cache_read_input_tokens,
             completion_tokens: self.output_tokens,
             cost: None,
@@ -430,32 +222,12 @@ impl ProgramUsage {
     }
 }
 
-/// Which content block the last piece of working came from.
-///
-/// The program streams a thinking block and then a text block, a call can hold
-/// more than one message, and no block ends its text with a newline. The first
-/// piece from anywhere else is written after a [`THOUGHT_BREAK`], or the end of
-/// one block reads as the start of the next: "two thingsboth are independent".
 #[derive(Debug, Default)]
 struct Seam {
-    /// Counted at each `message_start`, because a block index restarts there.
     message: u32,
     last: Option<(u32, u64)>,
 }
 
-/// Folds one line of the program's stdout into the call's state.
-///
-/// Split out from the read loop so the whole translation is a pure function of
-/// the lines, which is what the tests beside this file drive.
-///
-/// Both the thinking and the prose the model writes on its way to the answer go
-/// to [`Token::Reasoning`], and neither is kept. The reply is the `say` field of
-/// the structured answer, which arrives whole at the end of the call. That is
-/// the one way this provider differs from the other two on screen: the thinking
-/// line moves while the call runs, and the message lands complete rather than a
-/// token at a time. Streaming it would mean decoding a JSON string that is still
-/// arriving, and a half-decoded escape drawn into a channel is a worse failure
-/// than a message that appears at once.
 fn fold<F>(
     line: &str,
     out: &mut Completion,
@@ -466,8 +238,6 @@ where
     F: FnMut(Token<'_>),
 {
     let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
-        // The program writes diagnostics to stderr, but a line it cannot be
-        // held to is not a reason to fail a call that may still succeed.
         return Ok(false);
     };
 
@@ -513,12 +283,6 @@ where
                 .into_iter()
                 .enumerate()
                 .map(|(index, call)| ToolCall {
-                    // The program answers with a list rather than with calls
-                    // that carry ids, so the id is made here. It has to be
-                    // unique across the whole turn and not just this round:
-                    // the history keeps every round's calls and pairs each
-                    // result to one by id, so a counter that restarted would
-                    // make round two's first result answer round one's.
                     id: format!("{}-{}", uuid::Uuid::new_v4(), index),
                     name: call.name,
                     arguments: call.arguments.to_string(),
@@ -532,17 +296,6 @@ where
     }
 }
 
-/// Turns a failed result frame into the error an agent reads mid-turn.
-///
-/// The program's own words are carried through rather than replaced. With no
-/// endpoint and no status code, they are the only description of what went
-/// wrong that exists, and the commonest cause here is a sign-in or a spent plan
-/// that only the operator can fix.
-///
-/// The exception is the model refusing, which is not the program failing at
-/// all: [`REFUSED`] is what tells the two apart, and it is asked first because
-/// it is the more specific fact. A refusal comes back on an answered call, so
-/// there is no status for the arm below to find.
 fn failure(frame: &ResultFrame) -> LlmError {
     let said = frame
         .result
@@ -560,9 +313,6 @@ fn failure(frame: &ResultFrame) -> LlmError {
     }
 
     match frame.subtype.as_str() {
-        // The program hit its own turn ceiling. It cannot happen with no tools
-        // to loop on, so it means the program did something this app did not
-        // ask for, and reporting it as a bug in the request is wrong.
         "error_max_turns" => LlmError::ProgramFailed {
             program: PROGRAM,
             message: format!("{PROGRAM} stopped at its own turn limit: {said}"),
@@ -575,30 +325,12 @@ fn failure(frame: &ResultFrame) -> LlmError {
     }
 }
 
-/// The directory the program is started in, made if it is not there yet.
-///
-/// Empty, this app's, and about nothing. The module docs have the argument for
-/// why it is not the one this process happens to be standing in.
-///
-/// `None` is the whole error handling and it means inherit, which is where this
-/// started and is no worse than it was. Answering with a path that is not on
-/// disk would be worse than either: [`std::process::Command::spawn`] reports a
-/// missing working directory as `NotFound`, which the caller below maps to
-/// [`LlmError::ProgramMissing`], and the operator is told to install a program
-/// they already have.
 fn scratch() -> Option<PathBuf> {
     let at = std::env::temp_dir().join("guaca-claude");
     std::fs::create_dir_all(&at).ok()?;
     Some(at)
 }
 
-/// Whether the program is on this machine, and what it says its version is.
-///
-/// Asked of the program itself rather than of a path, because the answer
-/// changes when the operator installs or upgrades it between two looks at the
-/// settings. A program that is there and will not answer is reported missing:
-/// to the row that asks, the two are the same thing, and the refusal a turn
-/// meets names the install command either way.
 pub async fn presence() -> Option<String> {
     let asked = tokio::process::Command::new(PROGRAM)
         .arg("--version")
@@ -610,10 +342,6 @@ pub async fn presence() -> Option<String> {
     answered.status.success().then(|| String::from_utf8_lossy(&answered.stdout).trim().to_string())
 }
 
-/// Runs one model call and reads what the program says about it.
-///
-/// The one place the third provider parts company from the other two, reached
-/// from `LlmClient::stream_chat` and from nowhere else.
 pub async fn stream<F>(
     cfg: &InferenceConfig,
     request: &ChatRequest,
@@ -627,7 +355,6 @@ where
     let timeout = Duration::from_secs(cfg.request_timeout_secs.clamp(5, 900));
 
     let mut command = tokio::process::Command::new(PROGRAM);
-    // Set rather than inherited, and the module docs say what inheriting costs.
     if let Some(at) = scratch() {
         command.current_dir(at);
     }
@@ -637,11 +364,6 @@ where
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        // A call this app has given up on must not leave a process holding the
-        // operator's plan open. It is load-bearing rather than tidy: this is the whole of
-        // what a stop does to a call in flight. `Runtime::until_stopped` drops
-        // the future, the drop takes the child with it, and the plan stops being
-        // spent on an answer nobody is going to read.
         .kill_on_drop(true)
         .spawn()
         .map_err(|err| match err.kind() {
@@ -655,10 +377,6 @@ where
     })
     .to_string();
 
-    // Written from a task of its own rather than inline. A turn that has just
-    // looked at a screen carries a picture of it, which is megabytes, and a
-    // pipe holds a page: writing it here would block this task until the child
-    // drained it, while the child blocked writing a stdout nobody was reading.
     let mut stdin = child.stdin.take();
     let writer = tokio::spawn(async move {
         if let Some(stdin) = stdin.as_mut() {
@@ -666,7 +384,6 @@ where
             let _ = stdin.write_all(b"\n").await;
             let _ = stdin.flush().await;
         }
-        // Dropped here, which is the end-of-input the program waits for.
         drop(stdin);
     });
 
@@ -702,11 +419,6 @@ where
 
     writer.abort();
 
-    // A stream that ended without a result frame is the case the exit status
-    // and stderr are the only account of: the program refused the command line,
-    // died on a signal, or could not start at all. Reported as its own words
-    // rather than as a decode failure, which would send the reader here instead
-    // of to their sign-in.
     if !answered {
         let said = match stderr {
             Some(stderr) => {
@@ -762,17 +474,11 @@ mod tests {
         assert_eq!(variants.len(), 2);
         assert_eq!(variants[0]["properties"]["name"]["const"], "send_message");
         assert_eq!(variants[1]["properties"]["name"]["const"], "note_progress");
-        // The tool's own parameters, not a bare object: this is what makes the
-        // program refuse a call with the wrong arguments before this app sees
-        // it.
         assert_eq!(variants[0]["properties"]["arguments"]["required"][0], "to");
     }
 
     #[test]
     fn a_turn_with_no_tools_is_offered_no_calls_field() {
-        // Not an empty union. `oneOf: []` matches nothing, so a model that
-        // decided to call something would fail the schema instead of being
-        // told it has no tools.
         let schema = schema(&[]);
         assert!(schema["properties"].get(CALLS).is_none());
         assert_eq!(schema["required"].as_array().unwrap(), &[serde_json::json!(SAY)]);
@@ -788,15 +494,11 @@ mod tests {
 
         assert_eq!(system, "you are Dana\n\nand you are brief");
         assert_eq!(blocks.len(), 1);
-        // Verbatim. What `prompt.rs` wrote is not this file's to label.
         assert_eq!(blocks[0]["text"], "the build is green");
     }
 
     #[test]
     fn a_tool_result_is_written_under_the_name_of_the_tool_that_ran() {
-        // The result carries the call's id and not its name, so the name has to
-        // come down from the assistant turn. Without it a round of results is a
-        // list of unattributed strings.
         let (_, blocks) = conversation(&[
             ChatMessage::user("who is around?"),
             ChatMessage::Assistant {
@@ -821,8 +523,6 @@ mod tests {
 
     #[test]
     fn a_result_for_a_call_nobody_made_still_says_something() {
-        // A failure path: history this file did not assemble, or a call whose
-        // assistant turn was dropped. The result is worth more than nothing.
         let (_, blocks) = conversation(&[ChatMessage::Tool {
             tool_call_id: "orphan".into(),
             content: "delivered".into(),
@@ -844,9 +544,6 @@ mod tests {
 
     #[test]
     fn an_image_that_is_not_a_data_url_is_dropped_rather_than_fetched() {
-        // Following it would be this transport reaching the network because a
-        // model asked. Nothing in this app makes one, so anything else here is
-        // either a bug or a suggestion.
         for url in ["https://example.com/a.png", "data:image/png,notbase64", "data:;base64,AA"] {
             assert!(image_block(url).is_none(), "{url} should not have crossed");
         }
@@ -878,8 +575,6 @@ mod tests {
             assert!(!fold(line, &mut out, &mut seam, &mut pen).unwrap());
         }
 
-        // Two blocks are two paragraphs. Run together they were one sentence
-        // with nothing between the end of one and the start of the next.
         assert_eq!(seen, ["two things", THOUGHT_BREAK, "both are independent"]);
         assert!(out.content.is_empty());
     }
@@ -900,8 +595,6 @@ mod tests {
             r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"reading "}}}"#,
             r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"the inbox."}}}"#,
             r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":""}}}"#,
-            // A second message restarts the block index, so the same index is
-            // still somewhere else.
             r#"{"type":"stream_event","event":{"type":"message_start","message":{}}}"#,
             r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Now the reply."}}}"#,
         ] {
@@ -928,17 +621,14 @@ mod tests {
 
         assert_eq!(out.tool_calls.len(), 1);
         assert_eq!(out.tool_calls[0].name, "send_message");
-        // Re-serialized, because the runtime parses this string back.
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&out.tool_calls[0].arguments).unwrap(),
             serde_json::json!({ "to": "Pat", "body": "green" })
         );
 
         let usage = out.usage.unwrap();
-        // Every token that was read, cached or not. All three were processed.
         assert_eq!(usage.prompt_tokens, 1110);
         assert_eq!(usage.completion_tokens, 5);
-        // The price it quoted is not money that moved. `ProgramUsage::tally`.
         assert_eq!(usage.cost, None);
     }
 
@@ -963,9 +653,6 @@ mod tests {
 
     #[test]
     fn two_calls_in_one_round_do_not_share_an_id() {
-        // The history pairs a result to a call by id, across the whole turn and
-        // not just this round. Two the same is round two's result answering
-        // round one's call.
         let mut out = Completion::default();
         let line = r#"{"type":"result","subtype":"success","is_error":false,
             "structured_output":{"say":"","calls":[
@@ -983,9 +670,6 @@ mod tests {
 
     #[test]
     fn a_failure_carries_the_programs_own_words() {
-        // With no endpoint and no status code they are the only account of the
-        // failure there is, and the usual cause is a sign-in only the operator
-        // can fix.
         let mut out = Completion::default();
         let line = r#"{"type":"result","subtype":"error_during_execution","is_error":true,
             "result":"Credit balance is too low"}"#;
@@ -993,17 +677,11 @@ mod tests {
         let err = fold(line, &mut out, &mut Seam::default(), &mut sink()).unwrap_err();
         assert!(matches!(err, LlmError::ProgramFailed { .. }));
         assert!(err.to_string().contains("Credit balance is too low"), "{err}");
-        // A plan is over until somebody tops it up. Three attempts at it is
-        // four seconds in front of the sentence they needed to read at once.
         assert!(!err.is_transient(), "{err}");
     }
 
     #[test]
     fn a_model_refusal_is_not_a_spent_plan_and_is_worth_another_draw() {
-        // The frame this app actually got, at 2.1.247. The call was answered,
-        // so `api_error_status` is null and there is no status to classify by;
-        // `is_error` alone files it under the arm above, which means a sign-in
-        // the operator has to go and fix and which is never tried again.
         let mut out = Completion::default();
         let line = r#"{"type":"result","subtype":"success","is_error":true,
             "api_error_status":null,"stop_reason":"refusal",
@@ -1011,23 +689,13 @@ mod tests {
 
         let err = fold(line, &mut out, &mut Seam::default(), &mut sink()).unwrap_err();
         assert!(matches!(err, LlmError::ModelRefused { .. }), "{err}");
-        // The whole point of telling it apart: the check ran on what the model
-        // was writing, so the next draw is a different question.
         assert!(err.is_transient(), "{err}");
-        // The program's words, which is where the category and the request id
-        // an operator would quote are.
         assert!(err.to_string().contains("reasoning_extraction"), "{err}");
-        // And this app's after them, because theirs end in advice about a
-        // session and a `/model` that nothing here has.
         assert!(err.to_string().contains("provider"), "{err}");
     }
 
     #[test]
     fn a_refusal_that_also_carries_a_status_is_still_a_refusal() {
-        // Today's frame carries one or the other, so the order these are asked
-        // in is only decided here. A refusal says what stopped the answer; a
-        // status says what the transport did, and a 401 read off one would send
-        // an operator to a sign-in that is working.
         let mut out = Completion::default();
         let line = r#"{"type":"result","subtype":"success","is_error":true,
             "api_error_status":401,"stop_reason":"refusal","result":"API Error: flagged"}"#;
@@ -1044,15 +712,11 @@ mod tests {
 
         let err = fold(line, &mut out, &mut Seam::default(), &mut sink()).unwrap_err();
         assert!(matches!(err, LlmError::Upstream { status: 529, .. }), "{err}");
-        // The whole reason to classify it rather than fold it into the words.
         assert!(err.is_transient());
     }
 
     #[test]
     fn a_success_that_answered_in_the_wrong_shape_is_a_failure_and_says_so() {
-        // The case `docs/CODING.md` cost an afternoon over, in the other
-        // harness: a failed turn reported inside a stream that exits zero. Read
-        // by exit code alone it is a turn that had nothing to say.
         let mut out = Completion::default();
         let line = r#"{"type":"result","subtype":"success","is_error":false,"result":"hello"}"#;
 
@@ -1063,10 +727,6 @@ mod tests {
 
     #[test]
     fn the_argument_vector_switches_the_operators_own_setup_off() {
-        // Measured, not assumed: with these off, one trivial reply cost 104,371
-        // input tokens and named 200-odd of the operator's own tools. Each pair
-        // is asserted adjacently because a flag whose value landed elsewhere is
-        // a different command line.
         let argv = argv(&schema(&[spec("send_message")]), "you are Dana");
         let pair = |flag: &str| {
             let at = argv.iter().position(|a| a == flag).unwrap_or_else(|| panic!("no {flag}"));
@@ -1081,15 +741,12 @@ mod tests {
         assert!(argv.iter().any(|a| a == "--disable-slash-commands"));
         assert!(argv.iter().any(|a| a == "--no-session-persistence"));
 
-        // The model belongs to the program. `MODEL_LABEL` is the argument.
         assert!(!argv.iter().any(|a| a == "--model"), "{argv:?}");
 
-        // Each of these is refused by the program without the one after it.
         assert_eq!(pair("--input-format"), "stream-json");
         assert_eq!(pair("--output-format"), "stream-json");
         assert!(argv.iter().any(|a| a == "--verbose"));
 
-        // The schema is what holds the answer to a shape this app can dispatch.
         let schema: serde_json::Value = serde_json::from_str(&pair("--json-schema")).unwrap();
         assert_eq!(
             schema["properties"]["calls"]["items"]["oneOf"][0]["properties"]["name"]["const"],

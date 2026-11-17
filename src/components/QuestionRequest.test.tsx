@@ -75,7 +75,6 @@ function asked(part: QuestionPart): Envelope {
   };
 }
 
-/** The decision a lapse files in For you, under the request's own id. */
 function filedFor(id: string): WorkDecision {
   return {
     id: "d1",
@@ -129,9 +128,6 @@ describe("a question put to the operator", () => {
     expect(screen.getByRole("button", { name: "Contoso" })).toBeTruthy();
   });
 
-  // The whole line between this card and the one beside it. An operator who
-  // reads "Allow" here would be answering a question that grants nothing with
-  // a word that means it granted something.
   it("offers no verdict, because there is nothing here to permit", () => {
     draw("pending");
     expect(screen.queryByRole("button", { name: "Allow" })).toBeNull();
@@ -162,25 +158,18 @@ describe("a question put to the operator", () => {
     expect(answerQuestion).not.toHaveBeenCalled();
   });
 
-  // A question that has been answered is history, and history with live
-  // buttons on it is an answer that reaches nobody.
   it("stops offering answers once it has one", () => {
     draw("answered");
     expect(screen.queryByRole("button", { name: "Northwind" })).toBeNull();
     expect(screen.getByText("You answered this.")).toBeTruthy();
   });
 
-  // The agent did not stop working: it was told nobody answered and carried on.
-  // Saying "nothing happened" here, as the permission card does, would be the
-  // opposite of what happened.
   it("says the work went ahead when nobody answered", () => {
     draw("expired");
     expect(screen.getByText(/went ahead without you/)).toBeTruthy();
   });
 
   it("says a question that ran out of time is waiting in For you as well", () => {
-    // The agent did go ahead on its own assumption, and the question was filed
-    // too, so the line keeps the first fact and adds where the answer goes now.
     useStore.setState({ decisions: [filedFor(CHOICE.id)] });
     draw("expired");
     expect(
@@ -210,9 +199,6 @@ describe("a question that has been answered", () => {
     useStore.setState({ decisions: [] });
   });
 
-  // What the channel is for. The answer reached the agent either way; what was
-  // missing is the record of it, and a week later "You answered this" is the
-  // one line nobody can reconstruct from anything on screen.
   it("keeps what was said, not only that something was", () => {
     const { container } = draw("answered", CHOICE, { q1: "Contoso" });
 
@@ -227,9 +213,6 @@ describe("a question that has been answered", () => {
     expect(screen.getByText(/Forty thousand\./)).toBeTruthy();
   });
 
-  // A decision older than the window the store reads has a state and no answer
-  // with it. The card must still say the one thing that is known, and must not
-  // draw an empty answer as though the operator had said nothing.
   it("says only that it was answered when no answer came with it", () => {
     const { container } = draw("answered");
 
@@ -237,8 +220,6 @@ describe("a question that has been answered", () => {
     expect(container.querySelector(".ask__given")).toBeNull();
   });
 
-  // A choice is one of the agent's own options, so it can contain anything the
-  // model can write. It reaches the card as a value, never as markup.
   it("draws the answer as text, whatever the model put in the option", () => {
     const { container } = draw("answered", CHOICE, { q1: "[Contoso](https://example.com)" });
 

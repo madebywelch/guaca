@@ -1,11 +1,5 @@
 import { useEffect, useState } from "react";
 
-/**
- * Compact relative time, e.g. `now`, `4m`, `3h`, `2d`.
- *
- * Deliberately short: it sits in a narrow sidebar column beside an agent's
- * name, where "4 minutes ago" would push the name into an ellipsis.
- */
 export function relativeTime(at: number, now: number): string {
   const seconds = Math.max(0, Math.round((now - at) / 1000));
   if (seconds < 45) return "now";
@@ -22,48 +16,22 @@ export function relativeTime(at: number, now: number): string {
   return `${Math.round(days / 7)}w`;
 }
 
-/**
- * How long something has been going, counted in seconds.
- *
- * Not {@link relativeTime}, which rounds anything under three quarters of a
- * minute to "now". This is read while waiting on a call that has not come back,
- * where the whole question is whether the number is still moving, and "now" for
- * the first forty-four seconds of a wait answers it wrong. Whether a wait is
- * long enough to be worth reporting at all is the caller's decision, not this
- * one's.
- */
 export function elapsed(now: number, since: number): string {
   const seconds = Math.max(0, Math.floor((now - since) / 1000));
   if (seconds < 60) return `${seconds}s`;
   return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
 }
 
-/** Local midnight, so a day is a day and not a fixed number of milliseconds. */
 export function midnight(at: number): number {
   const day = new Date(at);
   day.setHours(0, 0, 0, 0);
   return day.getTime();
 }
 
-/**
- * A time of day, written the way it is said: `9:05 AM`.
- *
- * A leading zero is for a column of times that have to line up. This is one
- * time in a sentence or under a face.
- */
 export function clockLabel(at: number): string {
   return new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
-/**
- * When a stretch of conversation picked up again, for the line between two of
- * them.
- *
- * Named while a name is unambiguous and dated once it is not: "Tuesday" means
- * this week, and three weeks back it means nothing at all. Rounded from two
- * local midnights rather than divided out of a difference, because a day is 23
- * or 25 hours twice a year.
- */
 export function whenLabel(at: number, now: number): string {
   const clock = clockLabel(at);
   const days = Math.round((midnight(now) - midnight(at)) / 86_400_000);
@@ -74,10 +42,6 @@ export function whenLabel(at: number, now: number): string {
   return `${new Date(at).toLocaleDateString([], { day: "numeric", month: "short" })} ${clock}`;
 }
 
-/**
- * A clock that ticks slowly, so relative labels stay honest without
- * re-rendering the rail every frame.
- */
 export function useNow(intervalMs = 30_000): number {
   const [now, setNow] = useState(() => Date.now());
 

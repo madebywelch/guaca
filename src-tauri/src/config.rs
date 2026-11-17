@@ -1,12 +1,3 @@
-//! Operator configuration.
-//!
-//! Stored as JSON next to the database in the platform config directory. The
-//! API key lives here in plaintext, which is worth being blunt about: Guac is
-//! a local, no-auth app, and a key encrypted with a key stored beside it is
-//! theater. The file is written 0600 and the key is never sent to the webview.
-//! If you want real secret storage, the honest answer is the OS keychain, and
-//! that is a deliberate follow-up rather than something faked here.
-
 use crate::domain::effort::ReasoningEffort;
 use std::fs;
 use std::io;
@@ -19,49 +10,18 @@ use crate::runtime::guard::GuardLimits;
 pub const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
 pub const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4.5";
 
-/// How a turn is paid for.
-///
-/// Three answers, not one with a flag: a pasted key, a signed-in subscription
-/// and a program on this machine differ in the endpoint, the wire protocol, the
-/// auth header, the models on offer and whether a call has a price. Modeling
-/// any of them as "a base URL with a different key" would put that whole
-/// disagreement behind a string an operator can type, and the first symptom
-/// would be an agent failing on a parameter nobody set.
-///
-/// The third is not an endpoint at all. `Claude` runs the `claude` program once
-/// per model call and reads its stdout, which is the only way an Anthropic
-/// subscription can pay for a turn: consumer OAuth tokens are restricted to the
-/// program they were issued to, so the way to spend one is to be that program.
-/// `docs/PROTOCOL.md` has the dates and the sources.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Provider {
-    /// Any OpenAI-compatible endpoint, with a key the operator pasted. What
-    /// Guaca has always done, and still the default.
     #[default]
     Compatible,
-    /// A ChatGPT subscription, signed in to on this machine. Billed to the plan
-    /// rather than per token.
     Chatgpt,
-    /// The `claude` program on this machine, run once per model call. Billed to
-    /// whatever that program is signed in to, which is the operator's business
-    /// and not this app's.
     Claude,
 }
 
 impl Provider {
-    /// Every provider there is.
-    ///
-    /// A fixed-length array rather than a loose list, so a variant added
-    /// without being added here is a compile error rather than a case the
-    /// round-trip suite below silently stops covering.
     pub const ALL: [Provider; 3] = [Provider::Compatible, Provider::Chatgpt, Provider::Claude];
 
-    /// How a provider is spelled in SQLite, which is the same as on the wire.
-    ///
-    /// Not `Display`: the point is that the stored spelling and the IPC one
-    /// cannot drift, and a formatting impl is where a friendlier name would
-    /// eventually be written.
     pub fn as_str(&self) -> &'static str {
         match self {
             Provider::Compatible => "compatible",
@@ -70,10 +30,6 @@ impl Provider {
         }
     }
 
-    /// Reads one back. Anything unrecognized is `None`, which every caller
-    /// already has a meaning for: inherit. A column written by a newer build
-    /// must leave a crew running on the app settings rather than refusing to
-    /// load the group.
     pub fn parse(raw: &str) -> Option<Self> {
         match raw.trim() {
             "compatible" => Some(Provider::Compatible),
@@ -87,34 +43,16 @@ impl Provider {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InferenceConfig {
-    /// Which of the two places a call goes to. Absent in anything written before
-    /// subscriptions existed, and absent means the endpoint below.
     #[serde(default)]
     pub provider: Provider,
-    /// Any OpenAI-compatible base. Swappable so a local llama.cpp or LM Studio
-    /// endpoint works without a code change.
-    ///
-    /// Ignored when the provider is a subscription, and kept rather than blanked:
-    /// an operator who tries a subscription and goes back should find their
-    /// endpoint and key where they left them.
     pub base_url: String,
     #[serde(default)]
     pub api_key: String,
-    /// The model used when a pasted key is paying.
     pub default_model: String,
-    /// The model used when a subscription is paying.
-    ///
-    /// A second field rather than one shared with the endpoint's, because the
-    /// two providers have disjoint model names and neither will accept the
-    /// other's. Sharing one field meant every switch broke the model, and
-    /// switching back did not put it right: an operator who ran out of
-    /// subscription quota, moved to a key for an hour and moved back would find
-    /// their model replaced both times.
     #[serde(default = "default_subscription_model")]
     pub subscription_model: String,
     #[serde(default)]
     pub reasoning_effort: ReasoningEffort,
-    /// OpenRouter attributes requests by these headers. Harmless elsewhere.
     #[serde(default = "default_referer")]
     pub referer: String,
     #[serde(default = "default_title")]
@@ -156,18 +94,10 @@ impl Default for InferenceConfig {
 }
 
 impl InferenceConfig {
-    /// Full URL for the chat completions endpoint.
     pub fn chat_completions_url(&self) -> String {
         format!("{}/chat/completions", self.base_url.trim_end_matches('/'))
     }
 
-    /// Whether a call has any chance of working, as far as settings can tell.
-    ///
-    /// Neither a subscription nor the `claude` program is answered here. Whether
-    /// one is signed in is held by the credential store or by the program's own
-    /// config, not by settings, and a config that guessed would report a sign-in
-    /// it cannot see. Each transport asks the thing that actually knows and
-    /// produces a refusal that names the actual problem.
     pub fn is_ready(&self) -> bool {
         match self.provider {
             Provider::Chatgpt | Provider::Claude => true,
@@ -177,7 +107,6 @@ impl InferenceConfig {
         }
     }
 
-    /// Where a call actually goes, for the one line that reports it.
     pub fn endpoint(&self) -> &str {
         match self.provider {
             Provider::Chatgpt => crate::llm::codex::DEFAULT_BASE_URL,
@@ -186,17 +115,6 @@ impl InferenceConfig {
         }
     }
 
-    /// The model the active provider is set to.
-    ///
-    /// Every reader that is about to make a call wants this rather than either
-    /// field: an agent or a group can still override it afterward, but the
-    /// value being overridden has to be the one that belongs to the provider
-    /// doing the work.
-    ///
-    /// `Claude` has no field to read and does not gain one. The model belongs to
-    /// the program, which is signed in, configured and updated somewhere this
-    /// app does not reach. What comes back is a label rather than a model id, and the model
-    /// the program actually ran is reported in its own stream.
     pub fn active_model(&self) -> &str {
         match self.provider {
             Provider::Chatgpt => &self.subscription_model,
@@ -206,14 +124,8 @@ impl InferenceConfig {
     }
 }
 
-/// Bumped whenever stored settings need adjusting on load.
 pub const CURRENT_VERSION: u32 = 1;
 
-/// The limits Guac shipped with before they were retuned against real use.
-///
-/// Kept so a stored value can be told apart from a deliberate one. A number
-/// that exactly matches an old default was almost certainly never chosen by
-/// anyone; a different number was.
 const V0_LIMITS: GuardLimits = GuardLimits {
     max_hops: 4,
     max_steps_per_run: 40,
@@ -225,15 +137,7 @@ const V0_LIMITS: GuardLimits = GuardLimits {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppConfig {
-    /// 0 means "written before settings were versioned".
     pub version: u32,
-    /// What agents call the person using this app.
-    ///
-    /// Ambient rather than something each agent discovers and writes into its
-    /// own memory: an operator had to tell one agent their name, that agent
-    /// stored it privately, and every other agent still had no idea who it was
-    /// working for. Empty falls back to "the operator", which is what agents
-    /// said before this existed.
     #[serde(default)]
     pub operator_name: String,
     pub inference: InferenceConfig,
@@ -244,46 +148,23 @@ pub struct AppConfig {
     pub kernel: KernelConfig,
     #[serde(default)]
     pub webhook: WebhookConfig,
-    /// The status bar's buttons, in the order they are drawn. A setting like
-    /// the rest, so every window draws the same bar and a change reaches them
-    /// through the same event.
     #[serde(default)]
     pub quick_actions: Vec<crate::domain::quick::QuickAction>,
-    /// Kept pages pinned to the status bar, drawn from their condensed views,
-    /// in the order they are drawn. A setting for the quick actions' reason.
     #[serde(default)]
     pub widgets: Vec<crate::domain::widget::Widget>,
-    /// What may interrupt the operator. On the Host rather than in each
-    /// browser, because the Host now decides it, once, for every window.
-    /// Only the operator sets it: it is not in [`AGENT_WRITABLE`], and an
-    /// agent's own settings read does not show it.
     #[serde(default)]
     pub attention: crate::domain::outbox::Attention,
-    /// Where to reach the operator with every window closed. Only the operator
-    /// sets it, for the reason [`attention`] is theirs, and more: the address
-    /// and the token are credentials, so an agent's settings read never shows
-    /// them and the webview only ever gets a hint.
     #[serde(default)]
     pub delivery: DeliveryConfig,
 }
 
-/// An address the Host sends a push to while the operator is away: an ntfy
-/// topic or any receiver of a JSON POST. See `push.rs`.
-///
-/// `url` and `token` are secrets. A topic on a public ntfy server is readable
-/// by anyone who knows it, so it is redacted like a key, and `Debug` is
-/// written out by hand so that printing a config cannot print either.
 #[derive(Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct DeliveryConfig {
-    /// Empty means nothing is sent anywhere, which is the default.
     pub url: String,
-    /// Sent as `Authorization: Bearer`, unless it already names a scheme.
     pub token: String,
     pub format: crate::push::Format,
     pub content: crate::push::Content,
-    /// Where a tap on a push opens: the address of this Host as a phone can
-    /// reach it. Empty means a push opens nothing.
     pub link_base: String,
 }
 
@@ -305,35 +186,16 @@ impl std::fmt::Debug for DeliveryConfig {
     }
 }
 
-/// What a post to the Host's event route has to carry to fire a routine.
-///
-/// Written by the app rather than typed by the operator, and stored rather
-/// than derived so that it survives a restart: whatever the operator wired to
-/// post events was given one secret, and an app that picked a fresh one on
-/// every launch would break that wiring silently on every launch.
-///
-/// `secret` is empty until the first launch generates one, in
-/// `webhook::prepare`. A settings file from a build that ran a receiver of
-/// its own also has a `port`; it is ignored on load and not written back.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct WebhookConfig {
     pub secret: String,
 }
 
-/// Credentials for the sandboxes agents run their computers in.
-///
-/// App-wide rather than per group: it is one E2B account, and a sandbox is
-/// billed to it no matter which crew asked for one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct E2bConfig {
     pub api_key: String,
-    /// Minutes of inactivity before a machine puts itself to sleep.
-    ///
-    /// Sleeping keeps the disk, so a browser stays signed in; it is the bill
-    /// that stops, not the work. Refreshed on every use, so this is idle time
-    /// rather than a lifetime.
     #[serde(default = "default_idle_minutes")]
     pub idle_minutes: u32,
 }
@@ -348,35 +210,12 @@ impl Default for E2bConfig {
     }
 }
 
-/// Credentials for the hosted browsers agents use.
-///
-/// A second provider rather than a second setting on the first, because a
-/// computer and a browser are different products bought from different people.
-/// Either can be configured without the other: an operator who only wants
-/// agents that use the web needs no machines, and one who only wants shells
-/// needs no browsers. App-wide for the same reason as E2B's: it is one account,
-/// and a browser is billed to it whichever crew asked for one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct KernelConfig {
     pub api_key: String,
-    /// Minutes of inactivity before a browser is deleted.
-    ///
-    /// Not the same thing as a machine's sleep. A browser goes to standby on its
-    /// own after a few seconds, which keeps its state and stops the bill; this
-    /// is how long after that it is thrown away. Nothing is lost when it is:
-    /// the cookies were written back to the agent's profile, so the next browser
-    /// opens signed in to the same accounts. Longer therefore costs nothing but
-    /// saves the seconds a fresh one takes to boot.
     #[serde(default = "default_browser_idle_minutes")]
     pub idle_minutes: u32,
-    /// Whether browsers are created in stealth mode.
-    ///
-    /// Off by default, and the operator's call rather than Guaca's. On, sites
-    /// that block automation are far more likely to let an agent through, and
-    /// the provider solves the captchas. It also costs more and needs a plan
-    /// that includes it, so switching it on for everyone would make the first
-    /// browser fail to start on accounts that do not have it.
     #[serde(default)]
     pub stealth: bool,
 }
@@ -395,13 +234,6 @@ impl Default for KernelConfig {
     }
 }
 
-/// Brings stored settings up to date, returning true if anything changed.
-///
-/// Defaults otherwise only ever reach a fresh install: anyone who had opened
-/// Settings once was pinned to whatever the defaults were that day, which is
-/// how a retuned limit failed to reach the person who needed it. Only values
-/// that still match a superseded default are touched, so a number someone
-/// actually chose is left alone.
 pub fn migrate(config: &mut AppConfig) -> bool {
     if config.version >= CURRENT_VERSION {
         return false;
@@ -418,21 +250,14 @@ pub fn migrate(config: &mut AppConfig) -> bool {
     if config.limits.max_sends_per_pair == V0_LIMITS.max_sends_per_pair {
         config.limits.max_sends_per_pair = current.max_sends_per_pair;
     }
-    // Four was the hardcoded value before this was settable, and it is far too
-    // few for an agent working a browser.
     if config.limits.max_tool_rounds == V0_LIMITS.max_tool_rounds {
         config.limits.max_tool_rounds = current.max_tool_rounds;
     }
 
-    // Always worth persisting even when no limit moved: recording the version
-    // is what stops this running again on every launch.
     config.version = CURRENT_VERSION;
     true
 }
 
-/// What the webview is allowed to see. The key itself never crosses the IPC
-/// boundary, only whether one is set and its last four characters, which is
-/// enough for an operator to tell two keys apart.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RedactedConfig {
@@ -454,24 +279,17 @@ pub struct RedactedConfig {
     pub api_key_hint: String,
     pub request_timeout_secs: u64,
     pub limits: GuardLimits,
-    /// A safe initial choice while the account's live catalog is loading.
     pub subscription_models: Vec<String>,
-    /// Nothing secret in one, so it crosses whole.
     #[serde(default)]
     pub quick_actions: Vec<crate::domain::quick::QuickAction>,
-    /// An artifact id and a width. The page itself is read when it is drawn.
     #[serde(default)]
     pub widgets: Vec<crate::domain::widget::Widget>,
-    /// What may interrupt the operator, for every window on this Host.
     #[serde(default)]
     pub attention: crate::domain::outbox::Attention,
-    /// The address pushes go to, as hints only.
     #[serde(default)]
     pub delivery: RedactedDelivery,
 }
 
-/// What the webview may know about the push address: whether there is one and
-/// enough of it to recognize, never the topic or the token.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RedactedDelivery {
@@ -521,8 +339,6 @@ impl AppConfig {
     }
 }
 
-/// Last four characters of a key, for showing that one is set without showing
-/// what it is. Shared with groups, which redact theirs the same way.
 pub fn hint_for(key: &str) -> String {
     let key = key.trim();
     if key.is_empty() {
@@ -532,9 +348,6 @@ pub fn hint_for(key: &str) -> String {
     format!("...{tail}")
 }
 
-/// An address shown the way a key is: its scheme and host, which say which
-/// server it is, and the last four characters of the rest, which tell two
-/// topics apart. Never the path, which on ntfy is the topic and so the secret.
 pub fn url_hint(url: &str) -> String {
     let url = url.trim();
     if url.is_empty() {
@@ -552,9 +365,6 @@ pub fn url_hint(url: &str) -> String {
     format!("{}://{host}{port}/{shown}", parsed.scheme())
 }
 
-/// Checks an address the Host is to send to or open: http or https, with a
-/// host. Refused without repeating what was typed, since what was typed may be
-/// a topic nobody else should read in an error.
 fn web_address(input: &str, field: &'static str) -> Result<String, ConfigError> {
     let trimmed = input.trim();
     let parsed = reqwest::Url::parse(trimmed).map_err(|_| ConfigError::BadAddress { field })?;
@@ -590,14 +400,11 @@ pub enum ConfigError {
     BadAddress { field: &'static str },
 }
 
-/// Normalizes and validates an operator-supplied base URL.
 pub fn normalize_base_url(input: &str) -> Result<String, ConfigError> {
     let trimmed = input.trim().trim_end_matches('/');
     if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
         return Err(ConfigError::BadBaseUrl { got: input.to_string() });
     }
-    // A base that already names the endpoint is a common paste error; accepting
-    // it silently produces a 404 that looks like an auth problem.
     let cleaned = trimmed.trim_end_matches("/chat/completions").trim_end_matches('/');
     if cleaned.is_empty() {
         return Err(ConfigError::BadBaseUrl { got: input.to_string() });
@@ -605,11 +412,6 @@ pub fn normalize_base_url(input: &str) -> Result<String, ConfigError> {
     Ok(cleaned.to_string())
 }
 
-// ---- changing settings ---------------------------------------------------
-
-/// Absent fields are left alone. `apiKey: ""` clears the key; omitting it
-/// keeps the existing one, which is what lets the UI show a redacted value
-/// without ever round-tripping the secret.
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct LimitsPatch {
@@ -641,9 +443,6 @@ pub struct SettingsPatch {
     pub delivery: Option<DeliveryPatch>,
 }
 
-/// The parts of the push address the operator changed. A blank `url` or
-/// `token` removes it, and an absent one keeps it, as with the API key, which
-/// is what lets the pane show a hint without ever holding the secret.
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct DeliveryPatch {
@@ -654,8 +453,6 @@ pub struct DeliveryPatch {
     pub link_base: Option<String>,
 }
 
-/// The switches the operator changed. Absent ones keep their value, so a
-/// window that knows two of them cannot turn off a third it has never drawn.
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AttentionPatch {
@@ -665,11 +462,6 @@ pub struct AttentionPatch {
 }
 
 impl AppConfig {
-    /// Applies a patch in memory: the one set of rules every writer shares, the
-    /// settings pane in any client and an agent alike.
-    ///
-    /// Clamped rather than refused where a number is out of range, because the
-    /// pane reads the stored value back and shows what was kept.
     pub fn apply(&mut self, patch: SettingsPatch) -> Result<(), ConfigError> {
         if let Some(name) = patch.operator_name {
             self.operator_name = name.trim().to_string();
@@ -684,18 +476,12 @@ impl AppConfig {
             self.e2b.api_key = key.trim().to_string();
         }
         if let Some(minutes) = patch.computer_idle_minutes {
-            // A machine that sleeps after zero minutes can never be used, and one
-            // that never sleeps is a bill nobody chose.
             self.e2b.idle_minutes = minutes.clamp(1, 24 * 60);
         }
         if let Some(key) = patch.kernel_api_key {
             self.kernel.api_key = key.trim().to_string();
         }
         if let Some(minutes) = patch.browser_idle_minutes {
-            // Wider at the top than the machine's, because a browser on standby
-            // costs nothing and the provider allows three days. Wider at the bottom
-            // is not possible: ten seconds is its floor, which is a fifth of a
-            // minute, so one minute is as short as this can offer.
             self.kernel.idle_minutes = minutes.clamp(1, 72 * 60);
         }
         if let Some(stealth) = patch.browser_stealth {
@@ -770,10 +556,6 @@ impl AppConfig {
     }
 }
 
-/// The settings an agent may ask to change, as `settings` names them.
-///
-/// Everything here changes what agents run on and nothing here reaches outside
-/// the workspace. The operator approves each change, with its before and after.
 pub const AGENT_WRITABLE: &[&str] = &[
     "operatorName",
     "defaultModel",
@@ -786,14 +568,9 @@ pub const AGENT_WRITABLE: &[&str] = &[
     "browserStealth",
 ];
 
-/// What an agent may never change, even with approval. The endpoint decides
-/// where the API key is sent, so an agent that could move it could send the
-/// key anywhere; the keys themselves are never shown to it at all.
 pub const OPERATOR_ONLY: &[&str] =
     &["provider", "baseUrl", "apiKey", "e2bApiKey", "kernelApiKey", "permissionRules"];
 
-/// The five limits, as the settings pane labels them. `limits.ts` holds the same
-/// words for the pane, and `manual.test.ts` checks the two agree.
 pub const LIMIT_LABELS: &[(&str, &str)] = &[
     ("maxStepsPerRun", "Model calls per conversation"),
     ("maxToolRounds", "Tool calls per turn"),
@@ -817,8 +594,6 @@ struct AgentPatchValidation {
     browser_stealth: Option<bool>,
 }
 
-/// The limits an agent names, each one read as its own type. Absent is left
-/// alone; a null is refused, as it was when an agent's limits were read whole.
 #[allow(dead_code)]
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -830,13 +605,6 @@ struct LimitsValidation {
     max_tool_rounds: u16,
 }
 
-/// Reads the changes an agent asked for into a patch, refusing what it may
-/// not touch with a sentence that says what it may.
-///
-/// The patch carries what the agent named and nothing else, a limit included.
-/// It is applied when the operator allows it, which can be ten minutes after
-/// it was asked for, and a limit carried at the value it had then would undo
-/// whatever the operator saved in between.
 pub fn agent_patch(changes: &serde_json::Value) -> Result<SettingsPatch, String> {
     let Some(asked) = changes.as_object().filter(|asked| !asked.is_empty()) else {
         return Err("`changes` must name the settings to change, for example \
@@ -881,7 +649,6 @@ pub fn agent_patch(changes: &serde_json::Value) -> Result<SettingsPatch, String>
     })
 }
 
-/// One setting, before and after, in the words the settings pane uses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Change {
     pub label: String,
@@ -889,7 +656,6 @@ pub struct Change {
     pub to: String,
 }
 
-/// What differs between two settings, among the ones an agent can change.
 pub fn changes(before: &AppConfig, after: &AppConfig) -> Vec<Change> {
     let mut out = Vec::new();
     let mut compare = |label: &str, from: String, to: String| {
@@ -943,7 +709,6 @@ pub fn changes(before: &AppConfig, after: &AppConfig) -> Vec<Change> {
     out
 }
 
-/// An address with any `user:password@` taken out, for showing to a model.
 pub fn without_userinfo(url: &str) -> String {
     match url.split_once("://") {
         Some((scheme, rest)) => {
@@ -959,12 +724,10 @@ pub fn without_userinfo(url: &str) -> String {
     }
 }
 
-/// Reads stored settings, migrating and rewriting them if they are outdated.
 pub fn load(path: &Path) -> Result<AppConfig, ConfigError> {
     let mut config = match fs::read_to_string(path) {
         Ok(raw) => serde_json::from_str::<AppConfig>(&raw)
             .map_err(|source| ConfigError::Parse { path: path.to_path_buf(), source })?,
-        // A missing config is the first-run case, not an error.
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             return Ok(AppConfig { version: CURRENT_VERSION, ..Default::default() });
         }
@@ -972,8 +735,6 @@ pub fn load(path: &Path) -> Result<AppConfig, ConfigError> {
     };
 
     if migrate(&mut config) {
-        // Best effort: a read-only config directory should not stop startup,
-        // and the migrated values are already correct in memory.
         if let Err(err) = save(path, &config) {
             tracing::warn!(%err, "could not persist migrated settings");
         }
@@ -990,8 +751,6 @@ pub fn save(path: &Path, config: &AppConfig) -> Result<(), ConfigError> {
     let json = serde_json::to_string_pretty(config)
         .map_err(|source| ConfigError::Parse { path: path.to_path_buf(), source })?;
 
-    // Write to a sibling temp file and rename, so a crash mid-write cannot
-    // leave a truncated config that fails to parse on next launch.
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, json).map_err(|source| ConfigError::Io { path: tmp.clone(), source })?;
     restrict_permissions(&tmp)?;
@@ -1009,8 +768,6 @@ fn restrict_permissions(path: &Path) -> Result<(), ConfigError> {
 
 #[cfg(not(unix))]
 fn restrict_permissions(_path: &Path) -> Result<(), ConfigError> {
-    // Windows ACL defaults already scope a per-user config directory to that
-    // user. Nothing useful to tighten without pulling in a platform crate.
     Ok(())
 }
 
@@ -1030,8 +787,6 @@ mod tests {
         assert!(refused.contains("operatorName"), "lists what it may change: {refused}");
         assert!(agent_patch(&serde_json::json!({})).is_err());
 
-        // One limit, and nothing about the four it did not name, which keep
-        // whatever they are when the patch is applied rather than resetting.
         let patch = agent_patch(&serde_json::json!({ "limits": { "maxHops": 12 } })).unwrap();
         let limits = patch.clone().limits.unwrap();
         assert_eq!(limits.max_hops, Some(12));
@@ -1048,9 +803,6 @@ mod tests {
 
     #[test]
     fn what_interrupts_the_operator_is_theirs_alone_to_set() {
-        // Not writable by an agent, even asking, even with approval: an agent
-        // that could turn off the operator's interruptions could do anything
-        // else unannounced.
         for asked in [
             serde_json::json!({ "attention": { "needsYou": false } }),
             serde_json::json!({ "attention": { "failures": false, "finished": false } }),
@@ -1061,7 +813,6 @@ mod tests {
         }
         assert!(!AGENT_WRITABLE.contains(&"attention"));
 
-        // The operator's own patch sets only what it names.
         let mut config = AppConfig::default();
         let patch: SettingsPatch =
             serde_json::from_value(serde_json::json!({ "attention": { "finished": false } }))
@@ -1100,10 +851,6 @@ mod tests {
 
     #[test]
     fn a_provider_is_spelled_the_same_way_in_sqlite_and_on_the_wire() {
-        // Two spellings of one value, and the second is a `serde` attribute
-        // nothing else would notice changing. If they ever disagree, a group's
-        // stored provider reads as inherit and a whole crew quietly moves onto
-        // the app's settings.
         for provider in Provider::ALL {
             let wire = serde_json::to_value(provider).unwrap();
             assert_eq!(wire, serde_json::Value::String(provider.as_str().to_string()));
@@ -1269,8 +1016,6 @@ mod tests {
 
     #[test]
     fn a_superseded_default_is_replaced_on_load() {
-        // The case that bit a real user: they had opened Settings once, so the
-        // old defaults were written to disk and retuning them changed nothing.
         let mut config = AppConfig { version: 0, limits: V0_LIMITS, ..Default::default() };
         assert!(migrate(&mut config));
 
@@ -1283,8 +1028,6 @@ mod tests {
 
     #[test]
     fn a_deliberately_chosen_limit_is_left_alone() {
-        // Someone who raised the hop limit by hand keeps their number, even
-        // while the stale ones beside it are corrected.
         let mut config = AppConfig {
             version: 0,
             limits: GuardLimits { max_hops: 16, ..V0_LIMITS },
@@ -1313,7 +1056,6 @@ mod tests {
         let loaded = load(&path).unwrap();
         assert_eq!(loaded.limits, GuardLimits::default());
 
-        // And the fix is durable, not re-applied on every launch.
         let reread: AppConfig = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(reread.version, CURRENT_VERSION);
     }
@@ -1376,7 +1118,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
         fs::write(&path, "{ not json").unwrap();
-        // Resetting to defaults here would silently discard the operator's key.
         assert!(matches!(load(&path), Err(ConfigError::Parse { .. })));
     }
 

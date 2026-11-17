@@ -69,6 +69,16 @@
       "src-tauri/vendor/mac-usernotifications/README.md"
     ]
   },
+  "migrations": {
+    "commit": "8e24122c0c54c31c216c43259a57c63c8e5933e8",
+    "files": [
+      "connectors/google/migrations/0000_auth.sql",
+      "connectors/google/migrations/0001_oauth_provider.sql",
+      "connectors/google/migrations/0002_drop_email_scope.sql",
+      "connectors/google/migrations/0003_drop_email_scope_from_tokens.sql",
+      "connectors/google/migrations/0004_restore_email_scope.sql"
+    ]
+  },
   "upstream": [
     {
       "path": "src-tauri/vendor/mac-usernotifications/",

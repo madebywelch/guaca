@@ -1,13 +1,4 @@
 import type { GroupArchive, Reconnect } from "./transfer";
-/**
- * Typed wrappers over the command surface.
- *
- * Every call the UI can make goes through here, so the set of things the
- * frontend is able to do is one readable list. camelCase argument keys map onto
- * the Rust snake_case parameters. `invoke` goes over HTTP to the host the page
- * is attached to; `invokeLocal` goes over Tauri's IPC to the desktop app's own
- * commands, which are about this machine rather than the workspace.
- */
 
 import {
   attached,
@@ -119,14 +110,6 @@ import { errorMessage } from "./types";
 
 const EVENT_CHANNEL = "guac://event";
 
-/**
- * The menu bar panel asking the window to open an agent's channel, or For you.
- *
- * Its own channel rather than a `UiEvent`. That one is the runtime saying what
- * happened, and this is one surface asking another to go somewhere: folding
- * them together would put a case in the transcript's event handling for
- * something the runtime never emits. Kept in step with `tray.rs`.
- */
 const REVEAL_CHANNEL = "guac://reveal";
 
 export const api = {
@@ -140,63 +123,34 @@ export const api = {
   importGroup: (archive: GroupArchive, name: string) =>
     invoke<Group>("import_group", { archive, name }),
   groupReconnect: (id: GroupId) => invoke<Reconnect[]>("group_reconnect", { id }),
-  /** `null` when the agent has never been given a computer. */
   agentComputer: (id: AgentId) => invoke<Computer | null>("agent_computer", { id }),
 
-  /**
-   * Lets this agent have a computer. The decision alone: no machine is made
-   * here, and one is only rented when the agent or the operator needs it.
-   */
   giveAgentComputer: (id: AgentId) => invoke<void>("give_agent_computer", { id }),
 
-  /** Takes it back, and sleeps the machine if there is one. The disk is kept. */
   takeAgentComputer: (id: AgentId) => invoke<void>("take_agent_computer", { id }),
 
-  /** Creates or wakes the sandbox, and brings the desktop up. Idempotent. */
   startAgentComputer: (id: AgentId) => invoke<Computer>("start_agent_computer", { id }),
 
-  /** Puts it to sleep. The disk is kept, so a signed-in browser stays signed in. */
   stopAgentComputer: (id: AgentId) => invoke<Computer | null>("stop_agent_computer", { id }),
 
-  /** Destroys the sandbox and everything on its disk. */
   deleteAgentComputer: (id: AgentId) => invoke<void>("delete_agent_computer", { id }),
 
-  /** `null` when the agent has no browser, or the one it had has gone. */
   agentBrowser: (id: AgentId) => invoke<Browser | null>("agent_browser", { id }),
 
-  /** Lets this agent have a browser. The decision alone; nothing is opened. */
   giveAgentBrowser: (id: AgentId) => invoke<void>("give_agent_browser", { id }),
 
-  /**
-   * Takes it back, and closes the browser if one is open. What it is signed in
-   * to is saved to the agent's profile, so giving it back opens it signed in.
-   */
   takeAgentBrowser: (id: AgentId) => invoke<void>("take_agent_browser", { id }),
 
-  /**
-   * Whether that browser stops and asks before it acts in the operator's name.
-   * Its own call, because it outlives every browser given and taken back.
-   */
   setAgentBrowserConsent: (id: AgentId, consent: BrowserConsent) =>
     invoke<void>("set_agent_browser_consent", { id, consent }),
 
-  /** Whether this agent may send errands. Applied at once, and off by default. */
   setAgentErrands: (id: AgentId, given: boolean) =>
     invoke<void>("set_agent_errands", { id, given }),
 
-  /** Opens one, or hands back the one it already has. Idempotent. */
   startAgentBrowser: (id: AgentId) => invoke<Browser>("start_agent_browser", { id }),
 
-  /**
-   * Ends it, keeping what it is signed in to.
-   *
-   * Closing is what writes the cookies back to the agent's profile, so this is
-   * how a sign-in just performed is made durable rather than waiting for the
-   * idle timeout to do it.
-   */
   stopAgentBrowser: (id: AgentId) => invoke<void>("stop_agent_browser", { id }),
 
-  /** Every account a crew can reach. Never carries a credential's value. */
   groupConnectors: (groupId: GroupId) => invoke<Connector[]>("group_connectors", { groupId }),
 
   createConnector: (draft: ConnectorDraft) => invoke<Connector>("create_connector", { draft }),
@@ -211,12 +165,6 @@ export const api = {
 
   builtinTools: () => invoke<ToolSummary[]>("builtin_tools"),
 
-  /**
-   * Tells the host what this window shows. Without `presence`, only while it
-   * has focus. With it, also when focus is lost, naming the window: that is
-   * how the host knows whether anybody is there, and it changes nothing an
-   * agent reads about the view.
-   */
   reportView: (view: OperatorView, presence?: { focused: boolean; client: string }) =>
     invoke<void>("report_view", {
       view,
@@ -238,62 +186,20 @@ export const api = {
   addDirectorySkill: (scope: SkillScope, id: string, hash: string) =>
     invoke<Skill>("add_directory_skill", { scope, id, hash }),
 
-  /**
-   * Whether the `claude` program is on this machine. Asked of the program
-   * rather than assumed, so the provider row says so before a turn finds out.
-   */
   claudeProgram: () => invoke<ClaudeProgram>("claude_program"),
 
-  /**
-   * Sign-ins this machine already has, for the first run to offer.
-   *
-   * Empty on a host that is not this Mac, and on any host with nothing to
-   * offer. Asked only by the first run's provider step, and the answer never
-   * changes a setting on its own.
-   */
   existingSignins: () => invoke<Pickup[]>("existing_signins"),
 
   pluginCatalog: () => invoke<PluginOffer[]>("plugin_catalog"),
 
-  /** What one crew has connected. Never carries a grant. */
   groupPlugins: (groupId: GroupId) => invoke<Plugin[]>("group_plugins", { groupId }),
 
-  /**
-   * Signs the crew in, opening the operator's browser when the server asks for
-   * one. Resolves only once they have finished there, which can be minutes, so
-   * whatever calls this has to show that it is waiting on a person.
-   */
   connectPlugin: (groupId: GroupId, kind: CatalogKind, connection?: string) =>
     invoke<Plugin>("connect_plugin", { groupId, kind, connection: connection ?? null }),
 
-  /**
-   * Adds a server the operator addressed themselves, and connects it.
-   *
-   * The name becomes the prefix every one of its tools is called by, so what
-   * comes back on the row is the normalized form rather than what was typed.
-   * The key is for a server with no authorization server behind it, which is
-   * most of the ones somebody wrote: left out, the server is asked what it
-   * wants exactly as a vendor's is.
-   *
-   * The headers are a third thing and not a third credential: they go on every
-   * request whichever of the other two paid for it, which is what makes an
-   * `X-API-Key` server and a server behind Cloudflare Access both work.
-   */
   addPlugin: (groupId: GroupId, name: string, url: string, key?: string, headers?: HeaderPair[]) =>
     invoke<Plugin>("add_plugin", { groupId, name, url, key: key ?? null, headers }),
 
-  /**
-   * Points a crew's own server at a different address, or hands it a new key.
-   *
-   * A reconnection rather than an edit, because a server at a new address is
-   * not the one that published the old tool list. Who may spend it and which of
-   * its tools are whose survive, for the reason they survive any reconnection.
-   *
-   * The headers are the whole set every time, and leaving them out removes
-   * them. That is the opposite of the key, whose absence means "ask the
-   * server", and the two differ because the panel can read the header names
-   * back and cannot read a key back at all.
-   */
   readdressPlugin: (
     groupId: GroupId,
     id: PluginId,
@@ -302,78 +208,26 @@ export const api = {
     headers?: HeaderPair[],
   ) => invoke<Plugin>("readdress_plugin", { groupId, id, url, key: key ?? null, headers }),
 
-  /**
-   * Dials a server and says what it found, connecting nothing.
-   *
-   * The whole path a connection runs — both transports, the handshake, the
-   * tool list — with whatever has been typed and not yet saved. It stops one
-   * step short in one place: a server that wants a sign-in is reported as
-   * wanting one rather than sent to a browser.
-   */
   probeServer: (url: string, key?: string, headers?: HeaderPair[]) =>
     invoke<ServerReport>("probe_server", { url, key: key ?? null, headers }),
 
-  /**
-   * The same question, asked of a plugin this crew already has, using the grant
-   * in the store. The only way to find out whether a sign-in is still good
-   * without reconnecting, which opens a browser.
-   */
   checkPlugin: (id: PluginId) => invoke<ServerReport>("check_plugin", { id }),
 
-  /**
-   * Narrows a plugin to named agents, or opens it back up to the crew.
-   *
-   * The whole answer every time. A merge would let this panel narrow a plugin
-   * by forgetting somebody it had not drawn yet.
-   */
   setPluginAccess: (id: PluginId, access: PluginAccess) =>
     invoke<Plugin>("set_plugin_access", { id, access }),
 
-  /**
-   * Chooses which of a crew's agents may call one of a plugin's tools.
-   *
-   * One named tool and the whole answer for it, rather than every tool the way
-   * `setPluginAccess` takes every agent. Naming the tool is what keeps a panel
-   * that can only see today's list from dropping a narrowing filed against one
-   * the vendor has stopped publishing; inside the named tool the set of agents
-   * is replaced, for the reason it is there.
-   */
   setPluginTool: (id: PluginId, tool: string, access: PluginAccess) =>
     invoke<Plugin>("set_plugin_tool", { id, tool, access }),
 
   disconnectPlugin: (id: PluginId) => invoke<void>("disconnect_plugin", { id }),
 
-  /** The last scan's result. Does not touch the machine, so it is free. */
   agentSignins: (id: AgentId) => invoke<Signin[]>("agent_signins", { id }),
 
-  /**
-   * Asks the agent's browser what it is signed in to, right now. Nobody
-   * declares these: Chrome is holding the cookies, so the machine is asked.
-   * A sleeping or absent machine keeps whatever was last seen.
-   */
   scanAgentSignins: (id: AgentId) => invoke<Signin[]>("scan_agent_signins", { id }),
 
-  /**
-   * What every recent permission request came to, keyed by id. The requests
-   * themselves arrive in the transcript; this is the half that changes.
-   */
   approvalStates: () => invoke<Record<ApprovalId, ApprovalState>>("approval_states"),
-  /**
-   * What the operator said to each question, once they have answered it.
-   *
-   * The other half of the request record: `approvalStates` says whether a card
-   * is still live, and this says what it was answered with. Only a question
-   * has one — a permission is settled with a token, and the token is the state.
-   * A question missing from this map was never answered, or is older than the
-   * window the host reads, and its card says only that it was answered.
-   */
   approvalAnswers: () => invoke<Record<ApprovalId, string>>("approval_answers"),
-  /** Every request still waiting on the operator, oldest first. */
   listDecisions: () => invoke<WorkDecision[]>("list_decisions"),
-  /**
-   * What finished runs ended in, newest first: since a moment, in one group,
-   * or only what nobody has seen. `limit` is required; the host caps it.
-   */
   listOutcomes: (query: {
     since?: number;
     groupId?: GroupId;
@@ -386,139 +240,66 @@ export const api = {
       unseenOnly: query.unseenOnly ?? null,
       limit: query.limit,
     }),
-  /**
-   * Marks outcomes seen: the runs named, the ones finished by `before`, or the
-   * runs named that finished by then. One of the two is required. Resolves to
-   * the runs it marked, and every window hears `outcomesSeen` with them.
-   */
   markOutcomesSeen: (target: { runIds?: RunId[]; before?: number }) =>
     invoke<RunId[]>("mark_outcomes_seen", {
       runIds: target.runIds ?? null,
       before: target.before ?? null,
     }),
-  /**
-   * What the host has offered and nobody has claimed, oldest first. Asked on
-   * connecting, since an offer reaches only the windows listening when it is
-   * made. Never what this page gave back.
-   */
   pendingDeliveries: () => invoke<Delivery[]>("pending_deliveries", { client: PAGE_ID }),
-  /**
-   * Claims one delivery for this window. True means show it, and it is true
-   * for exactly one window. False means another window has it, or what it was
-   * about was answered or seen first. The page is named so that only it can
-   * give the claim back.
-   */
   claimDelivery: (id: DeliveryId) => invoke<boolean>("claim_delivery", { id, client: PAGE_ID }),
-  /**
-   * Gives back a delivery this window claimed and could not show, so another
-   * window or the push can. False when this page does not hold the claim,
-   * which changes nothing.
-   */
   releaseDelivery: (id: DeliveryId) => invoke<boolean>("release_delivery", { id, client: PAGE_ID }),
-  /** When a push last went out to the operator's address, and how the last attempt ended. */
   pushReport: () => invoke<PushReport>("push_report"),
-  /** Sends one push to the saved address now. Resolves with what came back; a refusal rejects. */
   testPush: () => invoke<string>("test_push"),
   answerDecision: (id: string, answer: string, updatedAt: number) =>
     invoke<WorkDecision>("answer_decision", { id, answer, updatedAt }),
   resumeDecision: (id: string) => invoke<WorkDecision>("resume_decision", { id }),
   snoozeDecision: (id: string, until: number) => invoke<void>("snooze_decision", { id, until }),
-  /**
-   * A host before 0.5.0 does not send `lapsesAt`. Read here as no known lapse,
-   * so every reader gets a value the type allows instead of `undefined`, which
-   * passes a `=== null` check and becomes a point at no time on the timeline.
-   */
   pendingApprovals: async () =>
     (await invoke<Approval[]>("pending_approvals")).map((one) => ({
       ...one,
       lapsesAt: one.lapsesAt ?? null,
     })),
 
-  /**
-   * Everything an agent has said it cannot get past without the operator,
-   * oldest first. The other half of the desk's queue, and read the same way:
-   * nothing can be on the desk that is not a row in the store.
-   */
   openEscalations: () => invoke<Escalation[]>("open_escalations"),
-  /** Takes one off the desk. Not an answer: nothing is waiting on it. */
   clearEscalation: (id: EscalationId) => invoke<void>("clear_escalation", { id }),
 
-  /**
-   * What is on the calendar between two moments, soonest first.
-   *
-   * `groupId` left out is every crew at once, which is the operator's default
-   * and the one read in the app that crosses the wall between crews. Theirs to
-   * cross: the wall keeps one crew's agents from moving another's meeting, not
-   * the operator from seeing their own workspace.
-   *
-   * Half-open on `until`, so paging a month at a time neither drops an occasion
-   * nor draws one twice.
-   */
   calendar: (from: number, until: number, groupId?: GroupId) =>
     invoke<Occasion[]>("calendar", { from, until, groupId: groupId ?? null }),
   createOccasion: (draft: OccasionDraft) => invoke<Occasion>("create_occasion", { draft }),
-  /**
-   * Rewrites one. The crew is taken from the row rather than from the draft:
-   * moving an occasion between crews is not an edit, and nothing offers it.
-   */
   updateOccasion: (id: OccasionId, draft: OccasionDraft) =>
     invoke<Occasion>("update_occasion", { id, draft }),
   deleteOccasion: (id: OccasionId) => invoke<void>("delete_occasion", { id }),
 
-  /**
-   * The artifacts the operator can see, newest change first. No `groupId` is
-   * every crew's, which is what the dialog reads while the rail shows every
-   * crew; the wall between crews is for agents, not the operator.
-   */
   artifacts: (groupId?: GroupId | null) =>
     invoke<Artifact[]>("artifacts", { groupId: groupId ?? null }),
-  /** One artifact and its whole log, without any page in it. */
   artifactDetail: (id: ArtifactId) => invoke<ArtifactDetail>("artifact_detail", { id }),
-  /** The page at one version, or the current one when `version` is left out. */
   artifactPage: (id: ArtifactId, version?: number | null) =>
     invoke<string>("artifact_page", { id, version: version ?? null }),
-  /**
-   * A kept page's reads, made now, with no model involved. Refused reads come
-   * back refused rather than failing the call, so the page can say which of
-   * its numbers are missing and why.
-   */
   artifactData: (id: ArtifactId, version?: number | null) =>
     invoke<ArtifactRead[]>("artifact_data", { id, version: version ?? null }),
-  /** Allows the reads the current version declares, exactly that list. */
   allowArtifactSources: (
     id: ArtifactId,
     version: number,
     ownerId: AgentId | null,
     sources: ArtifactSource[],
   ) => invoke<Artifact>("approve_artifact_sources", { id, version, ownerId, sources }),
-  /** Puts an earlier version back as a new one. The one it replaces is kept. */
   restoreArtifact: (id: ArtifactId, version: number) =>
     invoke<Artifact>("restore_artifact", { id, version }),
-  /** Gives it to an agent in its own crew; refused for anybody outside it. */
   handArtifact: (id: ArtifactId, agentId: AgentId) =>
     invoke<Artifact>("hand_artifact", { id, agentId }),
   deleteArtifact: (id: ArtifactId) => invoke<void>("delete_artifact", { id }),
-  /** A pinned page as the status bar draws it: the artifact and its condensed view. */
   artifactCondensed: (id: ArtifactId) => invoke<CondensedView>("artifact_condensed", { id }),
-  /**
-   * Puts a page with a condensed view on the status bar, or changes the width
-   * of one already there. The operator's own, so nobody approves it.
-   */
   pinArtifact: (id: ArtifactId, width: WidgetWidth) =>
     invoke<Settings>("pin_artifact", { id, width }),
   unpinArtifact: (id: ArtifactId) => invoke<Settings>("unpin_artifact", { id }),
 
-  /** Refused if it was already answered or has lapsed. */
   decideApproval: (id: ApprovalId, decision: Decision) =>
     invoke<Approval>("decide_approval", { id, decision }),
-  /** Answers a question with what the operator picked or wrote. */
   answerQuestion: (id: ApprovalId, answer: string) =>
     invoke<Approval>("answer_question", { id, answer }),
 
-  /** What this agent no longer has to ask about. */
   agentGrants: (id: AgentId) => invoke<ProtectedAction[]>("agent_grants", { id }),
 
-  /** Takes one back, and returns what is left. */
   revokeGrant: (id: AgentId, action: ProtectedAction) =>
     invoke<ProtectedAction[]>("revoke_grant", { id, action }),
 
@@ -528,24 +309,11 @@ export const api = {
 
   updateGroup: (id: GroupId, draft: GroupDraft) => invoke<Group>("update_group", { id, draft }),
 
-  /**
-   * Tests a group's endpoint and key, resolved over the app settings.
-   *
-   * Sends what is on screen and starts from the stored key, so testing without
-   * retyping it reports on the key that is actually there. `id` is null for a
-   * group that has not been created yet.
-   */
   testGroupConnection: (id: GroupId | null, draft: GroupDraft) =>
     invoke<string>("test_group_connection", { id, draft }),
 
-  /** Refused while the group still holds agents; the error carries which. */
   deleteGroup: (id: GroupId) => invoke<void>("delete_group", { id }),
 
-  /**
-   * The group and everybody in it: every agent deleted, every computer and
-   * browser destroyed with them. Refused for the default group, before
-   * anything is taken.
-   */
   disbandGroup: (id: GroupId) => invoke<void>("disband_group", { id }),
 
   listAgents: () => invoke<AgentCard[]>("list_agents"),
@@ -554,178 +322,79 @@ export const api = {
 
   updateAgent: (id: AgentId, draft: AgentDraft) => invoke<AgentCard>("update_agent", { id, draft }),
 
-  /**
-   * Deletes an agent into the compost, where it waits thirty days.
-   *
-   * It is out of the rail and unreachable the moment this returns, exactly as a
-   * deleted agent has always been. What is different is that its memory, notes,
-   * schedule, sign-ins and machines are all still there until the wait is up.
-   */
   deleteAgent: (id: AgentId) => invoke<void>("delete_agent", { id }),
 
-  /**
-   * Pulls one back out, paused. The name may come back settled: a composted
-   * agent frees its name, so somebody hired since may be holding it.
-   */
   restoreAgent: (id: AgentId) => invoke<AgentCard>("restore_agent", { id }),
 
-  /** Ends the wait now. Its memory, machines and schedule go for good. */
   purgeAgent: (id: AgentId) => invoke<void>("purge_agent", { id }),
 
-  /**
-   * A second agent from the same card: the look, model, skills and
-   * instructions. Not the computer, memory, schedule, accounts or transcript,
-   * which are what one agent went and did rather than what was written down.
-   */
   duplicateAgent: (id: AgentId) => invoke<AgentCard>("duplicate_agent", { id }),
 
-  /**
-   * Hires a set of preconfigured agents into one group, in one call.
-   *
-   * Batched rather than looped for two reasons. Every create announces itself
-   * and the rail re-reads the whole roster, so six hires done one at a time
-   * redraw the sidebar six times. And a name already taken in the group is
-   * settled on the Rust side against the roster *and* the rest of the batch,
-   * which is the one place that rule can live without being written twice.
-   */
   hireAgents: (groupId: GroupId, drafts: AgentDraft[], idempotencyKey?: string) =>
     invoke<AgentCard[]>("hire_agents", { groupId, drafts, idempotencyKey }),
 
   setAgentPaused: (id: AgentId, paused: boolean) =>
     invoke<AgentCard>("set_agent_paused", { id, paused }),
 
-  /** Keeps an agent at the top of the rail. Nothing else about it changes. */
   setAgentPinned: (id: AgentId, pinned: boolean) =>
     invoke<AgentCard>("set_agent_pinned", { id, pinned }),
 
-  /**
-   * Puts an agent where the operator dropped it: which group, and which place.
-   *
-   * One call because a drag is one gesture that can be both, and two would
-   * leave a state where the agent has joined the group but not landed in it.
-   * `before` is the row it goes in front of; `null` is the end of the group.
-   */
   moveAgent: (id: AgentId, groupId: GroupId, before: AgentId | null) =>
     invoke<AgentCard>("move_agent", { id, groupId, before }),
 
-  /**
-   * Puts a crew where the operator dropped its circle. `before` is the crew it
-   * lands in front of; `null` is the end. Answers with every crew, in order.
-   */
   moveGroup: (id: GroupId, before: GroupId | null) => invoke<Group[]>("move_group", { id, before }),
 
   agentActivity: () => invoke<Record<AgentId, Activity>>("agent_activity"),
 
   agentLastActive: () => invoke<Record<AgentId, number>>("agent_last_active"),
 
-  /** An agent's memory: a small markdown file it maintains for itself. */
   agentMemory: (id: AgentId) => invoke<string>("agent_memory", { id }),
   agentMemoryVersioned: (id: AgentId) =>
     invoke<{ content: string; version: string }>("agent_memory_versioned", { id }),
 
-  /** Lets the operator seed or correct an agent's memory by hand. */
   setAgentMemory: (id: AgentId, content: string, expected?: string) =>
     invoke<string>("set_agent_memory", { id, content, expected }),
 
-  /** What an agent is in the middle of, oldest first. */
   agentNotebook: (id: AgentId) => invoke<NotebookEntry[]>("agent_notebook", { id }),
   readNotebook: (id: AgentId, path: string) => invoke<string>("read_notebook", { id, path }),
   deleteNotebookFile: (id: AgentId, path: string) =>
     invoke<boolean>("delete_notebook_file", { id, path }),
   agentWorkingNotes: (id: AgentId) => invoke<WorkingNote[]>("agent_working_notes", { id }),
 
-  /** Drops every note an agent holds. The operator's only write here. */
   clearAgentWorkingNotes: (id: AgentId) => invoke<void>("clear_agent_working_notes", { id }),
 
-  /**
-   * A channel's newest messages. `through` widens the window until it reaches
-   * one particular message, which is what opening a search result needs: a hit
-   * from last month is not in the newest three hundred, and a jump that lands
-   * somewhere else is a jump that failed.
-   */
   channelMessages: (channelId: AgentId, limit?: number, through?: MessageId) =>
     invoke<Envelope[]>("channel_messages", { channelId, limit, through }),
 
-  /**
-   * What two agents said to each other. Not a channel read: a send is filed
-   * under the recipient and the answer under the sender, so neither of their
-   * channels holds the exchange.
-   */
   pairMessages: (a: AgentId, b: AgentId, limit?: number) =>
     invoke<Envelope[]>("pair_messages", { a, b, limit }),
 
-  /** One crew's conversation, for the flow board in its settings. */
   conversationFlow: (group: GroupId, limit?: number) =>
     invoke<Envelope[]>("conversation_flow", { group, limit }),
 
-  /**
-   * Messages, files, links and routines matching a query.
-   *
-   * Agents and groups are deliberately not here: this side already holds both
-   * to draw the rail, so matching them locally costs no round trip and cannot
-   * fall behind the keystroke. `lib/search.ts` puts the two halves in one list.
-   */
   search: (query: string, limit?: number) => invoke<SearchHits>("search", { query, limit }),
 
-  /**
-   * Sends files from this machine's disk to the box this window is showing.
-   *
-   * A drop on the desktop app is a path, and a box has never seen this disk,
-   * so the desktop app reads the bytes and posts them to the box.
-   * Answered in the same shape as every other way a file arrives.
-   */
   forwardFiles: (origin: string, token: string, paths: string[]) =>
     invokeLocal<Staged>("forward_files", { origin, token, paths }),
 
-  /**
-   * Hands this machine's menu bar what the window is showing, when that is a
-   * box; `null` puts it back on this machine's own workspace.
-   */
   reportPresence: (presence: Presence | null) => invokeLocal<void>("report_presence", { presence }),
 
-  /**
-   * Tells the menu bar which workspace this window is attached to, so the
-   * panel under its icon can be a second client of the same one. The token
-   * goes to this machine's own tray process and nowhere else.
-   */
   reportHost: (host: Remote) => invokeLocal<void>("report_host", { host }),
 
-  /**
-   * What macOS will do with a banner from this app, read without asking.
-   * `null` off macOS, where the system keeps no per-app answer to read. Asked
-   * of this machine whatever host the window shows, because the banner is
-   * this machine's.
-   */
   notificationAccess: () => invokeLocal<NotificationAccess | null>("notification_access"),
 
-  /** Opens System Settings at Notifications, where Guaca is turned back on. */
   openNotificationSettings: () => invokeLocal<void>("open_notification_settings"),
 
-  /** The workspace the menu bar panel shows, which is the one the window chose. */
   menubarHost: () => invokeLocal<Remote | null>("menubar_host"),
 
-  /**
-   * Brings the window back from the menu bar panel, somewhere in particular or
-   * wherever it was, and puts the panel away.
-   */
   openWindow: (target: Reveal | null) => invokeLocal<void>("open_window", { target }),
 
-  /** Puts the panel away and hands the keyboard back to whatever had it. */
   closeMenubar: () => invokeLocal<void>("close_menubar"),
 
-  /** How tall the panel's content is, so the panel can be exactly that tall. */
   fitMenubar: (height: number) => invokeLocal<void>("fit_menubar", { height }),
 
-  /** Stops every conversation in the workspace. Says how many were running. */
   stopEverything: () => invoke<number>("stop_everything"),
 
-  /**
-   * Takes documents a browser is holding into the store, one request each.
-   *
-   * The browser's counterpart of `forwardFiles`, with the same answer shape: one
-   * file out of five failing does not refuse the other four, and the one that
-   * cannot go is named in the words the store used.
-   */
   stageUploads: async (files: File[]): Promise<Staged> => {
     const staged: Staged = { attached: [], refused: [] };
     for (const file of files) {
@@ -738,7 +407,6 @@ export const api = {
     return staged;
   },
 
-  /** Copies a file out to the downloads folder, and says where it landed. */
   saveFile: (digest: string, name: string) =>
     invokeLocal<string>("download_file", {
       origin: workspaceOrigin(),
@@ -747,23 +415,9 @@ export const api = {
       name,
     }),
 
-  /**
-   * Puts a page an agent wrote somewhere it can be framed, and says where.
-   *
-   * A round trip rather than a `srcdoc`, because a frame given its markup
-   * inline inherits this document's content policy, and this document forbids
-   * script. What the returned origin permits is `artifact.rs`'s argument.
-   */
   frameArtifact: (html: string) =>
     invoke<{ port: number; id: string; ticket: string | null }>("frame_artifact", { html }),
 
-  /**
-   * Sends what the operator typed, with the files they attached.
-   *
-   * Only the digest and the name go over: the runtime resolves both against
-   * its own store, so the size and the type on the message are read off the
-   * disk rather than taken from here.
-   */
   sendMessage: (
     agentId: AgentId,
     text: string,
@@ -779,23 +433,10 @@ export const api = {
 
   clearChannel: (channelId: AgentId) => invoke<number>("clear_channel", { channelId }),
 
-  /**
-   * Sends the message a failed turn was answering again, as a new run. The
-   * runtime already retried the call itself; this is the operator's turn.
-   */
   retryTurn: (agentId: AgentId, messageId: MessageId) =>
     invoke<RunId>("retry_turn", { agentId, messageId }),
 
-  /**
-   * Stops a conversation and everything it set off. False when there was
-   * nothing left to stop.
-   *
-   * A run, not an agent: the thing the operator wants to end reached however
-   * many agents it reached, and stopping only the one on screen would leave the
-   * rest of the cascade running.
-   */
   stopRun: (runId: RunId) => invoke<boolean>("stop_run", { runId }),
-  /** Resets a whole group: transcripts, routines, memories and spend. */
   clearGroup: (groupId: GroupId) => invoke<GroupReset>("clear_group", { groupId }),
   agentRoutines: (id: AgentId) => invoke<Routine[]>("agent_routines", { id }),
   upcomingRuns: (until: number) => invoke<UpcomingRun[]>("upcoming_runs", { until }),
@@ -804,51 +445,27 @@ export const api = {
   updateRoutine: (id: RoutineId, draft: RoutineDraft) =>
     invoke<Routine>("update_routine", { id, draft }),
 
-  /** Stops or restarts a routine. Its wording, slot and history all stay. */
   setRoutineActive: (id: RoutineId, active: boolean) =>
     invoke<Routine>("set_routine_active", { id, active }),
 
-  /** Fires it now, exactly as the clock would, without moving the schedule. */
   testRoutine: (id: RoutineId) => invoke<RunId>("test_routine", { id }),
 
-  /** What it has done lately, newest first. */
   routineRuns: (id: RoutineId) => invoke<RoutineRun[]>("routine_runs", { id }),
 
-  /** Where an event is posted to fire a routine, and the secret it takes. */
   webhookAddress: () => invoke<WebhookAddress>("webhook_address"),
 
   deleteRoutine: (id: RoutineId) => invoke<void>("delete_routine", { id }),
   usageSummary: () => invoke<GroupUsage[]>("usage_summary"),
   usageForRuns: (runs: RunId[]) => invoke<RunUsage[]>("usage_for_runs", { runs }),
 
-  /**
-   * What this workspace can do, which is decided by where it runs.
-   *
-   * Asked once at startup. Every panel that could offer something a server
-   * cannot honor reads the answer, and the commands behind those panels refuse
-   * it again: a stale bundle draws controls this build no longer offers.
-   */
   capabilities: () => invoke<Capabilities>("capabilities"),
 
   getSettings: () => invoke<Settings>("get_settings"),
 
   updateSettings: (patch: SettingsPatch) => invoke<Settings>("update_settings", { patch }),
 
-  /**
-   * Tests what is currently on screen, not what was last saved. Testing the
-   * saved config while the operator is looking at an unsaved key reports "no
-   * API key configured" for a key they can see, which reads as a bug.
-   */
   testConnection: (patch?: SettingsPatch) => invoke<string>("test_connection", { patch }),
 
-  /**
-   * The models OpenRouter sees doing one kind of work, most capable first.
-   *
-   * The category is one of `ROLES` in `lib/roles.ts` and the backend refuses
-   * anything else, so this is a use case rather than a URL: the webview does not
-   * get to say where the request goes. Cached behind the command for hours, so
-   * calling it as an operator types costs one request per use case.
-   */
   rankedModels: (category: string) => invoke<RankedModel[]>("ranked_models", { category }),
 
   subscriptionModels: () => invoke<import("./types").SubscriptionModel[]>("subscription_models"),
@@ -861,96 +478,33 @@ export const api = {
     invoke<import("./types").ClaudeSigninStatus>("complete_claude_signin", { id, code }),
   cancelClaudeSignin: (id: string) => invoke<void>("cancel_claude_signin", { id }),
 
-  /** Asks for a code to carry to a browser. Returns in one round trip. */
   beginSubscriptionSignin: () => invoke<DeviceCode>("begin_subscription_signin"),
 
-  /**
-   * Waits for the code to be entered, which takes as long as the operator does.
-   *
-   * Parks for up to fifteen minutes on purpose: the whole sign-in is one call,
-   * so abandoning it leaves nothing half-finished to clean up. The caller has to
-   * keep its own "waiting" state, because this does not resolve until it is over.
-   */
   completeSubscriptionSignin: (code: DeviceCode) =>
     invoke<SubscriptionStatus>("complete_subscription_signin", { code }),
 
-  /** Forgets the sign-in, and moves the provider off it if it was in use. */
   signOutSubscription: () => invoke<Settings>("sign_out_subscription"),
 
   accountStatus: () => invoke<AccountStatus>("account_status"),
 
-  /**
-   * The whole sign-in, in one call.
-   *
-   * One rather than the subscription's two, because there is no code for the
-   * operator to carry: a browser opens, they say yes, and the answer arrives on
-   * a port Rust is already listening on. Parks for up to five minutes, so the
-   * caller keeps its own "waiting" state; closing the dialog abandons it and
-   * leaves nothing behind.
-   */
   signInAccount: () => invoke<AccountStatus>("sign_in_account"),
 
-  /** What the account holds, asked of the service rather than remembered. */
   accountConnectors: () => invoke<AccountConnectors>("account_connectors"),
 
-  /** Forgets the sign-in on this machine. */
   signOutAccount: () => invoke<AccountStatus>("sign_out_account"),
 
-  /**
-   * Points a crew's plugin at a different authorized identity.
-   *
-   * Separate from connecting because it is a different act: this moves an
-   * existing row to another mailbox and keeps the per-tool switches, where
-   * reconnecting would replace the row and lose them.
-   */
   setPluginConnection: (groupId: GroupId, kind: CatalogKind, connection: string) =>
     invoke<Plugin>("set_plugin_connection", { groupId, kind, connection }),
 };
 
-/**
- * Opens a link in the operating system browser.
- *
- * Agent output can contain links, and following one inside the webview would
- * navigate away from the app with no way back.
- */
 export function openExternal(url: string): Promise<void> {
   return reachBrowser(url);
 }
 
-/**
- * Raises an operating system notification, if the operator has ever allowed it.
- *
- * Permission is asked for at the moment the first notification would be shown
- * rather than at launch, so the prompt arrives attached to something the
- * operator can see a reason for.
- *
- * True means it was handed to the operating system, which is not the same as
- * shown. On desktop the permission question is answered yes unconditionally —
- * there is no per-app grant for the plugin to read — so a machine with
- * notifications switched off in System Settings accepts every one of these and
- * displays none. Nothing here can tell the difference, and any copy built on
- * this return value has to be worded so that it does not claim to.
- *
- * Every failure is swallowed. A refused permission, a plugin that is not there,
- * a platform with no notification center: none of them are worth a banner,
- * because the thing being announced is already on screen in the rail and the
- * transcript. This is the redundant copy, not the record.
- */
 export async function notifyOperator(title: string, body: string): Promise<boolean> {
   return notify(title, body);
 }
 
-/**
- * Subscribes to runtime events. Returns an unsubscribe function.
- *
- * `onReconnect` fires when a dropped connection comes back, and only a hosted
- * workspace can produce one: the desktop's channel cannot fail without the
- * process failing. What was missed while it was down is gone, exactly as it is
- * while the desktop app is closed, so a caller refetches what it draws.
- * `onLost` fires when it does not come back, and carries the same refusal a
- * call to a host that is not there gets, so a caller puts it on the same
- * banner.
- */
 export function onRuntimeEvent(
   handler: (event: UiEvent) => void,
   onReconnect?: () => void,
@@ -960,50 +514,18 @@ export function onRuntimeEvent(
   return subscribe(EVENT_CHANNEL, handler, onReconnect, onLost, onClose);
 }
 
-/**
- * Subscribes to the menu bar panel asking to be taken somewhere.
- *
- * The window is already shown, unminimized and focused by the time this
- * arrives; all that is left is where it lands. Answering a request in the
- * panel does not come through here: the panel is a client of the host itself,
- * and the answer reaches this window as an ordinary settled event.
- */
 export function onRevealRequest(handler: (target: Reveal) => void): Promise<Unlisten> {
-  // The menu bar is the desktop's, and so is this channel. A browser has no
-  // panel to be asked from, and a subscription that never fires is cheaper
-  // than a caller that has to know which host it is in.
   if (hosted && !attached()) return Promise.resolve(() => {});
   return import("@tauri-apps/api/event").then((events) =>
     events.listen<Reveal>(REVEAL_CHANNEL, (message) => handler(message.payload)),
   );
 }
 
-/**
- * Files dragged onto the window.
- *
- * Tauri hands over paths rather than bytes, which is the whole reason
- * `dragDropEnabled` is on: a dropped document is read by the Rust side and
- * never enters the renderer. `over` fires while a drag is above the window and
- * is what the drop target highlights on.
- */
 export async function onFileDrop(handlers: {
-  /** What the drop became, once the store has taken it. */
   dropped: (staged: Promise<Staged>) => void;
   over: (inside: boolean) => void;
 }): Promise<Unlisten> {
-  // Paths are a desktop fact. Tauri hands over the path of a dropped file and
-  // the Rust side reads the bytes, which is the whole reason `dragDropEnabled`
-  // is on: a document never enters the renderer. A browser has no path to give
-  // and hands over bytes instead, which is a different mechanism and a
-  // different route; both end in the same store, and the caller sees one
-  // answer shape either way.
-  //
-  // Decided by `desktop`, not `hosted`. Every window is hosted since the
-  // runtime left it, and a test on `hosted` sent the desktop down the browser's
-  // branch, where Tauri's own drop events arrive and nothing is listening.
   if (!desktop) {
-    // Counted rather than toggled: a drag crosses every child element on the
-    // way through the window, and each crossing is an enter and a leave.
     let depth = 0;
     const enter = (event: DragEvent) => {
       if (!event.dataTransfer?.types.includes("Files")) return;
@@ -1047,8 +569,6 @@ export async function onFileDrop(handlers: {
     events.listen<{ paths: string[] }>(events.TauriEvent.DRAG_DROP, (message) => {
       handlers.over(false);
       const paths = message.payload.paths ?? [];
-      // The path is on this disk and the store is on the host, local container
-      // or remote box alike, so the native side reads and forwards.
       handlers.dropped(api.forwardFiles(workspaceOrigin(), token(), paths));
     }),
   ]);

@@ -30,66 +30,11 @@ interface Props {
 
 let sendingPage = false;
 
-/**
- * The pages the crews keep, and one of them opened.
- *
- * ## The page is the point, and everything else is quiet
- *
- * The operator comes here for the page. Who owns it, which version it is and
- * when it last changed are one faint line under its name, and the history is
- * behind a button: it is there for working out what happened, by the operator
- * or by an agent asked about it, and it is not something anybody reads on the
- * way to the page. It took a column beside the page when it was first drawn,
- * and that spent the width of the dialog on the thing nobody opened it for.
- *
- * ## What it lists is what the rail is showing
- *
- * Inside a crew, that crew's artifacts; with every crew in the rail, every
- * crew's, with the crew leading each row's line. There is no filter of its own,
- * because the rail already is one and a second control deciding the same thing
- * would be a second answer to disagree with the first. That is a difference
- * from the calendar, which always opens on every crew.
- *
- * ## The page runs as a fenced one does, with nobody to answer
- *
- * Same origin, same policy. No `Answering` is provided here, so a page that
- * calls `guaca.answer` hands back nothing. Every history row that made a
- * version opens that version, and putting one back is a new version, never a
- * rewind, so the page it replaced is still there to put back in turn.
- *
- * ## A page can read, and a click on it can reach its owner
- *
- * A page that declares reads asks for them here, once, as a list the operator
- * can see in full: each connector, each tool, and exactly what it will be
- * sent. Allowed, they run every time the page is opened, with no model in the
- * loop, and again on Refresh. A page's `guaca.send` goes to its owner as the
- * operator's message, and only when the operator's click is what caused it:
- * one at a time, so a page cannot queue a stream of turns while the owner is
- * still working on the last.
- *
- * Ownership is handed from the history, and nowhere else by the operator.
- * Anyone in the crew may edit, so there is nothing to grant; what the operator
- * decides is who answers for the page, which is the way out when its owner has
- * left, and a rare enough act to live beside the record of who held it.
- *
- * ## A page can go on the status bar, or say why it cannot
- *
- * From the foot, as a width or not at all. The row is drawn for every page,
- * because the ones that cannot be pinned are exactly the ones nobody would
- * guess the bar exists from: a page with no condensed view says so beside a
- * width it cannot take, rather than leaving the whole feature to be found in
- * the source. The operator's own pin asks nobody and allows nothing: reads are
- * allowed here, above the page, where the list is drawn in full. A page pinned
- * while its current version has no condensed view, which a restore can do, can
- * only be taken off.
- */
 export function Artifacts({ onClose }: Props) {
   const open = useStore((state) => state.artifactsOpen);
   const show = useStore((state) => state.showArtifacts);
   const railGroup = useStore((state) => state.railGroup);
   const groups = useStore((state) => state.groups);
-  // Bumped whenever an agent or the operator changes one, so the list on screen
-  // is the one that is true now rather than when the dialog opened.
   const changed = useStore((state) => state.artifactsVersion);
   const now = useNow(60_000);
 
@@ -217,7 +162,6 @@ export function Artifacts({ onClose }: Props) {
   );
 }
 
-/** One artifact: its page at a version, and behind a button, its history. */
 function ArtifactView({
   id,
   onBack,
@@ -234,18 +178,12 @@ function ArtifactView({
   const widgets = useStore((state) => state.settings?.widgets ?? null);
   const setSettings = useStore((state) => state.setSettings);
   const now = useNow(60_000);
-  // Named so the reason the widths are refused can be described by the field
-  // that refuses them, rather than sitting beside it as an unrelated sentence.
   const why = useId();
 
   const [detail, setDetail] = useState<ArtifactDetail | null>(null);
   const [reads, setReads] = useState<ArtifactRead[] | null>(null);
-  // Bumped by Refresh, so the reads run again without anything else changing.
   const [fresh, setFresh] = useState(0);
-  // What became of the last thing the page sent, said once, above the page.
   const [said, setSaid] = useState<string | null>(null);
-  // `null` is the current version, followed as it moves. A number is one the
-  // operator picked from the history, and stays put while agents keep editing.
   const [viewing, setViewing] = useState<number | null>(null);
   const [history, setHistory] = useState(false);
   useDismiss(() => setHistory(false), history);
@@ -306,10 +244,6 @@ function ArtifactView({
     setProposal(null);
   }, [shown, detail?.artifact.owner?.id, detail?.artifact.owner?.gone, history]);
 
-  // A version's reads, made when it is shown and again on Refresh or once the
-  // operator allows them. Every version is asked, because Rust is where it is
-  // decided whether that version's list is the allowed one; a page with no
-  // reads gets an empty object, which is still an answer to `guaca.data()`.
   useEffect(() => {
     if (shown === null) return;
     let live = true;
@@ -370,9 +304,6 @@ function ArtifactView({
   const { artifact, log } = detail;
   const crew = groups.find((group) => group.id === artifact.groupId);
 
-  // Where a click on the page goes. Refused here rather than sent and
-  // explained later, because every refusal is something the operator can see
-  // the reason for on the screen they are already looking at.
   const send = (json: string) => {
     const owner = artifact.owner;
     if (proposalRef.current || sendingPage || shown === null) return;
@@ -396,10 +327,7 @@ function ArtifactView({
     setProposal({ json, artifact, shown });
   };
   const crewAgents = agents.filter((agent) => agent.groupId === artifact.groupId);
-  // An earlier version the operator picked, or `null` while the current one is
-  // on screen. The one place a restore can be offered from.
   const earlier = viewing !== null && viewing !== artifact.version ? viewing : null;
-  // `null` from a host older than the bar's pages, which offers no control.
   const pinned = widgets?.find((widget) => widget.artifactId === artifact.id) ?? null;
   const place = (width: WidgetWidth | "") =>
     void act(async () =>
@@ -435,9 +363,6 @@ function ArtifactView({
                 void act(() => api.handArtifact(artifact.id, event.target.value as AgentId))
               }
             >
-              {/* The current owner stays readable while they are gone, rather
-                  than the field quietly showing somebody else: nothing has
-                  changed hands until the operator picks. */}
               {(!artifact.owner || artifact.owner.gone) && (
                 <option value="" disabled>
                   {ownerLabel(artifact.owner)}
@@ -481,9 +406,6 @@ function ArtifactView({
         </div>
       ) : (
         <div className="artifacts__body artifacts__page">
-          {/* A permission, so it is drawn in full rather than kept quiet: the
-              operator is allowing exactly these calls, with exactly these
-              arguments, every time the page is opened. */}
           {artifact.sources.length > 0 && !artifact.sourcesAllowed && earlier === null && (
             <div className="artifacts__ask">
               <p className="artifacts__ask-text">
@@ -614,8 +536,6 @@ function ArtifactView({
           {page === null ? (
             <p className="routines__note">Opening…</p>
           ) : (
-            // Keyed by version so switching versions frames the new page rather
-            // than keeping whatever the operator had done in the old one.
             <HtmlArtifact
               key={`${artifact.id}:${shown}`}
               html={page}
@@ -722,15 +642,6 @@ function ArtifactView({
   );
 }
 
-/**
- * The card a turn leaves when it made or changed a kept page.
- *
- * Drawn from the tool call rather than from the reply, because the call is
- * what knows which artifact and which version: the id is assigned by the
- * write. The title and version are the ones at that moment, so an old card
- * still says what it was about after the page has moved on; opening it opens
- * the artifact as it is now.
- */
 export function ArtifactCard({ made }: { made: ArtifactMade }) {
   const show = useStore((state) => state.showArtifacts);
   return (
@@ -751,11 +662,6 @@ export function ArtifactCard({ made }: { made: ArtifactMade }) {
   );
 }
 
-/**
- * The mark for Artifacts: a page with a folded corner. One drawing for the
- * rail's button and the card a turn leaves, because the card is a way into the
- * same place and has to look like it.
- */
 export function ArtifactMark() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">

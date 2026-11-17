@@ -16,9 +16,6 @@ fn main() {
             assert!(digest.len() == 64 && digest.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)), "Published desktop releases require GUACA_BACKEND_IMAGE pinned to the published digest");
         }
     }
-    // Only the desktop host has a Tauri context to generate. A daemon build
-    // has no window, no `dist/` and no `tauri.conf.json` to validate, and
-    // running this for one fails on a frontend bundle it would never serve.
     if std::env::var_os("CARGO_FEATURE_DESKTOP").is_some() {
         tauri_build::build()
     }

@@ -1,30 +1,3 @@
-//! The third transport: a server that is a program on the host, spoken to over
-//! its own stdin and stdout, one JSON-RPC message per line.
-//!
-//! Most MCP servers people run for themselves ship this way: `npx` a package,
-//! `uvx` another, hand it a token in an environment variable. A connector that
-//! could only dial an address could not reach any of them without somebody
-//! wrapping each in an HTTP server first.
-//!
-//! ## A process per session, which is a process per call
-//!
-//! The same rule the HTTP transports follow: nothing is kept between calls, so
-//! nothing can go stale between them. For a POST that rule costs tens of
-//! milliseconds. For a program it costs its start, which for `npx` is a second
-//! or two with a warm cache, and that is the measurement to take before
-//! changing it: a pool of long-lived servers is a second lifecycle to supervise
-//! (restarts, idle timeouts, a server that wedges), and a server that keeps
-//! state between calls is the one case this shape cannot serve.
-//!
-//! ## What the program is given
-//!
-//! A cleared environment, a small baseline so it can find its own programs and
-//! a home directory, and the variables the operator wrote for it. Nothing else:
-//! the host's own environment holds its workspace token and whatever provider
-//! keys it was started with, and a server somebody found on npm has no business
-//! reading either. Its working directory is the temporary directory, so a
-//! server that writes beside itself does not write into the daemon's.
-
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -36,38 +9,21 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use super::{client_info, result_of, Era, McpError, Session, Transport, CONNECT_TIMEOUT};
 use super::{Dial, LEGACY_VERSION};
 
-/// The longest single message a program may write. A tool's whole answer is one
-/// line, and a large query result is megabytes; past this it is a program
-/// writing without newlines, and reading on would be reading until memory runs
-/// out.
 const MAX_LINE: usize = 16 * 1024 * 1024;
 
-/// How much of what a program wrote to stderr is kept, for the one message that
-/// needs it: a program that died or never answered usually said why there.
 const STDERR_TAIL: usize = 2_000;
 
-/// How long a program that has stopped answering is given to finish saying
-/// why.
-///
-/// Its output closing is the exit, and the reason is usually its last line on
-/// stderr, which arrives with the exit. The bound is for a program that left a
-/// child of its own holding stderr open after it had gone.
 const LAST_WORDS: Duration = Duration::from_secs(2);
 
-/// What a program inherits from the host, when the host has it.
 const BASELINE: [&str; 9] =
     ["PATH", "HOME", "USER", "LANG", "LC_ALL", "TMPDIR", "SHELL", "TERM", "XDG_CACHE_HOME"];
 
-/// One running server. Killed when the last session holding it is dropped.
 pub(crate) struct Process {
     endpoint: String,
     stdin: tokio::sync::Mutex<ChildStdin>,
     stdout: tokio::sync::Mutex<BufReader<ChildStdout>>,
-    /// Held for `kill_on_drop`, which is the whole of how a process ends.
     _child: std::sync::Mutex<Child>,
     stderr: Arc<std::sync::Mutex<String>>,
-    /// The task reading stderr into `stderr`, until it closes. Taken by the
-    /// first failure that has to quote it.
     reading_stderr: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     next: AtomicU64,
 }
@@ -82,7 +38,6 @@ fn failed(endpoint: &str, detail: impl Into<String>) -> McpError {
     McpError::Program { endpoint: endpoint.to_string(), detail: detail.into() }
 }
 
-/// Starts the program a `stdio:` address names and shakes hands with it.
 pub(super) async fn open(dial: Dial<'_>) -> Result<Session, McpError> {
     let endpoint = dial.endpoint;
     let words = crate::domain::plugin::command_line(endpoint)
@@ -178,14 +133,6 @@ pub(super) async fn open(dial: Dial<'_>) -> Result<Session, McpError> {
     })
 }
 
-/// One request, answered on the same process.
-///
-/// Requests are serialized per process: a session is one call, and a program
-/// that interleaved two answers would be one this client would have to match up
-/// by id anyway. Anything the program sends that is not the answer is handled
-/// on the way past: a notification is ignored, a `ping` is answered, and any
-/// other request of its own is refused so it does not wait on a client that
-/// offers it nothing.
 pub(super) async fn request(
     process: &Process,
     method: &str,
@@ -196,10 +143,6 @@ pub(super) async fn request(
     let message =
         serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
     if let Err(err) = send(process, &message).await {
-        // A program that has already exited cannot be written to either, and
-        // the write fails before its exit can be read. Which sentence it got
-        // was then a matter of how fast it died, so a failed write looks for
-        // the exit before it says the program stopped reading.
         return Err(if output_closed(process).await { exited(process, method).await } else { err });
     }
 
@@ -211,8 +154,6 @@ pub(super) async fn request(
                 return Err(exited(process, method).await);
             };
             let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
-                // A banner or a log line on stdout. Not MCP, and not fatal:
-                // plenty of servers print one before their first message.
                 tracing::debug!(endpoint = %process.endpoint, "skipping a line that is not JSON");
                 continue;
             };
@@ -261,7 +202,6 @@ async fn send(process: &Process, message: &serde_json::Value) -> Result<(), McpE
     stdin.flush().await.map_err(|err| failed(&process.endpoint, err.to_string()))
 }
 
-/// One line, or `None` at the end of the stream, capped at [`MAX_LINE`].
 async fn read_line(
     endpoint: &str,
     stdout: &mut BufReader<ChildStdout>,
@@ -281,11 +221,6 @@ async fn read_line(
     Ok(Some(String::from_utf8_lossy(&buf).trim().to_string()))
 }
 
-/// A program that went before answering, in its own words where it left any.
-///
-/// Its stderr is read by a task of its own, and its stdout closing can reach
-/// this one first: the sentence was sometimes missing the reason, which is the
-/// half that says what to fix. So it waits for stderr to close too.
 async fn exited(process: &Process, method: &str) -> McpError {
     let reading = process.reading_stderr.lock().unwrap_or_else(|held| held.into_inner()).take();
     if let Some(reading) = reading {
@@ -294,11 +229,6 @@ async fn exited(process: &Process, method: &str) -> McpError {
     failed(&process.endpoint, format!("it exited before answering {method}{}", said(process)))
 }
 
-/// Whether the program's output has reached its end, read through anything it
-/// printed on the way.
-///
-/// The one way to tell a program that stopped reading from one that has gone:
-/// a program closes everything when it exits, and its output with the rest.
 async fn output_closed(process: &Process) -> bool {
     let mut stdout = process.stdout.lock().await;
     let to_the_end = async {
@@ -313,7 +243,6 @@ async fn output_closed(process: &Process) -> bool {
     tokio::time::timeout(LAST_WORDS, to_the_end).await.unwrap_or(false)
 }
 
-/// What the program last said on stderr, as the end of a sentence.
 fn said(process: &Process) -> String {
     let tail = process.stderr.lock().map(|held| held.trim().to_string()).unwrap_or_default();
     if tail.is_empty() {
@@ -350,10 +279,6 @@ mod tests {
         let echoed = call_tool(&session, "echo", &serde_json::json!({ "text": "hi" }), None).await;
         assert_eq!(echoed.unwrap().text, "said: hi");
 
-        // The operator's variable arrives; the host's own environment does
-        // not, and a question the server asks mid-call is refused, not ignored.
-        // Cargo puts this in the test's environment, which is what makes its
-        // absence in the program's a finding.
         assert!(std::env::var("CARGO_PKG_NAME").is_ok());
         let said = call_tool(&session, "whoami", &serde_json::json!({}), None).await.unwrap();
         assert_eq!(said.text, "token=abc leaked=False refused=True");

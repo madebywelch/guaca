@@ -1,30 +1,5 @@
-/**
- * A theme, as three things an operator chooses and every color solved from them.
- *
- * What is chosen is how warm or cool the grays are, which hue means "the app
- * wants something from you", and how much contrast the operator wants. No
- * lightness is ever chosen, by the operator or by anybody writing a preset.
- * Each color is solved per surface against a ratio, and the ratio is the
- * design: a combination nobody has looked at clears the same gates the default
- * does, because the gates are where the values came from.
- *
- * Attention is two colors, not one. `--attention` is an ink, legible as text on
- * every ground it is drawn on. `--attention-fill` is a shape, recognizable as
- * the hue it is and carrying its own text color. One value cannot do both: an
- * amber dark enough to be read as words on white is brown, and signals held to
- * the same text ratio share one luminance, which is the one axis red-green
- * colorblindness keeps. So fills are separated by lightness and gated under
- * simulation, and inks are gated on contrast and always travel with a word.
- *
- * `styles.css` holds the default theme's values as its first paint, and
- * `theme.test.ts` holds them equal to what this file derives. Everything else
- * reaches the document through `themeCss`, as a second pair of token blocks
- * written after the stylesheet, so the surface still switches in CSS alone.
- */
-
 import { colorblindDistance, contrast, distance, hex, solve } from "./color";
 
-/** The surface a block is solved for. Mirrors `appearance.ts`, which owns the choice. */
 type Surface = "light" | "dark";
 
 export type GrayKey = "neutral" | "warm" | "avocado" | "slate";
@@ -39,16 +14,6 @@ export interface Theme {
   temperature: Temperature;
 }
 
-/**
- * The default is Ledger: warm grays on a paper page, and the paper itself
- * warm rather than white.
- *
- * `grays` chooses the hue every gray in the app carries and `temperature`
- * chooses how much of it reaches the page and the two columns. They are
- * separate because they answer different questions: an operator who likes a
- * warm rail may still want to read on white, and the page is the one surface
- * long text sits on for minutes at a time.
- */
 export const DEFAULT_THEME: Theme = Object.freeze({
   grays: "warm",
   attention: "amber",
@@ -94,17 +59,6 @@ export function matchesPreset(
   );
 }
 
-/**
- * Surface temperature: how far the page and the columns move along the warmth
- * axis the grays already follow.
- *
- * Not a color, which is why it is here rather than a fourth palette. It is a
- * lightness lift applied to every ground (`warm` is the ladder as drawn, so
- * the lift is zero) and a multiplier on the chroma those grounds carry. Every
- * ink is solved against the ground it lands on afterwards, so a paper that
- * moved is a paper the text was measured against, not one it was painted on
- * top of.
- */
 export const TEMPERATURES: Record<
   Temperature,
   { label: string; lift: Record<Surface, number>; tint: number }
@@ -116,18 +70,12 @@ export const TEMPERATURES: Record<
 
 export const TEMPERATURE_KEYS = Object.keys(TEMPERATURES) as Temperature[];
 
-/** A gray family: an OKLCH hue, and how much chroma the columns may carry. */
 interface Grays {
   label: string;
   h: number;
   c: number;
 }
 
-/**
- * Chroma stays under two hundredths on purpose. An agent's own color is the
- * saturated thing on screen, and a column that is itself a color is a column
- * every agent's color is competing with.
- */
 export const GRAYS: Record<GrayKey, Grays> = {
   neutral: { label: "Neutral", h: 260, c: 0.003 },
   warm: { label: "Warm", h: 89, c: 0.009 },
@@ -135,7 +83,6 @@ export const GRAYS: Record<GrayKey, Grays> = {
   slate: { label: "Slate", h: 250, c: 0.013 },
 };
 
-/** An attention hue: OKLCH hue and chroma, and the lightness its fill sits at. */
 interface Attention {
   label: string;
   h: number;
@@ -143,13 +90,6 @@ interface Attention {
   fill: number;
 }
 
-/**
- * Only hues that clear every gate on both surfaces are offered, and
- * `theme.test.ts` is what says so. Rose and teal were refused. On ink, each
- * fill sits at the lightness of a routine's green dot, 3.7 and 6.4 from it
- * under colorblindness against a floor of 8, and the two are drawn on the
- * same mark to mean "waiting on you" and "fine".
- */
 export const ATTENTIONS: Record<AttentionKey, Attention> = {
   amber: { label: "Amber", h: 72, c: 0.17, fill: 0.82 },
   orange: { label: "Orange", h: 50, c: 0.18, fill: 0.72 },
@@ -159,19 +99,6 @@ export const ATTENTIONS: Record<AttentionKey, Attention> = {
 
 export const CONTRASTS: readonly ContrastLevel[] = ["standard", "more"];
 
-/**
- * Grounds by OKLCH lightness, on the warm page Ledger draws.
- *
- * Calibrated on the mockup rather than invented: paper lands where `#fbf9f3`
- * is, the rail where `#f4f1e7` is, and the two rules at the separations a
- * printed page uses, 1.3 to 1 for a rule and 1.6 for one that has to be found.
- * The ladder is the `warm` climate; `TEMPERATURES` lifts it for the other two,
- * which is what keeps one table instead of three.
- *
- * `rule` is decoration and `rule-hard` is a boundary. They were one `edge`
- * value at 1.3 to 1 doing both jobs, which meant a page that could not say
- * "this is where the next turn starts" any louder than "this is a hairline".
- */
 const GROUNDS: Record<Surface, Record<ContrastLevel, Record<string, number>>> = {
   light: {
     standard: {
@@ -231,18 +158,6 @@ const GROUNDS: Record<Surface, Record<ContrastLevel, Record<string, number>>> = 
   },
 };
 
-/**
- * How much of a family's chroma each ground carries, as a multiple of the
- * family's own.
- *
- * The page carries almost all of it now, because the page is paper and paper
- * has a temperature. It carried none while the page was white, which is what
- * made white the only white thing on screen; the warmth arrives through
- * `TEMPERATURES` instead, and an operator who picks `cool` gets a page with a
- * tenth of it. The rules carry the most of all: a hairline one and a third to
- * one against the page reads as either a pencil line or a warm shadow, and the
- * hue is the whole of what makes it the second.
- */
 const TINT_DEFAULT: Record<string, number> = {
   ground: 0.91,
   raised: 0.91,
@@ -257,7 +172,6 @@ const TINT_DEFAULT: Record<string, number> = {
   "grail-ground": 1.6,
 };
 
-/** What each role is solved to. `more` is WCAG AAA for text and muted text. */
 export const RATIOS: Record<
   ContrastLevel,
   { text: number; muted: number; faint: number; control: number; signal: number; system: number }
@@ -266,10 +180,8 @@ export const RATIOS: Record<
   more: { text: 17, muted: 10, faint: 7, control: 4.5, signal: 7, system: 10 },
 };
 
-/** The fixed fill a failure is drawn in, which every attention hue is checked against. */
 const DANGER_FILL = { h: 25, c: 0.2, L: 0.52 };
 
-/** Text on a fill: whichever of these two the fill is further from. */
 const ON_LIGHT = "#161616";
 const ON_DARK = "#ffffff";
 
@@ -277,7 +189,6 @@ function onFill(fill: string): string {
   return contrast(fill, ON_LIGHT) >= contrast(fill, ON_DARK) ? ON_LIGHT : ON_DARK;
 }
 
-/** Every token a theme owns, in the order the stylesheet declares them. */
 export const THEME_TOKENS = [
   "--rail-ground",
   "--rail-raised",
@@ -313,7 +224,6 @@ export const THEME_TOKENS = [
 export type ThemeToken = (typeof THEME_TOKENS)[number];
 export type Tokens = Record<ThemeToken, string>;
 
-/** Every color a theme draws with on one surface. */
 export function themeTokens(theme: Theme, surface: Surface): Tokens {
   const dark = surface === "dark";
   const base = GROUNDS[surface][theme.contrast];
@@ -356,9 +266,6 @@ export function themeTokens(theme: Theme, surface: Surface): Tokens {
     "--rule-hard": ground("rule-hard"),
   };
 
-  // Text is solved against the ground it has least contrast with: the darkest
-  // column on paper, the lightest raised surface on ink. Faint is held on the
-  // grounds a hint is actually written on, which are not the crews' column.
   const worst = dark
     ? [rail["--rail-raised"], page["--raised"], page["--ground"]]
     : [
@@ -375,10 +282,6 @@ export function themeTokens(theme: Theme, surface: Surface): Tokens {
     ? [page["--ground"], page["--raised"], rail["--rail-ground"], rail["--rail-raised"]]
     : [page["--ground"], page["--raised"], rail["--rail-ground"]];
 
-  // Ink carries more of the family's chroma than it used to. A soft black on
-  // warm paper is the page's own temperature at the other end of the scale,
-  // and a neutral #131314 beside a #fbf9f3 page is the one gray the eye reads
-  // as belonging to a different document.
   const text = solve(c * 1.3, h, worst, ratio.text, dark ? 0.97 : 0.2, dark);
   const muted = solve(c * 2.4, h, worst, ratio.muted, dark ? 0.72 : 0.46, dark);
 
@@ -421,7 +324,6 @@ export function themeTokens(theme: Theme, surface: Surface): Tokens {
   };
 }
 
-/** The theme as two token blocks, one per surface, keyed the way `styles.css` keys its own. */
 export function themeCss(theme: Theme): string {
   const block = (selector: string, tokens: Tokens) =>
     `${selector} {\n${THEME_TOKENS.map((name) => `  ${name}: ${tokens[name]};`).join("\n")}\n}`;
@@ -437,10 +339,6 @@ export interface Check {
   target: number;
 }
 
-/**
- * Every ratio and separation a theme has to clear on one surface, measured.
- * A check passes when `value >= target`; the test suite is what insists.
- */
 export function measure(tokens: Tokens, level: ContrastLevel): Check[] {
   const ratio = RATIOS[level];
   const least = (fg: ThemeToken, grounds: ThemeToken[]) =>

@@ -18,14 +18,6 @@ import { blend, bodyPoints, FORM } from "./form";
 import type { Paint } from "./frame";
 import { MOODS, markFor } from "./moods";
 
-/**
- * The drawn cast: a brush line on twos, over a pigment out of register.
- *
- * Owns its elements and redraws them twelve times a second. Between drawings
- * it does nothing but keep the mark on its head swinging, which is simulated
- * every frame so its lag is the same whatever the frame rate, and drawn on
- * twos like the rest.
- */
 export function DrawnArt({ paint }: { paint: RefObject<Paint | null> }) {
   const id = useId();
   const fill = useRef<SVGPathElement>(null);
@@ -40,8 +32,6 @@ export function DrawnArt({ paint }: { paint: RefObject<Paint | null> }) {
     const to = DRAWN[f.mood];
     const from = DRAWN[f.from];
 
-    /* The mark on its head: pulled back against a sideways look, knocked
-       over by a message landing, and swinging back on a spring. */
     if (f.live) {
       const want =
         to.tuft.rest - f.body[0] * 60 + (f.gesture === "receive" && f.sinceGesture < 0.3 ? 30 : 0);
@@ -121,9 +111,6 @@ export function DrawnArt({ paint }: { paint: RefObject<Paint | null> }) {
     o.setAttribute("ry", (drawn.o?.ry ?? 0).toFixed(2));
     o.setAttribute("stroke-width", (drawn.o?.w ?? 0).toFixed(2));
 
-    /* Written only when it changes: most marks hold for several drawings, and
-       markup is the one thing here that is not an attribute. The amber one is
-       `markFor`'s, the same in both casts. */
     const beside =
       to.mark === "bang"
         ? markFor(f.mood)

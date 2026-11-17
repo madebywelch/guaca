@@ -2,14 +2,12 @@ import { VERSION } from "./build";
 import type { Channel, Health, Skew } from "./releases";
 import { attached, desktop, invokeLocal, type Remote, savedHostMode } from "./transport";
 
-/** One host update, as the manager that ran it recorded it. */
 export interface HostOperation {
   stage: string;
   backup: string | null;
   previousImage: string;
   targetImage: string;
   targetVersion?: string;
-  /** Where the workspace a failed update left was copied before the backup went back. */
   preserved?: string | null;
   error: string | null;
 }
@@ -24,14 +22,11 @@ export interface DockerStatus {
   operation?: HostOperation | null;
 }
 
-/** A box's updater, as the host relays it. `null` is a host with none. */
 export interface Manager {
-  /** What it installs. Absent from an updater older than channels. */
   channel?: Channel;
   updating: boolean;
   running: { image: string; version: string | null } | null;
   operation: HostOperation | null;
-  /** Why the updater could not start the host, until it can. */
   error: string | null;
 }
 export function parseManager(value: unknown): Manager | null {
@@ -63,22 +58,16 @@ export const localHost = {
   start: () => invokeLocal<Remote>("local_host_start"),
   openDocker: () => invokeLocal<void>("open_docker"),
 };
-/** The checkout a source build was made from, as the desktop reads it. */
 export interface AppSource {
   checkout: string | null;
-  /** Why this app cannot rebuild itself, when it cannot. */
   unavailable: string | null;
   branch: string | null;
-  /** The commit that branch is at on origin, when it could be read. */
   upstream: string | null;
   running: boolean;
-  /** The step `install.sh` last announced, while it runs. */
   stage: string | null;
-  /** The end of the log of the rebuild that last failed. */
   failure: string | null;
   log: string;
 }
-/** This app, rebuilt from its own checkout by `scripts/install.sh`. */
 export const thisApp = {
   source: () => invokeLocal<AppSource>("app_source"),
   rebuild: () => invokeLocal<void>("rebuild_app"),
@@ -87,20 +76,6 @@ export function hostMode() {
   return savedHostMode();
 }
 
-/**
- * What to check when nothing answers, in the words of the workspace this page
- * shows.
- *
- * Three arrangements and three answers, because what is usually wrong differs
- * in each: a container on this Mac, a host running on this Mac outside the app,
- * and a host reached over a network. None of them guesses at what failed — the
- * banner has already said the host did not answer — they say which thing a
- * person can go and look at, which is the half the banner cannot supply.
- *
- * A browser says `host` rather than a box or a container because it cannot tell
- * the two apart, and guessing would send somebody to Docker for a server in
- * another country.
- */
 export function unreachableHint(): string {
   if (!desktop) return "Check that the host is up, and that this address still answers from here.";
   if (hostMode() === "existing") return "Check that the host is still running on this Mac.";
@@ -109,23 +84,8 @@ export function unreachableHint(): string {
   return "Check that Docker is running: Guaca runs in a container on this Mac.";
 }
 
-/** Which host a window is showing, in the three ways a person can tell. */
 export type Place = "thisMac" | "remote" | "browser";
 
-/**
- * Which host this window shows.
- *
- * Read at the call rather than once on import, because the answer is the
- * chooser's and the page is reloaded when the chooser changes it.
- *
- * A window with nothing attached is on this Mac: before setup attaches a host,
- * or, before every workspace became a host, the app's own runtime. An attached
- * one is a box only when the chooser says remote: the desktop
- * reaches a container on this Mac and a host already running on this Mac by
- * the same kind of address, so the stored mode is the only thing that tells
- * them from a server somebody rented. A browser is told neither and would be
- * guessing, which is the same reason `unreachableHint` says `host` for one.
- */
 export function hostPlace(): Place {
   if (!desktop) return "browser";
   if (!attached()) return "thisMac";
@@ -138,30 +98,10 @@ const PLACES: Record<Place, string> = {
   browser: "This host",
 };
 
-/**
- * The host, as a sentence says it.
- *
- * The status bar's label names the window's arrangement ("This Mac", "Remote
- * host", "This host"); a sentence about where the runtime is has to agree with
- * it. "This machine" was written when there was only one arrangement, and it is
- * false of the two where the runtime is not in this window: a browser is on one
- * machine and its host is on another, and Settings is exactly where somebody
- * goes to learn which holds what.
- */
 export function hostAt(place: Place): string {
   return place === "thisMac" ? "this Mac" : "your host";
 }
 
-/**
- * What the client in front of the operator keeps of the host's, for About.
- *
- * Three arrangements and three answers, because one sentence was true of one of
- * them. A browser holds no token at all now that the session is an HttpOnly
- * cookie the daemon sets; a desktop window with no host attached has no
- * address to reach and nothing to send (it once meant a runtime in the window,
- * which no workspace has any more); and a desktop window showing a box keeps
- * that box's address and token so a reload finds it again.
- */
 export function clientKeeps(facts: { desktop: boolean; attached: boolean }): string {
   if (!facts.desktop) {
     return "This page keeps your display preferences. Its session is a cookie the host sets, which this page cannot read, and the host's token is not stored here.";
@@ -173,42 +113,16 @@ export function clientKeeps(facts: { desktop: boolean; attached: boolean }): str
 }
 
 export interface HostLabel {
-  /** What the bar says: the place, and the drift when there is one. */
   text: string;
-  /** The same fact in a sentence with the versions, for a hover. */
   title: string;
-  /** Whether this window and the host are on different builds, which is the
-   *  one fact on the bar worth a color. */
   drift: boolean;
 }
 
-/**
- * The status bar's left item: which host, and whether its build agrees with
- * this window's.
- *
- * It read `Host 0.2.0`, which is the least useful half of what the bar knows.
- * A version is what an operator quotes in a bug report, not something they act
- * on, and it is one click away in Host settings. What the bar is for is
- * which machine is doing the work, and whether the two halves are one build,
- * because a skew between them is the fact on that bar that breaks commands.
- *
- * The drift is said in words as well as marked in color. A color alone is a
- * difference only an operator who already knows the rule can read, and the bar
- * said a version for either build once already.
- *
- * A host that has stopped answering is the same row saying the last thing it
- * knows: the place, and when it last heard from it. It is the one mark on this
- * bar about the host itself rather than about the build it runs, and it is here
- * because this row is the window's answer to "which host", and "none, since
- * 14:32" is that answer at the moment it matters most.
- */
 export function hostLabel(facts: {
   place: Place;
   drift: Skew;
   host: Health | null;
-  /** This window's own version, named when the two differ. */
   appVersion?: string;
-  /** When the host last said anything, while it is saying nothing now. */
   lastHeard?: number | null;
 }): HostLabel {
   const { place, drift, host } = facts;
@@ -216,8 +130,6 @@ export function hostLabel(facts: {
   const where = PLACES[place];
   const version = host?.version;
   if (facts.lastHeard != null) {
-    // The same clock the transcript's margin writes with, so the two times on
-    // screen are read the same way.
     const clock = new Date(facts.lastHeard).toLocaleTimeString([], {
       hour: "numeric",
       minute: "2-digit",
@@ -225,8 +137,6 @@ export function hostLabel(facts: {
     return {
       text: `${where} · last heard ${clock}`,
       title: `${where} has not answered since ${clock}, so this page is not live. It catches up when the host does.`,
-      // The build it runs is not known to be what it was, and a skew is not the
-      // fact this row is telling while the host is gone.
       drift: false,
     };
   }

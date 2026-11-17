@@ -1,25 +1,9 @@
 # syntax=docker/dockerfile:1.7
-#
-# The daemon, as an image.
-#
-# One image, wherever it runs: a box somebody rents, one guaca.ai hands them,
-# or a container on a laptop. The desktop app is not in here and cannot be
-# (docs/ARCHITECTURE.md, *Why there is no Docker image for the app*); this is
-# the second host over the same library, built without Tauri and serving the
-# same `dist/` the desktop embeds.
-#
-#   docker build --build-arg GUACA_COMMIT=$(git rev-parse --short=7 HEAD) -t guacad .
-#   docker run --rm -p 127.0.0.1:8787:8787 -v guaca:/var/lib/guaca guacad
-#
-# `scripts/image.sh` builds it and proves it answers. The commit is an argument
-# because `.git` is not in the build context, and the same string has to reach
-# `/health` and the page's About so a box and a laptop can be told apart.
 
 ARG GUACA_COMMIT=""
 ARG GUACA_RELEASE=0
 ARG GUACA_VERSION=""
 
-# ---- the page ---------------------------------------------------------------
 FROM node:22-bookworm-slim AS web
 WORKDIR /app
 RUN corepack enable
@@ -31,18 +15,11 @@ ARG GUACA_COMMIT
 ARG GUACA_RELEASE
 ARG GUACA_VERSION
 ENV GUACA_COMMIT=$GUACA_COMMIT GUACA_RELEASE=$GUACA_RELEASE
-# The same `pnpm build` CI runs: the typecheck is the gate, not a nicety.
 RUN test "$GUACA_RELEASE" != 1 || test "$GUACA_VERSION" = "$(node -p 'require("./package.json").version')"
 RUN pnpm build
 
-# ---- the daemon -------------------------------------------------------------
 FROM rust:1.99-bookworm AS daemon
 WORKDIR /app/src-tauri
-# Dependencies first, so a source-only change reuses the compiled tree. The
-# vendored crates come with the manifests because `[patch.crates-io]` points at
-# them and Cargo resolves a patch on every platform. The stubs stand in for
-# every target the manifest names; build.rs is stubbed because the real one
-# only does anything with the desktop feature on.
 COPY src-tauri/Cargo.toml src-tauri/Cargo.lock ./
 COPY src-tauri/vendor ./vendor
 RUN mkdir -p src/bin \
@@ -60,14 +37,8 @@ ARG GUACA_RELEASE
 ENV GUACA_COMMIT=$GUACA_COMMIT GUACA_RELEASE=$GUACA_RELEASE
 RUN cargo build --release --no-default-features --features server --bin guacad --bin guaca-updater
 
-# ---- the updater's one tool -------------------------------------------------
-# `guaca-updater` replaces the host through the Docker CLI, as the desktop
-# does. 28 rather than the newest: it still negotiates down to the Docker a
-# long-term-support distribution ships, and speaks an API above the floor the
-# newest daemons require. The daemon never gets a socket to use it with.
 FROM docker:28.5.2-cli AS docker
 
-# ---- what runs --------------------------------------------------------------
 FROM node:22-bookworm-slim
 ARG GUACA_COMMIT
 ARG GUACA_RELEASE
@@ -75,9 +46,6 @@ ARG GUACA_VERSION
 LABEL org.opencontainers.image.version=$GUACA_VERSION \
       org.opencontainers.image.revision=$GUACA_COMMIT \
       bot.guaca.release=$GUACA_RELEASE
-# `curl` is the health check. TLS roots are for the model endpoints, the
-# sandboxes and the plugins the daemon calls out to. `python3` and `node` are
-# what a connector run as a program on the host is usually written in.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl python3 \
  && rm -rf /var/lib/apt/lists/* \
@@ -85,9 +53,6 @@ RUN apt-get update \
  && usermod --login guaca --home /var/lib/guaca node \
  && mkdir -p /var/lib/guaca \
  && chown guaca:guaca /var/lib/guaca
-# Pin the `claude` program, which a turn paid for by a Claude plan runs. It
-# uses its own sign-in, configured once on the volume, and never inherits a
-# desktop's subscription files.
 ARG CLAUDE_CODE_VERSION=2.1.260
 RUN curl -fsSL https://claude.ai/install.sh -o /tmp/install-claude.sh \
  && bash /tmp/install-claude.sh "${CLAUDE_CODE_VERSION}" \
@@ -99,10 +64,6 @@ COPY --from=daemon /app/src-tauri/target/release/guaca-updater /usr/local/bin/gu
 COPY --from=docker /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=web /app/dist /usr/share/guaca/web
 
-# Every interface *inside the container*, which is the only way a published
-# port reaches it; the container's network namespace is the boundary the
-# loopback default draws on bare metal. Publish it to 127.0.0.1 on the host
-# and put a tunnel in front, as the compose file does.
 ENV HOME=/var/lib/guaca \
     GUACA_ROOT=/var/lib/guaca \
     GUACA_BIND=0.0.0.0:8787 \
@@ -111,9 +72,6 @@ ENV HOME=/var/lib/guaca \
 VOLUME /var/lib/guaca
 EXPOSE 8787
 USER guaca
-# The one route without a token on it. Port spelled twice on purpose: a
-# GUACA_BIND override that moves the port has to move this too, and a check
-# that silently probed the wrong port would report a healthy box that is not.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s \
   CMD curl -fsS http://127.0.0.1:8787/health || exit 1
 STOPSIGNAL SIGTERM

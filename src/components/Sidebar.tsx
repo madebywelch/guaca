@@ -17,7 +17,6 @@ import { GroupRail } from "./GroupRail";
 import { NewMenu } from "./NewMenu";
 import { SpendTag, useSpendTag } from "./Spend";
 
-/** Only a Mac window draws its own buttons over the rail's top left corner. */
 const LIGHTS = desktop && IS_MAC;
 
 interface Props {
@@ -25,41 +24,22 @@ interface Props {
   onEditAgent: (agent: AgentCard) => void;
   onEditGroup: (group: Group) => void;
   onOpenCafeteria: () => void;
-  /** The workspace calendar: every crew's dates, in one place. */
   onOpenCalendar: () => void;
-  /** The pages the crews keep, scoped to whichever crew the rail is inside. */
   onOpenArtifacts: () => void;
   onOpenSettings: () => void;
   onOpenSearch: () => void;
-  /** The plus in the title strip, beside the pair. App-level, not any one row's. */
   onNewAgent: () => void;
   onNewGroup: () => void;
-  /** Where the operator right-clicked, and on whom. */
   onOpenMenu: (agent: AgentCard, at: { x: number; y: number }) => void;
 }
 
-/**
- * How far the pointer travels before a press becomes a drag.
- *
- * A row is a button first. Anything smaller than this and selecting an agent
- * with a hand that is not perfectly still starts rearranging the rail instead.
- */
 const DRAG_SLOP = 5;
 
-/** How close to an edge of the list the pointer scrolls it, and by how much. */
 const EDGE = 36;
 const EDGE_STEP = 14;
 
-/**
- * What a press picked up: an agent's row, or a crew's circle.
- *
- * One drag for both, because they share every part of the gesture but where it
- * may land. A row lands on a row or a crew; a circle lands among the circles
- * and nowhere else, since the rail's rows and sections are places for agents.
- */
 type Held = { kind: "agent"; id: AgentId } | { kind: "group"; id: GroupId };
 
-/** Something in flight, and what it is currently over. */
 interface Drag {
   held: Held;
   over: DropTarget | null;
@@ -84,8 +64,6 @@ export function Sidebar({
   const stuck = useStore((s) => s.stuck);
   const pending = useStore((s) => s.pending);
   const showForYou = useStore((s) => s.showForYou);
-  /* The rail is the one surface that draws a whole crew at once, so it is the
-     one that pays for the signals the quieter moods are read from. */
   const trail = useStore((s) => s.trail);
   const finishedAt = useStore((s) => s.finishedAt);
   const lastActive = useStore((s) => s.lastActive);
@@ -102,49 +80,26 @@ export function Sidebar({
   const now = useNow();
 
   const listRef = useRef<HTMLDivElement>(null);
-  /** The crews' own list, which scrolls under a drag the way the rail's does. */
   const crewsRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef(new Map<AgentId, HTMLButtonElement>());
   const [rowCenters, setRowCenters] = useState<Map<AgentId, number>>(new Map());
   const previousTops = useRef(new Map<AgentId, number>());
 
-  /** The press that has not yet traveled far enough to be a drag. */
   const press = useRef<{ held: Held; x: number; y: number } | null>(null);
   const [pressed, setPressed] = useState(false);
   const [drag, setDrag] = useState<Drag | null>(null);
-  /**
-   * Where the pointer is, and the thing that follows it.
-   *
-   * A ref and a direct style write rather than state, because this changes on
-   * every pointer frame and every row in the rail has an animating character in
-   * it. Rendering the whole rail sixty times a second to move one box is the
-   * one thing that would make dragging feel worse than not being able to.
-   */
   const point = useRef({ x: 0, y: 0 });
   const heldRef = useRef<HTMLDivElement>(null);
 
-  // Messages arrive in bursts; this spaces them out so each throw is watchable.
   const { staged, inFlight } = usePulseChoreography(pulses, dismissPulse);
 
-  /** Which crew's heading is being asked what it has spent. One per pointer. */
   const spend = useSpendTag();
 
   const focused = groups.find((g) => g.id === railGroup) ?? null;
 
-  /**
-   * How every section of the rail is ordered right now.
-   *
-   * Frozen while a row is being dragged, because dragging is arranging: a row
-   * dropped below a peer that is only near the top because it happens to be
-   * mid-turn would land somewhere the operator never aimed at, and the rail
-   * would look like it had ignored the gesture the moment that turn ended. A
-   * crew in hand arranges nothing in the rail, so the rail is left as it was.
-   */
   const dragging = drag?.held.kind === "agent" ? drag.held.id : null;
   const shape = { activity, lastActive, frozen: dragging !== null };
 
-  // One layout pass does two jobs: slide rows that moved, and record where
-  // every row ended up so the traveling message knows where to fly.
   useLayoutEffect(() => {
     const measure = () => {
       if (!listRef.current) return;
@@ -152,8 +107,6 @@ export function Sidebar({
       for (const [id, node] of rowRefs.current) {
         centers.set(id, node.offsetTop + node.offsetHeight / 2);
       }
-      // Bail out when nothing moved. The observer fires on any layout change,
-      // and a fresh Map every time would re-render the rail continuously.
       setRowCenters((current) => {
         if (
           current.size === centers.size &&
@@ -165,9 +118,6 @@ export function Sidebar({
       });
     };
 
-    // FLIP: the rows are already in their new places, so put each one back
-    // where it was and let CSS carry it forward. Reordering instantly is
-    // disorienting when several agents move at once.
     const tops = new Map<AgentId, number>();
     for (const [id, node] of rowRefs.current) tops.set(id, node.offsetTop);
 
@@ -193,12 +143,8 @@ export function Sidebar({
     const observer = new ResizeObserver(measure);
     if (listRef.current) observer.observe(listRef.current);
     return () => observer.disconnect();
-    // Everything the drawn order is computed from. Activity and recency are in
-    // here because a row lifted for working moves without the roster changing,
-    // and a move nothing slid is a row that jumped.
   }, [agents, activity, lastActive, dragging, railGroup]);
 
-  /** Moves the thing in hand to where the pointer is, without a render. */
   const place = useCallback(() => {
     const node = heldRef.current;
     if (!node) return;
@@ -206,8 +152,6 @@ export function Sidebar({
     node.style.top = `${point.current.y}px`;
   }, []);
 
-  // The first frame of a drag: the box has only just been put in the tree, so
-  // the handler that has been tracking the pointer had nothing to move.
   useLayoutEffect(place, [place, drag?.held.id]);
 
   useDismiss(
@@ -219,27 +163,12 @@ export function Sidebar({
     pressed || drag !== null,
   );
 
-  /**
-   * The rest of a drag, once one has started.
-   *
-   * On the window rather than on the rows, because the pointer leaves the row it
-   * picked up almost immediately and a release outside the rail still has to end
-   * the drag. Pointer events rather than HTML5 drag and drop: `dragDropEnabled`
-   * is what lets a dropped document reach Rust without entering the renderer,
-   * and it is the same setting that stops `dragstart` firing inside the webview
-   * on some platforms. A rail that only rearranges on macOS is not a feature.
-   */
   useEffect(() => {
     const move = (event: PointerEvent) => {
       const held = press.current;
       if (held && !drag) {
         if (Math.abs(event.clientX - held.x) + Math.abs(event.clientY - held.y) < DRAG_SLOP) return;
-        // Whatever the press began selecting is not what the operator meant.
         window.getSelection()?.removeAllRanges();
-        // Released here, not on the way out: this handler runs again on the
-        // next movement with a closure that still thinks nothing is being
-        // dragged, and a press it could still see would start a second drag on
-        // top of this one and lose whatever the pointer had reached.
         press.current = null;
         setPressed(false);
         point.current = { x: event.clientX, y: event.clientY };
@@ -251,13 +180,6 @@ export function Sidebar({
       point.current = { x: event.clientX, y: event.clientY };
       place();
 
-      // Reaching a row that is off the bottom of the rail, or a crew off the
-      // bottom of the column, has to be possible without letting go. Stepped
-      // per movement rather than on a timer: a pointer held still in the
-      // margin is a pointer that has arrived. The column when the pointer is
-      // over it, which it can only be while it is out, since it is drawn over
-      // the rail; the rail otherwise, and only for a row, which is the one
-      // thing that can land there.
       const crews = crewsRef.current;
       const column = crews?.getBoundingClientRect();
       const overCrews = column && event.clientX >= column.left && event.clientX <= column.right;
@@ -292,30 +214,14 @@ export function Sidebar({
       window.removeEventListener("pointerup", release);
       window.removeEventListener("pointercancel", cancel);
     };
-    // Rebound when the drag starts, ends, or reaches a different target: a
-    // handful of times per drag. The pointer's own position is deliberately not
-    // in here, or this would be four listeners torn down and replaced on every
-    // frame of every drag.
   }, [drag, dropAgent, dropGroup, place]);
 
-  /**
-   * A press, remembered and nothing else yet. A row and a circle are both
-   * buttons first, and only become handles once the pointer moves.
-   */
   const grab = (held: Held, event: React.PointerEvent) => {
     if (event.button !== 0 || event.pointerType === "touch") return;
     press.current = { held, x: event.clientX, y: event.clientY };
     setPressed(true);
   };
 
-  /**
-   * Marks what the pointer is over, while it is over it.
-   *
-   * `circle` says the target is a crew's circle rather than a row or a section
-   * of the rail. A circle catches anything; the rail catches an agent and
-   * nothing else, so a crew carried across it is aimed at nothing and a release
-   * there moves nothing.
-   */
   const aim = useCallback((target: DropTarget | null, circle: boolean) => {
     setDrag((current) => {
       if (!current) return current;
@@ -326,21 +232,14 @@ export function Sidebar({
 
   const hover = (target: DropTarget | null) => aim(target, false);
 
-  /** Whether a drop target is the one currently under the pointer. */
   const isOver = (target: DropTarget): boolean => {
     const over = drag?.over;
     if (!over || over.kind !== target.kind) return false;
     return over.id === target.id;
   };
 
-  /**
-   * Whether a crew's section of the rail is where a dragged agent would land.
-   * An agent only: a crew over a circle is aimed at the same target a section
-   * is, and the section lit under it said the crew was going into itself.
-   */
   const sectionOver = (id: GroupId): boolean => dragging !== null && isOver({ kind: "group", id });
 
-  /** Which way an agent should turn to face a peer. */
   const facing = (self: AgentId, other: AgentId | undefined): Look => {
     if (!other) return null;
     const mine = rowCenters.get(self);
@@ -349,7 +248,6 @@ export function Sidebar({
     return theirs > mine ? "down" : "up";
   };
 
-  /** One agent row. Shared by every section and both views. */
   const row = (agent: AgentCard) => {
     const role = roleOf(staged, agent.id);
     const label = doing(agent.id, { activity, stuck, trail, lastActive, finished }, now);
@@ -399,10 +297,6 @@ export function Sidebar({
         />
         <span className="agent-row__title">
           <span className="agent-row__name">{agent.name}</span>
-          {/* The only thing on screen that says a row is pinned rather than
-              first. Being at the head of a crew is what a pin does, and a crew
-              whose pinned member is also the one the operator arranged at the
-              top looks exactly like a pin that did nothing. */}
           {agent.pinned && (
             <svg className="agent-row__pin" viewBox="0 0 12 12" role="img" aria-label="pinned">
               <path
@@ -419,16 +313,6 @@ export function Sidebar({
     );
   };
 
-  /**
-   * The way into a group's settings, and the only thing left beside its name.
-   *
-   * The member count that used to hang here is gone: the crews' column says how
-   * many are in a crew twice already, since the faces on a circle are seated by
-   * how many there are and the tag under the pointer says the number in words.
-   * What a crew has spent is gone from the line too, and is what hovering the
-   * heading says. Both were readouts of fixed width on a line fifteen rem wide
-   * at its widest, and the name was the only thing on it that could give any up.
-   */
   const gear = (group: Group) => (
     <button
       type="button"
@@ -442,17 +326,11 @@ export function Sidebar({
   );
 
   const inHand = drag?.held;
-  /** The agent the hand is holding, which the box at the pointer draws. */
   const heldAgent = inHand?.kind === "agent" ? agents.find((a) => a.id === inHand.id) : undefined;
 
   const waiting = useStore(forYouCount);
 
   return (
-    // Two columns, one gesture. The crews and the crew are separate surfaces on
-    // screen and one drag reaches across both, so they are drawn together
-    // rather than made siblings in `App`: a drop onto a circle would otherwise
-    // need the whole pointer machinery lifted into a context to be shared with
-    // it.
     <>
       <GroupRail
         groups={groups}
@@ -470,17 +348,9 @@ export function Sidebar({
         listRef={crewsRef}
       />
 
-      {/* Over the rail rather than inside it: the card is fixed to the window
-          and the list it hangs off scrolls, and one card for every heading is
-          what having one pointer means. Never during a drag, when the rows it
-          would cover are the targets being aimed at and the pointer is already
-          carrying something. */}
       {spend.shown && !drag && <SpendTag groupId={spend.shown.id} at={spend.shown} />}
 
       <nav className="rail" aria-label="Agents" data-dragging={drag ? "true" : undefined}>
-        {/* The plus rides the drag region rather than sitting under it: a button
-            inside one is still a button, and this is the row an operator reads
-            first. */}
         <div className="rail__brand" data-tauri-drag-region data-lights={LIGHTS ? "" : undefined}>
           <Brand waiting={pending.length > 0} />
           <NewMenu
@@ -506,9 +376,6 @@ export function Sidebar({
           </select>
         </label>
 
-        {/* Looks like a field and behaves like a button, because the field it
-          opens onto is the one that does the searching. Two inputs would mean
-          deciding which of them holds the query. */}
         <button type="button" className="rail__search" onClick={onOpenSearch}>
           <span aria-hidden="true" className="rail__glass">
             ⌕
@@ -517,10 +384,6 @@ export function Sidebar({
           <kbd className="rail__key">{FIND_KEY}</kbd>
         </button>
 
-        {/* The wire lives on this wrapper rather than on the scroll container, so
-          it runs the full height of the rail down to the footer instead of
-          stopping wherever the list happens to end. It is only drawn while a
-          message is on it; see the rule in styles.css. */}
         <div className="rail__body" data-live={inFlight.length > 0 ? "true" : undefined}>
           <div className="rail__list" ref={listRef}>
             {inFlight.map((pulse) => {
@@ -544,14 +407,6 @@ export function Sidebar({
             })}
 
             {focused ? (
-              // Inside one group. The heading is the name at reading size, on a
-              // line of its own, with what the crew is spending under it: there
-              // is one group on screen here, so the name is the heading of the
-              // whole column rather than one label among several. The pins head
-              // the list rather than sitting in a section of their own:
-              // everybody drawn here is in this crew already, so a heading over
-              // one or two rows would divide nothing, and the mark on the row is
-              // what says which rows those are.
               <div
                 className="rail__group rail__group--open"
                 data-over={sectionOver(focused.id) ? "true" : undefined}
@@ -563,11 +418,6 @@ export function Sidebar({
                   onPointerEnter={(event) => spend.show(focused.id, event)}
                   onPointerLeave={spend.hide}
                 >
-                  {/* Both headings ellipse a name that does not fit the rail,
-                      and the crew column has no room to say it either, so the
-                      full one is on the heading as well as beside the circle.
-                      A crew called "Customer research, EMEA" is otherwise two
-                      words and a hyphen wherever it is drawn. */}
                   <span className="rail__open-name" title={focused.name}>
                     {focused.name}
                   </span>
@@ -585,21 +435,10 @@ export function Sidebar({
               </div>
             ) : (
               <>
-                {/* Every group gets a header, including the only one, because the
-                  gear on it is where that group's model and endpoint live. A
-                  crew's pins are at the head of it and nowhere else. They had a
-                  section of their own above the groups, which made a pin the one
-                  arrangement that was undone by going inside the crew it was
-                  arranging: the list on screen was the group's, and the row the
-                  operator had just pinned was in a section that was not being
-                  drawn. */}
                 {groups.map((group) => {
                   const members = agents.filter((a) => a.groupId === group.id);
                   const here = railOrder(members, shape);
                   return (
-                    // The whole block catches a drop, not just the heading:
-                    // anywhere in a group that is not a row means the group and no
-                    // particular place in it, which is all an empty one can offer.
                     <div
                       key={group.id}
                       className="rail__group"
@@ -619,9 +458,6 @@ export function Sidebar({
                         {gear(group)}
                       </div>
                       {here.map(row)}
-                      {/* Only when there are agents somewhere else. With none
-                          anywhere, the line under the groups says it once and
-                          this said it again in other words, stacked. */}
                       {members.length === 0 && agents.length > 0 && (
                         <p className="rail__empty">No agents in here.</p>
                       )}
@@ -629,9 +465,6 @@ export function Sidebar({
                   );
                 })}
 
-                {/* Anything whose group did not come back still gets drawn. The
-                  rail hiding an agent is worse than the rail looking untidy,
-                  and an empty group list used to hide every agent at once. */}
                 {railOrder(
                   agents.filter((a) => !groups.some((g) => g.id === a.groupId)),
                   shape,
@@ -643,10 +476,6 @@ export function Sidebar({
           </div>
         </div>
 
-        {/* The places the rail does not list, as one row. Four stacked links
-            were a fifth of the column's height taken from the agents, and a
-            row per place is a footer that gets taller every time the app gains
-            one. Settings stays last. */}
         <div className="rail__foot">
           <button
             type="button"
@@ -655,22 +484,15 @@ export function Sidebar({
             onClick={() => showForYou(true)}
           >
             <span>For you</span>
-            {/* Amber only while something is waiting: a zero in the one color
-                that means "answer me" is the app asking about nothing. */}
             <b data-waiting={waiting > 0 ? "true" : undefined}>{waiting}</b>
           </button>
           <button type="button" className="rail__place" onClick={onOpenCalendar}>
             <span>Calendar</span>
-            {/* What a calendar can say before it is opened. The date that used
-                to be drawn inside the mark itself, said in a word. */}
             <b>{new Date(now).toLocaleDateString([], { weekday: "short" })}</b>
           </button>
           <button type="button" className="rail__place" onClick={onOpenArtifacts}>
             <span>Artifacts</span>
           </button>
-          {/* Named in full for anything that reads the label rather than the
-              position: inside a group, the group's own settings are one click
-              away at the top of the column. */}
           <button
             type="button"
             className="rail__place"
@@ -682,13 +504,6 @@ export function Sidebar({
           </button>
         </div>
 
-        {/* What the hand is holding. Drawn at the pointer and outside the list so
-          nothing it passes over can clip it, and transparent to the pointer so
-          the row underneath is still the row being aimed at. An agent only: a
-          crew is carried along a column one circle wide, where the pointer is
-          always on the circle it is aimed at and that circle's tag is already
-          beside it. A second name there read as two labels for one circle, and
-          the circle in hand is still on screen, dimmed where it was. */}
         {heldAgent && (
           <div className="rail__held" aria-hidden="true" ref={heldRef}>
             <AgentAvatar

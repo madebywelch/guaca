@@ -3,10 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fileUrl, kindLabel, previewKind, readableSize, readFileText } from "./files";
 import type { Attachment } from "./types";
 
-/**
- * A stored file. The digest follows the name so that two different files in
- * this suite are two different files to the read cache, as they would be.
- */
 function file(name: string, mime: string, bytes = 10): Attachment {
   return { digest: name.padEnd(64, "0").slice(0, 64), name, mime, bytes };
 }
@@ -20,28 +16,18 @@ describe("previewKind", () => {
   });
 
   it("gives markdown its own kind, because that is what the agents write in", () => {
-    // A brief drawn as monospace `##` is a document the operator reads around
-    // rather than through, and the app already renders every message body as
-    // the prose it is. A file is the same prose that arrived as a file.
     expect(previewKind("text/markdown")).toBe("markdown");
-    // Everything else textual stays source. A log is not prose, and markdown
-    // rules applied to one would eat its punctuation.
     expect(previewKind("text/plain")).toBe("text");
     expect(previewKind("text/csv")).toBe("text");
     expect(previewKind("text/html")).toBe("text");
   });
 
   it("says Markdown rather than shouting it", () => {
-    // The generic `text/` rule upcases the subtype, which reads as MARKDOWN
-    // in the one heading an operator sees while reading the document.
     expect(kindLabel("text/markdown")).toBe("Markdown");
     expect(kindLabel("text/csv")).toBe("CSV");
   });
 
   it("refuses to guess at anything else", () => {
-    // The same rule the runtime follows deciding what to show a model: a file
-    // that is only mostly text renders as a screen of replacement characters,
-    // and a row saying what it is serves the operator better.
     for (const mime of [
       "application/zip",
       "application/octet-stream",
@@ -55,8 +41,6 @@ describe("previewKind", () => {
 
 describe("fileUrl", () => {
   it("addresses the bytes by digest and carries the name for its type", () => {
-    // The name is not what finds the file. Two agents sending one document
-    // under different names are one set of bytes at one address.
     const stored = file("brief.pdf", "application/pdf");
     const url = fileUrl(stored);
     expect(url).toContain("/v1/file/");
@@ -91,8 +75,6 @@ describe("readFileText", () => {
   }
 
   it("asks for the front of the file rather than all of it", async () => {
-    // A log nobody meant to attach is 20 MB, and the operator asked for a
-    // glance at it, not for it to be in the renderer.
     answers("hello");
     await readFileText(file("big.log", "text/plain", 20_000_000), 2048);
 
@@ -117,9 +99,6 @@ describe("readFileText", () => {
   });
 
   it("fails with the reason, because the name is already on the row", async () => {
-    // The three answers the file store gives mean different things to the
-    // person reading, and one sentence covering all of them is the reason the
-    // only failure anybody has hit was also the one nobody could diagnose.
     fetched.mockResolvedValue({ ok: false, status: 404, text: async () => "" });
     await expect(readFileText(file("gone.txt", "text/plain"), 2048)).rejects.toThrow(
       "not in this host's file store",
@@ -132,9 +111,6 @@ describe("readFileText", () => {
   });
 
   it("reads one file once, however many times the transcript redraws it", async () => {
-    // A channel reload hands every message new objects, so this runs again for
-    // every message that arrives, and a range request is the one kind the
-    // webview's own cache does not hold.
     answers("cached");
     const twice = file("stable.md", "text/markdown");
 
@@ -142,16 +118,12 @@ describe("readFileText", () => {
     await readFileText(twice, 2048);
 
     expect(fetched).toHaveBeenCalledTimes(1);
-    // A different length is a different read, since it can be cut differently.
     await readFileText(twice, 64);
     expect(fetched).toHaveBeenCalledTimes(2);
   });
 });
 
 describe("where a frame points", () => {
-  // Both run as the desktop here: the setup file gives jsdom Tauri's bridge.
-  // The hosted spellings are one branch each and are read in `transport`'s
-  // own suite, which takes the bridge off first.
   it("frames a page from the artifact origin on a desktop", async () => {
     const { artifactUrl } = await import("./files");
     expect(artifactUrl({ port: 4242, id: "abc" })).toBe(

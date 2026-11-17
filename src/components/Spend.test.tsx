@@ -7,8 +7,6 @@ import { bars, compact, money, priced, SpendTag } from "./Spend";
 
 describe("compact", () => {
   it("is exact while the numbers are small", () => {
-    // The first calls of a session are the ones an operator is watching most
-    // closely, and "0.1k" says less than "94".
     expect(compact(0)).toBe("0");
     expect(compact(94)).toBe("94");
     expect(compact(999)).toBe("999");
@@ -23,8 +21,6 @@ describe("compact", () => {
 
 describe("money", () => {
   it("keeps enough places to show a crew that has only just started", () => {
-    // Calls cost fractions of a cent. Two decimal places would report an hour
-    // of work as $0.00.
     expect(money(0.001121)).toBe("$0.0011");
     expect(money(0.0234)).toBe("$0.023");
   });
@@ -56,8 +52,6 @@ describe("bars", () => {
   });
 
   it("drops what has scrolled out of the window", () => {
-    // Otherwise a burst an hour ago would sit in the meter forever, which is
-    // the opposite of showing whether something is happening now.
     const drawn = bars([{ at: now - PULSE_WINDOW_MS - 1, tokens: 999 }], now);
     expect(drawn.every((v) => v === 0)).toBe(true);
   });
@@ -69,16 +63,12 @@ describe("bars", () => {
 
 describe("priced", () => {
   it("says no to the two ways a provider reports no charge", () => {
-    // A local server prices nothing and reports null. A free model prices every
-    // call at a real zero. Neither has anything to say in a narrow rail.
     expect(priced(null)).toBe(false);
     expect(priced(undefined)).toBe(false);
     expect(priced(0)).toBe(false);
   });
 
   it("says no to a price that would draw as zeros anyway", () => {
-    // money() pads to four places, so anything under a ten-thousandth of a
-    // dollar is $0.0000: the same nothing, at more precision.
     expect(priced(0.000_02)).toBe(false);
     expect(money(0.000_02)).toBe("$0.0000");
   });
@@ -104,8 +94,6 @@ describe("SpendTag", () => {
     return { prompt: 1200, completion: 300, cost: null, calls: 4, ...over };
   }
 
-  // The count is the invariant: it is the one figure every provider produces
-  // and the one that climbs while a crew works.
   it.each<[string, number | null]>([
     ["a paid model", 0.0234],
     ["a free model", 0],
@@ -116,9 +104,6 @@ describe("SpendTag", () => {
   });
 
   it("drops the price a free model reports, and keeps the count", () => {
-    // The whole complaint: free inference charged a real zero, the price won
-    // the one slot the heading had, and the rail spent seven characters on
-    // $0.0000 while the only figure going anywhere was not drawn at all.
     const { container } = draw(spent({ cost: 0 }));
     expect(container.textContent).toContain("1.5k");
     expect(container.textContent).not.toContain("$");
@@ -129,9 +114,6 @@ describe("SpendTag", () => {
     expect(container.querySelector(".spend__cost")?.textContent).toBe("$0.023");
   });
 
-  // Exact, and only here. The heading had room for four characters, which is
-  // why the split and the call count were in a `title` nobody hovered long
-  // enough to read; opening the card is the operator asking for them.
   it("splits the total, in full, rather than rounding it twice", () => {
     const { container } = draw(spent({ prompt: 1_200_000, completion: 345_000 }));
     const figures = [...container.querySelectorAll(".spend__figure")].map((n) => n.textContent);
@@ -141,16 +123,11 @@ describe("SpendTag", () => {
   });
 
   it("answers a crew that has never spent anything, rather than opening empty", () => {
-    // A card that appears for the crews with something to say and stays shut
-    // for the rest is a hover nobody can tell from a broken one.
     const { container } = draw(undefined);
     expect(container.querySelector(".spend__quiet")?.textContent).toBe("Nothing spent yet.");
   });
 
   it("says nothing to a screen reader, because the numbers have a home", () => {
-    // The same figures are in the crew's settings, where the flow board reports
-    // what every run cost. Drawn into the tree as well, a sweep across the rail
-    // is a crew announcing its token count at somebody who asked for none of it.
     const { container } = draw(spent());
     expect(container.querySelector(".spend")?.getAttribute("aria-hidden")).toBe("true");
   });

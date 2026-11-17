@@ -1,43 +1,3 @@
-//! Signing in to a plugin's MCP server, on behalf of a group.
-//!
-//! This is the second OAuth flow in the app and it is deliberately not the
-//! first one. [`crate::subscription`] uses the device flow and argues against a
-//! loopback redirect: a fixed port is one that something else may already own,
-//! and a URL scheme is claimed by whichever build registered last. Both of
-//! those objections are about a port or a scheme chosen in advance.
-//!
-//! Nothing here is chosen in advance. The listener binds `127.0.0.1:0`, the
-//! operating system hands back a port that is free by construction, and *then*
-//! the client is registered with that port in its redirect URI. Dynamic client
-//! registration is what makes the ordering possible, and it is also why there
-//! is no client id in this file: an MCP server issues one on the spot, so Guaca
-//! does not have to be a registered application at every vendor on the list
-//! before an operator can use it.
-//!
-//! The device flow is not available here anyway. None of the servers on the
-//! list advertises it, and the MCP authorization spec mandates authorization
-//! code with PKCE, so this is the flow or there is no flow.
-//!
-//! ## The order of the dance
-//!
-//! 1. Ask the resource who can authorize for it (RFC 9728).
-//! 2. Ask that authorization server where its endpoints are (RFC 8414).
-//! 3. Bind a loopback port.
-//! 4. Register as a client that redirects to it (RFC 7591).
-//! 5. Send the operator to the authorization endpoint with a PKCE challenge.
-//! 6. Catch the redirect, check the state and the issuer, trade the code for a
-//!    grant.
-//!
-//! Steps 1 and 2 are [`discover`], and every one of their fallbacks is a real
-//! server rather than defensiveness. Stripe's authorization server is
-//! `https://access.stripe.com/mcp`, and RFC 8414 says the well-known segment
-//! goes *before* that path; Supermemory's also has one, answers 404 there, and
-//! publishes only after its path and at the bare origin. Linear publishes its
-//! resource metadata under the endpoint's path and Neon's under the bare one.
-//! Getting any of those wrong is a plugin that cannot be connected at all,
-//! which is why `scripts/plugins.sh` runs this same function against the live
-//! vendors instead of rebuilding the URLs beside it.
-
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -48,18 +8,10 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
-/// How long the operator has to finish in the browser.
-///
-/// Long enough to find a password and pick an account, short enough that a
-/// forgotten tab does not leave a socket bound for the life of the app.
 const WAIT_FOR_OPERATOR: Duration = Duration::from_secs(5 * 60);
 
-/// Every other leg of the dance is Guaca talking to a server.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Refresh this far ahead of expiry rather than on rejection, for the reason
-/// `subscription.rs` gives: a turn that discovers the token expired has already
-/// spent the operator's wait on a call that was never going to work.
 pub const REFRESH_SKEW_MS: i64 = 5 * 60 * 1000;
 
 #[derive(Debug, thiserror::Error)]
@@ -91,18 +43,10 @@ pub enum OauthError {
     NoBrowser { detail: String },
     #[error("nothing came back from your browser within five minutes; the sign-in was abandoned")]
     TimedOut,
-    /// The operator pressed Cancel, or the authorization server refused.
     #[error("the sign-in was refused: {error}{}", .description.as_deref().map(|d| format!(": {d}")).unwrap_or_default())]
     Refused { error: String, description: Option<String> },
-    /// The redirect did not match the request that started it. Treated as an
-    /// attack rather than as a mistake, because that is the only thing it can
-    /// be: nothing else can arrive on that port with the wrong state.
     #[error("the answer from your browser did not match the sign-in that was started")]
     StateMismatch,
-    /// The redirect named a different authorization server from the one the
-    /// sign-in was started against. RFC 9207, and the attack it exists for is a
-    /// mix-up: a code minted by a server the operator does not use, presented
-    /// to the one they do.
     #[error(
         "the answer came back naming {named}, and the sign-in was started at {expected}. \
          Nothing was connected."
@@ -114,36 +58,17 @@ pub enum OauthError {
     NoRefreshToken,
 }
 
-/// Everything needed to use a grant, and to renew it.
-///
-/// Held in the store and never returned over IPC. The client registration is in
-/// here with the tokens because a refresh needs it, and re-registering on every
-/// refresh would leave a trail of abandoned clients at the vendor.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Grant {
     pub access_token: String,
     pub refresh_token: Option<String>,
-    /// Milliseconds since the epoch, when the server said. Absent means the
-    /// server did not say, and a token with no stated expiry is used until it
-    /// is refused.
     pub expires_at: Option<i64>,
     pub client_id: String,
-    /// Issued by some servers even for a public client. Sent back only when the
-    /// registration said the token endpoint expects it.
     pub client_secret: Option<String>,
     pub token_endpoint: String,
 }
 
 impl Grant {
-    /// A key the operator pasted, as the one shape everything downstream reads.
-    ///
-    /// Not a second kind of credential and not a second column: it is stored,
-    /// spent, hidden from the model and dropped on disconnect by exactly the
-    /// code an issued token is. What it has none of is the machinery for
-    /// renewing itself, and every one of those absences is the truth about a key
-    /// somebody minted by hand — there is no refresh token, no stated expiry, no
-    /// client and no token endpoint to present one to. A server that stops
-    /// accepting it says so once and the operator pastes another.
     pub fn key(pasted: &str) -> Grant {
         Grant {
             access_token: pasted.to_string(),
@@ -155,7 +80,6 @@ impl Grant {
         }
     }
 
-    /// Whether this should be renewed before it is used again.
     pub fn stale(&self, now_ms: i64) -> bool {
         match self.expires_at {
             Some(at) => at - REFRESH_SKEW_MS <= now_ms,
@@ -164,26 +88,6 @@ impl Grant {
     }
 }
 
-/// Headers the operator gave the resource, and the rule about where they go.
-///
-/// A sign-in normally reaches several hosts: the resource publishes its
-/// metadata, an authorization server publishes its own, and registration and
-/// the token exchange happen at that server. Most of the time those are two
-/// different origins.
-///
-/// The operator's headers belong to *their* server and nowhere else. A gate in
-/// front of a self-hosted MCP server refuses everything on that host including
-/// the metadata document a sign-in has to read first, so leaving them off makes
-/// the composition — behind a gate, and signing in — fail at discovery with a
-/// `403` nobody can act on. Sending them to every host in the dance instead
-/// would hand the operator's gate credential to a vendor's authorization
-/// server, which is a credential leak dressed up as a convenience.
-///
-/// So the rule is the origin: same origin as the resource, headers go on;
-/// anywhere else, they do not. That covers the self-hosted server that is its
-/// own issuer, where every request in the flow is behind the same gate, and it
-/// covers a challenge that names metadata on somebody else's host, where none
-/// of them are.
 #[derive(Clone, Default)]
 pub struct Gate<'a> {
     origin: String,
@@ -191,7 +95,6 @@ pub struct Gate<'a> {
 }
 
 impl<'a> Gate<'a> {
-    /// Nothing to send, which is every catalog server and most added ones.
     pub fn none() -> Gate<'static> {
         Gate::default()
     }
@@ -203,8 +106,6 @@ impl<'a> Gate<'a> {
         }
     }
 
-    /// This request, with the operator's headers on it if it is going to their
-    /// own server.
     fn apply(&self, request: RequestBuilder, url: &str) -> RequestBuilder {
         if self.headers.is_empty() || self.origin.is_empty() {
             return request;
@@ -221,12 +122,6 @@ impl<'a> Gate<'a> {
     }
 }
 
-/// Runs the whole flow and hands back a usable grant.
-///
-/// `open` is given the URL the operator has to visit. It is a callback rather
-/// than a call into the opener plugin because this file has no business knowing
-/// the app is a Tauri app, and because a test drives the flow without a browser
-/// by answering the URL itself.
 pub async fn authorize(
     resource: &str,
     challenge_header: Option<&str>,
@@ -248,12 +143,6 @@ pub async fn authorize(
     let challenge = pkce_challenge(&verifier);
     let state = secret();
 
-    // Opened before the client is registered, and that ordering is the whole
-    // reason a loopback redirect is acceptable here: the port in the redirect
-    // URI is one the operating system has already given us, so it cannot be
-    // taken by something else between choosing it and listening on it. A
-    // served landing has no port to race for; it is opened first anyway, so
-    // the two orders are one order.
     let opened = landing.open(&state).await?;
     let redirect_uri = opened.redirect_uri.clone();
 
@@ -269,76 +158,33 @@ pub async fn authorize(
         encode(&challenge),
         encode(resource),
     );
-    // Asked for only when the server publishes what there is to ask for. A
-    // scope Guaca invented is a scope the server refuses, and the refusal
-    // arrives in the operator's browser rather than here.
     if let Some(scope) = scope {
         url.push_str(&format!("&scope={}", encode(&scope)));
     }
 
     open(&url).map_err(|detail| OauthError::NoBrowser { detail })?;
 
-    // RFC 9207. The issuer is recorded beside the verifier and the state, and
-    // the answer is checked against it before the code is spent: a redirect that
-    // names a different issuer is a mix-up attack, where an authorization server
-    // the operator does not use hands back a code this client would then present
-    // to the one they do.
     let code = opened.wait(&state, &issuer).await?;
     exchange(&http, &server, &client, &code, &verifier, &redirect_uri, resource, gate, &now_ms)
         .await
 }
 
-// ---- where the browser lands ---------------------------------------------
-
-/// The query a browser came back with, and a way to tell it what happened.
-///
-/// What the served route hands to the flow that is waiting. The page is the
-/// flow's to choose, because only the flow knows whether the state matched and
-/// the issuer was the one it sent the operator to; a route that answered
-/// "Connected" on its own would say so to a mix-up.
 pub struct Answer {
     pub fields: Vec<(String, String)>,
     pub reply: tokio::sync::oneshot::Sender<(u16, &'static str)>,
 }
 
-/// Every sign-in a served host is waiting on, by the `state` it sent.
-///
-/// One map for the whole daemon, held on the host and handed to every flow.
-/// A callback naming a state nobody is waiting for is answered 404 and
-/// forgotten: it is a stale tab, or somebody guessing.
 pub type Callbacks = Arc<Mutex<HashMap<String, tokio::sync::mpsc::UnboundedSender<Answer>>>>;
 
-/// Where a browser is sent back to after it authorizes, and how its answer
-/// reaches the flow that is waiting for it.
-///
-/// A running host always uses `Served`: it has no browser on its machine and
-/// no port a browser elsewhere could reach, so the redirect is a route on the
-/// origin the operator reached the workspace at, and the daemon forwards what
-/// arrives to the flow by its state. `Loopback` binds a port on this machine
-/// before naming the redirect, for a browser on the same machine; it is what a
-/// runtime inside the desktop app used, and now only tests sign in through it.
-/// Everything after the landing (PKCE, the state, the issuer check, the
-/// exchange) is one path.
 #[derive(Clone)]
 pub enum Landing {
     Loopback,
-    Served {
-        /// Scheme and host the operator's browser reached the workspace at,
-        /// with no trailing slash. The redirect URI is this plus the route.
-        origin: String,
-        callbacks: Callbacks,
-    },
+    Served { origin: String, callbacks: Callbacks },
 }
 
-/// The route a served landing answers on. One string, read by the daemon's
-/// router and by the redirect URI it registers, so they cannot disagree.
 pub const CALLBACK_ROUTE: &str = "/v1/oauth/callback";
 
 impl Landing {
-    /// Opens the landing for one sign-in and names the redirect.
-    ///
-    /// Takes the state because a served landing is filed under it: that is
-    /// how the daemon's route finds the flow a browser came back for.
     pub async fn open(&self, state: &str) -> Result<Opened, OauthError> {
         match self {
             Landing::Loopback => {
@@ -358,9 +204,6 @@ impl Landing {
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .insert(state.to_string(), sender);
-                // Native OAuth clients allow varying ports on loopback IPs,
-                // not the DNS name localhost (RFC 8252). Both reach the same
-                // local backend; use the literal address in the callback.
                 let mut callback_origin = origin.trim_end_matches('/').to_string();
                 if let Ok(mut url) = reqwest::Url::parse(&callback_origin) {
                     if url.scheme() == "http" && url.host_str() == Some("localhost") {
@@ -379,12 +222,6 @@ impl Landing {
         }
     }
 
-    /// Hands a browser's answer to the flow waiting for it, and returns the
-    /// page to show the browser. None when nobody is waiting on that state.
-    ///
-    /// Called by the daemon's route. The flow decides the page (see
-    /// [`Answer`]) and this waits for it, so the browser is told what actually
-    /// happened rather than what a route could guess.
     pub async fn deliver(&self, fields: Vec<(String, String)>) -> Option<(u16, &'static str)> {
         let Landing::Served { callbacks, .. } = self else { return None };
         let state = fields.iter().find(|(k, _)| k == "state").map(|(_, v)| v.clone())?;
@@ -396,8 +233,6 @@ impl Landing {
     }
 }
 
-/// One sign-in's landing, opened. Holds the port or the registration until
-/// the answer arrives or the operator has taken too long.
 pub struct Opened {
     pub redirect_uri: String,
     waiter: Waiter,
@@ -408,7 +243,6 @@ enum Waiter {
     Served { receiver: tokio::sync::mpsc::UnboundedReceiver<Answer>, filed: Filed },
 }
 
-/// Takes the state back out of the map when the flow ends, however it ends.
 struct Filed {
     state: String,
     in_: Callbacks,
@@ -421,7 +255,6 @@ impl Drop for Filed {
 }
 
 impl Opened {
-    /// Waits for the browser to come back, and returns the code it carried.
     pub async fn wait(self, state: &str, issuer: &str) -> Result<String, OauthError> {
         match self.waiter {
             Waiter::Loopback(listener) => wait_for_redirect(listener, state, issuer).await,
@@ -457,7 +290,6 @@ impl Opened {
 
 const NOT_THE_SIGNIN: &str = "Not the sign-in.";
 
-/// What a browser is told, for what its answer turned out to be.
 fn page_for(read: &Result<String, OauthError>) -> (u16, &'static str) {
     match read {
         Ok(_) => (200, "Connected. You can close this tab and go back to Guaca."),
@@ -466,8 +298,6 @@ fn page_for(read: &Result<String, OauthError>) -> (u16, &'static str) {
     }
 }
 
-/// Reads one redirect's query against the state and issuer that were sent.
-///
 enum Callback {
     Unrelated,
     Rejected,
@@ -482,14 +312,6 @@ fn read_answer(fields: &[(String, String)], state: &str, issuer: &str) -> Callba
     if fields.iter().find(|(k, _)| k == "state").map(|(_, v)| v.as_str()) != Some(state) {
         return Callback::Rejected;
     }
-    // Before anything in the answer is read, error included. RFC 9207 is
-    // explicit that a mismatched `iss` means the client must not act on or
-    // display `error`, `error_description` or `error_uri` either: those are
-    // attacker-controlled text on a mix-up, and showing them is how an
-    // operator is talked into the next step. Compared byte for byte, with
-    // no normalization: the spec forbids case folding, default-port elision
-    // and trailing-slash tidying, because each one makes two different
-    // issuers compare equal.
     let named = fields.iter().find(|(k, _)| k == "iss").map(|(_, v)| v.as_str());
     if let Some(named) = named {
         if named != issuer {
@@ -510,11 +332,6 @@ fn read_answer(fields: &[(String, String)], state: &str, issuer: &str) -> Callba
     Callback::Complete(Ok(code))
 }
 
-/// Trades a refresh token for a fresh grant.
-///
-/// Keeps the old refresh token when the server does not issue a new one, which
-/// is legal and common: dropping it would make the next renewal impossible and
-/// the plugin would quietly stop working a day later.
 pub async fn refresh(
     grant: &Grant,
     gate: &Gate<'_>,
@@ -545,34 +362,14 @@ pub async fn refresh(
     })
 }
 
-// ---- discovery -----------------------------------------------------------
-
-/// What a server publishes about signing in to it, before anybody signs in.
 #[derive(Debug, Clone)]
 pub struct Discovered {
     pub issuer: String,
     pub server: ServerMetadata,
-    /// What the *resource* said it wants asked for, which is not the same list
-    /// as the authorization server's and takes precedence over it. See
-    /// [`Discovered::requested_scope`].
     pub resource_scopes: Vec<String>,
-    /// What the 401 itself named, which beats both.
-    ///
-    /// RFC 6750 puts a `scope` on the challenge, and the MCP authorization spec
-    /// makes it the first thing a client should ask for: it is the server
-    /// saying what *this* request needed, now, rather than what the resource
-    /// needs in general. Empty when the challenge said nothing, which is every
-    /// vendor on the list today.
     pub challenge_scopes: Vec<String>,
 }
 
-/// Steps 1 and 2 of the dance, on their own.
-///
-/// Split out because the live vendor test needs exactly this and nothing after
-/// it: whether the seven servers still publish what this build knows how to
-/// read. A test that rebuilt the metadata URLs beside these ones would pass
-/// while an operator could not connect, which is the only failure it exists to
-/// catch.
 pub async fn discover(
     resource: &str,
     challenge_header: Option<&str>,
@@ -580,7 +377,6 @@ pub async fn discover(
     discover_through(resource, challenge_header, &Gate::none()).await
 }
 
-/// The same, for a resource that is behind something.
 async fn discover_through(
     resource: &str,
     challenge_header: Option<&str>,
@@ -597,16 +393,8 @@ async fn discover_through(
     })
 }
 
-/// The `scope` a `WWW-Authenticate` challenge named, if it named one.
-///
-/// Space-separated inside quotes, per RFC 6750. Read from the challenge rather
-/// than from any document, because it is the only one of the three lists that
-/// knows which request was refused.
 fn challenge_scope(challenge: &str) -> Vec<String> {
     let Some(at) = challenge.find("scope=") else { return Vec::new() };
-    // `resource_metadata=` and `error=` also end in `scope=`-free text, but a
-    // parameter named `...scope` would match this: only a value at a parameter
-    // boundary counts.
     if !challenge[..at].is_empty()
         && !challenge[..at].ends_with([' ', ','])
         && !challenge[..at].ends_with("Bearer ")
@@ -621,19 +409,11 @@ fn challenge_scope(challenge: &str) -> Vec<String> {
     value.split_whitespace().map(str::to_string).collect()
 }
 
-/// RFC 9728 protected-resource metadata, as far as this build reads it.
 struct Resource {
-    /// Who can issue a grant for it.
     issuer: String,
-    /// What it says to ask for. Empty when it does not say.
     scopes: Vec<String>,
 }
 
-/// What the resource publishes about itself.
-///
-/// The challenge on a 401 is consulted first because it is the answer the
-/// server itself just gave; the well-known paths are what to try when a server
-/// refuses without saying where to go, which is most of them.
 async fn resource_for(
     http: &reqwest::Client,
     resource: &str,
@@ -684,36 +464,16 @@ async fn protected_resource(
     Some(Resource { issuer, scopes: metadata.scopes_supported })
 }
 
-/// RFC 8414 authorization-server metadata, as far as this build reads it.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServerMetadata {
-    /// The issuer identifier, which is the only value RFC 9207's `iss` check
-    /// may be made against.
-    ///
-    /// Not the address the document was fetched from. Those two are the same
-    /// string only for an authorization server at the root of an origin, and
-    /// `guaca.bot` mounts its own under `/api/auth`: a sign-in checked against
-    /// the origin reached the consent screen, was issued a code, and was then
-    /// refused at the redirect for naming the issuer the service publishes. RFC
-    /// 8414 section 3.3 wants the two to agree, and where they do not, the
-    /// published value wins, because it is also the one the server will send.
-    ///
-    /// `default` because the plugin flow takes its issuer from the *resource's*
-    /// metadata, where RFC 9728 has already named it, and never reads this
-    /// field. A vendor that omits a required one must not become a plugin
-    /// nobody can connect.
     #[serde(default)]
     pub issuer: String,
     pub authorization_endpoint: String,
     pub token_endpoint: String,
-    /// Absent is a server Guaca cannot sign in to at all: with no RFC 7591
-    /// endpoint there is nothing to register a loopback redirect against.
     #[serde(default)]
     pub registration_endpoint: Option<String>,
     #[serde(default)]
     pub scopes_supported: Vec<String>,
-    /// S256 is the only challenge this build sends, so a server that stops
-    /// naming it is one every sign-in would be refused by.
     #[serde(default)]
     pub code_challenge_methods_supported: Vec<String>,
 }
@@ -745,12 +505,6 @@ pub(crate) async fn server_metadata(
     })
 }
 
-/// The metadata addresses to try for one URL, in the order RFC 8414 gives.
-///
-/// An issuer with a path has the well-known segment inserted *before* it, which
-/// is the part everybody gets wrong; the suffixed form is tried first and the
-/// bare form second because a server with no path publishes only the second and
-/// a server with one may publish either.
 fn well_known(url: &str, name: &str) -> Vec<String> {
     let Some((origin, path)) = split_origin(url) else {
         return Vec::new();
@@ -759,16 +513,12 @@ fn well_known(url: &str, name: &str) -> Vec<String> {
     let mut out = Vec::new();
     if !path.is_empty() {
         out.push(format!("{origin}/.well-known/{name}{path}"));
-        // The other reading of the same rule, which some servers implement:
-        // Supermemory's issuer answers here and 404s at the form above.
         out.push(format!("{origin}{path}/.well-known/{name}"));
     }
     out.push(format!("{origin}/.well-known/{name}"));
     out
 }
 
-/// `https://host:port` and the path after it, without pulling in a URL crate
-/// for two `find` calls.
 pub(crate) fn split_origin(url: &str) -> Option<(String, String)> {
     let (scheme, rest) = url.split_once("://")?;
     match rest.find('/') {
@@ -777,7 +527,6 @@ pub(crate) fn split_origin(url: &str) -> Option<(String, String)> {
     }
 }
 
-/// The `resource_metadata` address out of a `WWW-Authenticate` challenge.
 fn resource_metadata_url(challenge: &str) -> Option<String> {
     let at = challenge.find("resource_metadata=")? + "resource_metadata=".len();
     let rest = &challenge[at..];
@@ -789,34 +538,6 @@ fn resource_metadata_url(challenge: &str) -> Option<String> {
 }
 
 impl Discovered {
-    /// What to ask for, when something publishes a list.
-    ///
-    /// Three places publish one and they are not the same list, so they are
-    /// tried in the order of how much each one knows about the request that was
-    /// refused. The challenge (RFC 6750, on the 401) is the server saying what
-    /// *this* request needed and beats everything. The resource's (RFC 9728) is
-    /// the scopes used to request access to that resource in general. The
-    /// authorization server's (RFC 8414) is everything the issuer can grant,
-    /// across every resource behind it and for clients it created by hand as
-    /// well as ones that registered themselves, which is why it is last: it is
-    /// the only one of the three that is not about this server at all.
-    ///
-    /// AgentMail is why, and it was found by an operator rather than by a test.
-    /// Its MCP server names `openid email profile`; the Clerk instance behind
-    /// it also lists `public_metadata`, `private_metadata` and `user:org:read`,
-    /// and refuses a registered client that asks for them: `invalid_scope`, on
-    /// a vendor's error page, where nothing here can explain it.
-    ///
-    /// `offline_access` is the one addition, and only when the authorization
-    /// server names it. It is not access to anything: it is the scope that
-    /// decides whether a refresh token comes back, and without one a plugin
-    /// works until the access token expires and then asks to be signed in
-    /// again, every hour, for as long as it stays connected.
-    ///
-    /// `*` is filtered out wherever it appears: an operator connecting a
-    /// database plugin has not agreed to hand over everything their account can
-    /// do, and a server that offers a wildcard also offers the named scopes
-    /// that add up to the part Guaca needs.
     pub fn requested_scope(&self) -> Option<String> {
         let published = if !self.challenge_scopes.is_empty() {
             &self.challenge_scopes
@@ -838,16 +559,11 @@ impl Discovered {
     }
 }
 
-// ---- registration --------------------------------------------------------
-
 #[derive(Debug, Clone, Deserialize)]
 struct Registered {
     client_id: String,
     #[serde(default)]
     client_secret: Option<String>,
-    /// What this registration says the token endpoint expects. A server may
-    /// issue a secret and still register the client as public, and sending the
-    /// secret then is what gets the exchange rejected.
     #[serde(default)]
     token_endpoint_auth_method: Option<String>,
 }
@@ -904,14 +620,6 @@ async fn register(
     })
 }
 
-// ---- the redirect --------------------------------------------------------
-
-/// Waits for the browser to come back, and answers it with a page.
-///
-/// Anything that is not the callback is answered 404 and the listener keeps
-/// waiting: a browser asks for `/favicon.ico` while it is showing the page, and
-/// taking the first connection as the answer would abandon the sign-in the
-/// moment the operator's browser was being thorough.
 pub(crate) async fn wait_for_redirect(
     listener: TcpListener,
     state: &str,
@@ -985,8 +693,6 @@ pub fn parse_query(query: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-// ---- the exchange --------------------------------------------------------
-
 #[derive(Debug, Deserialize)]
 pub(crate) struct Issued {
     pub access_token: String,
@@ -1015,8 +721,6 @@ async fn exchange(
         ("redirect_uri".to_string(), redirect_uri.to_string()),
         ("client_id".to_string(), client.client_id.clone()),
         ("code_verifier".to_string(), verifier.to_string()),
-        // RFC 8707. Without it a server that issues audience-bound tokens has
-        // to guess which resource this grant is for, and some refuse instead.
         ("resource".to_string(), resource.to_string()),
     ];
     if let Some(secret) = &secret {
@@ -1073,8 +777,6 @@ pub(crate) async fn post_token(
     })
 }
 
-// ---- the small things ----------------------------------------------------
-
 pub(crate) fn http() -> Result<reqwest::Client, OauthError> {
     reqwest::Client::builder().build().map_err(|source| OauthError::Transport {
         what: "to build a client",
@@ -1083,11 +785,6 @@ pub(crate) fn http() -> Result<reqwest::Client, OauthError> {
     })
 }
 
-/// 256 bits of randomness, base64url.
-///
-/// Two v4 UUIDs rather than a random-number crate: both are drawn from the
-/// operating system's generator, and this is the only place in the app that
-/// needs unguessable bytes that are not already an id.
 pub(crate) fn secret() -> String {
     let mut bytes = [0u8; 32];
     bytes[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
@@ -1099,12 +796,6 @@ pub(crate) fn pkce_challenge(verifier: &str) -> String {
     base64url(&Sha256::digest(verifier.as_bytes()))
 }
 
-/// Base64url without padding, which is what every one of these fields wants.
-///
-/// Not shared with `e2b::encode`: that one is standard base64 with padding, for
-/// a shell, and the two alphabets differ in exactly the characters that a URL
-/// treats specially. One encoder with a flag would be one flag away from a
-/// PKCE challenge that no server accepts.
 fn base64url(raw: &[u8]) -> String {
     const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut out = String::new();
@@ -1123,7 +814,6 @@ fn base64url(raw: &[u8]) -> String {
     out
 }
 
-/// Percent-encoding for a query parameter: everything but the unreserved set.
 pub(crate) fn encode(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for byte in raw.as_bytes() {
@@ -1137,9 +827,6 @@ pub(crate) fn encode(raw: &str) -> String {
     out
 }
 
-/// The inverse, for what comes back on the redirect. `+` is a space here
-/// because that is what a form-encoded query means by it, and an authorization
-/// code containing one would otherwise be exchanged with a plus in it.
 fn decode(raw: &str) -> String {
     let bytes = raw.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -1278,7 +965,6 @@ mod landing_tests {
     async fn a_served_landing_names_the_route_on_the_origin_it_was_reached_at() {
         let opened = served().open("s1").await.unwrap();
         assert_eq!(opened.redirect_uri, "https://box.example/v1/oauth/callback");
-        // A trailing slash on the origin is not two slashes on the redirect.
         let landing = Landing::Served {
             origin: "https://box.example/".into(),
             callbacks: Default::default(),
@@ -1304,7 +990,6 @@ mod landing_tests {
         };
         let code = opened.wait("expected", "https://issuer.example").await.unwrap();
         assert_eq!(code, "the-code");
-        // And the browser was told what happened, by the flow rather than the route.
         let page = deliver.await.unwrap().expect("somebody was waiting");
         assert_eq!(page.0, 200);
         assert!(page.1.contains("Connected"), "{}", page.1);
@@ -1317,7 +1002,6 @@ mod landing_tests {
             .deliver(vec![("state".into(), "stale".into()), ("code".into(), "x".into())])
             .await;
         assert!(page.is_none());
-        // Without a state at all it cannot even be filed.
         assert!(landing.deliver(vec![("code".into(), "x".into())]).await.is_none());
     }
 
@@ -1361,8 +1045,6 @@ mod tests {
 
     #[test]
     fn a_pkce_challenge_matches_the_rfc_example() {
-        // RFC 7636 appendix B, which is the one way to know the hash, the
-        // alphabet and the missing padding are all right at once.
         let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
         assert_eq!(pkce_challenge(verifier), "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
     }
@@ -1381,8 +1063,6 @@ mod tests {
 
     #[test]
     fn a_secret_is_long_enough_to_be_a_verifier() {
-        // RFC 7636 wants 43 to 128 characters, and a short one is refused by
-        // the server rather than here.
         let secret = secret();
         assert_eq!(secret.len(), 43);
         assert_ne!(secret, super::secret());
@@ -1397,9 +1077,6 @@ mod tests {
 
     #[test]
     fn a_plus_in_a_redirect_is_a_space_and_not_a_plus() {
-        // Query strings are form-encoded on the way back. An authorization code
-        // is opaque, so a wrong reading here fails at the token endpoint with
-        // "invalid grant" and nothing says why.
         assert_eq!(decode("one+two"), "one two");
         assert_eq!(decode("one%2Btwo"), "one+two");
     }
@@ -1412,12 +1089,6 @@ mod tests {
 
     #[test]
     fn metadata_addresses_put_the_well_known_segment_before_the_path() {
-        // The part of RFC 8414 that is most often got wrong, and the reason
-        // Stripe's authorization server is found at all: its issuer is
-        // `https://access.stripe.com/mcp`, and the first form below is the only
-        // one of the three that answers. Supermemory's, which also has a path,
-        // answers the other two and not the first, so the first alone is not
-        // enough either.
         assert_eq!(
             well_known("https://example.test/tenant", "oauth-authorization-server"),
             vec![
@@ -1461,7 +1132,6 @@ mod tests {
         challenged(&[], resource, server)
     }
 
-    /// The same, with what the 401 itself named on the front.
     fn challenged(challenge: &[&str], resource: &[&str], server: &[&str]) -> Option<String> {
         Discovered {
             issuer: "https://x.test".into(),
@@ -1474,10 +1144,6 @@ mod tests {
 
     #[test]
     fn what_the_refusal_itself_named_beats_both_documents() {
-        // The MCP authorization spec's own priority order, and the reason for
-        // it: a challenge is the server saying what *this* request needed,
-        // where both documents say what the resource needs in general. Asking
-        // for less than the challenge named is a second 401 on the same call.
         assert_eq!(
             challenged(&["files:read"], &["read", "write"], &["read", "write", "admin"]).as_deref(),
             Some("files:read")
@@ -1491,39 +1157,26 @@ mod tests {
             vec!["files:read", "files:write"]
         );
         assert_eq!(challenge_scope("Bearer scope=files:read"), vec!["files:read"]);
-        // The common case, and every vendor on the list today: a challenge that
-        // names the metadata and nothing else. Reading a scope out of one of
-        // these is how Guaca would come to invent one.
         assert!(challenge_scope(
             r#"Bearer resource_metadata="https://x.test/.well-known/oauth-protected-resource""#
         )
         .is_empty());
         assert!(challenge_scope("Bearer").is_empty());
-        // Not a parameter that merely ends in the right six characters.
         assert!(challenge_scope(r#"Bearer myscope="nope""#).is_empty());
     }
 
     #[test]
     fn a_wildcard_scope_is_never_asked_for() {
-        // Neon offers `read`, `write` and `*`, and publishes no list of its
-        // own on the resource. Connecting a database plugin is not consent to
-        // everything the operator's account can do.
         assert_eq!(scopes(&[], &["read", "write", "*"]).as_deref(), Some("read write"));
     }
 
     #[test]
     fn a_server_that_publishes_no_scopes_is_not_asked_for_one() {
-        // Cloudflare's does not. An invented scope is refused in the browser,
-        // where nothing can explain it.
         assert_eq!(scopes(&[], &[]), None);
     }
 
     #[test]
     fn the_resource_decides_what_is_asked_for_and_not_its_authorization_server() {
-        // AgentMail, exactly as the two documents read today. Its MCP server
-        // wants three scopes; the Clerk instance behind it can issue seven and
-        // refuses a registered client that asks for the other four, with an
-        // `invalid_scope` the operator sees and cannot act on.
         let asked = scopes(
             &["openid", "email", "profile"],
             &[
@@ -1541,9 +1194,6 @@ mod tests {
 
     #[test]
     fn a_refresh_token_is_asked_for_whenever_the_server_can_issue_one() {
-        // `offline_access` is not access to anything: it is the difference
-        // between a plugin that renews itself and one that asks the operator to
-        // sign in again every hour. Added once, and never invented.
         assert_eq!(
             scopes(&["read"], &["read", "offline_access"]).as_deref(),
             Some("read offline_access")
@@ -1562,8 +1212,6 @@ mod tests {
 
     #[test]
     fn a_public_client_never_sends_the_secret_it_was_given() {
-        // Neon issues one and registers the client as public in the same
-        // answer. Sending it then is what gets the exchange rejected.
         let public = Registered {
             client_id: "abc".into(),
             client_secret: Some("shh".into()),
@@ -1591,8 +1239,6 @@ mod tests {
         assert!(!grant(Some(now + REFRESH_SKEW_MS + 1)).stale(now));
         assert!(grant(Some(now + REFRESH_SKEW_MS)).stale(now));
         assert!(grant(Some(now - 1)).stale(now));
-        // A server that states no expiry is taken at its word. Guessing one
-        // would refresh a working token on a timer nobody chose.
         assert!(!grant(None).stale(now));
     }
 }

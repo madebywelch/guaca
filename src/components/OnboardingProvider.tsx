@@ -48,15 +48,8 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
   const [apiKey, setApiKey] = useState("");
   const [subscription, setSubscription] = useState<SubscriptionStatus | null>(null);
   const [pendingCode, setPendingCode] = useState<DeviceCode | null>(null);
-  // Whether the host has the `claude` program, which is a fact about the host
-  // and not about this screen: undefined while it is being asked, null when the
-  // answer could not be read. A screen that guessed "not installed" from a
-  // failed read would refuse a provider that works.
   const [claude, setClaude] = useState<ClaudeProgram | null | undefined>(undefined);
   const [claudeSignedIn, setClaudeSignedIn] = useState(false);
-  // What this Mac already has, and whether the operator has said no to it.
-  // Held here rather than in `Onboarding`, because the offer belongs to the
-  // step that would otherwise ask for exactly the same thing.
   const [pickups, setPickups] = useState<Pickup[]>([]);
   const [skipped, setSkipped] = useState(false);
   const [busy, setBusy] = useState<"signin" | "testing" | "saving" | null>(null);
@@ -96,11 +89,6 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
     };
   }, []);
 
-  // The offer is for a machine the operator is at, so both facts are read
-  // rather than inferred: the window has to be the desktop showing this Mac,
-  // and the host has to say it is on the operator's own machine. A browser
-  // cannot see the host's programs and a box may be shared, so either answer
-  // alone would be a guess about whose account that sign-in is.
   const offerHere = capabilities.borrowedSignins && hostPlace() === "thisMac";
   const unconfigured = provider === "compatible" && !settings?.apiKeySet;
 
@@ -112,8 +100,6 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
         if (live) setPickups(found);
       },
       () => {
-        // A host that cannot answer has nothing to offer. The provider cards
-        // are one click away, so a failed question costs nobody a choice.
         if (live) setPickups([]);
       },
     );
@@ -127,14 +113,6 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
   const needsKey = preset && !preset.local && !savedKey && !apiKey.trim();
   const ineligible = subscription?.signedIn && !subscription.includesCodex;
   const claudeReady = capabilities.claudeProvider && claude?.installed !== false;
-  // Detection filled a list and changed nothing. This is the list deciding
-  // whether there is an offer to draw, and the operator's Skip is what removes
-  // it: no setting is written until one of its buttons is pressed.
-  //
-  // It may replace the cards only while they are still untouched. A program can
-  // take a second to answer, and swapping the screen out from under somebody
-  // who has already picked a card and started typing a key is worse than never
-  // offering at all.
   const touched =
     provider !== "compatible" ||
     Boolean(apiKey.trim()) ||
@@ -142,19 +120,12 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
     baseUrl !== (settings?.baseUrl ?? PROVIDERS[0]!.baseUrl);
   const offer = offerHere && unconfigured && !skipped && !touched && pickups.length > 0;
 
-  // The Claude plan is offered beside the other two rather than behind
-  // "Advanced", because the people most likely to try this app are already
-  // carrying one and a disclosure triangle reads as "for experts". A host that
-  // cannot run the program is a reason on the card, never a reason to hide it.
   const claudeBlurb = !capabilities.claudeProvider
     ? "This host does not offer the claude program, so a plan cannot pay for turns here."
     : claude?.installed === false
       ? `Runs the claude program, which this host does not have. Install it there with ${claude.install}, sign in, then come back.`
       : "Use a Claude plan through the claude program on your Guaca host. No API key needed.";
 
-  // Why the primary action cannot be pressed, in the row beside it. The brief
-  // step does the same thing for its Continue, and for the same reason: a dead
-  // button with no sentence is the first thing this app does to a stranger.
   const blockedReason = !settings
     ? "Waiting for this host to answer with its settings."
     : provider === "compatible" && needsKey
@@ -185,14 +156,6 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
     setError("");
   };
 
-  /**
-   * Guaca's own ChatGPT sign-in, from whichever card asked for it.
-   *
-   * Shared rather than written twice because the browser step is the part a
-   * person has to finish, and two copies of it would eventually disagree about
-   * what cancelling means. `live` is the caller's answer to "am I still the
-   * current attempt", so an abandoned dialog writes nothing.
-   */
   const signInChatgpt = async (live: () => boolean): Promise<SubscriptionStatus | null> => {
     if (subscription?.signedIn && subscription.includesCodex) return subscription;
     setBusy("signin");
@@ -207,19 +170,6 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
     return account;
   };
 
-  /**
-   * Takes one sign-in and makes it the provider.
-   *
-   * Claude is a setting because that program already holds the sign-in: the
-   * `claude` provider is only "run that program", so accepting is the whole of
-   * it, and the test is the same one the card runs rather than a second way in.
-   *
-   * Codex cannot be a setting, and this is the trade-off `pickup.rs` argues: the
-   * token under `~/.codex` belongs to that CLI and rotates on refresh, so
-   * copying it would leave the two programs signing each other out. What is
-   * reused instead is the account and the browser session that CLI already
-   * opened, through Guaca's own sign-in.
-   */
   const accept = async (pickup: Pickup) => {
     if (request.current.kind === "running" || !settings) return;
     request.current = transitionRequest(request.current, "start");
@@ -326,9 +276,6 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
     }
   };
 
-  // The state of whatever was last pressed, in one place: the provider cards
-  // and the offer ask different questions but answer with the same failure,
-  // the same wait, and the same sign-in code.
   const notices = (
     <>
       {error && (

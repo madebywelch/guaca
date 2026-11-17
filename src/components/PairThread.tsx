@@ -9,24 +9,6 @@ import { continues, type Lookups, toPeer } from "../lib/transcript";
 import type { AgentId, Envelope } from "../lib/types";
 import { MessageItem } from "./MessageItem";
 
-/**
- * What two agents said to each other, on its own.
- *
- * The channel shows that an exchange happened and with whom; this is where it
- * is read. It is a separate view rather than a modal because it is a
- * conversation, sometimes a long one, and a dialog over the top of the window
- * is a bad place to read forty messages.
- *
- * Read-only, and said so on the page. Neither of these agents is addressable
- * from here: a message the operator typed into this thread would have to be
- * sent as one of them, which is not a thing this app lets anybody do. Saying
- * "view-only" is cheaper than a composer that refuses.
- *
- * Loaded from the runtime rather than from what the channel already holds,
- * because no channel holds it. A send is filed under the recipient and the
- * answer under the sender, and an automatic reply leaves no trace at all in
- * the channel of the agent that wrote it.
- */
 export function PairThread({
   self,
   peer,
@@ -42,11 +24,6 @@ export function PairThread({
   const [messages, setMessages] = useState<Envelope[] | undefined>(undefined);
   const { ref: scrollRef, follow } = useFollowBottom();
 
-  // Deliberately over-eager. `lastActive` moves for both ends of every message,
-  // so this fires for traffic that has nothing to do with this pair, and it
-  // fires for every message that does, which is the half that matters. A thread
-  // left open while its two agents are still talking has to keep up, and one
-  // small indexed read is cheaper than the state it would take to know better.
   const beat = useStore((s) => Math.max(s.lastActive[self] ?? 0, s.lastActive[peer] ?? 0));
 
   useEffect(() => {
@@ -66,11 +43,6 @@ export function PairThread({
 
   useDismiss(onClose);
 
-  // The newest is what the operator came for: this opens off a row saying
-  // something just happened between these two. Only while they are still there,
-  // though. This reloads on any activity by either agent, so without that a
-  // reader half way up a long exchange is thrown back to the end by a message
-  // that had nothing to do with what they were reading.
   useLayoutEffect(follow, [follow, messages]);
 
   const here = toPeer(lookups.byId(self), self);
@@ -79,7 +51,6 @@ export function PairThread({
   return (
     <section className="pane">
       <header className="pane__header">
-        {/* One heading, not two: the title of this view is the pair. */}
         <h1 className="pane__title pane__pair">
           <AgentAvatar avatar={here.avatar} color={here.color} size="sm" seed={here.id} />
           {here.name}

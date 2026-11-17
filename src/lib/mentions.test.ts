@@ -14,7 +14,6 @@ describe("mentionAt", () => {
   });
 
   it("ignores an @ inside a word", () => {
-    // Otherwise typing an email address opens a menu.
     expect(mentionAt("mail me at bob@example.com", 26)).toBeNull();
   });
 
@@ -33,7 +32,6 @@ describe("mentionAt", () => {
   });
 
   it("uses the caret, not the end of the text", () => {
-    // Editing mid-sentence must still offer completions.
     expect(mentionAt("ask @Cri to review", 8)).toEqual({ start: 4, end: 8, term: "Cri" });
   });
 
@@ -48,7 +46,6 @@ describe("matchMentions", () => {
   });
 
   it("is case insensitive, and ranks a prefix match first", () => {
-    // "Scribe" contains "cri" too, so this also pins the ordering.
     expect(matchMentions(NAMES, "cri")).toEqual(["Critic", "Scribe"]);
   });
 
@@ -85,22 +82,18 @@ describe("applyMention", () => {
   });
 
   it("inserts a name containing a space intact", () => {
-    // Exact names are the point: send_message resolves recipients by name.
     const query = mentionAt("@Head", 5)!;
     expect(applyMention("@Head", query, "Head Chef").text).toBe("@Head Chef ");
   });
 });
 
 describe("splitMentions", () => {
-  /** The runs that resolved, as they were typed. */
   const marked = (text: string, names = NAMES) =>
     splitMentions(text, names)
       .filter((run) => run.kind === "mention")
       .map((run) => run.text);
 
   it("marks a name the roster has and leaves one it does not", () => {
-    // The whole rule. `@` and a word is also a handle, a decorator and half an
-    // email address, and a chip around one of those claims a fact nobody has.
     expect(marked("ask @Critic about @lunch")).toEqual(["@Critic"]);
   });
 

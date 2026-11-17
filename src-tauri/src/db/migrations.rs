@@ -1,13 +1,5 @@
-//! Schema migrations.
-//!
-//! Forward-only, numbered, and applied inside a transaction keyed on SQLite's
-//! `user_version`. No migration framework: the whole thing is a list and a
-//! loop, which is auditable in one screen and cannot drift from what actually
-//! ran.
-
 use rusqlite::{Connection, Transaction, TransactionBehavior};
 
-/// Ordered migrations. Append only. Never edit a shipped entry.
 const MIGRATIONS: &[(i32, &str)] = &[
     (
         1,
@@ -2150,9 +2142,6 @@ ALTER TABLE agents ADD COLUMN tidied_through INTEGER;
     ),
 ];
 
-/// The group every agent starts in, and the one the UI keeps out of the way
-/// while it is the only one. Pinned so the check is an id comparison rather
-/// than a name match or a count.
 pub const DEFAULT_GROUP_ID: &str = "00000000-0000-4000-8000-000000000001";
 
 #[derive(Debug, thiserror::Error)]
@@ -2173,33 +2162,13 @@ pub fn latest_version() -> i32 {
     MIGRATIONS.last().map(|(v, _)| *v).unwrap_or(0)
 }
 
-/// Applies every migration newer than the database's current `user_version`.
-///
-/// Safe to call on every startup, and safe to call from two processes at once:
-/// each migration runs inside an immediate transaction and the version is
-/// re-read after the write lock is held. Reading the version first and then
-/// opening a transaction would let two racing callers both see version 0 and
-/// both try to create the tables.
 pub fn run(conn: &mut Connection) -> Result<i32, MigrationError> {
-    // Foreign keys off for the duration, which is what SQLite's own procedure
-    // for rebuilding a table asks for and what a migration cannot do for
-    // itself: the pragma is a no-op inside a transaction, and every migration
-    // runs in one. With enforcement on, the `DROP TABLE` in a rebuild performs
-    // an implicit DELETE first and fires the ON DELETE CASCADE of everything
-    // pointing at that table, so migration 21 took every routine's recorded
-    // firings with it.
-    //
-    // Nothing is lost by it here. Migrations are DDL written in this file, not
-    // input, and the connection this runs on exists only to run them: the pool
-    // the app actually works through turns enforcement on for every connection
-    // in `Store::open`. Restored anyway, because tests call this directly.
     let enforced: bool = conn.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
     if enforced {
         conn.pragma_update(None, "foreign_keys", false)?;
     }
     let applied = apply(conn, latest_version());
     if enforced {
-        // Best effort: whatever the migrations said is the answer worth having.
         let _ = conn.pragma_update(None, "foreign_keys", true);
     }
     applied
@@ -2223,20 +2192,13 @@ fn has_table(conn: &Connection, name: &str) -> Result<bool, rusqlite::Error> {
 
 fn apply(conn: &mut Connection, target: i32) -> Result<i32, MigrationError> {
     loop {
-        // `Immediate` takes the write lock at BEGIN rather than at first write,
-        // so the loser waits here instead of failing partway through a batch.
         let tx: Transaction<'_> = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let current: i32 = tx.query_row("PRAGMA user_version", [], |row| row.get(0))?;
 
         if current > target {
-            // Downgrading would silently corrupt data written by a newer build.
-            // Refusing is the only safe move.
             return Err(MigrationError::FromTheFuture { found: current, supported: target });
         }
 
-        // Before the hosting branch met main, 45 meant repositories.remote
-        // and 46 meant pending_runs. Repair that known lineage under the same
-        // write lock without decreasing user_version or editing main's SQL.
         if matches!(current, 45 | 46) && has_remote(&tx)? {
             let consent: bool = tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM pragma_table_info('agents') WHERE name='browser_consent')",
@@ -2254,15 +2216,12 @@ fn apply(conn: &mut Connection, target: i32) -> Result<i32, MigrationError> {
             break;
         };
 
-        // These two additions already exist on the old hosting lineage.
-        // Advancing their new slots must preserve its repository URLs and journal.
         let already_present = (*version == 48 && has_remote(&tx)?)
             || (*version == 49 && has_table(&tx, "pending_runs")?);
         if !already_present {
             tx.execute_batch(sql)
                 .map_err(|source| MigrationError::Failed { version: *version, source })?;
         }
-        // `user_version` does not accept a bound parameter.
         tx.pragma_update(None, "user_version", *version)?;
         tx.commit()?;
         tracing::info!(version, "applied migration");
@@ -2353,8 +2312,6 @@ mod tests {
                 .next()
                 .unwrap()
                 .is_none());
-            // Whichever lineage it came up, the repository row is gone and the
-            // agent that was in it is still there.
             assert!(!has_table(&conn, "repositories").unwrap());
             let kept: i64 = conn
                 .query_row("SELECT count(*) FROM agents WHERE id='coder'", [], |r| r.get(0))
@@ -2388,13 +2345,6 @@ mod tests {
 
     #[test]
     fn a_permission_recorded_before_questions_existed_is_still_a_permission() {
-        // The upgrade path, which no test that starts from a blank database can
-        // reach. Every request ever recorded has a NULL `options`, and NULL is
-        // also what a question that takes a written answer would store if the
-        // two were not told apart by `action`. Read as a question, every
-        // historical row would come back with no choices and no way to answer
-        // it, and `standing_grants` would refuse to parse the ones that were
-        // granted.
         let mut conn = memory();
         let tx = conn.transaction().unwrap();
         for (version, sql) in MIGRATIONS.iter().take_while(|(v, _)| *v < 33) {
@@ -2455,8 +2405,6 @@ mod tests {
 
     #[test]
     fn a_recovery_point_written_before_starts_were_recorded_counts_as_started() {
-        // Nothing said whether a turn had begun on it, and the guess that it
-        // had not would repeat work a turn may already have done.
         let mut conn = memory();
         for (v, sql) in MIGRATIONS.iter().take_while(|(v, _)| *v <= 74) {
             conn.execute_batch(sql).unwrap();
@@ -2474,14 +2422,7 @@ mod tests {
 
     #[test]
     fn a_withdrawn_plugin_takes_its_rows_and_leaves_the_others() {
-        // The slot in `plugins_kind_unique` is the point: a row nothing can
-        // resolve is invisible to every read but still owns (group, kind), so a
-        // crew reconnecting under that name would fail on a conflict with a row
-        // the UI never drew for them.
         let mut conn = memory();
-        // Staged by hand rather than with `apply`, which takes the next
-        // migration off the list without looking at the target and would run
-        // the one being tested.
         for (version, sql) in MIGRATIONS.iter().filter(|(v, _)| *v < 25) {
             conn.execute_batch(sql).unwrap();
             conn.pragma_update(None, "user_version", *version).unwrap();
@@ -2505,11 +2446,6 @@ mod tests {
 
     #[test]
     fn a_plugin_that_changed_server_loses_the_grant_it_had_for_the_old_one() {
-        // Cloudflare's endpoint moved hosts, so the stored token was issued by
-        // an issuer the new server does not share and the stored tool list
-        // names tools it does not have. Both are read on every turn, and a row
-        // that survives is an agent calling a tool that 401s against a host
-        // nobody signed in to.
         let mut conn = memory();
         for (version, sql) in MIGRATIONS.iter().filter(|(v, _)| *v < 26) {
             conn.execute_batch(sql).unwrap();
@@ -2535,9 +2471,6 @@ mod tests {
 
     #[test]
     fn a_plugin_connected_before_agents_could_be_chosen_stays_the_whole_crew_s() {
-        // The one thing this migration must not do. A crew whose Neon sign-in
-        // worked yesterday has to work today, without the operator opening a
-        // panel they have never seen to re-grant what they already had.
         let mut conn = memory();
         for (version, sql) in MIGRATIONS.iter().filter(|(v, _)| *v < 27) {
             conn.execute_batch(sql).unwrap();
@@ -2563,9 +2496,6 @@ mod tests {
 
     #[test]
     fn a_plugin_connected_before_tools_could_be_switched_off_keeps_all_of_them() {
-        // The same thing this migration must not do, one axis over. Nothing is
-        // written down, and nothing written down is what "everything is on"
-        // means: the refusals are the rows.
         let mut conn = memory();
         for (version, sql) in MIGRATIONS.iter().filter(|(v, _)| *v < 29) {
             conn.execute_batch(sql).unwrap();
@@ -2589,12 +2519,6 @@ mod tests {
 
     #[test]
     fn a_plugin_connected_before_a_server_could_be_added_keeps_dialling_the_vendor() {
-        // Empty means "the catalog knows where this is", which is what every
-        // row written before today meant and has to go on meaning. A migration
-        // that backfilled the vendor's address into the column would freeze it
-        // there, and the next time a vendor moved, every crew connected before
-        // the move would keep dialling the old host with nothing on screen
-        // saying why their plugin had stopped working.
         let mut conn = memory();
         for (version, sql) in MIGRATIONS.iter().filter(|(v, _)| *v < 35) {
             conn.execute_batch(sql).unwrap();
@@ -2617,10 +2541,6 @@ mod tests {
 
     #[test]
     fn a_plugin_connected_before_headers_existed_sends_none() {
-        // `'[]'` and not `''`, because the column is read by parsing it. An
-        // empty string parses as nothing either way today, and would be a
-        // corrupt row the day anything decided to tell an unreadable column
-        // apart from an empty one.
         let mut conn = memory();
         for (version, sql) in MIGRATIONS.iter().filter(|(v, _)| *v < 36) {
             conn.execute_batch(sql).unwrap();
@@ -2643,8 +2563,6 @@ mod tests {
 
     #[test]
     fn a_server_added_by_hand_under_a_name_the_catalog_takes_keeps_its_address() {
-        // Firecrawl's other address is the keyless one, which answers with no
-        // sign-in at all.
         a_row_the_tile_did_not_write_keeps_its_address(
             54,
             crate::domain::plugin::PluginKind::Firecrawl,
@@ -2665,12 +2583,6 @@ mod tests {
         );
     }
 
-    /// Migrations 54 and 55, which are one rule for two slugs.
-    ///
-    /// Left alone, `from_row` reads a row under a catalog slug as the
-    /// catalog's whatever address it carries, and a crew that pasted a key or
-    /// ran the server as a program starts dialling somewhere else with it. Only
-    /// the row the tile itself would have written may become the catalog's.
     fn a_row_the_tile_did_not_write_keeps_its_address(
         version: i32,
         vendor: crate::domain::plugin::PluginKind,
@@ -2743,8 +2655,6 @@ mod tests {
             })
             .unwrap();
         assert_eq!(named, 1, "who may spend it hangs off the id and survives the rename");
-        // A crew that already has the fallback name keeps both rows rather than
-        // failing to open on the unique index.
         assert_eq!(row("crowded").0, slug);
         assert_eq!(row("taken").0, added);
         assert_eq!(resolved("vendor"), PluginKind::Neon);
@@ -2752,11 +2662,6 @@ mod tests {
 
     #[test]
     fn a_tool_switched_off_before_agents_could_be_named_stays_off_for_all_of_them() {
-        // The other direction, and the one that would be silent. A refusal in
-        // the old table is a tool the operator switched off for the crew, which
-        // in the new shape is a tool narrowed to nobody. Dropped, or read as
-        // 'everyone', the migration hands `drop_project` back to every agent in
-        // the crew at the moment the file is opened by a newer build.
         let mut conn = memory();
         for (version, sql) in MIGRATIONS.iter().filter(|(v, _)| *v < 31) {
             conn.execute_batch(sql).unwrap();
@@ -2793,7 +2698,6 @@ mod tests {
     #[test]
     fn the_avatar_column_is_renamed_and_keeps_its_data() {
         let mut conn = memory();
-        // Stop at version 1 so the rename can be observed happening.
         let tx = conn.transaction().unwrap();
         tx.execute_batch(MIGRATIONS[0].1).unwrap();
         tx.pragma_update(None, "user_version", 1).unwrap();
@@ -2814,9 +2718,6 @@ mod tests {
 
     #[test]
     fn the_signin_column_is_renamed_and_keeps_its_data() {
-        // The rename is the entire migration, so a row written by an older
-        // build is the only thing that can show it renamed the column rather
-        // than rebuilding the table around it.
         let mut conn = memory();
         for (version, sql) in MIGRATIONS.iter().filter(|(v, _)| *v < 32) {
             conn.execute_batch(sql).unwrap();
@@ -2854,8 +2755,6 @@ mod tests {
 
     #[test]
     fn group_inference_settings_start_empty_and_mean_inherit() {
-        // NULL and "" have to stay distinguishable: one means "use the app
-        // default", the other is a value an operator deliberately blanked.
         let mut conn = memory();
         run(&mut conn).unwrap();
         let model: Option<String> = conn
@@ -2868,10 +2767,6 @@ mod tests {
 
     #[test]
     fn a_group_pinned_to_a_subscription_model_keeps_running_on_it() {
-        // The one column became two, and the split changed what the old one
-        // means. A group whose model is one of the subscription's own was being
-        // spent on the subscription; leaving it behind would move that crew to
-        // whatever the app happens to run, silently and on the next turn.
         let mut conn = memory();
         let tx = conn.transaction().unwrap();
         for (version, sql) in MIGRATIONS.iter().take_while(|(v, _)| *v < 23) {
@@ -2898,9 +2793,6 @@ mod tests {
             .unwrap();
         assert_eq!(carried.as_deref(), Some("gpt-5.4"));
 
-        // And a model that belongs to an endpoint is left where it was: copying
-        // it would pin a crew to a model the subscription cannot run the moment
-        // anyone moved it across.
         let untouched: Option<String> = conn
             .query_row("SELECT subscription_model FROM groups WHERE id='g2'", [], |r| r.get(0))
             .unwrap();
@@ -2909,8 +2801,6 @@ mod tests {
 
     #[test]
     fn a_group_that_already_had_an_endpoint_is_written_down_as_choosing_one() {
-        // What it was doing yesterday, said out loud, so that nothing has to
-        // guess it tomorrow.
         let mut conn = memory();
         let tx = conn.transaction().unwrap();
         for (version, sql) in MIGRATIONS.iter().take_while(|(v, _)| *v < 23) {
@@ -2942,15 +2832,11 @@ mod tests {
         };
         assert_eq!(provider("g1").as_deref(), Some("compatible"));
         assert_eq!(provider("g2").as_deref(), Some("compatible"));
-        // A group that only pinned a model never said anything about who pays,
-        // and must keep saying nothing.
         assert_eq!(provider("g3"), None);
     }
 
     #[test]
     fn group_limits_start_unset_and_mean_inherit() {
-        // A number here would be a limit nobody chose, and it would override the
-        // app's the first time either was retuned.
         let mut conn = memory();
         run(&mut conn).unwrap();
         let (steps, provider): (Option<i64>, Option<String>) = conn
@@ -2966,12 +2852,6 @@ mod tests {
 
     #[test]
     fn an_agent_that_already_had_a_machine_keeps_it_when_the_two_places_become_a_decision() {
-        // The upgrade cannot apply the old rule, because the old rule was
-        // "every agent in the workspace" and that is the state this column
-        // exists to end. It cannot apply the new default to everybody either:
-        // an agent already holding a machine is holding the operator's sign-ins
-        // on its disk, and one cut off from them reports accounts it can see
-        // and cannot reach. What it is holding is the only honest answer.
         let mut conn = memory();
         for (version, sql) in MIGRATIONS.iter().filter(|(v, _)| *v < 28) {
             conn.execute_batch(sql).unwrap();
@@ -3042,8 +2922,6 @@ mod tests {
 
     #[test]
     fn existing_agents_are_moved_into_the_default_group() {
-        // The upgrade path that matters: a database written before groups
-        // existed must come out the other side with every agent in one.
         let mut conn = memory();
         let tx = conn.transaction().unwrap();
         for (version, sql) in MIGRATIONS.iter().take(3) {
@@ -3067,8 +2945,6 @@ mod tests {
 
     #[test]
     fn agent_names_are_unique_per_group_rather_than_globally() {
-        // Two isolated groups each wanting a Manager is the ordinary case, and
-        // the old global index made it impossible.
         let mut conn = memory();
         run(&mut conn).unwrap();
         conn.execute("INSERT INTO groups (id,name,created_at) VALUES ('g2','Research',0)", [])
@@ -3085,9 +2961,6 @@ mod tests {
 
     #[test]
     fn two_connectors_in_one_group_cannot_claim_the_same_variable() {
-        // Both would be written into the same machine's environment and one
-        // would win by row order, so the agent would be handed a token for an
-        // account nobody chose.
         let mut conn = memory();
         run(&mut conn).unwrap();
         let insert = "INSERT INTO connectors (id,group_id,service,account,env_var,secret,note,created_at,updated_at)
@@ -3098,7 +2971,6 @@ mod tests {
             conn.execute(insert, rusqlite::params!["b", DEFAULT_GROUP_ID, "Linear", "TOKEN"]);
         assert!(clash.is_err(), "a duplicate variable name in one group must be rejected");
 
-        // Another group is another set of machines, so the same name is fine.
         conn.execute("INSERT INTO groups (id,name,created_at) VALUES ('g2','Research',0)", [])
             .unwrap();
         conn.execute(insert, rusqlite::params!["c", "g2", "Linear", "TOKEN"])
@@ -3107,10 +2979,6 @@ mod tests {
 
     #[test]
     fn declared_sign_ins_are_dropped_rather_than_carried_into_detection() {
-        // A database written before sign-ins were detected holds rows an
-        // operator typed. Keeping them would mean the roster advertised an
-        // account nobody had checked against the machine, which is the claim
-        // detection exists to stop making. The credentials beside them stay.
         let mut conn = memory();
         let tx = conn.transaction().unwrap();
         for (version, sql) in MIGRATIONS.iter().take(12) {
@@ -3161,7 +3029,6 @@ mod tests {
             .collect();
         assert_eq!(kept, vec!["keep".to_string()], "only the credential survives");
 
-        // And the detected table is there and empty, waiting for a scan.
         let signins: i64 =
             conn.query_row("SELECT count(*) FROM signins", [], |r| r.get(0)).unwrap();
         assert_eq!(signins, 0);
@@ -3169,9 +3036,6 @@ mod tests {
 
     #[test]
     fn an_existing_schedule_keeps_firing_on_exactly_the_gap_it_was_set_for() {
-        // The upgrade that could quietly change what a crew is already doing:
-        // a routine written as a number of seconds has to come out the other
-        // side saying the same thing, and a one-shot has to stay a one-shot.
         let mut conn = memory();
         let tx = conn.transaction().unwrap();
         for (version, sql) in MIGRATIONS.iter().take(15) {
@@ -3206,10 +3070,6 @@ mod tests {
 
     #[test]
     fn rebuilding_the_routines_table_keeps_every_schedule_and_its_history() {
-        // The one migration that drops a table other rows point at. With
-        // foreign keys on, DROP TABLE fires `routine_runs`' ON DELETE CASCADE
-        // and takes every recorded firing with it, so this checks the history
-        // is still there and the slots came over unchanged.
         let mut conn = memory();
         let tx = conn.transaction().unwrap();
         for (version, sql) in MIGRATIONS.iter().take(20) {
@@ -3256,7 +3116,6 @@ mod tests {
             conn.query_row("SELECT count(*) FROM routine_runs", [], |r| r.get(0)).unwrap();
         assert_eq!(runs, 1, "the history must not be cascaded away by the rebuild");
 
-        // And the point of the rebuild: a routine with no slot is now storable.
         conn.execute(
             "INSERT INTO routines (id,agent_id,name,what,fires,active,next_run_at,created_at)
              VALUES ('r2','a','Dunning','chase','event:stripe/invoice.payment_failed',1,NULL,0)",
@@ -3273,11 +3132,6 @@ mod tests {
 
     #[test]
     fn an_existing_schedule_keeps_its_firings_and_lands_on_the_ordinary_rule() {
-        // Migration 34 rebuilds `routine_runs` to let a skipped firing say it
-        // had no run. The rows already in it are recorded history, so they have
-        // to come over exactly, and every routine written before the column
-        // existed has to keep firing the way it has been: skipping is a thing
-        // somebody asks for, never a default an upgrade applies.
         let mut conn = memory();
         let tx = conn.transaction().unwrap();
         for (version, sql) in MIGRATIONS.iter().take_while(|(v, _)| *v < 34) {
@@ -3318,9 +3172,6 @@ mod tests {
             .unwrap();
         assert_eq!((run_id.as_str(), kind.as_str(), at), ("run-1", "scheduled", 7));
 
-        // The point of the rebuild: a firing with nothing behind it is now
-        // storable, and the index that answers the only question asked of this
-        // table survived being dropped with it.
         conn.execute(
             "INSERT INTO routine_runs (routine_id,run_id,kind,at) VALUES ('r1',NULL,'skipped',9)",
             [],
@@ -3336,7 +3187,6 @@ mod tests {
             .unwrap();
         assert_eq!(indexed, 1, "a rebuild takes the index with it unless it is made again");
 
-        // And the cascade still points at the parent it did before the rename.
         conn.pragma_update(None, "foreign_keys", true).unwrap();
         conn.execute("DELETE FROM routines WHERE id='r1'", []).unwrap();
         let left: i64 =
@@ -3346,10 +3196,6 @@ mod tests {
 
     #[test]
     fn foreign_key_enforcement_is_off_only_while_migrations_run() {
-        // A rebuild needs it off; everything after this must not inherit that.
-        // The pool sets it per connection, but `run` is handed a connection
-        // somebody else keeps, and leaving it off there disables every cascade
-        // in the app.
         let mut conn = memory();
         conn.pragma_update(None, "foreign_keys", true).unwrap();
         run(&mut conn).unwrap();
@@ -3374,9 +3220,6 @@ mod tests {
 
     #[test]
     fn an_upgrade_arranges_the_rail_in_the_order_it_was_already_drawn() {
-        // The rail was ordered by who spoke last, and creation order underneath
-        // that. Backfilling anything else would rearrange a workspace the
-        // operator has been looking at for weeks, on launch, with no gesture.
         let mut conn = memory();
         let tx = conn.transaction().unwrap();
         for (version, sql) in MIGRATIONS.iter().take_while(|(v, _)| *v < 20) {
@@ -3409,8 +3252,6 @@ mod tests {
 
     #[test]
     fn an_upgrade_arranges_the_crews_in_the_order_they_were_already_drawn() {
-        // The column was drawn in creation order and nothing else. Backfilling
-        // any other order would move every circle on launch, with no gesture.
         let mut conn = memory();
         let tx = conn.transaction().unwrap();
         for (version, sql) in MIGRATIONS.iter().take_while(|(v, _)| *v < 64) {
@@ -3419,8 +3260,6 @@ mod tests {
         }
         tx.commit().unwrap();
 
-        // Two made in the same millisecond, which is what a script or an
-        // import can do, and which still have to come out as two places.
         for (id, made) in [("late", 300), ("early", 100), ("twin-a", 200), ("twin-b", 200)] {
             conn.execute(
                 "INSERT INTO groups (id,name,created_at) VALUES (?1,?1,?2)",
@@ -3453,11 +3292,6 @@ mod tests {
 
     #[test]
     fn an_agent_that_worked_in_a_repository_keeps_its_other_answers_through_the_rebuild() {
-        // The upgrade path, which no test starting from a blank database can
-        // reach. 54 rebuilt the agents table to take the repository row away,
-        // and a rebuild done with enforcement on would have cascaded away or
-        // orphaned everything that pointed at an agent. What the operator had
-        // answered about the agent has to come through it untouched.
         let mut conn = memory();
         let tx = conn.transaction().unwrap();
         for (version, sql) in MIGRATIONS.iter().take_while(|(v, _)| *v < 58) {
@@ -3481,8 +3315,6 @@ mod tests {
             )
             .unwrap();
         }
-        // Two things that point at an agent, which a rebuild done with
-        // enforcement on would have cascaded away or orphaned.
         conn.execute(
             "INSERT INTO working_notes (agent_id,at,body) VALUES ('coder',1,'halfway')",
             [],
@@ -3527,8 +3359,6 @@ mod tests {
             .next()
             .unwrap()
             .is_none());
-        // And the name rule survives the rebuild: two live agents in one crew
-        // still cannot share a name.
         let clash = conn.execute(
             "INSERT INTO agents (id,name,avatar,color,model,system_prompt,lifecycle,created_at,
                                  updated_at,group_id)
@@ -3540,9 +3370,6 @@ mod tests {
 
     #[test]
     fn an_agent_given_a_browser_before_this_column_existed_is_not_held_back_by_it() {
-        // The one direction this upgrade must not go. An operator who had
-        // agents on the web yesterday gets the same browser today: the column
-        // records the decision they already took, it does not take a new one.
         let mut conn = memory();
         let tx = conn.transaction().unwrap();
         for (version, sql) in MIGRATIONS.iter().take_while(|(v, _)| *v < 45) {
@@ -3569,9 +3396,6 @@ mod tests {
 
     #[test]
     fn an_agents_model_lands_in_the_field_of_the_provider_that_ran_it() {
-        // The engineer that found this: its crew on the subscription and an
-        // OpenRouter slug on the agent, refused by ChatGPT on every turn. Every
-        // other row has to run tomorrow on exactly what it ran today.
         let mut conn = memory();
         let tx = conn.transaction().unwrap();
         for (version, sql) in MIGRATIONS.iter().take_while(|(v, _)| *v < 63) {
@@ -3635,8 +3459,6 @@ mod tests {
 
     #[test]
     fn a_failed_migration_leaves_the_version_untouched() {
-        // Simulates a half-applied migration by running a batch that fails
-        // partway. The transaction must roll the whole thing back.
         let mut conn = memory();
         let tx = conn.transaction().unwrap();
         let result = tx.execute_batch("CREATE TABLE ok (x); CREATE TABLE ok (x);");
@@ -3695,9 +3517,6 @@ mod tests {
         let answer = "No address.\nShow me the copy before \"sending\" anything.";
         let plain = write(Participant::System, delivery(answered, &request, answer, false));
         let again = write(Participant::System, delivery(resumed, &request, answer, true));
-        // Everything this must leave alone: the same words typed by the
-        // operator, the opening sentence over a line that is not the request,
-        // and Guaca saying something else.
         let typed = write(Participant::Human, delivery(answered, &request, answer, false));
         let broken = write(
             Participant::System,

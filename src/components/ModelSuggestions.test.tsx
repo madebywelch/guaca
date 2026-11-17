@@ -27,7 +27,6 @@ const THREE = [
   model({ id: "z-ai/glm-5.2", name: "Z.AI: GLM 5.2", promptPerMillion: 0.6 }),
 ];
 
-/** A legal agent on OpenRouter, which is the case everything else varies from. */
 function draw(over: Partial<Parameters<typeof ModelSuggestions>[0]> = {}) {
   const onChoose = vi.fn();
   render(
@@ -70,9 +69,6 @@ describe("ModelSuggestions", () => {
     expect(onChoose).toHaveBeenCalledTimes(1);
   });
 
-  // A slug ranked at OpenRouter means nothing at api.openai.com. Offering one
-  // there is a button that breaks every turn the agent takes afterward, with a
-  // refusal an operator has no way to connect back to this dialog.
   it("says nothing when OpenRouter is not what pays", () => {
     draw({ active: false });
 
@@ -80,8 +76,6 @@ describe("ModelSuggestions", () => {
     expect(screen.queryByText(/reads as/i)).toBeNull();
   });
 
-  // The common case. Most agents are a Manager or an Inbox, and OpenRouter has
-  // no category for either.
   it("says nothing about an agent that is not one of the twelve", () => {
     draw({ name: "Manager", skills: [], instructions: "You coordinate the others." });
 
@@ -89,8 +83,6 @@ describe("ModelSuggestions", () => {
     expect(screen.queryByText(/reads as/i)).toBeNull();
   });
 
-  // A button that puts back what is already there does nothing, and a button
-  // that does nothing reads as one that is broken.
   it("does not offer the model already in the field", async () => {
     draw({ model: "openai/gpt-5.6-sol" });
 
@@ -106,15 +98,10 @@ describe("ModelSuggestions", () => {
     expect(screen.getAllByRole("button")).toHaveLength(3);
   });
 
-  // The ranking is by capability and ignores price, so the dearest model in a
-  // pool regularly tops it. A row that hides the price is a one-click way to
-  // make every turn of this agent forty times dearer.
   it("prices every row", async () => {
     draw();
 
     expect(await screen.findByText("$2.00 / $12.00")).toBeTruthy();
-    // Under a cent is the same answer to the question being asked. Six leading
-    // zeros in a narrow monospace slot answer a different one.
     expect(screen.getByText("$0.60 / $12.00")).toBeTruthy();
   });
 
@@ -143,8 +130,6 @@ describe("ModelSuggestions", () => {
     expect(await screen.findByText("<$0.01 / $12.00")).toBeTruthy();
   });
 
-  // This sits beside a field that works perfectly well without it, so a failure
-  // is a sentence rather than a banner, and it still says what to do.
   it("says so quietly when OpenRouter does not answer", async () => {
     rankedModels.mockRejectedValue(new Error("no route to host"));
     draw();
@@ -154,8 +139,6 @@ describe("ModelSuggestions", () => {
     expect(screen.queryByRole("button")).toBeNull();
   });
 
-  // A request per keystroke would be five round trips for one answer, and the
-  // last one to come back would decide what is on screen.
   it("asks once while the evidence is still being typed", async () => {
     const { rerender } = render(
       <ModelSuggestions

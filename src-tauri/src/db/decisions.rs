@@ -42,7 +42,6 @@ fn one(conn: &rusqlite::Connection, id: DecisionId) -> Result<WorkDecision, Stor
 }
 
 impl Store {
-    /// Pending and answered rows are never truncated. History is bounded independently.
     pub fn decisions(&self, agent: Option<AgentId>) -> Result<Vec<WorkDecision>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM decisions d JOIN agents a ON a.id=d.agent_id
@@ -56,9 +55,6 @@ impl Store {
         Ok(results)
     }
 
-    /// Files a decision with no run to say it came from: what a caller with
-    /// no runtime behind it files. The runtime files through
-    /// [`Self::file_decision`], which records the run in the same commit.
     pub fn request_decision(
         &self,
         agent: AgentId,
@@ -71,12 +67,6 @@ impl Store {
         self.file_decision(agent, group, topic, request, due, None, now)
     }
 
-    /// Files a decision, or revises the pending one on the same topic, and
-    /// records `run` as the run that filed it. The first run to file a topic
-    /// keeps it, as the first raise of an escalation does: a later run that
-    /// restates a question still pending did not leave anything new on the
-    /// desk. In the decision's own commit, so a run's outcome can never read a
-    /// decision it filed without knowing it filed it.
     #[allow(clippy::too_many_arguments)]
     pub fn file_decision(
         &self,
@@ -95,20 +85,6 @@ impl Store {
         Ok(result)
     }
 
-    /// Ends a request nobody answered in time, and files it as a decision, in
-    /// one commit.
-    ///
-    /// One commit because the two are one fact seen from two sides: the card
-    /// stops being answerable at the moment the desk starts holding it, so
-    /// there is no instant in which the request is in neither place, or in
-    /// both. The decision says where it came from, and the run that asked is
-    /// the run that filed it, so that run's outcome says it left one open. A
-    /// permission's `fingerprint` is written beside it, ungranted, for an
-    /// Allow to grant later.
-    ///
-    /// `None` when the row had already left pending: an answer or a stop got
-    /// there first, and that stands. An error leaves the row pending and
-    /// nothing filed, and the caller expires it the old way.
     pub fn lapse_approval(
         &self,
         id: ApprovalId,
@@ -150,7 +126,6 @@ impl Store {
         Ok(Some(filed))
     }
 
-    /// The request a decision was filed from, when Guaca filed it from one.
     pub fn decision_origin(&self, id: DecisionId) -> Result<Option<ApprovalId>, StoreError> {
         let origin: Option<Option<String>> = self
             .conn()?
@@ -163,11 +138,6 @@ impl Store {
         Ok(origin.flatten().and_then(|raw| raw.parse().ok()))
     }
 
-    /// Spends one grant this agent holds for exactly this action, if it holds
-    /// one that is given, unused and not past its day.
-    ///
-    /// One statement, so two requests racing for one grant cannot both have
-    /// it: the second finds it used.
     pub fn take_grant(
         &self,
         agent: AgentId,
@@ -186,8 +156,6 @@ impl Store {
     }
 }
 
-/// Files a decision, or revises the pending one on the same topic, inside a
-/// commit somebody else owns. See [`Store::file_decision`].
 #[allow(clippy::too_many_arguments)]
 fn file_in(
     tx: &rusqlite::Transaction<'_>,
@@ -219,8 +187,6 @@ fn file_in(
     let id = if let Some(id) = existing {
         let id: DecisionId = id.parse().map_err(|_| invalid("Invalid stored decision id"))?;
         let previous = one(tx, id)?;
-        // Freeze the question as soon as a person answers it. A later scan
-        // may not silently reinterpret the answer against different choices.
         if previous.status == DecisionStatus::Pending
             && (previous.request != request || previous.due_at != due)
         {
@@ -254,9 +220,6 @@ fn file_in(
     one(tx, id)
 }
 
-/// Writes one delivery of a decision's answer, its recovery point, and the
-/// row naming it the delivery of record, inside the caller's commit. A
-/// delivery that is not the one of record is one a restart cannot see.
 fn deliver_in(
     tx: &rusqlite::Transaction<'_>,
     decision: &WorkDecision,
@@ -275,8 +238,6 @@ fn deliver_in(
             "The agent responsible for this decision was deleted. Restore it before answering.",
         ));
     }
-    // The question is model-authored. A system envelope preserves that
-    // boundary instead of laundering the whole brief as human instructions.
     let message = Envelope {
         id: MessageId::new(),
         run_id: RunId::new(),
@@ -301,8 +262,6 @@ fn deliver_in(
 }
 
 impl Store {
-    /// The answer, its transcript envelope and recovery point are one commit.
-    /// The caller holds the runtime's run lock through booking, then enqueues.
     pub fn answer_decision(
         &self,
         id: DecisionId,
@@ -339,10 +298,6 @@ impl Store {
             answer: answer.to_string(),
             resumed: resume,
         }];
-        // A lapsed permission allowed: the grant written when it lapsed is
-        // given now, in this commit, and the agent is told what it covers. A
-        // resumed delivery says nothing more, because the grant it would name
-        // was given the first time.
         if !resume && answer == ALLOW {
             let expires = now.saturating_add(GRANT_LIFETIME_MS);
             let granted = tx.execute(
@@ -361,18 +316,6 @@ impl Store {
         Ok((result, message))
     }
 
-    /// Try again on a message that delivered this decision's answer.
-    ///
-    /// The decision's own delivery, never a copy beside it: a copy left the
-    /// row pointing at the run that failed, so For you still offered Resume
-    /// and the answer arrived twice, and a crash during the copy's
-    /// follow-through was not seen as one. So it is the delivery of record
-    /// after this, in the same commit that writes it.
-    ///
-    /// Follow-through a restart interrupted is resumed exactly as Resume
-    /// resumes it. A turn that failed on the decision's current delivery has
-    /// that delivery sent again, as Try again sends any message. Anything else
-    /// has been delivered since, or finished, and is refused.
     pub fn retry_decision(
         &self,
         id: DecisionId,
@@ -451,23 +394,6 @@ impl Store {
         Ok(())
     }
 
-    /// Marks follow-through a restart cut off as interrupted: an answered
-    /// decision whose delivery run still holds its recovery point, so it had
-    /// not settled when the last process ended. Except where that run is
-    /// carried on: a drain put it down whole for the next host, or no turn
-    /// had started on the answer, which is delivered again. Either way its
-    /// agent carries it on without asking.
-    ///
-    /// Follow-through that settled is not touched. Its turn ended and the
-    /// agent may still be waiting on somebody before it can call the work
-    /// complete, which it must be able to do after any number of restarts.
-    ///
-    /// Called before `Store::recover`, which deletes the recovery point of
-    /// every run it reports interrupted: after it, a run cut off and a run
-    /// that finished long ago look the same. The carried-on rule is the one
-    /// `Store::recover` applies: a run marked whole with a message put down
-    /// for it, or one `put_down::UNTOUCHED` holds for. Its own commit, so a process that dies between this and
-    /// recovery repeats both and marks nothing twice.
     pub fn recover_decisions(&self) -> Result<usize, StoreError> {
         Ok(self.conn()?.execute(
             &format!(
@@ -483,11 +409,6 @@ impl Store {
         )?)
     }
 
-    /// Claim a batch once, and write the row that announces it in the same
-    /// commit as the next reminder. The claim used to be the only record, so a
-    /// batch claimed with no window listening, which is every batch due at
-    /// boot, was spent and never shown. Now the outbox holds it until a window
-    /// claims it in turn.
     pub fn decision_reminders(&self, now: i64) -> Result<usize, StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -716,7 +637,6 @@ mod tests {
             s.answer_decision(other.id, "yes", false, None, d.created_at + 1).unwrap();
         s.start_deliveries(&[started.id], started.run_id).unwrap();
 
-        // What a drain writes for a conversation it hands on whole.
         let state = crate::runtime::guard::RunState::new(Default::default());
         s.put_down(&[(delivery.id, &[])], &[(delivery.run_id, 0, state.snapshot())]).unwrap();
         assert_eq!(s.recover_decisions().unwrap(), 1, "only the other one");
@@ -776,8 +696,6 @@ mod tests {
 
     #[test]
     fn read_after_recovery_a_cut_off_run_looks_finished() {
-        // Why `boot::recover` marks decisions first: recovery deletes the
-        // recovery point that is the only sign the run was cut off.
         let (_, s, a) = fixture();
         let d = make(&s, &a);
         let (_, delivery) = s.answer_decision(d.id, "11", false, None, d.created_at + 1).unwrap();
@@ -788,9 +706,6 @@ mod tests {
 
     #[test]
     fn an_answer_no_turn_had_started_is_delivered_again_and_not_interrupted() {
-        // The counterpart of every test here that marks its delivery started:
-        // nothing had read this answer, so the restart delivers it again, and
-        // the decision is carried on rather than cut off.
         let (_, s, a) = fixture();
         let d = make(&s, &a);
         let (_, delivery) = s.answer_decision(d.id, "11", false, None, d.created_at + 1).unwrap();
@@ -807,7 +722,6 @@ mod tests {
             "nothing to resume: the answer is on its way"
         );
 
-        // A second restart before a turn takes it is the same restart again.
         assert_eq!(s.recover_decisions().unwrap(), 0);
         assert_eq!(s.recover().unwrap().resumed.len(), 1);
 
@@ -821,8 +735,6 @@ mod tests {
         let d = make(&s, &a);
         let (_, first) = s.answer_decision(d.id, "11", false, None, d.created_at + 1).unwrap();
 
-        // A turn that failed on the current delivery: the same message again,
-        // as Try again sends any message, and now the one a restart watches.
         let (row, again) = s.retry_decision(d.id, &first, d.created_at + 2).unwrap();
         assert_eq!(again.parts, first.parts);
         assert_eq!(again.cause, Some(first.id));
@@ -830,7 +742,6 @@ mod tests {
         assert!(s.retry_decision(d.id, &first, d.created_at + 3).is_err(), "delivered since");
         s.start_deliveries(&[again.id], again.run_id).unwrap();
 
-        // Interrupted: delivered exactly as Resume delivers it, once.
         assert_eq!(s.recover_decisions().unwrap(), 1);
         let (row, resumed) = s.retry_decision(d.id, &first, d.created_at + 4).unwrap();
         assert_eq!(
@@ -883,8 +794,6 @@ mod tests {
         assert!(s.decisions(None).unwrap()[0].snoozed_until.is_none());
     }
 
-    // ---- a request nobody answered in time ---------------------------------
-
     fn parked(
         store: &Store,
         agent: &crate::domain::agent::AgentCard,
@@ -935,18 +844,15 @@ mod tests {
             .unwrap();
         assert_eq!(filed_run, Some(asked.run_id.to_string()), "the run that asked filed it");
 
-        // Once: the row has left pending, so a second lapse files nothing.
         assert!(s.lapse_approval(asked.id, Some("fp"), now).unwrap().is_none());
         assert_eq!(s.decisions(Some(a.id)).unwrap().len(), 1);
 
-        // And an answer that got there first stands, with nothing filed.
         let answered = parked(&s, &a, permission());
         s.settle_approval(answered.id, ApprovalState::Deny).unwrap();
         assert!(s.lapse_approval(answered.id, Some("fp"), now).unwrap().is_none());
         assert_eq!(s.get_approval(answered.id).unwrap().unwrap().state, ApprovalState::Deny);
         assert_eq!(s.decisions(Some(a.id)).unwrap().len(), 1);
 
-        // An agent filed decision says nothing about where it came from.
         assert_eq!(s.decision_origin(make(&s, &a).id).unwrap(), None);
     }
 

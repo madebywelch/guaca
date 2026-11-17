@@ -16,9 +16,6 @@ vi.mock("../lib/ipc", () => ({
 const openRoutine = vi.fn<(id: string) => void>();
 const showArtifacts = vi.fn<(open: { id: string | null } | null) => void>();
 vi.mock("../lib/store", () => {
-  // Read when called rather than when mocked: the mock is hoisted above the
-  // two functions it hands out. Callable as a hook and readable outside one,
-  // which is how the two components this file draws each reach it.
   const state = () => ({ openRoutine, setBanner: vi.fn(), showArtifacts });
   const useStore = (pick: (state: object) => unknown) => pick(state());
   useStore.getState = state;
@@ -85,7 +82,6 @@ describe("messages addressed to the operator", () => {
   it("renders what you said as a bubble, with no avatar", () => {
     const { container } = show(envelope({}));
     expect(screen.getByText("hello there")).toBeTruthy();
-    // You know who you are; the avatars exist to tell the agents apart.
     expect(container.querySelector(".avatar")).toBeNull();
   });
 
@@ -110,13 +106,8 @@ describe("the running head", () => {
   });
 
   it("names the speaker on every turn, including in a channel of one agent", () => {
-    // It used to be left out here, on the argument that a channel names its
-    // agent at the top of the pane. Ledger sets a transcript as a page, and a
-    // page names the speaker over every passage: the head is what tells a
-    // reader scanning back up whose paragraph they are in.
     render(<MessageItem message={reply} lookups={lookups} continued={false} />);
     expect(screen.getByText("Manager")).toBeTruthy();
-    // The portrait still says it in one glyph, from the margin.
     expect(document.querySelector(".msg__margin .avatar")).toBeTruthy();
   });
 
@@ -126,7 +117,6 @@ describe("the running head", () => {
     );
     expect(screen.getByText("You")).toBeTruthy();
     expect(container.querySelector(".msg[data-operator='true']")).toBeTruthy();
-    // No portrait: the avatars are there to tell the agents apart.
     expect(container.querySelector(".avatar")).toBeNull();
   });
 
@@ -137,9 +127,6 @@ describe("the running head", () => {
   });
 
   it("still carries the time, in the margin", () => {
-    // Every message has one and almost none of them are worth a line of their
-    // own. It moved off the right edge and out of a hover and into the margin,
-    // which is where a printed page puts a date.
     const { container } = render(
       <MessageItem message={reply} lookups={lookups} continued={false} />,
     );
@@ -152,9 +139,6 @@ describe("the running head", () => {
 
 describe("agent-to-agent traffic", () => {
   it("is a bubble here, because the only place it is drawn one by one is the pair's own thread", () => {
-    // In a channel these never reach this component: the transcript collapses
-    // them into a burst row first. What is left is the thread the operator
-    // opened off that row, which they opened in order to read.
     show(
       envelope({
         channelId: "chef",
@@ -187,18 +171,11 @@ describe("an agent's own record of what it did", () => {
         outcome: { status: "ok", summary: "2 agent(s): Chef, Scribe" },
       }),
     );
-    // Sentence-cased and unnamed: there is exactly one agent whose own work
-    // this can be, and its name is at the top of the pane. The row this
-    // replaced put that name in front of every line of it.
     expect(screen.getByText("Checked who is available")).toBeTruthy();
-    // Nothing behind it, so nothing to press. A control that opens nothing is
-    // one the operator stops trusting the rest of.
     expect(screen.queryByRole("button")).toBeNull();
   });
 
   it("draws a call that wrote a kept page as a card that opens it", () => {
-    // The one call whose result is a place to go. Folded into a chip it would
-    // be a page the operator never learns was made.
     show(
       record({
         type: "toolCall",
@@ -222,15 +199,11 @@ describe("an agent's own record of what it did", () => {
         outcome: { status: "refused", reason: "`update` needs a `note`" },
       }),
     );
-    // The refused call is its own chip, and it says it was an attempt rather
-    // than an update that happened.
     expect(screen.getByText(/Tried to update an artifact/)).toBeTruthy();
     expect(screen.queryByText("New artifact")).toBeNull();
   });
 
   it("does not draw a memory update as a message to nobody", () => {
-    // update_memory has no recipients, so falling through to the send renderer
-    // drew it as "Sent to no one" with the memory body as the message.
     show(
       record({
         type: "toolCall",
@@ -242,15 +215,11 @@ describe("an agent's own record of what it did", () => {
     expect(screen.queryByText(/no one/)).toBeNull();
     expect(screen.getByText("Updated its memory")).toBeTruthy();
 
-    // And what it wrote is one click away, which is the whole of what an
-    // operator wants from this row and the one thing it never showed.
     fireEvent.click(screen.getByRole("button", { name: /Updated its memory/ }));
     expect(screen.getByText("Smith handles verification.")).toBeTruthy();
   });
 
   it("opens a memory rewrite against the version it replaced", () => {
-    // The tool replaces the file, so every write arrives as the whole page and
-    // the content alone never says what the agent changed its mind about.
     show(
       record({
         type: "toolCall",
@@ -267,20 +236,13 @@ describe("an agent's own record of what it did", () => {
     expect(kind("Smith handles verification.")).toBe("same");
     expect(kind("Patel signs off.")).toBe("removed");
     expect(kind("Jones signs off.")).toBe("added");
-    // Marked as well as colored. Red and green either side of a line are the
-    // one distinction a reader may not have, and the marker is also what keeps
-    // a diff copied out of the window reading as one.
     const marks = [...document.querySelectorAll(".diff__mark")].map((node) => node.textContent);
     expect(marks).toEqual([" ", "-", "+"]);
-    // How much moved, in the place the runtime's character count would have
-    // gone. That count is printed directly above the characters it counts.
     expect(screen.getByText("1 line added, 1 removed")).toBeTruthy();
     expect(screen.queryByText(/44 characters/)).toBeNull();
   });
 
   it("opens a memory that was cleared, which has nothing to show but the loss", () => {
-    // No content, so nothing that reads the arguments finds anything to draw,
-    // and what was thrown away is the whole of what happened.
     show(
       record({
         type: "toolCall",
@@ -296,10 +258,6 @@ describe("an agent's own record of what it did", () => {
   });
 
   it("draws a memory recorded before any of this as what it wrote, and no diff", () => {
-    // Every write already in a channel has no previous version stored against
-    // it, and inventing one from whatever else is in the channel would be wrong
-    // exactly where it mattered: the same memory is written from every thread
-    // an agent holds.
     show(
       record({
         type: "toolCall",
@@ -327,9 +285,6 @@ describe("an agent's own record of what it did", () => {
   });
 
   it("says why a tool call failed, not just that it happened", () => {
-    // The one send that lands here is the one naming nobody, and it is exactly
-    // the one where the reason is the whole of what there is to see. A line
-    // saying only "Manager used send_message" describes a working app.
     show(
       record({
         type: "toolCall",
@@ -347,10 +302,6 @@ describe("an agent's own record of what it did", () => {
   });
 
   it("draws text the turn trailed as an aside, not as a message to the operator", () => {
-    // A turn that answered its peer through `send_message` and then kept
-    // typing produces text with no recipient. The runtime files it here. Drawn
-    // as a bubble it reads as the agent addressing the operator, which is what
-    // seven agents each saying "I replied to the Chief of Staff" looked like.
     const { container } = show(
       record({ type: "text", text: "Replied to Manager confirming how I work." }),
     );
@@ -361,7 +312,6 @@ describe("an agent's own record of what it did", () => {
 });
 
 describe("a failed turn", () => {
-  /** What the runtime writes once its own retries are spent. */
   function failure(cause: string | null): Envelope {
     return envelope({
       id: "notice-1",
@@ -386,8 +336,6 @@ describe("a failed turn", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(retryTurn).toHaveBeenCalledWith("manager", "m-original");
-    // And it will not fire twice on a double click: a second run is a second
-    // model call, billed.
     expect((screen.getByRole("button", { name: "Sent again" }) as HTMLButtonElement).disabled).toBe(
       true,
     );
@@ -415,8 +363,6 @@ describe("a failed turn", () => {
   });
 
   it("does not offer a retry for a limit that would be hit again", () => {
-    // The guard refused this on purpose. A button here would spend the same
-    // budget to reach the same refusal.
     const stopped = envelope({
       from: { kind: "system" },
       to: { kind: "agent", id: "manager" },
@@ -430,9 +376,6 @@ describe("a failed turn", () => {
 
 describe("a command that used a credential", () => {
   it("says so in the transcript, by name, with no value anywhere", () => {
-    // The operator's audit trail for their own tokens. Before this, a
-    // credential went into the environment of every command and nothing
-    // distinguished the command that spent it.
     const used = envelope({
       from: { kind: "agent", id: "manager" },
       to: { kind: "system" },
@@ -452,12 +395,7 @@ describe("a command that used a credential", () => {
       <MessageItem message={used} lookups={lookups} continued={false} />,
     );
 
-    // On the row itself, never behind a click and never folded into a count:
-    // this is the operator's audit trail for their own tokens.
     expect(screen.getByText("Mistral ($MISTRAL_API_KEY)")).toBeTruthy();
-    // The exit code and the command are behind the click, which is where an
-    // exit code is worth reading. The credential is not, which is the whole
-    // point of it.
     expect(container.textContent).not.toContain("exit 0, 812 bytes out");
     expect(container.textContent).not.toContain("curl -H");
 
@@ -469,10 +407,6 @@ describe("a command that used a credential", () => {
 
 describe("a turn that asked the operator something", () => {
   it("says what it did, and keeps the name a model calls it by one click away", () => {
-    // The note said "Used ask_operator" once: a function name from a file the
-    // operator does not have, on the page they read most. What they read is
-    // the thing that happened; the wire name is on the row under it, for the
-    // bug report that needs it.
     const asking = envelope({
       from: { kind: "agent", id: "manager" },
       to: { kind: "system" },
@@ -489,14 +423,9 @@ describe("a turn that asked the operator something", () => {
     const { container } = show(asking);
     const note = screen.getByRole("button", { name: /Asked you/ });
     expect(note.textContent).not.toContain("ask_operator");
-    // On the note's own words as well as on the row it opens, because a plugin
-    // call is a note with nothing behind it: hover is the only place its name
-    // can live.
     expect(container.querySelector(".footnote__label")?.getAttribute("title")).toBe("ask_operator");
 
     fireEvent.click(note);
-    // Both the note and the row under it say the same phrase, which is the
-    // point: the row is the note opened, not a second wording of it.
     const row = container.querySelector(".trail__step-title");
     expect(row?.textContent).toBe("Asked you");
     expect(row?.getAttribute("title")).toBe("ask_operator");
@@ -505,7 +434,6 @@ describe("a turn that asked the operator something", () => {
 });
 
 describe("a turn that used its computer two dozen times", () => {
-  /** What the runtime writes for one turn: every call in one envelope. */
   function browsing(): Envelope {
     return envelope({
       from: { kind: "agent", id: "manager" },
@@ -535,8 +463,6 @@ describe("a turn that used its computer two dozen times", () => {
   }
 
   it("draws one line for the run of them, naming where it went", () => {
-    // Twenty-four rounds is the limit and a browsing turn spends most of it.
-    // A line apiece is the same burial peer traffic was collapsed to fix.
     const { container } = render(
       <MessageItem message={browsing()} lookups={lookups} continued={false} />,
     );
@@ -561,7 +487,6 @@ describe("a turn that used its computer two dozen times", () => {
 });
 
 describe("a refusal the runtime wrote for a model", () => {
-  /** One turn whose one call was refused, as the runtime records it. */
   function refused(): Envelope {
     return envelope({
       from: { kind: "agent", id: "manager" },
@@ -582,26 +507,16 @@ describe("a refusal the runtime wrote for a model", () => {
   }
 
   it("says it in words for the operator, and keeps the runtime's behind one click", () => {
-    // A parameter name in a monospace block is a traceback in the one place
-    // that should sound like a colleague. The model's version is not thrown
-    // away — it is what somebody diagnosing the refusal wants, and it sits
-    // beside the arguments the row already shows.
     const { container } = render(
       <MessageItem message={refused()} lookups={lookups} continued={false} />,
     );
     const chip = screen.getByRole("button", { name: /send a message to nobody/ });
-    // Shut, the line already carries the sentence rather than the vocabulary.
-    // It is a note's gist now — the transcript draws a turn's own work as a
-    // footnote — and a note's line is a fragment, so it is set without the
-    // full stop the paragraph behind it keeps.
     expect(container.querySelector(".footnote__gist")?.textContent).toBe(
       "Nothing was sent: the call named nobody to send to",
     );
     expect(container.textContent).not.toContain("`to`");
 
     fireEvent.click(chip);
-    // Open, the refusal is prose rather than the monospace block a command
-    // gets: this is Guaca explaining, not an argument the call carried.
     expect(container.querySelector(".trail__why")?.textContent).toBe(
       "Nothing was sent: the call named nobody to send to.",
     );
@@ -614,19 +529,12 @@ describe("a refusal the runtime wrote for a model", () => {
 
 describe("redrawing a transcript", () => {
   it("does not draw an entry again when nothing about it changed", () => {
-    // A transcript is rebuilt whenever any message is appended, and drawing an
-    // entry parses its markdown. Ten agents reporting at once meant every
-    // message on screen re-parsed for each arrival, which is the other half of
-    // what made the window stop responding.
     const message = envelope({ parts: [{ type: "text", text: "the answer is 42" }] });
     const view = render(<MessageItem message={message} lookups={lookups} continued={false} />);
     const drawn = screen.getByText("the answer is 42");
 
-    // The same envelope, the same lookups: a parent redraw with nothing new.
     view.rerender(<MessageItem message={message} lookups={lookups} continued={false} />);
 
-    // The node survives rather than being replaced, which is what memoization
-    // buys: React never called the component at all.
     expect(screen.getByText("the answer is 42")).toBe(drawn);
   });
 
@@ -677,8 +585,6 @@ describe("a decision the operator answered in For you", () => {
     });
 
   it("is the operator's reply under the question it answers, not Guaca's brief", () => {
-    // What this replaces: a bubble from Guaca holding the paragraph the agent
-    // is told, then the question and the answer as one line of JSON.
     const { container } = show(answered());
 
     expect(container.querySelector('[data-operator="true"]')).not.toBeNull();
@@ -701,7 +607,6 @@ describe("a decision the operator answered in For you", () => {
   });
 
   it("draws the agent's words as text, and a bare question opens nothing", () => {
-    // A choice clicked in For you is one of the agent's own options.
     const { container } = show(
       answered({
         request: { ...request, question: "Ship **now**?", context: "", source: "" },
@@ -738,9 +643,6 @@ describe("a routine coming due", () => {
     });
 
   it("is one line naming the routine, not the instruction as dialogue", () => {
-    // What this replaces: a chat bubble from "Guaca" carrying several
-    // sentences of instruction, in the middle of the operator's own
-    // conversation with the agent.
     show(fired());
 
     expect(screen.getByText("Listings sweep")).toBeTruthy();
@@ -765,8 +667,6 @@ describe("a routine coming due", () => {
   });
 
   it("opens the routine it names", () => {
-    // The panel that draws a routine is the transcript's sibling, so the click
-    // asks for it through the store rather than through a prop on every row.
     show(fired());
     fireEvent.click(screen.getByRole("button"));
     expect(openRoutine).toHaveBeenCalledWith("rt1");
@@ -789,9 +689,6 @@ describe("an overnight tidy", () => {
   });
 
   it("is one line saying it ran, and nothing it handed the agent", () => {
-    // What it carried was written for the agent to read at three in the
-    // morning. As a bubble it would be Guaca reciting the operator's own week
-    // back to them in the middle of their conversation.
     show(tidy);
     expect(screen.getByText("Overnight memory tidy")).toBeTruthy();
     expect(screen.getByText("ran")).toBeTruthy();

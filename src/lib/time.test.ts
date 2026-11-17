@@ -19,7 +19,6 @@ describe("relativeTime", () => {
   });
 
   it("never rounds down to zero", () => {
-    // "0m" would read as broken. A minute is the smallest unit above "now".
     expect(ago(50_000)).toBe("1m");
   });
 
@@ -35,7 +34,6 @@ describe("relativeTime", () => {
 });
 
 describe("whenLabel", () => {
-  /** 2pm on a Wednesday, local, so "yesterday" and "last week" are unambiguous. */
   const wednesday = new Date(2024, 4, 15, 14, 0).getTime();
   const day = 86_400_000;
 
@@ -49,14 +47,11 @@ describe("whenLabel", () => {
   });
 
   it("dates anything a weekday name would be ambiguous about", () => {
-    // "Tuesday" three weeks back is four different Tuesdays.
     expect(whenLabel(wednesday - 21 * day, wednesday)).not.toMatch(/day /);
     expect(whenLabel(wednesday - 21 * day, wednesday)).toMatch(/24/);
   });
 
   it("counts calendar days, not multiples of 24 hours", () => {
-    // Eleven at night and one in the morning are two hours apart and two
-    // different days, and an hour ago is never "yesterday".
     const lateWednesday = new Date(2024, 4, 15, 23, 0).getTime();
     const earlyThursday = new Date(2024, 4, 16, 1, 0).getTime();
     expect(whenLabel(lateWednesday, earlyThursday)).toMatch(/^Yesterday /);
@@ -72,9 +67,6 @@ describe("elapsed", () => {
   const waiting = (ms: number) => elapsed(NOW, NOW - ms);
 
   it("counts seconds, where relativeTime would say now", () => {
-    // Read while waiting on a call that has not come back, where the whole
-    // question is whether the number is still moving. "now" for the first
-    // forty-four seconds of a wait answers it wrong.
     expect(waiting(4_000)).toBe("4s");
     expect(waiting(59_000)).toBe("59s");
   });

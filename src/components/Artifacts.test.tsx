@@ -12,15 +12,6 @@ import type {
 } from "../lib/types";
 import { aGroup, DEFAULT_GROUP } from "../test-fixtures";
 
-/**
- * The Artifacts dialog and the card that opens it, over a mocked store.
- *
- * The sentences in the history are `lib/artifacts`'s and are tested there.
- * What is checked here is the wiring nothing else covers: which crew's list is
- * asked for, which version's page, what a restore and a hand-over send, and
- * that deleting asks first.
- */
-
 const artifacts = vi.fn<(groupId?: string | null) => Promise<Artifact[]>>(async () => []);
 const artifactDetail = vi.fn<(id: string) => Promise<ArtifactDetail>>();
 const artifactPage = vi.fn<(id: string, version?: number | null) => Promise<string>>(
@@ -212,10 +203,6 @@ describe("the status bar, from the page", () => {
   });
 
   it("shows the row for a page with no condensed view, with the reason it cannot be used", async () => {
-    // The row used to render only for a page that already had a condensed
-    // view, which is to say only for the pages whose owner already knew the
-    // status bar exists. The page that cannot be pinned is the one that needs
-    // to hear about it.
     await openOne(kept());
     const bar = await screen.findByRole("combobox", { name: "Status bar" });
     const options = [...bar.querySelectorAll("option")];
@@ -225,8 +212,6 @@ describe("the status bar, from the page", () => {
   });
 
   it("says any agent can add the missing view when the page has no owner", async () => {
-    // An owner can leave the group, and an artifact left behind has nobody to
-    // ask; anyone in the group may edit it, which is the way forward.
     await openOne(kept({ owner: null }));
     const bar = await screen.findByRole("combobox", { name: "Status bar" });
     const why = screen.getByText("No condensed view yet; any agent in its group can add one.");
@@ -243,8 +228,6 @@ describe("the status bar, from the page", () => {
   });
 
   it("can only take a pinned page off once its version has no condensed view", async () => {
-    // A restore can put back a version from before the strip existed. The pin
-    // is still the operator's to remove; it cannot be resized onto nothing.
     await openOne(kept());
     act(() =>
       useStore.setState({
@@ -276,8 +259,6 @@ describe("one artifact", () => {
   }
 
   it("opens on the current page, with the history kept out of the way", async () => {
-    // The page is what the operator came for. The history is there for working
-    // out what happened, one click away, and takes no room until then.
     await openOne();
     expect(artifactDetail).toHaveBeenCalledWith("artifact-1");
     expect(screen.queryByText(/Milo edited it/)).toBeNull();
@@ -286,10 +267,6 @@ describe("one artifact", () => {
   });
 
   it("is the reading view, with no second view to open the page into", async () => {
-    // The dialog framed the page the way a message does, capped and with an
-    // Open over it. Pressed, that opened a second modal inside this one,
-    // trapped in the dialog's box by the transform its arrival leaves on it:
-    // a strip of the page, a window's height too short, scrolling sideways.
     await openOne();
     const frame = await screen.findByTitle("Pipeline by stage");
     expect(screen.queryByRole("button", { name: "Open" })).toBeNull();
@@ -400,8 +377,6 @@ describe("a page that reads live data", () => {
   );
 
   it("asks for its reads in full, and allows exactly those", async () => {
-    // A permission, so every call and its arguments are on screen. The
-    // arguments are the part the page can never change.
     artifactDetail.mockResolvedValue({ ...detail, artifact: board });
     allowArtifactSources.mockResolvedValue({ ...board, sourcesAllowed: true });
     open(DEFAULT_GROUP, [board]);
@@ -484,7 +459,6 @@ describe("a page that reads live data", () => {
 });
 
 describe("a click on a kept page", () => {
-  /** Posts what a page's `guaca.send` posts, from the page's own window. */
   async function pageSends(value: unknown) {
     const frame = (await screen.findByTitle("Pipeline by stage")) as HTMLIFrameElement;
     act(() => {

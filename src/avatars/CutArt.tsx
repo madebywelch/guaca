@@ -6,19 +6,8 @@ import type { Paint } from "./frame";
 import { MOODS, MORPH, type Mood, markFor } from "./moods";
 import { Skin } from "./Skin";
 
-/**
- * The size a lid line is drawn at its own weight, in CSS pixels, and the most
- * it is made heavier by below that. A shut eye at 24px is otherwise a hairline.
- */
 const HINT = { px: 44, most: 2.2 } as const;
 
-/**
- * The cut cast: paper relief, and an eye with a pupil and two lids.
- *
- * Owns its elements and writes them once a frame. What it draws is decided in
- * `AgentAvatar`; what it adds is the morph from one mood's shape and lids to
- * the next, and the blinks a face has a reason for.
- */
 export function CutArt({ paint }: { paint: RefObject<Paint | null> }) {
   const id = useId();
   const skin = useRef<SVGPathElement>(null);
@@ -50,9 +39,6 @@ export function CutArt({ paint }: { paint: RefObject<Paint | null> }) {
 
     const eye = u >= 1 ? to.eye : blendEyes(from.eye, to.eye, u);
     const watch = u > 0.5 ? to.watch : from.watch;
-    /* A face blinks into a large saccade of its own, and as it turns to look
-       at somebody or away again. Neither while an aimed look is being held:
-       the eyes are not following the mood then. */
     const cue = f.live
       ? Math.max(f.look ? 0 : saccadeBlink(f.t, watch?.gaze), cueBlink(f.sinceLook))
       : 0;
@@ -99,11 +85,6 @@ export function CutArt({ paint }: { paint: RefObject<Paint | null> }) {
   );
 }
 
-/**
- * Two eyes' worth of elements, made once and written to every frame. The
- * white is the opening between the lids, and the pupil and the lid's shadow
- * are clipped to the same shape, so nothing of the eye is drawn where a lid is.
- */
 function write(group: SVGGElement, defs: SVGDefsElement, drawn: Drawn[]) {
   for (let i = 0; i < 2; i++) {
     const eye = drawn[i];

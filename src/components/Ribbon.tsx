@@ -13,20 +13,13 @@ import { useStore } from "../lib/store";
 import type { AgentId } from "../lib/types";
 
 interface Props {
-  /** What `layoutRibbon` made of the moment. */
   ribbon: Layout;
   onOpenAgent: (agentId: AgentId) => void;
   onOpenPile: () => void;
-  /** Whose page is open, marked on the strip; none on the opening screen. */
   openAgentId?: AgentId | null;
-  /**
-   * The timeline's width in CSS pixels, whenever it changes. The layout needs
-   * it to know how much of the strip a face takes: `RIBBON_FACE_PX` over this.
-   */
   onTrackWidth?: (px: number) => void;
 }
 
-/** The most faces the pile draws. Its label carries the count past that. */
 const PILE_SHOWN = 5;
 const PILE_KEY = "pile";
 
@@ -45,21 +38,11 @@ const CALENDAR = (
   </svg>
 );
 
-/**
- * The strip across the top of the window: who did what today, where now is,
- * and what is coming this week.
- *
- * Draws what it is handed and decides nothing about where. The faces and the
- * pile are one stop on the Tab key between them, walked with the arrows, so a
- * strip of a dozen agents is not a dozen stops on the way to the composer.
- */
 export function Ribbon({ ribbon, onOpenAgent, onOpenPile, openAgentId, onTrackWidth }: Props) {
   const agents = useStore((s) => s.agents);
   const activity = useStore((s) => s.activity);
   const byId = new Map(agents.map((agent) => [agent.id, agent]));
 
-  // Every button on the strip, in the order it is drawn: the pile, then the
-  // faces and the counted items left to right.
   const stops = [
     ...(ribbon.pile.length ? [PILE_KEY] : []),
     ...[
@@ -110,8 +93,6 @@ export function Ribbon({ ribbon, onOpenAgent, onOpenPile, openAgentId, onTrackWi
     else buttons.current.delete(key);
   };
 
-  // One list in the order it is drawn, left to right, so a screen reader
-  // hears the strip the way it is seen. The pile leads; it sits at the edge.
   const drawn: { x: number; node: ReactNode }[] = [
     ...ribbon.lapses.map((lapse) => ({
       x: lapse.x,
@@ -240,8 +221,6 @@ export function Ribbon({ ribbon, onOpenAgent, onOpenPile, openAgentId, onTrackWi
   ].sort((a, b) => a.x - b.x);
 
   const pileShown = ribbon.pile.slice(0, PILE_SHOWN);
-  // The others step back only when the open agent is on the strip to be
-  // picked out; dimming every face for someone in the pile marks nobody.
   const marked = ribbon.faces.some((face) => face.agentId === openAgentId);
 
   return (
@@ -305,8 +284,6 @@ export function Ribbon({ ribbon, onOpenAgent, onOpenPile, openAgentId, onTrackWi
                     ) : null;
                   })}
                 </span>
-                {/* Asleep is true only of agents with nothing today; once the pile also
-                    holds faces moved off a full strip, it says how many more. */}
                 <span className="ribbon__pile-label">
                   {ribbon.pile.length} {ribbon.crowded ? "more" : "asleep"}
                 </span>

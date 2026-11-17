@@ -1,15 +1,3 @@
-//! The outbox: what to deliver to a person. See `domain/outbox.rs` for what a
-//! row is and what earns one an interruption.
-//!
-//! Rows are written by the producers in their own commits, through [`enqueue`],
-//! and withdrawn the same way when what they announce is answered or seen.
-//! Everything else here is the dispatcher's: reading what is due, holding,
-//! gathering, offering, the one claim that decides which window shows it, and
-//! the claim a window gives back when it could not show it after all; and for
-//! the address the operator configured, the second row an offer writes while
-//! they are away or after every window has given it back, what is due to be
-//! sent, and how each attempt ended.
-
 use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 
 use super::{Store, StoreError};
@@ -20,20 +8,12 @@ use crate::domain::outbox::{
 use crate::domain::outcome::Status as Ended;
 use crate::push::{Next, Push, Report, Said};
 
-/// How many times a row may be given back. The first goes to the other pages,
-/// and the second ends at the push: a main window and its menu bar panel on one
-/// Mac are both refused by the same macOS, and a third page is no likelier.
 const RELEASES: u32 = 2;
 
-/// What producers write: every row starts as one for the windows.
 const CLIENTS: &str = Destination::Clients.as_str();
 
-/// What an offer made while the operator is away writes beside it.
 const ENDPOINT: &str = Destination::Endpoint.as_str();
 
-/// Writes a row in the caller's commit. False when its key already has one,
-/// which is how settling twice or raising an escalation twice in a day is one
-/// interruption.
 pub(super) fn enqueue(tx: &Connection, draft: &Draft, now: i64) -> Result<bool, StoreError> {
     let target = serde_json::to_string(&draft.target).expect("a target serializes");
     let written = tx.execute(
@@ -58,7 +38,6 @@ pub(super) fn enqueue(tx: &Connection, draft: &Draft, now: i64) -> Result<bool, 
     Ok(written == 1)
 }
 
-/// What a row calls an agent: its name now. None for one that is gone.
 pub(super) fn name_of(tx: &Connection, agent: AgentId) -> Result<Option<String>, StoreError> {
     Ok(tx
         .query_row(
@@ -69,10 +48,6 @@ pub(super) fn name_of(tx: &Connection, agent: AgentId) -> Result<Option<String>,
         .optional()?)
 }
 
-/// Withdraws what was waiting to announce a request or an escalation that has
-/// just been answered, cleared or closed, in the commit that did it. A window
-/// that claims it afterward is told it lost, which is what keeps a banner
-/// from asking about something already settled in another window.
 pub(super) fn withdraw_ref(tx: &Connection, ref_id: &str) -> Result<usize, StoreError> {
     Ok(tx.execute(
         "UPDATE outbox SET status='suppressed', last_error=?2 WHERE status='pending' AND ref_id=?1",
@@ -80,8 +55,6 @@ pub(super) fn withdraw_ref(tx: &Connection, ref_id: &str) -> Result<usize, Store
     )?)
 }
 
-/// Withdraws what was waiting to announce runs the operator has now seen.
-/// `runs` is a JSON list of run ids.
 pub(super) fn withdraw_runs(tx: &Connection, runs: &str) -> Result<usize, StoreError> {
     Ok(tx.execute(
         "UPDATE outbox SET status='suppressed', last_error=?2
@@ -91,18 +64,13 @@ pub(super) fn withdraw_runs(tx: &Connection, runs: &str) -> Result<usize, StoreE
     )?)
 }
 
-/// A row the dispatcher has to look at.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Due {
     pub id: String,
     pub kind: Kind,
     pub agent_id: Option<AgentId>,
-    /// How the run ended, for a row about a run.
     pub ended: Option<Ended>,
-    /// How many times the dispatcher has acted on it: held it, gathered it,
-    /// offered it. Zero is a row written since the last pass.
     pub attempts: u32,
-    /// The gathering it is in, if it is in one.
     pub batch_id: Option<String>,
     pub title: String,
     pub body: String,
@@ -212,8 +180,6 @@ fn collect<T>(
 }
 
 impl Store {
-    /// Rows whose time has come and that nobody has been offered yet, oldest
-    /// first: new ones, held ones, and the rows of every gathering that is over.
     pub fn due_deliveries(&self, now: i64) -> Result<Vec<Due>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(&format!(
@@ -223,7 +189,6 @@ impl Store {
         collect(rows)
     }
 
-    /// The rows still in one gathering, oldest first.
     pub fn gathering(&self, batch: &str) -> Result<Vec<Due>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(&format!(
@@ -233,9 +198,6 @@ impl Store {
         collect(rows)
     }
 
-    /// When the dispatcher next has something to do, if it has anything: a row
-    /// for the windows not yet offered, one given back whose time with the
-    /// other pages is up, or a push not yet sent.
     pub fn next_delivery_at(&self) -> Result<Option<i64>, StoreError> {
         Ok(self.conn()?.query_row(
             "SELECT min(next_attempt_at) FROM outbox
@@ -247,7 +209,6 @@ impl Store {
         )?)
     }
 
-    /// Looks at a row again at `until`.
     pub fn hold_delivery(&self, id: &str, until: i64) -> Result<(), StoreError> {
         self.conn()?.execute(
             "UPDATE outbox SET attempts=attempts+1, next_attempt_at=?2
@@ -257,11 +218,6 @@ impl Store {
         Ok(())
     }
 
-    /// Puts a row in the gathering that is open, or opens one that closes
-    /// [`GATHER_MS`] from now. Returns when it closes.
-    ///
-    /// Immediate, because two rows arriving at once must find the same
-    /// gathering rather than each open their own.
     pub fn gather_delivery(&self, id: &str, now: i64) -> Result<i64, StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -286,17 +242,6 @@ impl Store {
         Ok(closes)
     }
 
-    /// Offers a row to every window, saying `item`. With `carried`, it is the
-    /// one item for a gathering: the rows it carries, which may be none, are
-    /// offered and claimed with it, and it is the row they all name.
-    ///
-    /// With `push`, the operator is away and has an address: a row for it is
-    /// written in the same commit, saying that, so an offer is never made
-    /// without the push that goes with it. It names what it is about only for
-    /// a single item, which is what withdraws it when that is answered or seen.
-    ///
-    /// None when the row is no longer pending: answered or seen in the moment
-    /// since it was read, and then there is nothing to offer.
     pub fn offer_delivery(
         &self,
         id: &str,
@@ -356,7 +301,6 @@ impl Store {
         Ok(Some(delivery))
     }
 
-    /// Decides against these rows, saying why.
     pub fn suppress_deliveries(&self, ids: &[String], why: Why) -> Result<(), StoreError> {
         if ids.is_empty() {
             return Ok(());
@@ -369,8 +313,6 @@ impl Store {
         Ok(())
     }
 
-    /// Lets go of whatever nobody claimed in a day. Not lost: what it said is
-    /// still in For you and in the channel it was about.
     pub fn expire_deliveries(&self, now: i64) -> Result<usize, StoreError> {
         Ok(self.conn()?.execute(
             "UPDATE outbox SET status='expired' WHERE status='pending' AND created_at<=?1",
@@ -378,10 +320,6 @@ impl Store {
         )?)
     }
 
-    /// Everything offered and not yet claimed, oldest first: what a window
-    /// that has just connected asks for, since the offer was made to whoever
-    /// was listening at the time, which may have been nobody. Never what
-    /// `page` gave back, and nothing given back twice.
     pub fn pending_deliveries(&self, page: Option<&str>) -> Result<Vec<Delivery>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -395,11 +333,6 @@ impl Store {
         collect(rows)
     }
 
-    /// Takes an offered row for the window that asks first, with every row it
-    /// carries, and keeps which page that was. True for that window and false
-    /// for every other, which is the whole of how two windows show one banner
-    /// once. False too for the page that last gave it back, and for everyone
-    /// once it has been given back twice.
     pub fn claim_delivery(
         &self,
         id: &str,
@@ -416,14 +349,6 @@ impl Store {
         Ok(claimed > 0)
     }
 
-    /// Gives back a row `page` claimed and could not show, with every row it
-    /// carries: pending again, and offered again from `now`. After the first
-    /// release the other pages have until `now + reclaim` to take it; after
-    /// the second nobody does, and it is due at once. Returns the item and how
-    /// many times it has now been given back.
-    ///
-    /// None for a page that does not hold the claim, which includes a page
-    /// that already gave it back: then nothing changes.
     pub fn release_delivery(
         &self,
         id: &str,
@@ -433,8 +358,6 @@ impl Store {
     ) -> Result<Option<(Delivery, u32)>, StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        // Every SET reads the row as it was, so `releases` in the CASE is the
-        // count before this one.
         let released = tx.execute(
             "UPDATE outbox SET status='pending', delivered_at=NULL, claimed_by=NULL,
                     released_by=?2, releases=releases+1, offered_at=?3,
@@ -457,9 +380,6 @@ impl Store {
         Ok(Some((given, releases)))
     }
 
-    /// Rows given back whose time with the other pages is up, or that were
-    /// given back twice, each with how many rows its item stands for: the
-    /// ones that are now pushed, as if nobody had been at a window.
     pub fn due_releases(&self, now: i64) -> Result<Vec<(Due, usize)>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(&format!(
@@ -479,14 +399,6 @@ impl Store {
         collect(rows)
     }
 
-    /// Ends a row's time with the windows once every window that tried has
-    /// given it back: with `push`, the row for the address is written, or one
-    /// the operator's return dropped is due again; either way the dispatcher
-    /// does not look at it again before it expires at `expires`. A page that
-    /// never gave it back may still claim it until then.
-    ///
-    /// At most one push per item: the address's row is keyed like the
-    /// window's, so one already written, sent or failed stays as it is.
     pub fn settle_release(
         &self,
         id: &str,
@@ -534,9 +446,6 @@ impl Store {
         Ok(())
     }
 
-    /// Pushes whose time has come, oldest first, each with how many times it
-    /// has been tried and whether the windows gave back what it is about. The
-    /// names are read now, so a renamed agent is sent as it is called today.
     pub fn due_pushes(&self, now: i64) -> Result<Vec<(Push, u32, bool)>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -555,8 +464,6 @@ impl Store {
         collect(rows)
     }
 
-    /// Records how an attempt ended. Nothing, for a push withdrawn while it
-    /// was in the air: the operator has seen or answered what it was about.
     pub fn record_push(&self, id: &str, next: &Next, now: i64) -> Result<(), StoreError> {
         let (status, at, error) = match next {
             Next::Sent => ("delivered", None, None),
@@ -573,9 +480,6 @@ impl Store {
         Ok(())
     }
 
-    /// What the Notifications pane says about the address. The last attempt
-    /// is the newest push that was tried and not then withdrawn, since a
-    /// withdrawal says why it was withdrawn rather than how the attempt went.
     pub fn push_report(&self) -> Result<Report, StoreError> {
         let conn = self.conn()?;
         let last_sent_at: Option<i64> = conn.query_row(

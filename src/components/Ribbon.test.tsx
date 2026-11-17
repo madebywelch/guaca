@@ -1,5 +1,3 @@
-// One zone on every machine, so "9:12 on a Monday" and its labels are the same
-// moment wherever the suite runs. Set before anything here makes a Date.
 process.env.TZ = "America/New_York";
 
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
@@ -57,7 +55,6 @@ describe("what a screen reader hears", () => {
   it("is one list, every face, the pile and the schedule in it", () => {
     const list = draw();
     const items = within(list).getAllByRole("listitem");
-    // The pile, three faces, one run and one lapse point.
     expect(items).toHaveLength(6);
   });
 
@@ -85,7 +82,6 @@ describe("what a screen reader hears", () => {
     const ribbon = morning();
     const list = draw(ribbon);
     const items = within(list).getAllByRole("listitem");
-    // The pile leads; everything after it follows its place on the strip.
     expect(items[0]?.className).toBe("ribbon__pile");
     const xs = items.slice(1).map((item) => Number(item.style.getPropertyValue("--ribbon-x")));
     expect(xs).toEqual([...xs].sort((a, b) => a - b));

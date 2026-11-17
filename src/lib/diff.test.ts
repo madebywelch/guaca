@@ -2,21 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import { type DiffKind, type DiffLine, diffSummary, diffTally, lineDiff } from "./diff";
 
-/** A diff as a patch would write it, which is the shortest way to assert one. */
 function marked(diff: DiffLine[]): string[] {
   const mark = { same: " ", added: "+", removed: "-" };
   return diff.map((line) => `${mark[line.kind]}${line.text}`);
 }
 
-/**
- * The two documents a diff is of, recovered row by row.
- *
- * The before side is every kept line and every removal; the after side is
- * every kept line and every addition. Written out rather than joined, sorted or
- * deduplicated, because a reconstruction only checks anything if it preserves
- * each line and its position. The expected arrays passed to it are literals,
- * never the strings fed to `lineDiff` split back apart.
- */
 function reconstruct(diff: DiffLine[]): { before: string[]; after: string[] } {
   const keep = (kinds: DiffKind[]) =>
     diff.filter((line) => kinds.includes(line.kind)).map((line) => line.text);
@@ -28,8 +18,6 @@ function reconstruct(diff: DiffLine[]): { before: string[]; after: string[] } {
 
 describe("an empty side", () => {
   it("is no lines rather than one blank one", () => {
-    // `"".split("\n")` is `[""]`. Left alone, an agent's first memory reads as
-    // having replaced a blank line that was never there.
     expect(marked(lineDiff("", "Smith verifies."))).toEqual(["+Smith verifies."]);
     expect(marked(lineDiff("Smith verifies.", ""))).toEqual(["-Smith verifies."]);
     expect(lineDiff("", "")).toEqual([]);
@@ -38,8 +26,6 @@ describe("an empty side", () => {
 
 describe("what changed", () => {
   it("keeps the lines that did not, so the page is still readable", () => {
-    // Not a patch. The operator opening this wants what the agent now believes
-    // as much as they want what it just decided.
     const diff = lineDiff("one\ntwo\nthree", "one\ntwo\nthree\nfour");
     expect(marked(diff)).toEqual([" one", " two", " three", "+four"]);
   });
@@ -50,8 +36,6 @@ describe("what changed", () => {
   });
 
   it("reads a rewritten line as the old one and then the new one", () => {
-    // Adjacent, so the two sentences can be compared. Anything else puts the
-    // replacement below everything else the rewrite touched.
     const diff = lineDiff("one\ntwo\nthree", "one\nTWO\nthree");
     expect(marked(diff)).toEqual([" one", "-two", "+TWO", " three"]);
   });
@@ -62,9 +46,6 @@ describe("what changed", () => {
   });
 
   it("says nothing changed when an agent rewrites what it already had", () => {
-    // A real turn: asked to remember something it already remembers, an agent
-    // writes the file again. Drawn as a page of additions that is a page of
-    // additions in a diff, it reads as having thrown its memory away.
     const same = "Smith verifies.\nJones signs off.";
     const diff = lineDiff(same, same);
     expect(diffTally(diff)).toEqual({ added: 0, removed: 0 });
@@ -72,8 +53,6 @@ describe("what changed", () => {
   });
 
   it("keeps every line of both versions, whatever it decided about them", () => {
-    // The invariant that stops a line being lost between the two: a removal
-    // nobody drew is a fact about an agent the operator never gets told.
     const diff = lineDiff("a\nb\nc\nd\ne", "a\nx\nc\ny\ne\nf");
 
     expect(reconstruct(diff)).toEqual({
@@ -85,8 +64,6 @@ describe("what changed", () => {
 
 describe("a document too large to compare line by line", () => {
   it("is shown as a wholesale replacement rather than left working it out", () => {
-    // Well past what memory can hold, so this is the shape of a bug rather than
-    // of a page. It has to end, and it has to end without dropping a line.
     const before = Array.from({ length: 700 }, (_, i) => `old ${i}`).join("\n");
     const after = Array.from({ length: 700 }, (_, i) => `new ${i}`).join("\n");
 
@@ -96,8 +73,6 @@ describe("a document too large to compare line by line", () => {
   });
 
   it("still matches the ends first, which is what makes a real page cheap", () => {
-    // A page rewritten with one line changed is two short middles, however long
-    // the page is: the table is never built for the part that did not move.
     const body = Array.from({ length: 700 }, (_, i) => `line ${i}`);
     const after = [...body];
     after[350] = "changed";
@@ -108,10 +83,6 @@ describe("a document too large to compare line by line", () => {
 });
 
 describe("newlines, blanks and repeated lines", () => {
-  // The expected line arrays are written out here rather than derived from the
-  // inputs, so a change to how the inputs are split cannot move the goalposts
-  // with it. Each row names the raw document on each side and the two sequences
-  // it must reconstruct to, plus a hand-counted tally.
   const cases: {
     name: string;
     before: string;
@@ -132,8 +103,6 @@ describe("newlines, blanks and repeated lines", () => {
     },
     {
       name: "reads it the same the other way round too",
-      // A regression that normalized only one side, or only the first side
-      // handed to it, leaves carriage returns in the payload it drew.
       before: "a\n\nb\n",
       after: "a\r\n\r\nb\r\n",
       beforeLines: ["a", "", "b", ""],
@@ -152,9 +121,6 @@ describe("newlines, blanks and repeated lines", () => {
     },
     {
       name: "writes a first memory and keeps the entry after its newline",
-      // Split on LF alone gives `["one"]`, dropping the blank line the trailing
-      // newline stands for; trimming at the end gives `["one", ""]` too, but
-      // for the wrong reason, so the two are told apart by the rows below.
       before: "",
       after: "one\n",
       beforeLines: [],
@@ -200,9 +166,6 @@ describe("newlines, blanks and repeated lines", () => {
     },
     {
       name: "counts a blank-only page as a document with blank lines",
-      // `"".split("\n")` is `[""]`, the empty document is zero lines, and
-      // `"\n".split("\n")` is two blanks. Collapsing the two would read a page
-      // of whitespace as nothing at all.
       before: "",
       after: "\n",
       beforeLines: [],
@@ -248,10 +211,6 @@ describe("newlines, blanks and repeated lines", () => {
     },
     {
       name: "keeps both versions when several alignments are equally short",
-      // `a,b,a` against `b,a,b` has two two-line common subsequences, `a,b` and
-      // `b,a`. Either is minimal, so nothing here says which one wins; a test
-      // that did would fail on a correct change of tie-break. What is fixed is
-      // the one removal and one addition, and that both sequences come back.
       before: "left\na\nb\na\nright",
       after: "left\nb\na\nb\nright",
       beforeLines: ["left", "a", "b", "a", "right"],
@@ -279,8 +238,6 @@ describe("newlines, blanks and repeated lines", () => {
   }
 
   it("reads equivalent documents as unchanged line for line", () => {
-    // The stronger claim behind the first two rows: no row is even marked as a
-    // change, so no carriage return survives into a payload as a phantom edit.
     for (const [before, after] of [
       ["a\r\n\r\nb\r\n", "a\n\nb\n"],
       ["a\n\nb\n", "a\r\n\r\nb\r\n"],
@@ -291,15 +248,6 @@ describe("newlines, blanks and repeated lines", () => {
 });
 
 describe("the size cutoff", () => {
-  /**
-   * A middle whose lines cannot match across the two sides, with one shared
-   * sentinel line and the same prefix and suffix around both.
-   *
-   * The sentinel is the point: it is the one pair the table can keep, so a
-   * branch that builds the table and a branch that replaces the middle wholesale
-   * draw different rows. All-different middles would look identical whichever
-   * branch ran, and would pass even if the guard were wrong.
-   */
   function wrapped(middle: number, other: number, sentinelOld: number, sentinelNew: number) {
     const oldMiddle = Array.from({ length: middle }, (_, i) => `old ${i}`);
     const newMiddle = Array.from({ length: other }, (_, i) => `new ${i}`);
@@ -311,10 +259,6 @@ describe("the size cutoff", () => {
   }
 
   it("still matches the lines a full middle holds at exactly the cutoff", () => {
-    // The trimmed middle is 500 x 500, exactly 250,000 cells, which the table
-    // is still built for. The full documents are 502 lines against 502, above
-    // the cutoff, so this also catches a guard that counts the whole documents
-    // instead of the unmatched middle the table is actually for.
     const { beforeLines, afterLines } = wrapped(500, 500, 250, 250);
     const diff = lineDiff(beforeLines.join("\n"), afterLines.join("\n"));
 
@@ -328,11 +272,6 @@ describe("the size cutoff", () => {
   });
 
   it("replaces the middle wholesale one cell above the cutoff", () => {
-    // 53 x 4,717 is 250,001 cells, one cell past the limit, so the table is not
-    // built: every middle line is a removal followed by every addition, and
-    // the shared sentinel appears on both sides rather than as a kept line.
-    // An off-by-one in the guard, counting allocated cells as 54 x 4,718, or
-    // raising the limit would each keep the sentinel instead.
     const { beforeLines, afterLines } = wrapped(53, 4717, 26, 2358);
     const diff = lineDiff(beforeLines.join("\n"), afterLines.join("\n"));
 
@@ -343,9 +282,6 @@ describe("the size cutoff", () => {
     expect(reconstruct(diff)).toEqual({ before: beforeLines, after: afterLines });
     expect(diffTally(diff)).toEqual({ added: 4717, removed: 53 });
 
-    // The retained ends stay at the ends, the removals come before the
-    // additions, and the two blocks meet in the middle with nothing between:
-    // prefix, 53 removals, 4,717 additions, suffix.
     expect(diff[0]!.kind).toBe("same");
     expect(diff.slice(1, 54).every((line) => line.kind === "removed")).toBe(true);
     expect(diff.slice(54, 54 + 4717).every((line) => line.kind === "added")).toBe(true);

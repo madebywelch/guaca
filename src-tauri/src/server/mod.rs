@@ -1,40 +1,3 @@
-//! The host: the runtime, reached over HTTP and a socket.
-//!
-//! Every workspace runs here, in a container on the operator's Mac or on a box
-//! that stays awake when they close their laptop. The desktop window, its menu
-//! bar panel and a browser are all clients of it; `app.rs` builds no runtime.
-//! `boot.rs` opens the workspace and `ipc.rs` lists the commands.
-//!
-//! ## It cannot tell whose box it is on
-//!
-//! An operator rents a machine, or guaca.ai hands them one. This module cannot
-//! distinguish those and must not learn how: the difference is who pressed the
-//! button at the provider, which is a fact about the bill. Keeping it out is
-//! what makes bring-your-own-box free rather than a second product with a
-//! second code path to fall out of step.
-//!
-//! ## Two shapes, because that is what a webview already spoke
-//!
-//! Tauri's IPC, which the webview spoke when the runtime lived in the window,
-//! is "a name, some named arguments, and a value or a structured error" plus
-//! one event channel the runtime pushes into. Those are a POST and a
-//! WebSocket, so the commands kept their shape when they moved here, and
-//! `ipc.contract.test.ts` fails the build if the Rust and TypeScript command
-//! lists disagree.
-//!
-//! ## What guards it
-//!
-//! One bearer token, compared in constant time, on every route but health. The
-//! workspace behind it holds inference keys, plugin refresh tokens and an
-//! operator's transcripts, so there is no anonymous mode and no read-only mode:
-//! a caller is the operator or it is nobody.
-//!
-//! The socket takes the token in the query string as well as the header,
-//! because a browser cannot set headers on a WebSocket handshake. That is a
-//! real cost (a query string reaches proxy logs, which a header does not), and
-//! it is why the token is per-workspace and rotatable rather than derived from
-//! anything longer-lived.
-
 mod live;
 
 use std::net::SocketAddr;
@@ -57,36 +20,14 @@ use crate::domain::attachment::MAX_FILE_BYTES;
 use crate::domain::deployment::Deployment;
 use crate::runtime::events::{EventSink, UiEvent};
 
-/// How many events a client may fall behind before it starts losing them.
-///
-/// A streaming turn emits a token at a time, so this is seconds of backlog
-/// rather than a queue depth anybody chose. Losing events is the correct
-/// failure: the transcript is durable and a client that reconnects refetches,
-/// exactly as the window does after a reload. What must not happen is the
-/// runtime blocking on a slow socket, which would make one bad network
-/// connection into a crew that stops thinking.
 const BACKLOG: usize = 2048;
 
-/// How long a browser's session lasts before the token has to be presented
-/// again. Long enough that a workspace is not a daily chore to open, short
-/// enough that a cookie copied off a disk is not a key that never expires.
 const SESSION_SECONDS: u64 = 30 * 24 * 60 * 60;
 
-/// The cookie a browser keeps its session in. The name is completed with the
-/// host's port by `cookie_name`, because a cookie is not scoped by one.
 const SESSION_COOKIE: &str = "guaca_session_v2";
 
-/// Cookies an older host set and no host reads now. The first carried the
-/// token itself, and the second the one session those were upgraded to.
-/// Signing out still expires both, so a browser that kept one does not hold
-/// a copy of the token until the cookie's own expiry.
 const RETIRED_COOKIES: [&str; 2] = ["guaca_session", "guaca_session_legacy"];
 
-/// The origins the desktop webview is served from. None of them is ever this
-/// daemon's own: the app has exactly one cross-origin client, a window showing
-/// a box, and it presents its token in a header or a query string. Nothing
-/// else is admitted, and an opaque origin (the computer viewer has one on
-/// purpose) never is.
 const APP_ORIGINS: [&str; 5] = [
     "tauri://localhost",
     "http://tauri.localhost",
@@ -95,36 +36,15 @@ const APP_ORIGINS: [&str; 5] = [
     "http://127.0.0.1:1420",
 ];
 
-/// Where a daemon serves one workspace from.
 pub struct Settings {
-    /// The one directory everything durable lives under.
     pub root: PathBuf,
     pub bind: SocketAddr,
-    /// The bearer token every call presents.
     pub token: String,
-    /// The frontend bundle, served at `/` when there is one.
-    ///
-    /// Optional because a daemon is useful without it: a desktop app pointed at
-    /// this box is a client, and so is a `curl`. Serving the bundle is what
-    /// makes a browser one too.
     pub web: Option<PathBuf>,
-    /// The origin a browser reaches this box at, when the operator knows it.
-    ///
-    /// Only a sign-in needs it, for the redirect. Absent, the daemon uses the
-    /// origin of the last call that arrived, which is right whenever the
-    /// operator is signing in from the page they are reading.
     pub origin: Option<String>,
-    /// The socket of the updater beside this host, on a box that has one.
-    /// Absent, the host says it cannot be updated from here.
     pub updater: Option<PathBuf>,
 }
 
-/// Fans runtime events out to whoever is watching.
-///
-/// The only sink a running workspace has: the desktop window, the menu bar
-/// panel and a browser are all clients of this socket. A failed send with no
-/// receivers means nobody is looking, which is ordinary rather than an error.
-/// The transcript is already durable by the time this is called.
 struct SocketSink {
     events: broadcast::Sender<UiEvent>,
     live: parking_lot::Mutex<live::Snapshot>,
@@ -132,11 +52,6 @@ struct SocketSink {
 
 impl EventSink for SocketSink {
     fn emit(&self, event: UiEvent) {
-        // An `Err` here is "no client is attached", which is the normal state of
-        // a workspace doing its work at four in the morning. It must never
-        // propagate into an agent's turn.
-        // Snapshot and subscription use this same lock. No delta can land
-        // in both the snapshot and the feed, or fall between them.
         let mut live = self.live.lock();
         live.observe(&event);
         let _ = self.events.send(event);
@@ -154,41 +69,17 @@ struct Serving {
     revoked: broadcast::Sender<String>,
 }
 
-/// A workspace that is open and a socket that is listening, not yet serving.
-///
-/// Two steps rather than one because the address is only real once the
-/// operating system has handed it back, and `0` is a legitimate thing to ask
-/// for: a test wants a free port and a daemon under a supervisor may too.
-/// Anything that needs to know where to connect has to be able to ask before
-/// the serving future is spawned, and a future that never returns cannot be
-/// asked anything.
 pub struct Bound {
-    /// Where it is actually listening, which is not always what was requested.
     pub addr: SocketAddr,
-    /// How many agents came back up.
     pub agents: usize,
     listener: tokio::net::TcpListener,
     app: Router,
     runtime: crate::runtime::Runtime,
 }
 
-/// How long a stopping host gives its agents to put their work down.
-///
-/// Inside the thirty seconds every way this daemon is run allows between the
-/// stop signal and a kill: `--stop-timeout 30` on the container `host.rs`
-/// makes, `stop_grace_period` in `docker-compose.yml` and `TimeoutStopSec` in
-/// `deploy/guacad.service`. The rest of the thirty is the server winding down
-/// and the process ending. A drain usually takes well under a second: a model
-/// call is dropped rather than waited for, so what it waits on is tool calls
-/// already running.
 const DRAIN_WINDOW: std::time::Duration = std::time::Duration::from_secs(20);
 
 impl Bound {
-    /// Serves until the process is asked to stop, then puts every agent's work
-    /// down for the next host before it stops serving.
-    ///
-    /// The drain runs while the server still answers, so every client watches
-    /// its agents stop and says why rather than losing the connection first.
     pub async fn serve(self) -> Result<(), String> {
         let runtime = self.runtime;
         axum::serve(self.listener, self.app)
@@ -201,12 +92,10 @@ impl Bound {
     }
 }
 
-/// Opens the workspace and serves it until the process is asked to stop.
 pub async fn serve(settings: Settings) -> Result<(), String> {
     bind(settings).await?.serve().await
 }
 
-/// Opens the workspace and binds the socket, without serving yet.
 pub async fn bind(settings: Settings) -> Result<Bound, String> {
     let (events, _) = broadcast::channel(BACKLOG);
     let sink = Arc::new(SocketSink { events: events.clone(), live: Default::default() });
@@ -214,8 +103,6 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
     let paths = crate::boot::Paths::under(&settings.root);
     let booted = crate::boot::open(&paths, tokio::runtime::Handle::current(), sink.clone()).await?;
 
-    // A host before 0.4.0 kept the session it upgraded bearer cookies to here.
-    // Nothing reads it now, and it names a session, so it does not stay.
     for retired in ["legacy-sessions.json", "legacy-sessions.tmp"] {
         match std::fs::remove_file(settings.root.join(retired)) {
             Ok(()) => {}
@@ -228,16 +115,11 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
     let state = Arc::new(AppState {
         runtime: runtime.clone(),
         secret: Some(Arc::from(settings.token.as_str())),
-        // A box has no corner of a screen. A window showing this workspace
-        // feeds its own machine's strip, and that call never reaches here.
         menubar: Arc::new(|_presence| {}),
         deployment: Deployment::Server,
         open_url: page_opener(events.clone()),
         reach: Reach::served(settings.origin.clone()),
         config_path: booted.config_path,
-        // Never reached: `save_file` refuses before it looks, because a server
-        // has no downloads folder anybody could open. Named honestly rather
-        // than left as a path that means nothing.
         downloads: settings.root.join("downloads"),
         subscription: booted.subscription,
         claude_signin: Default::default(),
@@ -271,32 +153,11 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
         .route("/v1/auth/session", post(auth_session))
         .route("/v1/auth/logout", post(auth_logout))
         .merge(self::events(runtime.clone()))
-        // `:name` rather than `{name}`: axum 0.7 routes with matchit 0.7, where
-        // braces are a literal path segment. Spelled the newer way this compiles,
-        // registers a route nothing can match, and every preview draws nothing.
-        // `a_stored_file_is_reachable_by_its_digest` is what catches it.
         .route("/v1/file/:digest/:name", get(file))
-        // A document a browser hands over. The bytes are the body and the name
-        // is on the query, which is the smallest possible shape: one file per
-        // request, and the desktop's forwarded drop already sends one file at
-        // a time inside its loop. The body limit is well above the store's
-        // own, so a file a person plausibly drops is refused with the store's
-        // sentence, which names the file and the limit, rather than with the
-        // framework's bare 413. Past four times the limit nobody dropped it by
-        // mistake, and the 413 is what a body that size deserves.
         .route("/v1/upload", post(upload))
         .layer(DefaultBodyLimit::max(4 * MAX_FILE_BYTES as usize))
-        // Where a sign-in's browser comes back to. No token: the browser
-        // arrives from the vendor with the vendor's answer, and what bounds
-        // it is that only a flow that is waiting on that exact state reads it.
         .route(crate::oauth::CALLBACK_ROUTE, get(oauth_callback))
-        // A page an agent wrote, on this origin instead of a loopback one.
-        // The same document with the same policy; `frame-ancestors 'self'`
-        // now names this origin, which is what frames it.
         .route("/v1/artifact/:id", get(artifact))
-        // A computer's screen. The viewer on loopback keeps the sandbox
-        // tokens and does the work; this hands bytes through, upgrade and
-        // all, behind a ticket for that one sandbox.
         .route(
             &format!("{}/:ticket/:sandbox/:port/*rest", crate::commands::SCREEN_ROUTE),
             any(screen).layer(axum::middleware::map_response(isolate_screen)),
@@ -304,9 +165,6 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
         .with_state(serving);
 
     if let Some(web) = settings.web.as_ref() {
-        // The same bundle the desktop app embeds. `fallback` rather than a
-        // route, because the frontend is a single page and every path it
-        // invents has to reach `index.html`.
         let index = web.join("index.html");
         app = app.fallback_service(
             tower_http::services::ServeDir::new(web)
@@ -315,12 +173,6 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
         tracing::info!(web = %web.display(), "serving the app");
     }
 
-    // The desktop webview is cross-origin to every daemon. Never admit opaque
-    // origins here: the computer viewer deliberately has one. Cookies are not
-    // allowed on a cross-origin answer, because the only client that carries
-    // one is the browser, and that client is served by this daemon and is
-    // therefore same-origin. A window showing a box presents its token in a
-    // header instead, and a header needs no credential flag.
     app = app.layer(
         CorsLayer::new()
             .allow_origin(APP_ORIGINS.map(HeaderValue::from_static))
@@ -335,10 +187,6 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
     let addr = listener.local_addr().map_err(|err| err.to_string())?;
     tracing::info!(%addr, agents = booted.started, "guacad ready");
     if settings.web.is_some() {
-        // The token is already in this log from the run that generated it.
-        // Printing the whole invitation on every start is what makes the first
-        // visit one click rather than a URL and a string pasted beside it, and
-        // the fragment is the one part of a URL a browser never sends.
         tracing::info!(
             url = %invitation(addr, &token),
             "open this in a browser, or the same path on the address a tunnel gives this box"
@@ -348,17 +196,7 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
     Ok(Bound { addr, agents: booted.started, listener, app, runtime })
 }
 
-/// The one link a browser needs, with the token where a browser keeps it.
-///
-/// A fragment rather than a query string, because the fragment is not sent to
-/// this server, to a proxy in front of it, or to either one's logs. The socket
-/// takes the token in a query string because a handshake cannot carry a
-/// header; a first visit has no such excuse.
 fn invitation(addr: SocketAddr, token: &str) -> String {
-    // A daemon in a container listens on every interface, and `0.0.0.0` is
-    // not an address a browser can open. `localhost` is right for the
-    // operator who published the port to their own machine, and the log line
-    // beside it already says to substitute a tunnel's address for a box.
     if addr.ip().is_unspecified() {
         format!("http://localhost:{}/#token={token}", addr.port())
     } else {
@@ -366,11 +204,6 @@ fn invitation(addr: SocketAddr, token: &str) -> String {
     }
 }
 
-/// Waits for the signal a container is stopped with.
-///
-/// What follows it is `Runtime::drain`, which is what lets an update carry
-/// work on instead of ending it, and then the requests already in the router
-/// finishing.
 async fn stopped() {
     let interrupt = tokio::signal::ctrl_c();
     #[cfg(unix)]
@@ -396,11 +229,6 @@ async fn stopped() {
     }
 }
 
-/// Liveness, and the one route with no token on it.
-///
-/// It says the process is up and nothing about the workspace. A provider's
-/// health check has no credential, and a check that needed one would be a box
-/// that reports itself unhealthy for the whole time a token is being rotated.
 async fn health() -> Json<Value> {
     let mut value = crate::updates::metadata();
     value["status"] = json!("ok");
@@ -423,8 +251,6 @@ async fn update_status(
     if let Err(response) = authorized(&serving, &headers, None, &Method::GET) {
         return *response;
     }
-    // What is news is what the updater would install, so the channel is the
-    // updater's to say. A host without one follows releases.
     let channel = match serving.updater.as_deref() {
         Some(socket) => followed(socket).await,
         None => Some(crate::updates::Channel::Release),
@@ -432,9 +258,6 @@ async fn update_status(
     Json(serving.updates.check(channel, query.refresh).await).into_response()
 }
 
-/// The channel the box's updater follows, or `None` while it is not answering,
-/// which is an updater replacing itself. An updater older than channels says
-/// none, and it only ever installed releases.
 async fn followed(socket: &std::path::Path) -> Option<crate::updates::Channel> {
     #[cfg(unix)]
     let report = crate::updater::ask(socket, &crate::updater::Request::Status).await.ok()?;
@@ -446,14 +269,6 @@ async fn followed(socket: &std::path::Path) -> Option<crate::updates::Channel> {
     Some(serde_json::from_value(report["channel"].clone()).unwrap_or_default())
 }
 
-/// The box's updater, as a client sees it: whether there is one, what the
-/// host runs, and how the last update went.
-///
-/// The workspace's token authorizes an update as it authorizes everything
-/// else here. What an update may install is not the client's to say: the
-/// updater installs only a signed build on the box's own channel, and the
-/// version and commit are only a check that it is the one the operator was
-/// shown.
 async fn host_status(State(serving): State<Serving>, headers: HeaderMap) -> Response {
     if let Err(response) = authorized(&serving, &headers, None, &Method::GET) {
         return *response;
@@ -528,18 +343,10 @@ struct Call {
     name: String,
     #[serde(default)]
     args: Value,
-    /// Absent from a client older than the field, which is itself a skew.
     #[serde(default)]
     client: Option<crate::ipc::Client>,
 }
 
-/// How a sign-in reaches a browser from a box.
-///
-/// Nobody is sitting at this machine. The only browser there is belongs to
-/// whoever is reading the page, so the page is asked, and only the page whose
-/// command asked: the event names it. An `Err` from the send is no client
-/// attached, which is a sign-in nobody could finish anyway: the flow times out
-/// on its own.
 fn page_opener(events: broadcast::Sender<UiEvent>) -> crate::commands::OpenUrl {
     Arc::new(move |url: &str| {
         let client = CALLER.try_with(Clone::clone).ok().flatten();
@@ -553,13 +360,9 @@ fn page_opener(events: broadcast::Sender<UiEvent>) -> crate::commands::OpenUrl {
 }
 
 tokio::task_local! {
-    /// The page whose command is running, for the one thing that has to find
-    /// its way back to that page alone: a sign-in's browser tab. Every other
-    /// event is for every window.
     static CALLER: Option<String>;
 }
 
-/// One command, arriving as JSON.
 async fn call(
     State(serving): State<Serving>,
     headers: HeaderMap,
@@ -568,10 +371,6 @@ async fn call(
     if let Err(refused) = authorized(&serving, &headers, None, &Method::POST) {
         return *refused;
     }
-    // Where this call came in, remembered for the redirect a sign-in will
-    // name. Read off the headers a proxy rewrites rather than the socket,
-    // because the socket sees the tunnel and the browser saw the tunnel's
-    // public name.
     if let Some(origin) = reached_at(&headers) {
         serving.state.reach.note(origin);
     }
@@ -599,11 +398,6 @@ async fn call(
     }
 }
 
-/// The scheme and host a request was addressed to, as the browser spelled it.
-///
-/// `X-Forwarded-*` first, because a tunnel or a reverse proxy terminates TLS
-/// and rewrites the host, and the browser's own address is the forwarded one.
-/// Then `Host`, which is what a browser sends straight to the box.
 fn reached_at(headers: &HeaderMap) -> Option<String> {
     let text = |name: &str| headers.get(name).and_then(|v| v.to_str().ok()).map(str::trim);
     let host = text("x-forwarded-host")
@@ -624,12 +418,6 @@ struct Upload {
     name: String,
 }
 
-/// One document, arriving as bytes because a browser has no path to give.
-///
-/// The desktop reads a dropped path natively and posts it here, so a document
-/// never enters its renderer; a browser is the renderer, and its bytes have to
-/// cross once. They land in the same store by the same digest, and what comes
-/// back is what a message carries.
 async fn upload(
     State(serving): State<Serving>,
     headers: HeaderMap,
@@ -649,11 +437,6 @@ async fn upload(
     }
 }
 
-/// A sign-in's browser, back from the vendor.
-///
-/// Handed to the flow waiting on its state, which decides the page: only the
-/// flow knows whether the state matched and the issuer was the one it sent
-/// the operator to. Nobody waiting is a stale tab or a guess, and is told so.
 async fn oauth_callback(State(serving): State<Serving>, RawQuery(query): RawQuery) -> Response {
     let fields = crate::oauth::parse_query(query.as_deref().unwrap_or_default());
     let landing = match serving.state.reach.callbacks() {
@@ -666,14 +449,6 @@ async fn oauth_callback(State(serving): State<Serving>, RawQuery(query): RawQuer
     }
 }
 
-/// A page an agent wrote, by the digest it was framed under.
-///
-/// `artifact.rs` also serves it from a loopback port inside this process,
-/// which no client can reach; here it is a route, and everything
-/// `artifact.rs` argues still holds: the policy rides
-/// on every answer, refusals included, and the frame's `sandbox` keeps the
-/// page's origin opaque. Token in the query, because a frame cannot carry a
-/// header, which is the trade the file route already makes.
 async fn artifact(
     State(serving): State<Serving>,
     Query(ticket): Query<Ticket>,
@@ -698,18 +473,6 @@ async fn artifact(
     response
 }
 
-/// One request for a computer's screen, handed through to the viewer.
-///
-/// The viewer is a byte-level relay on loopback, and this is the same shape one
-/// hop out: the head is rewritten and everything after it is copied. An
-/// upgrade is taken over from hyper once the handshake has been answered and
-/// spliced with the viewer's socket; an ordinary request is read to the end,
-/// because the viewer closes after one response, and answered whole.
-///
-/// The ticket is a path segment rather than a query, because noVNC resolves
-/// its own scripts and its socket relative to the page it was served from, and
-/// a query string does not survive that. `referer` and `cookie` are dropped on
-/// the way in, so the ticket never reaches the machine on the far side.
 async fn screen(
     State(serving): State<Serving>,
     Path((ticket, sandbox, port, rest)): Path<(String, String, String, String)>,
@@ -742,7 +505,6 @@ async fn relay_screen(
         .is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
     for (name, value) in request.headers() {
         let name = name.as_str();
-        // Rewritten, decided here, or something the far side must not see.
         if matches!(
             name,
             "host" | "connection" | "keep-alive" | "referer" | "cookie" | "authorization"
@@ -768,8 +530,6 @@ async fn relay_screen(
         return page(502, "The computer viewer hung up.");
     }
 
-    // The viewer's answer, head first. It is a small server that answers with
-    // one head and then bytes, and the head is what decides what happens next.
     let mut answered = Vec::new();
     let mut byte = [0u8; 1];
     while !answered.ends_with(b"\r\n\r\n") && answered.len() < 32 * 1024 {
@@ -784,8 +544,6 @@ async fn relay_screen(
     };
 
     if status == 101 {
-        // Hand the socket over once hyper has finished the handshake, and then
-        // it is bytes both ways until one side hangs up.
         let taken = hyper::upgrade::on(&mut request);
         tokio::spawn(async move {
             match taken.await {
@@ -803,7 +561,6 @@ async fn relay_screen(
         return response;
     }
 
-    // One response, then the viewer closes: what is left is the body.
     let mut body = Vec::new();
     let _ = upstream.read_to_end(&mut body).await;
     let chunked = upstream_headers
@@ -816,10 +573,6 @@ async fn relay_screen(
     response
 }
 
-/// Applies even to direct navigation and errors, not just the React iframe.
-/// noVNC's modules load across the opaque origin using CORS; the scoped screen
-/// ticket admits those bytes, never a workspace credential. Storage, the parent
-/// document, forms and top-level navigation stay unavailable to sandbox code.
 async fn isolate_screen(mut response: Response) -> Response {
     let headers = response.headers_mut();
     headers
@@ -829,8 +582,6 @@ async fn isolate_screen(mut response: Response) -> Response {
     response
 }
 
-/// Status and headers out of a response head, or nothing for a head that is
-/// not one.
 fn parse_head(head: &[u8]) -> Option<(u16, Vec<(String, String)>)> {
     let text = String::from_utf8_lossy(head);
     let mut lines = text.split("\r\n");
@@ -842,8 +593,6 @@ fn parse_head(head: &[u8]) -> Option<(u16, Vec<(String, String)>)> {
     Some((status, headers))
 }
 
-/// Puts the viewer's headers on the answer, minus the ones that describe a
-/// connection this daemon owns rather than the viewer.
 fn apply_headers(set: &mut HeaderMap, headers: &[(String, String)]) {
     for (name, value) in headers {
         if matches!(
@@ -861,8 +610,6 @@ fn apply_headers(set: &mut HeaderMap, headers: &[(String, String)]) {
     }
 }
 
-/// A chunked body, joined. What the far side chunked is answered whole here
-/// with a length, so the framing is decided once, by hyper.
 fn dechunk(body: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(body.len());
     let mut at = 0;
@@ -882,7 +629,6 @@ fn dechunk(body: &[u8]) -> Vec<u8> {
     out
 }
 
-/// The page a browser is left on, spelled as `oauth::reply` spells it.
 fn page(status: u16, message: &str) -> Response {
     let body = format!(
         "<!doctype html><meta charset=\"utf-8\"><title>Guaca</title>\
@@ -908,26 +654,12 @@ struct FileRequest {
     download: bool,
 }
 
-/// The event channel, which is the socket half of what Tauri gave for free.
 async fn events_socket(
     State(serving): State<Serving>,
     headers: HeaderMap,
     Query(ticket): Query<Ticket>,
     upgrade: WebSocketUpgrade,
 ) -> Response {
-    // A WebSocket upgrade carries an Origin header from a browser, and the
-    // handshake is not subject to CORS, so this is the one place a cross-origin
-    // page could take the event channel with a cookie the browser sent on its
-    // own. A client that sends no Origin is not a page and is admitted on its
-    // credentials, as it always was.
-    //
-    // The app's own origins are the one exception to the origin proof, and
-    // they get no exception to the credential: a window of the app is a shell,
-    // and a shell proves itself with the token. It has to. A cookie is sent to
-    // any page on the same site, ports do not count toward a site, and the dev
-    // port below is Tauri's and Vite's default, so it is not this app's alone —
-    // a page from anything else listening there would otherwise read the live
-    // stream with the operator's cookie.
     let shell = app_origin(&headers);
     let revoked = serving.revoked.subscribe();
     if !shell && !proves_same_origin(&headers) {
@@ -941,9 +673,6 @@ async fn events_socket(
     if let Err(refused) = proof {
         return *refused;
     }
-    // Subscribed before the upgrade completes. Between accepting and
-    // subscribing there is a window in which events are dropped, and a client
-    // that reconnects mid-cascade would silently miss the run settling.
     let (feed, snapshot) = {
         let live = serving.sink.live.lock();
         (
@@ -963,7 +692,6 @@ async fn events_socket(
     upgrade.on_upgrade(move |socket| pump(socket, feed, snapshot, session))
 }
 
-/// Forwards events to one client until it goes away.
 async fn pump(
     mut socket: WebSocket,
     mut feed: broadcast::Receiver<UiEvent>,
@@ -1024,22 +752,13 @@ async fn pump(
                         return;
                     }
                 }
-                // Behind by more than the backlog. Told rather than hidden: the
-                // client refetches what it draws, and a gap it does not know
-                // about is a transcript that is quietly missing a message.
                 Err(broadcast::error::RecvError::Lagged(missed)) => {
                     tracing::warn!(missed, "a client fell behind the event stream");
-                    // Reconnect starts with a fresh snapshot. A warning event
-                    // alone cannot repair partial text or a missed job ending.
                     let _ = socket.close().await;
                     return;
                 }
                 Err(broadcast::error::RecvError::Closed) => return,
             },
-            // Read the other direction only to notice a close. Nothing a client
-            // sends here is acted on: every intent goes through `/v1/call`,
-            // where it is one named command with typed arguments rather than
-            // whatever arrived on a socket.
             incoming = socket.recv() => match incoming {
                 Some(Ok(_)) => { heard = tokio::time::Instant::now(); },
                 _ => return,
@@ -1052,17 +771,6 @@ async fn pump(
     }
 }
 
-/// One stored file, by the digest of its own contents.
-///
-/// A route, which is how every client reaches a stored file: nothing registers
-/// a `guacfile:` scheme any more. The bytes never cross the command surface:
-/// a transcript does, in bulk, which is the whole reason a message carries a
-/// digest rather than a document.
-///
-/// The token is in the query string because an `<img>` and a `<frame>` cannot
-/// carry a header, which is the same trade the event socket makes and for the
-/// same reason. What bounds it is that nothing is addressable here but a digest
-/// this workspace already stored.
 async fn file(
     State(serving): State<Serving>,
     headers: HeaderMap,
@@ -1072,8 +780,6 @@ async fn file(
     if let Err(refused) = authorized(&serving, &headers, ticket.token.as_deref(), &Method::GET) {
         return *refused;
     }
-    // Range, because a browser asks for one when it draws a PDF or seeks in a
-    // video, and an answer that ignores it draws nothing.
     let range = headers
         .get(axum::http::header::RANGE)
         .and_then(|value| value.to_str().ok())
@@ -1099,8 +805,6 @@ async fn file(
             if let Some(range) = served.content_range.and_then(|range| range.parse().ok()) {
                 headers.insert(axum::http::header::CONTENT_RANGE, range);
             }
-            // Content-addressed, so the bytes at one address never change and
-            // a browser may keep them for as long as it likes.
             if let Ok(cache) = "private, max-age=31536000, immutable".parse() {
                 headers.insert(axum::http::header::CACHE_CONTROL, cache);
             }
@@ -1114,14 +818,6 @@ async fn file(
     }
 }
 
-/// The route an event is posted to, on the runtime it fires routines in.
-///
-/// Its own router with its own state rather than one more route on the
-/// workspace's, because it answers to a different credential: the webhook
-/// secret, which grants nothing else, and never the workspace token. Merged
-/// into `bind`'s router where the route always stood, so what is served
-/// and what stands in front of it are unchanged; the cascade suite serves it
-/// on its own over a harness's runtime.
 pub fn events<S: Clone + Send + Sync + 'static>(runtime: crate::runtime::Runtime) -> Router<S> {
     Router::new()
         .route(
@@ -1131,19 +827,6 @@ pub fn events<S: Clone + Send + Sync + 'static>(runtime: crate::runtime::Runtime
         .with_state(runtime)
 }
 
-/// One event, fired at every routine standing on it.
-///
-/// The secret is checked before anything else is read, so a request without
-/// it learns nothing about which events exist. The scheme is matched in any
-/// letter case, as RFC 9110 has it: a sender that writes `bearer` is not
-/// wrong, and a 401 for it would read as a wrong secret.
-///
-/// Three answers that are not a delivery each say so in a sentence. A 404 for
-/// an event nobody stands on, because a 200 would tell a script its wiring
-/// works while the routine it was meant for sits under a different spelling.
-/// A 409 for one whose every routine belongs to a paused agent, because the
-/// event was not delivered and is not kept, and a sender that retries may
-/// arrive after the agent is resumed. A 401 that says what to send.
 async fn routine_event(
     State(runtime): State<crate::runtime::Runtime>,
     Path((service, topic)): Path<(String, String)>,
@@ -1215,17 +898,7 @@ async fn routine_event(
     (status, Json(answer)).into_response()
 }
 
-/// The host an address names, and its port when it spells one.
-///
-/// The port is kept apart from the host because the two are compared
-/// differently: a host has to match, and a port only when both addresses name
-/// one. A browser leaves the port out of an `Origin` when it is the scheme's
-/// default, so an absent port means "the default", not "port zero". An IPv6
-/// literal is bracketed, which is the only reliable place its colons end.
 fn authority(url: &str) -> Option<(&str, Option<u16>)> {
-    // An `Origin` carries its scheme and a `Host` header does not, so both
-    // spellings are read here. A scheme other than http or https is not an
-    // origin this app serves and is refused rather than compared.
     let rest = match url.split_once("://") {
         Some((scheme, rest)) => match scheme.to_ascii_lowercase().as_str() {
             "http" | "https" => rest,
@@ -1243,20 +916,11 @@ fn authority(url: &str) -> Option<(&str, Option<u16>)> {
         return Some((&inner[..end], port));
     }
     match host_port.rsplit_once(':') {
-        // A port that is spelled but unreadable is not an address this app
-        // serves. Refusing it is safer than treating it as no port, which
-        // would then match any port on that host.
         Some((host, port)) => port.parse::<u16>().ok().map(|port| (host, Some(port))),
         None => Some((host_port, None)),
     }
 }
 
-/// Whether an address arrived over https, however it was proxied to here.
-///
-/// `X-Forwarded-Proto` is what a proxy in front says, and the `Origin` header
-/// is what the page itself came from. Either naming https means the session
-/// cookie is issued `Secure`; a browser talking to the daemon directly over
-/// http has neither, and a `Secure` cookie would not come back.
 fn over_https(headers: &HeaderMap) -> bool {
     if let Some(proto) = headers.get("x-forwarded-proto").and_then(|h| h.to_str().ok()) {
         if proto.split(',').next().is_some_and(|proto| proto.trim().eq_ignore_ascii_case("https")) {
@@ -1268,13 +932,6 @@ fn over_https(headers: &HeaderMap) -> bool {
     })
 }
 
-/// The name of this host's session cookie, which carries its port.
-///
-/// A cookie is not scoped by port, so a daemon and a container beside it on
-/// one machine would otherwise share a name: signing in to one would replace
-/// the other's session and each would refuse the other's cookie. The port is
-/// already what separates two hosts in `same_origin`, and it is the one part
-/// of an authority a cookie cannot express.
 fn cookie_name(headers: &HeaderMap) -> String {
     named_cookie(headers, SESSION_COOKIE)
 }
@@ -1288,9 +945,6 @@ fn named_cookie(headers: &HeaderMap, prefix: &str) -> String {
         .map_or_else(|| prefix.to_string(), |port| format!("{prefix}_{port}"))
 }
 
-/// The `Set-Cookie` that issues this host's session, or clears it when the
-/// age is zero. One function for both, so a deletion cannot disagree with the
-/// cookie it has to match about its name or its attributes.
 fn session_cookie(headers: &HeaderMap, value: &str, max_age: u64) -> HeaderValue {
     make_cookie(headers, &cookie_name(headers), value, max_age)
 }
@@ -1411,26 +1065,6 @@ fn read_session(serving: &Serving, headers: &HeaderMap) -> SessionState {
     session_state(&serving.token, value, now(), &revoked)
 }
 
-/// Whether a request proves it came from a page on this origin.
-///
-/// A request authenticated by a cookie is forgeable from any page the browser
-/// sends that cookie to, so a state-changing one has to prove where it came
-/// from. The comparison is the whole authority and not the hostname alone:
-/// another app on the same machine at another port is another origin, and its
-/// page must not be able to drive this one. A browser omits the port from an
-/// `Origin` only when it is the default, and always spells one when it is not,
-/// so the case that matters — a page at `localhost:8080` posting to a daemon at
-/// `localhost:3000` — is two explicit ports and is refused.
-///
-/// `Sec-Fetch-Site` is the browser's own answer to the same question, and a
-/// page cannot set it. It is read first, because it is also the answer that
-/// survives a proxy which rewrites `Host`: `same-origin` is this app's own
-/// client, and `none` is a navigation the operator started. A request with
-/// neither header did not come from a page — a script, a test, or the desktop
-/// app — and each of those presents its own credential, which a cross-site
-/// request forger cannot make a browser send. Behind a proxy that rewrites
-/// `Host` without forwarding it, an older browser's `Origin` comparison is
-/// what the operator has to configure for.
 fn proves_same_origin(headers: &HeaderMap) -> bool {
     match headers.get("sec-fetch-site").and_then(|h| h.to_str().ok()) {
         Some(site) => site.eq_ignore_ascii_case("same-origin") || site.eq_ignore_ascii_case("none"),
@@ -1438,14 +1072,6 @@ fn proves_same_origin(headers: &HeaderMap) -> bool {
     }
 }
 
-/// Whether a socket upgrade came from one of the app's own windows.
-///
-/// A WebSocket handshake is not subject to CORS, so this is the one place a
-/// cross-origin page could otherwise take over the event channel with a cookie
-/// the browser sent on its own. The desktop webview is the exception the app
-/// has: it is served from `tauri://` and connects to a box with the token in
-/// the query string, and no page anywhere else can be served from those
-/// origins.
 fn app_origin(headers: &HeaderMap) -> bool {
     headers
         .get(header::ORIGIN)
@@ -1453,11 +1079,6 @@ fn app_origin(headers: &HeaderMap) -> bool {
         .is_some_and(|origin| APP_ORIGINS.iter().any(|known| origin.eq_ignore_ascii_case(known)))
 }
 
-/// Whether a request proves it came from this same origin.
-///
-/// The fallback for a browser that does not send `Sec-Fetch-Site`: the
-/// `Origin` header's authority against this host's, with the forwarded host
-/// when a proxy in front passes the one the browser used.
 fn same_origin(headers: &HeaderMap) -> bool {
     let Some(origin) = headers.get(header::ORIGIN).and_then(|h| h.to_str().ok()) else {
         return true;
@@ -1483,13 +1104,6 @@ fn same_origin(headers: &HeaderMap) -> bool {
     })
 }
 
-/// Exchanges a Bearer token for an HttpOnly, SameSite=Strict session cookie.
-///
-/// The browser client uses this once at sign-in, after the invitation fragment
-/// or the token form. The Authorization header keeps working for scripts,
-/// tests and the desktop app pointed at a box. The cookie is Secure when the
-/// request arrived over https, and it is scoped by name to this host's port so
-/// two hosts on one machine keep separate sessions.
 async fn auth_session(State(serving): State<Serving>, headers: HeaderMap) -> Response {
     let presented = headers
         .get(header::AUTHORIZATION)
@@ -1506,11 +1120,6 @@ async fn auth_session(State(serving): State<Serving>, headers: HeaderMap) -> Res
             );
             response
         }
-        // Only what this answer adds. The screen this refusal is drawn on has
-        // already said where the token comes from, above the field, and a
-        // second copy of the same advice under it was the one thing the
-        // operator already knew instead of the one thing they did not: that
-        // the token they just pasted was turned away.
         _ => (
             StatusCode::UNAUTHORIZED,
             Json(json!({ "err": {
@@ -1522,12 +1131,6 @@ async fn auth_session(State(serving): State<Serving>, headers: HeaderMap) -> Res
     }
 }
 
-/// Clears the session cookie.
-///
-/// Held to the same proof as any other state-changing request, because signing
-/// an operator out is a state change: a page elsewhere must not be able to do
-/// it with a form post. It asks for no token, because the only thing it does
-/// is clear a cookie the browser already presented.
 async fn auth_logout(State(serving): State<Serving>, headers: HeaderMap) -> Response {
     if !proves_same_origin(&headers) {
         return (
@@ -1580,10 +1183,6 @@ fn authorized(
     ticket: Option<&str>,
     method: &Method,
 ) -> Result<(), Box<Response>> {
-    // A valid session cookie authenticates the request. A cookie makes a
-    // state-changing request forgeable from another origin, so one that cannot
-    // prove it came from here is refused: the cookie rode along without the
-    // browser having meant to send it.
     if matches!(read_session(serving, headers), SessionState::Active { .. }) {
         let state_changing =
             *method == Method::POST || *method == Method::PUT || *method == Method::DELETE;
@@ -1607,12 +1206,6 @@ fn authorized(
     authorized_by_token(serving, headers, ticket)
 }
 
-/// Whether a request presents the token itself, in a header or the query.
-///
-/// The session cookie is deliberately not read here. That is what a caller
-/// uses when the credential has to be something only the app could present —
-/// a shell's socket upgrade — rather than something a browser sends to every
-/// page on the same site.
 fn authorized_by_token(
     serving: &Serving,
     headers: &HeaderMap,
@@ -1641,12 +1234,8 @@ fn authorized_by_token(
     }
 }
 
-/// Byte equality that does not return early.
 fn same(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());
-    // Length is not a secret and cannot be hidden by this anyway: a token of a
-    // different length is refused, and how long it took to say so tells an
-    // attacker only what the length was.
     if a.len() != b.len() {
         return false;
     }
@@ -1685,9 +1274,6 @@ mod tests {
 
     #[tokio::test]
     async fn a_sign_in_page_is_addressed_to_the_window_that_asked() {
-        // Two windows on one box both opened every sign-in tab. The event now
-        // names the page whose command asked, and a call that named no page
-        // is for every window, as every call was before pages named themselves.
         let (events, mut heard) = broadcast::channel(4);
         let open = page_opener(events);
         CALLER
@@ -1710,11 +1296,8 @@ mod tests {
         let addr: SocketAddr = "127.0.0.1:8787".parse().unwrap();
         let url = invitation(addr, "abc123");
         assert_eq!(url, "http://127.0.0.1:8787/#token=abc123");
-        // A fragment, never a query string: the query string is sent to the
-        // server and to anything in front of it, and the fragment is not.
         assert!(!url.contains('?'), "{url}");
 
-        // A container binds every interface, and nobody can open 0.0.0.0.
         let every: SocketAddr = "0.0.0.0:8787".parse().unwrap();
         assert_eq!(invitation(every, "abc123"), "http://localhost:8787/#token=abc123");
         let every6: SocketAddr = "[::]:8787".parse().unwrap();
@@ -1727,13 +1310,10 @@ mod tests {
         headers.insert("host", "127.0.0.1:8787".parse().unwrap());
         assert_eq!(reached_at(&headers).as_deref(), Some("http://127.0.0.1:8787"));
 
-        // Behind a tunnel the socket sees the tunnel and the browser saw the
-        // tunnel's public name, which is what a redirect has to be sent to.
         headers.insert("x-forwarded-host", "guaca.example.com".parse().unwrap());
         headers.insert("x-forwarded-proto", "https".parse().unwrap());
         assert_eq!(reached_at(&headers).as_deref(), Some("https://guaca.example.com"));
 
-        // A proto nobody would send a browser back over is not one.
         headers.insert("x-forwarded-proto", "gopher".parse().unwrap());
         assert_eq!(reached_at(&headers).as_deref(), Some("http://guaca.example.com"));
 
@@ -1755,7 +1335,6 @@ mod tests {
     #[test]
     fn a_chunked_body_is_joined_and_the_framing_dropped() {
         assert_eq!(dechunk(b"4\r\nnoVN\r\n1\r\nC\r\n0\r\n\r\n"), b"noVNC");
-        // A chunk extension is ignored, and a truncated tail keeps what arrived.
         assert_eq!(dechunk(b"3;ext=1\r\nabc\r\n5\r\nde"), b"abcde");
     }
 
@@ -1779,10 +1358,6 @@ mod tests {
 
     #[test]
     fn comparing_a_token_does_not_stop_at_the_first_wrong_byte() {
-        // The property, stated as the thing it prevents: two wrong tokens of
-        // the same length take the same path regardless of how much of the
-        // prefix is right. Timing is not assertable in a unit test, so what is
-        // checked is that neither returns early with a different answer.
         let real = "0123456789abcdef";
         assert!(!same("0123456789abcde_", real));
         assert!(!same("_123456789abcdef", real));
@@ -1790,9 +1365,6 @@ mod tests {
 
     #[test]
     fn a_server_refuses_to_open_a_browser_and_says_where_to_sign_in() {
-        // The failure this prevents is an operator waiting at a consent screen
-        // that was never drawn, because something reported success for opening
-        // a browser on a machine with no screen.
         let open: crate::commands::OpenUrl = Arc::new(|_| {
             Err("this workspace runs on a server, so there is no browser here to open. Sign in \
                  from the app or the browser you are reading this in, and the workspace is \

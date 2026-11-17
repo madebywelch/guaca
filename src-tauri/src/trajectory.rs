@@ -1,25 +1,3 @@
-//! Reading what a run *did*, and saying whether the machinery behaved.
-//!
-//! `eval.rs` reads the envelopes and asks whether a crew communicated sensibly.
-//! This reads the event stream the UI is drawn from and asks the other half of
-//! the question: did the run itself work. The two failures do not overlap. A
-//! stream that opens and never closes leaves a placeholder on screen forever
-//! while every message in the transcript is perfect. A settle that fires while
-//! an agent is still thinking stops the spinner and then keeps talking. A
-//! budget that counts something other than model calls bills a bounded run
-//! several times over, and the messages it produced look exactly the same.
-//!
-//! Same discipline as `eval.rs`: every anomaly is decidable from the record.
-//! Nothing is scored and nothing is timed, because an assertion with a wall
-//! clock in it is a flake, and "the run took too long" is already what the
-//! harness's settle timeout says.
-//!
-//! Four events carry a run: the messages, the streams, the token counts and
-//! the settle. Stream deltas and ends carry only a message id and are matched
-//! to the stream that announced them. Activity and approvals carry neither, so
-//! they are taken for the agents this run touched: exact while one run is in
-//! flight, which is what an end-to-end scenario is.
-
 use std::collections::{HashMap, HashSet};
 
 use crate::domain::approval::ApprovalState;
@@ -27,102 +5,34 @@ use crate::domain::envelope::{NoticeKind, Part, Participant, ToolOutcome};
 use crate::domain::ids::{AgentId, ApprovalId, MessageId, RunId};
 use crate::runtime::events::{Activity, UiEvent};
 
-/// One thing the runtime reported, in the order it reported it.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Record {
-    /// The operator gave an agent something to do.
-    Asked {
-        agent: AgentId,
-    },
-    /// The badge next to an agent's name changed.
-    Doing {
-        agent: AgentId,
-        activity: Activity,
-    },
-    /// A placeholder opened for a message the operator can watch arrive.
-    StreamOpened {
-        agent: AgentId,
-        message: MessageId,
-        to: Participant,
-    },
-    StreamText {
-        message: MessageId,
-        chars: usize,
-    },
-    StreamClosed {
-        message: MessageId,
-    },
-    /// One model call, as the provider counted it.
-    Called {
-        agent: AgentId,
-        prompt: u32,
-        completion: u32,
-    },
-    /// A message was persisted.
-    Said {
-        from: Participant,
-        to: Participant,
-        chars: usize,
-    },
-    /// A tool an agent used, and how it went.
-    Used {
-        agent: AgentId,
-        tool: String,
-        outcome: ToolOutcome,
-    },
-    /// Guaca speaking into a channel: a guard refusal, a failed call.
-    Noticed {
-        agent: AgentId,
-        kind: NoticeKind,
-        text: String,
-    },
-    /// An agent parked mid-turn on the operator.
-    Parked {
-        agent: AgentId,
-        approval: ApprovalId,
-    },
-    Answered {
-        approval: ApprovalId,
-        state: ApprovalState,
-    },
-    /// Every agent in the run went quiet.
-    Settled {
-        steps: u32,
-    },
+    Asked { agent: AgentId },
+    Doing { agent: AgentId, activity: Activity },
+    StreamOpened { agent: AgentId, message: MessageId, to: Participant },
+    StreamText { message: MessageId, chars: usize },
+    StreamClosed { message: MessageId },
+    Called { agent: AgentId, prompt: u32, completion: u32 },
+    Said { from: Participant, to: Participant, chars: usize },
+    Used { agent: AgentId, tool: String, outcome: ToolOutcome },
+    Noticed { agent: AgentId, kind: NoticeKind, text: String },
+    Parked { agent: AgentId, approval: ApprovalId },
+    Answered { approval: ApprovalId, state: ApprovalState },
+    Settled { steps: u32 },
 }
 
-/// Something about the way a run ran that an operator would call broken.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Anomaly {
-    /// A placeholder the UI never got to replace. On screen this is a message
-    /// that stays half-arrived for as long as the window is open.
     StreamLeftOpen { agent: String },
-    /// Text for a stream that had already ended. This is what a retry looks
-    /// like when it appends to the attempt it was meant to replace.
     TextAfterTheStreamEnded { agent: String },
-    /// Text or an end for a stream nothing announced: the UI has nowhere to
-    /// put it and drops it.
     UnannouncedStream { message: MessageId },
-    /// The budget did not count what the run spent. Steps are reserved one per
-    /// model call, so a run that reports a different number is either billing
-    /// turns or losing calls, and both are how a bounded run overspends.
     BudgetMiscounted { steps: u32, calls: usize },
-    /// The run was declared over while somebody was still in the middle of it.
     StillWorkingWhenTheRunSettled { agent: String, doing: &'static str },
-    /// Something arrived after the run was declared over. The operator watched
-    /// the spinner stop and then watched more text appear.
     ActedAfterTheRunSettled { agent: String },
-    /// A turn parked on a person and was never released. The agent is holding
-    /// a line open that nothing will ever close.
     ParkedWithoutAnAnswer { agent: String },
-    /// Once per run, or the UI counts one run's spend twice.
     SettledMoreThanOnce { times: usize },
-    /// Nothing ever said the run was over.
     NeverSettled,
-    /// A tool raised an error rather than returning a verdict. A refusal is
-    /// the guard working; this is something breaking.
     ToolFailed { agent: String, tool: String, error: String },
-    /// Every attempt at a model call failed and the operator was told.
     CallFailed { agent: String },
 }
 
@@ -164,23 +74,19 @@ impl Anomaly {
     }
 }
 
-/// What one run's machinery did.
 #[derive(Debug, Clone)]
 pub struct Trajectory {
     pub run: RunId,
     pub records: Vec<Record>,
-    /// Rendered for a failing assertion to print. Nobody can act on a count.
     pub ledger: String,
     names: HashMap<AgentId, String>,
 }
 
 impl Trajectory {
-    /// Model calls the providers counted. The unit the budget is spent in.
     pub fn calls(&self) -> usize {
         self.records.iter().filter(|r| matches!(r, Record::Called { .. })).count()
     }
 
-    /// Prompt and completion tokens, summed.
     pub fn tokens(&self) -> (u64, u64) {
         self.records.iter().fold((0, 0), |(p, c), record| match record {
             Record::Called { prompt, completion, .. } => {
@@ -190,7 +96,6 @@ impl Trajectory {
         })
     }
 
-    /// What the run reported spending when it finished.
     pub fn steps(&self) -> Option<u32> {
         self.records.iter().find_map(|r| match r {
             Record::Settled { steps } => Some(*steps),
@@ -198,12 +103,6 @@ impl Trajectory {
         })
     }
 
-    /// How many turns an agent took.
-    ///
-    /// A turn that parked on the operator comes back to `Thinking` when it is
-    /// released, which is the same turn resuming rather than a second one. A
-    /// count that read it as two would make every approval look like the agent
-    /// had been woken twice.
     pub fn turns(&self, agent: AgentId) -> usize {
         let mut turns = 0;
         let mut was = Activity::Idle;
@@ -220,12 +119,6 @@ impl Trajectory {
         turns
     }
 
-    /// The most agents that were mid-inference at the same moment.
-    ///
-    /// The claim the Rust runtime exists to make. Read from the interleaving
-    /// rather than from a clock: five agents that each took 300ms and finished
-    /// inside a second is an inference about a machine that was not busy, while
-    /// five open turns at one point in the ledger is the thing itself.
     pub fn peak_concurrency(&self) -> usize {
         let mut thinking: HashSet<AgentId> = HashSet::new();
         let mut peak = 0;
@@ -244,7 +137,6 @@ impl Trajectory {
         peak
     }
 
-    /// Every tool used, in order, by name.
     pub fn tools(&self) -> Vec<&str> {
         self.records
             .iter()
@@ -255,7 +147,6 @@ impl Trajectory {
             .collect()
     }
 
-    /// Every tool call that was turned away, worded as the model read it.
     pub fn refusals(&self) -> Vec<String> {
         self.records
             .iter()
@@ -271,14 +162,10 @@ impl Trajectory {
             .collect()
     }
 
-    /// Everything wrong with the way this run ran.
     pub fn anomalies(&self) -> Vec<Anomaly> {
         let mut found = Vec::new();
         let name = |id: &AgentId| self.names.get(id).cloned().unwrap_or_else(|| "?".into());
 
-        // Streams, walked in order: what is still open at the end is the
-        // placeholder nobody will replace, and text after a close is the retry
-        // bug that appends a second attempt onto the first one's half-sentence.
         let mut open: HashMap<MessageId, AgentId> = HashMap::new();
         let mut closed: HashMap<MessageId, AgentId> = HashMap::new();
         for record in &self.records {
@@ -311,7 +198,6 @@ impl Trajectory {
         left_open.sort();
         found.extend(left_open.into_iter().map(|agent| Anomaly::StreamLeftOpen { agent }));
 
-        // Tools that broke, and calls that never landed.
         for record in &self.records {
             match record {
                 Record::Used { agent, tool, outcome: ToolOutcome::Failed { error } } => {
@@ -328,8 +214,6 @@ impl Trajectory {
             }
         }
 
-        // A parked turn is a held line. Anything still pending here is one
-        // nothing will ever release.
         let mut parked: HashMap<ApprovalId, AgentId> = HashMap::new();
         for record in &self.records {
             match record {
@@ -346,13 +230,6 @@ impl Trajectory {
         unanswered.sort();
         found.extend(unanswered.into_iter().map(|agent| Anomaly::ParkedWithoutAnAnswer { agent }));
 
-        // The budget. A step is reserved per model call, so the number the run
-        // reports has to be the number of calls it made. A call that failed
-        // every attempt reserved its step and reported no usage, which is why
-        // the failures are added back rather than ignored.
-        //
-        // A provider that counts nothing leaves this unanswerable rather than
-        // wrong: with no usage reported at all there is nothing to compare.
         let calls = self.calls();
         let failed = self
             .records
@@ -365,7 +242,6 @@ impl Trajectory {
             }
         }
 
-        // The settle, and everything either side of it.
         let settles: Vec<usize> = self
             .records
             .iter()
@@ -402,7 +278,6 @@ impl Trajectory {
                     }),
                 );
 
-                // Work filed against a run that was already reported finished.
                 let mut late: Vec<String> = self.records[at + 1..]
                     .iter()
                     .filter_map(|record| match record {
@@ -425,15 +300,7 @@ impl Trajectory {
     }
 }
 
-/// Reads the events a run produced into something that can be asserted on.
-///
-/// `name_of` resolves an agent id for the ledger and the anomalies, so this can
-/// be run against a scripted harness or a live session without knowing which.
 pub fn read(events: &[UiEvent], run: RunId, name_of: &dyn Fn(AgentId) -> String) -> Trajectory {
-    // Which stream belongs to which run, learned from every announcement in
-    // the stream rather than only this run's: a delta for another run's stream
-    // is somebody else's traffic, and calling it unannounced would report a
-    // bug that is only this filter's own blind spot.
     let stream_runs: HashMap<MessageId, RunId> = events
         .iter()
         .filter_map(|e| match e {
@@ -442,8 +309,6 @@ pub fn read(events: &[UiEvent], run: RunId, name_of: &dyn Fn(AgentId) -> String)
         })
         .collect();
 
-    // Who this run touched. Activity and approvals carry no run, so they are
-    // read for these agents and nobody else.
     let mut involved: HashSet<AgentId> = HashSet::new();
     for event in events {
         match event {
@@ -474,8 +339,6 @@ pub fn read(events: &[UiEvent], run: RunId, name_of: &dyn Fn(AgentId) -> String)
                 for id in [message.from.agent_id(), message.to.agent_id()].into_iter().flatten() {
                     resolve(id, &mut names);
                 }
-                // The parts first: a tool ran and a notice was written before
-                // the message carrying them was persisted.
                 let channel = message.channel_id;
                 for part in &message.parts {
                     match part {
@@ -525,9 +388,6 @@ pub fn read(events: &[UiEvent], run: RunId, name_of: &dyn Fn(AgentId) -> String)
                     continue;
                 }
                 let chars = text.chars().count();
-                // Coalesced: a ledger with one line per token is unreadable,
-                // and the question here is whether text arrived, not in how
-                // many pieces.
                 match records.last_mut() {
                     Some(Record::StreamText { message, chars: so_far })
                         if message == message_id =>
@@ -581,8 +441,6 @@ fn render(run: RunId, records: &[Record], names: &HashMap<AgentId, String>) -> S
         Participant::System => "Guaca".to_string(),
         Participant::Agent { id } => name(id),
     };
-    // Streams are addressed by message id, which says nothing to a reader. The
-    // agent that opened one is what a line about it should say.
     let mut owners: HashMap<MessageId, AgentId> = HashMap::new();
     for record in records {
         if let Record::StreamOpened { agent, message, .. } = record {
@@ -594,8 +452,6 @@ fn render(run: RunId, records: &[Record], names: &HashMap<AgentId, String>) -> S
         None => format!("stream {message}"),
     };
 
-    // Named, because a failure that prints two of these has to say which is
-    // which: the retry of a failed turn is its own run.
     let mut out = format!("run {}:\n", run.short());
     for record in records {
         let line = match record {
@@ -684,8 +540,6 @@ mod tests {
         }
     }
 
-    /// The events one healthy turn produces, in the order the runtime emits
-    /// them: told, thinking, a placeholder, tokens, text, the message, idle.
     fn one_clean_turn(run: RunId, agent: AgentId, message: MessageId) -> Vec<UiEvent> {
         vec![
             appended(
@@ -741,8 +595,6 @@ mod tests {
 
     #[test]
     fn a_placeholder_that_never_closes_is_named_with_the_agent_holding_it() {
-        // What the operator sees is a message that stays half-arrived until
-        // the window is closed, and nothing in the transcript is wrong.
         let (run, agent) = (RunId::new(), AgentId::new());
         let mut events = one_clean_turn(run, agent, MessageId::new());
         events.retain(|e| !matches!(e, UiEvent::StreamEnded { .. }));
@@ -753,9 +605,6 @@ mod tests {
 
     #[test]
     fn a_retry_that_appends_to_the_attempt_it_replaced_is_caught() {
-        // The reason a retry opens a new placeholder: text from the second
-        // attempt landing in the first one's box reads as a sentence starting
-        // over halfway through.
         let (run, agent) = (RunId::new(), AgentId::new());
         let message = MessageId::new();
         let mut events = one_clean_turn(run, agent, message);
@@ -797,7 +646,6 @@ mod tests {
     fn a_settle_that_fires_while_somebody_is_thinking_is_the_spinner_stopping_early() {
         let (run, manager, chef) = (RunId::new(), AgentId::new(), AgentId::new());
         let mut events = one_clean_turn(run, manager, MessageId::new());
-        // Chef is in the run and never came back.
         events.insert(
             1,
             appended(
@@ -839,8 +687,6 @@ mod tests {
 
     #[test]
     fn a_budget_that_reports_turns_rather_than_calls_is_caught() {
-        // The defect this exists for: one turn working through tool results
-        // makes several calls, and a budget counting turns bills one.
         let (run, agent) = (RunId::new(), AgentId::new());
         let mut events = one_clean_turn(run, agent, MessageId::new());
         for _ in 0..2 {
@@ -865,8 +711,6 @@ mod tests {
 
     #[test]
     fn a_call_that_failed_every_attempt_still_spent_its_step() {
-        // The failed call reserved a step and reported no usage. Counting only
-        // what the provider billed would call the honest number a defect.
         let (run, agent) = (RunId::new(), AgentId::new());
         let mut events = one_clean_turn(run, agent, MessageId::new());
         events.insert(
@@ -898,7 +742,6 @@ mod tests {
         let t = read(&events, run, &named(&[(agent, "Manager")]));
         assert_eq!(t.anomalies(), vec![Anomaly::ParkedWithoutAnAnswer { agent: "Manager".into() }]);
 
-        // Answered, and the same run is clean.
         let mut answered = events.clone();
         answered.insert(
             3,
@@ -910,9 +753,6 @@ mod tests {
 
     #[test]
     fn a_turn_that_parked_and_resumed_is_still_one_turn() {
-        // The runtime puts a parked agent back to Thinking when the operator
-        // answers. Counting that as a second turn would report every approval
-        // as an agent that had been woken twice.
         let (run, agent) = (RunId::new(), AgentId::new());
         let mut events = one_clean_turn(run, agent, MessageId::new());
         events.splice(
@@ -929,8 +769,6 @@ mod tests {
 
     #[test]
     fn another_runs_traffic_is_not_read_as_this_ones() {
-        // Two runs interleave in one event stream, and the second run's stream
-        // deltas must not be read as text nobody announced.
         let (mine, theirs) = (RunId::new(), RunId::new());
         let (me, them) = (AgentId::new(), AgentId::new());
         let mut events = one_clean_turn(mine, me, MessageId::new());

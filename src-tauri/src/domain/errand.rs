@@ -1,73 +1,22 @@
-//! An errand: the agent's own model, called again with one brief.
-//!
-//! Not an agent. It has no card, no channel, no memory and no place in the
-//! directory, and nothing about it is addressable once the turn that sent it
-//! has its answer. It is a second call to the same model, working one brief
-//! with the sending agent's tools and in that agent's name, while the turn
-//! that sent it waits. What it is for is keeping a turn's reading out of the
-//! turn: a long document or a site searched page by page fills the context of
-//! whoever does it, and an errand hands back the finding instead of the trail.
-//!
-//! Everything here is a decision about limits and words. The loop that runs
-//! one is `runtime/errand.rs`, and it spends nothing this module did not
-//! bound first.
-//!
-//! ## Why the limits are what they are
-//!
-//! An errand spends from the run that sent it, one step per model call, so
-//! `max_steps_per_run` stays the only ceiling on spend. A budget of its own
-//! per errand is how a worst case multiplies: OpenHands gave each delegate its
-//! own iteration limit and reached that limit squared. The numbers below only
-//! bound how much of that one budget a single call can take, and none of them
-//! is the model's to raise.
-
-/// How many errands one call may send. The fourth is refused rather than
-/// queued: a queue is where a runaway fan-out waits to happen later.
 pub const MOST_AT_ONCE: usize = 3;
 
-/// Model calls one errand may make. Half a turn's default, because an errand
-/// is one brief and not a conversation, and because three of these against
-/// the default budget of sixty still leave the turn that sent them its answer.
 pub const ROUNDS: u16 = 12;
 
-/// Steps an errand will never take, so the turn that sent it can read what
-/// came back and answer. Without it three errands spend the budget between
-/// them and the turn ends holding findings it has no call left to report.
 pub const HEADROOM: u32 = 2;
 
-/// How much of an errand's answer the sending turn is shown.
-///
-/// About two thousand tokens, which is what Anthropic's research system asks
-/// of its subagents. The point of an errand is the context it keeps out, and
-/// an answer that returns the whole page it read has kept out nothing.
 pub const MAX_ANSWER: usize = 6_000;
 
-/// How an errand ended, which is not always "done".
-///
-/// A turn limit reached and a task finished read the same from the outside
-/// unless something says which: Gemini's subagents once reported success from
-/// a child that had run out of turns, and goose's parents killed children they
-/// could not tell from stuck ones.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ending {
-    /// Stopped calling tools and answered.
     Finished,
-    /// Stopped calling tools on a sentence about work still to come, or on
-    /// nothing at all. Nothing of an errand runs after it answers, so that
-    /// work is not coming.
     Unfinished,
-    /// Used every round it had and was still calling tools.
     OutOfRounds { rounds: u16 },
-    /// Reached the steps kept back for the turn that sent it.
     OutOfBudget,
-    /// A model call failed every attempt.
     Failed { error: String },
-    /// The operator stopped the conversation.
     Stopped,
 }
 
 impl Ending {
-    /// A few words for the chip the operator reads.
     fn label(&self) -> &'static str {
         match self {
             Ending::Finished => "finished",
@@ -79,7 +28,6 @@ impl Ending {
         }
     }
 
-    /// What the sending turn is told, in a sentence it can act on.
     fn told(&self) -> String {
         match self {
             Ending::Finished => "finished".to_string(),
@@ -101,30 +49,15 @@ impl Ending {
     }
 }
 
-/// One errand, as it came back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Errand {
     pub brief: String,
     pub ending: Ending,
-    /// The last thing it wrote. For an errand that finished, its answer; for
-    /// one that did not, whatever it had said by then, which may be nothing.
     pub answer: String,
-    /// Tool calls it made, refused ones included.
     pub calls: usize,
-    /// Model calls it made, which is what it cost the run.
     pub model_calls: u32,
 }
 
-/// The system prompt an errand runs under.
-///
-/// Opens on "You are" and the sending agent's name after a phrase, never on
-/// the name alone: every reader of a prompt's first line, including the test
-/// suites, takes the text up to the first comma as the speaker, and an errand
-/// that read as the agent itself would be indistinguishable from its turn.
-///
-/// Says the mechanism rather than a rule, for the reason the turn's own prompt
-/// does: "nothing of yours runs after this answer" is a fact a model does not
-/// talk itself out of, and "do not announce work" is.
 pub fn instructions(agent: &str) -> String {
     format!(
         "You are on an errand for {agent}, an agent in the operator's workspace. You are a \
@@ -144,16 +77,10 @@ pub fn instructions(agent: &str) -> String {
     )
 }
 
-/// The brief, as the errand's first and only incoming message.
 pub fn brief(text: &str) -> String {
     format!("Your brief:\n\n{}", text.trim())
 }
 
-/// What the sending turn reads back, as the result of its call.
-///
-/// Framed as the errand's account rather than as fact: the turn that sent it
-/// did not see what it read. Claude Code added the same framing after reports
-/// carried instructions that the parent then followed.
 pub fn for_caller(errands: &[Errand]) -> String {
     let total = errands.len();
     let mut out = format!(
@@ -178,9 +105,6 @@ pub fn for_caller(errands: &[Errand]) -> String {
     out
 }
 
-/// What the operator reads when they open the chip: how each one ended, and
-/// the whole of what it said. The briefs are the chip's own target and are not
-/// repeated.
 pub fn summary(errands: &[Errand]) -> String {
     let mut counts: Vec<(&'static str, usize)> = Vec::new();
     for errand in errands {
@@ -203,8 +127,6 @@ pub fn summary(errands: &[Errand]) -> String {
     out
 }
 
-/// Whether every errand in a call failed outright, which is the one case the
-/// call itself failed. Anything short of that came back with something.
 pub fn all_failed(errands: &[Errand]) -> bool {
     !errands.is_empty() && errands.iter().all(|e| matches!(e.ending, Ending::Failed { .. }))
 }
@@ -309,9 +231,6 @@ mod tests {
 
     #[test]
     fn an_errand_never_reads_as_the_agent_that_sent_it() {
-        // Every reader of a prompt's first line takes the text before the first
-        // comma as the speaker. An errand whose prompt opened on the agent's
-        // name would be that agent, to all of them.
         let prompt = instructions("Scout");
         let speaker = prompt.strip_prefix("You are ").unwrap().split(',').next().unwrap();
         assert_eq!(speaker, "on an errand for Scout");

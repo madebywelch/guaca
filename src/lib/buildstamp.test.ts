@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { builtOn } from "../../build-stamp";
 
-/** A repository with one commit, and what `git` calls that commit. */
 function checkout(): { dir: string; head: string } {
   const dir = mkdtempSync(join(tmpdir(), "guaca-stamp-"));
   const git = (...args: string[]) =>

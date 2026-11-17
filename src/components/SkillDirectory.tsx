@@ -13,7 +13,6 @@ import {
 
 interface Props {
   scope: SkillScope;
-  /** Names already in this scope. An add under one of them is refused. */
   taken: ReadonlySet<string>;
   onAdded: (skill: Skill) => void;
 }
@@ -26,7 +25,6 @@ const BOARDS: { id: DirectoryBoard; label: string }[] = [
 
 const COUNT = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
 
-/** "201.8K installs", and "1 install" for the one skill somebody tried once. */
 function installs(count: number): string {
   return `${COUNT.format(count)} ${count === 1 ? "install" : "installs"}`;
 }
@@ -37,16 +35,6 @@ function verdictClass(audit: SkillAudit): string {
   return "access__warn";
 }
 
-/**
- * skills.sh, ranked, searched and read before anything is added.
- *
- * Nothing is fetched until the operator opens this, and nothing is added
- * without being opened first: the add sends back the hash of what was read,
- * and Rust refuses it if the skill changed in between. A skill is
- * instructions a crew will follow, so what the operator reads is the whole
- * `SKILL.md`, the files it carries and what skills.sh's auditors said, in
- * that order.
- */
 export function SkillDirectory({ scope, taken, onAdded }: Props) {
   const [board, setBoard] = useState<DirectoryBoard>("allTime");
   const [query, setQuery] = useState("");
@@ -59,8 +47,6 @@ export function SkillDirectory({ scope, taken, onAdded }: Props) {
   const [added, setAdded] = useState<ReadonlySet<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Only the newest request draws. Switching boards twice quickly would
-  // otherwise let the first answer land on top of the second.
   const latest = useRef(0);
 
   const show = useCallback(async (load: (current: () => boolean) => Promise<void>) => {

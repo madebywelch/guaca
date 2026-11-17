@@ -1,49 +1,11 @@
-//! What OpenRouter is asked to do, and which models it hands that work to.
-//!
-//! Beside `openrouter.rs` because it is the same vendor, and separate from it
-//! because it is not the same conversation: that file is how a turn is spent,
-//! this one is read once while a dialog is open and never during a turn. No
-//! agent, prompt, tool or guard reads anything here.
-//!
-//! ## Why the ranking is not the one the endpoint returns by default
-//!
-//! `?category=` orders by how many tokens OpenRouter routed to each model for
-//! that kind of work, which sounds like the answer and is not. Bulk traffic
-//! dominates it: the same cheap high-throughput model tops eleven of the twelve
-//! use cases, so a picker built on that order suggests one model for every
-//! agent and says something different each time about why. The category is
-//! still what makes the list relevant — it is the set of models people actually
-//! send this kind of work to — so it decides the pool, and `sort=` decides the
-//! order inside it. Capability, from the index OpenRouter publishes on the same
-//! response, is what makes twelve pools read as twelve answers.
-//!
-//! ## Why the use cases are checked here
-//!
-//! OpenRouter answers an unrecognized category with 200 and an empty list, so a
-//! slug that has been renamed on their side is indistinguishable from a use case
-//! nobody sends work to. Checking against the published set before spending a
-//! request turns the first case into a sentence naming what was asked for, and
-//! leaves the empty answer meaning only one thing.
-
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
-/// The catalog is OpenRouter's, so this is not the operator's endpoint.
-///
-/// Suggestions are only offered when OpenRouter is what the agent's turns are
-/// paid through, and the ranking is still OpenRouter's own even then. Pointing
-/// this at a configured base URL would ask a local LM Studio to rank the world.
 const DEFAULT_BASE: &str = "https://openrouter.ai/api/v1";
 
-/// The use cases OpenRouter classifies traffic into, as it spells them.
-///
-/// Written out rather than discovered, because there is no endpoint that lists
-/// them: they are an enum in the vendor's OpenAPI document. `src/lib/roles.ts`
-/// holds the same twelve and `ipc.contract.test.ts` compares the two files, so a
-/// use case added on one side fails the build rather than a click.
 pub const CATEGORIES: [&str; 12] = [
     "programming",
     "roleplay",
@@ -59,25 +21,14 @@ pub const CATEGORIES: [&str; 12] = [
     "academia",
 ];
 
-/// Long enough that opening the same dialog twice costs one request, short
-/// enough that "today" is true. The ranking moves when a vendor ships, which is
-/// weeks, not minutes.
 const TTL: Duration = Duration::from_secs(6 * 60 * 60);
 
-/// How many of the twenty are worth carrying across IPC.
-///
-/// The dialog offers three and drops the model already in the box, so four is
-/// the most it can draw. The other sixteen are a payload nothing renders.
 const KEEP: usize = 4;
 
-/// Long enough for a cold edge, short enough that a dialog does not sit there.
-/// Nothing is blocked on this: the field works while it is in flight.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, thiserror::Error)]
 pub enum CatalogError {
-    /// Caught here rather than at OpenRouter, which answers this with an empty
-    /// list. See the module comment.
     #[error("OpenRouter does not rank models for {asked}; ask for one of: {}", CATEGORIES.join(", "))]
     Unsupported { asked: String },
     #[error("could not reach OpenRouter for {category}: {detail}")]
@@ -86,40 +37,20 @@ pub enum CatalogError {
     Status { category: String, status: u16 },
     #[error("OpenRouter sent something that is not a model list for {category}: {detail}")]
     Malformed { category: String, detail: String },
-    /// A use case this build believes in, that the vendor now ranks nothing for.
-    /// Distinct from the refusal above because there is nothing the caller can
-    /// spell differently: the set above has gone stale and wants updating.
     #[error("OpenRouter ranks no models for {0} any more; the use case has been withdrawn")]
     Withdrawn(String),
 }
 
-/// One model, as much of it as a suggestion has to say.
-///
-/// Price is on it because the ranking is by capability alone, and the most
-/// capable model for a use case is regularly the most expensive one in the pool.
-/// A row that names a model and hides what it costs is a one-click way to make
-/// every turn of an agent forty times dearer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RankedModel {
-    /// The slug a turn is made with, which is what the model field holds.
     pub id: String,
-    /// How the vendor writes it for a person, e.g. "Anthropic: Claude Opus 5".
     pub name: String,
     pub context_length: u32,
-    /// Dollars per million prompt tokens. Converted here rather than in the
-    /// webview so the number that crosses IPC is the number that is drawn, and
-    /// `None` when the vendor quoted no price rather than a misleading zero.
     pub prompt_per_million: Option<f64>,
-    /// Dollars per million completion tokens.
     pub completion_per_million: Option<f64>,
 }
 
-/// OpenRouter's ranked catalog, with what has already been asked for.
-///
-/// Cheap to clone behind the `Arc` its owner holds. The mutex is held to read or
-/// replace a cache entry and never across a request, so two dialogs opening at
-/// once make two requests rather than one blocking the other.
 #[derive(Debug)]
 pub struct Catalog {
     base: String,
@@ -134,13 +65,10 @@ struct Cached {
 }
 
 impl Catalog {
-    /// Against OpenRouter, which is the only place this data exists.
     pub fn new() -> Self {
         Self::against(DEFAULT_BASE)
     }
 
-    /// The same, against a named base. The seam for the test suite; deliberately
-    /// not reachable from settings, for the reason on `DEFAULT_BASE`.
     pub fn against(base: impl Into<String>) -> Self {
         Self {
             base: base.into().trim_end_matches('/').to_string(),
@@ -149,7 +77,6 @@ impl Catalog {
         }
     }
 
-    /// The models OpenRouter sees doing this kind of work, most capable first.
     pub async fn ranked(&self, category: &str) -> Result<Vec<RankedModel>, CatalogError> {
         let category = category.trim().to_ascii_lowercase();
         if !CATEGORIES.contains(&category.as_str()) {
@@ -162,9 +89,6 @@ impl Catalog {
         let response = self
             .http
             .get(format!("{}/models", self.base))
-            // `query` rather than a formatted URL: one of the twelve has a
-            // slash in it, and `marketing/seo` spliced into a path is a request
-            // for a page that does not exist.
             .query(&[("category", category.as_str()), ("sort", "intelligence-high-to-low")])
             .send()
             .await
@@ -206,8 +130,6 @@ impl Default for Catalog {
     }
 }
 
-// ---- the wire ------------------------------------------------------------
-
 #[derive(Debug, Deserialize)]
 struct Listing {
     data: Vec<WireModel>,
@@ -224,9 +146,6 @@ struct WireModel {
     pricing: Option<WirePricing>,
 }
 
-/// Only the two prices a turn is actually billed on. The vendor sends a dozen
-/// more — image, audio, web search, four kinds of cache — and a suggestion row
-/// that quoted any of them would be quoting a price this app does not pay.
 #[derive(Debug, Deserialize)]
 struct WirePricing {
     prompt: Option<String>,
@@ -234,7 +153,6 @@ struct WirePricing {
 }
 
 impl RankedModel {
-    /// `None` for a row with no id, which is nothing this can offer.
     fn from_wire(wire: WireModel) -> Option<Self> {
         if wire.id.trim().is_empty() {
             return None;
@@ -253,12 +171,6 @@ impl RankedModel {
     }
 }
 
-/// Dollars per token, as the vendor quotes it, into dollars per million.
-///
-/// A string on the wire because the numbers run to eleven decimal places and
-/// the vendor would rather not argue with a JSON parser about them. Anything
-/// unparseable is no price rather than zero: a free model quotes "0", and the
-/// two must not read the same.
 fn per_million(quoted: Option<String>) -> Option<f64> {
     let parsed: f64 = quoted?.trim().parse().ok()?;
     parsed.is_finite().then_some(parsed * 1_000_000.0)
@@ -275,8 +187,6 @@ mod tests {
     use axum::routing::get;
     use axum::Router;
 
-    /// Spins a stub catalog and returns its base URL, the queries it saw, and
-    /// how many requests it answered.
     async fn stub(
         answer: impl Fn() -> axum::response::Response + Clone + Send + Sync + 'static,
     ) -> (String, Arc<Mutex<Vec<HashMap<String, String>>>>, Arc<AtomicUsize>) {
@@ -329,9 +239,6 @@ mod tests {
         ])
     }
 
-    /// The refusal that costs nothing. OpenRouter answers a use case it does not
-    /// know with 200 and an empty list, so asking it would report the typo as an
-    /// absence of models and the operator would go looking for the wrong thing.
     #[tokio::test]
     async fn a_use_case_openrouter_does_not_rank_is_refused_without_asking() {
         let (base, _seen, count) = stub(|| listing(two())).await;
@@ -339,9 +246,7 @@ mod tests {
         let refused = Catalog::against(base).ranked("sales").await.unwrap_err();
 
         assert!(matches!(refused, CatalogError::Unsupported { ref asked } if asked == "sales"));
-        // The whole point: no request was spent finding that out.
         assert_eq!(count.load(Ordering::SeqCst), 0);
-        // And the refusal says what may be asked for instead.
         assert!(refused.to_string().contains("marketing"));
     }
 
@@ -353,14 +258,9 @@ mod tests {
 
         let query = seen.lock()[0].clone();
         assert_eq!(query["category"], "legal");
-        // Popularity would hand back the same three models for all twelve; see
-        // the module comment.
         assert_eq!(query["sort"], "intelligence-high-to-low");
     }
 
-    /// The one use case with a slash in it. Spliced into a path it asks for a
-    /// page rather than a list, and the answer is a 404 the operator reads as
-    /// OpenRouter being down.
     #[tokio::test]
     async fn the_use_case_with_a_slash_in_it_survives_the_query_string() {
         let (base, seen, _count) = stub(|| listing(two())).await;
@@ -380,12 +280,9 @@ mod tests {
         assert_eq!(ranked[0].name, "OpenAI: GPT-5.6 Sol");
         assert_eq!(ranked[0].prompt_per_million, Some(2.0));
         assert_eq!(ranked[0].completion_per_million, Some(12.0));
-        // A free model quotes a real zero, which is not the same as no quote.
         assert_eq!(ranked[1].prompt_per_million, Some(0.0));
     }
 
-    /// A model quoted no price is offered with no price beside it. Rendering the
-    /// absence as $0.00 advertises a free model that is not one.
     #[tokio::test]
     async fn a_model_with_no_quoted_price_carries_no_price() {
         let unpriced = serde_json::json!([
@@ -401,8 +298,6 @@ mod tests {
         assert_eq!(ranked[1].completion_per_million, None);
     }
 
-    /// A row with no slug is a row nothing can be swapped to, and a name with no
-    /// slug behind it is worse than no row: it is a button that cannot work.
     #[tokio::test]
     async fn a_row_with_no_slug_is_dropped_and_a_row_with_no_name_keeps_its_slug() {
         let ragged = serde_json::json!([
@@ -418,8 +313,6 @@ mod tests {
         assert_eq!(ranked[0].name, "vendor/model");
     }
 
-    /// Four is what the dialog can draw. The rest is a payload nothing renders,
-    /// paid for on every keystroke that changes which use case an agent reads as.
     #[tokio::test]
     async fn only_what_the_dialog_can_draw_crosses_ipc() {
         let twenty = serde_json::json!((0..20)
@@ -433,8 +326,6 @@ mod tests {
         assert_eq!(ranked[0].id, "v/m0");
     }
 
-    /// A network round trip in front of a text field, on a list that changes
-    /// when a vendor ships rather than when an operator types.
     #[tokio::test]
     async fn the_same_use_case_is_asked_for_once() {
         let (base, _seen, count) = stub(|| listing(two())).await;
@@ -445,14 +336,10 @@ mod tests {
 
         assert_eq!(first, again);
         assert_eq!(count.load(Ordering::SeqCst), 1);
-        // Two use cases are two lists, so the second one is still a request.
         catalog.ranked("finance").await.unwrap();
         assert_eq!(count.load(Ordering::SeqCst), 2);
     }
 
-    /// A use case this build believes in and the vendor no longer ranks. Its own
-    /// error because nothing the caller spells differently would fix it: the set
-    /// in `CATEGORIES` has gone stale.
     #[tokio::test]
     async fn a_use_case_that_has_been_withdrawn_says_so() {
         let (base, _seen, count) = stub(|| listing(serde_json::json!([]))).await;
@@ -461,8 +348,6 @@ mod tests {
         let refused = catalog.ranked("legal").await.unwrap_err();
 
         assert!(matches!(refused, CatalogError::Withdrawn(ref what) if what == "legal"));
-        // Nothing empty is cached, so a vendor putting the use case back is one
-        // dialog away rather than a restart.
         assert!(catalog.fresh("legal").is_none());
         catalog.ranked("legal").await.unwrap_err();
         assert_eq!(count.load(Ordering::SeqCst), 2);
@@ -493,19 +378,6 @@ mod tests {
         assert!(refused.to_string().contains("science"));
     }
 
-    /// The failure no stub can see.
-    ///
-    /// Every test above is this build agreeing with itself about a protocol, and
-    /// the twelve use cases are the half of that agreement OpenRouter can change
-    /// without telling anyone: a category renamed there answers 200 with an empty
-    /// list, so the dialog would draw nothing for exactly the agents it was built
-    /// for, silently, and no offline suite would notice. Same shape as the live
-    /// halves of `tests/plugins.rs` and `tests/account.rs`.
-    ///
-    /// Reaches the internet, authorizes nothing and spends nothing.
-    ///
-    ///   cargo test --manifest-path src-tauri/Cargo.toml \
-    ///     llm::catalog::tests::every_use_case -- --ignored --nocapture
     #[tokio::test]
     #[ignore = "reaches OpenRouter"]
     async fn every_use_case_this_build_believes_in_is_one_openrouter_still_ranks() {
@@ -516,9 +388,6 @@ mod tests {
             match catalog.ranked(use_case).await {
                 Ok(models) => {
                     println!("{use_case:<14} {}", models[0].id);
-                    // Capability ordering is the whole reason this is not the
-                    // endpoint's default order, and a `sort` value the vendor
-                    // stops accepting is a 400 rather than a quiet reordering.
                     assert!(!models[0].id.is_empty(), "{use_case} ranked a model with no slug");
                 }
                 Err(err) => missing.push(format!("{use_case}: {err}")),
@@ -530,7 +399,6 @@ mod tests {
 
     #[tokio::test]
     async fn an_unreachable_catalog_names_openrouter_rather_than_a_port() {
-        // Nothing is listening here, and nothing ever will be.
         let refused = Catalog::against("http://127.0.0.1:1/v1").ranked("legal").await.unwrap_err();
 
         assert!(matches!(refused, CatalogError::Transport { .. }));

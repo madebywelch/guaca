@@ -4,8 +4,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { expectRestart, forgetRestart } from "./link";
 import type { AgentCard, Envelope, UiEvent } from "./types";
 
-// The store talks to Tauri, which does not exist in a test runner. Only the
-// transport is mocked; the reducer logic under test is the real one.
 vi.mock("./ipc", () => ({
   api: {
     listAgents: vi.fn(async () => [] as AgentCard[]),
@@ -29,9 +27,6 @@ vi.mock("./ipc", () => ({
   onRuntimeEvent: vi.fn(),
 }));
 
-// The one thing in the transport that reaches outside the page: opening a
-// sign-in in the system browser. Stubbed, so asserting that a window opens one
-// does not ask a test runner to open a browser.
 vi.mock("./transport", async (original) => ({
   ...(await original<typeof import("./transport")>()),
   openExternal: vi.fn(async () => {}),
@@ -115,9 +110,6 @@ function reset(messages: Record<string, Envelope[] | undefined> = {}) {
     activity: {},
     lastActive: {},
     settings: null,
-    // Named explicitly for the same reason as every field above it: zustand's
-    // setState merges, so a slice left out of this list leaks into whichever
-    // test runs next.
     prefs: DEFAULT_PREFS,
     activeRun: {},
     selected: "chef",
@@ -157,16 +149,12 @@ describe("the line to the host", () => {
     expect(state().link).toBe("down");
     expect(state().lastHeard).toBe(1_700_000_000_000);
     expect(state().banner).toMatchObject({ tone: "error", fix: "host" });
-    // Finished for the one line that is read as prose: a capital and a full
-    // stop, even though the transport writes it for a log.
     expect(state().banner?.text).toMatch(/^Lost the connection to this host/);
     expect(state().banner?.text).toMatch(/restarting\.$/);
   });
 
   it("takes back only the sentence about the host when it answers again", () => {
     state().linkDown(gone, 1_700_000_000_000);
-    // A write refused while the host was gone is a different fact, and the host
-    // answering again says nothing about it.
     state().showFailure({ kind: "storage", message: "the disk is full" });
     state().linkUp();
     expect(state().link).toBe("up");
@@ -191,8 +179,6 @@ describe("messageAppended", () => {
   });
 
   it("leaves an unloaded channel alone", () => {
-    // Appending into a channel that was never fetched would produce a
-    // transcript with a hole in it the first time it is opened.
     apply({ type: "messageAppended", message: envelope() });
     expect(useStore.getState().messages.chef).toBeUndefined();
   });
@@ -233,8 +219,6 @@ describe("rail pulses", () => {
   });
 
   it("fires even when neither channel is open", () => {
-    // The pulse comes from the event, not from a channel read, which is what
-    // lets you watch a cascade you are not looking at.
     expect(useStore.getState().messages.chef).toBeUndefined();
     apply({
       type: "messageAppended",
@@ -283,7 +267,6 @@ describe("streaming", () => {
   });
 
   it("ignores deltas for a stream that never started", () => {
-    // Out-of-order or post-teardown deltas must not resurrect a bubble.
     apply({ type: "streamDelta", messageId: "ghost", channelId: "chef", text: "x" });
     expect(useStore.getState().streams.ghost).toBeUndefined();
   });
@@ -306,8 +289,6 @@ describe("streaming", () => {
   });
 
   it("remembers who a stream is for", () => {
-    // A peer-bound stream is announced rather than rendered as text, so the
-    // destination has to survive into the buffer.
     apply({
       type: "streamStarted",
       messageId: "s3",
@@ -337,8 +318,6 @@ describe("what an agent is thinking", () => {
   };
 
   it("is filed under the agent doing the thinking, not the channel it writes to", () => {
-    // Chef answering Manager streams into Manager's channel. The operator
-    // watching Chef work is reading Chef's.
     apply(started);
     apply({ type: "reasoningDelta", messageId: "s1", text: "weighing it up" });
     expect(useStore.getState().reasoning.chef).toBe("weighing it up");
@@ -346,7 +325,6 @@ describe("what an agent is thinking", () => {
   });
 
   it("is dropped when the turn ends", () => {
-    // The whole contract: it is visible while it happens and gone afterward.
     apply(started);
     apply({ type: "reasoningDelta", messageId: "s1", text: "weighing it up" });
     apply({ type: "streamEnded", messageId: "s1", channelId: "manager" });
@@ -354,8 +332,6 @@ describe("what an agent is thinking", () => {
   });
 
   it("is dropped when a failed call reopens under a new id", () => {
-    // Anything already thought belongs to the attempt that broke, exactly like
-    // the text that was already on screen.
     apply(started);
     apply({ type: "reasoningDelta", messageId: "s1", text: "half a thought" });
     apply({ type: "streamEnded", messageId: "s1", channelId: "manager" });
@@ -369,7 +345,6 @@ describe("what an agent is thinking", () => {
   });
 
   it("never lands in the transcript", () => {
-    // It is not something anybody said, so no channel may hold it.
     apply(started);
     apply({ type: "reasoningDelta", messageId: "s1", text: "weighing it up" });
     expect(JSON.stringify(useStore.getState().messages)).not.toContain("weighing");
@@ -440,9 +415,6 @@ describe("what an agent is reaching for", () => {
   });
 
   it("has no record of the call until it comes back", () => {
-    // Which is the whole reason it is reported before the call rather than
-    // after it: a command can sit for a minute, and that minute is the one the
-    // operator cannot otherwise account for.
     apply(started);
     apply(opened);
     expect(useStore.getState().trail.chef?.[0]?.done).toBeNull();
@@ -452,9 +424,6 @@ describe("what an agent is reaching for", () => {
   });
 
   it("keeps the whole part, so a live chip draws what a recorded one does", () => {
-    // Not the outcome alone. A memory rewrite carries what it overwrote and
-    // nothing outside the runtime could supply it, so a chip assembled here
-    // from the fields somebody thought to list would quietly stop showing it.
     apply(started);
     apply(opened);
     apply({
@@ -485,9 +454,6 @@ describe("what an agent is reaching for", () => {
   });
 
   it("is dropped when the turn ends", () => {
-    // The same contract as the thinking, from the same event: what a turn did
-    // is the message that lands at the end of it, and the transcript draws
-    // these chips again from that.
     apply(started);
     apply(opened);
     apply({ type: "streamEnded", messageId: "s1", channelId: "manager" });
@@ -515,8 +481,6 @@ describe("what an agent is reaching for", () => {
 
 describe("sidebar ordering", () => {
   it("records activity for both ends of a message", () => {
-    // A message an agent sends is filed in the recipient's channel, so tracking
-    // the channel alone would leave the sender looking idle.
     apply({
       type: "messageAppended",
       message: envelope({
@@ -547,13 +511,6 @@ describe("the group the rail is inside", () => {
   });
 
   it("follows the channel being opened into the crew it belongs to", async () => {
-    // A search hit or a click on the flow board can land anywhere, and a rail
-    // still showing one crew while the pane shows a member of another has the
-    // open channel nowhere on it. It used to drop out to the overview, which
-    // was the only view that could draw every row while the crews lived in a
-    // strip inside the rail. They have a column of their own now, so the crew
-    // the operator has landed in is on screen either way and following it moves
-    // one lit circle instead of rebuilding the rail.
     reset({ chef: [] });
     useStore.setState({
       agents: [AGENTS[0]!, { ...AGENTS[1]!, groupId: RESEARCH }],
@@ -575,8 +532,6 @@ describe("the group the rail is inside", () => {
     expect(useStore.getState().railGroup).toBe(AGENTS[0]!.groupId);
   });
 
-  // The overview draws everybody, so there is nothing to repair and no reason
-  // to narrow the rail to one crew behind a click that did not ask for one.
   it("stays on the overview when a channel is opened from it", async () => {
     reset({ chef: [] });
     useStore.setState({
@@ -588,8 +543,6 @@ describe("the group the rail is inside", () => {
     expect(useStore.getState().railGroup).toBeNull();
   });
 
-  // An agent the roster no longer has says nothing about which crew to be in,
-  // and guessing at one would move the rail away from a crew that is fine.
   it("stays where it is when the channel belongs to nobody", async () => {
     reset({ chef: [] });
     await useStore.getState().focusGroup(AGENTS[0]!.groupId);
@@ -602,7 +555,6 @@ describe("the group the rail is inside", () => {
 describe("the channel open when the rail goes inside a crew", () => {
   const RESEARCH = "00000000-0000-4000-8000-000000000002";
 
-  /** The same crew twice, with a namesake in each. */
   function twoCrews() {
     reset({ chef: [] });
     useStore.setState({
@@ -611,19 +563,11 @@ describe("the channel open when the rail goes inside a crew", () => {
   }
 
   it("closes when it belongs to the crew being left", async () => {
-    // The reported confusion, and why the name is the same on both: the rail
-    // does not draw the row, so nothing on screen says which crew the pane
-    // belongs to, and a namesake left open from the crew you came from reads as
-    // this crew's, working while nobody here is.
     twoCrews();
     useStore.setState({ selected: "chef-research" });
 
     await useStore.getState().focusGroup(AGENTS[1]!.groupId);
 
-    // Nothing open, rather than the first row of the crew being entered.
-    // Opening a channel is the operator naming somebody, and a crew that
-    // picked one for them would put an agent's history on screen as a side
-    // effect of a click that was about the crew.
     expect(useStore.getState().selected).toBeNull();
     expect(useStore.getState().railGroup).toBe(AGENTS[1]!.groupId);
   });
@@ -668,8 +612,6 @@ describe("activity", () => {
 
 describe("channelsCleared", () => {
   it("drops what it is holding for the cleared channels", async () => {
-    // The bug this covers: clearing a group left the open transcript on screen
-    // until the operator clicked away and back.
     reset({
       chef: [envelope()],
       manager: [envelope({ channelId: "manager" })],
@@ -678,7 +620,6 @@ describe("channelsCleared", () => {
     apply({ type: "channelsCleared", agents: ["chef"] });
 
     expect(useStore.getState().messages.chef).toBeUndefined();
-    // A channel that was not cleared keeps what it had.
     expect(useStore.getState().messages.manager).toHaveLength(1);
   });
 
@@ -689,16 +630,10 @@ describe("channelsCleared", () => {
     const { channelMessages } = (await import("./ipc")).api as unknown as {
       channelMessages: ReturnType<typeof vi.fn>;
     };
-    // No third argument: a reload after a clear is not a jump to a message,
-    // and asking to reach one that was just deleted would widen the window
-    // for nothing.
     expect(channelMessages).toHaveBeenCalledWith("chef", 300, undefined);
   });
 
   it("sends the panels holding the two stores back for them", () => {
-    // A reset takes the memory and the working notes as well, and neither
-    // panel reads again on its own: without this the inspector draws both
-    // beside a transcript that says they are gone.
     reset({ chef: [envelope()] });
     useStore.setState({ memoryVersion: {}, workingNotesVersion: {} });
 
@@ -712,9 +647,6 @@ describe("channelsCleared", () => {
 
 describe("openMessage", () => {
   it("asks for a window wide enough to hold the message", async () => {
-    // The transcript is normally read as "the newest three hundred", and a
-    // search hit from last month is not in it. Opening the channel without
-    // saying which message would land the operator at the wrong end of it.
     reset({ chef: [] });
     await useStore.getState().openMessage("chef", "m-old");
 
@@ -725,9 +657,6 @@ describe("openMessage", () => {
   });
 
   it("marks the message before the read comes back", async () => {
-    // The channel switches first so the operator sees where they are going,
-    // and the mark has to be in place by the time the rows arrive or the
-    // transcript has nothing to scroll to.
     reset({ chef: [] });
     const pending = useStore.getState().openMessage("chef", "m-old");
 
@@ -737,8 +666,6 @@ describe("openMessage", () => {
   });
 
   it("drops the mark when the operator moves on by hand", async () => {
-    // Otherwise clicking an agent in the rail re-runs the jump the next time
-    // that channel draws.
     reset({ chef: [] });
     await useStore.getState().openMessage("chef", "m-old");
     await useStore.getState().select("manager");
@@ -944,7 +871,6 @@ describe("a sign-in page", () => {
     expect(useStore.getState().handoff).toBeNull();
     apply(PAGE_ID);
     expect(useStore.getState().handoff).toBe("https://signin.example");
-    // An older host names no window, and every window opens it as before.
     useStore.setState({ handoff: null });
     apply(undefined);
     expect(useStore.getState().handoff).toBe("https://signin.example");
@@ -957,11 +883,6 @@ describe("a failure on the banner", () => {
   });
 
   it("offers what can be done about it when the host is the thing that is gone", () => {
-    // The one failure whose next step is a control rather than a sentence, and
-    // the one that reads as a browser bug if the banner is left with only a
-    // dismissal.
-    // The transport writes it for a log; the banner is read as prose, so it is
-    // finished on the way in — a capital and a full stop, and nothing doubled.
     useStore.getState().showFailure({
       kind: "unreachable",
       message:
@@ -975,8 +896,6 @@ describe("a failure on the banner", () => {
   });
 
   it("offers nothing but the sentence for everything else", () => {
-    // A refused write, a duplicate name, a missing key: all fixed somewhere the
-    // banner cannot open, so a control here would be a control that lies.
     for (const error of [
       { kind: "storage", message: "the disk is full" },
       { kind: "validation", message: "there are two Pips" },
@@ -991,10 +910,6 @@ describe("a failure on the banner", () => {
 
 describe("what a settled question is read back as", () => {
   it("keeps the answer beside the state it came with", async () => {
-    // The card in a channel is drawn from two maps seeded by one read, and a
-    // component test that sets both by hand passes with either read missing.
-    // The failure that leaves is quiet and exact: the card says "You answered
-    // this." and never what with, which is the whole reason the pair exists.
     await useStore.getState().refreshApprovals();
     expect(useStore.getState().approvals).toEqual(APPROVALS);
     expect(useStore.getState().answers).toEqual(ANSWERS);

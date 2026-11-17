@@ -1,18 +1,5 @@
-//! The scripted model and the runtime harness the end-to-end suites share.
-//!
-//! Included by two test binaries, each of which uses a different part of it.
-//! Rust checks dead code per binary, so anything only one suite needs looks
-//! unused to the other; the alternative is two copies that drift.
 #![allow(dead_code)]
-//
-//!
-//! These drive the real actor runtime against a scripted OpenAI-compatible
-//! server, so everything between "operator presses enter" and "four agents have
-//! replied" is exercised: tool-call assembly, the guard, channel routing, batch
-//! coalescing, and settle detection. The only thing swapped out is the model.
 
-/// The same runtime pointed at the operator's own endpoint rather than at the
-/// stub below. Nothing that uses it runs in CI.
 pub mod live;
 
 use std::collections::HashMap;
@@ -36,134 +23,53 @@ use guac_lib::runtime::guard::GuardLimits;
 use guac_lib::runtime::{Drained, OnDisk, Runtime};
 use guac_lib::trajectory::{self, Trajectory};
 
-// ---- scripted model ------------------------------------------------------
-
-/// What the stub model should do for one request.
 #[derive(Debug, Clone)]
 pub enum Script {
-    /// Emit plain text.
     Say(String),
-    /// Publish some working, then say something. What a reasoning model sends:
-    /// the thinking arrives first, in frames of the same shape as the text.
     Thinking { about: String, say: String },
-    /// Emit a `send_message` tool call, declared as a courtesy: what a model
-    /// sends when it is being polite, and what most of these scenarios play.
     SendTo { recipients: Vec<String>, text: String },
-    /// The same call, declared as work. The distinction is the only thing that
-    /// lets a peer be instructed twice in one run.
     Instruct { recipients: Vec<String>, text: String },
-    /// A `send_message` carrying files, named the way a model names them.
     SendFiles { recipients: Vec<String>, text: String, files: Vec<String> },
-    /// An `attach_file` call: files put on the answer rather than sent to a
-    /// peer. The tool name is the one a model actually emitted, so the alias
-    /// path is exercised wherever a scenario asks for it.
     Attach { tool: String, files: Vec<String> },
-    /// A `write_document` call: a document made out of the turn's own words,
-    /// which is the one way to produce a file with no machine anywhere.
     Write { tool: String, name: String, content: String },
-    /// Say something and then call a tool, in one reply.
-    ///
-    /// The shape a model takes when it narrates its work: a sentence about what
-    /// it is doing, then the doing. It is the only shape that puts text in more
-    /// than one round of a turn, and therefore the only one that can run the end
-    /// of one round into the start of the next.
     Narrate { text: String, then: Box<Script> },
-    /// Publish some working and then do what `then` does, in one reply.
-    ///
-    /// A reasoning model working through tools: a thought before every call.
-    /// The only shape that puts thinking in more than one round of a turn.
     Mull { about: String, then: Box<Script> },
-    /// Emit a `directory` tool call.
     Directory,
-    /// Call one of a connected plugin's tools, by its prefixed name. Nothing in
-    /// this build knows what those are: the crew's servers said.
     Plugin { name: String, arguments: serde_json::Value },
-    /// Emit an `update_memory` tool call under the name the tool had for a
-    /// year, which is the alias a model trained on an older transcript emits.
     Notes(String),
-    /// The same call under the tool's current name.
     Memory(String),
-    /// Emit a `note_progress` tool call: one line about where work stands.
     Progress(String),
-    /// Emit a `create_agent` tool call.
     Hire { name: String, instructions: String, notes: String },
-    /// Emit a `schedule` tool call that books a repeat on the calendar.
     Book { name: String, what: String, repeat: String },
-    /// A `schedule` call that retimes a routine the agent already has, which is
-    /// the whole of what it should do when asked to change one.
     Retime { id: String, repeat: String },
-    /// Emit a `calendar` call that puts something on the crew's calendar.
     Note { title: String, starts_at: String },
-    /// A `calendar` call aimed at an occasion by id: what a model plays when it
-    /// has been told one exists, whether or not the id is its crew's.
     Move { action: String, id: String, starts_at: String },
-    /// Emit a `skill` tool call with these arguments.
     Skill(serde_json::Value),
-    /// Emit a `settings` tool call with these arguments.
     Settings(serde_json::Value),
-    /// Emit a `notebook` tool call with these arguments.
     Notebook(serde_json::Value),
-    /// Emit a `request_permission` tool call.
     AskPermission { action: String, because: String },
-    /// Emit an `ask_operator` tool call. Empty options is a written answer.
     AskQuestion { question: String, options: Vec<String> },
-    /// Emit an `escalate` tool call: the one way to an operator that does not
-    /// park the turn, played by a model on its way out of one.
     Escalate(String),
-    /// Emit a `run_command` tool call: a model reaching for a computer, whether
-    /// or not it was offered one.
     RunCommand(String),
-    /// Emit a `use_screen` tool call that looks at the screen. The same reach
-    /// at the one place whose entire answer is a picture, which is what a model
-    /// running on an endpoint that takes text only must not be served.
     Look,
-    /// Emit a `browse` tool call that opens a url: the same reach, at the other
-    /// place.
     Open(String),
-    /// Emit an `errand` tool call carrying these briefs.
     Errands(Vec<String>),
-    /// Answer with a 503.
-    ///
-    /// Stands in for every failure worth retrying: a provider having a bad
-    /// minute, a request that timed out, a connection that never opened. They
-    /// arrive as different `LlmError`s and all answer `is_transient`, which is
-    /// the only thing the retry loop asks them.
     Unavailable,
-    /// Take the request and never answer it.
-    ///
-    /// A call in flight, which is where a turn spends most of a long minute and
-    /// is the one place a stop cannot be noticed by looking at a boundary. It
-    /// stands in for the shape that made this matter: on the Claude provider a
-    /// model call is a whole `claude` run, and one that thinks for five minutes
-    /// holds the operator's plan for all five of them.
-    ///
-    /// Held for [`HANG`], which is far longer than any stop test waits, so a
-    /// call that is not abandoned reads as a run that never settled rather than
-    /// as a slow one.
     Hang,
 }
 
-/// How long [`Script::Hang`] holds a request open.
 pub const HANG: Duration = Duration::from_secs(30);
 
 pub fn frame(value: serde_json::Value) -> String {
     format!("data: {value}\n\n")
 }
 
-/// What every scripted call reports having cost.
-///
-/// Fixed rather than proportional to the text: the point is that a real
-/// provider counts, so the runtime's accounting runs end to end and a total
-/// can be asserted exactly. A stub that reported nothing left `count_tokens`,
-/// the usage table and the budget's own arithmetic untested.
 pub const CALL_TOKENS: (u32, u32) = (100, 20);
 
 pub fn render(script: &Script) -> String {
     let mut body = String::new();
     match script {
         Script::Say(text) => {
-            // Split into fragments so the streaming path is exercised, not
-            // just a single-chunk happy case.
             for piece in text.as_bytes().chunks(7) {
                 let piece = String::from_utf8_lossy(piece).to_string();
                 body.push_str(&frame(
@@ -208,7 +114,6 @@ pub fn render(script: &Script) -> String {
                 {"index":0,"id":"call_send","type":"function",
                  "function":{"name":"send_message","arguments":""}}
             ]}}]})));
-            // Arguments arrive in pieces, as they really do.
             for piece in args.as_bytes().chunks(11) {
                 let piece = String::from_utf8_lossy(piece).to_string();
                 body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
@@ -246,9 +151,6 @@ pub fn render(script: &Script) -> String {
                     serde_json::json!({"choices":[{"delta":{"content": piece}}]}),
                 ));
             }
-            // The call it was narrating, with its own arguments and its own
-            // finish reason. A provider sends the text first and settles the
-            // reply once, which is what this concatenation is.
             body.push_str(&render(then));
         }
         Script::Mull { about, then } => {
@@ -404,8 +306,6 @@ pub fn render(script: &Script) -> String {
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
             ));
         }
-        // Never rendered: the server answers one with a status and the other
-        // with nothing at all.
         Script::Unavailable | Script::Hang => {}
         Script::Directory => {
             body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
@@ -450,8 +350,6 @@ pub fn render(script: &Script) -> String {
             ));
         }
     }
-    // As a provider sends it: alone, after the content, in a frame carrying no
-    // choices at all.
     body.push_str(&frame(serde_json::json!({
         "choices": [],
         "usage": {"prompt_tokens": CALL_TOKENS.0, "completion_tokens": CALL_TOKENS.1},
@@ -460,8 +358,6 @@ pub fn render(script: &Script) -> String {
     body
 }
 
-/// Extracts `You are <Name>,` from the system prompt so the stub can answer as
-/// whichever agent is asking.
 pub fn speaker(body: &serde_json::Value) -> String {
     let system = body["messages"][0]["content"].as_str().unwrap_or_default();
     system
@@ -471,11 +367,6 @@ pub fn speaker(body: &serde_json::Value) -> String {
         .to_string()
 }
 
-/// The id of the first routine this agent's own prompt says it has standing.
-///
-/// Read out of the prompt rather than handed to the stub, because that is the
-/// thing under test: an agent asked to change something it keeps has to be able
-/// to find it without going to look, or it writes a second one instead.
 pub fn standing_id(body: &serde_json::Value) -> Option<String> {
     let system = body["messages"][0]["content"].as_str().unwrap_or_default();
     let schedule = system.split("## Your schedule").nth(1)?.split("\n## ").next()?;
@@ -486,9 +377,6 @@ pub fn standing_id(body: &serde_json::Value) -> Option<String> {
         .map(str::to_string)
 }
 
-/// True when the newest user turn carries peer messages, meaning this agent is
-/// reading replies rather than being given a fresh instruction. A real model
-/// would summarize here rather than broadcasting again.
 pub fn reading_peer_replies(body: &serde_json::Value) -> bool {
     body["messages"]
         .as_array()
@@ -499,23 +387,10 @@ pub fn reading_peer_replies(body: &serde_json::Value) -> bool {
         .unwrap_or(false)
 }
 
-/// True once this conversation already contains a tool result, meaning the
-/// agent has already acted and should now speak.
 pub fn has_tool_result(body: &serde_json::Value) -> bool {
     body["messages"].as_array().map(|m| m.iter().any(|msg| msg["role"] == "tool")).unwrap_or(false)
 }
 
-/// Whether anybody has said this in the conversation so far.
-///
-/// The system prompt is excluded, and that is the entire reason this exists
-/// rather than each stub scanning `messages` itself. A stub branching on "has
-/// somebody said `noted` to me" that reads every message is really asking "does
-/// this word appear anywhere in the request", and the request opens with two
-/// thousand words of instructions. Adding a sentence to the prompt then rewrites
-/// what the scripted crew does: the working-notes section says "when something
-/// you noted stops being true", and every stub keyed on `noted` began firing on
-/// the first call, which reads in the eval output as a crew that will not stop
-/// repeating itself.
 pub fn anyone_said(body: &serde_json::Value, needle: &str) -> bool {
     body["messages"]
         .as_array()
@@ -539,18 +414,9 @@ pub async fn serve<F>(decide: F) -> Stub
 where
     F: Fn(&serde_json::Value) -> Script + Clone + Send + Sync + 'static,
 {
-    // No `/v1/models` route, which is most OpenAI-compatible servers and is
-    // what every test in this repo but one runs against: an endpoint that
-    // publishes nothing about its models leaves everything exactly as it was.
     serve_publishing(None, decide).await
 }
 
-/// The same endpoint, publishing what its models take.
-///
-/// OpenRouter's shape, which is where the field comes from. Only a test about
-/// modalities wants this: `listing` is the whole `/v1/models` body, so a test
-/// can say a model takes text and nothing else and watch a picture stop being
-/// sent to it.
 pub async fn serve_publishing<F>(listing: Option<serde_json::Value>, decide: F) -> Stub
 where
     F: Fn(&serde_json::Value) -> Script + Clone + Send + Sync + 'static,
@@ -604,8 +470,6 @@ where
     Stub { base_url: format!("http://{addr}/v1"), calls, transcript }
 }
 
-// ---- harness -------------------------------------------------------------
-
 pub struct Harness {
     pub runtime: Runtime,
     pub sink: Arc<RecordingSink>,
@@ -627,18 +491,11 @@ pub fn draft(name: &str, skills: &[&str]) -> CleanDraft {
     }
 }
 
-/// One agent in a scripted crew.
-///
-/// Skills are here because who a piece of work belongs to is not a question a
-/// crew of identically-described agents can be asked: the roster is what a
-/// coordinator chooses from, so a scenario about choosing has to build one.
 #[derive(Debug, Clone, Copy)]
 pub struct Member<'a> {
     pub name: &'a str,
     pub skills: &'a [&'a str],
-    /// `None` is the default group, where everybody can reach everybody.
     pub group: Option<&'a str>,
-    /// The card's own standing instructions. Empty takes the default.
     pub prompt: &'a str,
 }
 
@@ -647,21 +504,16 @@ impl<'a> Member<'a> {
         Member { name, skills, group: None, prompt: "" }
     }
 
-    /// The same, carrying the standing instruction an operator would type.
     pub fn told(name: &'a str, skills: &'a [&'a str], prompt: &'a str) -> Self {
         Member { name, skills, group: None, prompt }
     }
 }
 
 pub fn harness(stub: &Stub, names: &[&str], limits: GuardLimits) -> Harness {
-    // No group named, so every agent lands in the default one and can reach
-    // every other. This is the control for the isolation tests below.
     let placed: Vec<(&str, Option<&str>)> = names.iter().map(|n| (*n, None)).collect();
     harness_in_groups(stub, &placed, limits)
 }
 
-/// Places each agent in the named group, creating groups on demand. `None`
-/// means the default group.
 pub fn harness_in_groups(
     stub: &Stub,
     placed: &[(&str, Option<&str>)],
@@ -674,20 +526,10 @@ pub fn harness_in_groups(
     harness_of(stub, &crew, limits)
 }
 
-/// A crew whose agents differ from each other, which is what a scenario about
-/// delegation needs.
 pub fn harness_of(stub: &Stub, crew: &[Member], limits: GuardLimits) -> Harness {
     build(stub, crew, limits, E2bConfig::default(), KernelConfig::default())
 }
 
-/// The same crew, in a workspace that has a computer provider configured.
-///
-/// The scenarios about acting in the operator's name need one. A permission
-/// request from an agent with no computer and no browser is refused before the
-/// operator is asked, because nothing such an agent can call reaches outside
-/// the workspace, so a scenario about sending mail has to be a workspace where
-/// mail could be sent. Nothing here calls E2B: a key set is what decides which
-/// tools an agent is offered, and these tests script the model, not the machine.
 pub fn harness_with_computer(stub: &Stub, names: &[&str], limits: GuardLimits) -> Harness {
     let crew: Vec<Member> = names.iter().map(|name| Member::new(name, &["testing"])).collect();
     build(
@@ -699,8 +541,6 @@ pub fn harness_with_computer(stub: &Stub, names: &[&str], limits: GuardLimits) -
     )
 }
 
-/// The same crew, in a workspace that has a browser provider configured, each
-/// agent given one. Nothing here calls Kernel, for the reason above.
 pub fn harness_with_browser(stub: &Stub, names: &[&str], limits: GuardLimits) -> Harness {
     let crew: Vec<Member> = names.iter().map(|name| Member::new(name, &["testing"])).collect();
     build(
@@ -739,10 +579,6 @@ fn build(
             d.system_prompt = member.prompt.to_string();
         }
         let card = store.create_agent(&d).unwrap();
-        // A computer is the operator's to hand out one agent at a time, so a
-        // harness that configures the provider also gives it to the crew it
-        // builds: `harness_with_computer` means a crew with computers, and
-        // every test reaching for it is about what an agent does with one.
         if !e2b.api_key.trim().is_empty() {
             store.set_has_computer(card.id, true).unwrap();
         }
@@ -785,10 +621,6 @@ fn build(
     Harness { runtime, sink, ids, _dir: dir }
 }
 
-/// Fails naming the anomaly and printing the whole ledger.
-///
-/// The ledger is the point. "one anomaly" is unactionable; the sequence that
-/// produced it is what a person reads to find the defect.
 pub fn expect_normal(trajectory: &Trajectory, scenario: &str) {
     let anomalies = trajectory.anomalies();
     assert!(
@@ -799,10 +631,6 @@ pub fn expect_normal(trajectory: &Trajectory, scenario: &str) {
     );
 }
 
-/// Every `role: "tool"` message the stub was sent, in order. This is how a test
-/// sees what the model was actually told, which for a refusal is the assertion
-/// that matters: a silently dropped message and a reported one look identical
-/// from the outside.
 pub fn tool_results(stub: &Stub) -> Vec<String> {
     stub.transcript
         .lock()
@@ -820,11 +648,6 @@ pub fn tool_results(stub: &Stub) -> Vec<String> {
         .collect()
 }
 
-/// The tool results the model was shown on its last call, in order.
-///
-/// One turn's results once each, where [`tool_results`] repeats every result
-/// for every later call that carried it. What a scenario that asserts on the
-/// n-th call of a turn wants.
 pub fn last_tool_results(stub: &Stub) -> Vec<String> {
     stub.transcript
         .lock()
@@ -845,7 +668,6 @@ fn who(participant: Participant) -> String {
     }
 }
 
-/// One message rendered so that nothing in it is invisible.
 fn parts_of(envelope: &Envelope) -> String {
     use guac_lib::domain::envelope::Part;
     envelope
@@ -873,7 +695,6 @@ fn parts_of(envelope: &Envelope) -> String {
         .join(" ")
 }
 
-/// The system prompt each agent was actually sent, by name.
 pub fn prompts_by_agent(stub: &Stub) -> HashMap<String, String> {
     let mut out = HashMap::new();
     for body in stub.transcript.lock().iter() {
@@ -885,11 +706,6 @@ pub fn prompts_by_agent(stub: &Stub) -> HashMap<String, String> {
     out
 }
 
-/// The tool names each agent was offered, by name.
-///
-/// What a turn may do is settled before the first token, so a tool that should
-/// not have been on the table shows up here rather than in what the model did
-/// with it. The last call wins, which for these scenarios is the only call.
 pub fn tools_by_agent(stub: &Stub) -> HashMap<String, Vec<String>> {
     let mut out = HashMap::new();
     for body in stub.transcript.lock().iter() {
@@ -905,11 +721,6 @@ pub fn tools_by_agent(stub: &Stub) -> HashMap<String, Vec<String>> {
     out
 }
 
-/// How many model calls each agent made, by name.
-///
-/// The unit a crew costs its operator. An agent that was never involved in a
-/// task should not appear here at all, which is the whole argument for
-/// delegating to one peer rather than to everybody.
 pub fn calls_by_agent(stub: &Stub) -> HashMap<String, usize> {
     let mut out: HashMap<String, usize> = HashMap::new();
     for body in stub.transcript.lock().iter() {
@@ -934,19 +745,10 @@ impl Harness {
             .collect()
     }
 
-    /// Which peers were sent something, by name, with a count each.
-    ///
-    /// Who a message went to is the question a delegation scenario asks, and
-    /// counting traffic cannot answer it: one message to the right agent and
-    /// one to the wrong agent are the same number.
     pub fn messaged(&self) -> Vec<(String, usize)> {
         self.tally(self.feed())
     }
 
-    /// The same, for what one agent sent.
-    ///
-    /// A coordinator's delegations and the answers coming back to it are both
-    /// traffic at that agent, and only the first is the decision under test.
     pub fn messaged_by(&self, from: &str) -> Vec<(String, usize)> {
         let sender = Participant::Agent { id: self.id(from) };
         self.tally(self.feed().into_iter().filter(|e| e.from == sender).collect::<Vec<_>>())
@@ -966,11 +768,6 @@ impl Harness {
         out
     }
 
-    /// Everything one agent said to a peer, wherever it was filed.
-    ///
-    /// Not `channel_texts`: a send is filed under the recipient and an answer
-    /// under the sender, so an agent's own channel holds what it was asked and
-    /// not always what it answered.
     pub fn said_to_peers(&self, name: &str) -> Vec<String> {
         let sender = Participant::Agent { id: self.id(name) };
         self.feed()
@@ -981,14 +778,6 @@ impl Harness {
             .collect()
     }
 
-    /// Every message filed in any of these agents' channels, in order, once
-    /// each.
-    ///
-    /// Not `feed`, which is built for the activity view and keeps only
-    /// agent-to-agent traffic: it cannot see what the operator was told, and it
-    /// cannot see the system channel, which is where refusals are recorded. A
-    /// reader blind to a refusal cannot tell a guard doing its job from a
-    /// message that silently went nowhere.
     pub fn envelopes(&self, names: &[&str]) -> Vec<Envelope> {
         let mut messages: Vec<Envelope> = Vec::new();
         let mut seen = std::collections::HashSet::new();
@@ -1003,11 +792,6 @@ impl Harness {
         messages
     }
 
-    /// Peer traffic only, which is what most of these tests reason about.
-    ///
-    /// Every crew's board, merged. The store scopes a flow to one group,
-    /// because that is the only unit the board is ever drawn for; a test that
-    /// puts agents in two groups is still asking about the whole run.
     pub fn feed(&self) -> Vec<Envelope> {
         let store = self.runtime.store();
         let mut messages: Vec<Envelope> = store
@@ -1021,13 +805,9 @@ impl Harness {
         messages
     }
 
-    /// What the run's machinery did, read from the events the UI is drawn
-    /// from. See `guac_lib::trajectory`.
     pub fn trajectory(&self, run: RunId) -> Trajectory {
         let names: HashMap<AgentId, String> =
             self.ids.iter().map(|(name, id)| (*id, name.clone())).collect();
-        // Agents hired mid-run are not in the harness's table, so the store is
-        // the fallback: an anomaly about "?" is one nobody can act on.
         let store_names: HashMap<AgentId, String> = self
             .runtime
             .store()
@@ -1041,15 +821,12 @@ impl Harness {
         })
     }
 
-    /// The same, asserted. Returns it so a scenario can go on to ask what it
-    /// cost.
     pub fn expect_normal(&self, run: RunId, scenario: &str) -> Trajectory {
         let trajectory = self.trajectory(run);
         expect_normal(&trajectory, scenario);
         trajectory
     }
 
-    /// Polls until `check` holds, or panics on timeout.
     pub async fn wait_until(&self, what: &str, check: impl Fn(&Harness) -> bool) {
         let deadline = Instant::now() + Duration::from_secs(20);
         while !check(self) {
@@ -1058,11 +835,6 @@ impl Harness {
         }
     }
 
-    /// Waits for an agent to park on a permission request, and returns it.
-    ///
-    /// Polling the event sink rather than the store because the request the
-    /// test wants to answer is the one the UI would be drawing, and a turn is
-    /// holding its line open until somebody does.
     pub async fn awaited_request(&self) -> guac_lib::domain::ids::ApprovalId {
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
@@ -1092,13 +864,9 @@ impl Harness {
         self.runtime.pause_agent(self.id(name));
     }
 
-    /// Pause an active agent and wait until its actor holds a message.
     pub async fn park(&self, name: &str, text: &str) -> RunId {
         let id = self.id(name);
         let checkpoint = self.sink.snapshot().len();
-        // Do not publish a Paused badge ourselves: the event must come from
-        // the actor after it registers its resume waiter. Delivery may replace
-        // that badge with Queued, so observe the event, not the latest status.
         self.runtime.store().set_lifecycle(id, Lifecycle::Paused).unwrap();
         let run = self.runtime.send_from_human(id, text).unwrap();
         self.wait_until(&format!("{name} to park holding a message"), |h| {
@@ -1116,14 +884,6 @@ impl Harness {
         self.runtime.resume_agent(self.id(name));
     }
 
-    /// Stops this host the way an update stops it and opens the same
-    /// workspace on a new one, with the recovery and the pickup boot runs.
-    ///
-    /// The old runtime cannot be made to end the way a process does, so its
-    /// actors are told to stop and anything still inside a tool call runs on
-    /// in the background against a store the new host has already read. A real
-    /// stop kills it there, and a scenario about that case asserts on the new
-    /// host only.
     pub async fn restart(self, within: Duration) -> (Harness, Drained) {
         let drained = self.runtime.drain(within).await;
         for id in self.ids.values() {
@@ -1144,30 +904,16 @@ impl Harness {
         (Harness { runtime, sink, ids: self.ids, _dir: self._dir }, drained)
     }
 
-    /// Waits for the run to settle, or panics with what actually happened.
-    /// Waits for a run to go quiet. Twenty seconds is generous for a stub.
     pub async fn settle(&self, run: RunId) {
         self.settle_within(run, 20).await
     }
 
-    /// The same, for runs whose model is real.
-    ///
-    /// A scripted turn answers instantly; a real one takes seconds, and a
-    /// delegation is several in sequence. The stub timeout was reporting live
-    /// runs that were merely thinking as runs that had hung.
     pub async fn settle_within(&self, run: RunId, secs: u64) {
         if !self.settled_within(run, secs).await {
             panic!("run did not settle. messages so far:\n{}", self.transcript());
         }
     }
 
-    /// The same wait, reporting rather than panicking.
-    ///
-    /// A live run holds real machines, and a panic here skips whatever the
-    /// caller meant to release: the timeouts are exactly the runs that leave
-    /// the most behind, because a run that overruns is a run whose agents are
-    /// all still working. A caller that owns something has to be able to clean
-    /// up before it fails.
     pub async fn settled_within(&self, run: RunId, secs: u64) -> bool {
         let deadline = Instant::now() + Duration::from_secs(secs);
         loop {
@@ -1175,7 +921,6 @@ impl Harness {
                 .sink
                 .count_of(|e| matches!(e, UiEvent::RunSettled { run_id, .. } if *run_id == run));
             if settled > 0 {
-                // Let any final persistence land before assertions read it.
                 tokio::time::sleep(Duration::from_millis(50)).await;
                 assert_eq!(settled, 1, "RunSettled must fire exactly once per run");
                 return true;
@@ -1187,12 +932,6 @@ impl Harness {
         }
     }
 
-    /// Everything said so far, for a failure that has to be actionable.
-    ///
-    /// Every part, not `plain_text`: a guard refusal and a failed call are
-    /// `Notice` parts with no text in them, so a run that stopped because of one
-    /// used to print a blank line where its reason was. The two failures worth
-    /// having a transcript for are exactly those.
     pub fn transcript(&self) -> String {
         self.sink
             .appended_messages()

@@ -71,7 +71,6 @@ function msg(
 const human = { kind: "human" } as const;
 const agent = (id: string) => ({ kind: "agent", id }) as const;
 
-/** The exchange from the brief: you, then a relay chain between three agents. */
 const CONVERSATION = [
   msg(human, agent("manager"), "find the meaning of life", 0),
   msg(agent("manager"), agent("critic"), "please review", 1),
@@ -83,8 +82,6 @@ const CONVERSATION = [
 
 describe("ActivityFlow", () => {
   it("gives every participant a lane, the operator included", () => {
-    // A flow that starts at the first agent-to-agent message hides who set it
-    // off, so "You" has to be on the board.
     render(<ActivityFlow messages={CONVERSATION} byId={byId} />);
     for (const name of ["You", "Manager", "Critic", "Researcher"]) {
       expect(screen.getByText(name)).toBeTruthy();
@@ -112,14 +109,11 @@ describe("ActivityFlow", () => {
     render(<ActivityFlow messages={CONVERSATION} byId={byId} />);
     fireEvent.click(screen.getByLabelText(/Manager to Critic/));
     const dialog = screen.getByRole("dialog");
-    // Scoped to the dialog: the hovered arrow keeps its excerpt behind it.
     expect(within(dialog).getByText("please review")).toBeTruthy();
     expect(within(dialog).getByText(/Manager → Critic/)).toBeTruthy();
   });
 
   it("is reachable from the keyboard", () => {
-    // Each row is a real button, so focus and Enter come from the platform
-    // rather than from a tabindex and a key handler on an SVG group.
     render(<ActivityFlow messages={CONVERSATION} byId={byId} />);
     const node = screen.getByLabelText(/Critic to Manager/);
     expect(node.tagName).toBe("BUTTON");
@@ -142,16 +136,12 @@ describe("ActivityFlow", () => {
     );
     const runs = container.querySelectorAll(".run");
     expect(runs).toHaveLength(2);
-    // What just happened is what an operator came here for, so it is at the
-    // top and already open; the rest is one line each until asked for.
     expect(runs[0]!.textContent).toContain("second task");
     expect(runs[0]!.getAttribute("data-open")).toBe("true");
     expect(runs[1]!.getAttribute("data-open")).toBeNull();
   });
 
   it("does not widen a run with participants that were not in it", () => {
-    // Lanes used to be global, so every agent that ever spoke held a column
-    // forever and each new one pushed the arrows further right.
     const { container } = render(
       <ActivityFlow
         messages={[
@@ -162,7 +152,6 @@ describe("ActivityFlow", () => {
         byId={byId}
       />,
     );
-    // The open board is the second run: You and Manager, not Critic.
     const lanes = container.querySelectorAll(".run[data-open] .flow__lane");
     expect(lanes).toHaveLength(2);
     expect([...lanes].map((l) => l.textContent)).not.toContain("Critic");
@@ -186,8 +175,6 @@ describe("ActivityFlow", () => {
   });
 
   it("shows what was said without needing a click", () => {
-    // The whole reason the board was turned upright: an arrow with no room for
-    // a word meant reading a conversation one click at a time.
     render(<ActivityFlow messages={CONVERSATION} byId={byId} />);
     expect(screen.getByText(/please review/)).toBeTruthy();
     expect(screen.getByText(/here are the holes/)).toBeTruthy();

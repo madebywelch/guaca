@@ -2,10 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { type Reach, reaches } from "./reach";
 
-/** A collapsed column: the band is 8px wide, the zone reaches 20px in. */
 const SHUT: Reach = { reach: { top: 36, right: 20 }, column: { right: 8 } };
 
-/** The same column out: 64px of it, and the zone unchanged. */
 const OUT: Reach = { reach: { top: 36, right: 20 }, column: { right: 64 } };
 
 describe("the crews' column", () => {
@@ -18,9 +16,6 @@ describe("the crews' column", () => {
   });
 
   it("leaves the window's own buttons alone", () => {
-    // macOS floats close, minimize and zoom over the top left corner, which is
-    // this column. Opening on the way to them would put the crews under the
-    // pointer at the moment it was aimed at the button that closes the app.
     expect(reaches(false, { x: 6, y: 18 }, SHUT, false)).toBe(false);
   });
 
@@ -29,9 +24,6 @@ describe("the crews' column", () => {
   });
 
   it("stays out just past it, rather than closing at the pixel that opened it", () => {
-    // The gap between the two thresholds. Without it a hand resting on the
-    // boundary flickers the column: it closes, which puts the pointer back
-    // inside the zone, which opens it.
     expect(reaches(true, { x: 70, y: 400 }, OUT, false)).toBe(true);
   });
 
@@ -46,9 +38,6 @@ describe("the crews' column", () => {
 
 describe("a row in hand", () => {
   it("does not bring the column out from across the app", () => {
-    // It did, for the whole of every drag. Most drags are a reorder inside the
-    // rail, and the column comes out over the rail: the operator picked up a
-    // row and the crews covered the left edge of every row they were aiming at.
     expect(reaches(false, { x: 700, y: 400 }, SHUT, true)).toBe(false);
   });
 
@@ -57,9 +46,6 @@ describe("a row in hand", () => {
   });
 
   it("holds out a column already reached for, wherever the hand goes next", () => {
-    // What the drag is load-bearing for. A drop onto a circle is the one thing
-    // this column exists for, and a column that closed as the row was carried
-    // back across the app would take the target with it mid-gesture.
     expect(reaches(true, { x: 900, y: 400 }, OUT, true)).toBe(true);
   });
 

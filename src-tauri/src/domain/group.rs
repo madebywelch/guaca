@@ -1,30 +1,3 @@
-//! Groups: the isolation boundary between agents, and the settings they run on.
-//!
-//! Every agent belongs to exactly one group, and agents in different groups
-//! cannot reach each other. That is not a UI filter. `directory` only lists
-//! peers from the caller's own group, and a send addressed to a name outside it
-//! is refused as an unknown recipient, so from inside a group the rest of the
-//! roster does not exist.
-//!
-//! Agents are never told what a group is. There is no group tool, nothing in
-//! the system prompt, and no way to enumerate or address one. An agent that
-//! cannot observe the boundary cannot be talked across it, which is a stronger
-//! guarantee than a rule in a prompt and needs no cooperation from the model.
-//!
-//! The operator is not in a group. A human can open any agent and talk to it;
-//! the wall is between agents.
-//!
-//! There is always at least one group, created by the migration that introduced
-//! them, so "no group" is not a state the rest of the app has to handle.
-//!
-//! A group is also where a crew's settings live. App settings are defaults: how
-//! a turn is paid for, which model answers it, and how far a conversation may
-//! run are all decided per group, and only fall back to the app when the group
-//! says nothing. `None` is that silence throughout, at every layer: in the
-//! draft the operator sends, in the columns, and in the resolved overrides. An
-//! empty string is a field an operator blanked, which means inherit too, and is
-//! normalized to `None` on the way in so the two can never disagree.
-
 use crate::domain::effort::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 
@@ -32,65 +5,31 @@ use super::ids::GroupId;
 use crate::config::{InferenceConfig, Provider};
 use crate::runtime::guard::GuardLimits;
 
-/// What the UI sees. The API key is never on it: only whether one is set and a
-/// hint, the same shape the app-wide settings use, so a group's key cannot be
-/// read back out through the IPC boundary once written.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Group {
     pub id: GroupId,
     pub name: String,
-    /// Everything about how this group's turns are paid for and answered.
-    /// Every field `None` is a group that runs on the app's settings.
     pub inference: InferenceOverrides,
     pub api_key_set: bool,
     pub api_key_hint: String,
-    /// How far a conversation started in this group may run.
     pub limits: GroupLimits,
-    /// Whether its agents tidy their memory overnight, and at what hour.
     pub tidy: Tidy,
-    /// How many live agents are in it. Carried on the card because every screen
-    /// that lists groups wants it, and counting per group in the UI would mean
-    /// walking the whole roster once per group.
     pub agent_count: u32,
     pub created_at: i64,
 }
 
-/// The inference settings an operator can put on a group. `None` inherits.
-///
-/// The API key is deliberately not here. It is the one setting the UI cannot
-/// read back, so it has its own rule on the way in (absent keeps the stored
-/// one), and this struct is the shape where absent means inherit. Keeping the
-/// two rules in two types is what stops a redacted key ever being written back
-/// as a value.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct InferenceOverrides {
-    /// Which of the two ways a turn is paid for. A group can pay with the
-    /// operator's ChatGPT sign-in while another pays with a key, because the
-    /// sign-in is one credential on this machine and choosing it is a setting
-    /// rather than a second account.
     pub provider: Option<Provider>,
     pub base_url: Option<String>,
-    /// The model used when a key is paying.
     pub default_model: Option<String>,
-    /// The model used when the subscription is paying.
-    ///
-    /// Two fields for the same reason the app keeps two: the providers have
-    /// disjoint model names, and a group that tries the subscription for an
-    /// hour must find its endpoint model where it left it.
     pub subscription_model: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub request_timeout_secs: Option<u64>,
 }
 
-/// Per-field overrides of the app's loop guard. `None` inherits.
-///
-/// Group-scoped because a limit is a statement about one crew's work. A pair of
-/// agents drafting a document need a handful of model calls; a crew working a
-/// browser through a long form needs an order of magnitude more, and one number
-/// for both means either the first is an open wallet or the second stops
-/// halfway and reports nothing.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct GroupLimits {
@@ -102,7 +41,6 @@ pub struct GroupLimits {
 }
 
 impl GroupLimits {
-    /// Layers this group's limits over the app's.
     pub fn apply(&self, base: GuardLimits) -> GuardLimits {
         GuardLimits {
             max_hops: self.max_hops.unwrap_or(base.max_hops),
@@ -113,13 +51,6 @@ impl GroupLimits {
         }
     }
 
-    /// Clamps each override into the range the runtime survives.
-    ///
-    /// Done at the edit rather than only at the use, so the number the operator
-    /// reads back after saving is the number their agents will run on. The
-    /// ranges are `GuardLimits::sanitized`'s and are not restated here: a group
-    /// limit that could be clamped differently from the app's would be a second
-    /// definition of the same rule, drifting from the first.
     pub fn sanitized(self) -> Self {
         let full = self.apply(GuardLimits::default()).sanitized();
         Self {
@@ -132,24 +63,12 @@ impl GroupLimits {
     }
 }
 
-/// The hour a group's agents tidy their memory at, unless the operator picks
-/// another. Late enough that a day's work is over, early enough that it is
-/// done before anyone is back.
 pub const DEFAULT_TIDY_HOUR: u8 = 3;
 
-/// Whether a group's agents tidy their memory overnight, and at what hour.
-///
-/// Off unless the operator turns it on, because a tidy is model calls nobody
-/// asked for: two to four per agent for each night it worked. The hour is a
-/// wall-clock hour on the host, which keeps the operator's time zone, so "3:00"
-/// means three in the morning where they are and moves with daylight saving.
-///
-/// Kept when switched off, so turning it back on finds the hour where it was.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Tidy {
     pub on: bool,
-    /// 0 to 23, on the host's clock.
     pub hour: u8,
 }
 
@@ -160,19 +79,10 @@ impl Default for Tidy {
 }
 
 impl Tidy {
-    /// An hour past the end of the day is the last hour of it, so what the
-    /// operator reads back is the hour that will be used.
     pub fn sanitized(self) -> Self {
         Tidy { hour: self.hour.min(23), ..self }
     }
 
-    /// The last time `hour` struck at or before `now`, as an instant.
-    ///
-    /// The one question the clock asks: a tidy is owed for every strike its
-    /// agent has not been seen to since. Asked of the last strike rather than
-    /// of a window around it, which is what makes a host that was off for
-    /// three nights tidy once when it is back rather than three times, and an
-    /// agent busy at the hour tidy as soon as it is free.
     pub fn last_struck(hour: u8, now: i64) -> Option<i64> {
         let today = super::local(now)?.date_naive();
         let at = |day: chrono::NaiveDate| {
@@ -185,28 +95,16 @@ impl Tidy {
     }
 }
 
-/// Fields an operator can set. Separate from `Group` so `id` and timestamps
-/// cannot be forged across the IPC boundary.
-///
-/// Each block is all-or-nothing: absent leaves every override in it exactly as
-/// it was, and present replaces the lot, with a null field meaning inherit.
-/// One rule per block rather than per field, so a caller cannot half-write a
-/// group's settings and a UI that renders what it read back cannot clear a
-/// field by forgetting to mention it.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GroupDraft {
     pub name: String,
     #[serde(default)]
     pub inference: Option<InferenceOverrides>,
-    /// Absent leaves the stored key alone; `Some("")` clears it. Without that
-    /// distinction the UI could not render a redacted key without erasing it on
-    /// the next save.
     #[serde(default)]
     pub api_key: Option<String>,
     #[serde(default)]
     pub limits: Option<GroupLimits>,
-    /// Absent leaves the switch and the hour as they were.
     #[serde(default)]
     pub tidy: Option<Tidy>,
 }
@@ -219,35 +117,25 @@ pub enum GroupError {
     NameTooLong { max: usize },
     #[error("a group named {name:?} already exists")]
     DuplicateName { name: String },
-    // Carries the message rather than the error: ConfigError wraps io::Error,
-    // which is not comparable, and this enum is worth being able to assert on.
     #[error("that inference endpoint is not usable: {0}")]
     BadEndpoint(String),
 }
 
 pub const MAX_GROUP_NAME_LEN: usize = 48;
 
-/// The validated form of a draft, ready to store.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CleanGroup {
     pub name: String,
-    /// `None` leaves the stored overrides alone.
     pub inference: Option<InferenceOverrides>,
-    /// `Some(None)` clears the key, `None` leaves it as it was.
     pub api_key: Option<Option<String>>,
     pub limits: Option<GroupLimits>,
-    /// `None` leaves the switch and the hour as they were.
     pub tidy: Option<Tidy>,
 }
 
-/// Blank input means "inherit", so it is stored as NULL rather than "".
 fn override_of(value: &Option<String>) -> Option<String> {
     value.as_ref().map(|raw| raw.trim().to_string()).filter(|trimmed| !trimmed.is_empty())
 }
 
-/// The same range the app's own timeout is clamped to, and for the same reason:
-/// five seconds cannot complete a call, and a quarter of an hour is already
-/// longer than any model this app talks to takes to refuse.
 fn clamp_timeout(secs: u64) -> u64 {
     secs.clamp(5, 900)
 }
@@ -266,9 +154,6 @@ impl GroupDraft {
             None => None,
             Some(raw) => Some(InferenceOverrides {
                 provider: raw.provider,
-                // A base URL that cannot be parsed would fail on every turn of
-                // every agent in the group, so it is rejected at the edit
-                // instead.
                 base_url: match override_of(&raw.base_url) {
                     Some(url) => Some(
                         crate::config::normalize_base_url(&url)
@@ -286,8 +171,6 @@ impl GroupDraft {
         Ok(CleanGroup {
             name: name.to_string(),
             inference,
-            // The one field where absent and blank differ, so it cannot go
-            // through `override_of`: absent keeps the stored key.
             api_key: self.api_key.as_ref().map(|raw| {
                 let trimmed = raw.trim();
                 if trimmed.is_empty() {
@@ -302,10 +185,6 @@ impl GroupDraft {
     }
 }
 
-/// One group's inference overrides, resolved against the app defaults.
-///
-/// Never crosses IPC: it carries the key in plaintext because the runtime needs
-/// it to make a request.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GroupInference {
     pub overrides: InferenceOverrides,
@@ -313,14 +192,6 @@ pub struct GroupInference {
 }
 
 impl GroupInference {
-    /// The endpoint, key and endpoint model this group holds, whoever pays for
-    /// its turns.
-    ///
-    /// A group whose turns a subscription pays for still holds its endpoint and
-    /// key, kept rather than blanked exactly so they are there to go back to.
-    /// This resolves them as if the endpoint paid, so `active_model` agrees,
-    /// and with the endpoint's own model: the subscription's is a name the
-    /// endpoint refuses.
     pub fn endpoint(&self, base: &InferenceConfig) -> InferenceConfig {
         let mut out = base.clone();
         out.provider = Provider::Compatible;
@@ -336,25 +207,11 @@ impl GroupInference {
         out
     }
 
-    /// Layers this group over the app-wide settings. Anything the group does
-    /// not set is inherited, so a group with no overrides behaves exactly as
-    /// before groups had settings of their own.
     pub fn apply(&self, base: &InferenceConfig) -> InferenceConfig {
-        // The endpoint layers the same way whoever pays, so it is layered in
-        // one place and the provider put back over it.
         let mut out = self.endpoint(base);
         out.provider = base.provider;
         let over = &self.overrides;
 
-        // First, because the model that gets collapsed below depends on it.
-        //
-        // Nothing is inferred here. A group that names an endpoint used to be
-        // taken to mean it wanted one, because there was no way to say so; the
-        // migration that added this column wrote that meaning down for every
-        // group it was true of, so the guess has no work left to do. What it
-        // cost was the sentence an operator could not act on: with a guess in
-        // this path, "follow the app settings" and an endpoint in the box
-        // disagree, and the endpoint silently wins.
         if let Some(provider) = over.provider {
             out.provider = provider;
         }
@@ -369,10 +226,6 @@ impl GroupInference {
             out.request_timeout_secs = secs;
         }
 
-        // Everything downstream of here reads one model field. Collapsing to
-        // the resolved provider's model, after both overrides have landed,
-        // means a group gets the model that the provider paying for its turns
-        // can actually run.
         out.default_model = out.active_model().to_string();
 
         out
@@ -387,17 +240,12 @@ mod tests {
         GroupDraft { name: name.into(), inference: None, api_key: None, limits: None, tidy: None }
     }
 
-    /// A draft that sets inference overrides, starting from all-inherit.
     fn with_inference(name: &str, over: InferenceOverrides) -> GroupDraft {
         GroupDraft { inference: Some(over), ..draft(name) }
     }
 
     #[test]
     fn a_draft_is_read_from_the_shape_the_webview_sends() {
-        // Everything crossing IPC is camelCase, and `rename_all` on the outer
-        // struct does not reach a nested one: each block carries its own. A
-        // rename that only lands on one side is a field silently read as
-        // "inherit", which looks exactly like an operator clearing it.
         let draft: GroupDraft = serde_json::from_str(
             r#"{
                  "name": "Research",
@@ -463,8 +311,6 @@ mod tests {
 
     #[test]
     fn overlong_name_is_rejected_by_character_count_not_bytes() {
-        // Same reasoning as agent names: 40 emoji is 40 characters but well
-        // over 48 bytes, and counting bytes would reject a legal name.
         assert!(draft(&"\u{1f951}".repeat(40)).validate().is_ok());
         assert_eq!(
             draft(&"\u{1f951}".repeat(49)).validate(),
@@ -474,8 +320,6 @@ mod tests {
 
     #[test]
     fn a_blanked_override_is_stored_as_inherit_not_as_empty() {
-        // Otherwise clearing the field in the UI would pin every agent in the
-        // group to an empty model rather than falling back to the app default.
         let d = with_inference(
             "Research",
             InferenceOverrides { default_model: Some("   ".into()), ..Default::default() },
@@ -493,8 +337,6 @@ mod tests {
 
     #[test]
     fn a_present_block_of_nulls_clears_every_override_in_it() {
-        // The whole point of the block being all-or-nothing: a group put back
-        // on the app settings is one save, not five.
         let clean = with_inference("Research", InferenceOverrides::default()).validate().unwrap();
         assert_eq!(clean.inference, Some(InferenceOverrides::default()));
     }
@@ -549,8 +391,6 @@ mod tests {
         let stored = d.validate().unwrap().limits.unwrap();
         assert_eq!(stored.max_steps_per_run, Some(500));
         assert_eq!(stored.max_hops, Some(1));
-        // Clamping must not turn "inherit" into a number: a group that says
-        // nothing about fan-out has to keep saying nothing after a save.
         assert_eq!(stored.max_fanout_per_call, None);
     }
 
@@ -592,8 +432,6 @@ mod tests {
         assert_eq!(slow.apply(&base).request_timeout_secs, 600);
     }
 
-    /// App-wide settings with a subscription chosen, and a model set for each
-    /// provider so it is visible which one a resolution picked.
     fn on_subscription() -> InferenceConfig {
         InferenceConfig {
             provider: Provider::Chatgpt,
@@ -604,7 +442,6 @@ mod tests {
         }
     }
 
-    /// A group that overrides one inference field and nothing else.
     fn only(over: InferenceOverrides) -> GroupInference {
         GroupInference { overrides: over, api_key: None }
     }
@@ -613,16 +450,11 @@ mod tests {
     fn a_group_with_no_overrides_uses_the_subscription_and_its_own_model() {
         let resolved = GroupInference::default().apply(&on_subscription());
         assert_eq!(resolved.provider, Provider::Chatgpt);
-        // The one field everything downstream reads has to be the subscription's
-        // model, not the endpoint's, or every agent fails on a model the backend
-        // has never heard of.
         assert_eq!(resolved.default_model, "gpt-5.6-luna");
     }
 
     #[test]
     fn a_group_that_only_overrides_the_subscription_model_stays_on_the_subscription() {
-        // The common case: a crew that wants a cheaper model on whatever the app
-        // is already paying with.
         let resolved = only(InferenceOverrides {
             subscription_model: Some("gpt-5.4-mini".into()),
             ..Default::default()
@@ -634,24 +466,16 @@ mod tests {
 
     #[test]
     fn a_group_can_run_on_claude_while_the_app_is_on_a_key() {
-        // The case this provider exists for: one crew's plan still pays and
-        // another's does not, and a group is where that is said.
         let resolved =
             only(InferenceOverrides { provider: Some(Provider::Claude), ..Default::default() })
                 .apply(&InferenceConfig::default());
 
         assert_eq!(resolved.provider, Provider::Claude);
-        // No field to read and none to invent. The model belongs to the
-        // program, so what everything downstream sees is the label saying so.
         assert_eq!(resolved.default_model, crate::llm::claude::MODEL_LABEL);
     }
 
     #[test]
     fn a_model_named_on_a_claude_group_is_kept_and_never_used() {
-        // Same rule the two providers already have between them, and it has to
-        // hold in the direction that has no field of its own: an operator who
-        // tries Claude for an hour and goes back finds their model where they
-        // left it, and while Claude is paying nothing tries to run it.
         let resolved = only(InferenceOverrides {
             provider: Some(Provider::Claude),
             default_model: Some("local/qwen".into()),
@@ -666,10 +490,6 @@ mod tests {
 
     #[test]
     fn a_model_set_for_the_other_provider_is_kept_and_not_used() {
-        // Each model belongs to one provider. A group holding an endpoint model
-        // while the subscription is paying is a group that has been switched
-        // over, not a group whose model was ignored by mistake, and switching
-        // back has to find it intact.
         let resolved = only(InferenceOverrides {
             default_model: Some("local/qwen".into()),
             ..Default::default()
@@ -701,17 +521,11 @@ mod tests {
         assert_eq!(resolved.provider, Provider::Compatible);
         assert_eq!(resolved.base_url, "http://localhost:1234/v1");
         assert_eq!(resolved.api_key, "group-key");
-        // And it gets the endpoint's model, not the subscription's, because the
-        // provider is resolved before the model is collapsed.
         assert_eq!(resolved.default_model, "anthropic/claude-sonnet-4.5");
     }
 
     #[test]
     fn an_endpoint_alone_does_not_decide_who_pays() {
-        // The guess this replaced could not be argued with: an endpoint left in
-        // the box outvoted the operator choosing to follow the app settings, and
-        // there was nothing on screen to say why. The groups that meant it were
-        // written down by the migration instead.
         let resolved = only(InferenceOverrides {
             base_url: Some("http://localhost:1234/v1".into()),
             ..Default::default()
@@ -724,9 +538,6 @@ mod tests {
 
     #[test]
     fn a_group_on_the_subscription_keeps_the_endpoint_it_came_from() {
-        // Kept rather than blanked, exactly as the app keeps its own, so a group
-        // that tries the subscription for an hour finds its endpoint where it
-        // left it.
         let resolved = GroupInference {
             overrides: InferenceOverrides {
                 provider: Some(Provider::Chatgpt),
@@ -745,8 +556,6 @@ mod tests {
 
     #[test]
     fn a_group_can_pay_with_the_subscription_while_the_app_pays_with_a_key() {
-        // One sign-in on the machine, and choosing it is a setting rather than
-        // a second account, so a group can be moved onto it on its own.
         let resolved =
             only(InferenceOverrides { provider: Some(Provider::Chatgpt), ..Default::default() })
                 .apply(&InferenceConfig::default());
@@ -769,17 +578,12 @@ mod tests {
 
     #[test]
     fn a_group_changes_nothing_when_the_app_is_on_an_endpoint() {
-        // The behavior that existed before groups had settings, unchanged.
         let base = InferenceConfig::default();
         assert_eq!(GroupInference::default().apply(&base), base);
     }
 
     #[test]
     fn a_group_on_the_subscription_still_lends_the_key_it_holds() {
-        // The crew that found this: turns on a ChatGPT sign-in, an OpenRouter
-        // key in the crew's own settings, none in the app's, and pi set to
-        // Guaca's key. Reading the app's alone refused a key the operator had
-        // given this crew.
         let crew = GroupInference {
             overrides: InferenceOverrides {
                 provider: Some(Provider::Chatgpt),
@@ -795,11 +599,8 @@ mod tests {
         let lent = crew.endpoint(&app);
         assert_eq!(lent.base_url, "https://openrouter.ai/api/v1");
         assert_eq!(lent.api_key, "crew-key");
-        // The endpoint's model, never the subscription's, which the endpoint
-        // would refuse by name.
         assert_eq!(lent.default_model, "deepseek/deepseek-v4.1-flash");
         assert_eq!(lent.active_model(), "deepseek/deepseek-v4.1-flash");
-        // And the crew's turns are still the subscription's.
         assert_eq!(crew.apply(&app).provider, Provider::Chatgpt);
         assert_eq!(crew.apply(&app).default_model, "gpt-6-astra");
     }
@@ -820,15 +621,11 @@ mod tests {
         };
         let today = local(crate::domain::now_ms()).unwrap().date_naive();
         let yesterday = today.pred_opt().unwrap();
-        // Before the hour today, the strike that counts is yesterday's.
         assert_eq!(Tidy::last_struck(3, hour(today, 2, 59)), Some(hour(yesterday, 3, 0)));
-        // On it and after it, today's.
         assert_eq!(Tidy::last_struck(3, hour(today, 3, 0)), Some(hour(today, 3, 0)));
         assert_eq!(Tidy::last_struck(3, hour(today, 23, 0)), Some(hour(today, 3, 0)));
-        // Three nights later is one strike, the last one, not three.
         let later = today.checked_add_days(chrono::Days::new(3)).unwrap();
         assert_eq!(Tidy::last_struck(3, hour(later, 9, 0)), Some(hour(later, 3, 0)));
-        // An hour past the end of the day is read as the last hour of it.
         assert_eq!(Tidy { on: true, hour: 40 }.sanitized(), Tidy { on: true, hour: 23 });
         assert_eq!(Tidy::default(), Tidy { on: false, hour: 3 });
     }

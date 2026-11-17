@@ -79,15 +79,6 @@ async fn server(mode: usize) -> (String, Server) {
     (address, state)
 }
 
-/// A loopback listener on a port no other server in this process has had.
-///
-/// `mcp` remembers which era an endpoint speaks for the life of the process,
-/// keyed by its address, and every test in this file is one process. The kernel
-/// hands a port out again as soon as a finished test's runtime closes it, so a
-/// server could start with an era an earlier test's server left behind, and a
-/// test counting this server's probes would count none. A port seen before is
-/// held, so the kernel offers a different one, until it offers one nobody here
-/// has used. `tests/plugins.rs` has the same helper for the same reason.
 async fn listen() -> tokio::net::TcpListener {
     static USED: Mutex<BTreeSet<u16>> = Mutex::new(BTreeSet::new());
     let mut held = Vec::new();

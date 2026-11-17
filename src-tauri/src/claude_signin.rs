@@ -1,6 +1,3 @@
-//! A host's own Claude CLI sign-in. The CLI keeps the credential; this module
-//! relays only its authorization URL and the browser's one-time code.
-
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -81,7 +78,6 @@ impl Signin {
             sessions.clear();
             let program = program.to_owned();
             let task = tokio::spawn(async move {
-                // Lazy, so the deadline is set when the program has spawned.
                 let expired = async { tokio::time::sleep(EXPIRES).await };
                 let outcome = run(&program, url_tx, code_rx, cancel_rx, expired).await;
                 let _ = result_tx.send(outcome);

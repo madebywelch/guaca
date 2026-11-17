@@ -1,21 +1,3 @@
-//! A week of one agent's work with the overnight tidy on, against a real model.
-//!
-//! The cascade suite holds what the runtime does around a tidy. What it cannot
-//! hold is whether a real model, handed a night's lines and notes, leaves the
-//! page better: corrects what the week showed to be wrong, drops what stopped
-//! being true, and keeps the page short. That is a model's behavior, so it is
-//! printed rather than decided, night by night, with the page before and after.
-//!
-//! One live test, ignored, and kept out of `scripts/evals.sh`, which asks a
-//! different question. It costs money:
-//!
-//!   cargo test --manifest-path src-tauri/Cargo.toml --test tidy_week -- --ignored --nocapture
-//!
-//! The days are compressed. Each day's work is real turns against the model,
-//! then filed as having finished on that day, and each night is the clock's
-//! sweep at three the next morning. Nothing else is moved, so the lines a tidy
-//! reads are the ones the runtime would have handed it.
-
 mod harness;
 
 use std::sync::Arc;
@@ -29,15 +11,10 @@ use harness::live::{configured, live_crew, LiveAgent};
 const HOUR: i64 = 3_600_000;
 const DAY: i64 = 24 * HOUR;
 
-/// What the agent already keeps when the week starts: a page written the way
-/// pages get written, with one line of progress in it that belongs elsewhere.
 const KEPT: &str = "Operator: Robert. Prefers short replies.\n\
                     Currently working on: offsite planning, waiting on venue options.\n\
                     Offsite date: not set yet.";
 
-/// The page an agent has after months of work with no tidy: long, with a
-/// block of progress that belongs in working notes, and several statements
-/// the week's work will show to be wrong. About three thousand characters.
 const LONG: &str = "# Memory\n\
 \n\
 Operator: Robert. Prefers short replies, with the answer in the first line.\n\
@@ -86,8 +63,6 @@ Robert likes agendas laid out as a table with columns for time, topic and owner.
 - Built the onboarding checklist for new starters, kept in the notebook as onboarding.md; Tom updates the equipment part.\n\
 - Drafted the hiring plan for two engineers; it is waiting on budget approval and nothing has moved since.\n";
 
-/// Seven days of what the operator asks for. Some of it is corrected later in
-/// the week, and some of it stops being true.
 const WEEK: [&[&str]; 7] = [
     &[
         "Our team offsite is on March 12 at the Lakeview Hotel. The venue contact is Dana \
@@ -106,7 +81,6 @@ const WEEK: [&[&str]; 7] = [
     &["Start an outline for the board pack."],
 ];
 
-/// What this binary logged at warn and above.
 fn warnings() -> String {
     struct Into(Arc<std::sync::Mutex<Vec<u8>>>);
     impl std::io::Write for Into {
@@ -133,7 +107,6 @@ fn warnings() -> String {
     String::from_utf8_lossy(&log.lock().unwrap()).into_owned()
 }
 
-/// Model calls, prompt tokens, of them cached, and completion tokens.
 fn usage(db: &rusqlite::Connection, run: &str) -> (u32, u32, u32, u32) {
     db.query_row(
         "SELECT count(*), coalesce(sum(prompt),0), coalesce(sum(cached),0), \
@@ -154,16 +127,12 @@ async fn live_a_week_of_overnight_tidies() {
     week(KEPT).await;
 }
 
-/// The same week, starting from a page that needs the tidy most: long, partly
-/// stale, and holding progress that is not memory. What it is for is the page
-/// coming out shorter and right, and the week's lines say what right is.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: costs money, needs a configured key"]
 async fn live_a_week_of_overnight_tidies_from_a_long_stale_page() {
     week(LONG).await;
 }
 
-/// Runs the week from a starting page and prints what each night did to it.
 async fn week(kept: &str) {
     let Some(config) = configured() else {
         eprintln!("no configured model; skipping");
@@ -195,8 +164,6 @@ async fn week(kept: &str) {
     let mut nights = Vec::new();
     let mut limited = Vec::new();
     for (day, said) in WEEK.iter().enumerate() {
-        // The morning after this day, far enough from now that the whole day
-        // falls after the switch went on.
         let night = Tidy::last_struck(3, start + (day as i64 + 2) * DAY).unwrap();
         let worked_at = night - 15 * HOUR;
         let began = now_ms();

@@ -1,19 +1,3 @@
-//! skills.sh, against a scripted directory, and once against the real one.
-//!
-//! What is scripted is the far side: a ranking, a search, a skill's files and
-//! its audits, each with the answers that have to be handled rather than
-//! shown. A page in a shape this build does not know, a skill whose files
-//! reach outside it, a skill that changed between being read and being added.
-//! Everything on this side of the wire is the real client and the real disk.
-//!
-//! The `#[ignore]`d half asks the live skills.sh whether the three endpoints
-//! this build reads without a token still answer in the shape it reads. They
-//! are not the documented API, so this is the test that says when they moved:
-//!
-//! ```sh
-//! cargo test --manifest-path src-tauri/Cargo.toml --test skills_sh -- --ignored
-//! ```
-
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -33,7 +17,6 @@ const PDF: &str = "---\nname: pdf\ndescription: Use when a task involves a PDF.\
 
 #[derive(Default)]
 struct Far {
-    /// How many times the moving skill has been downloaded.
     moves: AtomicU32,
 }
 
@@ -48,7 +31,6 @@ async fn ranking(Path((board, page)): Path<(String, u32)>) -> Response {
             { "source": "someone/skills", "skillId": "notes", "name": "notes", "installs": 12 },
         ], "total": 3, "hasMore": false, "page": 1 }))
         .into_response(),
-        // What the documented API answers, which is not what this build reads.
         ("hot", _) => Json(json!({ "data": [], "pagination": {} })).into_response(),
         _ => StatusCode::NOT_FOUND.into_response(),
     }
@@ -202,7 +184,6 @@ async fn a_preview_shows_the_body_the_files_and_every_verdict_including_one_it_d
     let verdicts: Vec<_> = read.audits.unwrap().iter().map(|audit| audit.verdict).collect();
     assert_eq!(verdicts, [Verdict::Pass, Verdict::Warn, Verdict::Unknown]);
 
-    // None run yet, and none readable, are drawn differently.
     let quiet = directory.preview("someone/skills/moving").await.unwrap();
     assert_eq!(quiet.audits, Some(Vec::new()));
 }
@@ -221,8 +202,6 @@ async fn an_added_skill_lands_whole_with_where_it_came_from_and_is_not_added_twi
     let again = directory.add(&skills, Scope::Workspace, &read.id, &read.hash).await.unwrap_err();
     assert!(matches!(again, DirectoryError::Store(SkillsError::Taken(_))), "{again}");
 }
-
-// ---- live ------------------------------------------------------------------
 
 #[tokio::test]
 #[ignore = "asks the live skills.sh"]

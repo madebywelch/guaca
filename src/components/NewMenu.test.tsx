@@ -3,12 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { NewMenu } from "./NewMenu";
 
-/**
- * The plus is the only way to make an agent or a crew from the main window, so
- * the two things worth holding are that each is behind it and that it closes.
- * A menu that will not shut sits over the transcript it opened on top of.
- */
-
 function draw() {
   const onNewAgent = vi.fn();
   const onNewGroup = vi.fn();
@@ -63,9 +57,6 @@ describe("the plus", () => {
   });
 
   it("stops listening once it is shut", () => {
-    // The listeners are registered on the window and removed by reference. An
-    // inline arrow in both calls leaves one behind on every open, and the leak
-    // is invisible until something else is drawing where the menu was.
     const added = vi.spyOn(window, "addEventListener");
     const removed = vi.spyOn(window, "removeEventListener");
     const { plus } = draw();
@@ -84,19 +75,7 @@ describe("the plus", () => {
   });
 });
 
-/**
- * Where the menu grows from.
- *
- * Every surface in the app arrives on one keyframe, and the only thing that
- * tells a menu apart from a dialog is its origin: it grows out of the corner
- * nearest the button that was pressed. Taken from the button rather than from
- * where the menu actually landed, a menu pulled back off the window edge
- * animates in from a corner it is no longer anywhere near, which reads as the
- * panel sliding across the screen.
- */
 describe("where the plus menu grows from", () => {
-  // Both stubs are global. Left in place they would decide the layout of every
-  // test written after this one, in a file where nothing else measures.
   const window_ = { width: window.innerWidth, height: window.innerHeight };
   afterEach(() => {
     vi.restoreAllMocks();
@@ -104,12 +83,10 @@ describe("where the plus menu grows from", () => {
     window.innerHeight = window_.height;
   });
 
-  /** jsdom lays nothing out, so both boxes have to be stated. */
   function place(button: DOMRect, menu: { width: number; height: number }) {
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
       this: HTMLElement,
     ) {
-      // By role: the plus and the menu it opens carry the same label.
       const box =
         this.getAttribute("role") === "menu"
           ? { ...menu, top: 0, left: 0, bottom: menu.height, right: menu.width }
@@ -129,9 +106,6 @@ describe("where the plus menu grows from", () => {
   });
 
   it("swaps to the far corner when the window pulls it back", () => {
-    // A plus near the bottom right of a small window: the menu cannot open
-    // down and to the right, so it lands above and to the left of where it
-    // asked for, and that is the corner it has to grow from.
     window.innerWidth = 300;
     window.innerHeight = 200;
     place(box({ left: 250, top: 150, bottom: 182 }), { width: 200, height: 120 });

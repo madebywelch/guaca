@@ -7,42 +7,14 @@ import { type AgentId, errorMessage } from "../lib/types";
 
 export { arrived, type MemoryState, memoryReducer } from "../lib/memoryDraft";
 
-/**
- * The cap the runtime enforces, mirrored here so the operator is warned before
- * they lose anything rather than after.
- *
- * Pinned to `MAX_MEMORY` by the suite, which reads both sources and compares
- * them, exactly as `ipc.contract.test.ts` does across the same seam. It was
- * written as advisory on the reasoning that this panel puts back whatever came
- * home from the write, so a drifted number cannot cost the operator their
- * text. True, and not the failure: a low copy tells an operator "the end is
- * cut on save" about a page the runtime stores whole. They then edit down a
- * memory that was never in danger, which is worse than no warning at all,
- * because a warning is read as a fact about what the runtime is going to do.
- * The number is only worth drawing while it is the runtime's number.
- */
 export const CAP = 16_000;
 
-/** How near the cap is near enough to say so. */
 const ROOM = 400;
 
-/** Characters as the runtime counts them, which is not what `length` counts. */
 function characters(text: string): number {
   return [...text].length;
 }
 
-/**
- * How full the memory is, said only once it is nearly full.
- *
- * A running count under every agent's memory is a number nobody reads. What is
- * worth knowing is the one state that has a consequence: past the cap the
- * runtime cuts the end off, and an agent that has reached it is already
- * throwing things away to make room for what it learns next.
- *
- * `over` is the difference between a fact and a loss, and it is what the two
- * are drawn apart by. Room running out is worth a glance; room gone means the
- * end of what is on screen is not going to be stored.
- */
 export function crowding(text: string): { text: string; over: boolean } | null {
   const length = characters(text);
   if (length > CAP) {
@@ -61,19 +33,6 @@ interface Props {
   agentId: AgentId;
 }
 
-/**
- * An agent's memory, in the column beside it.
- *
- * It used to be a field two thirds of the way down the profile dialog, which
- * put the one thing about an agent that changes on its own behind a modal you
- * open to change the things that do not. It is read constantly and written
- * rarely, which is the panel's half of the split the dialog holds the other
- * side of, and it is the only section here that every agent has something in.
- *
- * The stored page is read first. Editing is a deliberate step, while the
- * textarea still shows the markdown characters the agent will actually read.
- * A rewrite arriving under that draft is held until Save or Cancel decides it.
- */
 export function Memory({ agentId }: Props) {
   return <MemoryPage key={agentId} agentId={agentId} />;
 }
@@ -83,7 +42,6 @@ function MemoryPage({ agentId }: Props) {
   const state = useSyncExternalStore(draft.subscribe, draft.getSnapshot);
   const { dispatch } = draft;
   const box = useRef<HTMLTextAreaElement>(null);
-  // The agent rewrote it. Same counter as the schedule's, one panel over.
   const changed = useStore((state) => state.memoryVersion[agentId] ?? 0);
 
   const load = useCallback(async () => {
@@ -130,7 +88,6 @@ function MemoryPage({ agentId }: Props) {
   const overwritten = held?.incoming != null;
   const room = crowding(value);
 
-  // Grow with the content instead of scrolling a six-line box, capped in CSS.
   useEffect(() => {
     const node = box.current;
     if (!node) return;
@@ -143,9 +100,6 @@ function MemoryPage({ agentId }: Props) {
     const sent = held.draft;
     dispatch({ type: "save", sent });
     try {
-      // What comes back is what was actually stored: the runtime trims it and
-      // cuts anything over the cap, so leaving what was typed on screen would
-      // show the operator a page their agent is never going to be given.
       const expected = held.incoming !== null ? held.incomingVersion : held.version;
       const saved = await api.setAgentMemory(agentId, sent, expected);
       draft.generation++;

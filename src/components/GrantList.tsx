@@ -7,30 +7,12 @@ interface Props {
   agent: AgentCard;
 }
 
-/** What each standing grant lets the agent do, in the operator's words. */
 const PHRASE: Record<ProtectedAction, string> = {
   createAgent: "Adds agents to this group without asking.",
-  // Not offered on the request itself, since a standing yes would cover every
-  // future send and purchase rather than the one being asked about. Listed
-  // anyway: a grant that exists and cannot be seen is worse than one that can.
   actOnBehalf: "Acts outside Guaca in your name without asking.",
-  // Never granted: a settings change is asked about every time. Named so an
-  // older build's row, if there is one, still reads as something.
   changeSettings: "Changes the app's settings without asking.",
 };
 
-/**
- * Standing permissions, and the way to take one back.
- *
- * A grant is created by clicking "Always allow" on a request in the transcript,
- * which is a decision made in one second about every future request. This is
- * where that decision stops being permanent. A permission that could only ever
- * be given would make the middle button on every request a thing to think hard
- * about, which is the opposite of what it is for.
- *
- * Nothing is drawn when there are none: an empty panel here would advertise a
- * mechanism most agents never touch.
- */
 export function GrantList({ agent }: Props) {
   const [grants, setGrants] = useState<ProtectedAction[]>([]);
   const [error, setError] = useState<string | null>(null);

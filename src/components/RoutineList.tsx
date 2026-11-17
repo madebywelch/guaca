@@ -7,15 +7,6 @@ import { relativeTime, useNow } from "../lib/time";
 import { type AgentId, errorMessage, type Routine, type RoutineId } from "../lib/types";
 import { Icon } from "./Icon";
 
-/**
- * The end of the second line: where this routine stands, right now.
- *
- * Three states, and the row has to be honest about all of them. A switched-off
- * routine must not claim a next firing, and one waiting on an event has no
- * next firing to claim: a countdown drawn there would be to a moment nothing
- * is holding. When it last ran carries the weight instead, because on a
- * routine that is not about to do anything that is the only news left.
- */
 function standing(routine: Routine, now: number): string {
   if (!routine.active) {
     return routine.lastRunAt === null
@@ -23,7 +14,6 @@ function standing(routine: Routine, now: number): string {
       : ` · off, last ran ${relativeTime(routine.lastRunAt, now)}`;
   }
   if (routine.nextRunAt !== null) {
-    // Arguments swapped on purpose: this one is ahead of now.
     return ` · next in ${relativeTime(now, routine.nextRunAt)}`;
   }
   return routine.lastRunAt === null
@@ -33,7 +23,6 @@ function standing(routine: Routine, now: number): string {
 
 interface Props {
   agentId: AgentId;
-  /** `"new"` opens an empty one. */
   onOpen: (routine: RoutineId | "new") => void;
 }
 
@@ -42,27 +31,11 @@ type RoutineRead =
   | { status: "loaded"; routines: Routine[] }
   | { status: "failed" };
 
-/**
- * An agent's schedule, as one line per standing commitment.
- *
- * Agents set these for themselves with the `schedule` tool, which used to mean
- * the only record of what a crew had promised to keep doing was inside the
- * agents. A routine that fires every weekday is a standing commitment, and a
- * standing commitment nobody can see or cancel is not one anybody chose.
- *
- * A row is a name and a cadence and stops there. The instruction is written to
- * be acted on with no other context, so it runs to several sentences, and a
- * list that showed it was one routine tall.
- */
 export function RoutineList({ agentId, onOpen }: Props) {
   const [read, setRead] = useState<RoutineRead>({ status: "loading" });
   const routines = read.status === "loading" ? null : read.status === "loaded" ? read.routines : [];
   const [error, setError] = useState<string | null>(null);
   const now = useNow(30_000);
-  // A routine set, retimed, canceled or fired since this was drawn. The
-  // operator watching an agent work is the one most likely to be looking at
-  // this list while it changes, and until this existed the only way to see the
-  // change was to close the panel and open it again.
   const changed = useStore((state) => state.routineVersion[agentId] ?? 0);
 
   const load = useCallback(async () => {
@@ -116,7 +89,6 @@ export function RoutineList({ agentId, onOpen }: Props) {
             <span
               aria-hidden="true"
               className="routine__mark"
-              // A clock face is a lie on something that does not wait on one.
               data-waiting={parseTrigger(routine.trigger).kind === "event" || undefined}
             />
             <span className="routine__body">

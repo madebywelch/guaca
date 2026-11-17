@@ -1,6 +1,3 @@
-//! Outcomes: one record per finished run, through the real runtime with a
-//! scripted model. What a run ended in is written by the commit that settles
-//! it, so each scenario here drives a run to its end and reads the table.
 mod harness;
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -28,7 +25,6 @@ fn only(h: &Harness) -> Outcome {
     all.into_iter().next().unwrap()
 }
 
-/// The newest message in an agent's channel that this predicate picks.
 fn newest(h: &Harness, name: &str, pick: impl Fn(&Envelope) -> bool) -> Envelope {
     h.runtime
         .store()
@@ -83,7 +79,6 @@ async fn a_routine_run_ends_in_the_first_line_of_its_note() {
     assert!(outcome.started_at <= outcome.finished_at);
     assert_eq!(outcome.seen_at, None);
 
-    // Announced once, after the run it belongs to has settled.
     let events = h.sink.snapshot();
     let settled = events
         .iter()
@@ -186,7 +181,6 @@ async fn a_run_the_process_died_in_ends_interrupted_after_recovery() {
     h.wait_until("the call to be in the air", |_| stub.calls.load(Ordering::SeqCst) == 1).await;
     assert!(outcomes(&h).is_empty(), "nothing has finished yet");
 
-    // The process ends with the turn still inside its call, and no drain.
     h.runtime.stop_agent(writer);
     let store = Store::open(&h._dir.path().join("guac.db")).unwrap();
     let recovered = guac_lib::boot::recover(&store).unwrap();
@@ -206,15 +200,12 @@ async fn a_run_the_process_died_in_ends_interrupted_after_recovery() {
     assert_eq!(all[0].headline, "The backend restarted before this conversation finished.");
     assert_eq!(all[0].note_id, Some(notice.id));
 
-    // Recovery runs again on the next start, and reports nothing twice.
     guac_lib::boot::recover(&store).unwrap();
     assert_eq!(store.outcomes(None, None, false, 100).unwrap().len(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_message_taken_into_another_turn_has_no_outcome_of_its_own() {
-    // The first call waits until the second message is queued, then goes round
-    // again so the second is taken into the turn that is working.
     let gate = Arc::new(AtomicBool::new(false));
     let calls = Arc::new(AtomicUsize::new(0));
     let (open, count) = (gate.clone(), calls.clone());
@@ -282,7 +273,6 @@ async fn a_run_that_filed_a_decision_ends_needing_the_operator() {
     assert_eq!(outcome.needs, vec![Need::Decision { id: decision.id }]);
     assert_eq!(outcome.headline, "Drafted the reply to Alex.");
 
-    // The answer starts a run of its own, which ends in an outcome of its own.
     let answered = h.runtime.answer_decision(decision.id, "11 AM", false, None).unwrap();
     let follow = answered.delivery_run.unwrap();
     h.settle(follow).await;
@@ -303,7 +293,6 @@ async fn a_channel_on_screen_marks_what_its_runs_ended_in_seen() {
     h.settle(ben).await;
     assert_eq!(h.runtime.store().outcomes(None, None, true, 100).unwrap().len(), 2);
 
-    // Ben's channel under For you is not Ben's channel being read.
     h.runtime.report_view(OperatorView {
         agent_id: Some(h.id("Ben")),
         overlay: Some(Overlay::ForYou),
@@ -330,11 +319,9 @@ async fn a_channel_on_screen_marks_what_its_runs_ended_in_seen() {
     };
     assert_eq!(seen(&h), vec![vec![ada]], "every other window is told which");
 
-    // Looking again marks nothing new and says nothing.
     h.runtime.report_view(OperatorView { agent_id: Some(h.id("Ada")), ..Default::default() });
     assert_eq!(seen(&h).len(), 1);
 
-    // Mark all seen, bounded by the moment the list was drawn.
     let drawn = store.outcome(ben).unwrap().unwrap().finished_at;
     assert_eq!(h.runtime.mark_outcomes_seen(None, Some(drawn - 1)).unwrap(), vec![]);
     assert_eq!(h.runtime.mark_outcomes_seen(None, Some(drawn)).unwrap(), vec![ben]);

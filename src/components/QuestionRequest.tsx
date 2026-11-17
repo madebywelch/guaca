@@ -9,55 +9,21 @@ type QuestionPart = Extract<Part, { type: "question" }>;
 
 interface Props {
   part: QuestionPart;
-  /** The agent that asked. Undefined once it has been deleted. */
   agent: AgentCard | undefined;
 }
 
-/** What the operator is told afterward, per outcome. */
 const SETTLED: Record<string, string> = {
   answered: "You answered this.",
   expired: "Nobody answered, so it went ahead without you.",
 };
 
-/** A question that ran out of time and was filed in For you as well. */
 const FILED =
   "Nobody answered in ten minutes, so it went ahead without you. The question is waiting in For you.";
 
-/**
- * An agent asking the operator what to do, in the channel it asked from.
- *
- * The other half of {@link ApprovalRequest}, and drawn as its own card for the
- * reason the two are separate parts: nothing answered here grants anything. The
- * agent could have gone either way and stopped because it does not know which
- * way is wanted, so the wording is a question rather than a request, and the
- * note under it says what happens if nobody answers instead of what has not
- * happened yet.
- *
- * The choices are the agent's own words. They are the only model-authored text
- * in this app that lands on a button, and that is safe exactly here: the value
- * goes back to the agent, and whatever it does with it passes every guard it
- * already had. Drawn as text, never as markdown, and already cut to a label's
- * length by the runtime.
- *
- * Once it has been answered the card keeps the words that answered it, under
- * the note saying it was answered: the channel is the record of what was
- * decided with an agent, and "You answered this" on its own is a record of a
- * decision nobody can read back. The answer is drawn the way `DecisionReply`
- * draws one, because it is the same fact in the other shape a question leaves
- * behind. A question whose answer is outside the window the store loads keeps
- * the sentence alone, which is everything that is known about it.
- */
 export function QuestionRequest({ part, agent }: Props) {
-  // A request the store has never heard of is older than the window it loads,
-  // so it cannot still be live. Drawing a live field for one would take an
-  // answer that reaches nobody.
   const state = useStore((s) => s.approvals[part.id]) ?? "expired";
-  // Read from the store rather than from the part: the part is the question as
-  // it was asked and never changes, and the answer is kept on the request's row.
   const said = useStore((s) => s.answers[part.id]);
   const answer = useStore((s) => s.answerQuestion);
-  // A lapse files the question in For you under its own id, in the commit that
-  // expires it. One a restart ended is not filed, and keeps the older sentence.
   const filed = useStore((s) => s.decisions.some((d) => d.topic === `approval:${part.id}`));
   const [sending, setSending] = useState(false);
   const [written, setWritten] = useState("");

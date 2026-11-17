@@ -43,8 +43,6 @@ describe("what a signal makes of a face", () => {
     expect(mood({ activity: { state: "thinking" }, work: [call("ok")] })).toBe("thinking");
   });
 
-  // The runtime does not publish its retries, so a refusal or a failure coming
-  // back is the only honest "this is not going well" the app has.
   it("minds a call that came back refused or failed", () => {
     expect(mood({ activity: { state: "thinking" }, work: [call("refused")] })).toBe("frustrated");
     expect(mood({ activity: { state: "thinking" }, work: [call("failed")] })).toBe("frustrated");
@@ -74,12 +72,9 @@ describe("what a signal makes of a face", () => {
   it("goes back to being stuck once it has stopped being pleased", () => {
     expect(mood({ escalated: true, finishedAt: NOW - 10 })).toBe("pleased");
     expect(mood({ escalated: true })).toBe("stuck");
-    // and an escalation says nothing about a turn that is actually running
     expect(mood({ escalated: true, activity: { state: "thinking" } })).toBe("thinking");
   });
 
-  // Ten expressions is ten drawings to keep working. One that no signal can
-  // reach is one nobody would notice going wrong.
   it("can reach every mood in the table", () => {
     const reachable = new Set<Mood>([
       mood({}),
@@ -107,8 +102,6 @@ describe("the table", () => {
     }
   });
 
-  // Amber is the app's one signal that a person is being waited on. A second
-  // mood wearing it is a rail where the color stops meaning anything.
   it("spends the amber on exactly one mood", () => {
     const amber = Object.entries(MOODS).filter(([, e]) => e.mark === "bang");
     expect(amber.map(([key]) => key)).toEqual(["blocked"]);

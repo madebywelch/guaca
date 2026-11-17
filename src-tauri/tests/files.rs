@@ -1,15 +1,3 @@
-//! Files moving between the operator, the agents, and their machines.
-//!
-//! The thing being tested is not that bytes were stored. It is that the file
-//! reaches the model in a form it can act on, and that when it cannot, the
-//! model is told rather than left to talk about a document nobody sent. A
-//! silently dropped attachment is the worst failure available here: everyone
-//! involved, agent and operator, believes the file arrived.
-//!
-//! What CI can reach is everything up to the sandbox. Placing a document on an
-//! agent's machine needs a real E2B key, so those paths are exercised here for
-//! their failure behavior and verified for real by `./scripts/evals.sh`.
-
 mod harness;
 
 use guac_lib::domain::envelope::{Envelope, Part, Participant};
@@ -17,7 +5,6 @@ use guac_lib::runtime::guard::GuardLimits;
 
 use harness::*;
 
-/// Every file part in an agent's channel, oldest first.
 fn files_in(h: &Harness, agent: &str) -> Vec<String> {
     h.runtime
         .store()
@@ -33,7 +20,6 @@ fn files_in(h: &Harness, agent: &str) -> Vec<String> {
         .collect()
 }
 
-/// Everything the stub was sent, flattened, including image parts.
 fn prompts(stub: &Stub) -> String {
     stub.transcript.lock().iter().map(|body| body.to_string()).collect::<Vec<_>>().join("\n")
 }
@@ -59,13 +45,9 @@ async fn a_text_file_the_operator_drops_is_read_to_the_agent() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_picture_is_handed_over_as_a_picture() {
-    // The one thing a model cannot be told about in words. This goes down the
-    // same path as a screenshot from `use_screen`, which is the proof that the
-    // shape is one a real provider accepts.
     let stub = serve(|_| Script::Say("A red square.".into())).await;
     let h = harness(&stub, &["Manager"], GuardLimits::default());
 
-    // A one-pixel PNG, so the bytes are real rather than a string pretending.
     let png: &[u8] = &[
         0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
         0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
@@ -82,11 +64,6 @@ async fn a_picture_is_handed_over_as_a_picture() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_picture_is_not_sent_to_a_model_that_cannot_be_shown_one() {
-    // The other half of the test above, and the reason any of this is decided
-    // rather than assumed. An operator swaps the model in the box for one that
-    // takes text only; the picture would be refused by the endpoint, which
-    // costs the whole turn rather than the attachment. So it is not sent, and
-    // the agent is told in words what it is holding and what it is not.
     let listing = serde_json::json!({
         "data": [{
             "id": "test/model",
@@ -108,23 +85,14 @@ async fn a_picture_is_not_sent_to_a_model_that_cannot_be_shown_one() {
     let sent = prompts(&stub);
     assert!(!sent.contains("image_url"), "the endpoint said it takes text only:\n{sent}");
     assert!(!sent.contains("data:image/png;base64,"), "{sent}");
-    // Not silence. A model that finds no picture and no explanation talks about
-    // the file from its name, confidently, which is the failure this replaces.
     assert!(sent.contains("chart.png"), "the agent has to know a file arrived:\n{sent}");
     assert!(sent.contains("pictures do not reach the model"), "{sent}");
-    // And the prompt agrees with the delivery, rather than telling an agent it
-    // can see and then handing it nothing.
     assert!(sent.contains("You read text, and only text"), "{sent}");
     assert!(!sent.contains("use_screen"), "a screen it cannot be shown is not offered:\n{sent}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_picture_is_handed_over_once_and_never_again() {
-    // A screenshot off a retina display is over a megabyte, and base64 is a
-    // third bigger again. Attaching it to every turn that follows would make
-    // each one slower and dearer than the last, and a request big enough
-    // eventually fails to send at all. It travels with the message it arrived
-    // on; after that the history says only that a file was there.
     let stub = serve(|_| Script::Say("Seen.".into())).await;
     let h = harness(&stub, &["Manager"], GuardLimits::default());
 
@@ -149,16 +117,12 @@ async fn a_picture_is_handed_over_once_and_never_again() {
         .count();
     assert_eq!(carrying, 1, "the picture was sent again on a later turn");
 
-    // The later turn still knows the file existed, which is the point of
-    // announcing it in the history rather than re-sending it.
     let last = stub.transcript.lock().last().cloned().unwrap().to_string();
     assert!(last.contains("screenshot.png"), "the history lost the file entirely:\n{last}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_text_file_is_read_out_once_and_not_on_every_turn_after() {
-    // The same arithmetic, quieter: 24k characters of a brief re-read into
-    // every following prompt is the history window filled with one document.
     let stub = serve(|_| Script::Say("Read.".into())).await;
     let h = harness(&stub, &["Manager"], GuardLimits::default());
 
@@ -179,9 +143,6 @@ async fn a_text_file_is_read_out_once_and_not_on_every_turn_after() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_document_that_cannot_be_placed_is_admitted_rather_than_described() {
-    // No sandbox in CI, so this is the failure path, and the failure path is
-    // the one that matters: an agent told nothing would answer about a
-    // proposal it has never read.
     let stub = serve(|_| Script::Say("I cannot open it yet.".into())).await;
     let h = harness(&stub, &["Manager"], GuardLimits::default());
 
@@ -203,8 +164,6 @@ async fn a_document_that_cannot_be_placed_is_admitted_rather_than_described() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_file_with_no_covering_note_still_reaches_the_agent() {
-    // Handing over a document with nothing typed is the most natural way to
-    // send one. Judging a message empty by its text alone dropped it.
     let stub = serve(|_| Script::Say("Read it.".into())).await;
     let h = harness(&stub, &["Manager"], GuardLimits::default());
 
@@ -222,9 +181,6 @@ async fn a_file_with_no_covering_note_still_reaches_the_agent() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_agent_forwards_a_file_it_was_given_without_needing_a_machine() {
-    // The case that started this: a coordinator holding a draft and a colleague
-    // that has to send it. Forwarding is host-side, so it works with no
-    // sandbox at all.
     let stub = serve(|body| {
         let who = speaker(body);
         if who == "Chef" {
@@ -256,7 +212,6 @@ async fn an_agent_forwards_a_file_it_was_given_without_needing_a_machine() {
         h.transcript()
     );
 
-    // And Chef was actually shown the contents, not just told a name.
     let chef_prompts: Vec<String> = stub
         .transcript
         .lock()
@@ -272,8 +227,6 @@ async fn an_agent_forwards_a_file_it_was_given_without_needing_a_machine() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_file_an_agent_never_had_is_reported_rather_than_imagined() {
-    // Without this the sender believes it attached something and goes on to
-    // discuss a document the recipient has never seen.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("It did not go.".into())
@@ -327,17 +280,11 @@ async fn the_same_file_sent_to_three_agents_is_stored_once() {
     for peer in ["Chef", "Baker", "Grocer"] {
         assert_eq!(files_in(&h, peer), vec!["menu.md"], "{peer} did not get it");
     }
-    // Four references, one file: the digest is the address, and a fan-out that
-    // copied the bytes per recipient would make a document expensive to share.
     assert_eq!(h.runtime.files().read(&digest).unwrap(), b"soup, then fish");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_file_never_leaks_into_the_text_of_a_message() {
-    // `plain_text` feeds prompt assembly, the guard's duplicate fingerprint and
-    // every channel preview. A document that leaked into it would be pasted
-    // into all three, and two different files sent with the same note would
-    // look like the same message to the guard.
     let stub = serve(|_| Script::Say("Read.".into())).await;
     let h = harness(&stub, &["Manager"], GuardLimits::default());
 
@@ -356,7 +303,6 @@ async fn a_file_never_leaks_into_the_text_of_a_message() {
     assert_eq!(stored.plain_text(), "read this");
 }
 
-/// Every file part on a message this agent sent to the operator, oldest first.
 fn handed_over(h: &Harness, agent: &str) -> Vec<String> {
     h.runtime
         .store()
@@ -375,10 +321,6 @@ fn handed_over(h: &Harness, agent: &str) -> Vec<String> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_document_an_agent_attaches_reaches_the_operator() {
-    // The failure this exists for: an agent wrote a brief, saved it, and ended
-    // its turn with the path. The operator was handed a location on a machine
-    // that is not theirs, in a window with nothing to click, and the document
-    // may as well not have been written.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("Tidied up and attached. The second risk is the one to worry about.".into())
@@ -406,11 +348,6 @@ async fn a_document_an_agent_attaches_reaches_the_operator() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_document_handed_over_with_nothing_said_still_arrives() {
-    // Sending a document with no covering note is a normal thing to do, and
-    // models do it constantly. A reply judged empty by its text alone would
-    // drop the file the whole turn was spent producing, which is the one
-    // failure worse than not having the feature: the agent believes it handed
-    // the document over and the operator never sees it.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("".into())
@@ -438,11 +375,6 @@ async fn a_document_handed_over_with_nothing_said_still_arrives() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_document_that_could_not_be_attached_is_admitted_rather_than_claimed() {
-    // No sandbox in CI, and no E2B key, so this agent has no computer at all.
-    // That is the case this covers, and it is the one that reached an operator:
-    // an agent told nothing goes on to say the brief is attached to a message
-    // that carries no file, and an agent given advice it cannot act on rewords
-    // the claim and tries again.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("I could not hand the file over.".into())
@@ -475,9 +407,6 @@ async fn a_document_that_could_not_be_attached_is_admitted_rather_than_claimed()
         told.contains("put it in your answer as text"),
         "and given a way forward it can actually take: {told}"
     );
-    // The bug this closes. The advice used to be "check the path with
-    // `run_command` and attach it again", and `run_command` is not offered to
-    // an agent with no computer either. One agent followed it twice.
     assert!(
         !told.contains("run_command"),
         "an agent with no computer is not offered that either: {told}"
@@ -486,8 +415,6 @@ async fn a_document_that_could_not_be_attached_is_admitted_rather_than_claimed()
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_same_document_attached_twice_in_one_turn_is_one_file() {
-    // A model that attaches the brief, writes a paragraph, then attaches the
-    // brief again would otherwise put two identical cards under one message.
     let stub = serve(|body| {
         let calls = body["messages"]
             .as_array()
@@ -518,9 +445,6 @@ async fn the_same_document_attached_twice_in_one_turn_is_one_file() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_agent_reads_its_own_attachment_back_on_the_next_turn() {
-    // Without this the agent has no record of having handed anything over: it
-    // attaches the same document again next turn and tells the operator it is
-    // sending it for the first time.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("Attached.".into())
@@ -558,13 +482,6 @@ async fn an_agent_reads_its_own_attachment_back_on_the_next_turn() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_document_is_written_and_handed_over_with_no_machine_anywhere() {
-    // The hole under `attach_file`. There is no sandbox in CI and no E2B key,
-    // so this agent has no computer, which is the state most agents are in.
-    // Until `write_document` there was no way for one to produce a file at all:
-    // it had the whole report in the turn and the only route to an attachment
-    // ran through a shell command on a machine it did not have. One agent spent
-    // four turns on that, twice invented a `/home/user` path, and delivered
-    // eight pages as chat text.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("Written up and attached.".into())
@@ -592,13 +509,7 @@ async fn a_document_is_written_and_handed_over_with_no_machine_anywhere() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_document_written_this_turn_can_be_sent_on_in_the_same_turn() {
-    // A document a moment old is in no channel yet: the message carrying it has
-    // not landed. Resolved against the channel alone, an agent that wrote a
-    // brief and passed it to a colleague was told its own document did not
-    // exist, which is the failure this whole file is about, one step along.
     let stub = serve(|body| {
-        // Counted rather than pattern-matched on the text: what round this is
-        // decides what to play, and the tool results are how many have run.
         let results = body["messages"]
             .as_array()
             .map(|m| m.iter().filter(|msg| msg["role"] == "tool").count())
@@ -633,9 +544,6 @@ async fn a_document_written_this_turn_can_be_sent_on_in_the_same_turn() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_document_called_for_with_nothing_in_it_is_refused_with_the_reason() {
-    // The mistake this catches is a model calling the tool intending to fill it
-    // in on a later round. There is no later round, and an empty file attached
-    // to an answer is the same lie as a phantom attachment.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("I could not produce it.".into())
@@ -691,7 +599,6 @@ async fn a_document_created_on_an_earlier_turn_can_be_reopened_without_a_compute
     assert_eq!(handed_over(&h, "Manager"), vec!["pilot-playbook.md"]);
 }
 
-/// A completed reply carrying a stored file, with no document contents in history.
 fn saved_reply(h: &Harness, agent: &str, name: &str, bytes: &[u8]) -> Envelope {
     use guac_lib::domain::{
         envelope::{Intent, Trust},
@@ -731,7 +638,6 @@ async fn reading_a_saved_file_distinguishes_missing_inaccessible_and_unreadable(
     let h = harness(&stub, &["Manager", "Scribe"], GuardLimits::default());
     let secret = saved_reply(&h, "Scribe", "brief.md", b"PRIVATE-CONTENTS");
     h.runtime.store().append(&secret).unwrap();
-    // Even a known name and stored bytes confer no access to another channel.
     let run = h.runtime.send_from_human(h.id("Manager"), "Read the brief.").unwrap();
     h.settle(run).await;
     let results = tool_results(&stub).join("\n");

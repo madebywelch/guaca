@@ -4,24 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Delivery, DeliveryId, DeliveryTarget, NotificationAccess, Reveal } from "./types";
 
-/**
- * What a window does with what the Host offers: claim it, and show it only if
- * the claim won.
- *
- * Every decision about whether something is worth an interruption is on the
- * Host now, and tested there (`domain/outbox.rs` for the rule, and
- * `tests/outbox.rs` for the dispatcher and the claim). What is left to get
- * wrong here is the order of three calls and what a click does, and each way
- * of getting it wrong is concrete: a banner shown by a window that lost the
- * claim is the same banner twice, and a claim made by a page that cannot show
- * anything is a banner nobody sees.
- *
- * The transport is the real one, so the browser half runs through the same
- * `Notification` calls a browser client on a remote Host makes. Only the Host
- * is faked, at `ipc`, and the operating system, at `Notification` and at the
- * Tauri plugin.
- */
-
 const host = vi.hoisted(() => ({
   claimDelivery: vi.fn<(id: string) => Promise<boolean>>(),
   releaseDelivery: vi.fn<(id: string) => Promise<boolean>>(),
@@ -38,25 +20,16 @@ const plugin = vi.hoisted(() => ({
 }));
 vi.mock("@tauri-apps/plugin-notification", () => plugin);
 
-/**
- * The app's own reading of macOS: `now` is what it would say without asking,
- * and `answer` is what the operator says when it does ask. `prompts` counts the
- * questions macOS actually put, and `held`, when set, keeps one on screen
- * until the test answers it. `null` is every other desktop, where the plugin
- * is asked instead.
- */
 const mac = vi.hoisted(() => ({
   now: null as NotificationAccess | null,
   answer: "allowed" as NotificationAccess,
   prompts: 0,
   held: null as Promise<void> | null,
-  /** What the app handed to macOS, and why macOS refuses the next one, if it does. */
   shown: [] as { title: string; body: string; click: number | null }[],
   refusal: null as string | null,
   invoke: vi.fn(async (name: string, args?: Record<string, unknown>): Promise<unknown> => {
     if (name === "notification_access") return mac.now;
     if (name === "show_notification") {
-      // The app hands a banner over itself only on a Mac; elsewhere it says so.
       if (mac.now === null) return false;
       if (mac.refusal) throw mac.refusal;
       mac.shown.push(args as (typeof mac.shown)[number]);
@@ -75,7 +48,6 @@ const mac = vi.hoisted(() => ({
 }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mac.invoke }));
 
-/** The app's events, as far as a click on a banner it handed to macOS goes. */
 const events = vi.hoisted(() => ({
   clicked: undefined as ((message: { payload: number }) => void) | undefined,
   listen: vi.fn(async (name: string, handler: (message: { payload: number }) => void) => {
@@ -85,7 +57,6 @@ const events = vi.hoisted(() => ({
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: events.listen }));
 
-/** A browser's notification center, as far as a page can see it. */
 class Shown {
   static permission: NotificationPermission = "granted";
   static answer: NotificationPermission = "granted";
@@ -116,7 +87,6 @@ function delivery(id: DeliveryId, over: Partial<Delivery> = {}): Delivery {
   };
 }
 
-/** What a click asked for, through the same `land` the window wires up. */
 let revealed: Reveal[] = [];
 type Notify = typeof import("./notify");
 let notify: Notify;
@@ -161,7 +131,6 @@ describe("a delivery the Host offered", () => {
       ["Title a", "Body a"],
     ]);
 
-    // Another window won this one. Its banner is that window's to show.
     host.claimDelivery.mockResolvedValueOnce(false);
     await expect(notify.deliver(delivery("b"), open)).resolves.toBe(false);
     expect(host.claimDelivery).toHaveBeenLastCalledWith("b");
@@ -169,7 +138,6 @@ describe("a delivery the Host offered", () => {
   });
 
   it("says what the Host wrote, word for word", async () => {
-    // Titles are the Host's: "has a question", never "needs your permission".
     const asked = delivery("q", { title: "Ada has a question", body: "Which branch?" });
     await notify.deliver(asked, open);
     expect(Shown.all[0]?.title).toBe("Ada has a question");
@@ -201,7 +169,6 @@ describe("a browser client on a remote Host", () => {
   });
 
   it("claims nothing when the question is left unanswered", async () => {
-    // What a browser that will not prompt without a click answers.
     Shown.permission = "default";
     Shown.answer = "default";
     await expect(notify.deliver(delivery("a"), open)).resolves.toBe(false);
@@ -267,11 +234,8 @@ describe("the desktop window", () => {
 
     tapped?.({ actionId: "tap", inputValue: null, notification: { id: second } });
     expect(host.openWindow.mock.calls).toEqual([[{ kind: "agent", id: "agent-b" }]]);
-    // The app emits the reveal once the window is up; landing here as well
-    // would select before the window is there to show it.
     expect(revealed).toEqual([]);
 
-    // Once only, and nothing for a notification this page did not raise.
     tapped?.({ actionId: "tap", inputValue: null, notification: { id: second } });
     tapped?.({ actionId: "tap", inputValue: null, notification: { id: 12 } });
     tapped?.({ actionId: "tap", inputValue: null, notification: null });
@@ -303,7 +267,6 @@ describe("a desktop window on a Mac", () => {
     await expect(notify.deliver(delivery("a"), open)).resolves.toBe(false);
     expect(host.claimDelivery).not.toHaveBeenCalled();
     expect(plugin.sendNotification).not.toHaveBeenCalled();
-    // The plugin answers yes on every desktop, so it is not the one asked.
     expect(plugin.isPermissionGranted).not.toHaveBeenCalled();
   });
 
@@ -319,8 +282,6 @@ describe("a desktop window on a Mac", () => {
     await expect(notify.deliver(delivery("a"), open)).resolves.toBe(true);
     expect(host.claimDelivery).toHaveBeenCalledWith("a");
     expect(mac.shown).toEqual([{ title: "Title a", body: "Body a", click: expect.any(Number) }]);
-    // The plugin drops a banner whenever the main thread is busy as it hands
-    // it over, and never says so.
     expect(plugin.sendNotification).not.toHaveBeenCalled();
   });
 
@@ -408,7 +369,6 @@ describe("a desktop window on a Mac", () => {
 
     events.clicked?.({ payload: second! });
     expect(host.openWindow.mock.calls).toEqual([[{ kind: "agent", id: "agent-b" }]]);
-    // Once only, and nothing for a notification this page did not raise.
     events.clicked?.({ payload: second! });
     events.clicked?.({ payload: 12 });
     expect(host.openWindow).toHaveBeenCalledTimes(1);
@@ -450,7 +410,6 @@ describe("a desktop window on a Mac", () => {
     expect(mac.prompts).toBe(0);
 
     host.claimDelivery.mockImplementation(async () => {
-      // The answer is in before the claim is made.
       expect(mac.now).toBe("allowed");
       return true;
     });
@@ -481,7 +440,6 @@ describe("a desktop window on a Mac", () => {
     expect(host.claimDelivery).not.toHaveBeenCalled();
 
     answer();
-    // Each one raised: on a Mac `notify` answers true only once macOS has it.
     await expect(shown).resolves.toEqual([true, true, true]);
     expect(mac.shown.map((banner) => banner.title)).toEqual(["Title a", "Title b", "Title c"]);
     expect(mac.prompts).toBe(1);
@@ -569,9 +527,6 @@ describe("the window that claims", () => {
   const read = (path: string) => readFileSync(resolve(__dirname, "../..", path), "utf8");
 
   it("is never suspended by WebKit while nobody can see it", () => {
-    // A suspended page hears an offer and claims nothing until it is woken:
-    // on a Mac, hidden or covered for a few minutes, no question was ever a
-    // banner (docs/ATTENTION.md, *What interrupts the operator*).
     const conf = JSON.parse(read("src-tauri/tauri.conf.json")) as {
       app: { windows: { label?: string; backgroundThrottling?: string }[] };
     };
@@ -581,9 +536,6 @@ describe("the window that claims", () => {
 });
 
 describe("the menu bar panel", () => {
-  // A second page on the same Host, offered every delivery the window is. It
-  // must never claim one, or a banner would be taken away from the window and
-  // shown by a page that cannot show it (docs/gotchas/menubar.md).
   const read = (path: string) => readFileSync(resolve(__dirname, "../..", path), "utf8");
 
   it("never reaches the code that claims or shows a delivery", () => {

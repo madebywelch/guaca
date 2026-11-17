@@ -115,9 +115,6 @@ beforeEach(() => {
 });
 
 it("keeps an endpoint's model out of the ChatGPT list, and keeps it for the endpoint", async () => {
-  // The engineer ChatGPT refused on every turn: an OpenRouter slug on an agent
-  // whose crew is on the subscription. It is the endpoint's, so the ChatGPT
-  // picker neither offers it nor sends it, and saving leaves it where it was.
   open(card("xiaomi/mimo-v2.6-pro"));
   await screen.findByRole("option", { name: "chat-specialist" });
   expect(modelSelect().value).toBe("");
@@ -222,8 +219,6 @@ it("uses the endpoint and model of a group that overrides an app on ChatGPT", as
 });
 
 it("keeps each provider's override when moving groups, and shows only the one that runs", async () => {
-  // One field for both is how a ChatGPT name reached an endpoint's box and an
-  // endpoint's slug reached ChatGPT, each refused by name on every turn.
   open(card("anthropic/specialist", "chat-specialist"), [
     crew,
     aGroup({ id: "endpoint", name: "Endpoint" }),

@@ -1,13 +1,4 @@
 #!/usr/bin/env bash
-#
-# Builds design/characters.html: the cast as it ships beside three redesigns,
-# every creature live. The baseline is drawn by src/avatars itself; the three
-# directions are prototypes in design/characters/.
-#
-#   ./design/make-characters.sh
-#
-# The page is self-contained (script, styles and the app's three fonts are
-# inlined), so it opens from anywhere with no server and no network.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."

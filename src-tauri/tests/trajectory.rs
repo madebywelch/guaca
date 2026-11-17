@@ -1,21 +1,3 @@
-//! Trajectory evals: whether the machinery under a run behaved.
-//!
-//! The cascade suite asks whether the runtime did what it was told. The eval
-//! suite asks whether the resulting traffic is something an operator would want
-//! to watch. Both read the messages, and there is a class of defect neither can
-//! see: the messages are correct and the machine around them is not.
-//!
-//! A placeholder that opens and never closes leaves a message half-arrived on
-//! screen forever. A run that reports itself finished while an agent is still
-//! thinking stops the spinner and then keeps talking. A budget that counts
-//! turns rather than model calls bills a bounded run several times over, and
-//! every message it produced looks exactly the same as one that did not.
-//!
-//! These drive the real runtime against the scripted model and read the event
-//! stream the UI is drawn from. `guac_lib::trajectory` is the analyzer;
-//! everything it reports is decidable from the record, so a failure here names
-//! a defect rather than a suspicion.
-
 mod harness;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -31,7 +13,6 @@ use guac_lib::trajectory::{Anomaly, Record};
 
 use harness::*;
 
-/// How many placeholders the operator watched open.
 fn placeholders(t: &guac_lib::trajectory::Trajectory) -> usize {
     t.records.iter().filter(|r| matches!(r, Record::StreamOpened { .. })).count()
 }
@@ -53,9 +34,6 @@ async fn one_turn_leaves_nothing_open_and_nothing_running() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_turn_that_works_through_a_tool_result_bills_every_call_it_made() {
-    // The claim the budget rests on, end to end: one turn, two model calls,
-    // two steps. A budget counting turns would report one here and let a
-    // tool-looping agent spend the run's whole allowance against it.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("There are three of us.".into())
@@ -79,8 +57,6 @@ async fn a_turn_that_works_through_a_tool_result_bills_every_call_it_made() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_delegation_settles_after_the_peer_has_finished_rather_than_before() {
-    // The failure this rules out is the operator-visible one: the spinner
-    // stops, and then the answer arrives.
     let stub = serve(|body| {
         let who = speaker(body);
         if who == "Chef" {
@@ -109,10 +85,6 @@ async fn a_delegation_settles_after_the_peer_has_finished_rather_than_before() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn a_fan_out_has_every_peer_working_at_the_same_moment() {
-    // The architectural claim, read from the interleaving rather than a clock.
-    // "Four peers finished inside a second" is an inference about a machine
-    // that was not busy; four turns open at one point in the ledger is the
-    // thing itself.
     let peers = ["Chef", "Host", "Barista", "Sommelier"];
     let together = Arc::new((std::sync::Mutex::new(0), std::sync::Condvar::new()));
     let manager_arrived = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -168,10 +140,6 @@ async fn a_fan_out_has_every_peer_working_at_the_same_moment() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_dropped_connection_starts_a_new_placeholder_rather_than_appending_to_the_broken_one() {
-    // Text from a first attempt is text the operator has already read. The
-    // second attempt starts from the beginning, so it needs a box of its own,
-    // and the trajectory is where that is visible: the messages are identical
-    // either way.
     let attempts = Arc::new(AtomicUsize::new(0));
     let counter = attempts.clone();
     let stub = serve(move |_| {
@@ -200,10 +168,6 @@ async fn a_dropped_connection_starts_a_new_placeholder_rather_than_appending_to_
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_provider_that_never_answers_is_named_and_still_spent_its_step() {
-    // A run that reached nobody is not a normal run, and the analyzer has to
-    // say so rather than pass it as quiet. The step still went: the request
-    // was made, and a budget that refunded it would let a broken endpoint be
-    // retried without limit.
     let stub = serve(|_| Script::Unavailable).await;
     let h = harness(&stub, &["Manager"], GuardLimits::default());
     let run = h.runtime.send_from_human(h.id("Manager"), "Anyone there?").unwrap();
@@ -222,15 +186,9 @@ async fn a_provider_that_never_answers_is_named_and_still_spent_its_step() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_retry_is_its_own_run_and_carries_nothing_from_the_one_that_failed() {
-    // "Try again" is the operator acting, so it gets a run and a budget of its
-    // own. Both runs are in one event stream, which is the only place the two
-    // can be confused: reading the retry's spend as the failed run's would
-    // bill an operator for a call that never landed.
     let attempts = Arc::new(AtomicUsize::new(0));
     let counter = attempts.clone();
     let stub = serve(move |_| {
-        // Three attempts is what one call is allowed. The fourth request is
-        // the retry the operator asked for.
         if counter.fetch_add(1, Ordering::SeqCst) < 3 {
             Script::Unavailable
         } else {
@@ -311,9 +269,6 @@ async fn a_turn_parked_on_the_operator_shows_the_wait_and_the_release() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_run_stopped_by_its_budget_stops_cleanly_and_spends_exactly_its_allowance() {
-    // A guard doing its job is normal operation. What would not be is a run
-    // that reported a different number than it spent, or one that left an
-    // agent mid-turn when the money ran out.
     let stub = serve(|_| Script::SendTo {
         recipients: vec!["Chef".into()],
         text: "and another thing".into(),
@@ -338,9 +293,6 @@ async fn a_run_stopped_by_its_budget_stops_cleanly_and_spends_exactly_its_allowa
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn what_the_operator_watched_is_what_the_run_was_billed_for() {
-    // Two independent accounts of the same run: the events the UI counts as
-    // they arrive, and the rows the usage screen reads back afterward. A run
-    // is only observable if they agree.
     let stub = serve(|body| {
         let who = speaker(body);
         if who == "Chef" {
@@ -375,25 +327,12 @@ async fn what_the_operator_watched_is_what_the_run_was_billed_for() {
     );
 }
 
-// ---- work that will never be done -----------------------------------------
-//
-// A run settles when nothing is outstanding, and the turn that reads an
-// envelope is what releases it. Every path where an envelope is delivered and
-// then never read has to release it too, or the run waits on a turn that
-// cannot happen: no settle, no reconciliation of what it spent, and one entry
-// stuck in the runtime's in-flight table for the life of the process.
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn deleting_an_agent_that_was_holding_work_still_ends_its_run() {
-    // Found by this suite. A paused agent parks holding the message it was
-    // woken by; deleting it there dropped that message and the run's only
-    // outstanding piece of work with it, and the run never ended.
     let stub = serve(|_| Script::Say("on it".into())).await;
     let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
 
     let held = h.park("Chef", "start the prep").await;
-    // A second run's work, still queued behind the one being held. It goes the
-    // same way and has to be released the same way.
     let queued = h.runtime.send_from_human(h.id("Chef"), "and the stock").unwrap();
 
     h.runtime.store().set_lifecycle(h.id("Chef"), Lifecycle::Terminated).unwrap();
@@ -411,10 +350,6 @@ async fn deleting_an_agent_that_was_holding_work_still_ends_its_run() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_message_nobody_is_left_to_read_ends_its_run_rather_than_hanging() {
-    // The same accounting from the other side: the agent is gone by the time
-    // the envelope reaches its inbox. The operator is owed an ending either
-    // way, and a run that can never start should end immediately rather than
-    // stay in flight forever.
     let stub = serve(|_| Script::Say("nobody home".into())).await;
     let h = harness(&stub, &["Manager"], GuardLimits::default());
 
@@ -429,24 +364,8 @@ async fn a_message_nobody_is_left_to_read_ends_its_run_rather_than_hanging() {
     assert_eq!(h.trajectory(run).steps(), Some(0), "and nothing was spent on it");
 }
 
-// ---- work the operator called off ------------------------------------------
-//
-// A stop marks the run and wakes what is asleep on it. It releases nothing:
-// every envelope is released by whatever consumes it, and a stop that released
-// as well would take a run's count below zero, which `track_inflight` reads as
-// the run reaching zero and reports as a second ending.
-//
-// So what these ask is whether every boundary that notices a stop still leaves
-// the run exactly as accountable as an ordinary turn does: settled once, every
-// placeholder closed, every parked turn answered, and a budget that names the
-// calls that actually happened.
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stopping_a_run_ends_it_and_bills_only_the_calls_it_made() {
-    // A model that never stops asking for another round is the case a stop
-    // exists for. The accounting is the part worth pinning: the check sits
-    // before the step is claimed, and moved one line later it would leave the
-    // run reporting a call that a stop then prevented.
     let stub = serve(|_| Script::SendTo {
         recipients: vec!["Chef".into()],
         text: "and another thing".into(),
@@ -487,19 +406,6 @@ async fn stopping_a_run_ends_it_and_bills_only_the_calls_it_made() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stopping_a_run_abandons_the_model_call_it_was_waiting_on() {
-    // The window every other stop test steps over. A stop is noticed at four
-    // boundaries and a call in flight is between all of them, which is where a
-    // turn spends most of a long minute: the run was marked, the wake reached
-    // nobody that was listening, and the operator watched a button they had
-    // pressed do nothing until the provider answered. On the Claude provider
-    // that wait is a whole `claude` run holding their plan, up to the request
-    // timeout, so this was the difference between a stop and a suggestion.
-    //
-    // Two calls, because the accounting is the other half of the fix. The first
-    // answers and is counted. The second is abandoned, reports no usage and
-    // raises no error, so it belongs to neither of the two buckets the run's
-    // bill is read as — `steps == calls + failures` — and its step has to be
-    // given back or `expect_normal` reads the stop as a miscounted budget.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Hang
@@ -545,12 +451,6 @@ async fn stopping_a_run_abandons_the_model_call_it_was_waiting_on() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stopping_a_run_a_paused_agent_is_holding_still_ends_it() {
-    // The same shape as deleting an agent mid-hold, and the reason a stop wakes
-    // every inbox. A paused agent parks inside an await that only a resume
-    // reaches, holding the one booking the run is waiting on, so a stop that
-    // only marked the run would wait for somebody to resume an agent they had
-    // just called off. The check has to sit inside that park, not above it: the
-    // agent is already asleep by the time the stop arrives.
     let stub = serve(|_| Script::Say("on it".into())).await;
     let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
 
@@ -577,11 +477,6 @@ async fn stopping_a_run_a_paused_agent_is_holding_still_ends_it() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stopping_a_run_closes_the_request_it_was_waiting_on() {
-    // A parked turn holds its envelope inside a ten-minute window, so a stop
-    // that does not reach it leaves the run outstanding for ten minutes. Both
-    // halves are needed and the order matters: waking the turn while the row is
-    // still pending leaves a request nothing will ever answer, and the turn
-    // reads its verdict back off that row.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("Scout is set up.".into())
@@ -623,19 +518,6 @@ async fn stopping_a_run_closes_the_request_it_was_waiting_on() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stopping_everything_ends_every_run_exactly_once() {
-    // The lever the menu bar offers, and the reason it exists: closing the
-    // window leaves Guaca running, so the one thing that must work with no
-    // window is halting the spend. Two runs rather than one, because a stop
-    // that released the work it was ending would take a run's count below zero
-    // and report it finished twice, and a single run can hide that behind its
-    // own settle.
-    //
-    // Each conversation has a pair of agents to itself. A badge names an agent
-    // and not a run, so the ledger counts an agent's badge against every run
-    // that agent took part in. Two runs through the same two agents read each
-    // other's turns: `stop_everything` stops one run and then the other, an
-    // agent can start a turn in the second between the two, and the first
-    // settling while that turn was thinking read as the first settling early.
     let stub = serve(|body| {
         let peer = match speaker(body).as_str() {
             "Manager" => "Chef",
@@ -685,23 +567,6 @@ async fn stopping_everything_ends_every_run_exactly_once() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stopping_everything_ends_each_run_once_when_they_share_both_inboxes() {
-    // The shape the test above gives up: one conversation started at each of
-    // two agents, so both inboxes hold work from both runs when the stop lands.
-    // That is where a stop that released the work it was ending hides, behind
-    // the other run's settle.
-    //
-    // Asserted is only what the ledger reads per run. A badge names an agent
-    // and not a run, and `trajectory::read` says in its module comment that it
-    // is exact only while one run is in flight. Here two are, so "the run
-    // settled while Manager was still thinking" can be Manager's turn in the
-    // other run, and that one anomaly is left out. Everything else in the
-    // ledger is keyed by run.
-    //
-    // A stop is told apart from the other guard notices by its sentence,
-    // because they share one kind. Every turn here asks for another send until
-    // the stop lands, so on a slow machine a turn can reach the ceiling of tool
-    // calls first, and its agent then takes the next turn in the same run.
-    // That is the guard working, not a step after a stop.
     const PROBE: &str = "Is anything left?";
     let said_it_was_stopped = |text: &str| text.starts_with("You stopped this conversation");
     let stub = serve(|body| {
@@ -737,11 +602,6 @@ async fn stopping_everything_ends_each_run_once_when_they_share_both_inboxes() {
         );
     }
 
-    // A synchronization point, not a sleep. An actor takes one envelope at a
-    // time, so once a question sent to each agent after the stop has been
-    // answered, every turn either agent still had from the stopped runs has
-    // finished and released what it held. A run released twice settles again
-    // in one of those turns, so by now its second settle is in the stream.
     for name in ["Manager", "Chef"] {
         let probe = h.runtime.send_from_human(h.id(name), PROBE).unwrap();
         h.settle(probe).await;
@@ -780,9 +640,6 @@ async fn stopping_everything_ends_each_run_once_when_they_share_both_inboxes() {
             t.ledger
         );
 
-        // Once an agent has said a run was stopped, it never opens another
-        // placeholder or makes another call in that run. Both are keyed by
-        // run, so this holds however the two runs interleave.
         let mut told = std::collections::HashSet::new();
         for record in &t.records {
             match record {
@@ -804,11 +661,6 @@ async fn stopping_everything_ends_each_run_once_when_they_share_both_inboxes() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stopping_a_run_that_has_already_finished_changes_nothing() {
-    // The ordinary outcome of a stop pressed a moment too late. It is not an
-    // error, and it must write nothing: a line saying a conversation was
-    // stopped, in a conversation that ended on its own, describes something
-    // that did not happen. `settled_within` also asserts a run ends exactly
-    // once, which is what a stop that released work of its own would break.
     let stub = serve(|_| Script::Say("The kitchen is ready.".into())).await;
     let h = harness(&stub, &["Manager"], GuardLimits::default());
     let run = h.runtime.send_from_human(h.id("Manager"), "are we set?").unwrap();
@@ -827,18 +679,6 @@ async fn stopping_a_run_that_has_already_finished_changes_nothing() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stopping_a_run_mid_call_does_not_let_the_answer_reach_the_peer() {
-    // Found by review. Every other stop test drives a model that asks for
-    // another tool call, so the turn always comes back round to the check at the
-    // top of the round. A turn whose last call returns text and no tool calls
-    // leaves by the break at the bottom instead, and nothing there was looking:
-    // the reply went to the peer that was waiting, booking another envelope
-    // against a run the operator had already called off.
-    //
-    // The 503 is what makes that window wide enough to aim at. Chef's first
-    // attempt fails, the runtime waits out its backoff before trying again, and
-    // the stop lands inside that wait — so the second attempt returns text the
-    // turn then has to decide what to do with, which is exactly the state no
-    // other test can reach.
     let chef_calls = Arc::new(AtomicUsize::new(0));
     let counted = chef_calls.clone();
     let stub = serve(move |body| {
@@ -889,18 +729,11 @@ async fn stopping_a_run_mid_call_does_not_let_the_answer_reach_the_peer() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stopping_a_run_queued_behind_another_at_a_paused_agent_still_ends_it() {
-    // Found by review, and the nastiest shape a stop has. The actor only ever
-    // looks at the envelope it is holding, so a paused agent parked on run A
-    // never notices that run B — sitting behind it in the same inbox — has been
-    // stopped. B waited on a turn that could not happen until somebody resumed
-    // an agent the operator had already called off, which is the leak this
-    // whole suite exists to catch.
     let stub = serve(|_| Script::Say("on it".into())).await;
     let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
 
     let held = h.park("Chef", "start the prep").await;
 
-    // Queued behind the one being held, and belonging to a different run.
     let behind = h.runtime.send_from_human(h.id("Chef"), "and the stock").unwrap();
 
     assert!(h.runtime.stop_run(behind), "the queued run is outstanding");
@@ -910,9 +743,6 @@ async fn stopping_a_run_queued_behind_another_at_a_paused_agent_still_ends_it() 
         h.trajectory(behind).ledger
     );
 
-    // And the run that was NOT stopped is untouched: still held, still waiting
-    // for a resume, and it finishes when one arrives. Stopping one conversation
-    // must not end another that happens to share an inbox.
     assert!(
         !h.settled_within(held, 1).await,
         "the run nobody stopped ended anyway:\n{}",

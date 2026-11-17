@@ -28,8 +28,6 @@ fn request(arguments: Value) -> Script {
     Script::Plugin { name: "request_permission".into(), arguments }
 }
 
-/// A standing "always" for acting in the operator's name, written the way a
-/// build that accepted one wrote it: a request settled as `alwaysAllow`.
 fn standing_grant(h: &Harness, name: &str) {
     let card = h.agent_named(name).unwrap();
     let store = h.runtime.store();
@@ -60,9 +58,6 @@ async fn missing_block_fact_parks_even_with_a_real_standing_grant() {
     let h = harness_with_computer(&stub, &["Sender"], GuardLimits::default());
     let first = h.runtime.send_from_human(h.id("Sender"), "First").unwrap();
     let initial = h.awaited_request().await;
-    // "Always" is not an answer acting in the operator's name can be given.
-    // The card does not offer it, and a client that sends it anyway gets the
-    // yes for this once and no standing grant.
     let decided = h.runtime.decide_approval(initial, ApprovalDecision::AlwaysAllow).unwrap();
     assert_eq!(decided.state, ApprovalState::Allow);
     h.settle(first).await;
@@ -71,8 +66,6 @@ async fn missing_block_fact_parks_even_with_a_real_standing_grant() {
         .store()
         .has_standing_grant(h.id("Sender"), ProtectedAction::ActOnBehalf)
         .unwrap());
-    // So the grant this scenario is about is one an older build recorded,
-    // which is the only way one exists.
     standing_grant(&h, "Sender");
 
     h.runtime
@@ -108,11 +101,6 @@ async fn missing_block_fact_parks_even_with_a_real_standing_grant() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_standing_grant_to_act_in_the_operators_name_is_not_honored() {
-    // An "always" an older build recorded, or any client sent before it was
-    // refused, would let every later request through without the operator
-    // seeing it, and through the browser's own consent gate with it. It is
-    // left in the table, where the operator can still see and revoke it, and
-    // the request is asked about as if it were not there.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("Done".into())
@@ -198,9 +186,6 @@ async fn outside_domain_and_greater_than_block_allow_and_ask() {
     }
 }
 
-/// Lapses one request to act in the operator's name into For you, and allows
-/// it there after `rule` is written, so the turn the answer starts makes the
-/// same request again with a grant in hand.
 async fn allowed_after_a_lapse(
     arguments: Value,
     rule: RuleDraft,
@@ -239,9 +224,6 @@ async fn allowed_after_a_lapse(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_block_rule_beats_an_allow_given_on_for_you() {
-    // The grant is the operator's yes to one action. A rule is the operator's
-    // standing no, and it was written for exactly the case where they are not
-    // there to look: it wins, and the grant is left for nothing to spend.
     let block = policy(
         Effect::Block,
         vec![Condition {
@@ -263,8 +245,6 @@ async fn a_block_rule_beats_an_allow_given_on_for_you() {
         "the block refused it without spending the grant"
     );
 
-    // And a block that might apply, with its fact missing, asks rather than
-    // reading the grant, as it does with a standing one.
     let unsure = policy(
         Effect::Block,
         vec![Condition {

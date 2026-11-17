@@ -1,66 +1,25 @@
-/**
- * Every key the app answers to, in one list.
- *
- * The list exists because the app already answered to a dozen keys and said so
- * nowhere. Discoverability is the whole feature: an operator who cannot find a
- * shortcut does not have it.
- *
- * It is a reference, not a rebinding system, and the difference is deliberate.
- * Nine of these are handled by the component that owns the surface they work
- * on: Escape by whatever is open, Enter and the arrows by the composer and the
- * palette. Rebinding would mean routing all nine through one dispatcher, and a
- * setting that appeared to rebind a key and only moved one of them is worse
- * than no setting at all. So the fixed ones are listed as fixed, and only the
- * three that are genuinely global are matched from this table.
- *
- * What that buys, beyond the panel: `mod` here means Command or Control on
- * every platform, both accepted, which is the rule the one existing shortcut
- * already followed and the reason it is written down once now.
- */
-
 export interface Combo {
-  /** `event.key`, lowercased for letters and verbatim for named keys. */
   key: string;
-  /** Command or Control. Either one, on every platform. */
   mod?: boolean;
   shift?: boolean;
 }
 
-/** The surfaces a binding belongs to, in the order the panel lists them. */
 export const SURFACES = ["Anywhere", "A channel", "Search", "Anything open"] as const;
 
 export type Surface = (typeof SURFACES)[number];
 
 export interface Binding {
   id: string;
-  /** What it does, in the operator's words. */
   what: string;
   combo: Combo;
   where: Surface;
-  /**
-   * True when the key is owned by the surface it works on rather than by the
-   * one global handler, and therefore cannot be changed from here. Listing it
-   * anyway is the point: the panel is a map of what the app responds to, not of
-   * what happens to be configurable.
-   */
   fixed?: boolean;
 }
 
-/** A Mac, which spells its keys as glyphs and floats its window buttons over the rail. */
 export const IS_MAC = /mac/i.test(navigator.platform || navigator.userAgent);
 
-/**
- * How this machine writes the find shortcut, for the two places that draw it.
- *
- * Both modifiers open the palette wherever the app runs; only the label changes,
- * and a label naming a key the keyboard does not have is worse than none. It
- * lives here rather than in either caller because the rail's search field and
- * the composer's hint row are the same claim about the same binding, and two
- * copies of it is one of them going stale.
- */
 export const FIND_KEY = IS_MAC ? "⌘F" : "Ctrl F";
 
-/** How this machine writes the shortcut to the field, for the field itself. */
 export const FIELD_KEY = IS_MAC ? "⌘K" : "Ctrl K";
 
 export const BINDINGS: Binding[] = [
@@ -134,25 +93,8 @@ export const BINDINGS: Binding[] = [
   },
 ];
 
-/** The ids the one global handler dispatches. Everything else is `fixed`. */
 export const GLOBAL = BINDINGS.filter((binding) => !binding.fixed).map((binding) => binding.id);
 
-/**
- * True when this keystroke is that binding.
- *
- * Either modifier satisfies `mod`, on every platform: an operator who learned
- * the shortcut on a laptop should not have to learn it again on a desktop.
- * `shift` is checked only when the binding names it, because a shortcut that
- * silently stopped working with caps lock or a shifted layout would be
- * indistinguishable from a broken build.
- *
- * Alt never matches anything, and that is not fussiness. On Windows and Linux
- * AltGr arrives as Control *and* Alt, so on a layout where AltGr and a key
- * produce a character, typing that character would look exactly like a
- * shortcut: the global handler calls `preventDefault`, the character never
- * arrives, and a dialog opens instead. No binding here wants Alt, so the
- * cheapest correct rule is that none of them tolerate it.
- */
 export function matches(event: KeyboardEvent, combo: Combo): boolean {
   const key = combo.key.length === 1 ? event.key.toLowerCase() : event.key;
   if (key !== combo.key) return false;
@@ -162,7 +104,6 @@ export function matches(event: KeyboardEvent, combo: Combo): boolean {
   return true;
 }
 
-/** Which binding this keystroke is, if any. Only the global ones can match. */
 export function bindingFor(event: KeyboardEvent): Binding | undefined {
   return BINDINGS.find((binding) => !binding.fixed && matches(event, binding.combo));
 }
@@ -175,12 +116,6 @@ const NAMED: Record<string, string> = {
   ArrowDown: "↓",
 };
 
-/**
- * How this machine writes a shortcut.
- *
- * A label naming a key the keyboard does not have is worse than no label, so
- * the glyphs follow the platform even though the matching does not.
- */
 export function formatCombo(combo: Combo): string {
   const parts: string[] = [];
   if (combo.mod) parts.push(IS_MAC ? "⌘" : "Ctrl");
@@ -189,7 +124,6 @@ export function formatCombo(combo: Combo): string {
   return IS_MAC ? parts.join("") : parts.join("+");
 }
 
-/** The arrow pair reads as one shortcut, so the panel draws it as one. */
 export function comboLabel(binding: Binding): string {
   if (binding.id === "mention" || binding.id === "hit")
     return formatCombo({ key: "ArrowUp" }) + formatCombo({ key: "ArrowDown" });

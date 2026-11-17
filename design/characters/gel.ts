@@ -1,20 +1,3 @@
-/**
- * B. Gel. The body is simulated, not a function of time.
- *
- * Thirty-two point masses are held to the mood's rest shape by springs (shape
- * matching, translation only, so a creature never rolls over), with a pressure
- * term that keeps the area and a floor they stand on. A mood is a rest shape
- * and a tension; changing mood changes the rest shape and the body flows into
- * it. Everything that reads as weight (overshoot, settle, squash on landing,
- * a wobble that dies) falls out of that rather than being keyframed.
- *
- * The look is spent the way `form.ts` spends it, as a pear pulled after the
- * eyes, but on the goal rather than on the drawing, so the mass arrives a
- * fraction late and overshoots a little. That lag is the thing CHARACTERS.md
- * removed; it is back here at a tenth of the size, because a body that answers
- * on the same frame has no mass.
- */
-
 import { AIM } from "../../src/avatars/eyes";
 import { grip, outline } from "../../src/avatars/form";
 import { markFor, type Mood } from "../../src/avatars/moods";
@@ -43,9 +26,6 @@ import {
 
 const N = 32;
 
-/* --- the five rest shapes -------------------------------------------------- */
-
-/** A gel cannot hold a corner. The square is a pillow and the octagon a gumdrop. */
 type Rest = "ball" | "pillow" | "gumdrop" | "drop" | "cloud";
 
 const FROM: Record<Silhouette, Rest> = {
@@ -59,8 +39,6 @@ const FROM: Record<Silhouette, Rest> = {
 const RAW: Record<Rest, (a: number) => number> = {
   ball: () => 1,
   pillow: (a) => (Math.abs(Math.cos(a)) ** 3.4 + Math.abs(Math.sin(a)) ** 3.4) ** (-1 / 3.4),
-  /* A dome on a flat base: a superellipse that is round on top and squared off
-     underneath. */
   gumdrop: (a) => {
     const n = Math.sin(a) > 0 ? 4.2 : 2;
     const ax = 1.08;
@@ -84,48 +62,30 @@ const SCALE = Object.fromEntries(
   (Object.keys(RAW) as Rest[]).map((k) => [k, Math.sqrt(Math.PI / area(RAW[k]))]),
 ) as Record<Rest, number>;
 
-/* --- moods ------------------------------------------------------------------ */
-
-/** A bead eye, in bead radii. The bead is the whole eye, dark, with a light in it. */
 interface Bead {
-  /** Upper cut: 0 clear, 1 to the middle. The brow, cut across the bead. */
   cut: number;
-  /** How far the upper cut arches in its middle. Negative sags: a sleeping eye. */
   arch: number;
-  /** Degrees. Positive drops the inner end. */
   tilt: number;
-  /** Lower cut: 0 clear, 1 to the middle, bowed up by `smile`. */
   low: number;
   smile: number;
-  /** Height and width of the bead. */
   h: number;
   w: number;
-  /** Catch-light size. A second, lower light is a wet eye. */
   glint: number;
   wet: number;
-  /** The creature's right cut lower than its left. */
   skew: number;
 }
 
 interface Gel {
-  /** Spring toward the rest shape, 1/s². High is tense. */
   k: number;
-  /** Fraction of critical damping. Low wobbles. */
   zeta: number;
   aspect: [number, number];
-  /** Degrees the rest shape leans: a head tilt. */
   tilt: number;
-  /** Rest area against the resting body. Under 1 is deflated. */
   volume: number;
   gravity: number;
-  /** A random shove on every point, units/s². */
   tremble?: number;
-  /** A squeeze on a beat. */
   pulse?: { hz: number; amp: number };
-  /** An effort upward that fails, on a beat. */
   heave?: { hz: number; amp: number };
   breath?: { hz: number; amp: number };
-  /** What entering this mood does to the top of the body, units/s. Negative is up. */
   enter?: number;
   bead: Bead;
   gaze?: GazeSpec;
@@ -238,11 +198,8 @@ function mixBead(a: Bead, b: Bead, u: number): Bead {
   return out;
 }
 
-/* --- drawing a bead -------------------------------------------------------- */
-
 const ARC = 24;
 
-/** The dark of one eye: an ellipse between two cuts, never thinner than a line. */
 function beadPath(x: number, y: number, rx: number, ry: number, b: Bead, side: number, line: number) {
   const slope = Math.tan((b.tilt * Math.PI) / 180);
   const across = (lx: number) => (side === 0 ? rx * 0.5 - Math.abs(lx) : -side * lx);
@@ -267,8 +224,6 @@ function beadPath(x: number, y: number, rx: number, ry: number, b: Bead, side: n
   }
   return { d: poly([...top, ...bottom.reverse()]), open: clamp(1 - b.cut - b.low * 0.8) };
 }
-
-/* --- the creature -------------------------------------------------------------- */
 
 export const gel: Design = {
   key: "gel",
@@ -347,15 +302,12 @@ export const gel: Design = {
       const out = base.map(([qx, qy]): Point => {
         let x = qx * sx * vol;
         let y = qy * sy * vol;
-        /* Tilted about the base, not the middle, so a head tilt keeps its feet. */
         const by = y - bottomOf;
         const rx = x * cos - by * sin;
         const ry = x * sin + by * cos + bottomOf;
         x = rx;
         y = ry;
         if (held > 0) {
-          /* The pear from `form.ts`: the front drawn out and narrowed, the
-             back left round. Without the narrowing a pulled gel is a point. */
           const along = (x * ux + y * uy) / R;
           const side = (-x * uy + y * ux) / R;
           const s = smooth((along + 0.15) / 1.15);
@@ -366,9 +318,6 @@ export const gel: Design = {
         }
         return [x, y];
       });
-      /* Goals are offsets from the body's own centroid, so they have to sum
-         to nothing: a pull that moved their mean would carry the whole body
-         off the floor after the look instead of stretching it. */
       let mx = 0;
       let my = 0;
       for (const [x, y] of out) {
@@ -414,10 +363,6 @@ export const gel: Design = {
             (p[i] as Point)[1] = Math.min(floor, C + middle + q[1]);
           }
         } else {
-          /* What a mood does on the way in, and what a gesture does: velocity,
-             given once, and the springs do the rest. */
-          /* A beat late, so a message landing squashes first and the
-             surprise stretches after it: anticipation, then the take. */
           if (entered !== f.mood && f.since > 0.09) {
             entered = f.mood;
             if (g.enter) kick(p, v, [0, g.enter], 1.4);
@@ -472,8 +417,6 @@ export const gel: Design = {
               const d = dirs[i] as Point;
               if (heave && d[1] < 0) ay -= heave * -d[1];
               if (g.tremble) {
-                /* A shiver of the whole mass in its two lowest modes, not
-                   noise per point: noise per point is a crumpled bag. */
                 const th = (i / N) * TAU;
                 const n =
                   Math.sin(f.t * 83 + jitterSeed * 40) * Math.cos(2 * th) +
@@ -544,8 +487,6 @@ export const gel: Design = {
         shadow.setAttribute("ry", "1.9");
         shadow.setAttribute("opacity", (0.2 * (1 - lift * 0.6)).toFixed(3));
 
-        /* The face rides the top of the body: wherever the top half has been
-           pushed from its rest, the eyes go with it. */
         let cx = 0;
         let cy = 0;
         for (const [x, y] of p) {
@@ -595,8 +536,6 @@ export const gel: Design = {
           const ry = r * mine.h * size;
           const drawn = beadPath(bx, ey, rx, ry, mine, side, line);
           parts.dark.setAttribute("d", drawn.d);
-          /* The light stays with the light. When the eye turns, the glint
-             slides the other way across it, which is what reads as a turn. */
           const gr = r * 0.34 * mine.glint * drawn.open;
           parts.glint.setAttribute("cx", (bx - rx * 0.32 - look[0] * rx * 0.5).toFixed(2));
           parts.glint.setAttribute("cy", (ey - ry * 0.34 - look[1] * ry * 0.4 + ry * mine.cut * 0.5).toFixed(2));
@@ -611,7 +550,6 @@ export const gel: Design = {
   },
 };
 
-/** Velocity added to the top of the body, most at the crown. */
 function kick(p: Point[], v: Point[], dv: Point, power: number) {
   let top = 99;
   let bottom = -99;

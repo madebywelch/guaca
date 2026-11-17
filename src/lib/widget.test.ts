@@ -22,8 +22,6 @@ describe("a condensed view's frame", () => {
   });
 
   it("sets its defaults with no specificity, so the page's own rules win", () => {
-    // A default that outranked `body { color: red }` would be the bar deciding
-    // what an agent's page looks like.
     const framed = dressed("", barLook(DEFAULT_THEME, "light", 100));
     const rules = framed.match(/\}([^{}]+)\{/g) ?? [];
     for (const rule of rules) expect(rule).toMatch(/:where\(/);
@@ -62,8 +60,6 @@ describe("the sizes an agent is told", () => {
   const rem = (name: string) => Number(css.match(new RegExp(`${name}: ([\\d.]+)rem;`))?.[1]);
 
   it("are the sizes the bar draws", () => {
-    // The tool description is the only place an agent learns how big the strip
-    // is, in pixels. Change a width here and that sentence is wrong.
     const tools = read("src-tauri/src/llm/tools.rs");
     const said = tools.match(/about (\d+) pixels wide when\s*\\?\s*narrow and (\d+) when wide/);
     expect(said, "the artifact tool states both widths").not.toBeNull();
@@ -77,8 +73,6 @@ describe("the sizes an agent is told", () => {
   });
 
   it("draw a condensed view in the bar's own height", () => {
-    // The one line is set to the frame's height so it is centered in the frame
-    // and a line too long for it can end in an ellipsis.
     expect(rem("--control-h-sm") * ROOT_PX).toBe(BAR_HEIGHT_PX);
   });
 });

@@ -9,12 +9,9 @@ type ApprovalPart = Extract<Part, { type: "approval" }>;
 
 interface Props {
   part: ApprovalPart;
-  /** The agent that asked. Undefined once it has been deleted. */
   agent: AgentCard | undefined;
 }
 
-/** What the operator is told after the fact, per outcome. */
-/** What has not happened yet while the operator decides, by what was asked. */
 const NOTHING_YET: Record<ProtectedAction, string> = {
   createAgent: "Nothing has been created yet.",
   actOnBehalf: "Nothing has been sent yet.",
@@ -28,33 +25,11 @@ const SETTLED: Record<string, string> = {
   expired: "Nobody answered, so nothing happened.",
 };
 
-/** A request that ran out of time and was filed in For you instead. */
 const FILED = "Nobody answered in ten minutes. It is waiting in For you.";
 
-/**
- * An agent asking the operator for permission, in the channel it asked from.
- *
- * The agent is parked mid-turn while this is on screen, which is why it is a
- * card in the transcript rather than a dialog: the operator can read what led
- * to the request before answering it, and a request nobody answers lapses on
- * its own rather than blocking the window.
- *
- * Every value here is what a model asked for, so all of it is rendered as
- * text. An agent that could format its own request could draw a button.
- */
 export function ApprovalRequest({ part, agent }: Props) {
-  // A request the store has never heard of is older than the window it loads,
-  // so it cannot still be live. Drawing live buttons for one would offer the
-  // operator a decision that no longer reaches anybody.
   const state = useStore((s) => s.approvals[part.id]) ?? "expired";
-  // The same request is live here and on the desk at once, so answering it is
-  // one action in the store rather than one call in each card. Being answered
-  // somewhere else, or lapsing while this was on screen, is handled there: the
-  // runtime's copy is the truth and both readings of it are corrected together.
   const decide = useStore((s) => s.decideApproval);
-  // A lapse files the request in For you under its own id, in the commit that
-  // expires it. Browser consent and a request a restart ended are not filed,
-  // so they keep the sentence that says nothing happened.
   const filed = useStore((s) => s.decisions.some((d) => d.topic === `approval:${part.id}`));
   const [deciding, setDeciding] = useState<Decision | null>(null);
 
@@ -105,12 +80,6 @@ export function ApprovalRequest({ part, agent }: Props) {
           >
             Allow
           </button>
-          {/* Deliberately absent for anything done in the operator's name.
-              "Always" is scoped to an agent and an action, and this action is
-              "act outside the workspace", so a standing yes here would cover
-              every future send, submission and purchase rather than this one.
-              Creating an agent is narrow enough to be worth not asking twice;
-              this is not. */}
           {part.action === "createAgent" && (
             <button
               type="button"
@@ -130,15 +99,6 @@ export function ApprovalRequest({ part, agent }: Props) {
           >
             Deny
           </button>
-          {/* The scope of the middle button, said in full. "Always" reads as a
-              setting for the workspace, and it is not: it is one agent being
-              let off one question.
-
-              Nothing to say about scope for the other action, because the
-              runtime says it: a yes to acting in the operator's name can cover
-              the rest of a turn on one site, and only the request knows which
-              site that is. What is true of every one of them is that it is
-              gone by the next turn. */}
           {part.action === "createAgent" ? (
             <span className="ask__scope">Always allow is for {asker} only.</span>
           ) : (

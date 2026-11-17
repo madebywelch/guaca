@@ -20,25 +20,6 @@ import {
 } from "../lib/chart";
 import { seriesColor, seriesMark } from "../lib/palette";
 
-/**
- * A chart, drawn.
- *
- * All the arithmetic happened in `lib/chart.ts`; this file turns coordinates
- * into elements and handles the two things a coordinate cannot: what the
- * pointer is on, and what the legend has switched off.
- *
- * Drawn at a fixed width and scaled by CSS rather than measured. jsdom does no
- * layout, so a chart that sized itself from a real element would be exercised
- * by no test in this repo; and a chart that waits to be measured is a jump on
- * every first paint. The trade is that type grows a little when a figure is
- * opened large, which is the behavior a figure should have anyway.
- *
- * Three things carry every value, and that is deliberate. The marks carry the
- * shape, the direct labels and the readout carry the number, and the table
- * underneath carries all of them. A tooltip may never be the only way to find
- * out what something is worth: it is unreachable by touch, unreachable by a
- * screen reader, and gone from a screenshot.
- */
 export function Chart({ chart }: { chart: ChartValue }) {
   const plot = useMemo(() => layout(chart), [chart]);
   const names = useMemo(() => chartSeriesNames(chart), [chart]);
@@ -46,8 +27,6 @@ export function Chart({ chart }: { chart: ChartValue }) {
   const [at, setAt] = useState<number | null>(null);
   const titleId = useId();
 
-  // A legend that could switch everything off is a legend that can empty the
-  // chart, and an empty frame reads as a chart that broke.
   const toggle = (index: number) =>
     setHidden((was) => {
       const next = new Set(was);
@@ -82,17 +61,11 @@ export function Chart({ chart }: { chart: ChartValue }) {
         </svg>
         <Readout chart={chart} plot={plot} hidden={hidden} at={at} names={names} />
       </div>
-      {/* One series needs no legend: there is one color, and the title above
-          already says what is plotted. A box with a single swatch in it
-          restates the title and costs a line. */}
       {names.length > 1 && (
         <Legend
           chart={chart}
           names={names}
           hidden={hidden}
-          // A pie's legend is a key and nothing more. Its slices are shares of
-          // one whole, so switching one off would leave the others claiming
-          // percentages of a total that has not changed.
           onToggle={isRadial(chart) ? null : toggle}
         />
       )}
@@ -100,7 +73,6 @@ export function Chart({ chart }: { chart: ChartValue }) {
   );
 }
 
-/** Bars, lines and areas, which share an axis and a set of category bands. */
 function Cartesian({
   chart,
   plot,
@@ -119,8 +91,6 @@ function Cartesian({
 
   return (
     <>
-      {/* Gridlines are solid hairlines a step off the surface. Dashed reads as
-          a threshold or a projection when it is only a grid. */}
       {plot.ticks.map((tick) => (
         <line
           key={tick.value}
@@ -194,8 +164,6 @@ function Cartesian({
         ),
       )}
 
-      {/* Only where the pointer is. A dot on every point of a twelve-month line
-          is a bead necklace, and the line already says where the readings are. */}
       {plot.dots.map((dot) =>
         hidden.has(dot.series) || at !== dot.band ? null : (
           <circle
@@ -221,16 +189,6 @@ function Cartesian({
         </text>
       ))}
 
-      {/* The hit target is the whole band, not the marks in it: a reader aims
-          at a month, never at a two-pixel line.
-
-          Not focusable, and carrying no label. The `svg` above is `role="img"`
-          with a sentence describing itself, which makes everything inside it
-          invisible to a screen reader by definition, so a label here would be
-          announced to nobody. Tab stops would be worse than useless: twelve
-          invisible rectangles between the message above and the message below,
-          for a readout the Figures table already holds in full and in a form
-          somebody can actually read. The readout enhances; it never gates. */}
       {plot.bands.map((band) => (
         <rect
           key={band.center}
@@ -247,7 +205,6 @@ function Cartesian({
   );
 }
 
-/** Pies and donuts. */
 function Radial({
   chart,
   plot,
@@ -289,14 +246,6 @@ function Radial({
   );
 }
 
-/**
- * Clouds of points.
- *
- * Every series wears a shape as well as a color. That is not decoration: in a
- * scatter any dot can end up beside any other, so the guarantee that holds for
- * neighboring colors elsewhere does not hold here at all, and shape is the
- * channel that survives colorblindness, gray print and a screenshot.
- */
 function Scatter({
   chart,
   plot,
@@ -362,13 +311,6 @@ function Scatter({
   );
 }
 
-/**
- * One point, with a target far bigger than itself.
- *
- * A nine-pixel dot is a pinpoint nobody hits, so the transparent circle over it
- * is what the pointer is actually aiming at. The ring in the surface color is
- * what keeps two overlapping points readable as two.
- */
 function Mark({ dot, lit, onEnter }: { dot: Point; lit: boolean; onEnter: () => void }) {
   const color = seriesColor(dot.series);
   const shape = seriesMark(dot.series);
@@ -397,18 +339,6 @@ function Mark({ dot, lit, onEnter }: { dot: Point; lit: boolean; onEnter: () => 
   );
 }
 
-/**
- * What is under the pointer, as words.
- *
- * Every series at that category, not just the one the pointer landed on: a
- * reader comparing two lines should not have to hit each of them in turn. The
- * value leads and the name follows, which is the legend's hierarchy inverted,
- * because by the time somebody is hovering they know which series they want
- * and are after the number.
- *
- * Positioned as a percentage of the drawing rather than in its coordinates,
- * since the drawing is scaled by CSS and this is not inside it.
- */
 function Readout({
   chart,
   plot,
@@ -479,8 +409,6 @@ function Readout({
       {chart.series.map((series, index) =>
         hidden.has(index) ? null : (
           <p className="chart__readout-row" key={series.name}>
-            {/* A short stroke of the series color, not a filled box: at this
-                density a box is data-weight ink doing a label's job. */}
             <span className="chart__key" style={{ background: seriesColor(index) }} />
             <span className="chart__readout-value">
               {series.values[at] === null || series.values[at] === undefined
@@ -495,15 +423,6 @@ function Readout({
   );
 }
 
-/**
- * Which series is which, and which are switched off.
- *
- * Always present past one series, because color-matching alone is not an
- * identity channel a reader can rely on. Toggling never repaints what is left:
- * a color belongs to a series, not to its position in what is currently shown,
- * and an operator who has learned that revenue is green is misled by a chart
- * that reassigns it when something else is hidden.
- */
 function Legend({
   chart,
   names,
@@ -513,7 +432,6 @@ function Legend({
   chart: ChartValue;
   names: string[];
   hidden: ReadonlySet<number>;
-  /** `null` where switching a series off would misstate the rest. */
   onToggle: ((index: number) => void) | null;
 }) {
   const line = chart.kind === "line" || chart.kind === "area";
@@ -526,13 +444,9 @@ function Legend({
             pressed={onToggle ? !hidden.has(index) : undefined}
             onClick={onToggle ? () => onToggle(index) : undefined}
           >
-            {/* The legend mirrors the mark: a rule for a line, a swatch for
-                anything filled, a shape for a scatter. */}
             <span
               className={line ? "chart__key" : "chart__swatch"}
               data-mark={isScatter(chart) ? seriesMark(index) : undefined}
-              // Both, because a triangle is drawn out of a border and a border
-              // reads `currentColor`. One or the other leaves one shape gray.
               style={{ background: seriesColor(index), color: seriesColor(index) }}
             />
             {name}
@@ -543,12 +457,6 @@ function Legend({
   );
 }
 
-/**
- * One legend row: a switch where there is something to switch, otherwise a key.
- *
- * A button that does nothing when pressed is worse than a label, so a legend
- * that cannot hide anything is not made of buttons.
- */
 function Entry({
   className,
   pressed,
@@ -574,15 +482,6 @@ function Entry({
   );
 }
 
-/**
- * The chart as its own numbers.
- *
- * Not a fallback. It is how a value is read by a screen reader, by an operator
- * who cannot separate two of the hues, and by anybody who wants the figure
- * rather than the shape. Folded away because a transcript is a conversation and
- * a table under every chart doubles its height; one press from open, because a
- * value behind a hover is a value some readers can never get to.
- */
 export function ChartFigures({ chart }: { chart: ChartValue }) {
   const table = useMemo(() => chartTable(chart), [chart]);
   return (

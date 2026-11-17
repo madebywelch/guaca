@@ -1,9 +1,3 @@
-//! The push address: what reaches a person with every window closed, through
-//! the real runtime with a scripted model and a stub receiver on loopback.
-//!
-//! Each scenario drives the cause, steps the dispatcher with a clock it is
-//! handed, then steps the sender, and reads what the receiver was sent. No
-//! test here, and nothing it starts, reaches anything but 127.0.0.1.
 mod harness;
 
 use std::collections::{HashMap, VecDeque};
@@ -21,12 +15,9 @@ use guac_lib::push::{Content, Format};
 use guac_lib::runtime::guard::GuardLimits;
 use harness::*;
 
-/// The part of the address that is a password: anyone who knows a topic on a
-/// public ntfy server can read it.
 const TOPIC: &str = "guaca-topic-SECRET-5c1e";
 const TOKEN: &str = "tk_SECRET_token_7a9b";
 
-/// One request the receiver took.
 #[derive(Debug, Clone)]
 struct Seen {
     path: String,
@@ -40,8 +31,6 @@ impl Seen {
     }
 }
 
-/// A receiver on loopback that answers each POST with the next status it was
-/// given, and 200 once it runs out.
 struct Receiver {
     url: String,
     seen: Arc<Mutex<Vec<Seen>>>,
@@ -97,7 +86,6 @@ fn deliver_to(h: &Harness, url: &str, change: impl FnOnce(&mut DeliveryConfig)) 
         .unwrap();
 }
 
-/// One outbox row, as much of it as these scenarios read.
 #[derive(Debug, Clone)]
 struct Row {
     id: String,
@@ -128,7 +116,6 @@ fn pushes(h: &Harness) -> Vec<Row> {
     rows(h).into_iter().filter(|row| row.destination == "endpoint").collect()
 }
 
-/// Runs a routine for each agent and lets it finish, with nobody at a window.
 async fn routines_finish(h: &Harness, names: &[&str]) {
     for name in names {
         let routine = h
@@ -148,7 +135,6 @@ async fn routines_finish(h: &Harness, names: &[&str]) {
     }
 }
 
-/// Closes the gathering finished work waits in, and returns when that was.
 fn gathering_closes(h: &Harness) -> i64 {
     let now = now_ms();
     h.runtime.dispatch_deliveries(now);
@@ -205,7 +191,6 @@ async fn finished_work_while_away_is_one_post_of_its_own_line_with_the_token() {
     assert_eq!(report.last_sent_at, Some(closes));
     assert_eq!(report.last_error, None);
 
-    // Sent once: the next pass finds nothing to send.
     assert_eq!(h.runtime.push_deliveries(closes + 60 * 60 * 1000).await, 0);
     assert_eq!(address.seen().len(), 1);
 }
@@ -324,8 +309,6 @@ async fn generic_content_says_only_that_something_finished() {
     assert_eq!(body["agent"], serde_json::Value::Null);
     assert_eq!(body["group"], serde_json::Value::Null);
 
-    // Nor is the line kept anywhere for the push: what it says was decided
-    // when it was written.
     let conn = h.runtime.store().conn().unwrap();
     let stored: String = conn
         .query_row("SELECT body FROM outbox WHERE destination='endpoint'", [], |row| row.get(0))
@@ -434,7 +417,6 @@ async fn a_retry_is_dropped_once_the_operator_is_back_or_has_seen_it() {
     h.runtime.dispatch_deliveries(now);
     assert_eq!(h.runtime.push_deliveries(now).await, 0, "refused once");
 
-    // The operator comes back before it is tried again: a window shows them.
     let view = OperatorView { agent_id: None, ..Default::default() };
     h.runtime.report_window(view, true, Some("desk".into()));
     assert_eq!(h.runtime.push_deliveries(now + 30_000).await, 0);
@@ -445,7 +427,6 @@ async fn a_retry_is_dropped_once_the_operator_is_back_or_has_seen_it() {
         ("suppressed", Some("operator present"))
     );
 
-    // Seen is the other way a push is dropped: in the commit that saw it.
     let stub = serve(done()).await;
     let h = harness(&stub, &["R1"], GuardLimits::default());
     let address = receiver().await;
@@ -478,10 +459,6 @@ async fn a_test_push_says_what_came_back() {
     assert_eq!(h.runtime.test_push().await.unwrap_err(), "403 Forbidden. Check the token.");
 }
 
-// ---- the address and the token stay secret ------------------------------
-
-/// Every log line any test in this binary writes, at every level of ours and
-/// at debug for every library, the HTTP client included.
 fn logs() -> &'static Arc<Mutex<Vec<u8>>> {
     static LOGS: OnceLock<Arc<Mutex<Vec<u8>>>> = OnceLock::new();
     LOGS.get_or_init(|| {
@@ -512,8 +489,6 @@ impl Write for Lines {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_address_and_the_token_never_leave_the_host_beyond_a_hint() {
     let logs = logs();
-    // An agent reads the settings and asks to change the address, and every
-    // request the model is sent is kept to look through afterwards.
     let asked = Arc::new(Mutex::new(Vec::<String>::new()));
     let heard = asked.clone();
     let stub = serve(move |body| {
@@ -537,8 +512,6 @@ async fn the_address_and_the_token_never_leave_the_host_beyond_a_hint() {
     address.answer(&[401]);
     deliver_to(&h, &address.url, |_| {});
 
-    // A refused push, a refused test, and a test to an address nothing
-    // listens on, which is the error a client library writes the address into.
     routines_finish(&h, &["Helper"]).await;
     let closes = gathering_closes(&h);
     h.runtime.push_deliveries(closes).await;
@@ -577,12 +550,8 @@ async fn the_address_and_the_token_never_leave_the_host_beyond_a_hint() {
     }
 }
 
-/// How long the other pages have to take what one page gave back; the
-/// dispatcher's own constant is private to the runtime.
 const RECLAIM_MS: i64 = 15_000;
 
-/// A window with focus on another channel, so presence says the operator is
-/// here, and the escalation it is offered.
 async fn an_escalation_offered_while_here(h: &Harness) -> String {
     let view = OperatorView { agent_id: Some(h.id("Notes")), ..Default::default() };
     h.runtime.report_window(view, true, Some("desk".into()));
@@ -652,7 +621,6 @@ async fn two_pages_giving_it_back_is_one_push_at_once_while_the_operator_is_here
     deliver_to(&h, &address.url, |_| {});
     let id = an_escalation_offered_while_here(&h).await;
 
-    // The main window and a second page on the same Mac, both refused.
     assert!(h.runtime.claim_delivery(&id, Some("desk")).unwrap());
     assert!(h.runtime.release_delivery(&id, "desk").unwrap());
     assert!(h.runtime.claim_delivery(&id, Some("panel")).unwrap());
@@ -680,14 +648,12 @@ async fn a_push_already_sent_is_not_sent_again_when_a_window_gives_it_back() {
     let address = receiver().await;
     deliver_to(&h, &address.url, |_| {});
 
-    // Offered and pushed while the operator was away.
     let run = h.runtime.send_from_human(h.id("Analyst"), "Ship it.").unwrap();
     h.settle(run).await;
     let now = now_ms();
     h.runtime.dispatch_deliveries(now);
     assert_eq!(h.runtime.push_deliveries(now).await, 1);
 
-    // They come back, the window catches up, and macOS refuses that banner.
     let id = h.runtime.pending_deliveries(Some("desk")).unwrap()[0].id.clone();
     assert!(h.runtime.claim_delivery(&id, Some("desk")).unwrap());
     assert!(h.runtime.release_delivery(&id, "desk").unwrap());
@@ -710,8 +676,6 @@ async fn a_push_the_operators_return_dropped_is_sent_when_the_window_gives_it_ba
     h.runtime.dispatch_deliveries(now);
     assert_eq!(h.runtime.push_deliveries(now).await, 0, "refused once");
 
-    // Back before it is tried again, so the retry is dropped; then the banner
-    // the window raises instead is refused.
     let view = OperatorView { agent_id: Some(h.id("Notes")), ..Default::default() };
     h.runtime.report_window(view, true, Some("desk".into()));
     assert_eq!(h.runtime.push_deliveries(now + 30_000).await, 0);

@@ -1,18 +1,3 @@
-//! Where the bytes of an attachment actually live.
-//!
-//! One flat directory beside the agents' memories, addressed by the SHA-256 of
-//! the contents. Content addressing is not cleverness here, it is the cheapest
-//! answer to the thing this feature does constantly: the same document is sent
-//! to three agents, forwarded once more, and re-attached next week, and every
-//! one of those is the same bytes. Storing them once also makes the store
-//! append-only, which means nothing that is being read can be rewritten
-//! underneath a reader.
-//!
-//! Nothing is ever deleted. A transcript that survives an agent's deletion is a
-//! promise this app already makes, and a file the transcript refers to has to
-//! outlive the agent too. Reclaiming space means walking every message for live
-//! digests, which is a job for the day somebody notices the directory.
-
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -27,8 +12,6 @@ pub enum FileError {
     TooBig { name: String, bytes: u64, max: u64 },
     #[error("a file must have a name")]
     Unnamed,
-    // Dropping a folder is a thing people do, and the reason it cannot work is
-    // not something they should have to infer from a read error.
     #[error("{name} is a folder. Attach the files inside it instead")]
     IsFolder { name: String },
     #[error("no file here with that content")]
@@ -47,7 +30,6 @@ impl FileError {
     }
 }
 
-/// The files every agent and the operator can refer to.
 #[derive(Debug, Clone)]
 pub struct FileStore {
     root: PathBuf,
@@ -58,11 +40,6 @@ impl FileStore {
         Self { root }
     }
 
-    /// Takes bytes in and returns what a message should carry.
-    ///
-    /// Writing is skipped when the digest is already stored: the contents are
-    /// the address, so a second write of the same file could only produce the
-    /// same file.
     pub fn put(&self, name: &str, bytes: &[u8]) -> Result<Attachment, FileError> {
         let name = clean_name(name).ok_or(FileError::Unnamed)?;
         let size = bytes.len() as u64;
@@ -75,9 +52,6 @@ impl FileStore {
         if !path.exists() {
             let parent = path.parent().expect("a stored file is never at the root");
             fs::create_dir_all(parent).map_err(|e| FileError::io(parent, e))?;
-            // Written under a temporary name and renamed, so a reader can never
-            // open a file that is still being written. Renaming within one
-            // directory is atomic on every filesystem this app runs on.
             let pending = path.with_extension("writing");
             fs::write(&pending, bytes).map_err(|e| FileError::io(&pending, e))?;
             fs::rename(&pending, &path).map_err(|e| FileError::io(&path, e))?;
@@ -86,15 +60,12 @@ impl FileStore {
         Ok(Attachment { digest, name: name.clone(), mime: mime_for(&name), bytes: size })
     }
 
-    /// Reads a file in from somewhere on the operator's disk.
     pub fn take(&self, source: &Path) -> Result<Attachment, FileError> {
         let name = source
             .file_name()
             .and_then(|n| n.to_str())
             .map(str::to_string)
             .ok_or(FileError::Unnamed)?;
-        // Checked before reading rather than after: the point of a limit is not
-        // to load a gigabyte into memory and then object to it.
         let about = fs::metadata(source).map_err(|e| FileError::io(source, e))?;
         if about.is_dir() {
             return Err(FileError::IsFolder { name });
@@ -107,12 +78,6 @@ impl FileStore {
         self.put(&name, &bytes)
     }
 
-    /// What a message should carry for a file that is already stored.
-    ///
-    /// Everything but "which bytes" and "what to call it" is worked out here
-    /// rather than taken from the caller. The webview holds a reference to a
-    /// file it was shown, not authority over what that file is, so the size
-    /// comes off the disk and the type comes off the name.
     pub fn reference(&self, digest: &str, name: &str) -> Result<Attachment, FileError> {
         let name = clean_name(name).ok_or(FileError::Unnamed)?;
         let path = self.stored(digest).ok_or(FileError::Unknown)?;
@@ -130,14 +95,6 @@ impl FileStore {
         fs::read(&path).map_err(|e| FileError::io(&path, e))
     }
 
-    /// Answers the webview's request for one stored file.
-    ///
-    /// `target` is the path of a preview URL, still percent-encoded:
-    /// `{digest}/{name}`. The name only decides the type that goes back, and a
-    /// caller that renames a file cannot turn it into a different one, because
-    /// the bytes are addressed by their content and nothing else.
-    ///
-    /// Ranges are answered because a webview's own PDF viewer asks for them.
     pub fn serve(&self, target: &str, range: Option<&str>) -> Result<Served, FileError> {
         let target = decode(target);
         let (digest, name) = target.split_once('/').unwrap_or((target.as_str(), ""));
@@ -158,25 +115,14 @@ impl FileStore {
         }
     }
 
-    /// Writes a copy of a stored file where a person can get at it.
-    ///
-    /// Never overwrites. Saving the same document twice means the operator
-    /// wants a second copy or has lost the first, and neither is a reason for
-    /// this app to destroy a file it did not write.
     pub fn save_copy(&self, digest: &str, name: &str, into: &Path) -> Result<PathBuf, FileError> {
         save_bytes(name, &self.read(digest)?, into)
     }
 
-    /// The text of a file, for a prompt, cut at `limit` characters.
-    ///
-    /// Lossy on purpose. This is only ever called for a type that is text, and
-    /// one invalid byte in a log file should cost that byte rather than the
-    /// whole document.
     pub fn read_text(&self, digest: &str, limit: usize) -> Result<(String, bool), FileError> {
         self.read_text_at(digest, 0, limit)
     }
 
-    /// Character offsets let a model read past the prompt limit without a machine.
     pub fn read_text_at(
         &self,
         digest: &str,
@@ -191,18 +137,10 @@ impl FileStore {
     }
 
     fn path(&self, digest: &str) -> PathBuf {
-        // Two levels, because one directory with every file this app has ever
-        // seen is slow to list and unpleasant to look at.
         let (prefix, rest) = digest.split_at(2.min(digest.len()));
         self.root.join(prefix).join(rest)
     }
 
-    /// Where a stored file is, or `None` when nothing is stored there.
-    ///
-    /// The gate on every read. A digest now arrives from the webview asking for
-    /// a preview, and it is joined onto a directory: anything that is not the
-    /// 64 hex characters of a SHA-256 is refused before that join rather than
-    /// after it, so nothing that means something to a path ever reaches one.
     fn stored(&self, digest: &str) -> Option<PathBuf> {
         if digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_hexdigit()) {
             return None;
@@ -212,26 +150,14 @@ impl FileStore {
     }
 }
 
-/// One stored file, on its way to the webview.
-///
-/// A preview is bytes, and bytes do not travel over IPC in this app: the
-/// webview reads a file over a URL scheme of its own instead, and this is what
-/// that scheme hands back. `app.rs` turns it into an HTTP response.
 #[derive(Debug, PartialEq)]
 pub struct Served {
     pub status: u16,
     pub mime: String,
-    /// The whole file, or the slice a range asked for.
     pub body: Vec<u8>,
-    /// `content-range`, on a partial answer only.
     pub content_range: Option<String>,
 }
 
-/// The range a webview asks for: `bytes=first-last`, with either end implied.
-///
-/// Anything else, a range past the end included, is `None` and gets the whole
-/// file. That is a legal answer to a range request and a better one than an
-/// error, which a picture cannot show and a PDF viewer gives up on.
 fn parse_range(header: &str, total: u64) -> Option<(u64, u64)> {
     if total == 0 {
         return None;
@@ -239,7 +165,6 @@ fn parse_range(header: &str, total: u64) -> Option<(u64, u64)> {
     let spec = header.trim().strip_prefix("bytes=")?.split(',').next()?.trim();
     let (first, last) = spec.split_once('-')?;
     let (start, end) = match (first.trim(), last.trim()) {
-        // A suffix range: the last n bytes, however many there turn out to be.
         ("", n) => (total.saturating_sub(n.parse::<u64>().ok()?), total - 1),
         (s, "") => (s.parse().ok()?, total - 1),
         (s, e) => (s.parse().ok()?, e.parse::<u64>().ok()?.min(total - 1)),
@@ -247,8 +172,6 @@ fn parse_range(header: &str, total: u64) -> Option<(u64, u64)> {
     (start <= end && start < total).then_some((start, end))
 }
 
-/// Percent-decoding, for the one thing that arrives encoded: the name in a
-/// preview URL, which holds spaces and brackets often enough to matter.
 fn decode(raw: &str) -> String {
     let bytes = raw.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -269,7 +192,6 @@ fn decode(raw: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Fetches a backend attachment onto the client machine without navigating its webview.
 pub async fn download(
     origin: &str,
     token: &str,
@@ -283,7 +205,6 @@ pub async fn download(
     let name = clean_name(name).ok_or_else(|| FileError::Unnamed.to_string())?;
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
-        // A redirect must not turn a workspace credential into another host's input.
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| e.to_string())?;
@@ -344,8 +265,6 @@ pub async fn download(
         .map_err(|e| e.to_string())?
 }
 
-/// Reserve the name atomically: two simultaneous downloads must not overwrite
-/// each other, an existing document, or a symlink in Downloads.
 fn save_bytes(name: &str, bytes: &[u8], into: &Path) -> Result<PathBuf, FileError> {
     let name = clean_name(name).ok_or(FileError::Unnamed)?;
     fs::create_dir_all(into).map_err(|e| FileError::io(into, e))?;
@@ -384,12 +303,6 @@ fn save_bytes(name: &str, bytes: &[u8], into: &Path) -> Result<PathBuf, FileErro
     ))
 }
 
-/// The name as it will be shown and as it will land on a machine.
-///
-/// A name arrives from an operator's disk or from a model, so it is treated as
-/// hostile: directory separators would let an attachment write outside the
-/// inbox it is placed in, and a leading dot hides the file from the agent that
-/// was just told it is there.
 fn clean_name(name: &str) -> Option<String> {
     let base = name.rsplit(['/', '\\']).next().unwrap_or_default().trim();
     let cleaned: String = base
@@ -506,8 +419,6 @@ mod tests {
 
     #[test]
     fn the_same_file_twice_is_stored_once() {
-        // The common case, not an edge case: one document sent to three agents
-        // and forwarded on is four references to one set of bytes.
         let (files, _dir) = store();
         let first = files.put("draft.docx", b"contents").unwrap();
         let again = files.put("copy-of-draft.docx", b"contents").unwrap();
@@ -519,8 +430,6 @@ mod tests {
 
     #[test]
     fn a_file_over_the_limit_is_refused_by_name_and_size() {
-        // The message reaches an operator or a model, so it has to say which
-        // file and by how much.
         let (files, _dir) = store();
         let huge = vec![0u8; (MAX_FILE_BYTES + 1) as usize];
         let err = files.put("enormous.zip", &huge).unwrap_err();
@@ -531,13 +440,9 @@ mod tests {
 
     #[test]
     fn a_name_cannot_escape_the_directory_it_will_be_written_into() {
-        // Names come from operators' disks and from models, and this one is
-        // placed on an agent's machine later.
         let (files, _dir) = store();
         assert_eq!(files.put("../../etc/passwd", b"x").unwrap().name, "passwd");
         assert_eq!(files.put(r"C:\Users\me\notes.txt", b"x").unwrap().name, "notes.txt");
-        // The name is written into a shell command when a file is placed on a
-        // machine, so nothing that means something to a shell survives it.
         let risky = files.put("plans; rm -rf $HOME `id`.md", b"x").unwrap().name;
         assert!(
             !risky.contains([';', '$', '`', '&', '|', '>', '<']),
@@ -556,8 +461,6 @@ mod tests {
 
     #[test]
     fn a_folder_is_refused_with_something_a_person_can_do_about_it() {
-        // People drop folders. "Is a directory (os error 21)" is a true answer
-        // and a useless one.
         let (files, dir) = store();
         let err = files.take(dir.path()).unwrap_err();
         assert!(err.to_string().contains("folder"), "{err}");
@@ -578,8 +481,6 @@ mod tests {
 
     #[test]
     fn a_name_with_spaces_arrives_encoded_and_is_still_the_same_file() {
-        // The webview builds the URL with `encodeURIComponent`, so the
-        // separator and every space in the name reach this side as escapes.
         let (files, _dir) = store();
         let stored = files.put("last quarter (final).pdf", b"x").unwrap();
 
@@ -592,7 +493,6 @@ mod tests {
 
     #[test]
     fn a_digest_that_is_not_a_digest_never_reaches_the_filesystem() {
-        // This one arrives from the webview, and it is joined onto a path.
         let (files, dir) = store();
         std::fs::write(dir.path().join("secret"), b"private").unwrap();
 
@@ -608,8 +508,6 @@ mod tests {
 
     #[test]
     fn a_range_gets_the_slice_it_asked_for_and_says_which_slice_it_is() {
-        // A webview's own PDF viewer asks in ranges, and a viewer handed the
-        // whole file for every range request re-reads it once per page.
         let (files, _dir) = store();
         let stored = files.put("doc.pdf", b"0123456789").unwrap();
         let target = format!("{}/doc.pdf", stored.digest);
@@ -623,7 +521,6 @@ mod tests {
         assert_eq!(open_ended.body, b"789");
         assert_eq!(open_ended.content_range.as_deref(), Some("bytes 7-9/10"));
 
-        // The tail, which is where a PDF keeps the table it opens with.
         let suffix = files.serve(&target, Some("bytes=-3")).unwrap();
         assert_eq!(suffix.body, b"789");
         assert_eq!(suffix.content_range.as_deref(), Some("bytes 7-9/10"));
@@ -631,8 +528,6 @@ mod tests {
 
     #[test]
     fn a_range_that_makes_no_sense_gets_the_whole_file_rather_than_an_error() {
-        // Ignoring a range is a legal answer and a picture can show it. An
-        // error is a broken image icon.
         let (files, _dir) = store();
         let stored = files.put("doc.pdf", b"0123456789").unwrap();
         let target = format!("{}/doc.pdf", stored.digest);
@@ -643,7 +538,6 @@ mod tests {
             assert_eq!(served.body.len(), 10, "{header}");
         }
 
-        // Past the end but overlapping is still a slice, not a refusal.
         let clamped = files.serve(&target, Some("bytes=8-99")).unwrap();
         assert_eq!(clamped.body, b"89");
         assert_eq!(clamped.content_range.as_deref(), Some("bytes 8-9/10"));
@@ -651,8 +545,6 @@ mod tests {
 
     #[test]
     fn a_reference_takes_the_bytes_and_the_name_and_works_out_the_rest() {
-        // The webview holds a reference to a file it was shown, not authority
-        // over what that file is.
         let (files, _dir) = store();
         let stored = files.put("sheet.csv", b"a,b,c").unwrap();
 
@@ -715,8 +607,6 @@ mod tests {
 
     #[test]
     fn a_half_written_file_is_never_visible_under_its_own_name() {
-        // Readers address a file by its digest the moment a message carrying it
-        // is delivered, which can be while the sender is still writing.
         let (files, _dir) = store();
         let stored = files.put("big.bin", &vec![7u8; 4096]).unwrap();
         let path = files.path(&stored.digest);

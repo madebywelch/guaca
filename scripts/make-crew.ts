@@ -1,21 +1,3 @@
-/**
- * Draws the crew strip in the README.
- *
- * Rendered from the app's own drawing code rather than redrawn: `form.ts` for
- * the body, `eyes.ts` for the face, `moods.ts` for the expression. A redesign
- * updates the front page by re-running this rather than by somebody noticing
- * the picture is out of date, which is what happened to the cast before this
- * one.
- *
- *   ./scripts/make-crew.sh
- *
- * One frame, held still. The strip has to say in a static picture what the app
- * says by moving, so what varies down the row is the expression: eight
- * characters, eight moods, eight directions of gaze. The eight are chosen to
- * cover all five silhouettes, because the strip is also the only place a reader
- * sees the cast is more than one shape.
- */
-
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -25,13 +7,6 @@ import { bodyPoints, FORM, outline, type Point } from "../src/avatars/form";
 import { markFor, MOODS, type Mood } from "../src/avatars/moods";
 import { Skin } from "../src/avatars/Skin";
 
-/**
- * Who appears, in which accent, doing what, and where it is looking.
- *
- * The moods are chosen for what survives one frame. `listening` and `surprised`
- * are a pair of open eyes held still, and next to `idle` in a picture that
- * cannot move they are the same drawing three times.
- */
 const CREW: { key: string; color: string; mood: Mood; gaze: Point; t: number }[] = [
   { key: "orb", color: "#8b8f45", mood: "idle", gaze: [0.26, -0.06], t: 0.9 },
   { key: "husk", color: "#4f5f96", mood: "thinking", gaze: [-0.22, -0.16], t: 2.1 },
@@ -46,9 +21,6 @@ const CREW: { key: string; color: string; mood: Mood; gaze: Point; t: number }[]
 const CELL = FORM.box;
 const GAP = 6;
 
-/* A README has no stylesheet: inline the pigment and face ink per cell.
-   The relief itself is shared with the app. Amber is still only a request
-   for a person. */
 function palette(color: string): string {
   return [`--accent:${color}`, "--eye:#252824", "--sclera:#fbf8f1", "--attention-fill:#ffb346", "--on-attention-fill:#161616"].join(";");
 }
@@ -59,10 +31,6 @@ function cell(member: (typeof CREW)[number], index: number): string {
   const mood = MOODS[member.mood];
 
   const body = outline(bodyPoints(lump, mood.shape, member.t, member.gaze).pts);
-  /* Not live: a still picture must not be caught mid-blink, and the jitter is
-     motion with nothing to show for itself in one frame. What is drawn is what
-     `CutArt` draws: the white between the lids, the pupil and the lid's shadow
-     clipped to it, and the lid line clipped to a circle round the ball. */
   const at = { t: member.t, live: false, gaze: member.gaze };
   const eyes = eyesAt(lump, mood.eye, mood.watch, at)
     .map((e, i) => {
@@ -82,11 +50,8 @@ function cell(member: (typeof CREW)[number], index: number): string {
     })
     .join("");
 
-  /* What `.avatar[data-mood="paused"]` does in the app, which is the one mood
-     whose color is not its accent. */
   const dim = mood.dim ? ";filter:grayscale(0.72);opacity:0.5" : "";
   const x = index * (CELL + GAP);
-  // Supply the SVG namespace to the server renderer, then join the outer strip.
   const skin = renderToStaticMarkup(createElement("svg", null, createElement(Skin, { d: body })), {
     identifierPrefix: `crew-${index}-`,
   }).replace(/^<svg>|<\/svg>$/g, "");

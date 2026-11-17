@@ -30,34 +30,6 @@ export function computerRead(state: ReadState, event: ReadEvent): ReadState {
   }
 }
 
-/**
- * An agent's computer, at the top of its panel.
- *
- * Two sizes, one connection. In the panel it is a live but read-only picture
- * behind a transparent veil, so a stray click cannot land in the agent's
- * desktop and the thing stays something you glance at while reading. Full
- * screen it accepts input and the operator can take over.
- *
- * Growing is a CSS change and nothing more: the frame keeps its place in the
- * tree and the stage around it is promoted to fill the window, so opening and
- * closing it never drops the desktop and reconnects to it.
- *
- * Two things make that change something to watch rather than something to
- * flinch at. The stage is not the element holding the screen's place in the
- * panel, so the panel does not reflow around the gap it leaves; and the stage
- * is played out of the picture it grew from rather than appearing at full size
- * in one frame, which is what made a change of size read as a reconnect.
- *
- * There is deliberately no terminal here. A shell is how the agent works, not
- * how an operator watches it, and a second way in only invited the two to
- * disagree about what was on the machine.
- *
- * It is also where an agent is given a computer and where it is taken back
- * again. That belongs beside the screen rather than in the profile dialog: the
- * decision is about a live, costed thing the operator can watch, and the
- * answer to "should this one have a machine" is usually being read off the
- * picture above the button.
- */
 export function ComputerScreen({ agent }: Props) {
   const settings = useStore((s) => s.settings);
   const [read, dispatchRead] = useReducer(computerRead, { kind: "checking" });
@@ -67,14 +39,7 @@ export function ComputerScreen({ agent }: Props) {
   const [busy, setBusy] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Sleep sits beside Destroy and Destroy throws work away, so neither happens
-  // on one click. Held here rather than in each button so switching agent or
-  // finishing an action always clears a half-pressed one.
   const [confirming, setConfirming] = useState<"sleep" | "destroy" | null>(null);
-  // Which agent the panel is currently about. A lookup started for one agent
-  // used to land after the operator had switched to another and paint that
-  // agent's machine into the new panel, so an agent with no computer showed
-  // the previous one's screen.
   const showing = useRef(agent.id);
   const generation = useRef(0);
   const requests = useRef(0);
@@ -83,32 +48,16 @@ export function ComputerScreen({ agent }: Props) {
   const frame = useRef<HTMLIFrameElement>(null);
   const veil = useRef<HTMLButtonElement>(null);
   const returnFocus = useRef(false);
-  // Where the picture was before it grew. Measured in the click, because by the
-  // time anything can react to the change the stage is already in its new place.
   const cameFrom = useRef<DOMRect | null>(null);
 
   const grow = useCallback(() => {
     cameFrom.current = stage.current?.getBoundingClientRect() ?? null;
     returnFocus.current = true;
     setFull(true);
-    // Hands the keyboard to the desktop. A cross-origin frame receives key
-    // events only while it holds focus, and clicking the veil focuses the veil,
-    // which is an element in this document. The mouse works throughout, which
-    // is what makes this read as a broken keyboard rather than a focus problem.
-    //
-    // Here rather than in an effect afterward, because this webview is WebKit
-    // and WebKit honours a focus change only as part of a user gesture. An
-    // effect on the next render is not one.
     frame.current?.focus();
   }, []);
 
-  // Nothing at all until there is a key. Offering to give an agent a computer
-  // that cannot be made is worse than not mentioning computers.
   const configured = settings?.e2bKeySet === true;
-  // Whether this agent is one of the agents allowed a machine. Read from the
-  // card rather than from whether a sandbox came back: a machine is reclaimed
-  // on the provider's clock, and an agent whose machine went to sleep has not
-  // had anything taken away from it.
   const given = agent.hasComputer;
 
   const look = useCallback(async () => {
@@ -122,8 +71,6 @@ export function ComputerScreen({ agent }: Props) {
       setError(null);
     } catch (caught) {
       if (generation.current !== epoch || requests.current !== request) return;
-      // A missing key is not a failure worth a red banner: it means the feature
-      // was never set up, and the panel says so instead.
       setError(errorMessage(caught));
       dispatchRead({ type: "failed" });
     }
@@ -134,8 +81,6 @@ export function ComputerScreen({ agent }: Props) {
     generation.current++;
     dispatchRead({ type: "reset" });
     setFull(false);
-    // Reset too. A call still in flight when the operator switched agents left
-    // this true for the new panel, which disabled its only button permanently.
     setBusy(false);
     setExpanded(false);
     setError(null);
@@ -147,17 +92,12 @@ export function ComputerScreen({ agent }: Props) {
     };
   }, [agent.id, look, configured, given]);
 
-  // Sandboxes expire on their own, so a panel left open goes stale: it kept
-  // showing a desktop that had been reclaimed, and clicking it did nothing.
   useEffect(() => {
     if (!configured || !given) return;
     const timer = setInterval(() => void look(), 15000);
     return () => clearInterval(timer);
   }, [configured, given, look]);
 
-  // Escape shrinks it again. On the window rather than on the frame, because
-  // the desktop swallows key presses the moment it has focus, and the operator
-  // should not have to find somewhere else to click first.
   useDismiss(() => setFull(false), full);
 
   useEffect(() => {
@@ -167,23 +107,12 @@ export function ComputerScreen({ agent }: Props) {
     }
   }, [full]);
 
-  // FLIP: the stage is already covering the window, so it is put back over the
-  // small picture it came from and let go. The desktop under it never reloads,
-  // and a change of size that lands in a single frame reads as a reconnect that
-  // did not happen.
-  //
-  // Only on the way up. Coming down, the stage is back inside the panel's
-  // scroller, which clips anything still scaled to the size of the window, and
-  // holding it out of the flow until a transition ended would risk leaving it
-  // there.
   useLayoutEffect(() => {
     const node = stage.current;
     const before = cameFrom.current;
     cameFrom.current = null;
     if (!node) return;
 
-    // Anything still playing belongs to the size the stage has just left, so it
-    // stops here rather than finishing in the new one.
     node.dataset.zooming = "false";
     node.style.transition = "none";
     node.style.transform = "";
@@ -202,15 +131,6 @@ export function ComputerScreen({ agent }: Props) {
     });
   }, [full]);
 
-  /**
-   * Giving a computer, and taking it back.
-   *
-   * Neither answers with a machine, because neither is about one: what changes
-   * is the card, and the roster refresh that follows flips `given` and sends
-   * the effect above to look again. Held apart from `act` for that reason
-   * rather than for tidiness — a shared helper would have to invent a
-   * `Computer` to return.
-   */
   const decide = async (run: () => Promise<unknown>) => {
     const asked = agent.id;
     const epoch = generation.current;
@@ -249,9 +169,6 @@ export function ComputerScreen({ agent }: Props) {
   const asleep = given && computer?.state === "asleep";
   const live = running && computer?.vncUrl;
 
-  // Announced as a dialog only while it covers the window; the rest of the
-  // time it is one section of the panel. Grouped so the role and the two
-  // properties that mean nothing without it cannot come apart.
   const asDialog = full
     ? { role: "dialog", "aria-modal": true, "aria-label": `${agent.name}'s computer` }
     : {};
@@ -278,10 +195,6 @@ export function ComputerScreen({ agent }: Props) {
       />
 
       {given && checked && (live || expanded || full) && (
-        // Two elements, one connection. The outer one stays in the panel and
-        // holds the space the screen had; the inner one is what covers the
-        // window. The frame inside that is the same element in both sizes,
-        // which is what keeps the desktop connected across the change.
         <div className="screen" data-full={full ? "true" : undefined}>
           <div className="screen__stage" ref={stage} {...asDialog}>
             {full && (
@@ -366,13 +279,6 @@ export function ComputerScreen({ agent }: Props) {
             {live ? (
               <div className="screen__frame">
                 <iframe
-                  // Keyed on the machine alone, never on the size, so growing to
-                  // fill the window keeps the same connection.
-                  //
-                  // Which is also why noVNC's own `view_only` is not used: it is
-                  // read once when the connection opens, so switching it would
-                  // mean reconnecting. The veil below does that job instead,
-                  // without touching the connection.
                   key={computer.sandboxId}
                   ref={frame}
                   sandbox={hosted ? "allow-scripts" : undefined}
@@ -381,9 +287,6 @@ export function ComputerScreen({ agent }: Props) {
                   src={computer.vncUrl ? screenUrl(computer.vncUrl) : ""}
                 />
                 {!full && (
-                  // Swallows clicks aimed at the desktop while it is only meant
-                  // to be watched, which is what makes noVNC's own read-only
-                  // mode unnecessary and the connection worth keeping.
                   <button
                     type="button"
                     className="screen__veil"

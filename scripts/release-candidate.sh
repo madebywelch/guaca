@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Build a desktop candidate pinned to its container image. No publishing.
-# Set GUACA_BACKEND_IMAGE to a published digest for a distributable app.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ./scripts/ci.sh

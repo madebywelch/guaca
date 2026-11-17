@@ -88,13 +88,6 @@ vi.mock("../lib/ipc", () => ({
   openExternal: (url: string) => openExternal(url),
 }));
 
-/**
- * The account's authorized identities.
- *
- * Rejecting by default, which is what an install with no Guaca account does.
- * The panel has to draw anyway: the account is optional and a plugin list that
- * waited on it would be blank for everybody who never signed in.
- */
 const accountConnectors = vi.fn<() => Promise<AccountConnectors>>(async () => {
   throw new Error("not signed in");
 });
@@ -118,7 +111,6 @@ const OFFERS: PluginOffer[] = [
     name: "Stripe",
     blurb: "The live account.",
     docs: "https://docs.stripe.com/mcp",
-    // Stripe's has no path, which is what the host line has to survive.
     endpoint: "https://mcp.stripe.com",
     accountBacked: false,
   },
@@ -144,12 +136,10 @@ describe("plugin list load transitions", () => {
   });
 });
 
-/** One tool as the server published it, for whoever the plugin is for. */
 function tool(name: string, access: PluginAccess = { mode: "everyone" }): PluginToolCard {
   return { name, description: `Runs ${name}.`, access };
 }
 
-/** The one state the old two-way switch could express: off for the crew. */
 const NOBODY: PluginAccess = { mode: "chosen", agents: [] };
 
 function plugin(over: Partial<Plugin> = {}): Plugin {
@@ -171,7 +161,6 @@ function plugin(over: Partial<Plugin> = {}): Plugin {
   };
 }
 
-/** Two agents, which is the smallest crew a plugin can be narrowed inside. */
 function member(id: string, name: string): AgentCard {
   return {
     id,
@@ -217,8 +206,6 @@ describe("PluginList", () => {
   });
 
   it("names the host each sign-in would go to, before anything is clicked", async () => {
-    // What an operator is agreeing to is which company gets their account. The
-    // host is that; the path is noise beside it.
     render(<PluginList groupId={GROUP} crew={CREW} />);
 
     expect(await screen.findByText("mcp.neon.tech")).toBeTruthy();
@@ -226,8 +213,6 @@ describe("PluginList", () => {
   });
 
   it("connects one, and says it is waiting on a person while it does", async () => {
-    // The flow finishes in a browser window, so the button has to explain a
-    // wait that has nothing to do with the network.
     let finish: (value: Plugin) => void = () => {};
     connectPlugin.mockReturnValue(
       new Promise<Plugin>((resolve) => {
@@ -238,8 +223,6 @@ describe("PluginList", () => {
     render(<PluginList groupId={GROUP} crew={CREW} />);
     fireEvent.click((await screen.findAllByText("Connect"))[0]!);
 
-    // No identity named: Neon signs in per group, and an account with none
-    // connects against the account's default.
     await waitFor(() => expect(connectPlugin).toHaveBeenCalledWith(GROUP, "neon", undefined));
     expect(screen.getByText("Waiting for your browser…")).toBeTruthy();
 
@@ -249,8 +232,6 @@ describe("PluginList", () => {
   });
 
   it("offers no second connect while one is in flight", async () => {
-    // Two loopback listeners and two browser windows, for one operator with
-    // one pair of hands.
     connectPlugin.mockReturnValue(new Promise<Plugin>(() => {}));
     render(<PluginList groupId={GROUP} crew={CREW} />);
 
@@ -263,9 +244,6 @@ describe("PluginList", () => {
   });
 
   it("says when a server asked for no sign-in, rather than claiming one", async () => {
-    // Every server on the list asks for one today. This is what the row says
-    // if one stops, because reporting it as signed in would be a claim about
-    // the operator's account that is not true.
     groupPlugins.mockResolvedValue([
       plugin({ kind: "stripe", signedIn: false, tools: [tool("docs")] }),
     ]);
@@ -284,7 +262,6 @@ describe("PluginList", () => {
   });
 
   it("opens the documentation in the shell, not in the webview", async () => {
-    // A webview that navigates away from the app has no way back.
     render(<PluginList groupId={GROUP} crew={CREW} />);
 
     fireEvent.click((await screen.findAllByText("What this can do"))[0]!);
@@ -296,18 +273,11 @@ describe("PluginList", () => {
     render(<PluginList groupId={GROUP} crew={CREW} />);
 
     expect(await screen.findByText(/offered to every agent in this group/)).toBeTruthy();
-    // Nobody is named while it is everyone's, because a tick list would be
-    // claiming that the answer is those two agents rather than the crew.
     expect(screen.queryByRole("button", { name: "Revenue" })).toBe(null);
   });
 
   it("narrows one to chosen agents, and says plainly that nobody has it yet", async () => {
-    // The state an operator is standing in for one click. It has to say what it
-    // means: a plugin connected and callable by nobody looks identical to a
-    // working one from the row above.
     const narrowed = plugin({ access: { mode: "chosen", agents: [] } });
-    // What the panel reads back is what the store now says, which is the whole
-    // reason nothing here keeps a draft.
     groupPlugins.mockResolvedValueOnce([plugin()]);
     groupPlugins.mockResolvedValue([narrowed]);
     setPluginAccess.mockResolvedValue(narrowed);
@@ -333,9 +303,6 @@ describe("PluginList", () => {
       expect(setPluginAccess).toHaveBeenCalledWith("p1", { mode: "chosen", agents: ["a1"] }),
     );
 
-    // And the whole set every time, never a difference: the panel that sends
-    // this is the one that knows who else was ticked, and a merge on the far
-    // side would make unticking impossible to express.
     setPluginAccess.mockClear();
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Scribe" }).getAttribute("aria-pressed")).toBe(
@@ -361,9 +328,6 @@ describe("PluginList", () => {
   });
 
   it("keeps the tool list shut until it is asked for", async () => {
-    // A crew with three plugins connected has sixty of these between the
-    // operator and the button they came here for. The count on the line above
-    // is what says whether opening one is worth it.
     groupPlugins.mockResolvedValue([plugin()]);
     render(<PluginList groupId={GROUP} crew={CREW} />);
 
@@ -372,8 +336,6 @@ describe("PluginList", () => {
 
     fireEvent.click(screen.getByText("Show all 2"));
     expect(screen.getByText("run_sql")).toBeTruthy();
-    // The vendor's own sentence, because `execute` and `create_refund` are not
-    // decisions anybody can make off the name alone.
     expect(screen.getByText("Runs run_sql.")).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "Every agent: run_sql" }).getAttribute("aria-pressed"),
@@ -381,8 +343,6 @@ describe("PluginList", () => {
   });
 
   it("says nothing per tool while a tool is the default", async () => {
-    // Forty rows each repeating "offered to every agent in this group" is the
-    // default said forty times, and it buries the one row that is not it.
     groupPlugins.mockResolvedValue([plugin()]);
     render(<PluginList groupId={GROUP} crew={CREW} />);
 
@@ -391,8 +351,6 @@ describe("PluginList", () => {
   });
 
   it("switches one tool off, and back on again", async () => {
-    // Narrowing to nobody is what off is now, and it is still one click. The
-    // agents underneath are what the same click opens up.
     const off = plugin({ tools: [tool("run_sql", NOBODY), tool("create_branch")] });
     groupPlugins.mockResolvedValueOnce([plugin()]);
     groupPlugins.mockResolvedValue([off]);
@@ -402,10 +360,7 @@ describe("PluginList", () => {
     fireEvent.click(await screen.findByText("Show all 2"));
     fireEvent.click(screen.getByRole("button", { name: "Only chosen agents: run_sql" }));
 
-    // The tool by name and the answer it should have, never a toggle: two
-    // panels open on one group cannot swap a decision between them.
     await waitFor(() => expect(setPluginTool).toHaveBeenCalledWith("p1", "run_sql", NOBODY));
-    // And the row draws what came back, not what was clicked.
     await waitFor(() =>
       expect(
         screen
@@ -424,9 +379,6 @@ describe("PluginList", () => {
   });
 
   it("gives two agents on one plugin different tools", async () => {
-    // The thing the crew-wide switch could not say. One sign-in, one inbox,
-    // and the agent that triages it reads while the agent that answers it
-    // sends.
     const split = plugin({
       tools: [
         tool("run_sql", { mode: "chosen", agents: ["a1"] }),
@@ -467,9 +419,6 @@ describe("PluginList", () => {
       }),
     );
 
-    // And the whole set every time, never a difference, for the reason the
-    // plugin above it sends the whole set: a merge on the far side would make
-    // unticking impossible to express.
     setPluginTool.mockClear();
     await waitFor(() =>
       expect(
@@ -486,10 +435,6 @@ describe("PluginList", () => {
   });
 
   it("says when a tool names an agent the plugin itself does not reach", async () => {
-    // The two controls are set in either order, so this is a state an operator
-    // passes through rather than a mistake. Drawing the tool as Scribe's when
-    // Scribe cannot spend the sign-in would name an agent that gets refused,
-    // which is the one thing a permission panel must not do.
     groupPlugins.mockResolvedValue([
       plugin({
         access: { mode: "chosen", agents: ["a1"] },
@@ -503,9 +448,6 @@ describe("PluginList", () => {
   });
 
   it("says when a connected plugin has nothing left switched on", async () => {
-    // The same state the crew-of-nobody row says out loud, one axis over: a
-    // plugin that is signed in and can call nothing looks identical to a
-    // working one until something says so.
     groupPlugins.mockResolvedValue([
       plugin({ tools: [tool("run_sql", NOBODY), tool("create_branch", NOBODY)] }),
     ]);
@@ -515,7 +457,6 @@ describe("PluginList", () => {
   });
 
   it("asks nothing about tools of a plugin nobody has connected", async () => {
-    // There is nothing to switch off, and the question is noise on four tiles.
     groupPlugins.mockResolvedValue([]);
     render(<PluginList groupId={GROUP} crew={CREW} />);
 
@@ -524,7 +465,6 @@ describe("PluginList", () => {
   });
 
   it("asks nothing about who can use a plugin nobody has connected", async () => {
-    // There is no sign-in to hand out, so the question is noise on four tiles.
     groupPlugins.mockResolvedValue([]);
     render(<PluginList groupId={GROUP} crew={CREW} />);
 
@@ -542,21 +482,7 @@ describe("PluginList", () => {
   });
 });
 
-/**
- * Two Google accounts on one Guaca account.
- *
- * The case this whole column exists for: a work Google and a personal one are
- * two grants, and two crews have to be able to use one each. Before this, both
- * reached whichever the service returned first.
- */
 describe("choosing which account a crew uses", () => {
-  /**
-   * Matches against an element's whole text content.
-   *
-   * The default matcher reads only an element's direct text-node children, and
-   * these sentences are built from several JSX interpolations, so it sees each
-   * fragment separately and matches none of them.
-   */
   const saying = (pattern: RegExp) => (_content: string, element: Element | null) =>
     element?.tagName === "P" && pattern.test(element.textContent ?? "");
   const GOOGLE_OFFER: PluginOffer = {
@@ -628,8 +554,6 @@ describe("choosing which account a crew uses", () => {
   });
 
   it("says which account it acts as, without an inert picker, when there is one", async () => {
-    // A select with a single option cannot do anything, but a crew acting as
-    // somebody's mail must never leave them guessing whose.
     accountConnectors.mockResolvedValue(one);
     groupPlugins.mockResolvedValue([plugin({ kind: "google", connection: "acct_work" })]);
     render(<PluginList groupId={GROUP} crew={CREW} />);
@@ -641,8 +565,6 @@ describe("choosing which account a crew uses", () => {
   });
 
   it("does not claim a group is acting as anyone before it is connected", async () => {
-    // A group with nothing connected is not acting as anybody, and saying it is
-    // reads as a grant that exists and does not.
     accountConnectors.mockResolvedValue(one);
     groupPlugins.mockResolvedValue([]);
     render(<PluginList groupId={GROUP} crew={CREW} />);
@@ -652,9 +574,6 @@ describe("choosing which account a crew uses", () => {
   });
 
   it("names the Guaca account the identities came from", async () => {
-    // The failure that costs the most time is a machine signed in to the
-    // account that does not hold the grant the operator is looking at in a
-    // browser. Nothing else on this panel can tell those two apart.
     accountConnectors.mockResolvedValue(one);
     groupPlugins.mockResolvedValue([plugin({ kind: "google", connection: "acct_work" })]);
     render(<PluginList groupId={GROUP} crew={CREW} />);
@@ -677,8 +596,6 @@ describe("choosing which account a crew uses", () => {
   });
 
   it("offers the picker before connecting, not only after", async () => {
-    // The whole complaint: Connect took the first account silently, so a crew
-    // could end up on the wrong mailbox with nothing on screen saying so.
     accountConnectors.mockResolvedValue(two);
     groupPlugins.mockResolvedValue([]);
     render(<PluginList groupId={GROUP} crew={CREW} />);
@@ -695,7 +612,6 @@ describe("choosing which account a crew uses", () => {
     fireEvent.change(await screen.findByLabelText(/^Account/), {
       target: { value: "acct_home" },
     });
-    // Nothing is written until Connect: there is no row to write to yet.
     expect(setPluginConnection).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByText("Connect"));
@@ -703,7 +619,6 @@ describe("choosing which account a crew uses", () => {
   });
 
   it("says so when the account has authorized nothing at that provider", async () => {
-    // A hidden picker is indistinguishable from a broken feature.
     accountConnectors.mockResolvedValue({ ...two, connections: [] });
     groupPlugins.mockResolvedValue([]);
     render(<PluginList groupId={GROUP} crew={CREW} />);
@@ -726,8 +641,6 @@ describe("choosing which account a crew uses", () => {
   });
 
   it("moves the crew to the other account without disconnecting", async () => {
-    // Reconnecting would replace the row and lose the per-tool switches the
-    // operator set, which is why this is its own command.
     accountConnectors.mockResolvedValue(two);
     groupPlugins.mockResolvedValue([plugin({ kind: "google", connection: "acct_work" })]);
     render(<PluginList groupId={GROUP} crew={CREW} />);
@@ -751,8 +664,6 @@ describe("choosing which account a crew uses", () => {
   });
 
   it("draws the plugin list even when the account cannot be reached", async () => {
-    // The account is optional. A panel that waited on guaca.bot would be blank
-    // for everybody who never signed in.
     accountConnectors.mockRejectedValue(new Error("not signed in"));
     groupPlugins.mockResolvedValue([]);
     render(<PluginList groupId={GROUP} crew={CREW} />);
@@ -762,14 +673,6 @@ describe("choosing which account a crew uses", () => {
   });
 });
 
-/**
- * A server nobody vouched for.
- *
- * The catalog rows above it are drawn from an offer, and these are drawn from
- * the row itself, because there is no offer: what it is called and where it is
- * come back from Rust with the plugin. Everything else on the row — who can use
- * it, which of its tools are whose — is the same code and is tested above.
- */
 describe("a server the operator added", () => {
   const added = (over: Partial<Plugin> = {}): Plugin =>
     plugin({
@@ -857,16 +760,11 @@ describe("a server the operator added", () => {
   });
 
   it("draws it under the name its tools are called by, not the one that was typed", async () => {
-    // The row shows what came back rather than predicting it, because the rule
-    // that turns one into the other lives in Rust and a second copy of it here
-    // would be a second place for it to be wrong.
     groupPlugins.mockResolvedValue([added()]);
     render(<PluginList groupId={GROUP} crew={CREW} />);
 
     expect(await screen.findByText("home_assistant")).toBeTruthy();
     expect(screen.getByText("ha.example.com")).toBeTruthy();
-    // And it says out loud that nobody checked it, which is the whole of the
-    // difference between this row and the eight above it.
     expect(screen.getByText(/nobody has checked it/)).toBeTruthy();
   });
 
@@ -881,12 +779,9 @@ describe("a server the operator added", () => {
       target: { value: "http://ha.example.com/mcp" },
     });
 
-    // Refused: a crew's grant would cross the network in the open.
     addPlugin.mockRejectedValue(new Error("that is not https"));
     fireEvent.click(screen.getByText("Add and connect"));
     expect(await screen.findByText(/not https/)).toBeTruthy();
-    // The form is still there, still filled in. A refusal that made the
-    // operator retype the URL costs more than the mistake did.
     expect((screen.getByPlaceholderText("Home Assistant") as HTMLInputElement).value).toBe(
       "Home Assistant",
     );
@@ -907,7 +802,6 @@ describe("a server the operator added", () => {
         [],
       ),
     );
-    // Cleared only once it worked, and the row it produced is what is drawn.
     expect(await screen.findByText("home_assistant")).toBeTruthy();
     expect(screen.queryByPlaceholderText("Home Assistant")).toBeNull();
   });
@@ -921,7 +815,6 @@ describe("a server the operator added", () => {
       target: { value: "github" },
     });
     fireEvent.click(screen.getByRole("button", { name: "A program on the host" }));
-    // The key is how an address is given one; a program is given a variable.
     expect(screen.getByText("Key (optional)").closest("label")?.hidden).toBe(true);
     fireEvent.change(screen.getByPlaceholderText("npx -y @modelcontextprotocol/server-github"), {
       target: { value: "npx -y server-github" },
@@ -946,9 +839,6 @@ describe("a server the operator added", () => {
   });
 
   it("sends a pasted key only when there is one", async () => {
-    // Empty means "ask the server what it wants", which is what a vendor's
-    // server gets. Sending an empty string would be a key that authorizes
-    // nothing, presented as though it were one.
     addPlugin.mockResolvedValue(added());
     render(<PluginList groupId={GROUP} crew={CREW} />);
     fireEvent.click(await screen.findByText("Add a server"));
@@ -958,8 +848,6 @@ describe("a server the operator added", () => {
     fireEvent.change(screen.getByPlaceholderText("https://example.com/mcp"), {
       target: { value: "https://vault.example.com/mcp" },
     });
-    // Anchored: the label wraps the hint under it, so the accessible name is
-    // the whole paragraph and an exact match would never find the box.
     fireEvent.change(screen.getByLabelText(/^Key \(optional\)/), {
       target: { value: "abc123" },
     });
@@ -977,8 +865,6 @@ describe("a server the operator added", () => {
   });
 
   it("moves one to a new address without disconnecting it", async () => {
-    // A local server changing port is the common case, and Disconnect plus Add
-    // would take the per-tool switches with it.
     groupPlugins.mockResolvedValue([added()]);
     readdressPlugin.mockResolvedValue(added({ endpoint: "http://localhost:9000/mcp" }));
     render(<PluginList groupId={GROUP} crew={CREW} />);
@@ -994,8 +880,6 @@ describe("a server the operator added", () => {
         "p2",
         "http://localhost:9000/mcp",
         undefined,
-        // Untouched, which is what keeps the stored set: a value cannot be read
-        // back, so a reconnection that meant "replace" would drop it.
         undefined,
       ),
     );
@@ -1003,8 +887,6 @@ describe("a server the operator added", () => {
   });
 
   it("sends the headers that were typed, and never sends a name back as a value", async () => {
-    // The third thing a server somebody runs can want, and the one nothing can
-    // discover: an `X-API-Key` because that is where its framework looks.
     addPlugin.mockResolvedValue(added());
     render(<PluginList groupId={GROUP} crew={CREW} />);
     fireEvent.click(await screen.findByText("Add a server"));
@@ -1032,9 +914,6 @@ describe("a server the operator added", () => {
   });
 
   it("keeps a half-typed header on the row it was typed on", async () => {
-    // Keyed by position instead, removing the first row hands its DOM node —
-    // and whatever is in it — to the second, which is exactly when the operator
-    // is looking at two boxes that both say something they did not type.
     render(<PluginList groupId={GROUP} crew={CREW} />);
     fireEvent.click(await screen.findByText("Add a server"));
     fireEvent.click(screen.getByText("Add a header"));
@@ -1048,9 +927,6 @@ describe("a server the operator added", () => {
   });
 
   it("hides a header's value and shows its name on the row", async () => {
-    // Both halves. The value is a credential and the panel must not be a place
-    // to read one back; the name is what an operator debugging their own
-    // server needs, because "is x-api-key on the request" is the question.
     groupPlugins.mockResolvedValue([added({ headers: ["x-api-key", "cf-access-client-id"] })]);
     render(<PluginList groupId={GROUP} crew={CREW} />);
 
@@ -1058,10 +934,6 @@ describe("a server the operator added", () => {
   });
 
   it("leaves stored headers alone unless the operator replaces them", async () => {
-    // A value cannot be read back, so a reconnection that meant "replace" would
-    // drop it: the same rule a group's API key has. Replacing is a thing the
-    // operator does on purpose, and the box starts with the names and no
-    // values, because that is exactly what is knowable.
     groupPlugins.mockResolvedValue([added({ headers: ["x-api-key"] })]);
     readdressPlugin.mockResolvedValue(added());
     render(<PluginList groupId={GROUP} crew={CREW} />);
@@ -1086,8 +958,6 @@ describe("a server the operator added", () => {
   });
 
   it("tests an address before anything is connected, and says what it found", async () => {
-    // The whole point of the button: an operator who has to press Add to find
-    // out what is wrong connects the same server four times.
     probeServer.mockResolvedValue({
       endpoint: "https://ha.example.com/mcp",
       transport: "HTTP+SSE (2024-11-05)",
@@ -1105,19 +975,12 @@ describe("a server the operator added", () => {
     });
     fireEvent.click(screen.getByText("Test"));
 
-    // The transport is the field that costs the most to guess at: a refusal on
-    // the current one and a working event stream are the same sentence and
-    // opposite instructions.
     expect(await screen.findByText(/HTTP\+SSE \(2024-11-05\)/)).toBeTruthy();
     expect(screen.getByText(/1 tool: turn_on/)).toBeTruthy();
-    // And it connected nothing.
     expect(addPlugin).not.toHaveBeenCalled();
   });
 
   it("keeps a refusal on screen rather than clearing the form it was about", async () => {
-    // `run` reloads the panel and drops what it was told; a test has to keep
-    // its answer on a failure, because a server that refused is what somebody
-    // pressed this to find out.
     probeServer.mockRejectedValue(new Error("could not reach https://ha.example.com/mcp"));
     render(<PluginList groupId={GROUP} crew={CREW} />);
     fireEvent.click(await screen.findByText("Add a server"));
@@ -1133,11 +996,6 @@ describe("a server the operator added", () => {
   });
 
   it("says what to check where the eye is, and folds the raw error away", async () => {
-    // Two defects in one: a `reqwest` string printed at a person, and the
-    // answer to a button arriving below the buttons. `detail` is what the layer
-    // underneath said — the same URL twice and nothing to do about it — so it
-    // belongs behind the click that asks for it, and the sentence belongs above
-    // the control that was pressed.
     probeServer.mockRejectedValue({
       kind: "plugin",
       message:
@@ -1153,7 +1011,6 @@ describe("a server the operator added", () => {
     fireEvent.click(screen.getByText("Test"));
 
     const says = await screen.findByText(/Check the address and its path/);
-    // Above the row of buttons, not past them.
     const test = screen.getByRole("button", { name: "Test" });
     expect(says.compareDocumentPosition(test) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByText(/Connection refused/)).toBeTruthy();
@@ -1163,9 +1020,6 @@ describe("a server the operator added", () => {
   });
 
   it("tests a connected plugin against the sign-in it already has", async () => {
-    // The question a crew notices as an agent reporting a tool it cannot call,
-    // and the only other way to ask it is to connect again, which replaces the
-    // tool list and opens a browser.
     groupPlugins.mockResolvedValue([added()]);
     checkPlugin.mockResolvedValue({
       endpoint: "https://ha.example.com/mcp",
@@ -1187,11 +1041,6 @@ describe("a server the operator added", () => {
   });
 
   it("draws a mark for a server named after something on Object's prototype", async () => {
-    // A name here is an operator's word, and the prototype chain answers to
-    // several of them. A plain lookup with a fallback finds a truthy value that
-    // is not a brand for `constructor`, so the fallback never fires and the row
-    // draws an empty square, which reads as a broken row rather than an added
-    // server.
     groupPlugins.mockResolvedValue([added({ kind: "constructor", name: "constructor" })]);
     const { container } = render(<PluginList groupId={GROUP} crew={CREW} />);
 
@@ -1201,9 +1050,6 @@ describe("a server the operator added", () => {
   });
 
   it("offers no address control on a server Guaca ships", async () => {
-    // Where a vendor's server lives is not an operator setting: it is a
-    // decision the build makes, and a box implying otherwise is a way to point
-    // a crew's sign-in somewhere nobody chose.
     groupPlugins.mockResolvedValue([plugin()]);
     render(<PluginList groupId={GROUP} crew={CREW} />);
 
@@ -1212,9 +1058,6 @@ describe("a server the operator added", () => {
   });
 
   it("says what a test is doing, and promises no window it never opens", async () => {
-    // Only a sign-in opens a browser window: a probe dials the address and
-    // nothing else. The panel used to say the same browser sentence on every
-    // busy state, which sent a person looking for a popup that never came.
     probeServer.mockReturnValue(new Promise<ServerReport>(() => {}));
     render(<PluginList groupId={GROUP} crew={CREW} />);
     fireEvent.click(await screen.findByText("Add a server"));
@@ -1238,8 +1081,6 @@ describe("a server the operator added", () => {
   });
 
   it("clears what a test found when the address it was run against changes", async () => {
-    // A report that outlived its address reads as one about the address on
-    // screen, which is the one thing it cannot be.
     probeServer.mockResolvedValue({
       endpoint: "https://ha.example.com/mcp",
       transport: "streamable HTTP",
@@ -1263,8 +1104,6 @@ describe("a server the operator added", () => {
   });
 
   it("clears a refusal when the key it was about changes", async () => {
-    // The sentence names the address it could not reach. A new key is a new
-    // attempt, and the old sentence would be about an attempt nobody made.
     probeServer.mockRejectedValue({
       kind: "plugin",
       message:
@@ -1284,8 +1123,6 @@ describe("a server the operator added", () => {
   });
 
   it("offers a tool to all agents without borrowing the default group's name", async () => {
-    // The short answer used to be "Everyone", which is what the app calls its
-    // first group. Inside that group the same word answered two questions.
     groupPlugins.mockResolvedValue([plugin()]);
     render(<PluginList groupId={GROUP} crew={CREW} />);
 

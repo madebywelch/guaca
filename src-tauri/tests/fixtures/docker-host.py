@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""A process-boundary Docker fixture. All state stays beside this copied script."""
 import json
 import pathlib
 import sys
@@ -17,10 +16,8 @@ def fail():
 def save():
     path.write_text(json.dumps(state))
 def main(name):
-    """Whether `name` is the one container this fixture models in full."""
     return "name" not in state or name == state["name"]
 def mount(destination):
-    """The volume a --mount argument puts at `destination`."""
     spec = next(arg for arg in args if f"dst={destination}" in arg)
     return dict(part.split("=", 1) for part in spec.split(",") if "=" in part)["src"]
 

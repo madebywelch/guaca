@@ -29,10 +29,6 @@ describe("roleOf", () => {
   });
 
   it("keeps both characters facing each other for the whole exchange", () => {
-    // This is what makes it read as an exchange rather than two unrelated
-    // animations that happen to overlap. The catch is in here deliberately: it
-    // is the one beat an operator is certainly looking at, and it is the beat
-    // the recipient's own reaction is drawn on.
     for (const phase of ["aim", "flight", "catch"] as const) {
       expect(roleOf(staged(phase), "a").facing).toBe("b");
       expect(roleOf(staged(phase), "b").facing).toBe("a");
@@ -44,9 +40,6 @@ describe("roleOf", () => {
     expect(roleOf(staged("catch"), "b").gesture).toBe("receive");
   });
 
-  // Where the peer is, is the only thing that says which way a landing shoves
-  // the creature it lands on. Dropping the look at the catch left the knock
-  // with nothing to read, and a message thrown downward pushed its recipient up.
   it("still says where the parcel came from at the moment it lands", () => {
     const hit = roleOf(staged("catch"), "b");
     expect(hit.gesture).toBe("receive");
@@ -72,8 +65,6 @@ describe("pacing", () => {
   afterEach(() => vi.useRealTimers());
 
   it("gives each message a visible beat instead of firing them at once", () => {
-    // The runtime delivers a fan-out within milliseconds. Animating that
-    // literally is over before the eye can follow it.
     const done = vi.fn();
     const burst = [pulse(1, "m", "a"), pulse(2, "m", "b"), pulse(3, "m", "c")];
     const { result, rerender } = renderHook(({ pulses }) => usePulseChoreography(pulses, done), {
@@ -126,8 +117,6 @@ describe("pacing", () => {
   });
 
   it("is slow enough to watch", () => {
-    // The whole point of this module. If these drop back to a few hundred
-    // milliseconds, the exchange becomes a flicker again.
     expect(AIM_MS + FLIGHT_MS + CATCH_MS).toBeGreaterThanOrEqual(2000);
     expect(STAGGER_MS).toBeGreaterThanOrEqual(600);
   });
@@ -138,7 +127,6 @@ describe("pacing", () => {
     const { rerender } = renderHook(({ pulses }) => usePulseChoreography(pulses, done), {
       initialProps: { pulses: only },
     });
-    // Re-rendering with the same pulse must not queue it again.
     rerender({ pulses: only });
     rerender({ pulses: only });
 
@@ -149,9 +137,6 @@ describe("pacing", () => {
   });
 
   it("waits on nothing while there is nothing to animate", () => {
-    // A poll would keep the renderer awake for the life of the window to look
-    // at an empty queue several times a second, and a renderer that never goes
-    // idle never stops drawing.
     const interval = vi.spyOn(window, "setInterval");
     renderHook(() => usePulseChoreography([], vi.fn()));
 
@@ -176,8 +161,6 @@ describe("pacing", () => {
   });
 
   it("drops the animation, never the message, when a backlog builds", () => {
-    // Delivery already happened. A queue longer than anyone will watch just
-    // means some throws go undrawn.
     const done = vi.fn();
     const flood = Array.from({ length: 40 }, (_, i) => pulse(i, "m", `a${i}`));
     const { rerender } = renderHook(({ pulses }) => usePulseChoreography(pulses, done), {

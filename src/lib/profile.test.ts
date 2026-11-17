@@ -55,8 +55,6 @@ describe("runsOn", () => {
   });
 
   it("reads the subscription field when ChatGPT pays, never the key's model", () => {
-    // The two providers share no model names, so a slug kept for the key must
-    // not be drawn as what a subscription is running.
     const card = agent({ model: "openai/gpt-5", subscriptionModel: "" });
     expect(runsOn(card, group({ provider: "chatgpt" }), settings()).model).toBe("gpt-5.6-luna");
     expect(

@@ -14,11 +14,9 @@ export interface Health {
   release?: boolean;
   apiGeneration?: number;
 }
-/** Which builds a box installs: published releases, or every build of main. */
 export type Channel = "release" | "main";
 export interface Release {
   schema: number;
-  /** Absent from a release, whose manifest predates channels. */
   channel?: "main";
   version: string;
   commit: string;
@@ -29,7 +27,6 @@ export interface Release {
   notes: string;
 }
 export interface ReleaseStatus {
-  /** Absent from a host older than channels, which only follows releases. */
   channel?: Channel;
   automatic: boolean;
   checkedAt: string | null;
@@ -45,7 +42,6 @@ export function compatibility(health: Health): Compatibility {
   return "compatible";
 }
 
-/** Stable published versions only. Never order commits or custom builds. */
 export function compareVersions(left: string, right: string): number | null {
   const parse = (s: string) =>
     /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(s) ? s.split(".").map(Number) : null;
@@ -58,8 +54,6 @@ export function compareVersions(left: string, right: string): number | null {
 export function available(health: Health | null, status: ReleaseStatus | null): boolean {
   const latest = status?.latest;
   if (!health || !latest) return false;
-  // Every build of main carries the version it will be released as, so the
-  // commit is the one thing that says a host is behind it.
   if (latest.channel === "main") return !sameBuild(health.build, latest.commit);
   return !!(
     health.release &&
@@ -67,15 +61,6 @@ export function available(health: Health | null, status: ReleaseStatus | null): 
     compareVersions(health.version, latest.version) === -1
   );
 }
-/**
- * How this client and its host differ, by release version, then by build.
- *
- * A desktop and its host are updated separately, so either can be ahead. Only
- * stable versions are ordered; a development build or a legacy host with no
- * version is `unknown`, never assumed current. `otherBuild` is one version and
- * two commits: a source build carries the version of the last release, so a
- * version alone reads "same" while one side is missing commands the other has.
- */
 export type Skew = "same" | "otherBuild" | "clientBehind" | "hostBehind" | "unknown";
 export function skew(client: { version: string; commit: string }, health: Health | null): Skew {
   const order = health?.version ? compareVersions(client.version, health.version) : null;
@@ -84,12 +69,10 @@ export function skew(client: { version: string; commit: string }, health: Health
   return order < 0 ? "clientBehind" : "hostBehind";
 }
 
-/** Whether a published release is newer than this client's own version. */
 export function clientUpdate(client: string, status: ReleaseStatus | null): boolean {
   return !!status?.latest && compareVersions(client, status.latest.version) === -1;
 }
 
-/** A browser page is the host's own bundle, so a different commit is a stale page. */
 export function pageStale(desktop: boolean, commit: string, health: Health | null): boolean {
   return (
     !desktop && !!health?.build && !sameBuild(commit, health.build) && !commit.endsWith("-dirty")
@@ -101,22 +84,13 @@ export interface UpdateFacts {
   client: { version: string; commit: string };
   health: Health | null;
   release: ReleaseStatus | null;
-  /** The image a host this desktop manages would be replaced with, when it differs. */
   localUpdate: string | null;
 }
 export interface UpdateNotice {
-  /** What a dismissal hides: this message about these versions, and no later one. */
   key: string;
   text: string;
 }
 
-/**
- * The one line worth drawing above the conversation, most urgent first.
- *
- * A stale page comes first because every other fact on it is stale too. A
- * skew between a desktop and its host comes next, because it is the one that
- * breaks commands; a newer published release is only news.
- */
 export function updateNotice(facts: UpdateFacts): UpdateNotice | null {
   const { desktop, client, health, release, localUpdate } = facts;
   if (!health) return null;
@@ -168,24 +142,10 @@ export function sameBuild(a: string, b: string): boolean {
 
 const BUILD = /^[a-f0-9]{7,40}(-dirty)?$/;
 
-/**
- * Two builds known to be different code. Both have to be commits: an empty
- * build was made without a repository, and nothing is known about it. A
- * `-dirty` build matches only the identical string, which is the most either
- * side can say about a tree with uncommitted edits. `ipc::different_builds`
- * is the host's copy of this rule.
- */
 function otherBuild(a: string, b: string): boolean {
   return BUILD.test(a) && BUILD.test(b) && a !== b && !sameBuild(a, b);
 }
 
-/**
- * A build as the operator reads it beside a version: seven characters, and
- * `-dirty` where the tree had edits. A source build keeps the last release's
- * version, so this is the only part of what is drawn that tells two apart.
- * Empty for anything that is not a commit, which the reader draws as the
- * version alone.
- */
 export function shortBuild(build: string): string {
   const found = BUILD.exec(build);
   return found ? `${build.slice(0, 7)}${found[1] ?? ""}` : "";
@@ -218,7 +178,6 @@ export function parseReleaseStatus(value: unknown): ReleaseStatus {
   )
     throw new Error("The host returned unreadable update information.");
   const r = data.latest;
-  // A build of main links the commit it was made from; a release, its notes.
   const notes =
     r?.channel === "main" ? `${REPOSITORY}/commit/${r.commit}` : `${RELEASES}/tag/v${r?.version}`;
   if (

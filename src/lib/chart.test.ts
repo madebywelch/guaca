@@ -14,14 +14,12 @@ import {
   readChart,
 } from "./chart";
 
-/** Reads a spec that is expected to be good, and hands back the chart. */
 function good(value: unknown): Chart {
   const read = readChart(value);
   if (isFault(read)) throw new Error(`expected a chart, got: ${read.why}`);
   return read.chart;
 }
 
-/** Reads one that is expected to be refused, and hands back the sentence. */
 function refused(value: unknown): string {
   const read = readChart(value);
   if (!isFault(read)) throw new Error("expected a refusal");
@@ -47,9 +45,6 @@ describe("reading a spec", () => {
   });
 
   it("names the field and the fix in every refusal", () => {
-    // These are read by the agent that wrote the spec, on a turn where it can
-    // still put it right. "Invalid chart" costs a whole turn and teaches it
-    // nothing, so every one of these has to say what to do.
     expect(refused({ type: "sunburst", series: [{ data: [1] }] })).toContain("bar, line");
     expect(refused({ type: "bar" })).toContain('"series" is required');
     expect(refused({ type: "bar", series: [{ name: "a" }] })).toContain('needs "data"');
@@ -57,8 +52,6 @@ describe("reading a spec", () => {
   });
 
   it("keeps a gap a gap rather than calling it zero", () => {
-    // A month with no reading is not a month that sold nothing, and a chart
-    // that draws the second when it was told the first is inventing data.
     const chart = good({ type: "line", labels: ["a", "b", "c"], series: [{ data: [1, null, 3] }] });
     if (chart.kind !== "line") throw new Error("wrong kind");
     expect(chart.series[0]?.values).toEqual([1, null, 3]);
@@ -70,8 +63,6 @@ describe("reading a spec", () => {
   });
 
   it("refuses labels that do not line up with the data", () => {
-    // Silently padding would slide every point one category to the left, which
-    // is a chart that is confidently wrong rather than absent.
     expect(refused({ type: "bar", labels: ["a", "b"], series: [{ data: [1, 2, 3] }] })).toContain(
       "one label per point",
     );
@@ -115,9 +106,6 @@ describe("reading a pie", () => {
   });
 
   it("folds a long tail into Other rather than refusing", () => {
-    // Past six wedges nobody is comparing them: they are reading the big ones
-    // and the remainder. Folding gives them exactly that; refusing gives them
-    // nothing.
     const chart = good({
       type: "pie",
       labels: ["a", "b", "c", "d", "e", "f", "g", "h"],
@@ -168,9 +156,6 @@ describe("ticks", () => {
   });
 
   it("reaches past the data rather than stopping under it", () => {
-    // An axis whose top gridline is below the tallest bar leaves that bar
-    // sticking out of its own frame, which reads as a chart that did not
-    // finish drawing.
     for (const [low, high] of [
       [0, 1_240_000],
       [0, 97],
@@ -184,14 +169,10 @@ describe("ticks", () => {
   });
 
   it("offers a quarter step, so a wide range is not three gridlines", () => {
-    // Without 2.5 in the set, 1.24M steps by 500K and the whole chart gets
-    // three lines to read against.
     expect(niceTicks(0, 1_240_000)).toEqual([0, 250_000, 500_000, 750_000, 1_000_000, 1_250_000]);
   });
 
   it("does not produce 0.30000000000000004", () => {
-    // Floating point turns a tenth into seventeen digits, and an axis that
-    // says so is an axis nobody trusts.
     for (const tick of niceTicks(0, 0.5)) {
       expect(String(tick).length).toBeLessThan(6);
     }
@@ -237,8 +218,6 @@ describe("laying a bar chart out", () => {
   const plot = layout(good(bars)) as CartesianPlot;
 
   it("anchors bars to zero, because their length is the quantity", () => {
-    // A bar chart from 90 to 100 makes a two percent difference look like
-    // everything there is.
     const tall = layout(good({ ...bars, series: [{ data: [90, 95, 100] }] })) as CartesianPlot;
     expect(tall.ticks[0]?.value).toBe(0);
   });
@@ -251,8 +230,6 @@ describe("laying a bar chart out", () => {
   });
 
   it("never lets a bar fill its band", () => {
-    // The air left over is what separates one category from the next, and it
-    // does that job better than a stroke around each bar would.
     const band = plot.bands[0]?.size ?? 0;
     for (const bar of plot.bars) expect(bar.width).toBeLessThan(band);
   });
@@ -274,13 +251,10 @@ describe("laying a bar chart out", () => {
     ) as CartesianPlot;
     const [lower, upper] = stack.bars;
     if (!lower || !upper) throw new Error("expected two segments");
-    // The upper one ends short of where the lower one starts.
     expect(lower.y - (upper.y + upper.height)).toBeGreaterThanOrEqual(MARK.gap - 0.001);
   });
 
   it("writes the value on every bar of a single series and on none of a group", () => {
-    // On one series the numbers are the point, and they are also what makes a
-    // pale fill readable. On a group they are a wall of digits nobody reads.
     expect(plot.labels).toHaveLength(3);
     const grouped = layout(
       good({ ...bars, series: [{ data: [1, 2, 3] }, { data: [4, 5, 6] }] }),
@@ -289,8 +263,6 @@ describe("laying a bar chart out", () => {
   });
 
   it("drops whole category names rather than overlapping them", () => {
-    // A label is never shrunk, rotated or clipped to fit: rotated axis text is
-    // unreadable and a clipped one loses what told two categories apart.
     const many = layout(
       good({
         type: "bar",
@@ -303,9 +275,6 @@ describe("laying a bar chart out", () => {
   });
 
   it("stops a stacked fill at the series under it, not at the axis", () => {
-    // Every band drawn down to zero is every band drawn over the one before
-    // it, which at a tenth opacity makes a stack whose colors are all
-    // mixtures of each other.
     const stack = layout(
       good({
         type: "area",
@@ -320,8 +289,6 @@ describe("laying a bar chart out", () => {
     const [lower, upper] = stack.strokes;
     if (!lower || !upper) throw new Error("expected two fills");
 
-    // The lower one closes on the baseline. The upper one closes on the line
-    // the lower one drew, and never reaches the axis at all.
     const floor = (stroke: { line: string; fill: string }) =>
       [...stroke.fill.slice(stroke.line.length).matchAll(/L[\d.]+ ([\d.]+)/g)].map((at) =>
         Number(at[1]),
@@ -333,9 +300,6 @@ describe("laying a bar chart out", () => {
   });
 
   it("labels a stacked series with its own value, not the running total", () => {
-    // The readout and the table both say what this series was worth, and a
-    // label saying something else is the chart contradicting itself two inches
-    // lower down.
     const stack = layout(
       good({
         type: "area",
@@ -358,15 +322,12 @@ describe("laying a bar chart out", () => {
   });
 
   it("gives every category a pointer target the size of the whole band", () => {
-    // A reader aims at a month, never at a two-pixel line.
     for (const band of plot.bands) expect(band.size).toBeGreaterThan(MARK.hitRadius);
   });
 });
 
 describe("laying a pie out", () => {
   it("says nothing beside a wedge too thin to hold a label", () => {
-    // Two one-percent slivers put two labels in the same place, and the shot of
-    // that reads "Partne Other 1%". The legend and the table already name them.
     const plot = layout(
       good({
         type: "pie",
@@ -388,8 +349,6 @@ describe("laying a pie out", () => {
   });
 
   it("draws a single slice as a whole circle rather than nothing", () => {
-    // One wedge sweeping the full turn starts and ends on the same point, so
-    // the arc collapses and a pie of one category draws an empty frame.
     const plot = layout(
       good({ type: "pie", labels: ["all"], series: [{ data: [5] }] }),
     ) as RadialPlot;
@@ -405,7 +364,6 @@ describe("laying a pie out", () => {
     const pie = layout(
       good({ type: "pie", labels: ["a", "b"], series: [{ data: [1, 1] }] }),
     ) as RadialPlot;
-    // A solid wedge is drawn from the center out; a hollow one never goes there.
     expect(pie.wedges[0]?.path.startsWith(`M${pie.center.x} ${pie.center.y}`)).toBe(true);
     expect(donut.wedges[0]?.path.startsWith(`M${donut.center.x} ${donut.center.y}`)).toBe(false);
   });
@@ -413,8 +371,6 @@ describe("laying a pie out", () => {
 
 describe("a bar's outline", () => {
   it("is rounded where the data ends and square at the baseline", () => {
-    // Rounded at both ends a bar floats, and every bar in the chart looks as
-    // though it starts above the axis it is measured from.
     const path = barPath({
       series: 0,
       band: 0,
@@ -425,7 +381,6 @@ describe("a bar's outline", () => {
       round: "top",
       value: 1,
     });
-    // Two corner arcs at the top, none at the bottom.
     expect(path.match(/A/g)).toHaveLength(2);
     expect(path).toContain("V100");
   });
@@ -465,8 +420,6 @@ describe("the table every chart carries", () => {
   });
 
   it("refuses a series with nothing in it at all", () => {
-    // Distinct from a gap: a series of nothing but gaps has no reading
-    // anywhere, so it puts a name in the legend that points at no mark.
     expect(refused({ type: "line", labels: ["a"], series: [{ data: [null] }] })).toContain(
       "nothing to draw",
     );

@@ -70,9 +70,6 @@ describe("a chart in a message", () => {
   });
 
   it("says what it is, for anyone who cannot see it", () => {
-    // The drawing itself is one image with one sentence on it. The numbers are
-    // in the table underneath, which is where a reader is sent rather than
-    // being read a hundred coordinates.
     render(<Markdown>{fence("chart", BARS)}</Markdown>);
     const drawing = screen.getByRole("img");
     expect(drawing.getAttribute("aria-label")).toContain("Revenue by quarter");
@@ -80,9 +77,6 @@ describe("a chart in a message", () => {
   });
 
   it("carries every value as text as well as as a shape", () => {
-    // A value behind a hover is a value some readers can never reach. This is
-    // the channel that makes the drawing an enhancement rather than the only
-    // way to find out what the numbers were.
     const { container } = render(<Markdown>{fence("chart", BARS)}</Markdown>);
     const table = container.querySelector(".chart__table table");
     if (!table) throw new Error("a chart shipped without its figures");
@@ -97,8 +91,6 @@ describe("a chart in a message", () => {
   });
 
   it("offers a legend past one series and none at one", () => {
-    // One color, and the title above already says what is plotted. A box with
-    // a single swatch in it restates the title and costs a line.
     const { container } = render(<Markdown>{fence("chart", BARS)}</Markdown>);
     expect(container.querySelector(".chart__legend")).toBeNull();
 
@@ -122,9 +114,6 @@ describe("a chart in a message", () => {
   });
 
   it("makes a pie's legend a key rather than a set of switches", () => {
-    // Its slices are shares of one whole, so switching one off would leave the
-    // others claiming percentages of a total that has not changed. A button
-    // that does nothing when pressed is worse than a label.
     const { container } = render(
       <Markdown>
         {fence("chart", {
@@ -140,9 +129,6 @@ describe("a chart in a message", () => {
   });
 
   it("keeps the source one press away", () => {
-    // A figure drawn from a model's own JSON is a claim about numbers, and an
-    // operator checking the chart against what was written has nowhere else to
-    // look. It is also the only thing that can be copied out.
     render(<Markdown>{fence("chart", BARS)}</Markdown>);
     expect(screen.getByRole("button", { name: "Source" })).toBeTruthy();
   });
@@ -154,15 +140,10 @@ describe("a chart that will not draw", () => {
       <Markdown>{fence("chart", '{"type": "sunburst", "series": [{"data": [1]}]}')}</Markdown>,
     );
     expect(container.querySelector(".figure__fault")?.textContent).toContain("not a chart type");
-    // The spec itself stays on screen: the operator needs to see the request,
-    // and the agent needs to be told what to change.
     expect(container.querySelector(".figure__source")?.textContent).toContain("sunburst");
   });
 
   it("waits quietly while one is still arriving", () => {
-    // Mid-stream a chart is half an object. Called an error, that is a red box
-    // under every figure for a second, which teaches an operator that the
-    // feature is broken.
     const { container } = render(<Markdown>{'```chart\n{"type": "ba'}</Markdown>);
     expect(container.querySelector(".figure--waiting")).toBeTruthy();
     expect(container.querySelector(".figure__fault")).toBeNull();
@@ -222,18 +203,12 @@ describe("a page in a message", () => {
   });
 
   it("mounts exactly one frame, however many places it could go", async () => {
-    // The same element written into both the inline card and the full view is
-    // two of them: React draws it once per position in the tree, so a second
-    // renderer would start loading the same page and the height message would
-    // arrive from the wrong window.
     const { container } = render(<Markdown>{fence("html", PAGE)}</Markdown>);
     await waitFor(() => expect(container.querySelector("iframe")).toBeTruthy());
     expect(container.querySelectorAll("iframe")).toHaveLength(1);
   });
 
   it("is framed on an origin of its own, with scripts and nothing else", async () => {
-    // Never `allow-same-origin` beside `allow-scripts`: together they let the
-    // page take its own sandbox off and reload without one.
     const { container } = render(<Markdown>{fence("html", PAGE)}</Markdown>);
     await waitFor(() => {
       const frame = container.querySelector("iframe");
@@ -246,8 +221,6 @@ describe("a page in a message", () => {
   });
 
   it("is bounded in the transcript, and opens into a full view", async () => {
-    // The other half of the reading view in Artifacts, which offers no Open:
-    // a message is where a page is capped, so a message is where it opens.
     const { container } = render(<Markdown>{fence("html", PAGE)}</Markdown>);
     await waitFor(() => expect(container.querySelector("iframe")).toBeTruthy());
     expect(container.querySelector("iframe")?.style.height).not.toBe("");
@@ -255,8 +228,6 @@ describe("a page in a message", () => {
   });
 
   it("never becomes part of this document", async () => {
-    // The markup goes over IPC and comes back as an address. Nothing in the
-    // fence is ever parsed into the app's own tree.
     const { container } = render(<Markdown>{fence("html", PAGE)}</Markdown>);
     await waitFor(() => expect(container.querySelector("iframe")).toBeTruthy());
     expect(container.querySelector("h1")).toBeNull();
@@ -272,8 +243,6 @@ describe("a page in a message", () => {
   });
 
   it("leaves a snippet as a code block", () => {
-    // Framing `<div>hi</div>` on its own origin is a renderer and a round trip
-    // spent on what a code block already showed.
     const { container } = render(<Markdown>{fence("html", "<div>hi</div>")}</Markdown>);
     expect(container.querySelector(".md__pre")).toBeTruthy();
     expect(container.querySelector("iframe")).toBeNull();
@@ -289,7 +258,6 @@ describe("a page that hands a value back", () => {
     sendMessage.mockClear();
   });
 
-  /** Renders the page in a channel and answers from inside the frame. */
   const answering = async (to: typeof TO | null = TO) => {
     const view = render(
       <Answering.Provider value={to}>
@@ -303,8 +271,6 @@ describe("a page that hands a value back", () => {
     });
     const say = (value: unknown) =>
       act(() => {
-        // Exactly what the bridge in `artifact.rs` posts, and delivered from
-        // the frame's own window, which is the only thing the parent trusts.
         window.dispatchEvent(
           new MessageEvent("message", {
             source: frame.contentWindow,
@@ -316,9 +282,6 @@ describe("a page that hands a value back", () => {
   };
 
   it("shows what was handed back and sends nothing on its own", async () => {
-    // The whole safety argument. A transcript re-frames a page whenever it
-    // draws one, so a page that could send by itself would send again every
-    // time it was scrolled past, and each send is a turn nobody asked for.
     const { say } = await answering();
     say('{"plan":"pro","seats":12}');
 
@@ -376,8 +339,6 @@ describe("a page that hands a value back", () => {
   });
 
   it("draws nothing where there is nobody to answer", async () => {
-    // A search hit, a pair's thread, a document preview. A Send button there
-    // is a control that cannot say who it sends to.
     const { say } = await answering(null);
     say('{"plan":"pro"}');
 
@@ -386,29 +347,14 @@ describe("a page that hands a value back", () => {
   });
 
   it("fences the value clear of its own backticks", () => {
-    // A page about code hands back a snippet, and a fixed three would end the
-    // block in the middle of the value.
     const message = answerMessage('{"snippet":"```js"}');
     expect(message).toContain("````json");
     expect(message.endsWith("````")).toBe(true);
-    // The plain case stays the plain case.
     expect(answerMessage('{"plan":"pro"}')).toContain("```json");
   });
 });
 
-/**
- * The seam between the script `artifact.rs` prepends and the parent that reads
- * it, checked by running the real one.
- *
- * Nothing else in the build can see this break. The Rust suite asserts what the
- * bridge's text contains, the suite above asserts what the renderer accepts, and
- * the two agree because the same literal is written in both places: renaming the
- * message in Rust fails one test, and updating that test makes the build green
- * with a page that can no longer answer. Same failure `ipc.contract.test.ts`
- * exists for, so the same answer: read both sources and compare them.
- */
 describe("the bridge the page is served with", () => {
-  /** The bridge's JavaScript, out of the Rust constant that carries it. */
   const bridge = () => {
     const rust = readFileSync(resolve(__dirname, "../../src-tauri/src/artifact.rs"), "utf8");
     const held = rust.match(/const BRIDGE: &str = r#"([\s\S]*?)"#;/);
@@ -418,7 +364,6 @@ describe("the bridge the page is served with", () => {
     return script[1] as string;
   };
 
-  /** Runs it the way the page does, and collects what it posts to its parent. */
   const running = () => {
     const posted: unknown[] = [];
     const page: Record<string, unknown> = {};
@@ -437,8 +382,6 @@ describe("the bridge the page is served with", () => {
     expect(guaca.answer({ plan: "pro", seats: 12 })).toBe(true);
     expect(posted).toEqual([{ guaca: "artifact-answer", value: '{"plan":"pro","seats":12}' }]);
 
-    // The same object, straight from the bridge into the component that reads
-    // it. Neither side is retyped here, which is the whole point.
     const view = render(
       <Answering.Provider value={{ id: "agent-1", name: "Analyst" }}>
         <Markdown>
@@ -464,8 +407,6 @@ describe("the bridge the page is served with", () => {
   });
 
   it("fails in the page, where the page can be told, rather than in the app", () => {
-    // A value that will not survive `JSON.stringify`. Arriving as something the
-    // app has to decide about is strictly worse than the page getting a false.
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;
     const { posted, guaca } = running();
@@ -485,7 +426,6 @@ describe("every other fence", () => {
   });
 
   it("including one holding JSON that happens to be a chart spec", () => {
-    // A model showing an operator what a spec looks like is showing them text.
     const { container } = render(<Markdown>{fence("json", BARS)}</Markdown>);
     expect(container.querySelector("svg.chart__svg")).toBeNull();
     expect(container.querySelector(".md__pre")).toBeTruthy();

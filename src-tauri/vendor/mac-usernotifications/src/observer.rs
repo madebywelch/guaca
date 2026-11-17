@@ -1,5 +1,3 @@
-//! Scoped observation of real native responses, independent of response futures.
-
 use std::{
     fmt,
     sync::{Arc, Condvar, Mutex},
@@ -21,7 +19,6 @@ struct State {
     running: usize,
 }
 
-/// The single active native-response subscription. Drop detaches without waiting.
 pub struct ResponseSubscription(Option<Arc<Observer>>);
 
 impl fmt::Debug for ResponseSubscription {
@@ -30,7 +27,6 @@ impl fmt::Debug for ResponseSubscription {
     }
 }
 
-/// Callbacks leased before detachment, which may still be running.
 pub struct ResponseDrain(Arc<Observer>);
 
 impl fmt::Debug for ResponseDrain {
@@ -39,10 +35,6 @@ impl fmt::Debug for ResponseDrain {
     }
 }
 
-/// Observe real delegate actions. Returns `None` if a subscription is active.
-///
-/// No registry or lifecycle lock is held while calling the observer. Callbacks
-/// may detach reentrantly. Polling and timeout responses never reach this observer.
 pub fn observe_responses(
     callback: impl Fn(&NotificationResponse) + Send + Sync + 'static,
 ) -> Option<ResponseSubscription> {
@@ -70,7 +62,6 @@ impl ResponseSubscription {
         Some(observer)
     }
 
-    /// Prevent new invocations, returning the callbacks already leased.
     pub fn detach(mut self) -> ResponseDrain {
         ResponseDrain(self.deactivate().expect("subscription already detached"))
     }
@@ -83,10 +74,6 @@ impl Drop for ResponseSubscription {
 }
 
 impl ResponseDrain {
-    /// Wait until all pre-detachment callbacks finish.
-    ///
-    /// After return, this subscription cannot invoke a callback. Call outside
-    /// its callback: waiting inside it would wait for that same invocation.
     pub fn wait(self) {
         let mut state = self.0.state.lock().expect("observer state poisoned");
         while state.running != 0 {

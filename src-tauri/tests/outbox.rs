@@ -1,7 +1,3 @@
-//! The outbox: what reaches a person, through the real runtime with a scripted
-//! model. Each scenario drives the cause, steps the dispatcher with a clock it
-//! is handed, and then plays the windows: what one asks for when it connects,
-//! and what its claim answers.
 mod harness;
 
 use std::sync::atomic::Ordering;
@@ -18,7 +14,6 @@ use guac_lib::runtime::events::UiEvent;
 use guac_lib::runtime::guard::GuardLimits;
 use harness::*;
 
-/// One outbox row, as much of it as these scenarios read.
 #[derive(Debug, Clone)]
 struct Row {
     id: String,
@@ -47,7 +42,6 @@ fn rows(h: &Harness) -> Vec<Row> {
     .unwrap()
 }
 
-/// What a window that has just connected is offered.
 fn pending(h: &Harness) -> Vec<Delivery> {
     h.runtime.pending_deliveries(None).unwrap()
 }
@@ -56,7 +50,6 @@ fn offers(h: &Harness) -> usize {
     h.sink.count_of(|e| matches!(e, UiEvent::Delivery { .. }))
 }
 
-/// Files a decision due within the hour, which is due for a reminder at once.
 fn file_due_decision(h: &Harness, name: &str, topic: &str) {
     let agent = h.runtime.store().get_agent(h.id(name)).unwrap().unwrap();
     h.runtime
@@ -78,7 +71,6 @@ fn file_due_decision(h: &Harness, name: &str, topic: &str) {
         .unwrap();
 }
 
-/// A window with focus on this agent's channel.
 fn looking_at(h: &Harness, name: &str, window: &str) {
     let view = OperatorView { agent_id: Some(h.id(name)), ..Default::default() };
     h.runtime.report_window(view, true, Some(window.into()));
@@ -104,8 +96,6 @@ async fn a_reminder_due_with_no_window_open_is_delivered_once_when_one_connects(
     let h = harness(&stub, &["Assistant"], GuardLimits::default());
     file_due_decision(&h, "Assistant", "thread/time");
 
-    // Due now, with no window connected: the claim used to be the only
-    // record, and the event it raised went to nobody.
     h.runtime.sweep_decisions(now_ms());
     assert_eq!(
         h.sink.count_of(|e| matches!(e, UiEvent::DecisionReminder { count: 1 })),
@@ -114,7 +104,6 @@ async fn a_reminder_due_with_no_window_open_is_delivered_once_when_one_connects(
     );
     assert_eq!(h.runtime.dispatch_deliveries(now_ms()), 1);
 
-    // A window connects and asks what it missed.
     let waiting = pending(&h);
     assert_eq!(waiting.len(), 1, "{waiting:#?}");
     assert_eq!(waiting[0].kind, Kind::Reminder);
@@ -129,7 +118,6 @@ async fn a_reminder_due_with_no_window_open_is_delivered_once_when_one_connects(
     );
     assert!(pending(&h).is_empty());
 
-    // The next sweep finds nothing due, and writes nothing.
     h.runtime.sweep_decisions(now_ms());
     h.runtime.dispatch_deliveries(now_ms());
     assert!(pending(&h).is_empty());
@@ -144,8 +132,6 @@ async fn a_reminder_due_while_the_host_was_down_is_not_lost_at_boot() {
     let h = harness(&stub, &["Assistant"], GuardLimits::default());
     file_due_decision(&h, "Assistant", "thread/time");
 
-    // The next host boots the way boot::open does: pickup, dispatcher, then
-    // the scheduler, whose first sweep runs before any window can connect.
     let (h, _) = h.restart(Duration::from_secs(5)).await;
     h.runtime.start_dispatcher();
     h.runtime.start_scheduler();
@@ -166,7 +152,6 @@ async fn two_windows_claiming_one_delivery_show_it_once() {
     h.runtime.dispatch_deliveries(now_ms());
     let id = pending(&h)[0].id.clone();
 
-    // Every window heard the same offer and claims it at the same moment.
     let windows = 8;
     let start = Arc::new(Barrier::new(windows));
     let claims: Vec<_> = (0..windows)
@@ -199,8 +184,6 @@ async fn a_run_that_ends_in_the_channel_the_operator_is_reading_interrupts_nobod
     assert_eq!(all[0].status, "suppressed");
     assert_eq!(all[0].last_error.as_deref(), Some("on screen"));
 
-    // The control: the same ending in a channel the operator is not reading
-    // is not decided against, only held until they would count as away.
     let run = h.runtime.send_from_human(h.id("Triage"), "Triage the inbox.").unwrap();
     h.settle(run).await;
     h.runtime.dispatch_deliveries(now_ms());
@@ -231,7 +214,6 @@ async fn three_routines_finishing_while_the_operator_is_away_are_one_item() {
         h.settle(run).await;
     }
 
-    // No window has said anything: nobody is there. The three are gathered.
     let now = now_ms();
     assert_eq!(h.runtime.dispatch_deliveries(now), 0);
     assert!(pending(&h).is_empty(), "nothing is offered while it gathers");
@@ -256,7 +238,6 @@ async fn three_routines_finishing_while_the_operator_is_away_are_one_item() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_run_with_nothing_to_tell_writes_nothing() {
-    // A stop is the operator's own act.
     let stub = serve(|_| Script::Hang).await;
     let h = harness(&stub, &["Writer"], GuardLimits::default());
     let run = h.runtime.send_from_human(h.id("Writer"), "Draft the launch post.").unwrap();
@@ -268,9 +249,6 @@ async fn a_run_with_nothing_to_tell_writes_nothing() {
     h.runtime.dispatch_deliveries(now_ms() + GATHER_MS);
     assert!(rows(&h).is_empty(), "{:#?}", rows(&h));
 
-    // A check that found nothing is the other ending nobody is told about.
-    // No run ends that way until the prompt lets an agent say so, so it is
-    // asked of the one function every outcome's row comes from.
     let nothing_new = guac_lib::domain::outcome::Outcome { status: Status::NothingNew, ..outcome };
     assert_eq!(outbox::for_outcome(&nothing_new, "Writer"), None);
 }
@@ -288,7 +266,6 @@ async fn a_restart_between_the_offer_and_the_claim_delivers_once() {
     assert_eq!(before[0].kind, Kind::NeedsYou);
     assert_eq!(before[0].title, "Analyst is stuck");
 
-    // The host goes down before any window claims it.
     let (h, _) = h.restart(Duration::from_secs(5)).await;
     assert_eq!(h.runtime.dispatch_deliveries(now_ms()), 0, "an offer is not made twice");
     let after = pending(&h);
@@ -308,7 +285,6 @@ async fn a_banner_about_something_already_dealt_with_is_withdrawn() {
     let run = h.runtime.send_from_human(h.id("Analyst"), "Ship it.").unwrap();
     h.settle(run).await;
 
-    // Raised twice in one day is one interruption.
     let again = h.runtime.send_from_human(h.id("Analyst"), "Try again.").unwrap();
     h.settle(again).await;
     let open = h.runtime.store().open_escalations(10).unwrap();
@@ -319,13 +295,11 @@ async fn a_banner_about_something_already_dealt_with_is_withdrawn() {
     h.runtime.dispatch_deliveries(now_ms());
     let id = pending(&h).into_iter().find(|d| d.kind == Kind::NeedsYou).unwrap().id;
 
-    // Cleared in one window before another claims the banner.
     h.runtime.clear_escalation(open[0].id).unwrap();
     assert!(!h.runtime.claim_delivery(&id, None).unwrap(), "nothing to show about a cleared wall");
     let row = rows(&h).into_iter().find(|row| row.id == id).unwrap();
     assert_eq!((row.status.as_str(), row.last_error.as_deref()), ("suppressed", Some("answered")));
 
-    // Seen is the same for a finished run: opening the channel withdraws it.
     let finished: Vec<Row> = rows(&h).into_iter().filter(|row| row.kind == "outcome").collect();
     assert_eq!(finished.len(), 2, "{finished:#?}");
     assert!(finished.iter().all(|row| row.status == "pending"), "gathering: {finished:#?}");
@@ -350,7 +324,6 @@ async fn finished_work_while_the_operator_is_elsewhere_goes_out_only_if_they_lea
     h.settle(run).await;
     assert_eq!(h.runtime.dispatch_deliveries(now_ms()), 0, "held while they are here");
 
-    // They leave: the window loses focus and says so.
     let view = OperatorView { agent_id: Some(h.id("Notes")), ..Default::default() };
     h.runtime.report_window(view, false, Some("desk".into()));
     let away = now_ms().max(seen_at) + AWAY_AFTER_MS;
@@ -377,12 +350,8 @@ async fn a_window_losing_focus_changes_nothing_an_agent_reads() {
     assert!(before.contains("Pip"), "{before}");
 }
 
-/// How long the other pages have to take what one page gave back. The
-/// dispatcher's own constant is private to the runtime, so a change to it
-/// shows up here as a failure rather than going unnoticed.
 const RECLAIM_MS: i64 = 15_000;
 
-/// What one page, named as `PAGE_ID` names it, is offered when it connects.
 fn offered_to(h: &Harness, page: &str) -> Vec<Delivery> {
     h.runtime.pending_deliveries(Some(page)).unwrap()
 }
@@ -395,7 +364,6 @@ fn releases(h: &Harness, id: &str, page: &str) -> bool {
     h.runtime.release_delivery(id, page).unwrap()
 }
 
-/// A reminder offered to every window, and its id.
 fn a_reminder_is_offered(h: &Harness) -> String {
     file_due_decision(h, "Assistant", "thread/time");
     h.runtime.sweep_decisions(now_ms());
@@ -417,7 +385,6 @@ async fn a_delivery_given_back_is_offered_to_every_other_window_and_never_to_the
     assert_eq!(status_of(&h, &id), "delivered");
     let before = offers(&h);
 
-    // macOS refused the banner after the claim won.
     assert!(releases(&h, &id, "desk"));
     assert_eq!(status_of(&h, &id), "pending", "no longer counted as shown");
     assert_eq!(offers(&h), before + 1, "offered again to the windows that are listening");
@@ -479,7 +446,6 @@ async fn with_no_address_what_nobody_else_takes_ends_not_shown() {
     assert!(claims(&h, &id, "desk"));
     assert!(releases(&h, &id, "desk"));
 
-    // Nobody else claims it in time, and there is no address to push to.
     let now = now_ms();
     h.runtime.dispatch_deliveries(now + RECLAIM_MS);
     h.runtime.dispatch_deliveries(now + RECLAIM_MS + 60_000);
@@ -489,7 +455,6 @@ async fn with_no_address_what_nobody_else_takes_ends_not_shown() {
     let next = h.runtime.store().next_delivery_at().unwrap().unwrap();
     assert!(next > now + RECLAIM_MS + 60_000, "the dispatcher is done with it until it expires");
 
-    // A day after it was written it has expired, like any offer nobody took.
     h.runtime.dispatch_deliveries(now + outbox::EXPIRE_MS + 1);
     assert_eq!(status_of(&h, &id), "expired");
     assert!(offered_to(&h, "laptop").is_empty());

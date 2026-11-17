@@ -4,22 +4,17 @@ import { workspaceOrigin } from "../lib/transport";
 import type { AgentCard, Attachment, Staged } from "../lib/types";
 import { Composer } from "./Composer";
 
-/** The drop handlers the component registered, so a test can fire one. */
 let dropped: ((staged: Promise<Staged>) => void) | null = null;
 let over: ((inside: boolean) => void) | null = null;
 
-/** What the runtime says came of a drop. Set per test where it matters. */
 let staging: (paths: string[]) => Promise<Staged> = async (paths) => ({
   attached: paths.map(stored),
   refused: [],
 });
 
-/** A file as the store would hand it back: named, typed, and addressed. */
 function stored(path: string): Attachment {
   const name = path.split("/").pop() ?? path;
   return {
-    // Content addressing, faked by the name: two copies of one document in
-    // different folders are one attachment, which is the case worth testing.
     digest: `digest-of-${name}`,
     name,
     mime: name.endsWith(".png") ? "image/png" : "text/plain",
@@ -43,10 +38,8 @@ vi.mock("../lib/ipc", () => ({
   },
 }));
 
-/** Every live agent in the workspace, which is more than one crew. */
 let roster: AgentCard[] = [];
 
-/** What the composer reads off the store: the roster, and whether there is a disk. */
 const state = {
   groups: [
     { id: "00000000-0000-4000-8000-000000000001", name: "Studio" },
@@ -65,15 +58,11 @@ vi.mock("../lib/store", () => ({
   useStore: (select: (s: typeof state) => unknown) => select(state),
 }));
 
-/** The crew whose channel is open in these tests. */
 const CREW = "00000000-0000-4000-8000-000000000001";
-/** Another one, whose names the box must never offer. */
 const ELSEWHERE = "00000000-0000-4000-8000-000000000002";
 
-/** Minted per card rather than per name: two crews can hold one name. */
 let minted = 0;
 
-/** An agent as the rail hands one over: only the fields the composer draws. */
 function anAgent(name: string, group = CREW): AgentCard {
   return {
     id: `00000000-0000-4000-8000-${(++minted).toString().padStart(12, "0")}`,
@@ -326,8 +315,6 @@ describe("Composer", () => {
     const onSend = await draw();
     await drop(["/Users/robert/Documents/proposal.docx"]);
 
-    // The path is the operator's business and is never shown; the name is what
-    // they recognize.
     expect(screen.getByText("proposal.docx")).toBeTruthy();
     expect(screen.queryByText(/Users\/robert/)).toBeNull();
 
@@ -342,8 +329,6 @@ describe("Composer", () => {
   });
 
   it("lets a file be sent with nothing typed", async () => {
-    // Handing over a document with no covering note is how people actually
-    // send one, and Send is disabled on an empty box.
     const onSend = await draw();
     expect(screen.getByRole("button", { name: "Send" }).hasAttribute("disabled")).toBe(true);
 
@@ -378,8 +363,6 @@ describe("Composer", () => {
   });
 
   it("takes one copy of a document dropped twice from two places", async () => {
-    // By content, not by path. A second drop is a person making sure, and one
-    // document saved in two folders is still one document.
     await draw();
     await drop(["/tmp/same.md"]);
     await drop(["/Users/robert/Desktop/same.md"]);
@@ -398,9 +381,6 @@ describe("Composer", () => {
   });
 
   it("names the file it could not take and keeps the ones it could", async () => {
-    // Refused on the drop rather than on the send: the operator is still
-    // holding the file, and one document over the limit must not cost them the
-    // message they have written or the four attachments beside it.
     staging = async () => ({
       attached: [stored("/tmp/brief.md")],
       refused: ["enormous.zip is 40000000 bytes, and the limit is 26214400"],
@@ -426,8 +406,6 @@ describe("Composer", () => {
   });
 
   it("shows a dropped picture rather than only its name", async () => {
-    // Three screenshots dropped together are three copies of one long
-    // timestamped name, and nothing else to tell them apart.
     await draw();
     await drop(["/tmp/shot.png"]);
 
@@ -436,9 +414,6 @@ describe("Composer", () => {
   });
 
   it("offers a file button where there are no paths to drop, and takes what it picks", async () => {
-    // A browser has bytes rather than paths, so the drop is joined by a
-    // picker. On a desktop the button is not there: the window takes a path
-    // and the runtime reads the file.
     state.capabilities = { ...state.capabilities, localFiles: false };
     uploads.mockResolvedValue({ attached: [stored("brief.pdf")], refused: [] });
     try {
@@ -477,7 +452,6 @@ describe("Composer", () => {
 });
 
 describe("a mention in the box", () => {
-  /** The layer under the textarea, which is where a draft's mentions are drawn. */
   const painted = () => document.querySelector(".composer__mirror");
 
   async function draw(group: string | null = CREW) {
@@ -485,14 +459,10 @@ describe("a mention in the box", () => {
     await waitFor(() => expect(dropped).not.toBeNull());
   }
 
-  /** The names the typeahead is offering right now. */
   const offered = () =>
     [...document.querySelectorAll(".mentions__name")].map((item) => item.textContent);
 
   it("offers the channel's own crew and nobody else", async () => {
-    // The workspace-wide list is what an operator sees after clearing a crew
-    // and hiring a new one: every agent they have ever had, on a menu where
-    // picking one writes a name `send_message` refuses as belonging to nobody.
     roster = [anAgent("Critic"), anAgent("Scribe", ELSEWHERE)];
     await draw();
     await type("ask @");
@@ -518,10 +488,6 @@ describe("a mention in the box", () => {
   });
 
   it("paints exactly the characters the box holds, and no others", async () => {
-    // The layer sits under the operator's own text, so a copy that is one
-    // character out is a pill beside the name instead of behind it. Nothing in
-    // a window with no layout can see that; that the two strings agree is what
-    // can be checked here, and `styles.test.ts` holds the metrics.
     roster = [anAgent("Critic")];
     await draw();
     await type("ask @Critic to review\nand say so");
@@ -547,9 +513,6 @@ describe("a mention in the box", () => {
   });
 
   it("marks nothing when the name belongs to another crew", async () => {
-    // The chip is the promise the menu made, one step later: drawing one
-    // around a name in a crew this channel cannot reach says the message is
-    // addressed to somebody it will never arrive at.
     roster = [anAgent("Critic"), anAgent("Scribe", ELSEWHERE)];
     await draw();
     await type("ask @Scribe about it");
@@ -558,8 +521,6 @@ describe("a mention in the box", () => {
   });
 
   it("marks the name the typeahead just completed", async () => {
-    // The two have to agree: a completion the operator accepted that then drew
-    // as prose reads as the app having refused it.
     roster = [anAgent("Head Chef")];
     await draw();
     await type("ask @Head");
@@ -583,13 +544,6 @@ describe("a mention in the box", () => {
   });
 });
 
-/**
- * A keydown the box receives while an input method is mid-character.
- *
- * The composing bit lives on the browser's own event, not on React's wrapper,
- * so it is set on the DOM event that is dispatched. The event is handed back so
- * a test can see whether the box claimed it.
- */
 function composing(key: string) {
   const box = screen.getByRole("combobox") as HTMLTextAreaElement;
   const event = new KeyboardEvent("keydown", {
@@ -602,7 +556,6 @@ function composing(key: string) {
   return event;
 }
 
-/** The names the typeahead is offering right now, and which is highlighted. */
 const suggestions = () =>
   [...document.querySelectorAll(".mentions__name")].map((item) => item.textContent);
 const highlighted = () =>
@@ -617,8 +570,6 @@ describe("the keyboard while an input method is composing", () => {
   }
 
   it("does not send when Enter commits a character", async () => {
-    // On a Mac the Enter that ends a composition picks a candidate; sending the
-    // half-written line instead is a message nobody meant to write.
     const onSend = await draw();
     await type("こんにち");
 
@@ -630,9 +581,6 @@ describe("the keyboard while an input method is composing", () => {
   });
 
   it("does not complete a mention when Enter commits a character", async () => {
-    // The menu is open while a name is being typed, so Enter is the key the
-    // guard most needs to reach first: choosing here writes a name out of the
-    // composition's own characters.
     roster = [anAgent("Critic")];
     const onSend = await draw();
     await type("ask @Crit");
@@ -767,8 +715,6 @@ describe("the keyboard outside a composition", () => {
   });
 });
 
-/** A drop arrives from the runtime, not from the DOM, so it is fired by hand.
- *  What the composer is handed is the store's answer, already under way. */
 async function drop(paths: string[]) {
   await act(async () => {
     dropped?.(staging(paths));

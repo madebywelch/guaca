@@ -1,53 +1,22 @@
-//! A widget: a kept page's condensed view, pinned to the status bar.
-//!
-//! Quick actions are data from a closed set because the only other option was
-//! an agent's script running in the window with the app's whole authority. A
-//! kept page is not that. It runs on the artifact origin, which reaches no
-//! network and cannot read the document that framed it, so a widget can be
-//! code and still be nothing the bar has to trust: it is a page the crew
-//! already keeps, drawn one row high from its condensed view, and a click on it
-//! opens the page itself. Owner, versions, reads and the click that reaches the
-//! owner are all the artifact's; this is only where it sits and how often its
-//! reads run.
-//!
-//! A pin is a setting on the host rather than a column on the artifact, for the
-//! quick actions' reason: every window draws the same bar, a change reaches
-//! them through `settingsChanged`, and what is on the operator's bar is the
-//! operator's decision rather than a fact about the page. An agent asks for one
-//! and the operator says yes, once, to the placement and the reads together.
-//!
-//! The width is chosen here, not by the page. A frame on another origin cannot
-//! be measured from outside, and a page that reported its own width would be a
-//! page deciding how much of the bar it takes.
-
 use serde::{Deserialize, Serialize};
 
 use super::ids::ArtifactId;
 
-/// How many fit beside the host and the quick actions without the bar
-/// wrapping onto a second row, which would take the line from the channel.
 pub const MAX_WIDGETS: usize = 6;
 
-/// How often a pinned page's reads run when nobody said. A connector call each,
-/// with no model, so the floor is about the connector's rate limit rather than
-/// about spend.
 pub const DEFAULT_EVERY: u32 = 5;
 pub const MIN_EVERY: u32 = 1;
 pub const MAX_EVERY: u32 = 24 * 60;
 
-/// How much of the bar one takes. Two, so a page is written for one of them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Width {
-    /// A number and a word: `3 open PRs`.
     #[default]
     Narrow,
-    /// Room for a small sparkline or two numbers side by side.
     Wide,
 }
 
 impl Width {
-    /// Absent is narrow, which is what a condensed view should be.
     pub fn parse(raw: Option<&str>) -> Result<Width, WidgetError> {
         match raw.map(|raw| raw.trim().to_ascii_lowercase()).as_deref() {
             None | Some("") | Some("narrow") => Ok(Width::Narrow),
@@ -64,15 +33,12 @@ impl Width {
     }
 }
 
-/// One page on the bar.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Widget {
     pub artifact_id: ArtifactId,
     pub width: Width,
-    /// Minutes between reads, for a page that declares any.
     pub every_minutes: u32,
-    /// "the operator", or the agent that asked for it.
     pub added_by: String,
 }
 
@@ -110,7 +76,6 @@ impl Widget {
     }
 }
 
-/// Puts one on the bar, at the end.
 pub fn pin(bar: &mut Vec<Widget>, widget: Widget) -> Result<(), WidgetError> {
     if bar.iter().any(|pinned| pinned.artifact_id == widget.artifact_id) {
         return Err(WidgetError::AlreadyPinned);
@@ -122,7 +87,6 @@ pub fn pin(bar: &mut Vec<Widget>, widget: Widget) -> Result<(), WidgetError> {
     Ok(())
 }
 
-/// Changes how much of the bar one takes, where it already is.
 pub fn resize(bar: &mut [Widget], id: ArtifactId, width: Width) -> Result<(), WidgetError> {
     let pinned =
         bar.iter_mut().find(|pinned| pinned.artifact_id == id).ok_or(WidgetError::NotPinned)?;
@@ -130,7 +94,6 @@ pub fn resize(bar: &mut [Widget], id: ArtifactId, width: Width) -> Result<(), Wi
     Ok(())
 }
 
-/// Takes one off the bar.
 pub fn unpin(bar: &mut Vec<Widget>, id: ArtifactId) -> Result<Widget, WidgetError> {
     let at =
         bar.iter().position(|pinned| pinned.artifact_id == id).ok_or(WidgetError::NotPinned)?;

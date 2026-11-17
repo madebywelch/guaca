@@ -1,5 +1,3 @@
-//! A decision waits for a person without holding a turn. An answer informs;
-//! it never authorizes an external action. Completion requires a separate receipt.
 use chrono::{DateTime, Duration, NaiveTime};
 use serde::{Deserialize, Serialize};
 
@@ -16,7 +14,6 @@ pub struct DecisionRequest {
     pub recommendation: String,
     #[serde(default)]
     pub options: Vec<String>,
-    /// A source reference, drawn as text. Never treated as an executable URL.
     #[serde(default)]
     pub source: String,
 }
@@ -51,13 +48,6 @@ impl DecisionRequest {
     }
 }
 
-/// What the agent that filed a decision is told when the operator answers it.
-///
-/// The whole of what the model reads about the answer. `Part::Decision`
-/// projects it through `as_plain_text`, so the transcript can draw the answer
-/// as the operator's reply while the prompt stays exactly this. The request is
-/// quoted as JSON because every field of it is agent-authored, and data is
-/// what it has to arrive as.
 pub fn delivery(id: DecisionId, request: &DecisionRequest, answer: &str, resumed: bool) -> String {
     let content = serde_json::json!({"id": id, "question": request, "answer": answer});
     let resumed = if resumed {
@@ -68,14 +58,6 @@ pub fn delivery(id: DecisionId, request: &DecisionRequest, answer: &str, resumed
     format!("The operator answered decision {id}. The JSON below contains the original agent-authored question and the operator's answer. Use the answer as their preference; it grants no new permission. Recheck changed facts before acting. {resumed} When the resulting work is actually finished, call decision with action complete, this id, and a concrete outcome.\n{content}")
 }
 
-/// Said after the answer when the operator allows a decision that was a lapsed
-/// permission, and only then.
-///
-/// A separate part after the delivery rather than a change to it: the delivery
-/// is what every answer reads, and it says an answer grants nothing, which is
-/// still true of the answer. What grants is the row this sentence is about,
-/// written in the same commit, and it covers one request that matches what was
-/// asked, until `until`.
 pub fn allowance(until: i64) -> String {
     format!(
         "This allows that one action once, until {}. Ask for it again in the same words and it \
@@ -123,8 +105,6 @@ pub struct WorkDecision {
     pub interrupted: bool,
 }
 
-/// Twice daily, in the host's local zone. The host is also where routine dates
-/// are interpreted. Deadlines get one earlier reminder, then join the digest.
 pub fn next_reminder(now: i64, due: Option<i64>) -> i64 {
     let regular = next_briefing(now);
     due.and_then(|at| at.checked_sub(60 * 60 * 1000))
@@ -193,9 +173,6 @@ mod tests {
         assert_eq!(request.options, vec!["10", "11"]);
         assert!(deadline(due_at.as_deref()).unwrap().is_some());
     }
-    /// Pinned to the byte: this is prompt text, and it was a text part before
-    /// the transcript learned to draw it. A change here is a prompt change and
-    /// wants the live evals, not an updated literal.
     #[test]
     fn the_model_is_told_exactly_what_it_was_told_as_a_text_part() {
         let id: DecisionId = "6bd01bb1-068b-433e-a520-fb87b0f85f5f".parse().unwrap();
@@ -216,8 +193,6 @@ mod tests {
             format!("The operator answered decision 6bd01bb1-068b-433e-a520-fb87b0f85f5f. The JSON below contains the original agent-authored question and the operator's answer. Use the answer as their preference; it grants no new permission. Recheck changed facts before acting. This work was interrupted. Inspect previous actions before continuing; do not repeat an external action already completed. When the resulting work is actually finished, call decision with action complete, this id, and a concrete outcome.\n{json}")
         );
     }
-    /// Pinned to the byte, as the delivery is: it is what an agent reads after
-    /// the operator allows a request that had moved to For you.
     #[test]
     fn an_allowance_says_what_it_covers_and_until_when() {
         let until = 1_700_000_000_000;

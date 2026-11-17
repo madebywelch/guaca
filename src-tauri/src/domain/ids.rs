@@ -1,10 +1,3 @@
-//! Newtype identifiers.
-//!
-//! These are separate types on purpose. An `AgentId` and a `RunId` are both
-//! UUIDs underneath, and mixing them up is the kind of bug that only shows up
-//! once messages are flying between agents. The type system is cheaper than
-//! the debugging session.
-
 use std::fmt;
 use std::str::FromStr;
 
@@ -32,7 +25,6 @@ macro_rules! declare_id {
                 &self.0
             }
 
-            /// Short, human-scannable form for log lines and UI affordances.
             pub fn short(&self) -> String {
                 self.0.simple().to_string()[..8].to_string()
             }
@@ -89,8 +81,6 @@ mod tests {
     fn ids_round_trip_through_json_as_bare_strings() {
         let id = MessageId::new();
         let json = serde_json::to_string(&id).unwrap();
-        // `transparent` keeps the wire format a plain string, so the TypeScript
-        // side sees `string` and not `{ "0": "..." }`.
         assert!(json.starts_with('"'), "expected a bare JSON string, got {json}");
         assert_eq!(id, serde_json::from_str::<MessageId>(&json).unwrap());
     }

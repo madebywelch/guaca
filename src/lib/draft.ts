@@ -166,9 +166,7 @@ export function readDraft(key: string): Draft {
   try {
     const value = JSON.parse(sessionStorage.getItem(key) ?? "null");
     if (validDraft(value)) return { text: value.text, files: value.files };
-  } catch {
-    /* An unavailable session store does not prevent composition. */
-  }
+  } catch {}
   return { text: "", files: [] };
 }
 export function saveDraft(key: string, draft: Draft) {

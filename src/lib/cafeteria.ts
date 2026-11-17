@@ -1,55 +1,5 @@
-/**
- * The cafeteria: agents that are already set up, waiting to be hired.
- *
- * Every field an operator would otherwise fill in by hand is written down here
- * once, well. The point is not that these are agents nobody could have written;
- * it is that writing twenty-one of them is an afternoon standing between a new
- * operator and a crew, and that afternoon buys nothing that a good default does
- * not.
- *
- * **What is stocked, and why these.** The counters are the departments of a
- * small software company, because a crew of agents is most often pointed at
- * one. The set is chosen so that a crew assembled from it can carry a change
- * the whole way without the operator writing a prompt: somebody decides what to
- * build, somebody draws it, somebody writes it, somebody reviews it, somebody
- * ships it and watches it, somebody documents it, and somebody tells the market
- * it exists. A gap in that chain is exactly the prompt the operator ends up
- * writing by hand, which is the work this file exists to remove. Which is why
- * design, reliability, security and growth are hires of their own rather than
- * duties folded into the engineer and the marketer: an agent doing five jobs
- * has no refusals, and the refusals are most of what a role is.
- *
- * The catalog cannot grow past the character cast, and that is the rule rather
- * than the coincidence it looks like. A crew is whatever subset was ticked, so
- * two presets sharing a character are two agents that look the same in one
- * rail. A new preset is a new row in `avatars/catalog.ts` first.
- *
- * **They are jobs, not functions.** "Chief of Staff" and "Paralegal", not
- * "Manager" and "Reviewer". A person staffing a workspace is thinking about a
- * role they would hire, and a role carries its own duties, its own judgment
- * and its own refusals: a paralegal declines to give a legal opinion, an
- * account manager does not promise a discount. A generic function label carries
- * none of that, and the operator has to supply all of it in the prompt, which
- * is the work this file exists to remove.
- *
- * A hire is a copy. Nothing here is referenced afterward: an agent hired from
- * the cafeteria is an ordinary agent with an ordinary card, editable, deletable
- * and indistinguishable from one typed out by hand. There is no upgrade path
- * from a preset to an agent because there is no link to upgrade along, which is
- * what stops this file from becoming a schema the database has to agree with.
- *
- * **House style for a prompt.** What the agent does, how it decides, and one
- * hard limit. The limit is the part that matters and the part that is easiest
- * to leave out: the cascade evals exist because a prompt with no stopping rule
- * makes a crew that talks to itself, and nothing in CI can see that. A preset
- * added without one is a regression that passes every automated suite. See
- * *Three test suites, asking different questions* in `docs/ARCHITECTURE.md`,
- * and run `./scripts/evals.sh` after touching anything below.
- */
-
 import type { AgentDraft } from "./types";
 
-/** Which counter of the cafeteria an agent stands at. */
 export type Station =
   | "Front office"
   | "Product and design"
@@ -58,15 +8,6 @@ export type Station =
   | "Customers and research"
   | "Finance and legal";
 
-/**
- * Drawn in this order: whoever the operator deals with first, then the order
- * the work happens in. A thing is decided, then built, then sold.
- *
- * Product and engineering used to be one counter, and nine cards under one
- * heading is a wall rather than a menu. Splitting them is not tidying: the two
- * halves answer different questions, and what to build is decided at the first
- * and settled at the second.
- */
 export const STATIONS: Station[] = [
   "Front office",
   "Product and design",
@@ -77,26 +18,11 @@ export const STATIONS: Station[] = [
 ];
 
 export interface Hireable {
-  /**
-   * Stable across renames. Selection, the starter crew and the tests all
-   * address a preset by this, so changing a `name` never silently changes
-   * which agent a button hires.
-   */
   id: string;
-  /**
-   * The job title the agent is hired under, and how peers address it.
-   *
-   * At most three words. Peers resolve each other by whole name and the
-   * composer's `@` typeahead gives up after two spaces, so a four-word title is
-   * an agent nobody can mention.
-   */
   name: string;
   station: Station;
-  /** The one line the operator reads while browsing. Not sent to any model. */
   tagline: string;
-  /** Key into the character catalog. */
   avatar: string;
-  /** One of the accents in that same catalog. */
   color: string;
   skills: string[];
   systemPrompt: string;
@@ -336,17 +262,6 @@ export const HIREABLE: Hireable[] = [
   },
 ];
 
-/**
- * The four an empty workspace starts with: somebody whose job is to delegate,
- * and three with distinct jobs to delegate to. Between them they can take
- * "look into X and draft something about it" end to end, which is the shortest
- * demonstration of what the app is for.
- *
- * By id rather than by copy, so the crew a first run gets and the cards the
- * cafeteria draws cannot drift apart. This was a second literal in `App.tsx`
- * and had already drifted: it named characters from a retired set, which the
- * avatar aliases resolved to something nobody had chosen.
- */
 export const STARTER_CREW = [
   "chief-of-staff",
   "market-researcher",
@@ -354,22 +269,17 @@ export const STARTER_CREW = [
   "executive-assistant",
 ];
 
-/** What a hire sends across IPC. */
 export function toDraft(preset: Hireable): AgentDraft {
   return {
     name: preset.name,
     avatar: preset.avatar,
     color: preset.color,
-    // Blank means inherit, so a hire picks up the group's model if it pins one
-    // and the app default otherwise. Writing the app default in here instead
-    // would pin every hire to it and quietly ignore a group that chose its own.
     model: "",
     systemPrompt: preset.systemPrompt,
     skills: preset.skills,
   };
 }
 
-/** Presets by id, in catalog order. Unknown ids are dropped rather than faked. */
 export function pick(ids: Iterable<string>): Hireable[] {
   const wanted = new Set(ids);
   return HIREABLE.filter((preset) => wanted.has(preset.id));

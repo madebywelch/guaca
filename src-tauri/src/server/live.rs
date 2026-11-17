@@ -1,7 +1,3 @@
-//! The current render state, captured before a socket starts consuming events.
-//! Only live text is held. Thinking is never replayed, and ended streams leave
-//! immediately. The transcript remains the durable record.
-
 use std::collections::HashMap;
 
 use serde::Serialize;
@@ -57,8 +53,6 @@ impl Snapshot {
             }
             UiEvent::StreamDelta { message_id, text, .. } => {
                 if let Some(stream) = self.streams.get_mut(message_id) {
-                    // A very large live reply can wait for its persisted form.
-                    // The cache is bounded per active turn, not per socket.
                     if !stream.truncated && stream.text.len() + text.len() <= 512 * 1024 {
                         stream.text.push_str(text);
                     } else {
