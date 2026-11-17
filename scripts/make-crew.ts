@@ -7,7 +7,7 @@ import { bodyPoints, FORM, outline, type Point } from "../src/avatars/form";
 import { markFor, MOODS, type Mood } from "../src/avatars/moods";
 import { Skin } from "../src/avatars/Skin";
 
-const CREW: { key: string; color: string; mood: Mood; gaze: Point; t: number }[] = [
+export const CREW: { key: string; color: string; mood: Mood; gaze: Point; t: number }[] = [
   { key: "orb", color: "#8b8f45", mood: "idle", gaze: [0.26, -0.06], t: 0.9 },
   { key: "husk", color: "#4f5f96", mood: "thinking", gaze: [-0.22, -0.16], t: 2.1 },
   { key: "crumb", color: "#bf5f3c", mood: "working", gaze: [0.12, 0.09], t: 0.32 },
