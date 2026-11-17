@@ -178,8 +178,8 @@ modifies: every kind of comment, docstrings included; `#[allow]`, `#[expect]`,
 lines, `noqa`, `type: ignore`, `.skip`, `.only` and `.todo`; a sleep standing in
 for a check in a test or script; and any new prose file (`.md`, `.mdx`,
 `.markdown`, `.rst`, `.adoc`, `.txt`, `.org`, an HTML page or a license). A
-comment fails wherever it is in the tree, touched or not, except in a prose file,
-where an old one stays until its line is touched, and in a shipped migration the
+comment fails wherever it is in the tree, touched or not, an HTML page and the
+scripts and styles in it included, except in a shipped migration the
 ledger lists under `migrations`, which must stay byte-identical to the commit it
 names because a migration is never edited. A suppression already in the tree
 stays until its line is touched. `node scripts/check-grants.mjs strip` removes
@@ -194,12 +194,13 @@ or an exit under a condition (an `if`, a `match` arm, a `case`, a `catch` or an
 `&&`); an exit at the top of the loop body checks nothing and does not count.
 Lines a tool reads and that silence nothing pass by rule
 (shebangs, `# syntax=`, `/// <reference>`, `@vitest-environment`, SPDX
-identifiers, `# shellcheck source=` and the version beside a pinned action); a
+identifiers, `# shellcheck source=`, the version beside a pinned action, and a
+one-word HTML placeholder such as `<!--app-->` that a build replaces); a
 `SAFETY:` comment is a comment like any other. Everything else needs the
 owner, and only the owner, recorded in `grants.json` by path and a hash of the
 exact text, so an unrelated edit keeps a grant and a reworded comment loses it,
-and a grant that matches nothing fails. A change to the ledger, deleting it included, fails the check
-until the owner approves that exact ledger: the approval is the pull request
+and a grant that matches nothing fails. A change to the ledger, deleting it
+included, fails the check until the owner approves that exact ledger: the approval is the pull request
 label `grants-approved-` followed by the first 12 hex digits of the SHA-256 of
 what `grants.json` says (parsed, with every object's keys in sorted order and
 no whitespace), which lives outside the diff, so any later change to what the

@@ -35,6 +35,7 @@ const DIRECTIVES = [
   (unit) => unit.lang === "shell" && /^shellcheck\s+(shell|source|source-path|external-sources)=\S+$/.test(unit.body),
   (unit) => unit.lang === "yaml" && /^yaml-language-server:\s*\$schema=\S+$/.test(unit.body),
   (unit) => unit.lang === "swift" && unit.line === 1 && /^swift-tools-version:/.test(unit.body),
+  (unit) => unit.lang === "markup" && /^<!--[a-z][a-z0-9-]*-->$/.test(unit.raw),
   (unit) =>
     unit.lang === "yaml" &&
     /^#\s*v\d+(\.\d+)*$/.test(unit.raw) &&
@@ -438,7 +439,7 @@ export function check(repo, { base, head = null, ledgerOverride, proseByDiff = f
   const grants = ledger?.grants ?? [];
   const grantFiles = grants.filter((grant) => grant.kind !== "document").map((grant) => grant.path);
   const shipped = shippedMigrations(repo, ledger, head, problems);
-  const judgedWhole = (path) => !PROSE.test(path) && !shipped.has(path);
+  const judgedWhole = (path) => !shipped.has(path);
   const named = (path) => !upstream(path) && !QUOTED.test(path);
   const files = listFiles(repo, head).filter((path) => !upstream(path));
   for (const path of files.filter((path) => QUOTED.test(path))) findings.push({ path, line: null, kind: "name", what: "a file name git quotes" });
@@ -716,7 +717,7 @@ export function sweep(repo, { only = [] } = {}) {
   const upstream = upstreamOf(ledger);
   const migrations = new Set(ledger?.migrations?.files ?? []);
   const wanted = (path) => only.length === 0 || only.some((prefix) => path === prefix || path.startsWith(prefix.replace(/\/?$/, "/")));
-  const candidates = listFiles(repo, null).filter((path) => wanted(path) && !upstream(path) && !PROSE.test(path) && !migrations.has(path));
+  const candidates = listFiles(repo, null).filter((path) => wanted(path) && !upstream(path) && !migrations.has(path));
   const links = linksAmong(repo, null, candidates);
   const texts = [];
   for (const path of candidates) {

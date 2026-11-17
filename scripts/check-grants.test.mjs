@@ -221,7 +221,7 @@ const LANGUAGES = [
       ["<script>const a = 1; // why</script>", "comment"],
       ["<style>a { color: red; } /* why */</style>", "comment"],
     ],
-    pass: ['<p title="<!-- no -->">// text</p>', '<script type="application/json">{"a": "//"}</script>'],
+    pass: ['<p title="<!-- no -->">// text</p>', '<script type="application/json">{"a": "//"}</script>', "<head>\n  <!--head-->\n</head>\n<body><!--app--></body>"],
   },
   {
     path: "migrations/0001.sql",
@@ -713,17 +713,21 @@ describe("a change", () => {
     }),
   );
   it(
-    "judges an old suppression and an old comment in a prose file only on the lines a change touches",
-    scenario(
-      {
-        "src/a.ts": "export function a() {\n  // biome-ignore lint/style/useConst: old\n  let b = 1;\n  return b;\n}\n",
-        "index.html": "<!-- an old note -->\n<p>old</p>\n",
-      },
-      (repo, run) => {
-        write(repo.dir, { "src/a.ts": "export function a() {\n    // biome-ignore lint/style/useConst: old\n  let b = 1;\n  return b + 1;\n}\n", "index.html": "<!-- an old note -->\n<p>new</p>\n" });
-        assert.deepEqual([...run().findings, ...run().problems], []);
-      },
-    ),
+    "judges an old suppression only on the lines a change touches",
+    scenario({ "src/a.ts": "export function a() {\n  // biome-ignore lint/style/useConst: old\n  let b = 1;\n  return b;\n}\n" }, (repo, run) => {
+      write(repo.dir, { "src/a.ts": "export function a() {\n    // biome-ignore lint/style/useConst: old\n  let b = 1;\n  return b + 1;\n}\n" });
+      assert.deepEqual([...run().findings, ...run().problems], []);
+    }),
+  );
+  it(
+    "fails an old comment in an HTML page the change never touched",
+    scenario({ "src/a.ts": SOURCE, "index.html": "<p>a</p>\n<!-- an old note -->\n" }, (repo, run) => {
+      write(repo.dir, { "src/a.ts": SOURCE + "export const c = 3;\n" });
+      assert.deepEqual(
+        run().findings.map((f) => [f.path, f.line, f.kind]),
+        [["index.html", 2, "comment"]],
+      );
+    }),
   );
   it(
     "passes the comments in a migration the ledger lists as shipped, unchanged",
@@ -1071,17 +1075,17 @@ describe("strip", () => {
     }),
   );
   it(
-    "keeps lines a tool reads, suppressions, granted comments, prose and shipped migrations",
+    "keeps lines a tool reads, suppressions, granted comments and shipped migrations, and strips an HTML comment",
     stripped(
       {
         "scripts/a.sh": "#!/usr/bin/env bash\n# shellcheck disable=SC2086\necho $A\n",
         "src/b.ts": "// the owner wants this\nexport const b = 1;\n",
-        "index.html": "<!-- a note -->\n<p>a</p>\n",
+        "index.html": "<!-- a note -->\n<p>a</p>\n<!--app-->\n",
         "migrations/0000_init.sql": "-- why\nCREATE TABLE a (id INTEGER);\n",
       },
       (repo, result, read) => {
         assert.equal(read("scripts/a.sh"), "#!/usr/bin/env bash\n# shellcheck disable=SC2086\necho $A\n");
-        assert.equal(read("index.html"), "<!-- a note -->\n<p>a</p>\n");
+        assert.equal(read("index.html"), "<p>a</p>\n<!--app-->\n");
         assert.equal(read("migrations/0000_init.sql"), "CREATE TABLE a (id INTEGER);\n");
         write(repo.dir, { "migrations/0000_init.sql": "-- why\nCREATE TABLE a (id INTEGER);\n", "src/b.ts": "// the owner wants this\nexport const b = 1;\n" });
         shipMigrations(repo, ["migrations/0000_init.sql"]);
