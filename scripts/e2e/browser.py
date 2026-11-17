@@ -167,7 +167,8 @@ class Browser:
             code = self.proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             code = None
-        said = self.log.read_text(errors="replace").strip().splitlines()[-5:] if self.log.exists() else []
+        lines = self.log.read_text(errors="replace").strip().splitlines() if self.log.exists() else []
+        said = [line for line in lines if ":FATAL:" in line][:1] or lines[-5:]
         return f"the browser went away (exit {code}): " + (" | ".join(said) or "it said nothing")
 
     def open(self, url: str) -> None:

@@ -38,7 +38,8 @@ class Pipe(unittest.TestCase):
     def test_a_browser_that_dies_at_launch_says_why_and_never_breaks_the_pipe(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             binary = Path(temp) / "chromium"
-            binary.write_text("#!/bin/sh\necho 'No usable sandbox!' >&2\nexit 133\n")
+            binary.write_text("#!/bin/sh\necho '[1:1:FATAL:zygote_host_impl_linux.cc] No usable sandbox!' >&2\n"
+                              "for frame in 1 2 3 4 5 6; do echo \"#$frame 0x0\" >&2; done\nexit 133\n")
             binary.chmod(0o755)
             browser = Browser(Path(temp) / "run" / "profile", binary=str(binary))
             with self.assertRaisesRegex(BrowserError, r"exit 133.*No usable sandbox"):
