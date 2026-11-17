@@ -24,6 +24,9 @@ pub const LIST_MAX: u32 = 500;
 const FAILED: &str = "EXISTS (SELECT 1 FROM json_each(m.parts) \
      WHERE json_extract(value,'$.type')='notice' AND json_extract(value,'$.kind')='upstreamError')";
 
+const CUT_SHORT: &str = "EXISTS (SELECT 1 FROM json_each(m.parts) \
+     WHERE json_extract(value,'$.type')='notice' AND json_extract(value,'$.kind')='interrupted')";
+
 pub(super) fn record(
     tx: &Connection,
     run: RunId,
@@ -47,6 +50,10 @@ pub(super) fn record(
         "DESC",
         params![run.to_string(), owner.to_string()],
     )?;
+    let cut_short = match settled {
+        Settled::Interrupted => first(tx, CUT_SHORT, "DESC", params![run.to_string()])?,
+        _ => None,
+    };
     let failure = first(tx, FAILED, "DESC", params![run.to_string()])?
         .filter(|failure| note.as_ref().is_none_or(|note| failure.created_at > note.created_at));
     let needs = left_open(tx, run)?;
@@ -63,6 +70,14 @@ pub(super) fn record(
 
     let quoted = note.as_ref().and_then(headline_of);
     let (status, headline, note_id) = match (settled, failure) {
+        (Settled::Interrupted, _) => (
+            Status::Interrupted,
+            cut_short
+                .as_ref()
+                .map(|notice| first_sentence(&notice_text(notice)))
+                .unwrap_or_default(),
+            cut_short.as_ref().map(|notice| notice.id),
+        ),
         (Settled::Stopped, _) => {
             (Status::Stopped, quoted.unwrap_or_else(|| STOPPED.into()), note.as_ref().map(|n| n.id))
         }

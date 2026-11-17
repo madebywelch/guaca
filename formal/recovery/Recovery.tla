@@ -8,7 +8,9 @@ CONSTANTS
     MarkBeforeRead,
     AcceptOneCommit,
     RecoverUntouched,
-    RecoverClears
+    RecoverClears,
+    KeepLink,
+    SkipStartNote
 
 Msgs == <<"m1", "m2">>
 MsgSet == {"m1", "m2"}
@@ -44,12 +46,13 @@ VARIABLES
     blind,
     marked,
     calledOff,
-    resumedOff
+    resumedOff,
+    riders
 
 host == <<draining, stopped, pdMem, outstanding, inbox, turn, resuming>>
 disk == <<accepted, pending, put, whole, extra, notices>>
 ghosts == <<read, acted, answered, blind, marked, calledOff, resumedOff>>
-vars == <<up, ends, host, disk, ghosts>>
+vars == <<up, ends, host, disk, ghosts, riders>>
 
 Init ==
     /\ up = TRUE /\ ends = 0
@@ -59,7 +62,7 @@ Init ==
     /\ put = [m \in MsgSet |-> "none"] /\ whole = {}
     /\ extra = [r \in Runs |-> 0] /\ notices = [r \in Runs |-> 0]
     /\ read = {} /\ acted = [m \in MsgSet |-> "none"] /\ answered = {} /\ blind = FALSE
-    /\ marked = {} /\ calledOff = {} /\ resumedOff = FALSE
+    /\ marked = {} /\ calledOff = {} /\ resumedOff = FALSE /\ riders = {}
 
 Halted(r) == draining \/ r \in stopped
 MarkStarted(rs) == [r \in Runs |-> IF r \in rs /\ pending[r] = "unstarted"
@@ -86,13 +89,16 @@ PutDown(batch, taken, records, actedOn) ==
     IN /\ outstanding' = left
        /\ pdMem' = pdMem \cup touched
        /\ put' = [m \in MsgSet |-> IF m \in booked THEN (IF records THEN "rec" ELSE "bare")
-                                   ELSE IF m \in kept THEN "bare" ELSE put[m]]
+                                   ELSE IF m \in kept THEN (IF KeepLink /\ m \in actedOn /\ records THEN "link" ELSE "bare")
+                                   ELSE put[m]]
        /\ whole' = whole \cup {r \in touched : left[r] = 0}
-       /\ pending' = [r \in Runs |-> IF r \in {Run(m) : m \in gone} /\ left[r] = 0
+       /\ pending' = [r \in Runs |-> IF r \in {Run(m) : m \in gone \cup owed} /\ left[r] = 0
                                       THEN "none" ELSE pending[r]]
+       /\ notices' = [r \in Runs |-> IF r \in {Run(m) : m \in owed} THEN notices[r] + 1 ELSE notices[r]]
 
 ---------------------------------------------------------------------------
 Send ==
+    /\ riders' = riders
     /\ up
     /\ \E m \in MsgSet \ accepted :
         /\ \A n \in MsgSet : Earlier(n, m) => n \in accepted
@@ -112,6 +118,7 @@ Send ==
     /\ UNCHANGED <<up, ends, draining, stopped, turn, resuming, extra, notices, ghosts>>
 
 AcceptLate ==
+    /\ riders' = riders
     /\ up /\ ~AcceptOneCommit
     /\ \E m \in accepted :
         /\ pending[Run(m)] = "none" /\ outstanding[Run(m)] > 0
@@ -119,6 +126,7 @@ AcceptLate ==
     /\ UNCHANGED <<up, ends, host, accepted, put, whole, extra, notices, ghosts>>
 
 Dequeue ==
+    /\ riders' = riders
     /\ up /\ turn.st = "none" /\ inbox /= <<>> /\ ~draining
     /\ turn' = [NoTurn EXCEPT !.st = "dequeued", !.run = Run(Head(inbox)),
                               !.batch = {Head(inbox)}]
@@ -130,15 +138,14 @@ PutDownQueued ==
     /\ LET m == Head(inbox) IN
        /\ inbox' = Tail(inbox)
        /\ resuming' = resuming \ {m}
-       /\ IF Run(m) \in stopped
-             THEN /\ extra' = [extra EXCEPT ![Run(m)] = @ + 1]
-                  /\ Release(Run(m))
-                  /\ UNCHANGED <<put, pdMem>>
-             ELSE /\ PutDown({m}, {}, m \in resuming, {})
-                  /\ UNCHANGED extra
-    /\ UNCHANGED <<up, ends, draining, stopped, turn, accepted, notices, ghosts>>
+       /\ LET rides == IF m \in resuming THEN riders ELSE {} IN
+          /\ riders' = riders \ rides
+          /\ PutDown({m}, rides, m \in resuming, rides)
+          /\ extra' = IF Run(m) \in stopped THEN [extra EXCEPT ![Run(m)] = @ + 1] ELSE extra
+    /\ UNCHANGED <<up, ends, draining, stopped, turn, accepted, ghosts>>
 
 MarkBatch ==
+    /\ riders' = riders
     /\ up /\ turn.st = "dequeued"
     /\ pending' = IF MarkBeforeRead THEN MarkStarted({turn.run}) ELSE pending
     /\ marked' = IF MarkBeforeRead THEN marked \cup {turn.run} ELSE marked
@@ -150,29 +157,32 @@ MarkBatch ==
 MarkFails ==
     /\ up /\ StartCanFail /\ turn.st = "dequeued"
     /\ resuming' = resuming \ turn.batch
-    /\ PutDown(turn.batch, {}, turn.batch \cap resuming /= {}, {})
+    /\ LET rides == IF turn.batch \cap resuming /= {} THEN riders ELSE {} IN
+          /\ riders' = riders \ rides
+          /\ PutDown(turn.batch, rides, turn.batch \cap resuming /= {}, rides)
+    /\ extra' = IF SkipStartNote \/ turn.run \in stopped THEN extra
+                ELSE [extra EXCEPT ![turn.run] = @ + 1]
     /\ turn' = NoTurn
-    /\ UNCHANGED <<up, ends, draining, stopped, inbox, accepted, extra, notices, ghosts>>
+    /\ UNCHANGED <<up, ends, draining, stopped, inbox, accepted, ghosts>>
 
 Begin ==
     /\ up /\ turn.st = "marked"
     /\ resuming' = resuming \ turn.batch
-    /\ LET carries == turn.batch \cap resuming /= {} IN
-       IF Halted(turn.run)
-          THEN /\ turn' = NoTurn
-               /\ IF turn.run \notin stopped
-                     THEN /\ PutDown(turn.batch, {}, carries, {})
-                          /\ UNCHANGED extra
-                     ELSE /\ extra' = [extra EXCEPT ![turn.run] = @ + 1]
-                          /\ Release(turn.run)
-                          /\ UNCHANGED <<put, pdMem>>
-          ELSE /\ turn' = [turn EXCEPT !.st = "round", !.carries = carries]
-               /\ UNCHANGED <<outstanding, pdMem, put, whole, pending, extra>>
-    /\ UNCHANGED <<up, ends, draining, stopped, inbox, accepted, notices, ghosts>>
+    /\ LET carries == turn.batch \cap resuming /= {}
+           rides == IF carries THEN riders ELSE {}
+       IN /\ riders' = riders \ rides
+          /\ IF Halted(turn.run)
+              THEN /\ turn' = NoTurn
+                   /\ PutDown(turn.batch, rides, carries, rides)
+                   /\ extra' = IF turn.run \in stopped THEN [extra EXCEPT ![turn.run] = @ + 1] ELSE extra
+              ELSE /\ turn' = [turn EXCEPT !.st = "round", !.carries = carries, !.taken = rides]
+                   /\ UNCHANGED <<outstanding, pdMem, put, whole, pending, extra, notices>>
+    /\ UNCHANGED <<up, ends, draining, stopped, inbox, accepted, ghosts>>
 
 Takeable == inbox /= <<>> /\ ~Halted(Run(Head(inbox))) /\ Head(inbox) \notin resuming
 
 TakeIn ==
+    /\ riders' = riders
     /\ up /\ turn.st = "round" /\ ~Halted(turn.run) /\ Takeable
     /\ LET m == Head(inbox) IN
        /\ pending' = MarkStarted({Run(m)})
@@ -184,6 +194,7 @@ TakeIn ==
                    read, acted, answered, blind, calledOff, resumedOff>>
 
 Think ==
+    /\ riders' = riders
     /\ up /\ turn.st = "round" /\ ~Halted(turn.run) /\ ~Takeable
     /\ Show((turn.batch \cup turn.taken) \ turn.seen)
     /\ turn' = [turn EXCEPT !.st = "thinking", !.seen = turn.batch \cup turn.taken]
@@ -191,6 +202,7 @@ Think ==
                    disk, acted, answered, marked, calledOff, resumedOff>>
 
 Call ==
+    /\ riders' = riders
     /\ up /\ turn.st = "thinking"
     /\ acted' = [m \in MsgSet |-> IF m \in turn.seen THEN turn.run ELSE acted[m]]
     /\ turn' = [turn EXCEPT !.st = "acting", !.did = TRUE, !.fresh = {}]
@@ -198,6 +210,7 @@ Call ==
                    disk, read, answered, blind, marked, calledOff, resumedOff>>
 
 Returned ==
+    /\ riders' = riders
     /\ up /\ turn.st = "acting"
     /\ turn' = [turn EXCEPT !.st = "round"]
     /\ pending' = IF MarkBeforeRead THEN pending ELSE MarkStarted({turn.run})
@@ -207,12 +220,14 @@ Returned ==
                    read, acted, answered, blind, calledOff, resumedOff>>
 
 CalledOff ==
+    /\ riders' = riders
     /\ up /\ turn.st \in {"round", "thinking"} /\ Halted(turn.run)
     /\ turn' = [turn EXCEPT !.st = "halted"]
     /\ UNCHANGED <<up, ends, draining, stopped, pdMem, outstanding, inbox, resuming,
                    disk, ghosts>>
 
 Answer ==
+    /\ riders' = riders
     /\ up /\ turn.st = "thinking"
     /\ extra' = [extra EXCEPT ![turn.run] = @ + 1]
     /\ answered' = answered \cup turn.seen
@@ -224,20 +239,26 @@ Answer ==
                    read, acted, blind, marked, calledOff, resumedOff>>
 
 HaltStopped ==
+    /\ riders' = riders
     /\ up /\ turn.st = "halted" /\ turn.run \in stopped
     /\ extra' = [extra EXCEPT ![turn.run] = @ + 1]
     /\ LET ended == {m \in turn.taken : Run(m) \in stopped}
            unread == (turn.taken \ ended) \cap turn.fresh
            owed == turn.taken \ (ended \cup unread)
        IN /\ inbox' = InOrder(unread) \o inbox
-          /\ outstanding' = [r \in Runs |-> outstanding[r] - Cardinality({m \in owed : Run(m) = r})]
+          /\ LET left == [r \in Runs |-> outstanding[r] - Cardinality({m \in owed : Run(m) = r})]
+             IN /\ outstanding' = left
+                /\ pending' = [r \in Runs |-> IF r \in {Run(m) : m \in owed} /\ left[r] = 0
+                                                 THEN "none" ELSE pending[r]]
+          /\ notices' = [r \in Runs |-> IF r \in {Run(m) : m \in owed} THEN notices[r] + 1 ELSE notices[r]]
           /\ turn' = [turn EXCEPT !.st = "finishing",
                                   !.owed = IF ended = {} THEN <<turn.run>>
                                            ELSE <<Run(CHOOSE m \in ended : TRUE), turn.run>>]
     /\ UNCHANGED <<up, ends, draining, stopped, pdMem, resuming,
-                   accepted, pending, put, whole, notices, ghosts>>
+                   accepted, put, whole, ghosts>>
 
 FinishOne ==
+    /\ riders' = riders
     /\ up /\ turn.st = "finishing"
     /\ Release(Head(turn.owed))
     /\ turn' = IF Len(turn.owed) = 1 THEN NoTurn ELSE [turn EXCEPT !.owed = Tail(@)]
@@ -245,6 +266,7 @@ FinishOne ==
                    accepted, put, extra, notices, ghosts>>
 
 PutTurnDown ==
+    /\ riders' = riders
     /\ up /\ turn.st = "halted" /\ turn.run \notin stopped
     /\ extra' = [extra EXCEPT ![turn.run] = @ + 1]
     /\ turn' = [turn EXCEPT !.st = "recorded"]
@@ -252,13 +274,15 @@ PutTurnDown ==
                    accepted, pending, put, whole, notices, ghosts>>
 
 PutTurnDownCommit ==
+    /\ riders' = riders
     /\ up /\ turn.st = "recorded"
     /\ PutDown(turn.batch, turn.taken, turn.did \/ turn.carries, turn.taken \ turn.fresh)
     /\ turn' = NoTurn
     /\ UNCHANGED <<up, ends, draining, stopped, inbox, resuming,
-                   accepted, extra, notices, ghosts>>
+                   accepted, extra, ghosts>>
 
 Stop ==
+    /\ riders' = riders
     /\ up /\ OperatorStops
     /\ \E r \in Runs :
         /\ outstanding[r] > 0 /\ r \notin stopped
@@ -272,6 +296,7 @@ Stop ==
                    accepted, extra, notices, read, acted, answered, blind, marked, resumedOff>>
 
 Drain ==
+    /\ riders' = riders
     /\ up /\ ~draining
     /\ draining' = TRUE
     /\ UNCHANGED <<up, ends, stopped, pdMem, outstanding, inbox, turn, resuming, disk, ghosts>>
@@ -281,20 +306,23 @@ End ==
     /\ up' = FALSE /\ ends' = ends + 1
     /\ draining' = FALSE /\ stopped' = {} /\ pdMem' = {}
     /\ outstanding' = [r \in Runs |-> 0] /\ inbox' = <<>> /\ turn' = NoTurn
-    /\ resuming' = {}
+    /\ resuming' = {} /\ riders' = {}
     /\ UNCHANGED <<disk, ghosts>>
 
 Recover ==
     /\ ~up
     /\ LET putM == {m \in MsgSet : put[m] /= "none"}
-           carried == {m \in putM : Run(m) \in whole}
-           cut == putM \ carried
+           linked == {m \in putM : put[m] = "link"}
+           carrierOk == \E c \in MsgSet : put[c] = "rec" /\ Run(c) \in whole
+           ride == IF carrierOk THEN {m \in linked : Run(m) \in whole} ELSE {}
+           carried == {m \in putM : Run(m) \in whole} \ linked
+           cut == putM \ (carried \cup ride)
            untouched == IF RecoverUntouched
                            THEN {m \in accepted : pending[Run(m)] = "unstarted"
                                    /\ extra[Run(m)] = 0 /\ m \notin carried}
                            ELSE {}
            resumed == carried \cup untouched
-           picked == {Run(m) : m \in resumed}
+           picked == {Run(m) : m \in resumed \cup ride}
            withRec == {m \in carried : put[m] = "rec"}
            anchors == ({Run(m) : m \in {n \in accepted : pending[Run(n)] /= "none"}}
                         \cup {Run(m) : m \in cut}) \ picked
@@ -307,7 +335,8 @@ Recover ==
           /\ put' = [m \in MsgSet |-> "none"]
           /\ whole' = {}
           /\ inbox' = InOrder(resumed)
-          /\ outstanding' = [r \in Runs |-> Cardinality({m \in resumed : Run(m) = r})]
+          /\ outstanding' = [r \in Runs |-> Cardinality({m \in resumed \cup ride : Run(m) = r})]
+          /\ riders' = ride
           /\ resuming' = withRec
           /\ marked' = marked \cup {Run(m) : m \in withRec}
           /\ resumedOff' = (resumedOff \/ picked \cap calledOff /= {})
@@ -336,6 +365,6 @@ StoppedStaysStopped == ~resumedOff
 
 TypeOK ==
     /\ pending \in [Runs -> {"none", "unstarted", "started"}]
-    /\ put \in [MsgSet -> {"none", "bare", "rec"}]
+    /\ put \in [MsgSet -> {"none", "bare", "rec", "link"}]
     /\ \A r \in Runs : outstanding[r] >= 0
 =============================================================================

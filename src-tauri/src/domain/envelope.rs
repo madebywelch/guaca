@@ -314,6 +314,10 @@ impl Envelope {
         self.parts.iter().any(|part| matches!(part, Part::Tidy { .. }))
     }
 
+    pub fn is_routine(&self) -> bool {
+        self.parts.iter().any(|part| matches!(part, Part::Routine { .. }))
+    }
+
     pub fn is_inter_agent(&self) -> bool {
         self.from.is_agent() && self.to.is_agent()
     }

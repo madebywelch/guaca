@@ -574,6 +574,7 @@ struct Runs {
     draining: bool,
     put_down: HashSet<RunId>,
     absorbed: HashSet<RunId>,
+    cut_short: HashSet<RunId>,
 }
 
 type ResumeRecords = (Vec<MessageId>, Vec<MessageId>);
@@ -2213,11 +2214,14 @@ impl Runtime {
             {
                 let stopped = runs.stopped.remove(&run);
                 let absorbed = runs.absorbed.remove(&run);
+                let cut_short = runs.cut_short.remove(&run);
                 if runs.put_down.contains(&run) {
                     self.mark_whole(&[run]);
                     None
                 } else {
-                    let ending = if absorbed {
+                    let ending = if cut_short {
+                        Settled::Interrupted
+                    } else if absorbed {
                         Settled::Absorbed
                     } else if stopped {
                         Settled::Stopped
@@ -2617,12 +2621,12 @@ impl Runtime {
         let inbound_hop = batch.iter().map(|e| e.hop).max().unwrap_or(0);
         let cause = batch.last().map(|e| e.id);
         let (resumed, absorbed_ids) = self.resumed(&batch);
-        let absorbed: Vec<Envelope> = match absorbed_ids
+        let (carried, absorbed): (Vec<Envelope>, Vec<Envelope>) = match absorbed_ids
             .iter()
             .map(|id| self.inner.store.get_message(*id).ok().flatten())
             .collect::<Option<Vec<_>>>()
         {
-            Some(absorbed) => absorbed,
+            Some(absorbed) => absorbed.into_iter().partition(|envelope| !envelope.is_routine()),
             None => {
                 tracing::error!(agent = %card.name, "could not read an absorbed routine after restart");
                 self.notice(agent_id, run_id, batch.last().map(|envelope| envelope.id), NoticeKind::Interrupted,
@@ -2635,15 +2639,28 @@ impl Runtime {
         let starting: Vec<_> = batch.iter().map(|envelope| envelope.id).collect();
         if let Err(err) = self.inner.store.start_deliveries(&starting, run_id) {
             tracing::error!(%err, "could not mark a delivery started; putting it down for the next host rather than run a turn a crash would repeat");
-            self.put_down(&batch, &absorbed, &[], 0, &resumed);
+            if self.put_down(&batch, &absorbed, &carried, carried.len(), &resumed) {
+                self.notice(
+                    agent_id,
+                    run_id,
+                    cause,
+                    NoticeKind::Lifecycle,
+                    format!(
+                        "{} could not start on this because the workspace could not record it. \
+                         Nothing was done. It will be delivered again when the host next starts.",
+                        card.name
+                    ),
+                );
+            }
             self.idle(agent_id);
             return;
         }
 
-        let reply_target = batch.iter().rev().find(|e| e.expects_reply).map(|e| e.from);
+        let reply_target =
+            batch.iter().chain(&carried).rev().find(|e| e.expects_reply).map(|e| e.from);
 
         let settled = reply_target.is_none();
-        let assigned = batch.iter().chain(&absorbed).any(|e| e.intent.is_work());
+        let assigned = batch.iter().chain(&absorbed).chain(&carried).any(|e| e.intent.is_work());
         let tidying = batch.iter().any(Envelope::is_tidy);
         let mut mode = match reply_target {
             _ if tidying => ReplyMode::Tidy,
@@ -2661,7 +2678,7 @@ impl Runtime {
 
         if self.stopped(run_id) {
             if !self.called_off(run_id) {
-                self.put_down(&batch, &absorbed, &[], 0, &resumed);
+                self.put_down(&batch, &absorbed, &carried, carried.len(), &resumed);
                 self.idle(agent_id);
                 return;
             }
@@ -2676,8 +2693,16 @@ impl Runtime {
                     card.name
                 ),
             );
-            self.finish_turn(agent_id, run_id, batch.len(), &[]);
+            let acted_on = carried.len();
+            let ended = self.hand_back(agent_id, run_id, carried, acted_on, intake);
+            self.finish_turn(agent_id, run_id, batch.len(), &ended);
             return;
+        }
+        {
+            let mut runs = self.inner.runs.lock();
+            for envelope in carried.iter().filter(|envelope| envelope.run_id != run_id) {
+                runs.absorbed.insert(envelope.run_id);
+            }
         }
 
         let before: Vec<Envelope> = match resumed
@@ -2698,7 +2723,7 @@ impl Runtime {
                      retrying."
                         .into(),
                 );
-                self.finish_turn(agent_id, run_id, batch.len(), &[]);
+                self.finish_turn(agent_id, run_id, batch.len(), &carried);
                 return;
             }
         };
@@ -2721,7 +2746,7 @@ impl Runtime {
                     card.name, limits.max_steps_per_run
                 ),
             );
-            self.finish_turn(agent_id, run_id, batch.len(), &[]);
+            self.finish_turn(agent_id, run_id, batch.len(), &carried);
             return;
         }
 
@@ -2850,13 +2875,15 @@ impl Runtime {
             }
         }
         self.deliver_files(&card, &batch, modalities, &mut messages).await;
-        if !absorbed.is_empty() {
+        if !absorbed.is_empty() || !carried.is_empty() {
             let lines = absorbed
                 .iter()
+                .chain(&carried)
                 .map(|envelope| prompt::render_incoming(envelope, &names))
                 .collect::<Vec<_>>();
             messages.push(ChatMessage::user(lines.join("\n\n")));
             self.deliver_files(&card, &absorbed, modalities, &mut messages).await;
+            self.deliver_files(&card, &carried, modalities, &mut messages).await;
         }
         if let Some(brief) = prompt::resumed(&before) {
             messages.push(ChatMessage::user(brief));
@@ -2890,8 +2917,8 @@ impl Runtime {
             ..Reading::default()
         };
         let mut attached: Vec<Attachment> = Vec::new();
-        let mut taken_in: Vec<Envelope> = Vec::new();
-        let mut acted_on = 0;
+        let mut acted_on = carried.len();
+        let mut taken_in: Vec<Envelope> = carried;
         let mut failure: Option<LlmError> = None;
         let mut hit_tool_ceiling = false;
         let mut budget_exhausted = false;
@@ -3190,23 +3217,25 @@ impl Runtime {
             );
         }
 
-        let taken_in =
-            if called_off { self.hand_back(run_id, taken_in, acted_on, intake) } else { taken_in };
+        let taken_in = if called_off {
+            self.hand_back(agent_id, run_id, taken_in, acted_on, intake)
+        } else {
+            taken_in
+        };
         self.finish_turn(agent_id, run_id, batch.len(), &taken_in);
     }
 
     fn hand_back(
         &self,
+        agent: AgentId,
         run: RunId,
         taken: Vec<Envelope>,
         acted_on: usize,
         intake: &mut Intake<'_>,
     ) -> Vec<Envelope> {
-        let routine = |envelope: &Envelope| {
-            envelope.parts.iter().any(|part| matches!(part, Part::Routine { .. }))
-        };
         let mut ended = Vec::new();
         let mut unread = Vec::new();
+        let mut cut = Vec::new();
         {
             let mut runs = self.inner.runs.lock();
             let acted: HashSet<RunId> =
@@ -3214,7 +3243,7 @@ impl Runtime {
             for envelope in taken {
                 if envelope.run_id == run
                     || runs.stopped.contains(&envelope.run_id)
-                    || routine(&envelope)
+                    || envelope.is_routine()
                 {
                     ended.push(envelope);
                     continue;
@@ -3222,16 +3251,47 @@ impl Runtime {
                 runs.absorbed.remove(&envelope.run_id);
                 if !acted.contains(&envelope.run_id) {
                     unread.push(envelope);
-                } else if Self::release_bookings(&mut runs, envelope.run_id, 1) {
-                    self.inner.guard.lock().unpin(envelope.run_id);
+                } else {
+                    runs.cut_short.insert(envelope.run_id);
+                    cut.push(envelope.clone());
+                    ended.push(envelope);
                 }
             }
+        }
+        for envelope in &cut {
+            self.cut_short_notice(agent, envelope);
         }
         for envelope in unread.into_iter().rev() {
             intake.depth.fetch_add(1, Ordering::SeqCst);
             intake.carry.push_front(envelope);
         }
         ended
+    }
+
+    pub(super) fn cut_short_notice(&self, agent: AgentId, envelope: &Envelope) {
+        self.notice(
+            agent,
+            envelope.run_id,
+            Some(envelope.id),
+            NoticeKind::Interrupted,
+            format!(
+                "You stopped another conversation while {} was working on this one too, so this \
+                 was not finished. Review any actions already taken before retrying.",
+                self.agent_name(agent)
+            ),
+        );
+    }
+
+    fn let_go(&self, agent: AgentId, stopped: &Envelope, intake: &mut Intake<'_>) {
+        let (_, absorbed) = self.resumed(std::slice::from_ref(stopped));
+        let carried: Vec<Envelope> = absorbed
+            .iter()
+            .filter_map(|id| self.inner.store.get_message(*id).ok().flatten())
+            .filter(|envelope| !envelope.is_routine())
+            .collect();
+        let acted_on = carried.len();
+        let ended = self.hand_back(agent, stopped.run_id, carried, acted_on, intake);
+        self.finish_turn(agent, stopped.run_id, 1, &ended);
     }
 
     async fn stream_with_retries(
@@ -7194,7 +7254,9 @@ async fn actor_loop(
                                         card.name, card.name
                                     ),
                                 );
-                                runtime.finish_turn(id, queued.run_id, 1, &[]);
+                                let mut intake =
+                                    Intake { rx: &mut rx, carry: &mut carry, depth: &depth };
+                                runtime.let_go(id, &queued, &mut intake);
                             } else {
                                 carry.push_back(queued);
                             }
@@ -7211,7 +7273,8 @@ async fn actor_loop(
             continue;
         }
         if called_off {
-            runtime.finish_turn(id, first.run_id, 1, &[]);
+            let mut intake = Intake { rx: &mut rx, carry: &mut carry, depth: &depth };
+            runtime.let_go(id, &first, &mut intake);
             continue;
         }
         if abandoned {
@@ -7525,6 +7588,7 @@ mod tests {
         };
         runtime.pick_up(crate::db::Recovered {
             resumed: vec![crate::db::PutDown { envelope, records: vec![], absorbed: vec![] }],
+            carried: vec![],
             steps: HashMap::from([(run, 7)]),
             guards: HashMap::new(),
             interrupted: 0,

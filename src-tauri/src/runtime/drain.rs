@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, Notify};
 
-use super::Runtime;
+use super::{Intake, Runtime};
 use crate::db::Recovered;
 use crate::domain::agent::AgentCard;
 use crate::domain::envelope::{Envelope, Intent, NoticeKind, Part, Participant, Trust};
@@ -92,10 +92,8 @@ impl Runtime {
         taken: &[Envelope],
         acted_on: usize,
         records: &[MessageId],
-    ) {
-        let routine = |envelope: &Envelope| {
-            envelope.parts.iter().any(|part| matches!(part, Part::Routine { .. }))
-        };
+    ) -> bool {
+        let routine = Envelope::is_routine;
         for envelope in taken.iter().filter(|envelope| routine(envelope)) {
             self.track_inflight(envelope.run_id, -1);
         }
@@ -139,12 +137,12 @@ impl Runtime {
             .map(|envelope| envelope.run_id)
             .collect();
         let mut ended = Vec::new();
+        let mut cut = Vec::new();
         for envelope in booked.iter().chain(taken.iter().filter(|envelope| !routine(envelope))) {
             if owed.contains(&envelope.run_id) {
                 runs.absorbed.remove(&envelope.run_id);
-                if Self::release_bookings(&mut runs, envelope.run_id, 1) {
-                    self.inner.guard.lock().unpin(envelope.run_id);
-                }
+                runs.cut_short.insert(envelope.run_id);
+                cut.push(envelope);
                 continue;
             }
             if live(&envelope.run_id) {
@@ -156,6 +154,15 @@ impl Runtime {
         }
         let kept: Vec<&Envelope> =
             booked.iter().filter(|envelope| live(&envelope.run_id)).collect();
+        let linked: Vec<MessageId> = if carried {
+            taken[..acted_on]
+                .iter()
+                .filter(|envelope| !routine(envelope) && live(&envelope.run_id))
+                .map(|envelope| envelope.id)
+                .collect()
+        } else {
+            Vec::new()
+        };
         let messages: Vec<(MessageId, &[MessageId])> = kept
             .iter()
             .enumerate()
@@ -163,11 +170,19 @@ impl Runtime {
             .chain(
                 other_absorbed
                     .iter()
-                    .filter(|envelope| live(&envelope.run_id) && !owed.contains(&envelope.run_id))
+                    .filter(|envelope| {
+                        live(&envelope.run_id)
+                            && !owed.contains(&envelope.run_id)
+                            && !linked.contains(&envelope.id)
+                    })
                     .map(|envelope| (envelope.id, &[][..])),
             )
             .collect();
-        let routine_absorbed: &[MessageId] = if kept.is_empty() { &[] } else { &routine_absorbed };
+        let with_carrier: Vec<MessageId> = if carried {
+            routine_absorbed.iter().chain(&linked).copied().collect()
+        } else {
+            Vec::new()
+        };
         let touched: HashSet<RunId> =
             touched.iter().filter(|run| live(run) && !owed.contains(run)).copied().collect();
         runs.put_down.extend(touched.iter().copied());
@@ -184,15 +199,28 @@ impl Runtime {
             })
             .collect();
         drop(guard);
-        if let Err(err) =
-            self.inner.store.put_down_with_absorbed(&messages, &whole, routine_absorbed)
-        {
-            tracing::error!(%err, "could not put work down; the next host reports it interrupted");
-        }
+        let written = match self.inner.store.put_down_with_absorbed(
+            &messages,
+            &whole,
+            &with_carrier,
+        ) {
+            Ok(()) => true,
+            Err(err) => {
+                tracing::error!(%err, "could not put work down; the next host reports it interrupted");
+                false
+            }
+        };
         drop(runs);
+        for envelope in cut {
+            if let Participant::Agent { id } = envelope.to {
+                self.cut_short_notice(id, envelope);
+            }
+            ended.push(envelope.run_id);
+        }
         for run in ended {
             self.track_inflight(run, -1);
         }
+        written && !kept.is_empty()
     }
 
     pub(super) fn mark_whole(&self, runs: &[RunId]) {
@@ -229,6 +257,7 @@ impl Runtime {
         let (called_off, kept): (Vec<Envelope>, Vec<Envelope>) =
             held.into_iter().partition(|envelope| self.called_off(envelope.run_id));
         for envelope in called_off {
+            let stopped = envelope.clone();
             self.notice(
                 agent,
                 envelope.run_id,
@@ -240,7 +269,7 @@ impl Runtime {
                     self.agent_name(agent)
                 ),
             );
-            self.finish_turn(agent, envelope.run_id, 1, &[]);
+            self.let_go(agent, &stopped, &mut Intake { rx: &mut *rx, carry: &mut *carry, depth });
         }
         if !kept.is_empty() {
             for envelope in kept {
@@ -253,7 +282,9 @@ impl Runtime {
                     tracing::error!("could not read an absorbed routine while putting work down");
                     continue;
                 };
-                self.put_down(&[envelope], &absorbed, &[], 0, &records);
+                let (carried, absorbed): (Vec<_>, Vec<_>) =
+                    absorbed.into_iter().partition(|envelope| !envelope.is_routine());
+                self.put_down(&[envelope], &absorbed, &carried, carried.len(), &records);
             }
         }
         self.idle(agent);
@@ -329,7 +360,7 @@ impl Runtime {
     }
 
     pub fn pick_up(&self, recovered: Recovered) {
-        let Recovered { resumed, steps, guards, .. } = recovered;
+        let Recovered { resumed, carried, steps, guards, .. } = recovered;
         let conversations = steps.len();
         let legacy = steps.len().saturating_sub(guards.len());
         if legacy > 0 {
@@ -337,8 +368,8 @@ impl Runtime {
         }
         {
             let mut runs = self.inner.runs.lock();
-            for put in &resumed {
-                self.book(&mut runs, put.envelope.run_id);
+            for run in resumed.iter().map(|put| put.envelope.run_id).chain(carried) {
+                self.book(&mut runs, run);
             }
         }
         let restored: HashSet<_> = guards.keys().copied().collect();

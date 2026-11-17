@@ -118,13 +118,24 @@ code.
   what a turn took in, and for a turn the operator stopped that used to settle
   every conversation it had read, answered or not. `hand_back` sorts them first:
   unread since the last tool call goes back to the queue, read before a call
-  stays owed for the next host to report, and only the stopped ones end here.
+  is reported interrupted at once and settles, and only the stopped ones end
+  as stopped. A `cut_short` run settles through `finish_turn` like the others:
+  released early, it would settle twice.
+- **A message a put-down turn acted on rides in that turn's row.** As a bare
+  `put_down` row it is queued as a turn of its own, and once the carrier's
+  conversation is stopped that turn runs with no record of the calls already
+  made for it. Every way a carrier ends before its turn starts (the stop check
+  in `run_turn`, a stop while paused, a stop while draining) goes through
+  `hand_back` with what it carried.
 - **`put_down` checks the stop itself.** The check in `run_turn` is read
   before the record is written, and a stop can land between the two. Reading
   `Runs.stopped` under the lock the commit is written under is the only place
   that window closes.
 - **A failed start mark puts the batch down.** Settling it reported a turn that
   never ran as finished, and running it anyway is a turn a crash would repeat.
+  The notice it writes is a system `lifecycle` notice, and `put_down::UNTOUCHED`
+  skips exactly that kind. Counted as a touch, two crashes in a row turned a
+  message no turn had started into an interruption report.
 - **The stop check sits before `reserve_step`, not after it.** One line later and
   a run reports a model call that a stop prevented, for the rest of its life.
 - **The checks inside the round loop do not cover the way out of it.** A turn

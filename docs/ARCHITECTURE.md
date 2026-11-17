@@ -303,9 +303,19 @@ conversation that nobody stopped is not settled with it. If the turn made no
 tool call after reading it, nothing has acted on it, and it goes back to the
 front of the agent's queue for a turn of its own (`Runtime::hand_back`). If a
 call ran after it was read, that call may have been for it, and answering it in
-a turn that cannot be told about the call would repeat it. So it stays owed in
-`pending_runs`, started and unsettled, and the next host reports it
-interrupted with Try again, as a crash would.
+a turn that cannot be told about the call would repeat it. So it is reported
+interrupted at once (`Runtime::cut_short_notice`), with Try again on its own
+message, and its run settles as `Settled::Interrupted` with that notice as its
+outcome. Before, it stayed owed in `pending_runs` and said nothing until the
+next host reported it.
+
+The same holds across a restart. A drain writes a message the turn acted on
+into the turn's own `put_down` row (`absorbed`), not a row of its own, and
+`Store::recover` hands it back with that row (`Recovered::carried`), so the
+next host carries it on in the same turn, with the record. Delivered on its
+own, it would be a turn with no record of the calls already made for it, which
+is what a stop of the turn's conversation in the moments after the restart
+used to produce.
 
 The run that booked it is remembered as taken in, and it settles with no outcome
 of its own. Its answer is whatever the turn that read it went on to write, so it
@@ -568,6 +578,10 @@ whether the run was stopped, and whether its message was taken into another
 run's turn. A taken-in run settles when that turn ends, possibly before the run
 that answered it, and writes nothing. Steps come from the guard, as `RunSettled`
 reports them.
+
+A run cut short by a stop of another conversation settles through the
+runtime like any other, as `Settled::Interrupted`, and its outcome points at
+the notice that says so.
 
 Two places end a run without the runtime's settle. **Recovery** reports a run
 interrupted in the commit that writes its notice, and writes its outcome there
