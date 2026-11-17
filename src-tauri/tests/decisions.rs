@@ -121,8 +121,8 @@ fn crash(h: Harness) -> Harness {
         OnDisk::under(_dir.path()),
         sink.clone(),
     );
-    runtime.start_all().unwrap();
-    runtime.pick_up(recovered);
+    let started = runtime.start_all().unwrap();
+    runtime.pick_up(&started, recovered);
     Harness { runtime, sink, ids, _dir }
 }
 

@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use super::{Runtime, RuntimeError, UiEvent};
+use super::{PickedUp, Runtime, RuntimeError, UiEvent};
 use crate::db::{Due, StoreError};
 use crate::domain::now_ms;
 use crate::domain::outbox::{
@@ -18,7 +18,7 @@ const REST: Duration = Duration::from_secs(1);
 pub const RECLAIM_MS: i64 = 15_000;
 
 impl Runtime {
-    pub fn start_dispatcher(&self) {
+    pub(super) fn start_dispatcher(&self, _: &PickedUp) {
         let runtime = self.clone();
         let written = self.inner.store.outbox_written();
         self.inner.handle.spawn(async move {

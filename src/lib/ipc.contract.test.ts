@@ -201,6 +201,21 @@ describe("IPC contract", () => {
     expect([...variants].sort()).toEqual([...known].sort());
   });
 
+  it("knows every reason a box's updater can give for not updating", () => {
+    const block = read("src-tauri/src/updater.rs").match(/pub enum Reason \{([\s\S]*?)\n\}/);
+    if (!block) throw new Error("could not find enum Reason in updater.rs");
+    const variants = [...block[1]!.matchAll(/^\s{4}([A-Z][A-Za-z]*)/gm)].map(
+      (found) => found[1]![0]!.toLowerCase() + found[1]!.slice(1),
+    );
+    expect(variants.length).toBeGreaterThan(1);
+
+    const union = read("src/lib/host.ts").match(/export type UpdateFailure =([\s\S]*?);\n/);
+    if (!union) throw new Error("could not find the UpdateFailure union in host.ts");
+    const known = [...union[1]!.matchAll(/"([a-zA-Z]+)"/g)].map((found) => found[1]!);
+
+    expect([...variants].sort()).toEqual([...known].sort());
+  });
+
   it("reports the menu bar the fields it reads, and no fewer", () => {
     const block = read("src-tauri/src/menubar.rs").match(/pub struct Presence \{([\s\S]*?)\n\}/);
     if (!block) throw new Error("could not find struct Presence in menubar.rs");
