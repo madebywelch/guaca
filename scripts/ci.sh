@@ -52,6 +52,11 @@ run_scripts() {
   python3 scripts/package-dmg.test.py
 }
 
+run_formal() {
+  step "Conversation recovery model"
+  bash scripts/formal.sh
+}
+
 run_connector() {
   step "Self-hosted Google connector"
   (cd connectors/google && pnpm install --frozen-lockfile && pnpm typecheck && pnpm test)
@@ -127,15 +132,17 @@ case "${1:-all}" in
   scripts) run_scripts ;;
   web) run_web ;;
   rust) run_rust ;;
+  formal) run_formal ;;
   all)
     run_assets
     run_scripts
     run_web
     run_rust
     run_connector
+    run_formal
     ;;
   *)
-    echo "usage: $0 [all|assets|scripts|web|rust]" >&2
+    echo "usage: $0 [all|assets|scripts|web|rust|formal]" >&2
     exit 2
     ;;
 esac
