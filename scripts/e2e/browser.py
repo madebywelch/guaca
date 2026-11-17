@@ -144,9 +144,10 @@ class Browser:
         message: dict[str, Any] = {"id": ident, "method": method, "params": params or {}}
         if session and self.session:
             message["sessionId"] = self.session
-        if self.proc.poll() is not None:
-            raise BrowserError(f"{method}: {self.why_gone()}")
-        os.write(self._out, json.dumps(message).encode() + b"\0")
+        try:
+            os.write(self._out, json.dumps(message).encode() + b"\0")
+        except BrokenPipeError:
+            raise BrowserError(f"{method}: {self.why_gone()}") from None
         deadline = time.monotonic() + timeout
         with self._cond:
             while ident not in self._answers:
