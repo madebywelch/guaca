@@ -136,11 +136,11 @@ lists what has already been broken by changing it.
 | What About says this build is, and where that string comes from | *About says which commit it is* in `docs/WORKSPACE.md`, then `src/lib/build.ts` and the `define` in `vite.config.ts` |
 | Building, signing, notarizing or publishing a macOS release, and checking its download | `docs/RELEASING.md`, then `.claude/skills/guaca-release/SKILL.md`, which has to agree with it |
 | The group editor: what a group overrides and what it inherits | *A group's settings are the app's, with its own answer on top* in `docs/WORKSPACE.md`, then `src/components/GroupEditor.tsx` |
-| What model an agent is offered, and how its job is guessed at | *The model field suggests three, and is still a text box* in `docs/WORKSPACE.md`, then `src/lib/roles.ts` and `llm/catalog.rs`, whose twelve use cases have to agree |
+| What model an agent is offered, and how its job is guessed at | *The model field suggests three, and is still a text box* in `docs/WORKSPACE.md`, then `src/lib/roles.ts` and `commands/catalog.rs`, whose twelve use cases have to agree |
 | Whether a model can be shown a picture: an attachment, a screen, what an agent is told it is | *What a model can be sent is asked of the endpoint, not assumed* in `docs/ARCHITECTURE.md`, then `llm/modality.rs` and the four places `Modalities` is spent from `Runtime::run_turn` |
 | A prompt, or anything that changes how much a group talks | *Three test suites, asking different questions*, then run the live evals |
 | What a real group of eight does with one directive, and what is different when you ask twice | *A group is watched rather than asserted*, then `src-tauri/tests/crew.rs` |
-| A comment, a suppression, a new Markdown file, a grant in `grants.json`, or the lint that refuses them | *A comment, a suppression or a new prose file needs the owner's grant* in `docs/INVARIANTS.md`, then `scripts/check-grants.mjs` and `scripts/grants/lex.mjs`, and run `./scripts/ci.sh grants` |
+| A comment, a suppression, a new Markdown file, a grant in `grants.json`, or the lint that refuses them, and the judge workflow that runs `main`'s copy of it on a pull request | *A comment, a suppression or a new prose file needs the owner's grant* in `docs/INVARIANTS.md`, then `scripts/check-grants.mjs`, `scripts/grants/lex.mjs` and `.github/workflows/judge.yml`, and run `./scripts/ci.sh grants` |
 
 Unqualified section names are headings in `docs/ARCHITECTURE.md`. Every row
 also has a shorter companion under `docs/gotchas/`, indexed below: the doc

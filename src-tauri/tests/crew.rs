@@ -156,7 +156,7 @@ async fn one_run(
     std::fs::create_dir_all(dir).unwrap();
 
     let recorder = Recorder::open(&dir.join("events.jsonl"));
-    let before = machines_now(config).await;
+    let machines = machines_now(config).await;
     let h = live_crew_watched(config.clone(), crew, recorder);
     let (answering, asked) = answer_permission_requests(&h);
 
@@ -173,10 +173,8 @@ async fn one_run(
     println!("--> run {number}: {} agents, asking {CHIEF}", crew.len());
     let started = Instant::now();
     let run = h.runtime.send_from_human(h.id(CHIEF), directive).unwrap();
-    let settled = h.settled_within(run, secs).await;
+    let settled = settle_and_release(&h, run, secs, answering, machines).await;
     let seconds = started.elapsed().as_secs();
-    answering.abort();
-    release_machines(config, before).await;
 
     let messages = h.envelopes(names);
     let name_of = |id: AgentId| lookup.get(&id).cloned().unwrap_or_else(|| "?".into());

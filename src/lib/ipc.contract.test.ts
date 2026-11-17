@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -116,8 +116,17 @@ describe("IPC contract", () => {
     expect(source).not.toMatch(/->\s*Reply<AppConfig>/);
   });
 
+  it("asks OpenRouter for its ranking only from the suggestions in an agent's dialog", () => {
+    const callers = readdirSync(resolve(root, "src"), { recursive: true, encoding: "utf8" })
+      .filter((path) => /\.tsx?$/.test(path) && !/\.test\.tsx?$/.test(path))
+      .filter((path) => /\.rankedModels\(/.test(read(`src/${path}`)))
+      .sort();
+
+    expect(callers).toEqual(["components/ModelSuggestions.tsx"]);
+  });
+
   it("knows the same twelve use cases on both sides", () => {
-    const rust = read("src-tauri/src/llm/catalog.rs").match(
+    const rust = read("src-tauri/src/commands/catalog.rs").match(
       /CATEGORIES: \[&str; \d+\] = \[([\s\S]*?)\];/,
     );
     const web = read("src/lib/roles.ts").match(/export const ROLES: Role\[\] = \[([\s\S]*?)\];/);

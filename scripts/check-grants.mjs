@@ -7,6 +7,7 @@ import { languageOf, lineEnd, lineStarts, scanFiles } from "./grants/lex.mjs";
 import { fillEmptyPythonBodies, stripComments } from "./grants/strip.mjs";
 
 export const LEDGER = "grants.json";
+export const JUDGE = ["scripts/check-grants.mjs", "scripts/grants", ".github/workflows"];
 export const PROSE = /(\.(md|mdx|markdown|rst|adoc|asciidoc|txt|text|org|html?)|(^|\/)(LICENSE|COPYING|NOTICE)(-[^/]*)?)$/i;
 export const DATA = [
   {
@@ -20,6 +21,7 @@ export const DATA = [
 ];
 const KINDS = new Set(["comment", "suppression", "document"]);
 const GRANT_COMMAND = "node " + relative(process.cwd(), fileURLToPath(import.meta.url)) + " grant";
+const HASH_COMMAND = "node " + relative(process.cwd(), fileURLToPath(import.meta.url)) + " hash";
 const READERS = relative(process.cwd(), fileURLToPath(new URL("./grants/lex.mjs", import.meta.url)));
 const DATA_LIST = relative(process.cwd(), fileURLToPath(import.meta.url));
 
@@ -197,7 +199,7 @@ export function approvalsFrom(env = process.env) {
 export function resolveBase(repo, env = process.env) {
   if (env.GRANTS_BASE) return { rev: git(repo, ["rev-parse", env.GRANTS_BASE]).trim(), label: env.GRANTS_BASE };
   const branch = gitOk(repo, ["rev-parse", "--abbrev-ref", "HEAD"]);
-  const onMain = env.GITHUB_REF === "refs/heads/main" || (!env.GITHUB_BASE_REF && branch === "main");
+  const onMain = !env.GITHUB_BASE_REF && (env.GITHUB_REF === "refs/heads/main" || branch === "main");
   if (onMain) {
     const parent = gitOk(repo, ["rev-parse", "HEAD^"]);
     if (!parent) throw new Error("HEAD has no parent commit to compare with; fetch more history (git fetch --deepen=1)");
@@ -312,8 +314,22 @@ function readLedger(repo, rev) {
   }
 }
 
-export function approvalFor(ledgerText) {
-  return "grants-approved-" + hashText(ledgerText).slice(0, 12);
+export function canonical(value) {
+  if (Array.isArray(value)) return "[" + value.map(canonical).join(",") + "]";
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  return "{" + Object.keys(value).sort().map((key) => JSON.stringify(key) + ":" + canonical(value[key])).join(",") + "}";
+}
+
+function contentOf(ledgerText) {
+  try {
+    return ledgerText === null ? null : canonical(JSON.parse(ledgerText));
+  } catch {
+    return null;
+  }
+}
+
+export function approvalFor(ledger) {
+  return "grants-approved-" + hashText(canonical(ledger)).slice(0, 12);
 }
 
 function parseLedger(text, problems) {
@@ -391,7 +407,26 @@ function shippedMigrations(repo, ledger, head, problems) {
   return shipped;
 }
 
-export function check(repo, { base, head = null, ledgerOverride, proseByDiff = false, approvals = [], ledgerGate = true }) {
+function judgeChange(repo, base, head, approvals) {
+  const edited = git(repo, ["diff", "--name-only", "--no-renames", base, head, "--", ...JUDGE]).split("\n").filter(Boolean);
+  if (edited.length === 0) return [];
+  const approval = "judge-approved-" + hashText(git(repo, ["ls-tree", "-r", head, "--", ...JUDGE])).slice(0, 12);
+  if (approvals.includes(approval)) return [];
+  return [
+    {
+      path: edited.join(", "),
+      message:
+        "changes the lint that judges every pull request, and only the owner approves a change to the judge. Stop here: report what the change does to the judge to whoever directs the work, and wait. The author never approves their own change to the judge. The approval is the pull request label " +
+        approval +
+        ", made from the SHA-256 of every file of the judge at this head (" +
+        JUDGE.join(", ") +
+        "), so any later change to them needs a new approval.",
+    },
+  ];
+}
+
+export function check(repo, { base, head = null, ledgerOverride, proseByDiff = false, approvals = [], ledgerGate = true, judge = false }) {
+  if (judge && head === null) throw new Error("the judge reads a committed head as data; name it with --head");
   const problems = [];
   const findings = [];
   const ledgerText = ledgerOverride === undefined ? readLedger(repo, head) : ledgerOverride;
@@ -496,20 +531,23 @@ export function check(repo, { base, head = null, ledgerOverride, proseByDiff = f
   }
   const baseText = readLedger(repo, base);
   let approval = null;
-  if (ledgerGate && ledgerText !== null && ledgerText !== baseText) {
-    approval = approvalFor(ledgerText);
+  if (ledgerGate && ledger !== null && canonical(ledger) !== contentOf(baseText)) {
+    approval = approvalFor(ledger);
     if (!approvals.includes(approval)) {
       problems.push({
         path: LEDGER,
         message:
           "differs from the base, and only the owner approves a ledger change. Stop here: report the exact text of each grant above, and what you tried instead, to whoever directs the work, and wait. The author never approves their own ledger change. The approval is the pull request label " +
           approval +
-          ", made from the SHA-256 of this exact " +
+          ", made from the SHA-256 of what this " +
           LEDGER +
-          ", so any later edit to it needs a new approval.",
+          " says, so any later change to what it says needs a new approval and a change to its formatting alone does not. " +
+          HASH_COMMAND +
+          " prints it.",
       });
     }
   }
+  if (judge) problems.push(...judgeChange(repo, base, head, approvals));
   return { findings, problems, filesRead: texts.length, approval, ledgerChanges: ledger ? ledgerChanges(baseText, ledger, unitsByPath) : null };
 }
 
@@ -737,6 +775,10 @@ function main() {
     console.log("recorded " + JSON.stringify(entry) + " in " + LEDGER + "; the gate prints it to whoever merges this change");
     return 0;
   }
+  if (options.positional[0] === "hash") {
+    console.log(approvalFor(JSON.parse(readFileSync(join(repo, LEDGER), "utf8"))));
+    return 0;
+  }
   if (options.positional[0] === "strip") {
     const result = sweep(repo, { only: options.positional.slice(1) });
     if (options.record) {
@@ -751,7 +793,9 @@ function main() {
   }
   const base = options.base ? { rev: git(repo, ["rev-parse", options.base]).trim(), label: options.base } : resolveBase(repo);
   const pushToMain = process.env.GITHUB_EVENT_NAME === "push" && process.env.GITHUB_REF === "refs/heads/main";
-  const result = check(repo, { base: base.rev, head: options.head ?? null, approvals: approvalsFrom(), ledgerGate: !pushToMain });
+  const judge = options.positional[0] === "judge";
+  const head = options.head ?? (judge ? "HEAD" : null);
+  const result = check(repo, { base: base.rev, head, approvals: approvalsFrom(), ledgerGate: !pushToMain, judge });
   annotate(result);
   console.log(report(result, base));
   return result.findings.length + result.problems.length > 0 ? 1 : 0;

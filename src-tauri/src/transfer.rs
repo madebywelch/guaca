@@ -847,6 +847,54 @@ mod tests {
         assert_eq!(f.store.artifact_condensed(copy.id).unwrap().as_deref(), Some("<b>2 open</b>"));
     }
     #[test]
+    fn a_copy_never_carries_the_reads_the_operator_allowed_and_asks_again() {
+        let f = Fixture::new();
+        let reads = [crate::domain::artifact::Source {
+            name: "issues".into(),
+            tool: "github_list_issues".into(),
+            arguments: serde_json::json!({}),
+        }];
+        let page = f
+            .store
+            .create_artifact(
+                f.group,
+                f.agent,
+                "Engineer",
+                crate::db::ArtifactDraft {
+                    title: "Board",
+                    page: "<p>open issues</p>",
+                    sources: &reads,
+                    condensed: None,
+                    note: "First",
+                },
+            )
+            .unwrap();
+        f.store.allow_artifact_sources(page.id).unwrap();
+        assert!(f.store.artifact_sources(page.id, None).unwrap().unwrap().1, "allowed here");
+
+        let archive = f.export();
+        for (table, rows) in &archive.tables {
+            for row in rows {
+                assert!(!row.contains_key("allowed_sources"), "{table} carries allowed_sources");
+            }
+        }
+
+        let imported = f.import(archive).unwrap();
+        let copy = &f.store.artifacts(Some(imported), 10).unwrap()[0];
+        let (sources, allowed) = f.store.artifact_sources(copy.id, None).unwrap().unwrap();
+        assert_eq!(sources, reads, "the copy still declares what it reads");
+        assert!(!allowed, "and asks again before it reads it");
+
+        let mut smuggled = f.export();
+        smuggled.tables.get_mut("artifacts").unwrap()[0]
+            .insert("allowed_sources".into(), serde_json::to_string(&reads).unwrap().into());
+        assert_eq!(
+            f.import_named(smuggled, "Smuggled").unwrap_err(),
+            "The group file contains an unexpected field."
+        );
+    }
+
+    #[test]
     fn invalid_participants_are_refused_without_partial_groups() {
         let f = Fixture::new();
         let before = f.store.list_groups().unwrap().len();

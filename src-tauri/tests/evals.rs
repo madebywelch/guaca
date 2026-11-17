@@ -1195,16 +1195,14 @@ mod live {
         start: impl FnOnce(&Harness) -> RunId,
     ) -> Option<(Harness, Eval)> {
         let config = configured()?;
-        let before = machines_now(&config).await;
+        let machines = machines_now(&config).await;
         let h = live_crew(config.clone(), crew);
         let names: Vec<&str> = crew.iter().map(|a| a.name).collect();
 
         let (answering, asked) = answer_permission_requests(&h);
         let run = start(&h);
 
-        let settled = h.settled_within(run, secs).await;
-        answering.abort();
-        release_machines(&config, before).await;
+        let settled = settle_and_release(&h, run, secs, answering, machines).await;
 
         let asked = asked.lock().clone();
         if !asked.is_empty() {

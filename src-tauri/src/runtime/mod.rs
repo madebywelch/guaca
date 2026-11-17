@@ -6317,7 +6317,7 @@ impl Runtime {
                     written.describe(now),
                     written.id
                 );
-                if clean.cut {
+                if clean.cut() {
                     answer.push_str(
                         " It was long for a calendar line and the end was cut, so check what is \
                          left says what it needs to; the rest belongs in `detail`.",

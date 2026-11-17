@@ -5,6 +5,7 @@ use guac_lib::config::{AppConfig, Provider};
 use guac_lib::db::Store;
 use guac_lib::domain::agent::CleanDraft;
 use guac_lib::domain::approval::Decision;
+use guac_lib::domain::ids::RunId;
 use guac_lib::llm::openrouter::LlmClient;
 use guac_lib::runtime::events::{EventSink, NullSink, RecordingSink, UiEvent};
 use guac_lib::runtime::{OnDisk, Runtime};
@@ -205,14 +206,33 @@ pub fn answer_permission_requests(
     (handle, asked)
 }
 
-pub async fn machines_now(config: &AppConfig) -> Vec<String> {
-    match guac_lib::e2b::E2bClient::new(&config.e2b.api_key) {
-        Some(client) => client.list_ours().await.unwrap_or_default(),
-        None => Vec::new(),
-    }
+pub struct Machines {
+    config: AppConfig,
+    before: Vec<String>,
 }
 
-pub async fn release_machines(config: &AppConfig, before: Vec<String>) {
+pub async fn machines_now(config: &AppConfig) -> Machines {
+    let before = match guac_lib::e2b::E2bClient::new(&config.e2b.api_key) {
+        Some(client) => client.list_ours().await.unwrap_or_default(),
+        None => Vec::new(),
+    };
+    Machines { config: config.clone(), before }
+}
+
+pub async fn settle_and_release(
+    h: &Harness,
+    run: RunId,
+    secs: u64,
+    answering: tokio::task::JoinHandle<()>,
+    machines: Machines,
+) -> bool {
+    let settled = h.settled_within(run, secs).await;
+    answering.abort();
+    release_machines(machines).await;
+    settled
+}
+
+async fn release_machines(Machines { config, before }: Machines) {
     let Some(client) = guac_lib::e2b::E2bClient::new(&config.e2b.api_key) else {
         return;
     };
