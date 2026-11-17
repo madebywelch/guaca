@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::path::PathBuf;
 
@@ -8,10 +8,12 @@ use serde_json::{json, Value};
 
 use guac_lib::domain::ids::AgentId;
 use guac_lib::domain::plugin::PluginAccess;
+use guac_lib::runtime::guard::GuardLimits;
 
 type Check = fn(&Value);
 
 const CHECKS: &[(&str, Check)] = &[
+    ("limits", limits),
     ("plugin-access", plugin_access),
 ];
 
@@ -66,4 +68,37 @@ struct Access {
 
 fn plugin_access(file: &Value) {
     each(file, |case: Access| case.access.allows(case.agent));
+}
+
+fn limits(file: &Value) {
+    let low = GuardLimits {
+        max_hops: 0,
+        max_steps_per_run: 0,
+        max_fanout_per_call: 0,
+        max_sends_per_pair: 0,
+        max_tool_rounds: 0,
+    }
+    .sanitized();
+    let high = GuardLimits {
+        max_hops: u16::MAX,
+        max_steps_per_run: u32::MAX,
+        max_fanout_per_call: usize::MAX,
+        max_sends_per_pair: u32::MAX,
+        max_tool_rounds: u16::MAX,
+    }
+    .sanitized();
+    let (low, high) = (serde_json::to_value(low).unwrap(), serde_json::to_value(high).unwrap());
+    let ours: BTreeMap<String, Value> = low
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(|key| (key.clone(), json!({ "min": low[key], "max": high[key] })))
+        .collect();
+    let theirs: BTreeMap<String, Value> = file
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|case| (parsed(&case["input"]), case["expected"].clone()))
+        .collect();
+    assert_eq!(ours, theirs);
 }

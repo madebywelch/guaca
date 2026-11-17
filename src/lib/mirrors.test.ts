@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { LIMITS } from "./limits";
 import { allows } from "./plugins";
 import { type AgentId, type PluginAccess } from "./types";
 
@@ -23,6 +24,11 @@ function each<I, E>(actual: (input: I) => E): Check {
 }
 
 const CHECKS: Record<string, Check> = {
+  limits: (file) => {
+    expect(LIMITS.map(({ key, min, max }) => ({ input: key, expected: { min, max } }))).toEqual(
+      file,
+    );
+  },
   "plugin-access": each(({ access, agent }: { access: PluginAccess; agent: AgentId }) =>
     allows(access, agent),
   ),
