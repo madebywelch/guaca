@@ -421,16 +421,16 @@ async fn rpc(
         "tools/call" => {
             let name = body["params"]["name"].as_str().unwrap_or_default().to_string();
             let arguments = body["params"]["arguments"].clone();
-            if server.rules.mirrors && name == "deploy" {
-                if noted.get("mcp-param-region").map(String::as_str) != arguments["region"].as_str()
-                {
-                    return refusal(
-                        axum::http::StatusCode::BAD_REQUEST,
-                        -32020,
-                        "Mcp-Param-Region does not match the body".into(),
-                        serde_json::Value::Null,
-                    );
-                }
+            if server.rules.mirrors
+                && name == "deploy"
+                && noted.get("mcp-param-region").map(String::as_str) != arguments["region"].as_str()
+            {
+                return refusal(
+                    axum::http::StatusCode::BAD_REQUEST,
+                    -32020,
+                    "Mcp-Param-Region does not match the body".into(),
+                    serde_json::Value::Null,
+                );
             }
             server.called.lock().push((name.clone(), arguments));
             serde_json::json!({ "content": [{ "type": "text", "text": format!("{name} ran") }] })
