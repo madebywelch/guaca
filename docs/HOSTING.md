@@ -625,7 +625,8 @@ lands while a turn is being put down, or a stop of a message that turn had taken
 in, keeps that conversation off the next host. A message the turn had acted on
 is put down beside it only while the turn's own conversation goes on to carry
 it; when that conversation is the one stopped, the message stays owed and is
-reported interrupted.
+reported interrupted. A turn whose start mark cannot be written is put down
+rather than run, so its message stays owed and the next host delivers it.
 Completed messages, attachments, memories and working notes remain on the volume. Back up the volume before deploying; SQLite migrations are
 forward-only.
 

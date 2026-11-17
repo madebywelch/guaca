@@ -67,7 +67,7 @@ Each action is one SQLite commit, or one section the code runs under `Runtime.in
 | `read`, `acted`, `answered`, `blind`, `marked`, `calledOff`, `resumedOff` | ghosts: what really happened, which the code cannot see |
 | `Send` | `Runtime::deliver_with_expectation`: `Store::append_delivery` and `book`, or while draining `Store::append_put_down` and `hand_on` |
 | `Dequeue`, `PutDownQueued` | `actor_loop` taking `first`, and `Runtime::put_down_queue` while draining |
-| `MarkBatch`, `MarkFails` | `Store::start_deliveries` at the top of `run_turn`, and its error path `abandon` |
+| `MarkBatch`, `MarkFails` | `Store::start_deliveries` at the top of `run_turn`, and its error path, which puts the batch down |
 | `Begin` | `run_turn` from `self.resumed(&batch)` to the first `if self.stopped(run_id)` |
 | `TakeIn`, `Think` | `Runtime::take_in` (greedy, one `start_deliveries` per message) and the model call of a round |
 | `Call`, `Returned` | a tool call from the completion, and its return |
@@ -117,4 +117,3 @@ Last confirmed against commit `79ae97296e7c83b4737c38a7abba9bf308de232b` (`main`
 Open findings, held as finding rows in `scripts/formal.sh` and each replayed in the real runtime:
 
 1. **NoBlindRepeat (stops).** A drain puts a message a turn took in and acted on down bare, beside the turn's own message and its record. If the operator stops the turn's conversation on the next host before that turn takes the message in again, the message gets a turn of its own with no record of the calls already made for it. Replayed with the agent paused across the restart, which holds the window open.
-2. **NothingLost (failed start mark).** When `start_deliveries` fails, `abandon` settles the run as finished: no model call, no notice, and an outcome of "Finished without a note."

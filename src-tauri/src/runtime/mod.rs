@@ -3758,15 +3758,6 @@ impl Runtime {
             return;
         }
 
-        // Before the model reads any of it: once this is written, a crash
-        // reports the conversation instead of delivering it again.
-        let starting: Vec<_> = batch.iter().map(|envelope| envelope.id).collect();
-        if let Err(err) = self.inner.store.start_deliveries(&starting, run_id) {
-            tracing::error!(%err, "could not mark a delivery started; abandoning it rather than run a turn a crash would repeat");
-            self.abandon(run_id, batch.len());
-            return;
-        }
-
         let inbound_hop = batch.iter().map(|e| e.hop).max().unwrap_or(0);
         let cause = batch.last().map(|e| e.id);
         // Picked up after a restart: what this turn had already done when the
@@ -3787,6 +3778,14 @@ impl Runtime {
                 return;
             }
         };
+
+        let starting: Vec<_> = batch.iter().map(|envelope| envelope.id).collect();
+        if let Err(err) = self.inner.store.start_deliveries(&starting, run_id) {
+            tracing::error!(%err, "could not mark a delivery started; putting it down for the next host rather than run a turn a crash would repeat");
+            self.put_down(&batch, &absorbed, &[], 0, &resumed);
+            self.idle(agent_id);
+            return;
+        }
 
         // The most recent envelope that wants an answer decides where the
         // reply goes. Everything else in the batch is context.

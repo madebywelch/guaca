@@ -149,10 +149,10 @@ MarkBatch ==
 
 MarkFails ==
     /\ up /\ StartCanFail /\ turn.st = "dequeued"
-    /\ Release(turn.run)
+    /\ resuming' = resuming \ turn.batch
+    /\ PutDown(turn.batch, {}, turn.batch \cap resuming /= {}, {})
     /\ turn' = NoTurn
-    /\ UNCHANGED <<up, ends, draining, stopped, pdMem, inbox, resuming,
-                   accepted, put, extra, notices, ghosts>>
+    /\ UNCHANGED <<up, ends, draining, stopped, inbox, accepted, extra, notices, ghosts>>
 
 Begin ==
     /\ up /\ turn.st = "marked"

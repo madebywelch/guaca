@@ -123,6 +123,8 @@ code.
   before the record is written, and a stop can land between the two. Reading
   `Runs.stopped` under the lock the commit is written under is the only place
   that window closes.
+- **A failed start mark puts the batch down.** Settling it reported a turn that
+  never ran as finished, and running it anyway is a turn a crash would repeat.
 - **The stop check sits before `reserve_step`, not after it.** One line later and
   a run reports a model call that a stop prevented, for the rest of its life.
 - **The checks inside the round loop do not cover the way out of it.** A turn

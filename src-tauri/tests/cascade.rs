@@ -8987,3 +8987,44 @@ async fn a_stopped_message_taken_into_a_turn_is_not_put_down_for_the_next_host()
     h.settle(first).await;
     assert!(!settled_on(&h.sink, second), "the next host picked up a stopped conversation");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_start_mark_leaves_the_message_owed_and_the_next_host_answers_it() {
+    let stub = serve(|_| Script::Say("The room is booked.".into())).await;
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    h.runtime
+        .store()
+        .conn()
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER reject_start BEFORE UPDATE OF started_at ON pending_runs \
+             BEGIN SELECT RAISE(ABORT,'disk failure'); END;",
+        )
+        .unwrap();
+    let run = h.runtime.send_from_human(h.id("Researcher"), "Book the room.").unwrap();
+    h.wait_until("the start mark to fail and the run to leave the process", |h| {
+        h.runtime.live_runs() == 0
+    })
+    .await;
+
+    assert_eq!(stub.calls.load(Ordering::SeqCst), 0);
+    assert!(!settled_on(&h.sink, run), "a run that never started was reported settled");
+    assert!(h.runtime.store().outcome(run).unwrap().is_none());
+    let pending: i64 = h
+        .runtime
+        .store()
+        .conn()
+        .unwrap()
+        .query_row("SELECT count(*) FROM pending_runs WHERE run_id=?1", [run.to_string()], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(pending, 1, "the conversation is no longer owed anywhere");
+
+    h.runtime.store().conn().unwrap().execute_batch("DROP TRIGGER reject_start;").unwrap();
+    let (h, _) = h.restart(Duration::from_secs(5)).await;
+    h.settle(run).await;
+    assert_eq!(stub.calls.load(Ordering::SeqCst), 1);
+    assert!(h.channel_texts("Researcher").iter().any(|t| t.contains("The room is booked.")));
+    assert_eq!(h.runtime.store().outcome(run).unwrap().unwrap().status, OutcomeStatus::Done);
+}
