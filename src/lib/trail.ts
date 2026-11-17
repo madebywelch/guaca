@@ -37,13 +37,17 @@ export interface TrailGroup {
   spent: string[];
 }
 
-const SPENT = /^used (.+?) · /;
+const CREDENTIAL = String.raw`(?:"((?:[^"]|"")*)"|([^",·]+?)) \(\$([A-Za-z_][A-Za-z0-9_]*)\)`;
+const SPENT = new RegExp(`^used (${CREDENTIAL}(?:, ${CREDENTIAL})*) · `);
+const ONE_SPENT = new RegExp(`${CREDENTIAL}(?:, |$)`, "gy");
 
 export function readSpent(summary: string): { spent: string[]; rest: string } {
   const found = SPENT.exec(summary);
   if (!found) return { spent: [], rest: summary };
   return {
-    spent: found[1]!.split(", ").filter(Boolean),
+    spent: [...found[1]!.matchAll(ONE_SPENT)].map(
+      ([, quoted, plain, envVar]) => `${quoted?.replaceAll('""', '"') ?? plain} ($${envVar})`,
+    ),
     rest: summary.slice(found[0].length),
   };
 }

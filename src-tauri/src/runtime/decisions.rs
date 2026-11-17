@@ -1,5 +1,5 @@
 use super::guard::RunState;
-use super::{AgentCard, Runs, Runtime, RuntimeError, UiEvent};
+use super::{AgentCard, RunGuard, Runs, Runtime, RuntimeError, UiEvent};
 use crate::domain::decision::{self, DecisionAction, DecisionStatus, WorkDecision};
 use crate::domain::envelope::{Envelope, Part, Participant, ToolOutcome};
 use crate::domain::ids::{DecisionId, RunId};
@@ -14,8 +14,8 @@ impl Runtime {
         resume: bool,
         expected_updated_at: Option<i64>,
     ) -> Result<WorkDecision, RuntimeError> {
-        let (decision, _) = self.deliver_decision(id, |store| {
-            store.answer_decision(id, answer, resume, expected_updated_at, now_ms())
+        let (decision, _) = self.deliver_decision(id, |store, runs| {
+            store.answer_decision(runs, id, answer, resume, expected_updated_at, now_ms())
         })?;
         tracing::info!(decision = %id, resume, "decision answer accepted and queued");
         Ok(decision)
@@ -26,8 +26,8 @@ impl Runtime {
         id: DecisionId,
         failed: &Envelope,
     ) -> Result<RunId, RuntimeError> {
-        let (_, run) =
-            self.deliver_decision(id, |store| store.retry_decision(id, failed, now_ms()))?;
+        let (_, run) = self
+            .deliver_decision(id, |store, runs| store.retry_decision(runs, id, failed, now_ms()))?;
         tracing::info!(decision = %id, %run, "decision delivery tried again");
         Ok(run)
     }
@@ -35,10 +35,13 @@ impl Runtime {
     fn deliver_decision(
         &self,
         id: DecisionId,
-        write: impl FnOnce(&crate::db::Store) -> Result<(WorkDecision, Envelope), crate::db::StoreError>,
+        write: impl FnOnce(
+            &crate::db::Store,
+            &RunGuard<'_, Runs>,
+        ) -> Result<(WorkDecision, Envelope), crate::db::StoreError>,
     ) -> Result<(WorkDecision, RunId), RuntimeError> {
         let mut runs = self.inner.runs.lock();
-        let (decision, envelope) = write(&self.inner.store)?;
+        let (decision, envelope) = write(&self.inner.store, &runs)?;
         let run = envelope.run_id;
         if runs.draining {
             if let Err(err) = self.put_down_answer(&mut runs, &envelope) {
@@ -55,11 +58,16 @@ impl Runtime {
         Ok((decision, run))
     }
 
-    fn put_down_answer(&self, runs: &mut Runs, envelope: &Envelope) -> Result<(), RuntimeError> {
+    fn put_down_answer(
+        &self,
+        runs: &mut RunGuard<'_, Runs>,
+        envelope: &Envelope,
+    ) -> Result<(), RuntimeError> {
         let Participant::Agent { id } = envelope.to else { return Ok(()) };
         let card = self.inner.store.get_agent(id)?.ok_or(RuntimeError::UnknownAgent(id))?;
         let state = RunState::new(self.limits_for(&card));
         self.inner.store.put_down(
+            runs,
             &[(envelope.id, &[])],
             &[(envelope.run_id, state.steps_used(), state.snapshot())],
         )?;

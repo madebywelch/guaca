@@ -309,6 +309,13 @@ message, and its run settles as `Settled::Interrupted` with that notice as its
 outcome. Before, it stayed owed in `pending_runs` and said nothing until the
 next host reported it.
 
+A turn that ends on a failed model call or an exhausted budget answers nothing
+for the other conversations it took in either, so it sorts them the same way
+(`CutShort` names which ending, and so which notice). An unread one goes back
+to the queue, and one a call ran after is told at once, in words that name the
+same cause as the turn's own notice. Before, both settled with the turn as
+taken in, and Try again on the turn's own notice re-sent only its own message.
+
 The same holds across a restart. A drain writes a message the turn acted on
 into the turn's own `put_down` row (`absorbed`), not a row of its own, and
 `Store::recover` hands it back with that row (`Recovered::carried`), so the

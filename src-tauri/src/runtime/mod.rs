@@ -5,8 +5,10 @@ pub mod events;
 pub mod guard;
 mod outbox;
 pub mod prompt;
+mod watch;
 
 pub use drain::Drained;
+use watch::Watch;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicI64, AtomicU16, AtomicU64, AtomicUsize, Ordering};
@@ -380,7 +382,7 @@ fn browser_answer(permission: &Permission, service: &str, unchecked: bool) -> Op
         )),
     }
 }
-use crate::db::{Store, StoreError};
+use crate::db::{RunGuard, RunLock, Store, StoreError};
 use crate::domain::agent::{
     copy_name, AgentCard, CleanDraft, Consent, DirectoryEntry, Lifecycle, COMPOST_MS,
 };
@@ -510,6 +512,34 @@ const ENDED_BY_RESTART: &str = "The host restarted while this was waiting for th
 
 const SCHEDULE_TICK: Duration = Duration::from_secs(20);
 
+#[derive(Clone, Copy)]
+pub(super) enum CutShort {
+    Stopped,
+    Failed,
+    Spent,
+}
+
+impl CutShort {
+    fn notice(self, name: &str) -> String {
+        match self {
+            CutShort::Stopped => format!(
+                "You stopped another conversation while {name} was working on this one too, so \
+                 this was not finished. Review any actions already taken before retrying."
+            ),
+            CutShort::Failed => format!(
+                "{name} was working on this and another conversation together when a model call \
+                 failed, so this was not finished. Review any actions already taken before \
+                 retrying."
+            ),
+            CutShort::Spent => format!(
+                "{name} was working on this and another conversation together when the other \
+                 conversation hit its budget, so this was not finished. Review any actions \
+                 already taken before retrying."
+            ),
+        }
+    }
+}
+
 fn spent_notice(limits: GuardLimits, name: &str) -> Part {
     Part::Notice {
         kind: NoticeKind::GuardStop,
@@ -594,7 +624,7 @@ struct Inner {
     inboxes: Mutex<HashMap<AgentId, Inbox>>,
     activity: Mutex<HashMap<AgentId, Activity>>,
     routine_delivery: Mutex<()>,
-    runs: Mutex<Runs>,
+    runs: RunLock<Runs>,
     waiting: Mutex<HashMap<ApprovalId, tokio::sync::oneshot::Sender<()>>>,
     approval_window: AtomicU64,
     workspace: Workspace,
@@ -695,7 +725,7 @@ impl Runtime {
                 inboxes: Mutex::new(HashMap::new()),
                 activity: Mutex::new(HashMap::new()),
                 routine_delivery: Mutex::new(()),
-                runs: Mutex::new(Runs::default()),
+                runs: RunLock::default(),
                 waiting: Mutex::new(HashMap::new()),
                 approval_window: AtomicU64::new(crate::probe_clock::scaled(
                     APPROVAL_WINDOW.as_millis() as i64,
@@ -1328,7 +1358,7 @@ impl Runtime {
             let mut runs = self.inner.runs.lock();
             if runs.draining && !runs.stopped.contains(&envelope.run_id) {
                 if runs.outstanding.contains_key(&envelope.run_id) {
-                    self.inner.store.append_put_down(&envelope, None)?;
+                    self.inner.store.append_put_down(&runs, &envelope, None)?;
                     if let (
                         Some(limits),
                         Participant::Agent { id: from },
@@ -1364,7 +1394,7 @@ impl Runtime {
                     state.note_sent(from, to, envelope.expects_reply);
                 }
                 let whole = Some((state.steps_used(), state.snapshot()));
-                self.inner.store.append_put_down(&envelope, whole)?;
+                self.inner.store.append_put_down(&runs, &envelope, whole)?;
                 self.hand_on(&mut runs, envelope.run_id, state);
                 drop(runs);
                 self.inner.events.emit(UiEvent::MessageAppended { message: Box::new(envelope) });
@@ -2218,7 +2248,7 @@ impl Runtime {
                 let absorbed = runs.absorbed.remove(&run);
                 let cut_short = runs.cut_short.remove(&run);
                 if runs.put_down.contains(&run) {
-                    self.mark_whole(&[run]);
+                    self.mark_whole(&runs, &[run]);
                     None
                 } else {
                     let ending = if cut_short {
@@ -2696,7 +2726,8 @@ impl Runtime {
                 ),
             );
             let acted_on = carried.len();
-            let ended = self.hand_back(agent_id, run_id, carried, acted_on, intake);
+            let ended =
+                self.hand_back(agent_id, run_id, carried, acted_on, intake, CutShort::Stopped);
             self.finish_turn(agent_id, run_id, batch.len(), &ended);
             return;
         }
@@ -3190,6 +3221,15 @@ impl Runtime {
             tool_parts.push(stopped_notice(&card.name));
         }
 
+        let cut_short = if called_off {
+            Some(CutShort::Stopped)
+        } else if failure.is_some() {
+            Some(CutShort::Failed)
+        } else if budget_exhausted {
+            Some(CutShort::Spent)
+        } else {
+            None
+        };
         if let Some(err) = failure {
             let own_model = card.own_model(inference.provider).is_some();
             self.report_failure(
@@ -3219,10 +3259,9 @@ impl Runtime {
             );
         }
 
-        let taken_in = if called_off {
-            self.hand_back(agent_id, run_id, taken_in, acted_on, intake)
-        } else {
-            taken_in
+        let taken_in = match cut_short {
+            Some(why) => self.hand_back(agent_id, run_id, taken_in, acted_on, intake, why),
+            None => taken_in,
         };
         self.finish_turn(agent_id, run_id, batch.len(), &taken_in);
     }
@@ -3234,6 +3273,7 @@ impl Runtime {
         taken: Vec<Envelope>,
         acted_on: usize,
         intake: &mut Intake<'_>,
+        why: CutShort,
     ) -> Vec<Envelope> {
         let mut ended = Vec::new();
         let mut unread = Vec::new();
@@ -3261,7 +3301,7 @@ impl Runtime {
             }
         }
         for envelope in &cut {
-            self.cut_short_notice(agent, envelope);
+            self.cut_short_notice(agent, envelope, why);
         }
         for envelope in unread.into_iter().rev() {
             intake.depth.fetch_add(1, Ordering::SeqCst);
@@ -3270,17 +3310,13 @@ impl Runtime {
         ended
     }
 
-    pub(super) fn cut_short_notice(&self, agent: AgentId, envelope: &Envelope) {
+    pub(super) fn cut_short_notice(&self, agent: AgentId, envelope: &Envelope, why: CutShort) {
         self.notice(
             agent,
             envelope.run_id,
             Some(envelope.id),
             NoticeKind::Interrupted,
-            format!(
-                "You stopped another conversation while {} was working on this one too, so this \
-                 was not finished. Review any actions already taken before retrying.",
-                self.agent_name(agent)
-            ),
+            why.notice(&self.agent_name(agent)),
         );
     }
 
@@ -3292,7 +3328,8 @@ impl Runtime {
             .filter(|envelope| !envelope.is_routine())
             .collect();
         let acted_on = carried.len();
-        let ended = self.hand_back(agent, stopped.run_id, carried, acted_on, intake);
+        let ended =
+            self.hand_back(agent, stopped.run_id, carried, acted_on, intake, CutShort::Stopped);
         self.finish_turn(agent, stopped.run_id, 1, &ended);
     }
 
@@ -3374,17 +3411,14 @@ impl Runtime {
 
         tokio::pin!(work);
         loop {
-            let woken = signal.notified();
-            tokio::pin!(woken);
-            woken.as_mut().enable();
-
-            if self.stopped(run_id) {
+            let watch = Watch::arm(&signal, || self.stopped(run_id));
+            if *watch.stop() {
                 return None;
             }
 
             tokio::select! {
                 done = &mut work => return Some(done),
-                () = woken => {}
+                () = watch.woken() => {}
             }
         }
     }
@@ -5092,7 +5126,14 @@ impl Runtime {
                     && (command.contains(&format!("${}", connector.env_var))
                         || command.contains(&format!("${{{}}}", connector.env_var)))
             })
-            .map(|connector| format!("{} (${})", connector.service, connector.env_var))
+            .map(|connector| {
+                let service = if connector.service.contains([',', '"', '·']) {
+                    format!("\"{}\"", connector.service.replace('"', "\"\""))
+                } else {
+                    connector.service
+                };
+                format!("{service} (${})", connector.env_var)
+            })
             .collect();
 
         if named.is_empty() {
@@ -7218,16 +7259,21 @@ async fn actor_loop(
                 }
                 Some(card) if card.lifecycle.accepts_work() => break,
                 Some(card) => {
-                    let waiter = resume.notified();
-                    tokio::pin!(waiter);
-                    waiter.as_mut().enable();
+                    let watch = Watch::arm(&resume, || {
+                        (
+                            runtime.draining() && !runtime.called_off(first.run_id),
+                            runtime.stopped(first.run_id),
+                            runtime.anything_stopped(),
+                        )
+                    });
+                    let &(for_next_host, stopped, anything_stopped) = watch.stop();
 
-                    if runtime.draining() && !runtime.called_off(first.run_id) {
+                    if for_next_host {
                         put_down = true;
                         break;
                     }
 
-                    if runtime.stopped(first.run_id) {
+                    if stopped {
                         runtime.notice(
                             id,
                             first.run_id,
@@ -7241,7 +7287,7 @@ async fn actor_loop(
                         called_off = true;
                         break;
                     }
-                    if runtime.anything_stopped() {
+                    if anything_stopped {
                         while let Ok(queued) = rx.try_recv() {
                             if runtime.called_off(queued.run_id) {
                                 depth.fetch_sub(1, Ordering::SeqCst);
@@ -7265,7 +7311,7 @@ async fn actor_loop(
                     }
 
                     runtime.set_activity(id, Activity::Paused);
-                    waiter.await;
+                    watch.woken().await;
                 }
             }
         }
@@ -8412,7 +8458,14 @@ mod tests {
             .unwrap();
         let filed = store.lapse_approval(earlier.id, Some("granted"), now_ms()).unwrap().unwrap();
         store
-            .answer_decision(filed.id, crate::domain::approval::ALLOW, false, None, now_ms())
+            .answer_decision(
+                &RunLock::new(()).lock(),
+                filed.id,
+                crate::domain::approval::ALLOW,
+                false,
+                None,
+                now_ms(),
+            )
             .unwrap();
 
         let mut reading = Reading {

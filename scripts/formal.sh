@@ -10,20 +10,20 @@ readonly CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/guaca"
 readonly JAR="$CACHE/tla2tools-$TLA_VERSION.jar"
 
 readonly CODE="MarkBeforeRead=TRUE AcceptOneCommit=TRUE RecoverUntouched=TRUE RecoverClears=TRUE KeepLink=TRUE SkipStartNote=TRUE"
-readonly CALM="OperatorStops=FALSE StartCanFail=FALSE"
-readonly STOPS="OperatorStops=TRUE StartCanFail=FALSE"
-readonly FAILS="OperatorStops=FALSE StartCanFail=TRUE"
+readonly CALM="OperatorStops=FALSE StartCanFail=FALSE TurnsCanFail=FALSE"
+readonly STOPS="OperatorStops=TRUE StartCanFail=FALSE TurnsCanFail=FALSE"
+readonly FAILS="OperatorStops=FALSE StartCanFail=TRUE TurnsCanFail=FALSE"
 readonly ALL="NoBlindRepeat NothingLost OnlyStartedReported ReportedOnce StoppedStaysStopped"
 
 CHECKS=(
   "holds|code, no stops, no failed commit|$CODE $CALM|$ALL"
-  "holds|code, operator stops and a failed start mark|$CODE OperatorStops=TRUE StartCanFail=TRUE|$ALL"
+  "holds|code, operator stops, a failed start mark, and turns that end on a failed model call or an exhausted budget|$CODE OperatorStops=TRUE StartCanFail=TRUE TurnsCanFail=TRUE|$ALL"
   "broken|model read before the start mark|MarkBeforeRead=FALSE AcceptOneCommit=TRUE RecoverUntouched=TRUE RecoverClears=TRUE KeepLink=TRUE SkipStartNote=TRUE $CALM|NoBlindRepeat"
   "broken|pending_runs row in its own commit|MarkBeforeRead=TRUE AcceptOneCommit=FALSE RecoverUntouched=TRUE RecoverClears=TRUE KeepLink=TRUE SkipStartNote=TRUE $CALM|NothingLost"
   "broken|recover reports every unfinished conversation|MarkBeforeRead=TRUE AcceptOneCommit=TRUE RecoverUntouched=FALSE RecoverClears=TRUE KeepLink=TRUE SkipStartNote=TRUE $CALM|OnlyStartedReported"
   "broken|recover keeps the rows it reported|MarkBeforeRead=TRUE AcceptOneCommit=TRUE RecoverUntouched=TRUE RecoverClears=FALSE KeepLink=TRUE SkipStartNote=TRUE $CALM|ReportedOnce"
   "broken|a message the turn acted on is handed on without its carrier|MarkBeforeRead=TRUE AcceptOneCommit=TRUE RecoverUntouched=TRUE RecoverClears=TRUE KeepLink=FALSE SkipStartNote=TRUE $STOPS|NoBlindRepeat"
-  "broken|recover counts the notice that a start could not be recorded as a touch|MarkBeforeRead=TRUE AcceptOneCommit=TRUE RecoverUntouched=TRUE RecoverClears=TRUE KeepLink=TRUE SkipStartNote=FALSE OperatorStops=FALSE StartCanFail=TRUE|OnlyStartedReported"
+  "broken|recover counts the notice that a start could not be recorded as a touch|MarkBeforeRead=TRUE AcceptOneCommit=TRUE RecoverUntouched=TRUE RecoverClears=TRUE KeepLink=TRUE SkipStartNote=FALSE OperatorStops=FALSE StartCanFail=TRUE TurnsCanFail=FALSE|OnlyStartedReported"
 )
 
 fetch_tools() {
@@ -88,7 +88,9 @@ fetch_tools
 if [ "${1:-}" = "--trace" ]; then
   shift
   work=$(mktemp -d)
-  run_tlc "$CODE $1" "$2" "$work"
+  scope=$1
+  [[ $scope == *TurnsCanFail* ]] || scope="$scope TurnsCanFail=FALSE"
+  run_tlc "$CODE $scope" "$2" "$work"
   cat "$work/tlc.out"
   exit 0
 fi
