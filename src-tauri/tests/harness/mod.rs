@@ -957,3 +957,30 @@ impl Harness {
             .join("\n")
     }
 }
+
+pub fn command_state(h: &Harness) -> Arc<guac_lib::commands::AppState> {
+    use guac_lib::{
+        account::Account,
+        artifact::Artifacts,
+        commands::{AppState, Catalog, Reach},
+        domain::deployment::Deployment,
+        subscription::Subscription,
+    };
+    use std::sync::atomic::AtomicU16;
+    Arc::new(AppState {
+        runtime: h.runtime.clone(),
+        menubar: Arc::new(|_| {}),
+        secret: None,
+        deployment: Deployment::Desktop,
+        open_url: Arc::new(|_| Ok(())),
+        reach: Reach::Desktop,
+        config_path: h._dir.path().join("config.json"),
+        downloads: h._dir.path().to_path_buf(),
+        subscription: Arc::new(Subscription::open(h._dir.path().join("subscription.json"))),
+        claude_signin: Default::default(),
+        account: Arc::new(Account::open(h._dir.path().join("account.json"))),
+        catalog: Arc::new(Catalog::new()),
+        artifacts: Artifacts::new(),
+        artifact_port: Arc::new(AtomicU16::new(0)),
+    })
+}

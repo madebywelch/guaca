@@ -11,33 +11,6 @@ use serde_json::json;
 
 static PROVIDER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-fn command_state(h: &harness::Harness) -> Arc<guac_lib::commands::AppState> {
-    use guac_lib::{
-        account::Account,
-        artifact::Artifacts,
-        commands::{AppState, Catalog, Reach},
-        domain::deployment::Deployment,
-        subscription::Subscription,
-    };
-    use std::sync::atomic::AtomicU16;
-    Arc::new(AppState {
-        runtime: h.runtime.clone(),
-        menubar: Arc::new(|_| {}),
-        secret: None,
-        deployment: Deployment::Desktop,
-        open_url: Arc::new(|_| Ok(())),
-        reach: Reach::Desktop,
-        config_path: h._dir.path().join("config.json"),
-        downloads: h._dir.path().to_path_buf(),
-        subscription: Arc::new(Subscription::open(h._dir.path().join("subscription.json"))),
-        claude_signin: Default::default(),
-        account: Arc::new(Account::open(h._dir.path().join("account.json"))),
-        catalog: Arc::new(Catalog::new()),
-        artifacts: Artifacts::new(),
-        artifact_port: Arc::new(AtomicU16::new(0)),
-    })
-}
-
 #[tokio::test]
 async fn operator_deletion_never_clears_a_concurrent_replacement() {
     let _guard = PROVIDER.lock().await;
@@ -71,7 +44,7 @@ async fn operator_deletion_never_clears_a_concurrent_replacement() {
         .store()
         .set_agent_sandbox(computer_id, Some(("old-computer", "old", "old")))
         .unwrap();
-    let state = command_state(&computer);
+    let state = harness::command_state(&computer);
     let deletion = tokio::spawn(async move {
         guac_lib::commands::delete_agent_computer(&state, computer_id).await
     });
@@ -88,7 +61,7 @@ async fn operator_deletion_never_clears_a_concurrent_replacement() {
     let browser = harness::harness_with_browser(&stub, &["Browser"], GuardLimits::default());
     let browser_id = browser.id("Browser");
     browser.runtime.store().set_agent_browser(browser_id, Some("old-browser")).unwrap();
-    let state = command_state(&browser);
+    let state = harness::command_state(&browser);
     let deletion =
         tokio::spawn(
             async move { guac_lib::commands::stop_agent_browser(&state, browser_id).await },
@@ -151,7 +124,7 @@ async fn status_and_revocation_never_clear_a_concurrent_browser_replacement() {
     let id = h.id("Worker");
 
     h.runtime.store().set_agent_browser(id, Some("old-status")).unwrap();
-    let state = command_state(&h);
+    let state = harness::command_state(&h);
     let status = tokio::spawn(async move { guac_lib::commands::agent_browser(&state, id).await });
     arrived.notified().await;
     h.runtime.store().record_browser(id, "new-status", false).unwrap();
@@ -160,7 +133,7 @@ async fn status_and_revocation_never_clear_a_concurrent_browser_replacement() {
     let after_status = h.agent_named("Worker").unwrap().browser_id;
 
     h.runtime.store().set_agent_browser(id, Some("old-revoked")).unwrap();
-    let state = command_state(&h);
+    let state = harness::command_state(&h);
     let revoke =
         tokio::spawn(async move { guac_lib::commands::take_agent_browser(&state, id).await });
     arrived.notified().await;

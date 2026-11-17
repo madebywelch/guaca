@@ -1332,7 +1332,7 @@ async fn deleting_an_agent_takes_its_memory_with_it() {
     h.settle(run).await;
     assert_eq!(h.runtime.workspace().read(h.id("Manager")), "private");
 
-    h.runtime.workspace().remove(h.id("Manager"));
+    h.runtime.workspace().remove(h.id("Manager")).unwrap();
     assert_eq!(h.runtime.workspace().read(h.id("Manager")), "");
 }
 
@@ -6004,6 +6004,202 @@ async fn the_sweep_takes_whoever_is_past_the_deadline_and_nobody_else() {
         "and the other one has twenty-nine days left"
     );
     assert!(h.runtime.store().get_agent(waiting).unwrap().unwrap().discarded());
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PurgeStep {
+    Memory,
+    Notebook,
+    Routines,
+    WorkingNotes,
+    Signins,
+    Approvals,
+    PluginAccess,
+    Stamp,
+}
+
+const HELD_TABLE: &str = "held_by_test";
+
+fn purge_table(step: PurgeStep) -> Option<&'static str> {
+    match step {
+        PurgeStep::Routines => Some("routines"),
+        PurgeStep::WorkingNotes => Some("working_notes"),
+        PurgeStep::Signins => Some("signins"),
+        PurgeStep::Approvals => Some("approvals"),
+        PurgeStep::PluginAccess => Some("plugin_agents"),
+        PurgeStep::Memory | PurgeStep::Notebook | PurgeStep::Stamp => None,
+    }
+}
+
+fn notebook_dir(h: &Harness, id: guac_lib::domain::ids::AgentId) -> std::path::PathBuf {
+    h._dir.path().join("notebooks").join(id.to_string())
+}
+
+fn break_purge(h: &Harness, id: guac_lib::domain::ids::AgentId, name: &str, step: PurgeStep) {
+    let conn = h.runtime.store().conn().unwrap();
+    if let Some(table) = purge_table(step) {
+        conn.execute_batch(&format!("ALTER TABLE {table} RENAME TO {HELD_TABLE}")).unwrap();
+        return;
+    }
+    match step {
+        PurgeStep::Memory => {
+            let path = h.runtime.workspace().preferred_path(id, name);
+            std::fs::remove_file(&path).unwrap();
+            std::fs::create_dir(&path).unwrap();
+            std::fs::write(path.join("in-the-way"), "a folder where the memory was").unwrap();
+        }
+        PurgeStep::Notebook => {
+            let dir = notebook_dir(h, id);
+            std::fs::remove_dir_all(&dir).unwrap();
+            std::fs::write(&dir, "a file where the notebook was").unwrap();
+        }
+        PurgeStep::Stamp => conn
+            .execute_batch(
+                "CREATE TRIGGER held_stamp BEFORE UPDATE OF discarded_at ON agents \
+                 WHEN NEW.discarded_at IS NULL BEGIN SELECT RAISE(ABORT, 'held'); END",
+            )
+            .unwrap(),
+        _ => unreachable!(),
+    }
+}
+
+fn mend_purge(h: &Harness, id: guac_lib::domain::ids::AgentId, name: &str, step: PurgeStep) {
+    let conn = h.runtime.store().conn().unwrap();
+    if let Some(table) = purge_table(step) {
+        conn.execute_batch(&format!("ALTER TABLE {HELD_TABLE} RENAME TO {table}")).unwrap();
+        return;
+    }
+    match step {
+        PurgeStep::Memory => {
+            std::fs::remove_dir_all(h.runtime.workspace().preferred_path(id, name)).unwrap()
+        }
+        PurgeStep::Notebook => std::fs::remove_file(notebook_dir(h, id)).unwrap(),
+        PurgeStep::Stamp => conn.execute_batch("DROP TRIGGER held_stamp").unwrap(),
+        _ => unreachable!(),
+    }
+}
+
+fn compost_due(h: &Harness, name: &str, at: i64) -> guac_lib::domain::ids::AgentId {
+    let id = h.id(name);
+    h.runtime.workspace().write(id, name, "The vendor answers on Tuesdays.").unwrap();
+    h.runtime.notebooks().write(id, "leads.md", "Acme, call back Friday").unwrap();
+    h.runtime.store().discard_agent(id, at).unwrap();
+    id
+}
+
+fn still_composted(h: &Harness, id: guac_lib::domain::ids::AgentId) -> bool {
+    h.runtime.store().get_agent(id).unwrap().unwrap().discarded()
+}
+
+async fn a_purge_that_fails_at(step: PurgeStep) {
+    let stub = quiet().await;
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let id = compost_due(&h, "Researcher", now_ms() - COMPOST_MS - 1);
+    let card = h.runtime.store().get_agent(id).unwrap().unwrap();
+
+    break_purge(&h, id, "Researcher", step);
+    let failed = h.runtime.purge_agent(&card).await;
+    assert!(failed.is_err(), "{step:?}: a purge that could not finish said it had");
+    assert!(
+        still_composted(&h, id),
+        "{step:?}: the stamp went while something it held was left behind, so nothing will retry"
+    );
+
+    mend_purge(&h, id, "Researcher", step);
+    h.runtime.sweep_compost().await;
+    assert!(
+        !still_composted(&h, id),
+        "{step:?}: the next sweep finishes what the failed one began"
+    );
+    assert!(h.runtime.workspace().read(id).is_empty(), "{step:?}: the memory is gone");
+    assert!(h.runtime.notebooks().list(id).is_empty(), "{step:?}: the notebook is gone");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_purge_that_cannot_remove_the_memory_keeps_the_agent_in_the_compost() {
+    a_purge_that_fails_at(PurgeStep::Memory).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_purge_that_cannot_remove_the_notebook_keeps_the_agent_in_the_compost() {
+    a_purge_that_fails_at(PurgeStep::Notebook).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_purge_that_cannot_delete_the_schedule_keeps_the_agent_in_the_compost() {
+    a_purge_that_fails_at(PurgeStep::Routines).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_purge_that_cannot_clear_the_working_notes_keeps_the_agent_in_the_compost() {
+    a_purge_that_fails_at(PurgeStep::WorkingNotes).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_purge_that_cannot_delete_the_signins_keeps_the_agent_in_the_compost() {
+    a_purge_that_fails_at(PurgeStep::Signins).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_purge_that_cannot_delete_the_approvals_keeps_the_agent_in_the_compost() {
+    a_purge_that_fails_at(PurgeStep::Approvals).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_purge_that_cannot_revoke_plugin_access_keeps_the_agent_in_the_compost() {
+    a_purge_that_fails_at(PurgeStep::PluginAccess).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_purge_that_cannot_clear_the_stamp_reports_it() {
+    a_purge_that_fails_at(PurgeStep::Stamp).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn one_agent_the_sweep_cannot_purge_does_not_hold_up_the_rest() {
+    let stub = quiet().await;
+    let h = harness(&stub, &["Researcher", "Scribe"], GuardLimits::default());
+    let stuck = compost_due(&h, "Researcher", now_ms() - COMPOST_MS - 2);
+    let next = compost_due(&h, "Scribe", now_ms() - COMPOST_MS - 1);
+    break_purge(&h, stuck, "Researcher", PurgeStep::Memory);
+
+    h.runtime.sweep_compost().await;
+
+    assert!(still_composted(&h, stuck), "the one that failed waits for the next sweep");
+    assert!(!still_composted(&h, next), "the one after it is purged all the same");
+    assert!(h.runtime.workspace().read(next).is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deleting_forever_reports_a_purge_that_could_not_finish() {
+    let stub = quiet().await;
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let id = compost_due(&h, "Researcher", now_ms());
+    let state = command_state(&h);
+    break_purge(&h, id, "Researcher", PurgeStep::Memory);
+
+    assert!(guac_lib::commands::purge_agent(&state, id).await.is_err());
+    assert!(still_composted(&h, id), "the operator can still restore it, or press again");
+
+    mend_purge(&h, id, "Researcher", PurgeStep::Memory);
+    guac_lib::commands::purge_agent(&state, id).await.unwrap();
+    assert!(!still_composted(&h, id));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn clearing_a_group_reports_memory_it_could_not_remove() {
+    let stub = quiet().await;
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let id = h.id("Researcher");
+    h.runtime.workspace().write(id, "Researcher", "The vendor answers on Tuesdays.").unwrap();
+    let group = h.runtime.store().get_agent(id).unwrap().unwrap().group_id;
+    let state = command_state(&h);
+    break_purge(&h, id, "Researcher", PurgeStep::Memory);
+
+    assert!(
+        guac_lib::commands::clear_group(&state, group).await.is_err(),
+        "a clear that left the memory behind said it had removed it"
+    );
 }
 
 use guac_lib::domain::envelope::NoticeKind;
