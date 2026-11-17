@@ -1,14 +1,17 @@
 import http.client
+import inspect
 import json
+import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 from e2e.browser import Browser, BrowserError, split_frames
-from e2e.scenarios import SCENARIOS
+from e2e.scenarios import SCENARIOS, unproved
 from e2e.world import (UNSCRIPTED, Call, Egress, Failed, Model, call, held, redact, refuse, say, stream,
                        until)
 
@@ -28,12 +31,43 @@ def conversation(*messages: tuple[str, str]) -> dict:
     return {"messages": [{"role": role, "content": text} for role, text in messages]}
 
 
+class Rendering(Browser):
+    def __init__(self, appears_after: int | None) -> None:
+        self.appears_after = appears_after
+        self.looks = 0
+        self.sent: list[tuple[str, str]] = []
+
+    def ax_nodes(self) -> list[dict]:
+        self.looks += 1
+        shown = self.appears_after is not None and self.looks > self.appears_after
+        return [{"role": {"value": "button"}, "name": {"value": "Deny"}, "backendDOMNodeId": 7}] if shown else []
+
+    def _center(self, node: dict) -> tuple[float, float]:
+        return 1.0, 1.0
+
+    def send(self, method: str, params: dict | None = None, session: bool = True, timeout: float = 30) -> dict:
+        self.sent.append((method, (params or {}).get("type", "")))
+        return {}
+
+
 class Pipe(unittest.TestCase):
     def test_a_message_split_across_reads_is_held_until_its_end(self) -> None:
         whole, rest = split_frames(b'{"id":1}\0{"id"')
         self.assertEqual(whole, [b'{"id":1}'])
         whole, rest = split_frames(rest + b':2}\0')
         self.assertEqual((whole, rest), ([b'{"id":2}'], b""))
+
+    def test_a_click_waits_for_a_button_the_page_is_still_rendering(self) -> None:
+        page = Rendering(appears_after=3)
+        page.click("button", "Deny")
+        self.assertEqual([kind for _, kind in page.sent], ["mouseMoved", "mousePressed", "mouseReleased"])
+
+    def test_a_click_on_a_button_that_never_appears_fails_naming_it(self) -> None:
+        page = Rendering(appears_after=None)
+        with mock.patch("e2e.browser.ACTIONABLE_SECONDS", 0.3):
+            with self.assertRaisesRegex(BrowserError, "no button named 'Deny'"):
+                page.click("button", "Deny")
+        self.assertEqual(page.sent, [])
 
     def test_a_browser_that_dies_at_launch_says_why_and_never_breaks_the_pipe(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -142,6 +176,17 @@ class Evidence(unittest.TestCase):
         text = redact("token abc123 at http://h/#token=abc123 and key s3cret", ["abc123", "s3cret"])
         self.assertNotIn("abc123", text)
         self.assertNotIn("s3cret", text)
+
+    def test_a_claim_no_passing_step_made_is_unproved(self) -> None:
+        steps = [{"step": "the reply arrives", "pass": True}, {"step": "the key is kept", "pass": False}]
+        claims = ("the reply arrives", "the key is kept", "the run ends")
+        self.assertEqual(unproved(claims, steps), ["the key is kept", "the run ends"])
+
+    def test_every_claim_is_a_check_its_scenario_makes(self) -> None:
+        for name, scenario in SCENARIOS.items():
+            source = inspect.getsource(sys.modules[scenario.run.__module__])
+            for claim in scenario.claims:
+                self.assertIn(f'check("{claim}"', source.replace("check(\n", "check("), f"{name}: {claim}")
 
     def test_a_wait_that_never_holds_fails_naming_what_never_happened(self) -> None:
         with self.assertRaises(Failed) as failed:

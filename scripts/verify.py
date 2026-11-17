@@ -41,7 +41,7 @@ import traceback
 from pathlib import Path
 
 from e2e.browser import BrowserError, find_chromium
-from e2e.scenarios import SCENARIOS
+from e2e.scenarios import SCENARIOS, unproved
 from e2e.world import (EVIDENCE, GUACAD, GUACAD_CLOCK, ROOT, SCRATCH, STAND_IN_KEY, STAND_IN_MODEL,
                        WEB, Failed, World, say)
 
@@ -100,6 +100,9 @@ def attempt(name: str, run: int, evidence: Path, keep: bool) -> dict:
         SCENARIOS[name].run(world)
         if not world.steps:
             world.check("the scenario recorded a step", False, stop=False)
+        missing = unproved(SCENARIOS[name].claims, world.steps)
+        if missing:
+            world.check("the scenario proved every claim it makes", False, observed=missing, stop=False)
         if world.page_errors:
             world.check("the page threw nothing", False, observed=world.page_errors, stop=False)
     except Failed as why:
@@ -166,6 +169,8 @@ def main() -> int:
         for name, scenario in SCENARIOS.items():
             clock = f" (probe-host Host, {scenario.minute_ms} ms minute)" if scenario.minute_ms else ""
             print(f"{name:12} {scenario.proves}{clock}")
+            for claim in scenario.claims:
+                print(f"{'':12}   {claim}")
         return 0
     if args.scenarios == ["doctor"]:
         checks = doctor()

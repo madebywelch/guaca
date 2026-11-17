@@ -24,9 +24,14 @@ SEEDED_RANDOM = """(() => {
 })();"""
 
 WINDOW = (1280, 860)
+ACTIONABLE_SECONDS = 10
 
 
 class BrowserError(Exception):
+    pass
+
+
+class BrowserGone(BrowserError):
     pass
 
 
@@ -147,12 +152,12 @@ class Browser:
         try:
             os.write(self._out, json.dumps(message).encode() + b"\0")
         except BrokenPipeError:
-            raise BrowserError(f"{method}: {self.why_gone()}") from None
+            raise BrowserGone(f"{method}: {self.why_gone()}") from None
         deadline = time.monotonic() + timeout
         with self._cond:
             while ident not in self._answers:
                 if -1 in self._answers:
-                    raise BrowserError(f"{method}: {self.why_gone()}")
+                    raise BrowserGone(f"{method}: {self.why_gone()}")
                 left = deadline - time.monotonic()
                 if left <= 0:
                     raise BrowserError(f"{method}: no answer within {timeout:g}s")
@@ -278,7 +283,17 @@ class Browser:
         return sum(quad[0::2]) / 4, sum(quad[1::2]) / 4
 
     def click(self, role: str, name: str, exact: bool = True) -> None:
-        x, y = self._center(self.one(role, name, exact))
+        deadline = time.monotonic() + ACTIONABLE_SECONDS
+        while True:
+            try:
+                x, y = self._center(self.one(role, name, exact))
+                break
+            except BrowserGone:
+                raise
+            except BrowserError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.1)
         for kind in ("mouseMoved", "mousePressed", "mouseReleased"):
             self.send("Input.dispatchMouseEvent",
                       {"type": kind, "x": x, "y": y, "button": "left", "clickCount": 1})

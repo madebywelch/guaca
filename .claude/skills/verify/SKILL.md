@@ -22,9 +22,19 @@ a fresh browser profile. Runs never share state, so a failure is about the
 commit and not about the run before it. The result is one JSON document on
 stdout; exit status 1 means a run failed, 2 means the checkout is not ready.
 
-The features this covers, with the exact handles and the traps, are in
-[features/README.md](features/README.md). Read the file for the feature you
-changed before you drive it.
+`scripts/verify.py --list` is the map: each scenario, what it proves, and the
+claims a run must pass to count. A run that skips a claim fails, so the list
+cannot drift from what runs. The handles and the traps live in
+`scripts/e2e/scenarios.py`, in the helpers each scenario calls.
+
+When you drive or add a scenario:
+
+- Find elements by role and accessible name with `w.ui`.
+- Wait on a row, an element or an event, never on a fixed delay.
+- Script the model by what was said to it, never by call count.
+- Read rows only through `w.host.rows`, which opens the database read only.
+- A step the product cannot satisfy fails with the names it did show. Never
+  weaken the step to make it pass.
 
 ## Launch
 
@@ -131,7 +141,8 @@ Rules that keep a result a function of the commit alone:
 4. Assert on what a person sees (`w.ui`), what changed underneath (rows,
    files, messages) and what the page was told (`w.events`).
 5. Add it to `SCENARIOS` with one sentence of what it proves, naming the
-   failure path after a semicolon. Add a feature file under `features/`.
+   failure path after a semicolon, and list every `w.check` it makes as its
+   claims.
 6. Break the product on purpose and watch the scenario fail for the right
    reason. Then run it `--runs 20` and require 20 passes and `identical: true`.
 

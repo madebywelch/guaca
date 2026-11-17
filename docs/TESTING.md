@@ -187,8 +187,8 @@ real daemon and web bundle with the model scripted on loopback, so a scenario
 costs nothing, needs no key and reaches no network, and its result depends only
 on the commit. Break the behavior on purpose and watch the scenario fail before
 trusting it, and run it `--runs 20` before adding it. `.claude/skills/verify`
-is how to drive, read the evidence and add one; its `features/` directory is
-the list of journeys covered. What only the native shell does (the window,
+is how to drive, read the evidence and add one; `scripts/verify.py --list` is
+the journeys covered and the claims each must pass. What only the native shell does (the window,
 banners, the menu bar) is `scripts/verify.py mac`, which is the probe below.
 
 Three suites ask three different questions, and a change can pass one while

@@ -561,24 +561,74 @@ def scenario_lapse(w: World) -> None:
 class Scenario:
     run: Callable[[World], None]
     proves: str
+    claims: tuple[str, ...]
     minute_ms: int | None = None
+
+
+def unproved(claims: tuple[str, ...], steps: list[dict]) -> list[str]:
+    held = {step["step"] for step in steps if step["pass"]}
+    return [claim for claim in claims if claim not in held]
 
 
 SCENARIOS: dict[str, Scenario] = {
     "reply": Scenario(scenario_reply, "A person sets up their first agent, writes to it and gets a reply; a key the "
-                      "endpoint rejects is refused before anything is saved."),
+                      "endpoint rejects is refused before anything is saved.",
+    (
+        "a rejected key is reported in the form",
+        "a rejected key saves nothing and starts no agent",
+        "the right key passes the test and is kept on the Host",
+        "the brief reached the agent and its reply is in the conversation",
+        "a message written in the field is answered in the same conversation",
+        "the page was told about each reply as it happened",
+        "every model call was one the scenario scripted",
+    )),
     "peers": Scenario(scenario_peers, "An agent asks another, the answer comes back and the conversation ends; two "
-                      "agents that would volley forever are stopped at the hop limit and the run still ends."),
+                      "agents that would volley forever are stopped at the hop limit and the run still ends.",
+    (
+        "a second agent joins the group",
+        "the question went to Critic and its answer came back in the same run",
+        "the conversation ended with the relayed answer and nothing after it",
+        "the guard ended the volley at the hop limit, and the run settled",
+        "every model call was one the scenario scripted",
+    )),
     "permission": Scenario(scenario_permission, "An agent asks to change a setting, the person allows it in the "
                            "conversation and it changes; a denied request changes nothing, and a setting no agent "
-                           "may touch is refused without asking."),
+                           "may touch is refused without asking.",
+    (
+        "the turn is parked on a request, and nothing has changed yet",
+        "an allowed change is made, and the agent is told",
+        "a denied change is not made, and the agent is told",
+        "a setting only the person may change is refused without asking anyone",
+        "every model call was one the scenario scripted",
+    )),
     "lapse": Scenario(scenario_lapse, "A request nobody answers lapses into For you, where an Allow lets the same "
                       "change through once without asking again; a Deny there grants nothing, and the next ask is "
-                      "parked again.", minute_ms=1000),
+                      "parked again.",
+    (
+        "the lapsed request waits in For you and nothing has changed",
+        "an Allow in For you lets the same change through once, without parking again",
+        "a Deny in For you grants nothing: the next ask waits for a person again",
+        "every model call was one the scenario scripted",
+    ), minute_ms=1000),
     "restart": Scenario(scenario_restart, "A Host stopped while a turn is in the air puts it down, and the next Host "
                         "finishes it; a Host that crashes mid-turn shows the turn as interrupted, repeats nothing, "
-                        "and Try again finishes it."),
+                        "and Try again finishes it.",
+    (
+        "a stopped Host exits cleanly after putting the turn down",
+        "the next Host delivered the message again and the reply arrived once",
+        "a crashed turn is reported interrupted and is not repeated by itself",
+        "Try again runs the turn once more and the reply arrives",
+        "every model call was one the scenario scripted",
+    )),
     "routine": Scenario(scenario_routine, "A person adds a routine on an event, one delivery fires it once and the "
                         "agent acts on it; a retry of that delivery does not fire it again, and a post without the "
-                        "secret or to an event nobody waits on fires nothing."),
+                        "secret or to an event nobody waits on fires nothing.",
+    (
+        "the routine is kept, switched on, waiting on the event",
+        "a post without the secret, or to an event nobody waits on, fires nothing",
+        "one delivery fires the routine once, with its body, in a run of its own",
+        "a retry of the same delivery does not fire it again",
+        "the routine's history shows the one firing",
+        "every model call was one the scenario scripted",
+    )),
 }
