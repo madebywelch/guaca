@@ -8,6 +8,7 @@
 #   ./scripts/ci.sh scripts  installer checks, probe unit tests, disk image layout
 #   ./scripts/ci.sh rust     just the Rust suite
 #   ./scripts/ci.sh web      just the frontend
+#   ./scripts/ci.sh formal   the model of conversation recovery across restarts
 
 set -euo pipefail
 
@@ -50,6 +51,11 @@ run_scripts() {
   # opening a packaged image is a release step in docs/RELEASING.md.
   step "Release disk image layout"
   python3 scripts/package-dmg.test.py
+}
+
+run_formal() {
+  step "Conversation recovery model"
+  bash scripts/formal.sh
 }
 
 run_connector() {
@@ -127,15 +133,17 @@ case "${1:-all}" in
   scripts) run_scripts ;;
   web) run_web ;;
   rust) run_rust ;;
+  formal) run_formal ;;
   all)
     run_assets
     run_scripts
     run_web
     run_rust
     run_connector
+    run_formal
     ;;
   *)
-    echo "usage: $0 [all|assets|scripts|web|rust]" >&2
+    echo "usage: $0 [all|assets|scripts|web|rust|formal]" >&2
     exit 2
     ;;
 esac
