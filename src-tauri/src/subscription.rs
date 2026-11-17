@@ -87,17 +87,30 @@ struct Stored {
     plan: String,
 }
 
+#[derive(Serialize)]
+struct OnDisk<'a> {
+    access_token: &'a str,
+    refresh_token: &'a str,
+    id_token: &'a str,
+    account_id: &'a str,
+    expires_at: i64,
+    email: &'a str,
+    plan: &'a str,
+}
+
 impl Stored {
-    fn on_disk(&self) -> serde_json::Value {
-        serde_json::json!({
-            "access_token": self.access_token.expose(),
-            "refresh_token": self.refresh_token.expose(),
-            "id_token": self.id_token.expose(),
-            "account_id": self.account_id,
-            "expires_at": self.expires_at,
-            "email": self.email,
-            "plan": self.plan,
-        })
+    fn on_disk(&self) -> OnDisk<'_> {
+        let Stored { access_token, refresh_token, id_token, account_id, expires_at, email, plan } =
+            self;
+        OnDisk {
+            access_token: access_token.expose(),
+            refresh_token: refresh_token.expose(),
+            id_token: id_token.expose(),
+            account_id,
+            expires_at: *expires_at,
+            email,
+            plan,
+        }
     }
 }
 
@@ -693,6 +706,33 @@ fn restrict(_path: &Path) -> Result<(), SigninError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const RELEASED: &str = r#"{
+  "access_token": "access-2",
+  "refresh_token": "refresh-2",
+  "id_token": "id-2",
+  "account_id": "acct-2",
+  "expires_at": 1767225600,
+  "email": "ada@example.com",
+  "plan": "plus"
+}"#;
+
+    #[test]
+    fn a_subscription_file_is_read_and_written_byte_for_byte_as_released() {
+        let stored = Stored {
+            access_token: Secret::new("access-2"),
+            refresh_token: Secret::new("refresh-2"),
+            id_token: Secret::new("id-2"),
+            account_id: "acct-2".into(),
+            expires_at: 1767225600,
+            email: "ada@example.com".into(),
+            plan: "plus".into(),
+        };
+        assert_eq!(serde_json::from_str::<Stored>(RELEASED).unwrap(), stored);
+        let written = serde_json::to_string_pretty(&stored.on_disk()).unwrap();
+        assert_eq!(written, RELEASED);
+        assert_eq!(serde_json::from_str::<Stored>(&written).unwrap(), stored);
+    }
 
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;

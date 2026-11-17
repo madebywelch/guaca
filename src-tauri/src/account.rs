@@ -123,16 +123,28 @@ struct Stored {
     origin: String,
 }
 
+#[derive(Serialize)]
+struct OnDisk<'a> {
+    access_token: &'a str,
+    refresh_token: Option<&'a str>,
+    expires_at: Option<i64>,
+    email: &'a str,
+    token_endpoint: &'a str,
+    origin: &'a str,
+}
+
 impl Stored {
-    fn on_disk(&self) -> serde_json::Value {
-        serde_json::json!({
-            "access_token": self.access_token.expose(),
-            "refresh_token": self.refresh_token.as_ref().map(Secret::expose),
-            "expires_at": self.expires_at,
-            "email": self.email,
-            "token_endpoint": self.token_endpoint,
-            "origin": self.origin,
-        })
+    fn on_disk(&self) -> OnDisk<'_> {
+        let Stored { access_token, refresh_token, expires_at, email, token_endpoint, origin } =
+            self;
+        OnDisk {
+            access_token: access_token.expose(),
+            refresh_token: refresh_token.as_ref().map(Secret::expose),
+            expires_at: *expires_at,
+            email,
+            token_endpoint,
+            origin,
+        }
     }
 
     fn expiring(&self) -> bool {
@@ -733,6 +745,47 @@ mod tests {
     }
     use super::*;
 
+    const RELEASED: &str = r#"{
+  "access_token": "access-1",
+  "refresh_token": "refresh-1",
+  "expires_at": 1767225600000,
+  "email": "ada@example.com",
+  "token_endpoint": "https://guaca.bot/api/auth/oauth2/token",
+  "origin": "https://guaca.bot"
+}"#;
+
+    const RELEASED_UNSET: &str = r#"{
+  "access_token": "access-1",
+  "refresh_token": null,
+  "expires_at": null,
+  "email": "ada@example.com",
+  "token_endpoint": "https://guaca.bot/api/auth/oauth2/token",
+  "origin": "https://guaca.bot"
+}"#;
+
+    fn released_sign_in() -> Stored {
+        Stored {
+            access_token: Secret::new("access-1"),
+            refresh_token: Some(Secret::new("refresh-1")),
+            expires_at: Some(1767225600000),
+            email: "ada@example.com".into(),
+            token_endpoint: "https://guaca.bot/api/auth/oauth2/token".into(),
+            origin: "https://guaca.bot".into(),
+        }
+    }
+
+    #[test]
+    fn a_sign_in_file_is_read_and_written_byte_for_byte_as_released() {
+        let set = released_sign_in();
+        let unset = Stored { refresh_token: None, expires_at: None, ..released_sign_in() };
+        for (bytes, stored) in [(RELEASED, set), (RELEASED_UNSET, unset)] {
+            assert_eq!(serde_json::from_str::<Stored>(bytes).unwrap(), stored);
+            let written = serde_json::to_string_pretty(&stored.on_disk()).unwrap();
+            assert_eq!(written, bytes);
+            assert_eq!(serde_json::from_str::<Stored>(&written).unwrap(), stored);
+        }
+    }
+
     fn account(origin: &str) -> Account {
         let dir = std::env::temp_dir().join(format!("guaca-account-{}", uuid::Uuid::new_v4()));
         Account::open_at(dir.join("account.json"), origin)
@@ -776,7 +829,7 @@ mod tests {
             token_endpoint: format!("{origin}/api/auth/oauth2/token"),
             origin: origin.to_string(),
         };
-        fs::write(&path, stored.on_disk().to_string()).unwrap();
+        fs::write(&path, serde_json::to_string(&stored.on_disk()).unwrap()).unwrap();
         path
     }
 
