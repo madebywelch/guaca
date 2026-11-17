@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { anApproval } from "../test-fixtures";
 import { expectRestart, forgetRestart } from "./link";
 import type { AgentCard, Envelope, UiEvent } from "./types";
 
@@ -106,6 +107,7 @@ const AGENTS: AgentCard[] = [
 
 function reset(messages: Record<string, Envelope[] | undefined> = {}) {
   useStore.setState({
+    ...useStore.getInitialState(),
     agents: AGENTS,
     activity: {},
     lastActive: {},
@@ -135,6 +137,14 @@ const apply = (event: UiEvent) => useStore.getState().applyEvent(event);
 beforeEach(() => {
   reset();
   forgetRestart();
+});
+
+describe("the reset between tests", () => {
+  it("leaves no slice behind from the test before", () => {
+    useStore.setState({ pending: [anApproval({ agentId: "chef" })] });
+    reset();
+    expect(useStore.getState().pending).toEqual(useStore.getInitialState().pending);
+  });
 });
 
 describe("the line to the host", () => {
