@@ -37,9 +37,18 @@ AMBER = token(TOKENS, "attention")
 
 CONTENT = 824 / 1024
 
-BOX = 64.0
-CENTER = 32.0
-RADIUS = 20.0
+def form() -> dict[str, float]:
+    ts = (ROOT / "src" / "avatars" / "form.ts").read_text()
+    block = re.search(r"^export const FORM = \{\n(.*?)^\}", ts, re.M | re.S)
+    if block is None:
+        raise SystemExit("src/avatars/form.ts has no FORM to read the icon's box from")
+    return {name: float(value) for name, value in re.findall(r"^\s*(\w+): ([0-9.]+),$", block.group(1), re.M)}
+
+
+FORM = form()
+BOX = FORM["box"]
+CENTER = FORM["center"]
+RADIUS = FORM["radius"]
 
 CORNER_N = 5.0
 
