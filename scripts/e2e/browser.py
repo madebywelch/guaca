@@ -87,7 +87,8 @@ class Browser:
             args.insert(1, f"--proxy-server={proxy}")
         if os.geteuid() == 0:
             args.insert(1, "--no-sandbox")
-        with open(profile.parent / "chromium.log", "ab") as log:
+        self.log = profile.parent / "chromium.log"
+        with open(self.log, "ab") as log:
             self.proc = subprocess.Popen(
                 args,
                 stdin=subprocess.DEVNULL,
@@ -143,12 +144,14 @@ class Browser:
         message: dict[str, Any] = {"id": ident, "method": method, "params": params or {}}
         if session and self.session:
             message["sessionId"] = self.session
+        if self.proc.poll() is not None:
+            raise BrowserError(f"{method}: {self.why_gone()}")
         os.write(self._out, json.dumps(message).encode() + b"\0")
         deadline = time.monotonic() + timeout
         with self._cond:
             while ident not in self._answers:
                 if -1 in self._answers:
-                    raise BrowserError(f"{method}: the browser went away")
+                    raise BrowserError(f"{method}: {self.why_gone()}")
                 left = deadline - time.monotonic()
                 if left <= 0:
                     raise BrowserError(f"{method}: no answer within {timeout:g}s")
@@ -157,6 +160,14 @@ class Browser:
         if "error" in answer:
             raise BrowserError(f"{method}: {answer['error'].get('message')}")
         return answer.get("result", {})
+
+    def why_gone(self) -> str:
+        try:
+            code = self.proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            code = None
+        said = self.log.read_text(errors="replace").strip().splitlines()[-5:] if self.log.exists() else []
+        return f"the browser went away (exit {code}): " + (" | ".join(said) or "it said nothing")
 
     def open(self, url: str) -> None:
         target = self.send("Target.createTarget", {"url": "about:blank"}, session=False)["targetId"]

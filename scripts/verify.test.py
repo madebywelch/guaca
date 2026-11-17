@@ -7,7 +7,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from e2e.browser import split_frames
+from e2e.browser import Browser, BrowserError, split_frames
 from e2e.scenarios import SCENARIOS
 from e2e.world import (UNSCRIPTED, Call, Egress, Failed, Model, call, held, redact, refuse, say, stream,
                        until)
@@ -34,6 +34,18 @@ class Pipe(unittest.TestCase):
         self.assertEqual(whole, [b'{"id":1}'])
         whole, rest = split_frames(rest + b':2}\0')
         self.assertEqual((whole, rest), ([b'{"id":2}'], b""))
+
+    def test_a_browser_that_dies_at_launch_says_why_and_never_breaks_the_pipe(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            binary = Path(temp) / "chromium"
+            binary.write_text("#!/bin/sh\necho 'No usable sandbox!' >&2\nexit 133\n")
+            binary.chmod(0o755)
+            browser = Browser(Path(temp) / "run" / "profile", binary=str(binary))
+            with self.assertRaisesRegex(BrowserError, r"exit 133.*No usable sandbox"):
+                browser.open("about:blank")
+            with self.assertRaisesRegex(BrowserError, "No usable sandbox"):
+                browser.send("Page.captureScreenshot")
+            browser.close()
 
 
 class Reading(unittest.TestCase):
