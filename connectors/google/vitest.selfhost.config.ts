@@ -4,11 +4,12 @@ const migrations = await readD1Migrations("./migrations");
 
 export default defineWorkersConfig({
   test: {
-    include: ["worker/selfhost.itest.ts"],
+    include: ["worker/*.itest.ts"],
     poolOptions: {
       workers: {
         wrangler: { configPath: "./wrangler.selfhost.jsonc" },
         miniflare: {
+          d1Databases: { PREVIOUS_DB: { id: "previous" } },
           bindings: {
             MIGRATIONS: migrations,
             BETTER_AUTH_URL: "http://localhost:8787",

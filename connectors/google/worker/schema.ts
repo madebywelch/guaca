@@ -48,6 +48,7 @@ export const account = sqliteTable(
     password: text("password"),
     createdAt: timestamp("createdAt").notNull(),
     updatedAt: timestamp("updatedAt").notNull(),
+    label: text("label"),
   },
   (table) => [
     uniqueIndex("account_issuer_accountId_idx").on(table.issuer, table.accountId),

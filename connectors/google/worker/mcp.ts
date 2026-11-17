@@ -27,11 +27,10 @@ export interface Caller {
 
 async function available(
   env: Env,
-  auth: Auth,
   caller: Caller,
 ): Promise<{ tool: Tool; providerId: string; accountId: string }[]> {
   const providers = configuredProviders(env as unknown as Record<string, unknown>);
-  const all = await readConnections(env, auth, caller.userId, providers);
+  const all = await readConnections(env, caller.userId, providers);
 
   const chosen = caller.connection
     ? all.filter((connection) => connection.id === caller.connection)
@@ -93,7 +92,7 @@ export async function handle(
       return new Response(null, { status: 202 });
 
     case "tools/list": {
-      const tools = await available(env, auth, caller);
+      const tools = await available(env, caller);
       return result(id, {
         tools: tools.map(({ tool }) => ({
           name: tool.name,
@@ -110,7 +109,7 @@ export async function handle(
           ? (body.params.arguments as Record<string, unknown>)
           : {};
 
-      const tools = await available(env, auth, caller);
+      const tools = await available(env, caller);
       const found = tools.find((entry) => entry.tool.name === name);
       if (!found) {
         return result(id, {

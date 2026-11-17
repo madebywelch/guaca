@@ -1,9 +1,10 @@
 import { oauthProvider } from "@better-auth/oauth-provider";
-import { betterAuth } from "better-auth";
+import { type BetterAuthOptions, betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { emailOTP } from "better-auth/plugins";
 import { drizzle } from "drizzle-orm/d1";
 
+import { labelFromIdToken } from "./connections";
 import { PROVIDERS } from "./connectors";
 import { CODE_TTL_MINUTES, sendSignInCode } from "./email";
 import { origin } from "./origin";
@@ -32,7 +33,10 @@ export const ACCOUNT_OPTIONS = {
     trustedProviders: ["google", "github"],
     allowDifferentEmails: true,
   },
-};
+  additionalFields: {
+    label: { type: "string", required: false, input: false },
+  },
+} satisfies BetterAuthOptions["account"];
 
 export const DISABLED_PATHS = [
   "/email-otp/send-verification-otp",
@@ -172,6 +176,13 @@ function build(env: Env) {
 
     account: ACCOUNT_OPTIONS,
 
+    databaseHooks: {
+      account: {
+        create: { before: async (account) => ({ data: withoutIdToken(account) }) },
+        update: { before: async (account) => ({ data: withoutIdToken(account) }) },
+      },
+    },
+
     session: { expiresIn: SESSION_TTL_DAYS * 24 * 60 * 60 },
 
     emailAndPassword: { enabled: false },
@@ -182,6 +193,11 @@ function build(env: Env) {
 
     plugins: [...authPlugins(env)],
   });
+}
+
+function withoutIdToken(account: { idToken?: string | null }) {
+  const label = account.idToken ? labelFromIdToken(account.idToken) : undefined;
+  return label ? { idToken: null, label } : { idToken: null };
 }
 
 function socialProviders(env: Env) {
