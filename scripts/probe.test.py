@@ -1,4 +1,6 @@
 import json
+import math
+import re
 import socket
 import subprocess
 import tempfile
@@ -605,6 +607,29 @@ class SummaryTests(unittest.TestCase):
         record.deferred = True
         self.assertEqual(record.result()["outcome"], "not run")
         self.assertFalse(record.result()["pass"])
+
+
+class SettingsCopyTests(unittest.TestCase):
+    dialog = (probe.ROOT / "src/components/SettingsDialog.tsx").read_text()
+
+    def test_the_pane_lines_are_every_line_the_dialog_can_show(self):
+        block = self.dialog.split("const MAC_ACCESS", 1)[1].split("};", 1)[0]
+        self.assertEqual(set(probe.PANE), set(re.findall(r"^  (\w+):", block, re.M)))
+        for line in probe.PANE.values():
+            self.assertIn(f'"{line}"', block)
+
+    def test_the_test_banner_is_the_one_the_dialog_sends(self):
+        self.assertIn(f'"{probe.TEST_BODY}"', self.dialog)
+
+
+class PresenceWindowTests(unittest.TestCase):
+    def test_a_window_that_stays_says_so_before_the_scaled_away_window_ends(self):
+        view = (probe.ROOT / "src/lib/view.ts").read_text()
+        heartbeat = int(re.search(r"^export const HEARTBEAT_MS = ([\d_]+);$", view, re.M).group(1).replace("_", ""))
+        rust = (probe.ROOT / "src-tauri/src/domain/view.rs").read_text()
+        away = re.search(r"^pub const AWAY_AFTER_MS: i64 = ([\d *]+);$", rust, re.M).group(1)
+        scaled_away = math.prod(int(n) for n in away.split("*")) * probe.PRESENCE_MINUTE_MS // 60_000
+        self.assertGreater(scaled_away, heartbeat)
 
 
 if __name__ == "__main__":

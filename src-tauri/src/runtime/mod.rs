@@ -7,7 +7,7 @@ mod outbox;
 pub mod prompt;
 mod watch;
 
-pub use drain::Drained;
+pub use drain::{Drained, PickedUp};
 use watch::Watch;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -257,7 +257,8 @@ const UNBACKED_PROMISE: &str =
 
 const CALL_ATTEMPTS: usize = 3;
 
-const CALL_BACKOFF: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(3)];
+const CALL_BACKOFF: [Duration; CALL_ATTEMPTS - 1] =
+    [Duration::from_secs(1), Duration::from_secs(3)];
 
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(20);
 
@@ -663,6 +664,14 @@ struct OnMachine<'a> {
 impl Drop for OnMachine<'_> {
     fn drop(&mut self) {
         self.runtime.inner.on_machine.lock().remove(&self.id);
+    }
+}
+
+pub struct Started(usize);
+
+impl Started {
+    pub fn agents(&self) -> usize {
+        self.0
     }
 }
 
@@ -1212,14 +1221,14 @@ impl Runtime {
         }
     }
 
-    pub fn start_all(&self) -> Result<usize, RuntimeError> {
+    pub fn start_all(&self) -> Result<Started, RuntimeError> {
         let agents = self.inner.store.list_agents()?;
         let mut started = 0;
         for card in agents.iter().filter(|c| c.lifecycle != Lifecycle::Terminated) {
             self.start_agent(card.id);
             started += 1;
         }
-        Ok(started)
+        Ok(Started(started))
     }
 
     pub fn start_agent(&self, id: AgentId) {
@@ -1941,7 +1950,7 @@ impl Runtime {
         Ok(delivery)
     }
 
-    pub fn start_scheduler(&self) {
+    pub fn start_scheduler(&self, _: PickedUp) {
         let runtime = self.clone();
         self.inner.handle.spawn(async move {
             loop {
@@ -3349,7 +3358,7 @@ impl Runtime {
                     LlmError::RateLimited { retry_after_secs: Some(secs), .. } => {
                         Duration::from_secs(*secs).min(MAX_RETRY_AFTER)
                     }
-                    _ => CALL_BACKOFF[(attempt - 1).min(CALL_BACKOFF.len() - 1)],
+                    _ => CALL_BACKOFF[attempt - 1],
                 };
                 tracing::warn!(
                     attempt,
@@ -7633,13 +7642,17 @@ mod tests {
             cause: None,
             created_at: now_ms(),
         };
-        runtime.pick_up(crate::db::Recovered {
-            resumed: vec![crate::db::PutDown { envelope, records: vec![], absorbed: vec![] }],
-            carried: vec![],
-            steps: HashMap::from([(run, 7)]),
-            guards: HashMap::new(),
-            interrupted: 0,
-        });
+        let started = runtime.start_all().unwrap();
+        runtime.pick_up(
+            &started,
+            crate::db::Recovered {
+                resumed: vec![crate::db::PutDown { envelope, records: vec![], absorbed: vec![] }],
+                carried: vec![],
+                steps: HashMap::from([(run, 7)]),
+                guards: HashMap::new(),
+                interrupted: 0,
+            },
+        );
         std::thread::sleep(Duration::from_millis(10));
         let mut guard = runtime.inner.guard.lock();
         for _ in 0..300 {

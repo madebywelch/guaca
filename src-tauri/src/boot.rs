@@ -99,10 +99,7 @@ pub async fn open(
     runtime.hold_workspace_lease(lease);
 
     let started =
-        runtime.start_all().map_err(|err| format!("could not start the agents: {err}"))?;
-    runtime.pick_up(recovered);
-    runtime.start_dispatcher();
-    runtime.start_scheduler();
+        runtime.resume(recovered).map_err(|err| format!("could not start the agents: {err}"))?;
     runtime.start_signin_sweep();
     runtime.start_compost();
 
@@ -204,6 +201,18 @@ pub fn account_store(path: PathBuf) -> Account {
 mod tests {
     use super::*;
     use crate::db::RunLock;
+
+    #[test]
+    fn the_native_client_builds_no_runtime() {
+        let client = include_str!("app.rs");
+        for reach in ["Runtime::new", "Runtime::with_handle", "boot::open", "start_all"] {
+            assert!(
+                !client.contains(reach),
+                "app.rs names {reach}, but agents run only in guacad: the window asks the host \
+                 through its commands instead"
+            );
+        }
+    }
 
     #[test]
     fn a_server_keeps_both_directories_under_one_root() {

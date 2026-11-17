@@ -5,6 +5,14 @@ export type Look = "up" | "down" | null;
 
 export type Gesture = "send" | "receive" | null;
 
+export const KNOCK: Record<
+  Exclude<Gesture, null>,
+  { amp: number; hz: number; decay: number; life: number }
+> = {
+  send: { amp: 0.26, hz: 1.5, decay: 0.28, life: 0.9 },
+  receive: { amp: 0.3, hz: 2.2, decay: 0.3, life: 0.8 },
+};
+
 export interface Frame {
   lump: Lump;
   t: number;

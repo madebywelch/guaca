@@ -6,7 +6,7 @@ import { gaitOf, join } from "../../src/avatars/clock";
 import { prefersReducedMotion } from "../../src/lib/motion";
 import { AIM, gazeAt, settle } from "../../src/avatars/eyes";
 import { FORM, type Lump, type Point } from "../../src/avatars/form";
-import type { Gesture, Paint } from "../../src/avatars/frame";
+import { type Gesture, KNOCK, type Paint } from "../../src/avatars/frame";
 import { MOODS, MORPH, type Mood } from "../../src/avatars/moods";
 import { SILHOUETTES } from "../../src/avatars/silhouette";
 
@@ -21,11 +21,6 @@ export interface Cue {
 }
 
 export const REST_CUE: Cue = { mood: "idle", look: null, gesture: null, shown: true };
-
-const KNOCK = {
-  send: { amp: 0.26, hz: 1.5, decay: 0.28, life: 0.9 },
-  receive: { amp: 0.3, hz: 2.2, decay: 0.3, life: 0.8 },
-};
 
 const REACH = { across: 0.38, up: AIM.up, down: AIM.down };
 
