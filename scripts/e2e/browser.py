@@ -210,6 +210,21 @@ class Browser:
                 pass
 
 
+    def answer(self, pattern: str, body: Callable[[], Any]) -> None:
+        def paused(message: dict) -> None:
+            if message.get("method") != "Fetch.requestPaused":
+                return
+            fulfill = {
+                "requestId": message["params"]["requestId"],
+                "responseCode": 200,
+                "responseHeaders": [{"name": "content-type", "value": "application/json"}],
+                "body": base64.b64encode(json.dumps(body()).encode()).decode(),
+            }
+            threading.Thread(target=self.send, args=("Fetch.fulfillRequest", fulfill), daemon=True).start()
+
+        self.listen(paused)
+        self.send("Fetch.enable", {"patterns": [{"urlPattern": pattern, "requestStage": "Request"}]})
+
     def evaluate(self, expression: str) -> Any:
         result = self.send("Runtime.evaluate", {"expression": expression, "returnByValue": True})
         if "exceptionDetails" in result:

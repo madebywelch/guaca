@@ -109,3 +109,13 @@ describe("self-hosted handoff", () => {
     }
   });
 });
+
+describe("authorization server metadata under the issuer", () => {
+  it.each(["openid-configuration", "oauth-authorization-server"])("answers %s with the corrected document", async (name) => {
+    const response = await SELF.fetch(`${origin}/api/auth/.well-known/${name}`);
+    expect(response.status).toBe(200);
+    const body = await response.json() as Record<string, unknown>;
+    expect(body).not.toHaveProperty("end_session_endpoint");
+    expect(body.token_endpoint_auth_methods_supported).toContain("none");
+  });
+});

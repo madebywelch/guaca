@@ -4,6 +4,7 @@ import {
   crewsWith,
   dayLabel,
   daysIn,
+  fieldDate,
   isPast,
   monthOf,
   openingWindow,
@@ -36,13 +37,6 @@ interface Editing {
   minutes: string;
   place: string;
   detail: string;
-}
-
-function fieldDate(occasion: Occasion): string {
-  const when = new Date(occasion.startsAt);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const day = `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}`;
-  return occasion.allDay ? day : `${day} ${pad(when.getHours())}:${pad(when.getMinutes())}`;
 }
 
 function monthLabel(window: Window): string {

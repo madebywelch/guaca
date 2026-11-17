@@ -1,0 +1,822 @@
+[
+  {
+    "input": {
+      "group": {
+        "provider": null,
+        "apiKeySet": false
+      },
+      "workspace": {
+        "provider": "compatible",
+        "apiKeySet": false
+      }
+    },
+    "expected": {
+      "provider": "compatible",
+      "keyed": false
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": null,
+        "apiKeySet": false
+      },
+      "workspace": {
+        "provider": "compatible",
+        "apiKeySet": true
+      }
+    },
+    "expected": {
+      "provider": "compatible",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": null,
+        "apiKeySet": false
+      },
+      "workspace": {
+        "provider": "chatgpt",
+        "apiKeySet": false
+      }
+    },
+    "expected": {
+      "provider": "chatgpt",
+      "keyed": false
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": null,
+        "apiKeySet": false
+      },
+      "workspace": {
+        "provider": "chatgpt",
+        "apiKeySet": true
+      }
+    },
+    "expected": {
+      "provider": "chatgpt",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": null,
+        "apiKeySet": false
+      },
+      "workspace": {
+        "provider": "claude",
+        "apiKeySet": false
+      }
+    },
+    "expected": {
+      "provider": "claude",
+      "keyed": false
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": null,
+        "apiKeySet": false
+      },
+      "workspace": {
+        "provider": "claude",
+        "apiKeySet": true
+      }
+    },
+    "expected": {
+      "provider": "claude",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": null,
+        "apiKeySet": true
+      },
+      "workspace": {
+        "provider": "compatible",
+        "apiKeySet": false
+      }
+    },
+    "expected": {
+      "provider": "compatible",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": null,
+        "apiKeySet": true
+      },
+      "workspace": {
+        "provider": "compatible",
+        "apiKeySet": true
+      }
+    },
+    "expected": {
+      "provider": "compatible",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": null,
+        "apiKeySet": true
+      },
+      "workspace": {
+        "provider": "chatgpt",
+        "apiKeySet": false
+      }
+    },
+    "expected": {
+      "provider": "chatgpt",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": null,
+        "apiKeySet": true
+      },
+      "workspace": {
+        "provider": "chatgpt",
+        "apiKeySet": true
+      }
+    },
+    "expected": {
+      "provider": "chatgpt",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": null,
+        "apiKeySet": true
+      },
+      "workspace": {
+        "provider": "claude",
+        "apiKeySet": false
+      }
+    },
+    "expected": {
+      "provider": "claude",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": null,
+        "apiKeySet": true
+      },
+      "workspace": {
+        "provider": "claude",
+        "apiKeySet": true
+      }
+    },
+    "expected": {
+      "provider": "claude",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "compatible",
+        "apiKeySet": false
+      },
+      "workspace": {
+        "provider": "compatible",
+        "apiKeySet": false
+      }
+    },
+    "expected": {
+      "provider": "compatible",
+      "keyed": false
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "compatible",
+        "apiKeySet": false
+      },
+      "workspace": {
+        "provider": "compatible",
+        "apiKeySet": true
+      }
+    },
+    "expected": {
+      "provider": "compatible",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "compatible",
+        "apiKeySet": false
+      },
+      "workspace": {
+        "provider": "chatgpt",
+        "apiKeySet": false
+      }
+    },
+    "expected": {
+      "provider": "compatible",
+      "keyed": false
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "compatible",
+        "apiKeySet": false
+      },
+      "workspace": {
+        "provider": "chatgpt",
+        "apiKeySet": true
+      }
+    },
+    "expected": {
+      "provider": "compatible",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "compatible",
+        "apiKeySet": false
+      },
+      "workspace": {
+        "provider": "claude",
+        "apiKeySet": false
+      }
+    },
+    "expected": {
+      "provider": "compatible",
+      "keyed": false
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "compatible",
+        "apiKeySet": false
+      },
+      "workspace": {
+        "provider": "claude",
+        "apiKeySet": true
+      }
+    },
+    "expected": {
+      "provider": "compatible",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "compatible",
+        "apiKeySet": true
+      },
+      "workspace": {
+        "provider": "compatible",
+        "apiKeySet": false
+      }
+    },
+    "expected": {
+      "provider": "compatible",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "compatible",
+        "apiKeySet": true
+      },
+      "workspace": {
+        "provider": "compatible",
+        "apiKeySet": true
+      }
+    },
+    "expected": {
+      "provider": "compatible",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "compatible",
+        "apiKeySet": true
+      },
+      "workspace": {
+        "provider": "chatgpt",
+        "apiKeySet": false
+      }
+    },
+    "expected": {
+      "provider": "compatible",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "compatible",
+        "apiKeySet": true
+      },
+      "workspace": {
+        "provider": "chatgpt",
+        "apiKeySet": true
+      }
+    },
+    "expected": {
+      "provider": "compatible",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "compatible",
+        "apiKeySet": true
+      },
+      "workspace": {
+        "provider": "claude",
+        "apiKeySet": false
+      }
+    },
+    "expected": {
+      "provider": "compatible",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "compatible",
+        "apiKeySet": true
+      },
+      "workspace": {
+        "provider": "claude",
+        "apiKeySet": true
+      }
+    },
+    "expected": {
+      "provider": "compatible",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "chatgpt",
+        "apiKeySet": false
+      },
+      "workspace": {
+        "provider": "compatible",
+        "apiKeySet": false
+      }
+    },
+    "expected": {
+      "provider": "chatgpt",
+      "keyed": false
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "chatgpt",
+        "apiKeySet": false
+      },
+      "workspace": {
+        "provider": "compatible",
+        "apiKeySet": true
+      }
+    },
+    "expected": {
+      "provider": "chatgpt",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "chatgpt",
+        "apiKeySet": false
+      },
+      "workspace": {
+        "provider": "chatgpt",
+        "apiKeySet": false
+      }
+    },
+    "expected": {
+      "provider": "chatgpt",
+      "keyed": false
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "chatgpt",
+        "apiKeySet": false
+      },
+      "workspace": {
+        "provider": "chatgpt",
+        "apiKeySet": true
+      }
+    },
+    "expected": {
+      "provider": "chatgpt",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "chatgpt",
+        "apiKeySet": false
+      },
+      "workspace": {
+        "provider": "claude",
+        "apiKeySet": false
+      }
+    },
+    "expected": {
+      "provider": "chatgpt",
+      "keyed": false
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "chatgpt",
+        "apiKeySet": false
+      },
+      "workspace": {
+        "provider": "claude",
+        "apiKeySet": true
+      }
+    },
+    "expected": {
+      "provider": "chatgpt",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "chatgpt",
+        "apiKeySet": true
+      },
+      "workspace": {
+        "provider": "compatible",
+        "apiKeySet": false
+      }
+    },
+    "expected": {
+      "provider": "chatgpt",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "chatgpt",
+        "apiKeySet": true
+      },
+      "workspace": {
+        "provider": "compatible",
+        "apiKeySet": true
+      }
+    },
+    "expected": {
+      "provider": "chatgpt",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "chatgpt",
+        "apiKeySet": true
+      },
+      "workspace": {
+        "provider": "chatgpt",
+        "apiKeySet": false
+      }
+    },
+    "expected": {
+      "provider": "chatgpt",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "chatgpt",
+        "apiKeySet": true
+      },
+      "workspace": {
+        "provider": "chatgpt",
+        "apiKeySet": true
+      }
+    },
+    "expected": {
+      "provider": "chatgpt",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "chatgpt",
+        "apiKeySet": true
+      },
+      "workspace": {
+        "provider": "claude",
+        "apiKeySet": false
+      }
+    },
+    "expected": {
+      "provider": "chatgpt",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "chatgpt",
+        "apiKeySet": true
+      },
+      "workspace": {
+        "provider": "claude",
+        "apiKeySet": true
+      }
+    },
+    "expected": {
+      "provider": "chatgpt",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "claude",
+        "apiKeySet": false
+      },
+      "workspace": {
+        "provider": "compatible",
+        "apiKeySet": false
+      }
+    },
+    "expected": {
+      "provider": "claude",
+      "keyed": false
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "claude",
+        "apiKeySet": false
+      },
+      "workspace": {
+        "provider": "compatible",
+        "apiKeySet": true
+      }
+    },
+    "expected": {
+      "provider": "claude",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "claude",
+        "apiKeySet": false
+      },
+      "workspace": {
+        "provider": "chatgpt",
+        "apiKeySet": false
+      }
+    },
+    "expected": {
+      "provider": "claude",
+      "keyed": false
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "claude",
+        "apiKeySet": false
+      },
+      "workspace": {
+        "provider": "chatgpt",
+        "apiKeySet": true
+      }
+    },
+    "expected": {
+      "provider": "claude",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "claude",
+        "apiKeySet": false
+      },
+      "workspace": {
+        "provider": "claude",
+        "apiKeySet": false
+      }
+    },
+    "expected": {
+      "provider": "claude",
+      "keyed": false
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "claude",
+        "apiKeySet": false
+      },
+      "workspace": {
+        "provider": "claude",
+        "apiKeySet": true
+      }
+    },
+    "expected": {
+      "provider": "claude",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "claude",
+        "apiKeySet": true
+      },
+      "workspace": {
+        "provider": "compatible",
+        "apiKeySet": false
+      }
+    },
+    "expected": {
+      "provider": "claude",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "claude",
+        "apiKeySet": true
+      },
+      "workspace": {
+        "provider": "compatible",
+        "apiKeySet": true
+      }
+    },
+    "expected": {
+      "provider": "claude",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "claude",
+        "apiKeySet": true
+      },
+      "workspace": {
+        "provider": "chatgpt",
+        "apiKeySet": false
+      }
+    },
+    "expected": {
+      "provider": "claude",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "claude",
+        "apiKeySet": true
+      },
+      "workspace": {
+        "provider": "chatgpt",
+        "apiKeySet": true
+      }
+    },
+    "expected": {
+      "provider": "claude",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "claude",
+        "apiKeySet": true
+      },
+      "workspace": {
+        "provider": "claude",
+        "apiKeySet": false
+      }
+    },
+    "expected": {
+      "provider": "claude",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": {
+        "provider": "claude",
+        "apiKeySet": true
+      },
+      "workspace": {
+        "provider": "claude",
+        "apiKeySet": true
+      }
+    },
+    "expected": {
+      "provider": "claude",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": null,
+      "workspace": {
+        "provider": "compatible",
+        "apiKeySet": false
+      }
+    },
+    "expected": {
+      "provider": "compatible",
+      "keyed": false
+    }
+  },
+  {
+    "input": {
+      "group": null,
+      "workspace": {
+        "provider": "compatible",
+        "apiKeySet": true
+      }
+    },
+    "expected": {
+      "provider": "compatible",
+      "keyed": true
+    }
+  },
+  {
+    "input": {
+      "group": null,
+      "workspace": {
+        "provider": "chatgpt",
+        "apiKeySet": false
+      }
+    },
+    "expected": {
+      "provider": "chatgpt",
+      "keyed": false
+    }
+  },
+  {
+    "input": {
+      "group": null,
+      "workspace": {
+        "provider": "chatgpt",
+        "apiKeySet": true
+      }
+    },
+    "expected": {
+      "provider": "chatgpt",
+      "keyed": true
+    }
+  }
+]

@@ -1,5 +1,3 @@
-process.env.TZ = "America/New_York";
-
 import { describe, expect, it } from "vitest";
 
 import { anAgent, anApproval, anOutcome } from "../test-fixtures";

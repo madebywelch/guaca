@@ -73,10 +73,19 @@ pub struct Push {
 
 pub const DELIVERY_HEADER: &str = "X-Guaca-Delivery";
 
-#[derive(Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Request {
-    pub headers: Vec<(&'static str, String)>,
+    headers: Vec<(&'static str, String)>,
+    authorization: Option<crate::secrets::Secret>,
     pub body: String,
+}
+
+impl Request {
+    pub fn headers(&self) -> impl Iterator<Item = (&'static str, &str)> {
+        let authorization =
+            self.authorization.as_ref().map(|value| ("Authorization", value.expose()));
+        self.headers.iter().map(|(name, value)| (*name, value.as_str())).chain(authorization)
+    }
 }
 
 pub fn priority(kind: Kind) -> u8 {
@@ -88,9 +97,7 @@ pub fn priority(kind: Kind) -> u8 {
 
 pub fn request(format: Format, push: &Push, token: Option<&str>, link: Option<&str>) -> Request {
     let mut headers = vec![(DELIVERY_HEADER, push.id.clone())];
-    if let Some(token) = token.map(str::trim).filter(|token| !token.is_empty()) {
-        headers.push(("Authorization", authorization(token)));
-    }
+    let authorization = token.map(str::trim).filter(|token| !token.is_empty()).map(authorization);
     let link = link.map(str::trim).filter(|link| !link.is_empty());
     match format {
         Format::Ntfy => {
@@ -101,7 +108,7 @@ pub fn request(format: Format, push: &Push, token: Option<&str>, link: Option<&s
             if let Some(link) = link {
                 headers.push(("Click", header_text(link)));
             }
-            Request { headers, body: push.body.clone() }
+            Request { headers, authorization, body: push.body.clone() }
         }
         Format::Json => {
             headers.push(("Content-Type", "application/json".into()));
@@ -116,16 +123,16 @@ pub fn request(format: Format, push: &Push, token: Option<&str>, link: Option<&s
                 "createdAt": push.created_at,
                 "link": link,
             });
-            Request { headers, body: body.to_string() }
+            Request { headers, authorization, body: body.to_string() }
         }
     }
 }
 
-fn authorization(token: &str) -> String {
+fn authorization(token: &str) -> crate::secrets::Secret {
     let scheme = token.split_once(' ').map(|(scheme, _)| scheme.to_ascii_lowercase());
     match scheme.as_deref() {
-        Some("bearer" | "basic") => token.to_string(),
-        _ => format!("Bearer {token}"),
+        Some("bearer" | "basic") => token.into(),
+        _ => format!("Bearer {token}").into(),
     }
 }
 
@@ -260,7 +267,7 @@ mod tests {
     }
 
     fn header<'a>(request: &'a Request, name: &str) -> Option<&'a str> {
-        request.headers.iter().find(|(key, _)| *key == name).map(|(_, value)| value.as_str())
+        request.headers().find(|(key, _)| *key == name).map(|(_, value)| value)
     }
 
     #[test]
@@ -328,6 +335,14 @@ mod tests {
         assert_eq!(header(&sent, "Authorization"), None, "no token, no header");
         assert_eq!(priority(Kind::Failure), 4);
         assert_eq!(priority(Kind::Reminder), 4);
+    }
+
+    #[test]
+    fn a_request_never_prints_its_token() {
+        for format in [Format::Ntfy, Format::Json] {
+            let sent = request(format, &push(Kind::Outcome), Some("tk_secret"), None);
+            assert!(!format!("{sent:?}").contains("tk_secret"), "{sent:?}");
+        }
     }
 
     #[test]

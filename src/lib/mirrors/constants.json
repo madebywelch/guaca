@@ -2,6 +2,7 @@
   "stdio": "stdio:",
   "notificationClicked": "notification-clicked",
   "maxAgentNameLength": 48,
+  "awayAfterMs": 120000,
   "catalog": [
     "neon",
     "cloudflare",

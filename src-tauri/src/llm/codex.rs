@@ -374,7 +374,7 @@ impl From<ResponseUsage> for Usage {
     }
 }
 
-pub async fn stream<F>(
+pub(super) async fn stream<F>(
     http: &reqwest::Client,
     subscription: &Subscription,
     cfg: &InferenceConfig,
