@@ -4181,6 +4181,60 @@ async fn update_and_cancel_still_work_at_the_cap() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_change_an_agent_makes_to_its_schedule_redraws_the_panel() {
+    let ids: Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+    let script_ids = ids.clone();
+    let stub = serve(move |body| {
+        let done = body["messages"]
+            .as_array()
+            .map(|m| m.iter().filter(|msg| msg["role"] == "tool").count())
+            .unwrap_or(0);
+        let ids = script_ids.lock().unwrap();
+        match done {
+            0 => Script::Book {
+                name: "Newsletter".into(),
+                what: "Draft the weekly newsletter from this week's notes.".into(),
+                repeat: "weekly".into(),
+            },
+            1 => Script::Retime { id: ids[0].clone(), repeat: "weekly".into() },
+            2 => Script::Plugin {
+                name: "schedule".into(),
+                arguments: serde_json::json!({ "action": "cancel", "id": ids[1] }),
+            },
+            _ => Script::Say("Added one, moved one and dropped one.".into()),
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Watcher"], GuardLimits::default());
+    let kept = keep_routines(&h, "Watcher", 2);
+    *ids.lock().unwrap() = kept.iter().map(|r| r.id.to_string()).collect();
+    let watcher = h.id("Watcher");
+    let checkpoint = h.sink.snapshot().len();
+
+    let asked = h
+        .runtime
+        .send_from_human(
+            watcher,
+            "Add the newsletter, make the first sweep weekly, drop the second.",
+        )
+        .unwrap();
+    h.settle(asked).await;
+
+    let told = last_tool_results(&stub);
+    assert!(told[0].starts_with("Scheduled: "), "{told:?}");
+    assert!(told[1].starts_with("Updated "), "{told:?}");
+    assert!(told[2].starts_with("Canceled "), "{told:?}");
+    let redrawn = h.sink.snapshot()[checkpoint..]
+        .iter()
+        .filter(|e| matches!(e, UiEvent::RoutinesChanged { agent_id } if *agent_id == watcher))
+        .count();
+    assert_eq!(
+        redrawn, 3,
+        "each write the agent made has to reach the panel beside its transcript"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_fired_one_off_and_a_cancelled_routine_do_not_count_toward_the_cap() {
     let stub = serve(|body| {
         if anyone_said(body, "every week") {
