@@ -1,6 +1,6 @@
 use rusqlite::{params, OptionalExtension, Row, TransactionBehavior};
 
-use super::{Store, StoreError};
+use super::{RunGuard, Store, StoreError};
 use crate::domain::approval::{ALLOW, GRANT_LIFETIME_MS};
 use crate::domain::decision::{
     next_briefing, next_reminder, DecisionRequest, DecisionStatus, WorkDecision,
@@ -262,8 +262,9 @@ fn deliver_in(
 }
 
 impl Store {
-    pub fn answer_decision(
+    pub fn answer_decision<T>(
         &self,
+        _runs: &RunGuard<'_, T>,
         id: DecisionId,
         answer: &str,
         resume: bool,
@@ -316,8 +317,9 @@ impl Store {
         Ok((result, message))
     }
 
-    pub fn retry_decision(
+    pub fn retry_decision<T>(
         &self,
+        _runs: &RunGuard<'_, T>,
         id: DecisionId,
         failed: &Envelope,
         now: i64,
@@ -487,7 +489,9 @@ mod tests {
     fn empty_answers_and_unanswered_completion_change_nothing() {
         let (_, s, a) = fixture();
         let d = make(&s, &a);
-        assert!(s.answer_decision(d.id, " ", false, None, d.created_at + 1).is_err());
+        assert!(s
+            .answer_decision(&RunLock::new(()).lock(), d.id, " ", false, None, d.created_at + 1)
+            .is_err());
         assert!(s
             .finish_decision(d.id, a.id, DecisionStatus::Completed, "sent", d.created_at + 1)
             .is_err());
@@ -498,7 +502,9 @@ mod tests {
         let (_, s, a) = fixture();
         let d = make(&s, &a);
         s.conn().unwrap().execute_batch("CREATE TRIGGER reject_delivery BEFORE INSERT ON pending_runs BEGIN SELECT RAISE(ABORT,'disk failure'); END;").unwrap();
-        assert!(s.answer_decision(d.id, "11", false, None, d.created_at + 1).is_err());
+        assert!(s
+            .answer_decision(&RunLock::new(()).lock(), d.id, "11", false, None, d.created_at + 1)
+            .is_err());
         assert_eq!(s.decisions(None).unwrap()[0].status, DecisionStatus::Pending);
         let messages: i64 =
             s.conn().unwrap().query_row("SELECT count(*) FROM messages", [], |r| r.get(0)).unwrap();
@@ -512,14 +518,29 @@ mod tests {
         let s = Store::open(&dir.path().join("test.db")).unwrap();
         s.expire_pending_approvals().unwrap();
         s.recover_decisions().unwrap();
-        let (answered, envelope) =
-            s.answer_decision(d.id, "11", false, None, d.created_at + 3 * 86400 * 1000).unwrap();
+        let (answered, envelope) = s
+            .answer_decision(
+                &RunLock::new(()).lock(),
+                d.id,
+                "11",
+                false,
+                None,
+                d.created_at + 3 * 86400 * 1000,
+            )
+            .unwrap();
         assert_eq!(answered.answer.as_deref(), Some("11"));
         assert_eq!(envelope.trust, Trust::System);
         assert_eq!(envelope.from, Participant::System);
         assert!(s.get_message(envelope.id).unwrap().is_some());
         assert!(s
-            .answer_decision(d.id, "10", false, None, d.created_at + 4 * 86400 * 1000)
+            .answer_decision(
+                &RunLock::new(()).lock(),
+                d.id,
+                "10",
+                false,
+                None,
+                d.created_at + 4 * 86400 * 1000
+            )
             .is_err());
         assert_eq!(s.decisions(None).unwrap()[0].answer.as_deref(), Some("11"));
     }
@@ -530,11 +551,15 @@ mod tests {
         let answered = |resumed| {
             vec![Part::Decision { id: d.id, request: request(), answer: "11".into(), resumed }]
         };
-        let (_, first) = s.answer_decision(d.id, " 11 ", false, None, d.created_at + 1).unwrap();
+        let (_, first) = s
+            .answer_decision(&RunLock::new(()).lock(), d.id, " 11 ", false, None, d.created_at + 1)
+            .unwrap();
         assert_eq!(first.parts, answered(false));
         s.start_deliveries(&[first.id], first.run_id).unwrap();
         s.recover_decisions().unwrap();
-        let (_, again) = s.answer_decision(d.id, "", true, None, d.created_at + 2).unwrap();
+        let (_, again) = s
+            .answer_decision(&RunLock::new(()).lock(), d.id, "", true, None, d.created_at + 2)
+            .unwrap();
         assert_eq!(again.parts, answered(true));
         assert_eq!(s.get_message(again.id).unwrap().unwrap().parts, answered(true));
     }
@@ -550,7 +575,8 @@ mod tests {
         assert_eq!(again.created_at, d.created_at);
         assert_eq!(again.snoozed_until, Some(d.created_at + 7 * 86400 * 1000));
         assert_eq!(again.remind_at, d.created_at + 7 * 86400 * 1000);
-        s.answer_decision(d.id, "11", false, None, d.created_at + 2).unwrap();
+        s.answer_decision(&RunLock::new(()).lock(), d.id, "11", false, None, d.created_at + 2)
+            .unwrap();
         let mut changed = request();
         changed.question = "Pay 100 or 200?".into();
         let frozen = s
@@ -569,7 +595,14 @@ mod tests {
             s.request_decision(a.id, a.group_id, &d.topic, changed, None, d.created_at).unwrap();
         assert!(revised.updated_at > d.updated_at);
         assert!(s
-            .answer_decision(d.id, "11", false, Some(d.updated_at), d.created_at + 2)
+            .answer_decision(
+                &RunLock::new(()).lock(),
+                d.id,
+                "11",
+                false,
+                Some(d.updated_at),
+                d.created_at + 2
+            )
             .is_err());
         assert_eq!(s.decisions(None).unwrap()[0].status, DecisionStatus::Pending);
     }
@@ -577,7 +610,8 @@ mod tests {
     fn rescanning_completed_work_does_not_reopen_it() {
         let (_, s, a) = fixture();
         let d = make(&s, &a);
-        s.answer_decision(d.id, "11", false, None, d.created_at + 1).unwrap();
+        s.answer_decision(&RunLock::new(()).lock(), d.id, "11", false, None, d.created_at + 1)
+            .unwrap();
         s.finish_decision(
             d.id,
             a.id,
@@ -607,7 +641,16 @@ mod tests {
             let store = s.clone();
             let id = rows[0].id;
             jobs.push(std::thread::spawn(move || {
-                store.answer_decision(id, "11", false, None, 1_700_000_000_001).is_ok()
+                store
+                    .answer_decision(
+                        &RunLock::new(()).lock(),
+                        id,
+                        "11",
+                        false,
+                        None,
+                        1_700_000_000_001,
+                    )
+                    .is_ok()
             }));
         }
         assert_eq!(jobs.into_iter().filter_map(|j| j.join().ok()).filter(|ok| *ok).count(), 1);
@@ -616,7 +659,8 @@ mod tests {
     fn one_agent_cannot_finish_anothers_decision() {
         let (_, s, a) = fixture();
         let d = make(&s, &a);
-        s.answer_decision(d.id, "11", false, None, d.created_at + 1).unwrap();
+        s.answer_decision(&RunLock::new(()).lock(), d.id, "11", false, None, d.created_at + 1)
+            .unwrap();
         assert!(s
             .finish_decision(
                 d.id,
@@ -632,10 +676,20 @@ mod tests {
     fn follow_through_a_drain_put_down_is_carried_on_rather_than_interrupted() {
         let (_, s, a) = fixture();
         let d = make(&s, &a);
-        let (_, delivery) = s.answer_decision(d.id, "11", false, None, d.created_at + 1).unwrap();
+        let (_, delivery) = s
+            .answer_decision(&RunLock::new(()).lock(), d.id, "11", false, None, d.created_at + 1)
+            .unwrap();
         let other = make_other(&s, &a);
-        let (_, started) =
-            s.answer_decision(other.id, "yes", false, None, d.created_at + 1).unwrap();
+        let (_, started) = s
+            .answer_decision(
+                &RunLock::new(()).lock(),
+                other.id,
+                "yes",
+                false,
+                None,
+                d.created_at + 1,
+            )
+            .unwrap();
         s.start_deliveries(&[started.id], started.run_id).unwrap();
 
         let state = crate::runtime::guard::RunState::new(Default::default());
@@ -667,17 +721,23 @@ mod tests {
     fn restart_keeps_answer_and_requires_explicit_resume_before_completion() {
         let (_, s, a) = fixture();
         let d = make(&s, &a);
-        let (_, delivery) = s.answer_decision(d.id, "11", false, None, d.created_at + 1).unwrap();
+        let (_, delivery) = s
+            .answer_decision(&RunLock::new(()).lock(), d.id, "11", false, None, d.created_at + 1)
+            .unwrap();
         s.start_deliveries(&[delivery.id], delivery.run_id).unwrap();
         assert_eq!(s.recover_decisions().unwrap(), 1);
         assert_eq!(s.recover_decisions().unwrap(), 0);
         assert!(s
             .finish_decision(d.id, a.id, DecisionStatus::Completed, "sent", d.created_at + 2)
             .is_err());
-        let (resumed, _) = s.answer_decision(d.id, "", true, None, d.created_at + 3).unwrap();
+        let (resumed, _) = s
+            .answer_decision(&RunLock::new(()).lock(), d.id, "", true, None, d.created_at + 3)
+            .unwrap();
         assert!(!resumed.interrupted);
         assert_eq!(resumed.answer.as_deref(), Some("11"));
-        assert!(s.answer_decision(d.id, "", true, None, d.created_at + 4).is_err());
+        assert!(s
+            .answer_decision(&RunLock::new(()).lock(), d.id, "", true, None, d.created_at + 4)
+            .is_err());
         let completed = s
             .finish_decision(
                 d.id,
@@ -694,7 +754,9 @@ mod tests {
     fn follow_through_that_settled_is_not_interrupted_and_can_be_completed() {
         let (_, s, a) = fixture();
         let d = make(&s, &a);
-        let (_, delivery) = s.answer_decision(d.id, "11", false, None, d.created_at + 1).unwrap();
+        let (_, delivery) = s
+            .answer_decision(&RunLock::new(()).lock(), d.id, "11", false, None, d.created_at + 1)
+            .unwrap();
         s.settle_run(delivery.run_id).unwrap();
         assert_eq!(s.recover_decisions().unwrap(), 0);
         s.finish_decision(d.id, a.id, DecisionStatus::Completed, "sent", d.created_at + 2).unwrap();
@@ -704,7 +766,9 @@ mod tests {
     fn read_after_recovery_a_cut_off_run_looks_finished() {
         let (_, s, a) = fixture();
         let d = make(&s, &a);
-        let (_, delivery) = s.answer_decision(d.id, "11", false, None, d.created_at + 1).unwrap();
+        let (_, delivery) = s
+            .answer_decision(&RunLock::new(()).lock(), d.id, "11", false, None, d.created_at + 1)
+            .unwrap();
         s.start_deliveries(&[delivery.id], delivery.run_id).unwrap();
         assert_eq!(s.recover().unwrap().interrupted, 1, "the run itself is reported");
         assert_eq!(s.recover_decisions().unwrap(), 0);
@@ -714,7 +778,9 @@ mod tests {
     fn an_answer_no_turn_had_started_is_delivered_again_and_not_interrupted() {
         let (_, s, a) = fixture();
         let d = make(&s, &a);
-        let (_, delivery) = s.answer_decision(d.id, "11", false, None, d.created_at + 1).unwrap();
+        let (_, delivery) = s
+            .answer_decision(&RunLock::new(()).lock(), d.id, "11", false, None, d.created_at + 1)
+            .unwrap();
         assert_eq!(s.recover_decisions().unwrap(), 0);
         let recovered = s.recover().unwrap();
         assert_eq!(recovered.interrupted, 0);
@@ -724,7 +790,8 @@ mod tests {
         assert!(!row.interrupted);
         assert_eq!(row.delivery_run, Some(delivery.run_id));
         assert!(
-            s.answer_decision(d.id, "", true, None, d.created_at + 2).is_err(),
+            s.answer_decision(&RunLock::new(()).lock(), d.id, "", true, None, d.created_at + 2)
+                .is_err(),
             "nothing to resume: the answer is on its way"
         );
 
@@ -739,17 +806,24 @@ mod tests {
     fn try_again_is_the_delivery_of_record_and_happens_once() {
         let (_, s, a) = fixture();
         let d = make(&s, &a);
-        let (_, first) = s.answer_decision(d.id, "11", false, None, d.created_at + 1).unwrap();
+        let (_, first) = s
+            .answer_decision(&RunLock::new(()).lock(), d.id, "11", false, None, d.created_at + 1)
+            .unwrap();
 
-        let (row, again) = s.retry_decision(d.id, &first, d.created_at + 2).unwrap();
+        let (row, again) =
+            s.retry_decision(&RunLock::new(()).lock(), d.id, &first, d.created_at + 2).unwrap();
         assert_eq!(again.parts, first.parts);
         assert_eq!(again.cause, Some(first.id));
         assert_eq!(row.delivery_run, Some(again.run_id));
-        assert!(s.retry_decision(d.id, &first, d.created_at + 3).is_err(), "delivered since");
+        assert!(
+            s.retry_decision(&RunLock::new(()).lock(), d.id, &first, d.created_at + 3).is_err(),
+            "delivered since"
+        );
         s.start_deliveries(&[again.id], again.run_id).unwrap();
 
         assert_eq!(s.recover_decisions().unwrap(), 1);
-        let (row, resumed) = s.retry_decision(d.id, &first, d.created_at + 4).unwrap();
+        let (row, resumed) =
+            s.retry_decision(&RunLock::new(()).lock(), d.id, &first, d.created_at + 4).unwrap();
         assert_eq!(
             resumed.parts,
             vec![Part::Decision {
@@ -761,11 +835,18 @@ mod tests {
         );
         assert_eq!(row.delivery_run, Some(resumed.run_id));
         assert!(!row.interrupted);
-        assert!(s.answer_decision(d.id, "", true, None, d.created_at + 5).is_err());
-        assert!(s.retry_decision(d.id, &again, d.created_at + 5).is_err());
+        assert!(s
+            .answer_decision(&RunLock::new(()).lock(), d.id, "", true, None, d.created_at + 5)
+            .is_err());
+        assert!(s
+            .retry_decision(&RunLock::new(()).lock(), d.id, &again, d.created_at + 5)
+            .is_err());
 
         s.finish_decision(d.id, a.id, DecisionStatus::Completed, "sent", d.created_at + 6).unwrap();
-        assert!(s.retry_decision(d.id, &resumed, d.created_at + 7).is_err(), "finished");
+        assert!(
+            s.retry_decision(&RunLock::new(()).lock(), d.id, &resumed, d.created_at + 7).is_err(),
+            "finished"
+        );
     }
 
     #[test]
@@ -782,7 +863,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(withdrawn.outcome.as_deref(), Some("Alex canceled."));
-        assert!(s.answer_decision(d.id, "11", false, None, d.created_at + 2).is_err());
+        assert!(s
+            .answer_decision(&RunLock::new(()).lock(), d.id, "11", false, None, d.created_at + 2)
+            .is_err());
         assert_eq!(s.decisions(None).unwrap().len(), 1);
     }
     #[test]
@@ -874,7 +957,9 @@ mod tests {
         );
         let filed = s.lapse_approval(asked.id, None, 1).unwrap().expect("filed");
         assert_eq!(filed.request.options, ["Northwind", "Contoso"]);
-        let (_, message) = s.answer_decision(filed.id, "Northwind", false, None, 2).unwrap();
+        let (_, message) = s
+            .answer_decision(&RunLock::new(()).lock(), filed.id, "Northwind", false, None, 2)
+            .unwrap();
         assert_eq!(
             message.parts.len(),
             1,
@@ -906,7 +991,9 @@ mod tests {
             s.lapse_approval(parked(&s, &a, permission()).id, Some("fp"), at).unwrap().unwrap();
         assert!(!s.take_grant(a.id, "fp", at).unwrap(), "nothing is granted until it is allowed");
 
-        let (_, message) = s.answer_decision(filed.id, "Allow", false, None, at).unwrap();
+        let (_, message) = s
+            .answer_decision(&RunLock::new(()).lock(), filed.id, "Allow", false, None, at)
+            .unwrap();
         let until = at + crate::domain::approval::GRANT_LIFETIME_MS;
         assert_eq!(
             message.parts.last(),
@@ -926,7 +1013,8 @@ mod tests {
         let (_, s, a) = fixture();
         let filed =
             s.lapse_approval(parked(&s, &a, permission()).id, Some("fp"), 1).unwrap().unwrap();
-        let (_, message) = s.answer_decision(filed.id, "Deny", false, None, 2).unwrap();
+        let (_, message) =
+            s.answer_decision(&RunLock::new(()).lock(), filed.id, "Deny", false, None, 2).unwrap();
         assert_eq!(message.parts.len(), 1);
         assert!(!s.take_grant(a.id, "fp", 3).unwrap());
     }

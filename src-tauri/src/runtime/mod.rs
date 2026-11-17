@@ -8411,7 +8411,14 @@ mod tests {
             .unwrap();
         let filed = store.lapse_approval(earlier.id, Some("granted"), now_ms()).unwrap().unwrap();
         store
-            .answer_decision(filed.id, crate::domain::approval::ALLOW, false, None, now_ms())
+            .answer_decision(
+                &RunLock::new(()).lock(),
+                filed.id,
+                crate::domain::approval::ALLOW,
+                false,
+                None,
+                now_ms(),
+            )
             .unwrap();
 
         let mut reading = Reading {

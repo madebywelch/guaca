@@ -203,6 +203,7 @@ pub fn account_store(path: PathBuf) -> Account {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::RunLock;
 
     #[test]
     fn a_server_keeps_both_directories_under_one_root() {
@@ -241,7 +242,7 @@ mod tests {
             };
             let filed =
                 store.request_decision(agent.id, agent.group_id, topic, request, None, 1).unwrap();
-            store.answer_decision(filed.id, "11", false, None, 2).unwrap()
+            store.answer_decision(&RunLock::new(()).lock(), filed.id, "11", false, None, 2).unwrap()
         };
         let (finished, delivery) = answered("finished");
         store.settle_run(delivery.run_id).unwrap();
