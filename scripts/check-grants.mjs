@@ -4,6 +4,7 @@ import { existsSync, lstatSync, readFileSync, writeFileSync, appendFileSync } fr
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { languageOf, lineEnd, lineStarts, scanFiles } from "./grants/lex.mjs";
+import { fillEmptyPythonBodies, stripComments } from "./grants/strip.mjs";
 
 export const LEDGER = "grants.json";
 export const PROSE = /(\.(md|mdx|markdown|rst|adoc|asciidoc|txt|text|org|html?)|(^|\/)(LICENSE|COPYING|NOTICE)(-[^/]*)?)$/i;
@@ -623,6 +624,68 @@ export function grant(repo, target, words, date) {
   return entry;
 }
 
+export function sweep(repo, { only = [] } = {}) {
+  const ledgerText = readLedger(repo, null);
+  const ledger = ledgerText === null ? null : JSON.parse(ledgerText);
+  const upstream = upstreamOf(ledger);
+  const migrations = new Set(ledger?.migrations?.files ?? []);
+  const wanted = (path) => only.length === 0 || only.some((prefix) => path === prefix || path.startsWith(prefix.replace(/\/?$/, "/")));
+  const candidates = listFiles(repo, null).filter((path) => wanted(path) && !upstream(path) && !PROSE.test(path) && !migrations.has(path));
+  const links = linksAmong(repo, null, candidates);
+  const texts = [];
+  for (const path of candidates) {
+    if (links.has(path)) continue;
+    const text = asText(readFileSync(join(repo, path)));
+    if (text !== null && classOf(path, text) === "code") texts.push({ path, text });
+  }
+  const scans = scanFiles(texts);
+  const available = new Map();
+  for (const grant of ledger?.grants ?? []) {
+    if (grant.kind !== "comment") continue;
+    const k = grant.path + "\u0000" + grant.sha256;
+    available.set(k, (available.get(k) ?? 0) + 1);
+  }
+  const removed = [];
+  const unreadable = [];
+  const changed = [];
+  for (const { path, text } of texts) {
+    const scan = scans.get(path);
+    if (scan.error) {
+      unreadable.push({ path, message: scan.error });
+      continue;
+    }
+    const units = unitsOf(path, text, scan).filter((unit) => {
+      if (unit.kind !== "comment") return false;
+      const k = unit.path + "\u0000" + unit.sha256;
+      const left = available.get(k) ?? 0;
+      if (left > 0) available.set(k, left - 1);
+      return left === 0;
+    });
+    if (units.length === 0) continue;
+    const result = stripComments(text, units, { dialect: languageOf(path, text).dialect });
+    writeFileSync(join(repo, path), scan.lang === "python" ? fillEmptyPythonBodies(result.text) : result.text);
+    changed.push(path);
+    removed.push(...result.removed.map((unit) => ({ path, lang: unit.lang, line: unit.line, endLine: unit.endLine, what: unit.what, raw: unit.raw })));
+  }
+  return { removed, unreadable, changed };
+}
+
+function formatChanged(repo, changed) {
+  for (const path of changed.filter((file) => file.endsWith(".rs"))) {
+    const full = join(repo, path);
+    let dir = join(full, "..");
+    while (!existsSync(join(dir, "Cargo.toml")) && dir !== repo) dir = join(dir, "..");
+    const manifest = join(dir, "Cargo.toml");
+    const edition = existsSync(manifest) ? /^edition\s*=\s*"(\d+)"/m.exec(readFileSync(manifest, "utf8"))?.[1] : undefined;
+    const formatted = execFileSync("rustfmt", [...(edition ? ["--edition", edition] : []), "--emit", "stdout"], { cwd: join(full, ".."), input: readFileSync(full), maxBuffer: 1 << 28 });
+    writeFileSync(full, formatted);
+  }
+  const biome = join(repo, "node_modules", ".bin", "biome");
+  if (existsSync(biome) && changed.length > 0) {
+    execFileSync(biome, ["format", "--write", "--no-errors-on-unmatched", ...changed], { cwd: repo, stdio: ["ignore", "ignore", "inherit"] });
+  }
+}
+
 function parseArgs(argv) {
   const options = { positional: [] };
   for (let i = 0; i < argv.length; i++) {
@@ -642,6 +705,18 @@ function main() {
     const entry = grant(repo, options.positional[1], options.words, date);
     console.log("recorded " + JSON.stringify(entry) + " in " + LEDGER + "; the gate prints it to whoever merges this change");
     return 0;
+  }
+  if (options.positional[0] === "strip") {
+    const result = sweep(repo, { only: options.positional.slice(1) });
+    if (options.record) {
+      const escape = (text) => text.replace(/\\/g, "\\\\").replace(/\t/g, "\\t").replace(/\n/g, "\\n");
+      const rows = result.removed.map((unit) => [unit.path, unit.line, unit.endLine, unit.lang, unit.what, escape(unit.raw)].join("\t"));
+      writeFileSync(options.record, ["path\tline\tend_line\tlanguage\tkind\ttext", ...rows].join("\n") + "\n");
+    }
+    formatChanged(repo, result.changed);
+    for (const problem of result.unreadable) console.error(problem.path + "  could not be read: " + problem.message);
+    console.log("removed " + result.removed.length + " comments from " + result.changed.length + " files");
+    return result.unreadable.length > 0 ? 1 : 0;
   }
   const base = options.base ? { rev: git(repo, ["rev-parse", options.base]).trim(), label: options.base } : resolveBase(repo);
   const pushToMain = process.env.GITHUB_EVENT_NAME === "push" && process.env.GITHUB_REF === "refs/heads/main";
