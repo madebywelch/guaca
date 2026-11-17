@@ -132,6 +132,8 @@ const ATTENTION_ROWS: { key: keyof Attention; label: string; hint: string }[] = 
 
 const NOT_ACCEPTED = "Not sent. macOS did not accept the notification.";
 
+const TEST_NOTIFICATION = "This is what a notification looks like.";
+
 const MAC_ACCESS: Record<NotificationAccess, string> = {
   allowed: "macOS allows Guaca to show notifications.",
   notAsked:
@@ -1734,10 +1736,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                     className="btn"
                     onClick={async () => {
                       const { notifyOperator } = await import("../lib/ipc");
-                      const sent = await notifyOperator(
-                        "Guaca",
-                        "This is what a notification looks like.",
-                      );
+                      const sent = await notifyOperator("Guaca", TEST_NOTIFICATION);
                       const access = desktop
                         ? await api.notificationAccess().catch(() => null)
                         : null;

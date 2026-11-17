@@ -32,6 +32,25 @@ pub const HOST_ENV: &[&str] = &[
 ];
 const OWN_ENV: &[&str] = &["GUACA_PORT", "GUACA_VOLUME", "GUACA_CHANNEL"];
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Reason {
+    Refused,
+    Unanswered,
+}
+
+#[derive(Debug)]
+pub struct Failure {
+    pub reason: Reason,
+    pub message: String,
+}
+
+impl Failure {
+    pub fn unanswered(message: impl Into<String>) -> Self {
+        Self { reason: Reason::Unanswered, message: message.into() }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "ask", rename_all = "camelCase")]
 pub enum Request {
@@ -471,30 +490,33 @@ async fn answer(stream: tokio::net::UnixStream, updater: &Arc<Updater>) -> std::
 }
 
 #[cfg(unix)]
-pub async fn ask(socket: &Path, request: &Request) -> Result<Value, String> {
+pub async fn ask(socket: &Path, request: &Request) -> Result<Value, Failure> {
     let unreachable = |e: std::io::Error| {
-        format!("The updater on this box is not answering ({e}). Restart the guaca-updater container on the box, or reinstall it with deploy/box/install.sh.")
+        Failure::unanswered(format!("The updater on this box is not answering ({e}). Restart the guaca-updater container on the box, or reinstall it with deploy/box/install.sh."))
     };
+    let unreadable = || Failure::unanswered("The updater gave an answer the host cannot read.");
     let exchange = async {
         let mut stream = tokio::net::UnixStream::connect(socket).await.map_err(unreachable)?;
-        let line = serde_json::to_string(request).map_err(|e| e.to_string())?;
+        let line =
+            serde_json::to_string(request).map_err(|e| Failure::unanswered(e.to_string()))?;
         stream.write_all(format!("{line}\n").as_bytes()).await.map_err(unreachable)?;
         let mut answer = String::new();
         BufReader::new(stream.take(MOST_ANSWER))
             .read_line(&mut answer)
             .await
             .map_err(unreachable)?;
-        let value: Value = serde_json::from_str(&answer)
-            .map_err(|_| "The updater gave an answer the host cannot read.".to_string())?;
+        let value: Value = serde_json::from_str(&answer).map_err(|_| unreadable())?;
         match (value.get("ok"), value["err"].as_str()) {
             (Some(ok), _) => Ok(ok.clone()),
-            (None, Some(message)) => Err(message.to_string()),
-            (None, None) => Err("The updater gave an answer the host cannot read.".into()),
+            (None, Some(message)) => {
+                Err(Failure { reason: Reason::Refused, message: message.to_string() })
+            }
+            (None, None) => Err(unreadable()),
         }
     };
-    tokio::time::timeout(Duration::from_secs(30), exchange)
-        .await
-        .map_err(|_| "The updater on this box took too long to answer. Try again.".to_string())?
+    tokio::time::timeout(Duration::from_secs(30), exchange).await.map_err(|_| {
+        Failure::unanswered("The updater on this box took too long to answer. Try again.")
+    })?
 }
 
 #[cfg(all(test, unix))]
@@ -884,7 +906,8 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(refused.contains("review it again"), "{refused}");
+        assert_eq!(refused.reason, Reason::Refused);
+        assert!(refused.message.contains("review it again"), "{}", refused.message);
         tokio::time::pause();
         let mut silent = tokio::net::UnixStream::connect(&path).await.unwrap();
         let mut nothing = Vec::new();
@@ -893,7 +916,8 @@ mod tests {
         assert!(ask(&path, &Request::Status).await.is_ok());
         serving.abort();
         let gone = ask(&dir.path().join("nobody.sock"), &Request::Status).await.unwrap_err();
-        assert!(gone.contains("not answering"), "{gone}");
+        assert_eq!(gone.reason, Reason::Unanswered);
+        assert!(gone.message.contains("not answering"), "{}", gone.message);
     }
 
     #[tokio::test]

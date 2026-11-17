@@ -11,7 +11,7 @@ import { gaitOf, join, type Painter } from "./clock";
 import { DrawnArt } from "./DrawnArt";
 import { AIM, gazeAt, settle } from "./eyes";
 import { FORM, type Point } from "./form";
-import { AVATAR_PX, type Gesture, type Look, type Paint, type Size } from "./frame";
+import { AVATAR_PX, type Gesture, KNOCK, type Look, type Paint, type Size } from "./frame";
 import { MOODS, MORPH, type Mood, moodFor } from "./moods";
 
 export type { Gesture, Look } from "./frame";
@@ -34,11 +34,6 @@ interface Props {
   says?: string | null;
   title?: string;
 }
-
-const KNOCK = {
-  send: { amp: 0.26, hz: 1.5, decay: 0.28, life: 0.9 },
-  receive: { amp: 0.3, hz: 2.2, decay: 0.3, life: 0.8 },
-};
 
 const TURN = 0.2;
 

@@ -1,14 +1,39 @@
 use std::collections::HashMap;
 
 use serde::Serialize;
+use tokio::sync::broadcast;
 
 use crate::domain::envelope::Participant;
 use crate::domain::ids::{AgentId, MessageId, RunId};
-use crate::runtime::events::{Activity, UiEvent};
+use crate::runtime::events::{Activity, EventSink, UiEvent};
+
+pub(super) struct SocketSink {
+    events: broadcast::Sender<UiEvent>,
+    live: parking_lot::Mutex<Snapshot>,
+}
+
+impl SocketSink {
+    pub(super) fn new(events: broadcast::Sender<UiEvent>) -> Self {
+        Self { events, live: Default::default() }
+    }
+
+    pub(super) fn tune_in(&self) -> (broadcast::Receiver<UiEvent>, String) {
+        let live = self.live.lock();
+        (self.events.subscribe(), serde_json::to_string(&*live).expect("live state serializes"))
+    }
+}
+
+impl EventSink for SocketSink {
+    fn emit(&self, event: UiEvent) {
+        let mut live = self.live.lock();
+        live.observe(&event);
+        let _ = self.events.send(event);
+    }
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct Snapshot {
+struct Snapshot {
     #[serde(rename = "type")]
     kind: &'static str,
     activity: HashMap<AgentId, Activity>,

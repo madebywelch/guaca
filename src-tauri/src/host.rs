@@ -14,6 +14,8 @@ pub const IMAGE: &str = match option_env!("GUACA_BACKEND_IMAGE") {
 
 pub const STOP_TIMEOUT: Duration = Duration::from_secs(30);
 
+pub const PORT: u16 = 8787;
+
 pub const UPDATER_SOCKET: &str = "/run/guaca-updater/updater.sock";
 const UPDATER_DIR: &str = "/run/guaca-updater";
 
@@ -914,8 +916,9 @@ impl LocalHost {
     }
 
     async fn create(&self, image: &str, port: Option<u16>) -> Result<(), String> {
-        let binding =
-            port.map(|p| format!("127.0.0.1:{p}:8787")).unwrap_or_else(|| "127.0.0.1::8787".into());
+        let binding = port
+            .map(|p| format!("127.0.0.1:{p}:{PORT}"))
+            .unwrap_or_else(|| format!("127.0.0.1::{PORT}"));
         let label = format!("{}={}", self.spec.owner, self.spec.name);
         let workspace = format!("type=volume,src={},dst=/var/lib/guaca", self.spec.volume);
         let stop_timeout = STOP_TIMEOUT.as_secs().to_string();
@@ -965,7 +968,7 @@ impl LocalHost {
         let published = format!("http://127.0.0.1:{port}");
         let probe = match self.spec.reach {
             Reach::Published => published.clone(),
-            Reach::Bridge => format!("http://{}:8787", bridge_address(value)?),
+            Reach::Bridge => format!("http://{}:{PORT}", bridge_address(value)?),
         };
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(2))
@@ -1082,7 +1085,7 @@ fn write_journal(path: &Path, op: &Operation) -> Result<(), String> {
 }
 
 fn published_port(value: &Value) -> Result<u16, String> {
-    let ports = value["NetworkSettings"]["Ports"]["8787/tcp"]
+    let ports = value["NetworkSettings"]["Ports"][format!("{PORT}/tcp").as_str()]
         .as_array()
         .ok_or("Guaca has no local connection port.")?;
     let binding = ports
@@ -1135,6 +1138,33 @@ pub(crate) mod tests {
     }
     async fn docker(args: &[&str], seconds: u64) -> Result<String, String> {
         run_docker(&docker_binary(), args, seconds).await
+    }
+
+    #[test]
+    fn every_way_the_daemon_is_run_listens_and_is_probed_on_one_port() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let read = |file: &str| std::fs::read_to_string(root.join(file)).unwrap();
+        let ports = |text: &str, key: &str| -> Vec<u16> {
+            text.lines()
+                .filter_map(|line| line.trim().strip_prefix(key))
+                .map(|rest| {
+                    let word = rest.split_whitespace().next().unwrap_or_default();
+                    let tail = word.rsplit(':').next().unwrap_or_default();
+                    let digits: String = tail.chars().take_while(char::is_ascii_digit).collect();
+                    digits.parse().unwrap_or_else(|_| panic!("no port after {key} in {word:?}"))
+                })
+                .collect()
+        };
+        let dockerfile = read("Dockerfile");
+        let compose = read("docker-compose.yml");
+        for (what, found) in [
+            ("GUACA_BIND in Dockerfile", ports(&dockerfile, "GUACA_BIND=")),
+            ("EXPOSE in Dockerfile", ports(&dockerfile, "EXPOSE ")),
+            ("the HEALTHCHECK URL in Dockerfile", ports(&dockerfile, "CMD curl -fsS ")),
+            ("the published port in docker-compose.yml", ports(&compose, "- \"127.0.0.1:")),
+        ] {
+            assert_eq!(found, [PORT], "{what}");
+        }
     }
 
     #[test]
