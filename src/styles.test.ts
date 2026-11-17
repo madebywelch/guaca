@@ -67,6 +67,17 @@ describe("the type ladder", () => {
   });
 });
 
+describe("the timeline's faces", () => {
+  it.each([
+    ["--ribbon-face", "md"],
+    ["--ribbon-pile-face", "sm"],
+  ] as const)("sizes %s for the %s avatar drawn in it", (token, size) => {
+    const rem = css.match(new RegExp(`^\\s*${token}: ([\\d.]+)rem;$`, "m"))?.[1];
+    expect(rem, token).toBeDefined();
+    expect(Number(rem) * ROOT_PX).toBe(AVATAR_PX[size]);
+  });
+});
+
 describe("avatar hit targets", () => {
   it.each(["picker__item", "orb", "agent-row"])(
     "keeps animated artwork out of hit testing inside %s",
