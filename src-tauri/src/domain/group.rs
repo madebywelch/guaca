@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use super::ids::GroupId;
 use crate::config::{clamp_request_timeout, InferenceConfig, Provider};
 use crate::runtime::guard::GuardLimits;
+use crate::secrets::Secret;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -102,7 +103,7 @@ pub struct GroupDraft {
     #[serde(default)]
     pub inference: Option<InferenceOverrides>,
     #[serde(default)]
-    pub api_key: Option<String>,
+    pub api_key: Option<Secret>,
     #[serde(default)]
     pub limits: Option<GroupLimits>,
     #[serde(default)]
@@ -127,7 +128,7 @@ pub const MAX_GROUP_NAME_LEN: usize = 48;
 pub struct CleanGroup {
     pub name: String,
     pub inference: Option<InferenceOverrides>,
-    pub api_key: Option<Option<String>>,
+    pub api_key: Option<Option<Secret>>,
     pub limits: Option<GroupLimits>,
     pub tidy: Option<Tidy>,
 }
@@ -168,11 +169,11 @@ impl GroupDraft {
             name: name.to_string(),
             inference,
             api_key: self.api_key.as_ref().map(|raw| {
-                let trimmed = raw.trim();
+                let trimmed = raw.expose().trim();
                 if trimmed.is_empty() {
                     None
                 } else {
-                    Some(trimmed.to_string())
+                    Some(trimmed.into())
                 }
             }),
             limits: self.limits.map(GroupLimits::sanitized),
@@ -184,7 +185,7 @@ impl GroupDraft {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GroupInference {
     pub overrides: InferenceOverrides,
-    pub api_key: Option<String>,
+    pub api_key: Option<Secret>,
 }
 
 impl GroupInference {
@@ -195,7 +196,7 @@ impl GroupInference {
             out.base_url = url.clone();
         }
         if let Some(key) = &self.api_key {
-            out.api_key = key.clone();
+            out.api_key = key.expose().to_string();
         }
         if let Some(model) = &self.overrides.default_model {
             out.default_model = model.clone();

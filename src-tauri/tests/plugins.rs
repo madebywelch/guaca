@@ -2069,7 +2069,7 @@ async fn a_grant_revoked_at_the_vendor_is_renewed_once_and_the_call_retried() {
     else {
         panic!("the plugin is connected and this agent was not excluded from it")
     };
-    assert_eq!(reached.grant.unwrap().access_token, "access-1");
+    assert_eq!(reached.grant.unwrap().access_token.expose(), "access-1");
 }
 
 #[tokio::test]
@@ -2137,7 +2137,7 @@ async fn connecting_twice_replaces_the_grant_rather_than_refusing() {
         panic!("connecting again leaves a plugin the crew can use")
     };
     assert_eq!(
-        reached.grant.unwrap().access_token,
+        reached.grant.unwrap().access_token.expose(),
         "access-1",
         "the newer sign-in is the one held"
     );

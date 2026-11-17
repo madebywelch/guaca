@@ -172,7 +172,7 @@ pub struct BrowserCandidate {
 #[derive(Debug, Clone)]
 pub struct KernelClient {
     http: reqwest::Client,
-    api_key: String,
+    api_key: crate::secrets::Secret,
     base: String,
 }
 
@@ -183,7 +183,7 @@ impl KernelClient {
             return None;
         }
         let http = reqwest::Client::builder().timeout(REQUEST_TIMEOUT).build().ok()?;
-        Some(Self { http, api_key: api_key.to_string(), base: api_base() })
+        Some(Self { http, api_key: api_key.into(), base: api_base() })
     }
 
     async fn call<T: for<'de> Deserialize<'de>>(
@@ -191,7 +191,7 @@ impl KernelClient {
         request: reqwest::RequestBuilder,
     ) -> Result<T, KernelError> {
         let response = request
-            .bearer_auth(&self.api_key)
+            .bearer_auth(self.api_key.expose())
             .send()
             .await
             .map_err(|e| KernelError::Transport(e.to_string()))?;

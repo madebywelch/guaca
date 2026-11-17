@@ -67,7 +67,7 @@ impl Consent {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentCard {
     pub id: AgentId,
@@ -104,6 +104,36 @@ pub struct AgentCard {
 pub const COMPOST_DAYS: i64 = 30;
 
 pub const COMPOST_MS: i64 = COMPOST_DAYS * 24 * 60 * 60 * 1000;
+
+impl std::fmt::Debug for AgentCard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentCard")
+            .field("id", &self.id)
+            .field("group_id", &self.group_id)
+            .field("name", &self.name)
+            .field("avatar", &self.avatar)
+            .field("color", &self.color)
+            .field("model", &self.model)
+            .field("subscription_model", &self.subscription_model)
+            .field("reasoning_effort", &self.reasoning_effort)
+            .field("system_prompt", &self.system_prompt)
+            .field("skills", &self.skills)
+            .field("sandbox_id", &self.sandbox_id)
+            .field("browser_id", &self.browser_id)
+            .field("has_computer", &self.has_computer)
+            .field("has_browser", &self.has_browser)
+            .field("browser_consent", &self.browser_consent)
+            .field("runs_errands", &self.runs_errands)
+            .field("lifecycle", &self.lifecycle)
+            .field("pinned", &self.pinned)
+            .field("rail_order", &self.rail_order)
+            .field("version", &self.version)
+            .field("created_at", &self.created_at)
+            .field("updated_at", &self.updated_at)
+            .field("discarded_at", &self.discarded_at)
+            .finish_non_exhaustive()
+    }
+}
 
 impl AgentCard {
     pub fn discarded(&self) -> bool {
@@ -443,6 +473,19 @@ mod tests {
             updated_at: 0,
             discarded_at: None,
         }
+    }
+
+    #[test]
+    fn a_card_debugs_without_its_sandbox_tokens() {
+        let card = AgentCard {
+            sandbox_id: Some("sbx".into()),
+            sandbox_envd_token: Some("envd-hunter2".into()),
+            sandbox_traffic_token: Some("traffic-hunter2".into()),
+            ..card()
+        };
+        let printed = format!("{card:?}");
+        assert!(printed.contains("sbx"), "{printed}");
+        assert!(!printed.contains("hunter2"), "a token reached Debug: {printed}");
     }
 
     #[test]

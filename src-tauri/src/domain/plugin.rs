@@ -69,17 +69,23 @@ pub enum CustomError {
 
 pub const MAX_CUSTOM_NAME: usize = 32;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct Headers {
     pairs: Vec<(String, String)>,
     env: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+impl std::fmt::Debug for Headers {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Headers").field("names", &self.names()).field("env", &self.env).finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HeaderPair {
     pub name: String,
-    pub value: String,
+    pub value: crate::secrets::Secret,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -208,7 +214,7 @@ impl Headers {
         let mut out: Vec<(String, String)> = Vec::new();
         for row in rows {
             let name = row.name.trim().to_ascii_lowercase();
-            let value = row.value.trim().to_string();
+            let value = row.value.expose().trim().to_string();
             if name.is_empty() {
                 return Err(HeaderError::NoName);
             }
@@ -242,7 +248,7 @@ impl Headers {
         let mut out: Vec<(String, String)> = Vec::new();
         for row in rows {
             let name = row.name.trim().to_string();
-            let value = row.value.trim().to_string();
+            let value = row.value.expose().trim().to_string();
             if name.is_empty() {
                 return Err(HeaderError::NoName);
             }
@@ -273,10 +279,10 @@ impl Headers {
     }
 
     pub fn encode(&self) -> String {
-        let rows: Vec<HeaderPair> = self
+        let rows: Vec<serde_json::Value> = self
             .pairs
             .iter()
-            .map(|(name, value)| HeaderPair { name: name.clone(), value: value.clone() })
+            .map(|(name, value)| serde_json::json!({ "name": name, "value": value }))
             .collect();
         let value =
             if self.env { serde_json::json!({ "env": rows }) } else { serde_json::json!(rows) };

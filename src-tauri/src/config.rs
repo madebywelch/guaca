@@ -40,7 +40,7 @@ impl Provider {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InferenceConfig {
     #[serde(default)]
@@ -94,6 +94,22 @@ impl Default for InferenceConfig {
             title: default_title(),
             request_timeout_secs: default_timeout(),
         }
+    }
+}
+
+impl std::fmt::Debug for InferenceConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InferenceConfig")
+            .field("provider", &self.provider)
+            .field("base_url", &self.base_url)
+            .field("api_key_set", &!self.api_key.is_empty())
+            .field("default_model", &self.default_model)
+            .field("subscription_model", &self.subscription_model)
+            .field("reasoning_effort", &self.reasoning_effort)
+            .field("referer", &self.referer)
+            .field("title", &self.title)
+            .field("request_timeout_secs", &self.request_timeout_secs)
+            .finish()
     }
 }
 
@@ -182,7 +198,7 @@ impl std::fmt::Debug for DeliveryConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DeliveryConfig")
             .field("url", &url_hint(&self.url))
-            .field("token", &hint_for(&self.token))
+            .field("token_set", &!self.token.is_empty())
             .field("format", &self.format)
             .field("content", &self.content)
             .field("link_base", &self.link_base)
@@ -190,18 +206,33 @@ impl std::fmt::Debug for DeliveryConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct WebhookConfig {
     pub secret: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+impl std::fmt::Debug for WebhookConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebhookConfig").field("secret_set", &!self.secret.is_empty()).finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct E2bConfig {
     pub api_key: String,
     #[serde(default = "default_idle_minutes")]
     pub idle_minutes: u32,
+}
+
+impl std::fmt::Debug for E2bConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("E2bConfig")
+            .field("api_key_set", &!self.api_key.is_empty())
+            .field("idle_minutes", &self.idle_minutes)
+            .finish()
+    }
 }
 
 pub fn default_idle_minutes() -> u32 {
@@ -214,7 +245,7 @@ impl Default for E2bConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct KernelConfig {
     pub api_key: String,
@@ -222,6 +253,16 @@ pub struct KernelConfig {
     pub idle_minutes: u32,
     #[serde(default)]
     pub stealth: bool,
+}
+
+impl std::fmt::Debug for KernelConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KernelConfig")
+            .field("api_key_set", &!self.api_key.is_empty())
+            .field("idle_minutes", &self.idle_minutes)
+            .field("stealth", &self.stealth)
+            .finish()
+    }
 }
 
 pub fn default_browser_idle_minutes() -> u32 {
@@ -432,15 +473,15 @@ pub struct SettingsPatch {
     pub operator_name: Option<String>,
     pub provider: Option<Provider>,
     pub base_url: Option<String>,
-    pub api_key: Option<String>,
+    pub api_key: Option<crate::secrets::Secret>,
     pub default_model: Option<String>,
     pub subscription_model: Option<String>,
     pub reasoning_effort: Option<crate::domain::effort::ReasoningEffort>,
     pub request_timeout_secs: Option<u64>,
     pub limits: Option<LimitsPatch>,
-    pub e2b_api_key: Option<String>,
+    pub e2b_api_key: Option<crate::secrets::Secret>,
     pub computer_idle_minutes: Option<u32>,
-    pub kernel_api_key: Option<String>,
+    pub kernel_api_key: Option<crate::secrets::Secret>,
     pub browser_idle_minutes: Option<u32>,
     pub browser_stealth: Option<bool>,
     pub attention: Option<AttentionPatch>,
@@ -451,7 +492,7 @@ pub struct SettingsPatch {
 #[serde(rename_all = "camelCase", default)]
 pub struct DeliveryPatch {
     pub url: Option<String>,
-    pub token: Option<String>,
+    pub token: Option<crate::secrets::Secret>,
     pub format: Option<crate::push::Format>,
     pub content: Option<crate::push::Content>,
     pub link_base: Option<String>,
@@ -477,13 +518,13 @@ impl AppConfig {
             self.inference.base_url = normalize_base_url(&base_url)?;
         }
         if let Some(key) = patch.e2b_api_key {
-            self.e2b.api_key = key.trim().to_string();
+            self.e2b.api_key = key.expose().trim().to_string();
         }
         if let Some(minutes) = patch.computer_idle_minutes {
             self.e2b.idle_minutes = minutes.clamp(1, 24 * 60);
         }
         if let Some(key) = patch.kernel_api_key {
-            self.kernel.api_key = key.trim().to_string();
+            self.kernel.api_key = key.expose().trim().to_string();
         }
         if let Some(minutes) = patch.browser_idle_minutes {
             self.kernel.idle_minutes = minutes.clamp(1, 72 * 60);
@@ -506,7 +547,7 @@ impl AppConfig {
                 };
             }
             if let Some(token) = delivery.token {
-                now.token = token.trim().to_string();
+                now.token = token.expose().trim().to_string();
             }
             now.format = delivery.format.unwrap_or(now.format);
             now.content = delivery.content.unwrap_or(now.content);
@@ -518,7 +559,7 @@ impl AppConfig {
             }
         }
         if let Some(api_key) = patch.api_key {
-            self.inference.api_key = api_key.trim().to_string();
+            self.inference.api_key = api_key.expose().trim().to_string();
         }
         if let Some(model) = patch.default_model {
             let trimmed = model.trim();
@@ -947,6 +988,18 @@ mod tests {
 
         let printed = format!("{config:?}");
         assert!(!printed.contains("secret-topic") && !printed.contains("supersecret"), "{printed}");
+    }
+
+    #[test]
+    fn a_config_debugs_with_none_of_its_keys() {
+        let mut config = AppConfig::default();
+        config.inference.api_key = "sk-inference-hunter2".into();
+        config.e2b.api_key = "e2b-hunter2".into();
+        config.kernel.api_key = "kernel-hunter2".into();
+        config.webhook.secret = "webhook-hunter2".into();
+        config.delivery.token = "push-hunter2".into();
+        let printed = format!("{config:?}");
+        assert!(!printed.contains("ter2"), "a key reached Debug: {printed}");
     }
 
     #[test]

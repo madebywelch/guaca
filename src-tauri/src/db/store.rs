@@ -35,6 +35,7 @@ use crate::domain::signin::{Signin, Surface};
 use crate::domain::usage::{Tokens, UsageEntry};
 use crate::domain::worknote::{Appended, WorkingNote, KEPT};
 use crate::runtime::guard::GuardSnapshot;
+use crate::secrets::Secret;
 
 pub type Conn = PooledConnection<SqliteConnectionManager>;
 
@@ -2352,11 +2353,11 @@ impl Store {
             .map_err(|e| StoreError::Corrupt(format!("bad plugin id {id:?}: {e}")))?;
 
         let grant = (!access.is_empty()).then(|| crate::oauth::Grant {
-            access_token: access,
-            refresh_token: (!refresh.is_empty()).then_some(refresh),
+            access_token: access.into(),
+            refresh_token: (!refresh.is_empty()).then(|| refresh.into()),
             expires_at,
             client_id,
-            client_secret: (!client_secret.is_empty()).then_some(client_secret),
+            client_secret: (!client_secret.is_empty()).then(|| client_secret.into()),
             token_endpoint,
         });
 
@@ -2558,10 +2559,16 @@ impl Store {
                 account,
                 encoded,
                 grant.map(|g| g.client_id.as_str()).unwrap_or_default(),
-                grant.and_then(|g| g.client_secret.as_deref()).unwrap_or_default(),
+                grant
+                    .and_then(|g| g.client_secret.as_ref())
+                    .map(Secret::expose)
+                    .unwrap_or_default(),
                 grant.map(|g| g.token_endpoint.as_str()).unwrap_or_default(),
-                grant.map(|g| g.access_token.as_str()).unwrap_or_default(),
-                grant.and_then(|g| g.refresh_token.as_deref()).unwrap_or_default(),
+                grant.map(|g| g.access_token.expose()).unwrap_or_default(),
+                grant
+                    .and_then(|g| g.refresh_token.as_ref())
+                    .map(Secret::expose)
+                    .unwrap_or_default(),
                 grant.and_then(|g| g.expires_at),
                 now_ms(),
                 connection,
@@ -2623,11 +2630,11 @@ impl Store {
         Ok(Some(Dialed {
             kind,
             grant: (!access.is_empty()).then(|| crate::oauth::Grant {
-                access_token: access,
-                refresh_token: (!refresh.is_empty()).then_some(refresh),
+                access_token: access.into(),
+                refresh_token: (!refresh.is_empty()).then(|| refresh.into()),
                 expires_at,
                 client_id,
-                client_secret: (!client_secret.is_empty()).then_some(client_secret),
+                client_secret: (!client_secret.is_empty()).then(|| client_secret.into()),
                 token_endpoint,
             }),
             headers: Headers::decode(&headers),
@@ -2647,8 +2654,8 @@ impl Store {
             "UPDATE plugins SET access_token=?2, refresh_token=?3, expires_at=?4, grant_generation=grant_generation+1 WHERE id=?1 AND grant_generation=?5",
             params![
                 id.to_string(),
-                grant.access_token,
-                grant.refresh_token.clone().unwrap_or_default(),
+                grant.access_token.expose(),
+                grant.refresh_token.as_ref().map(Secret::expose).unwrap_or_default(),
                 grant.expires_at,
                 generation,
             ],
@@ -2795,7 +2802,7 @@ impl Store {
                 draft.name,
                 now,
                 over.base_url,
-                draft.api_key.clone().flatten(),
+                draft.api_key.as_ref().and_then(Option::as_ref).map(Secret::expose),
                 over.default_model,
                 over.provider.map(|p| p.as_str()),
                 over.subscription_model,
@@ -2852,7 +2859,7 @@ impl Store {
                     over.subscription_model,
                     over.request_timeout_secs,
                     draft.api_key.is_some(),
-                    draft.api_key.clone().flatten(),
+                    draft.api_key.as_ref().and_then(Option::as_ref).map(Secret::expose),
                     draft.limits.is_some(),
                     limits.max_hops,
                     limits.max_steps_per_run,
@@ -2892,7 +2899,7 @@ impl Store {
                             reasoning_effort: read_effort(row, 6)?,
                             request_timeout_secs: row.get(5)?,
                         },
-                        api_key: row.get(1)?,
+                        api_key: row.get::<_, Option<String>>(1)?.map(Secret::from),
                     })
                 },
             )
@@ -6072,7 +6079,7 @@ mod tests {
         let json = serde_json::to_string(&group).unwrap();
         assert!(!json.contains("sk-group"), "a group card leaked its key: {json}");
         assert_eq!(
-            store.group_inference(group.id).unwrap().api_key.as_deref(),
+            store.group_inference(group.id).unwrap().api_key.as_ref().map(Secret::expose),
             Some("sk-group-9999")
         );
         assert_eq!(store.group_limits(group.id).unwrap().max_steps_per_run, Some(9));

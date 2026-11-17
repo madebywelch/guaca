@@ -34,7 +34,7 @@ pub async fn models(subscription: &Subscription) -> Result<Vec<SubscriptionModel
             let mut request = http
                 .get(&url)
                 .query(&[("client_version", CATALOG_CLIENT_VERSION)])
-                .bearer_auth(&access.token)
+                .bearer_auth(access.token.expose())
                 .header("originator", ORIGINATOR);
             if !access.account_id.is_empty() {
                 request = request.header("ChatGPT-Account-Id", &access.account_id);
@@ -46,7 +46,7 @@ pub async fn models(subscription: &Subscription) -> Result<Vec<SubscriptionModel
             let status = response.status();
             if status == reqwest::StatusCode::UNAUTHORIZED && !renewed {
                 renewed = true;
-                access = subscription.renew(&access.token).await.map_err(auth_error)?;
+                access = subscription.renew(access.token.expose()).await.map_err(auth_error)?;
                 continue;
             }
             if !status.is_success() {
@@ -394,7 +394,7 @@ where
     loop {
         let mut send = http
             .post(&url)
-            .bearer_auth(&access.token)
+            .bearer_auth(access.token.expose())
             .header("originator", ORIGINATOR)
             .header("Accept", "text/event-stream")
             .timeout(timeout)
@@ -419,7 +419,7 @@ where
 
         if status == reqwest::StatusCode::UNAUTHORIZED && !renewed {
             renewed = true;
-            access = subscription.renew(&access.token).await.map_err(auth_error)?;
+            access = subscription.renew(access.token.expose()).await.map_err(auth_error)?;
             continue;
         }
 
