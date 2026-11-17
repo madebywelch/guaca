@@ -619,8 +619,14 @@ before the process dies, so nothing interrupted in the middle of an action is
 ever repeated automatically. It is why the drain waits for a boundary instead
 of checkpointing anything. Pending approvals expire because their waiting
 turns no longer exist; a turn put down while it waited asks again when it is
-picked up. A conversation the operator stopped is never picked up. Completed
-messages, attachments, memories and working notes remain on the volume. Back up the volume before deploying; SQLite migrations are
+picked up. A conversation the operator stopped is never picked up: `put_down`
+reads the stops under the same lock its commit is written under, so a stop that
+lands while a turn is being put down, or a stop of a message that turn had taken
+in, keeps that conversation off the next host. A message the turn had acted on
+is put down beside it only while the turn's own conversation goes on to carry
+it; when that conversation is the one stopped, the message stays owed and is
+reported interrupted.
+Completed messages, attachments, memories and working notes remain on the volume. Back up the volume before deploying; SQLite migrations are
 forward-only.
 
 The database runs in WAL mode with `synchronous = NORMAL` (`Store::open`), so a

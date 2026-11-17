@@ -3842,7 +3842,7 @@ impl Runtime {
             // The host is stopping and this never started, so it is the next
             // host's exactly as it arrived.
             if !self.called_off(run_id) {
-                self.put_down(&batch, &absorbed, &[], &resumed);
+                self.put_down(&batch, &absorbed, &[], 0, &resumed);
                 self.idle(agent_id);
                 return;
             }
@@ -4540,6 +4540,7 @@ impl Runtime {
                 &batch,
                 &absorbed,
                 &taken_in,
+                acted_on,
                 collected_text,
                 tool_parts,
                 resumed,

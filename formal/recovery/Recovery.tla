@@ -76,15 +76,20 @@ Release(r) ==
     /\ IF outstanding[r] = 1 /\ r \notin pdMem
           THEN pending' = [pending EXCEPT ![r] = "none"] ELSE pending' = pending
 
-PutDown(booked, taken, records) ==
-    LET ms == booked \cup taken
-        touched == {Run(m) : m \in ms}
-        left == [r \in Runs |-> outstanding[r] - Cardinality({m \in ms : Run(m) = r})]
+PutDown(batch, taken, records, actedOn) ==
+    LET gone == {m \in batch \cup taken : Run(m) \in stopped}
+        booked == batch \ gone
+        owed == IF booked = {} THEN (actedOn \cap taken) \ gone ELSE {}
+        kept == taken \ (gone \cup owed)
+        touched == {Run(m) : m \in booked \cup kept}
+        left == [r \in Runs |-> outstanding[r] - Cardinality({m \in batch \cup taken : Run(m) = r})]
     IN /\ outstanding' = left
        /\ pdMem' = pdMem \cup touched
        /\ put' = [m \in MsgSet |-> IF m \in booked THEN (IF records THEN "rec" ELSE "bare")
-                                   ELSE IF m \in taken THEN "bare" ELSE put[m]]
+                                   ELSE IF m \in kept THEN "bare" ELSE put[m]]
        /\ whole' = whole \cup {r \in touched : left[r] = 0}
+       /\ pending' = [r \in Runs |-> IF r \in {Run(m) : m \in gone} /\ left[r] = 0
+                                      THEN "none" ELSE pending[r]]
 
 ---------------------------------------------------------------------------
 Send ==
@@ -129,8 +134,8 @@ PutDownQueued ==
              THEN /\ extra' = [extra EXCEPT ![Run(m)] = @ + 1]
                   /\ Release(Run(m))
                   /\ UNCHANGED <<put, pdMem>>
-             ELSE /\ PutDown({m}, {}, m \in resuming)
-                  /\ UNCHANGED <<extra, pending>>
+             ELSE /\ PutDown({m}, {}, m \in resuming, {})
+                  /\ UNCHANGED extra
     /\ UNCHANGED <<up, ends, draining, stopped, turn, accepted, notices, ghosts>>
 
 MarkBatch ==
@@ -156,8 +161,8 @@ Begin ==
        IF Halted(turn.run)
           THEN /\ turn' = NoTurn
                /\ IF turn.run \notin stopped
-                     THEN /\ PutDown(turn.batch, {}, carries)
-                          /\ UNCHANGED <<extra, pending>>
+                     THEN /\ PutDown(turn.batch, {}, carries, {})
+                          /\ UNCHANGED extra
                      ELSE /\ extra' = [extra EXCEPT ![turn.run] = @ + 1]
                           /\ Release(turn.run)
                           /\ UNCHANGED <<put, pdMem>>
@@ -248,10 +253,10 @@ PutTurnDown ==
 
 PutTurnDownCommit ==
     /\ up /\ turn.st = "recorded"
-    /\ PutDown(turn.batch, turn.taken, turn.did \/ turn.carries)
+    /\ PutDown(turn.batch, turn.taken, turn.did \/ turn.carries, turn.taken \ turn.fresh)
     /\ turn' = NoTurn
     /\ UNCHANGED <<up, ends, draining, stopped, inbox, resuming,
-                   accepted, pending, extra, notices, ghosts>>
+                   accepted, extra, notices, ghosts>>
 
 Stop ==
     /\ up /\ OperatorStops

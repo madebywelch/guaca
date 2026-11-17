@@ -119,6 +119,10 @@ code.
   every conversation it had read, answered or not. `hand_back` sorts them first:
   unread since the last tool call goes back to the queue, read before a call
   stays owed for the next host to report, and only the stopped ones end here.
+- **`put_down` checks the stop itself.** The check in `run_turn` is read
+  before the record is written, and a stop can land between the two. Reading
+  `Runs.stopped` under the lock the commit is written under is the only place
+  that window closes.
 - **The stop check sits before `reserve_step`, not after it.** One line later and
   a run reports a model call that a stop prevented, for the rest of its life.
 - **The checks inside the round loop do not cover the way out of it.** A turn

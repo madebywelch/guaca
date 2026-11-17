@@ -8944,3 +8944,46 @@ async fn stopping_a_turn_keeps_a_message_it_acted_on_owed_for_the_next_host() {
         .collect();
     assert_eq!(reported, vec![second]);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stopped_message_taken_into_a_turn_is_not_put_down_for_the_next_host() {
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let stub = gated_researcher(gate.clone(), calls.clone()).await;
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let (first, second) = taken_in_mid_turn(&h, &stub, &gate, &calls).await;
+    let asked = h
+        .runtime
+        .store()
+        .channel_messages(h.id("Researcher"), 50)
+        .unwrap()
+        .into_iter()
+        .find(|m| m.run_id == second)
+        .unwrap()
+        .id;
+
+    assert!(h.runtime.stop_run(second));
+    let drained = h.runtime.drain(Duration::from_secs(5)).await;
+    assert!(drained.is_complete(), "{drained:?}");
+
+    let conn = h.runtime.store().conn().unwrap();
+    let put: i64 = conn
+        .query_row("SELECT count(*) FROM put_down WHERE message_id=?1", [asked.to_string()], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    let whole: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM put_down_runs WHERE run_id=?1",
+            [second.to_string()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    drop(conn);
+    assert_eq!((put, whole), (0, 0), "the stopped conversation was put down for the next host");
+    assert_eq!(h.runtime.store().outcome(second).unwrap().unwrap().status, OutcomeStatus::Stopped);
+
+    let (h, _) = h.restart(Duration::from_secs(5)).await;
+    h.settle(first).await;
+    assert!(!settled_on(&h.sink, second), "the next host picked up a stopped conversation");
+}

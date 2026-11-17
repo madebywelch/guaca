@@ -116,6 +116,5 @@ Last confirmed against commit `79ae97296e7c83b4737c38a7abba9bf308de232b` (`main`
 
 Open findings, held as finding rows in `scripts/formal.sh` and each replayed in the real runtime:
 
-1. **StoppedStaysStopped (stops).** `Runtime::put_down` does not skip stopped runs. A message taken into a turn, then stopped by the operator, is put down whole by a drain, and the next host answers it. The same happens to a stop that lands between `put_turn_down`'s check and its commit.
-2. **NoBlindRepeat (stops).** This follows from 1. If a second restart comes before the handed-on message is taken in again, it is delivered as a fresh conversation, without the record of the turn that acted on it.
-3. **NothingLost (failed start mark).** When `start_deliveries` fails, `abandon` settles the run as finished: no model call, no notice, and an outcome of "Finished without a note."
+1. **NoBlindRepeat (stops).** A drain puts a message a turn took in and acted on down bare, beside the turn's own message and its record. If the operator stops the turn's conversation on the next host before that turn takes the message in again, the message gets a turn of its own with no record of the calls already made for it. Replayed with the agent paused across the restart, which holds the window open.
+2. **NothingLost (failed start mark).** When `start_deliveries` fails, `abandon` settles the run as finished: no model call, no notice, and an outcome of "Finished without a note."
