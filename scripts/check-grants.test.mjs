@@ -881,6 +881,21 @@ describe("judge", () => {
     }),
   );
   it(
+    "judges every commit of the pull request under pull_request_target, where the ref is main's",
+    scenario({ "src/a.ts": SOURCE, "scripts/check-grants.mjs": "export const a = 1;\n" }, (repo) => {
+      git(repo.dir, "update-ref", "refs/remotes/origin/main", "main");
+      write(repo.dir, { "scripts/check-grants.mjs": "export const a = 2;\n" });
+      git(repo.dir, "commit", "-qam", "first");
+      write(repo.dir, { "src/b.ts": SOURCE });
+      git(repo.dir, "add", "-A");
+      git(repo.dir, "commit", "-qm", "second");
+      const out = cli(repo, ["judge"], { GITHUB_EVENT_NAME: "pull_request_target", GITHUB_REF: "refs/heads/main", GITHUB_BASE_REF: "main" });
+      assert.equal(out.status, 1, out.stdout);
+      assert.match(out.stdout, /scripts\/check-grants\.mjs {2}changes the lint/);
+      assert.match(out.stdout, /the merge base with origin\/main/);
+    }),
+  );
+  it(
     "judges the committed head from the command, not the files on disk",
     scenario({ "src/a.ts": SOURCE, "scripts/check-grants.mjs": "export const a = 1;\n" }, (repo) => {
       write(repo.dir, { "scripts/check-grants.mjs": "export const a = 2;\n" });

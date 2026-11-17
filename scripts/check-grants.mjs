@@ -199,7 +199,7 @@ export function approvalsFrom(env = process.env) {
 export function resolveBase(repo, env = process.env) {
   if (env.GRANTS_BASE) return { rev: git(repo, ["rev-parse", env.GRANTS_BASE]).trim(), label: env.GRANTS_BASE };
   const branch = gitOk(repo, ["rev-parse", "--abbrev-ref", "HEAD"]);
-  const onMain = env.GITHUB_REF === "refs/heads/main" || (!env.GITHUB_BASE_REF && branch === "main");
+  const onMain = !env.GITHUB_BASE_REF && (env.GITHUB_REF === "refs/heads/main" || branch === "main");
   if (onMain) {
     const parent = gitOk(repo, ["rev-parse", "HEAD^"]);
     if (!parent) throw new Error("HEAD has no parent commit to compare with; fetch more history (git fetch --deepen=1)");
