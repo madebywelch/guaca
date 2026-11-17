@@ -17,6 +17,7 @@ import type {
   Participant,
   RoutineId,
 } from "../lib/types";
+import { TIDY_LABEL } from "../lib/types";
 import { ApprovalRequest } from "./ApprovalRequest";
 import { ArtifactCard } from "./Artifacts";
 import { FileCard } from "./FileCard";
@@ -130,7 +131,7 @@ function TidyRow({ at }: { at: number }) {
   return (
     <div className="wire wire--routine">
       <span className="wire__chip">
-        <span className="wire__label">Overnight memory tidy</span>
+        <span className="wire__label">{TIDY_LABEL}</span>
         <span className="wire__why">ran</span>
         <span className="wire__meta">{clockTime(at)}</span>
       </span>

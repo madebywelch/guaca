@@ -991,11 +991,14 @@ export function asSentence(text: string): string {
   return /[.!?…:]$/.test(opened) ? opened : `${opened}.`;
 }
 
+export const TIDY_LABEL = "Overnight memory tidy";
+
 export function plainText(envelope: Envelope): string {
   return envelope.parts
     .map((part) => {
       if (part.type === "text") return part.text;
       if (part.type === "routine") return part.what;
+      if (part.type === "tidy") return TIDY_LABEL;
       if (part.type === "decision") return part.answer;
       return null;
     })
