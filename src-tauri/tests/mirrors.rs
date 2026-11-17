@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 use guac_lib::config::AppConfig;
 use guac_lib::db::Store;
-use guac_lib::domain::agent::{CleanDraft, MAX_NAME_LEN};
+use guac_lib::domain::agent::{AgentDraft, CleanDraft, MAX_NAME_LEN};
 use guac_lib::domain::connector::CleanConnector;
 use guac_lib::domain::envelope::Envelope;
 use guac_lib::domain::ids::{AgentId, GroupId};
@@ -30,6 +30,7 @@ const CHECKS: &[(&str, Check)] = &[
     ("constants", constants),
     ("crew-name", crew_name),
     ("event-spec", event_spec),
+    ("hireable", hireable),
     ("human-gap", gap),
     ("limits", limits),
     ("money", money),
@@ -154,6 +155,41 @@ fn event_spec(file: &Value) {
         topic: String,
     }
     each(file, |spec: Spec| EventTrigger { service: spec.service, topic: spec.topic }.as_str());
+}
+
+fn hireable(file: &Value) {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Preset {
+        id: String,
+        name: String,
+        avatar: String,
+        color: String,
+        system_prompt: String,
+        skills: Vec<String>,
+    }
+    for case in file.as_array().expect("the catalog is a list of presets") {
+        let preset: Preset = parsed(case);
+        let draft = AgentDraft {
+            group_id: None,
+            name: preset.name,
+            avatar: preset.avatar,
+            color: preset.color,
+            model: String::new(),
+            subscription_model: None,
+            reasoning_effort: None,
+            system_prompt: preset.system_prompt,
+            skills: preset.skills,
+        };
+        let clean =
+            draft.validate().unwrap_or_else(|e| panic!("{} cannot be hired: {e}", preset.id));
+        assert_eq!(
+            (clean.name, clean.avatar, clean.color, clean.system_prompt, clean.skills),
+            (draft.name, draft.avatar, draft.color, draft.system_prompt, draft.skills),
+            "{} is stored differently from how the cafeteria shows it",
+            preset.id
+        );
+    }
 }
 
 fn titled(file: &Value) {

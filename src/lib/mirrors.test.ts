@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { compact, money } from "../components/Spend";
+import { HIREABLE } from "./cafeteria";
 import { LIMITS } from "./limits";
 import { allows } from "./plugins";
 import { groupNamed } from "./presence";
@@ -75,6 +76,9 @@ const CHECKS: Record<string, Check> = {
   "event-spec": each(({ service, topic }: { service: string; topic: string }) =>
     eventSpec(service, topic),
   ),
+  hireable: (file) => {
+    expect(HIREABLE).toEqual(file);
+  },
   "human-gap": each(humanGap),
   limits: (file) => {
     expect(LIMITS.map(({ key, min, max }) => ({ input: key, expected: { min, max } }))).toEqual(
