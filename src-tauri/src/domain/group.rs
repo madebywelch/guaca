@@ -2,7 +2,7 @@ use crate::domain::effort::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 
 use super::ids::GroupId;
-use crate::config::{InferenceConfig, Provider};
+use crate::config::{clamp_request_timeout, InferenceConfig, Provider};
 use crate::runtime::guard::GuardLimits;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -136,10 +136,6 @@ fn override_of(value: &Option<String>) -> Option<String> {
     value.as_ref().map(|raw| raw.trim().to_string()).filter(|trimmed| !trimmed.is_empty())
 }
 
-fn clamp_timeout(secs: u64) -> u64 {
-    secs.clamp(5, 900)
-}
-
 impl GroupDraft {
     pub fn validate(&self) -> Result<CleanGroup, GroupError> {
         let name = self.name.trim();
@@ -164,7 +160,7 @@ impl GroupDraft {
                 default_model: override_of(&raw.default_model),
                 subscription_model: override_of(&raw.subscription_model),
                 reasoning_effort: raw.reasoning_effort,
-                request_timeout_secs: raw.request_timeout_secs.map(clamp_timeout),
+                request_timeout_secs: raw.request_timeout_secs.map(clamp_request_timeout),
             }),
         };
 
@@ -376,6 +372,24 @@ mod tests {
             InferenceOverrides { request_timeout_secs: Some(99_999), ..Default::default() },
         );
         assert_eq!(d.validate().unwrap().inference.unwrap().request_timeout_secs, Some(900));
+    }
+
+    #[test]
+    fn a_group_timeout_is_clamped_to_the_range_the_app_timeout_is() {
+        for asked in [0, 4, 5, 6, 120, 899, 900, 901, u64::MAX] {
+            let d = with_inference(
+                "Research",
+                InferenceOverrides { request_timeout_secs: Some(asked), ..Default::default() },
+            );
+            let group = d.validate().unwrap().inference.unwrap().request_timeout_secs;
+            let mut app = crate::config::AppConfig::default();
+            app.apply(crate::config::SettingsPatch {
+                request_timeout_secs: Some(asked),
+                ..Default::default()
+            })
+            .unwrap();
+            assert_eq!(group, Some(app.inference.request_timeout_secs), "asked for {asked}s");
+        }
     }
 
     #[test]
