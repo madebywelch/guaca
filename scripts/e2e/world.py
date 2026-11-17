@@ -330,16 +330,64 @@ class Egress:
         self.sock.close()
 
 
+UpdaterScript = Callable[[dict], "dict | None"]
+
+
+class Updater:
+
+    def __init__(self, path: Path, evidence: Path) -> None:
+        self.path = path
+        self.asked: list[dict] = []
+        self.script: UpdaterScript = lambda ask: None
+        self._log = evidence / "updater.jsonl"
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.bind(str(path))
+        self.sock.listen(16)
+        self._open = True
+        threading.Thread(target=self._serve, daemon=True).start()
+
+    def _serve(self) -> None:
+        while self._open:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            with conn:
+                conn.settimeout(5)
+                try:
+                    ask = json.loads(conn.makefile("rb").readline())
+                except (OSError, ValueError):
+                    continue
+                self.asked.append(ask)
+                reply = self.script(ask)
+                with self._log.open("a") as log:
+                    log.write(json.dumps({"asked": ask, "answered": reply}) + "\n")
+                if reply is None:
+                    continue
+                try:
+                    conn.sendall((json.dumps(reply) + "\n").encode())
+                except OSError:
+                    pass
+
+    def updates(self) -> list[dict]:
+        return [ask for ask in self.asked if ask.get("ask") == "update"]
+
+    def stop(self) -> None:
+        self._open = False
+        self.sock.close()
+
+
 class Host:
 
     def __init__(self, scratch: Path, evidence: Path, egress: Egress, binary: Path,
-                 minute_ms: int | None = None) -> None:
+                 minute_ms: int | None = None, updater: Path | None = None) -> None:
         self.root = scratch / "host"
         self.home = scratch / "home"
         for directory in (self.root, self.home):
             directory.mkdir(parents=True, exist_ok=True)
         self.binary = binary
         self.minute_ms = minute_ms
+        self.updater = updater
         self.egress = egress
         self.port = free_port()
         self.origin = f"http://127.0.0.1:{self.port}"
@@ -372,6 +420,8 @@ class Host:
         }
         if self.minute_ms:
             env["GUACA_PROBE_MINUTE_MS"] = str(self.minute_ms)
+        if self.updater:
+            env["GUACA_UPDATER_SOCKET"] = str(self.updater)
         self.starts += 1
         with self.log.open("ab") as log:
             log.write(f"---- start {self.starts} ----\n".encode())
@@ -448,7 +498,7 @@ class Host:
 class World:
 
     def __init__(self, scenario: str, run: int, evidence_root: Path, clock_minute_ms: int | None = None,
-                 binary: Path | None = None) -> None:
+                 binary: Path | None = None, updater: bool = False) -> None:
         self.scenario = scenario
         self.run = run
         self.scratch = SCRATCH / uuid.uuid4().hex[:12]
@@ -465,8 +515,10 @@ class World:
         self.egress = Egress(self.evidence / "egress.jsonl")
         self.browser_egress = Egress(self.evidence / "browser-egress.jsonl")
         self.model = Model(self.evidence)
+        self.updater = Updater(self.scratch / "updater.sock", self.evidence) if updater else None
         self.host = Host(self.scratch, self.evidence, self.egress,
-                         binary or (GUACAD_CLOCK if clock_minute_ms else GUACAD), clock_minute_ms)
+                         binary or (GUACAD_CLOCK if clock_minute_ms else GUACAD), clock_minute_ms,
+                         self.updater.path if self.updater else None)
         self.browser: Browser | None = None
 
 
@@ -511,7 +563,8 @@ class World:
 
     def close(self) -> None:
         for stop in (lambda: self.browser and self.browser.close(), self.host.stop,
-                     self.model.stop, self.egress.stop, self.browser_egress.stop):
+                     self.model.stop, self.egress.stop, self.browser_egress.stop,
+                     lambda: self.updater and self.updater.stop()):
             try:
                 stop()
             except Exception:
