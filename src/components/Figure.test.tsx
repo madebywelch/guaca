@@ -278,7 +278,7 @@ describe("a page that hands a value back", () => {
           }),
         );
       });
-    return { ...view, say };
+    return { ...view, frame, say };
   };
 
   it("shows what was handed back and sends nothing on its own", async () => {
@@ -336,6 +336,36 @@ describe("a page that hands a value back", () => {
     say({ plan: "pro" });
 
     expect(screen.queryByText(/answer ready/)).toBeNull();
+  });
+
+  it("trusts only its own frame, whatever origin another window claims", async () => {
+    const { frame, say } = await answering();
+    const other = document.createElement("iframe");
+    document.body.append(other);
+    const forge = (source: Window | null, guaca: string) =>
+      act(() => {
+        window.dispatchEvent(
+          new MessageEvent("message", {
+            source,
+            origin: "null",
+            data: { guaca, value: '{"plan":"forged"}', height: 900 },
+          }),
+        );
+      });
+    const before = frame.style.height;
+
+    for (const source of [other.contentWindow, window]) {
+      for (const guaca of ["artifact-answer", "artifact-send", "artifact-height"]) {
+        forge(source, guaca);
+      }
+    }
+    other.remove();
+
+    expect(screen.queryByText('{"plan":"forged"}')).toBeNull();
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(frame.style.height).toBe(before);
+    say('{"plan":"pro"}');
+    expect(screen.getByText('{"plan":"pro"}')).toBeTruthy();
   });
 
   it("draws nothing where there is nobody to answer", async () => {
