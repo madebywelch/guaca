@@ -201,8 +201,11 @@ exact text, so an unrelated edit keeps a grant and a reworded comment loses it,
 and a grant that matches nothing fails. A change to the ledger fails the check
 until the owner approves that exact ledger: the approval is the pull request
 label `grants-approved-` followed by the first 12 hex digits of the SHA-256 of
-`grants.json`, which lives outside the diff, so any later edit to the ledger
-needs a new one and the author never approves their own. A push to `main`
+what `grants.json` says (parsed, with every object's keys in sorted order and
+no whitespace), which lives outside the diff, so any later change to what the
+ledger says needs a new one, a change to its formatting alone does not, and the
+author never approves their own. `node scripts/check-grants.mjs hash` prints
+the label. A push to `main`
 prints the change and passes, since `main` only takes a pull request whose
 gate was green. The error says what to do instead: encode a constraint as a
 type, an assertion or a test, put the why in the commit message, fix the cause

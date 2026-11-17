@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { check, hashText, PROSE, report, sweep, unitsOf } from "./check-grants.mjs";
+import { approvalFor, check, hashText, PROSE, report, sweep, unitsOf } from "./check-grants.mjs";
 import { scanFiles } from "./grants/lex.mjs";
 
 const CLI = join(dirname(fileURLToPath(import.meta.url)), "check-grants.mjs");
@@ -362,7 +362,7 @@ function scenario(files, body) {
 
 const SOURCE = "export function a() {\n  const b = 1;\n  return 1;\n}\n";
 const OLD = "export function a() {\n  // an old comment\n  return 1;\n}\n";
-const approvalOf = (repo) => "grants-approved-" + hashText(readFileSync(join(repo.dir, "grants.json"), "utf8")).slice(0, 12);
+const approvalOf = (repo) => approvalFor(JSON.parse(readFileSync(join(repo.dir, "grants.json"), "utf8")));
 const grantOf = (kind, path, text, words = "keep it") => ({ kind, path, sha256: hashText(text), words, date: "2026-11-17" });
 
 describe("a change", () => {
@@ -617,6 +617,26 @@ describe("a change", () => {
     }),
   );
   it(
+    "keeps an approval when only the ledger's formatting changes",
+    scenario({ "src/a.ts": OLD }, (repo) => {
+      setLedger(repo.dir, (ledger) => ledger.grants.push(grantOf("comment", "src/a.ts", "// an old comment")));
+      const approved = approvalOf(repo);
+      const ledger = JSON.parse(readFileSync(join(repo.dir, "grants.json"), "utf8"));
+      writeFileSync(join(repo.dir, "grants.json"), JSON.stringify({ grants: ledger.grants, upstream: ledger.upstream, existing: ledger.existing }) + "\n");
+      assert.deepEqual(check(repo.dir, { base: repo.base, approvals: [approved] }).problems, []);
+    }),
+  );
+  it(
+    "treats a ledger whose formatting alone changed as unchanged",
+    scenario({ "src/a.ts": SOURCE }, (repo) => {
+      const ledger = JSON.parse(readFileSync(join(repo.dir, "grants.json"), "utf8"));
+      writeFileSync(join(repo.dir, "grants.json"), JSON.stringify({ grants: ledger.grants, upstream: ledger.upstream, existing: ledger.existing }, null, 4));
+      const result = check(repo.dir, { base: repo.base });
+      assert.deepEqual([...result.findings, ...result.problems], []);
+      assert.equal(result.approval, null);
+    }),
+  );
+  it(
     "prints a grant it removes or rewords",
     scenario({ "src/a.ts": OLD }, (repo, run) => {
       write(repo.dir, { "src/a.ts": OLD + "// an old comment\n" });
@@ -804,6 +824,30 @@ describe("the command", () => {
       const out = cli(repo, ["--base", repo.base], { GRANTS_APPROVALS: "other-label " + approvalOf(repo) });
       assert.equal(out.status, 0, out.stdout);
       assert.match(out.stdout, /GRANTS CHANGED[\s\S]*\/\/ the owner wants this/);
+    }),
+  );
+});
+
+describe("hash", () => {
+  it(
+    "prints the approval a ledger needs, from its content with keys in sorted order",
+    scenario({ "src/a.ts": SOURCE }, (repo) => {
+      writeFileSync(
+        join(repo.dir, "grants.json"),
+        '{\n  "grants": [{ "words": "caf\\u00e9 \\"ok\\"", "date": "2026-11-17" }],\n  "existing": { "files": ["README.md"], "commit": "abc" }\n}\n',
+      );
+      const out = cli(repo, ["hash"]);
+      assert.equal(out.status, 0, out.stderr);
+      assert.equal(out.stdout, "grants-approved-b97fbc127c67\n");
+    }),
+  );
+  it(
+    "prints the label the check asks for",
+    scenario({ "src/a.ts": OLD }, (repo) => {
+      setLedger(repo.dir, (ledger) => ledger.grants.push(grantOf("comment", "src/a.ts", "// an old comment")));
+      const label = cli(repo, ["hash"]).stdout.trim();
+      assert.match(cli(repo, ["--base", repo.base]).stdout, new RegExp(label));
+      assert.equal(cli(repo, ["--base", repo.base], { GRANTS_APPROVALS: label }).status, 0);
     }),
   );
 });

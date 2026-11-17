@@ -20,6 +20,7 @@ export const DATA = [
 ];
 const KINDS = new Set(["comment", "suppression", "document"]);
 const GRANT_COMMAND = "node " + relative(process.cwd(), fileURLToPath(import.meta.url)) + " grant";
+const HASH_COMMAND = "node " + relative(process.cwd(), fileURLToPath(import.meta.url)) + " hash";
 const READERS = relative(process.cwd(), fileURLToPath(new URL("./grants/lex.mjs", import.meta.url)));
 const DATA_LIST = relative(process.cwd(), fileURLToPath(import.meta.url));
 
@@ -312,8 +313,22 @@ function readLedger(repo, rev) {
   }
 }
 
-export function approvalFor(ledgerText) {
-  return "grants-approved-" + hashText(ledgerText).slice(0, 12);
+export function canonical(value) {
+  if (Array.isArray(value)) return "[" + value.map(canonical).join(",") + "]";
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  return "{" + Object.keys(value).sort().map((key) => JSON.stringify(key) + ":" + canonical(value[key])).join(",") + "}";
+}
+
+function contentOf(ledgerText) {
+  try {
+    return ledgerText === null ? null : canonical(JSON.parse(ledgerText));
+  } catch {
+    return null;
+  }
+}
+
+export function approvalFor(ledger) {
+  return "grants-approved-" + hashText(canonical(ledger)).slice(0, 12);
 }
 
 function parseLedger(text, problems) {
@@ -496,17 +511,19 @@ export function check(repo, { base, head = null, ledgerOverride, proseByDiff = f
   }
   const baseText = readLedger(repo, base);
   let approval = null;
-  if (ledgerGate && ledgerText !== null && ledgerText !== baseText) {
-    approval = approvalFor(ledgerText);
+  if (ledgerGate && ledger !== null && canonical(ledger) !== contentOf(baseText)) {
+    approval = approvalFor(ledger);
     if (!approvals.includes(approval)) {
       problems.push({
         path: LEDGER,
         message:
           "differs from the base, and only the owner approves a ledger change. Stop here: report the exact text of each grant above, and what you tried instead, to whoever directs the work, and wait. The author never approves their own ledger change. The approval is the pull request label " +
           approval +
-          ", made from the SHA-256 of this exact " +
+          ", made from the SHA-256 of what this " +
           LEDGER +
-          ", so any later edit to it needs a new approval.",
+          " says, so any later change to what it says needs a new approval and a change to its formatting alone does not. " +
+          HASH_COMMAND +
+          " prints it.",
       });
     }
   }
@@ -735,6 +752,10 @@ function main() {
     const date = options.date ?? new Date().toISOString().slice(0, 10);
     const entry = grant(repo, options.positional[1], options.words, date);
     console.log("recorded " + JSON.stringify(entry) + " in " + LEDGER + "; the gate prints it to whoever merges this change");
+    return 0;
+  }
+  if (options.positional[0] === "hash") {
+    console.log(approvalFor(JSON.parse(readFileSync(join(repo, LEDGER), "utf8"))));
     return 0;
   }
   if (options.positional[0] === "strip") {
