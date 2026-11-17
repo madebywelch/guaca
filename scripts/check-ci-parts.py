@@ -14,7 +14,7 @@ bodies = {
     name: re.findall(r"^\s*(run_\w+)\s*$", body, re.M)
     for name, body in re.findall(r"^(run_\w+)\(\) \{\n(.*?)^\}", script, re.M | re.S)
 }
-arguments = {function: argument for argument, function in re.findall(r"^\s*([a-z]+)\) (run_\w+) ;;", script, re.M)}
+arguments = {function: argument for argument, function in re.findall(r"^\s*([a-z0-9]+)\) (run_\w+) ;;", script, re.M)}
 everything = re.search(r"^\s*all\)\n(.*?);;", script, re.M | re.S)
 if not everything:
     sys.exit(f"{gate} has no all) case")

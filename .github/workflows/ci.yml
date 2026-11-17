@@ -134,9 +134,38 @@ jobs:
       - name: Build the daemon image and prove it answers
         run: ./scripts/image.sh
 
+  e2e:
+    name: end-to-end scenarios (guacad, headless Chromium, stand-in model)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: src-tauri
+      - name: Let Chromium sandbox itself under Ubuntu's AppArmor user namespace rule
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - run: ./scripts/ci.sh e2e
+      - name: Keep the scenario evidence of a failed run
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-evidence
+          path: src-tauri/target/verify/evidence
+          retention-days: 7
+
   gate:
     if: always()
-    needs: [grants, web, desktop, daemon, formal, image]
+    needs: [grants, web, desktop, daemon, formal, image, e2e]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

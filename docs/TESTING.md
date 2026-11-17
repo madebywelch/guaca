@@ -165,8 +165,9 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib \
 ## Verify
 
 ```sh
-./scripts/ci.sh          # lint, typecheck, build, every test suite, the icons
+./scripts/ci.sh          # lint, typecheck, build, every test suite, the icons, the scenarios
 ./scripts/ci.sh rust     # Rust only: desktop, then daemon
+./scripts/ci.sh e2e      # the end-to-end scenarios: scripts/verify.py --build
 ./scripts/image.sh       # the daemon's image: build it, run it, prove it answers
 scripts/probe.py         # on a Mac: what only a Mac does, see docs/PROBE.md
 GUAC_LOG=guac=debug pnpm app
@@ -176,6 +177,19 @@ Getting a change on screen has its own file: `.claude/skills/run-guaca`. It
 holds the harness that draws a component in seconds without a Rust build, a key
 or any spend; what to do when the app refuses to start; and the rule about the
 operator's own workspace, which every workspace on the machine shares.
+
+**User-visible behavior ships with a scenario.** A change a person can see or
+do in the window, or one that changes what a Host does with their work (a
+reply, a request, For you, a restart, a routine), is not done until a scenario
+in `scripts/e2e/scenarios.py` drives it from an empty workspace the way a
+person does, and asserts its failure path too. `scripts/verify.py` runs the
+real daemon and web bundle with the model scripted on loopback, so a scenario
+costs nothing, needs no key and reaches no network, and its result depends only
+on the commit. Break the behavior on purpose and watch the scenario fail before
+trusting it, and run it `--runs 20` before adding it. `.claude/skills/verify`
+is how to drive, read the evidence and add one; `scripts/verify.py --list` is
+the journeys covered and the claims each must pass. What only the native shell does (the window,
+banners, the menu bar) is `scripts/verify.py mac`, which is the probe below.
 
 Three suites ask three different questions, and a change can pass one while
 failing the next. *Three test suites, asking different questions* in
@@ -218,6 +232,7 @@ exactly what `./scripts/ci.sh` with no argument runs.
 | rust daemon (no Tauri, no frontend) | `ci.sh daemon`: Clippy and every test built as the daemon | Rust only, so a dependency on Tauri or `dist/` fails here |
 | formal (TLA+ model check) | `ci.sh formal`: the conversation recovery model | Java, and the TLA+ tools jar, cached by its pinned version |
 | images (Dockerfile.ci and the daemon image) | builds `Dockerfile.ci`, then `./scripts/image.sh` | Docker |
+| end-to-end scenarios (guacad, headless Chromium, stand-in model) | `ci.sh e2e`: builds `dist/` and `guacad`, then drives every scenario in `scripts/e2e/scenarios.py` once | Rust, Node 22 and pnpm, the runner's Chrome |
 | gate | passes only when every job above passed | nothing |
 
 Each job starts on a fresh GitHub-hosted Ubuntu 24.04 machine, never on one of

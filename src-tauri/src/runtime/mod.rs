@@ -696,7 +696,9 @@ impl Runtime {
                 routine_delivery: Mutex::new(()),
                 runs: Mutex::new(Runs::default()),
                 waiting: Mutex::new(HashMap::new()),
-                approval_window: AtomicU64::new(APPROVAL_WINDOW.as_millis() as u64),
+                approval_window: AtomicU64::new(crate::probe_clock::scaled(
+                    APPROVAL_WINDOW.as_millis() as i64,
+                ) as u64),
                 workspace,
                 skills,
                 notebooks,

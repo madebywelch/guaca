@@ -30,6 +30,11 @@ class CiParts(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("./scripts/ci.sh daemon", result.stderr)
 
+    def test_a_part_named_with_a_digit_is_checked(self):
+        result = check(gate, workflow.replace("./scripts/ci.sh e2e", "true"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("./scripts/ci.sh e2e", result.stderr)
+
     def test_a_part_added_to_the_gate_alone_fails(self):
         script = gate.replace("    run_connector\n", "    run_connector\n    run_probe\n").replace(
             "  connector) run_connector ;;\n", "  connector) run_connector ;;\n  probe) run_probe ;;\n"
