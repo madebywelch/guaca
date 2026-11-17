@@ -6,7 +6,7 @@ import { LIMITS } from "./limits";
 import { allows } from "./plugins";
 import { eventSpec, humanGap, parseTrigger, repeats } from "./routine";
 import { attachedFiles, sendRecipients } from "./toolArgs";
-import { readSpent } from "./trail";
+import { readSpent, surfaceOf } from "./trail";
 import { type AgentId, type PluginAccess } from "./types";
 
 const MIRRORS = resolve(__dirname, "mirrors");
@@ -50,6 +50,7 @@ const CHECKS: Record<string, Check> = {
   "tool-names": each(({ tool, args }: { tool: string; args: unknown }) =>
     tool === "attach_file" ? attachedFiles(args) : sendRecipients(args),
   ),
+  "tool-surfaces": each(surfaceOf),
   trigger: each((spec: string) => {
     const trigger = parseTrigger(spec);
     return trigger.kind === "unknown" ? null : { trigger, repeats: repeats(spec) };

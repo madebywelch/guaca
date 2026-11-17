@@ -13,8 +13,9 @@ use guac_lib::domain::connector::CleanConnector;
 use guac_lib::domain::ids::AgentId;
 use guac_lib::domain::plugin::PluginAccess;
 use guac_lib::domain::routine::{human_gap, Cadence, EventTrigger, Trigger};
+use guac_lib::llm::modality::Modalities;
 use guac_lib::llm::openrouter::{LlmClient, ToolCall};
-use guac_lib::llm::tools::{self, ToolInvocation};
+use guac_lib::llm::tools::{self, Surfaces, ToolInvocation};
 use guac_lib::runtime::events::RecordingSink;
 use guac_lib::runtime::guard::GuardLimits;
 use guac_lib::runtime::{OnDisk, Runtime};
@@ -27,6 +28,7 @@ const CHECKS: &[(&str, Check)] = &[
     ("limits", limits),
     ("plugin-access", plugin_access),
     ("tool-names", tool_names),
+    ("tool-surfaces", tool_surfaces),
     ("trigger", trigger),
 ];
 
@@ -164,6 +166,18 @@ fn tool_names(file: &Value) {
             Err(_) => Vec::new(),
         }
     });
+}
+
+fn tool_surfaces(file: &Value) {
+    each(file, |name: String| tools::surface_of(&name));
+    let named: BTreeSet<String> =
+        file.as_array().unwrap().iter().map(|case| parsed(&case["input"])).collect();
+    let missing: Vec<String> = tools::specs(Surfaces::both(), Modalities::seeing())
+        .into_iter()
+        .map(|spec| spec.name)
+        .filter(|name| !named.contains(name))
+        .collect();
+    assert_eq!(missing, Vec::<String>::new(), "tools with no surface vector");
 }
 
 #[derive(Deserialize)]

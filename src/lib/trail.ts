@@ -395,17 +395,21 @@ export function attempt(title: string): string {
   return verb ? `Tried to ${verb}${rest ? ` ${rest}` : ""}` : `Failed: ${title}`;
 }
 
-export function machineInUse(work: LiveCall[] | undefined): "computer" | "browser" | null {
+export type Machine = "computer" | "browser";
+
+export function surfaceOf(tool: string): Machine | null {
+  if (tool === "browse") return "browser";
+  if (tool === "run_command" || tool === "open_on_desktop" || tool === "use_screen") {
+    return "computer";
+  }
+  return null;
+}
+
+export function machineInUse(work: LiveCall[] | undefined): Machine | null {
   for (const call of work ?? []) {
     if (call.done !== null) continue;
-    if (call.name === "browse") return "browser";
-    if (
-      call.name === "run_command" ||
-      call.name === "open_on_desktop" ||
-      call.name === "use_screen"
-    ) {
-      return "computer";
-    }
+    const surface = surfaceOf(call.name);
+    if (surface) return surface;
   }
   return null;
 }
