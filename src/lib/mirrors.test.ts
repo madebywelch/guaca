@@ -6,6 +6,7 @@ import { LIMITS } from "./limits";
 import { allows } from "./plugins";
 import { eventSpec, humanGap, parseTrigger, repeats } from "./routine";
 import { attachedFiles, sendRecipients } from "./toolArgs";
+import { readSpent } from "./trail";
 import { type AgentId, type PluginAccess } from "./types";
 
 const MIRRORS = resolve(__dirname, "mirrors");
@@ -26,6 +27,14 @@ function each<I, E>(actual: (input: I) => E): Check {
 }
 
 const CHECKS: Record<string, Check> = {
+  credentials: (file) => {
+    for (const { input, expected } of file as Case<
+      { summary: string },
+      { written: string; spent: string[] }
+    >[]) {
+      expect(readSpent(expected.written)).toEqual({ spent: expected.spent, rest: input.summary });
+    }
+  },
   "event-spec": each(({ service, topic }: { service: string; topic: string }) =>
     eventSpec(service, topic),
   ),

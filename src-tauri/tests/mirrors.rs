@@ -6,12 +6,18 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use guac_lib::config::AppConfig;
+use guac_lib::db::Store;
+use guac_lib::domain::agent::CleanDraft;
+use guac_lib::domain::connector::CleanConnector;
 use guac_lib::domain::ids::AgentId;
 use guac_lib::domain::plugin::PluginAccess;
 use guac_lib::domain::routine::{human_gap, Cadence, EventTrigger, Trigger};
-use guac_lib::llm::openrouter::ToolCall;
+use guac_lib::llm::openrouter::{LlmClient, ToolCall};
 use guac_lib::llm::tools::{self, ToolInvocation};
+use guac_lib::runtime::events::RecordingSink;
 use guac_lib::runtime::guard::GuardLimits;
+use guac_lib::runtime::{OnDisk, Runtime};
 
 type Check = fn(&Value);
 
@@ -56,7 +62,8 @@ fn every_vector_file_has_a_check_here_and_every_check_a_file() {
         .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
         .map(|path| path.file_stem().unwrap().to_string_lossy().into_owned())
         .collect();
-    let checks: BTreeSet<String> = CHECKS.iter().map(|(name, _)| name.to_string()).collect();
+    let mut checks: BTreeSet<String> = CHECKS.iter().map(|(name, _)| name.to_string()).collect();
+    checks.insert("credentials".to_string());
     assert_eq!(files, checks);
 }
 
@@ -157,4 +164,81 @@ fn tool_names(file: &Value) {
             Err(_) => Vec::new(),
         }
     });
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Credential {
+    service: String,
+    env_var: String,
+}
+
+#[derive(Deserialize)]
+struct Command {
+    connectors: Vec<Credential>,
+    command: String,
+    summary: String,
+}
+
+#[derive(Deserialize)]
+struct Written {
+    written: String,
+}
+
+#[tokio::test]
+async fn every_credential_vector_is_the_wording_the_runtime_writes() {
+    for case in vectors("credentials").as_array().unwrap() {
+        let command: Command = parsed(&case["input"]);
+        let expected: Written = parsed(&case["expected"]);
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("guac.db")).unwrap();
+        let card = store
+            .create_agent(&CleanDraft {
+                group_id: None,
+                name: "Ada".into(),
+                avatar: "orb".into(),
+                color: "#7fb069".into(),
+                model: "test/model".into(),
+                subscription_model: None,
+                reasoning_effort: None,
+                system_prompt: String::new(),
+                skills: vec![],
+            })
+            .unwrap();
+        for credential in command.connectors {
+            store
+                .create_connector(&CleanConnector {
+                    group_id: card.group_id,
+                    service: credential.service,
+                    account: String::new(),
+                    env_var: credential.env_var,
+                    note: String::new(),
+                    secret: "not-a-real-secret".into(),
+                    agents: vec![card.id],
+                })
+                .unwrap();
+        }
+        let config = AppConfig {
+            version: guac_lib::config::CURRENT_VERSION,
+            operator_name: String::new(),
+            inference: Default::default(),
+            limits: Default::default(),
+            e2b: Default::default(),
+            kernel: Default::default(),
+            webhook: Default::default(),
+            quick_actions: vec![],
+            widgets: vec![],
+            attention: Default::default(),
+            delivery: Default::default(),
+        };
+        let runtime = Runtime::new(
+            store,
+            LlmClient::new().unwrap(),
+            config,
+            OnDisk::under(dir.path()),
+            RecordingSink::new(),
+        );
+        let written = runtime.credentials_named_in(&card, &command.command) + &command.summary;
+        assert_eq!(written, expected.written, "input {}", case["input"]);
+    }
 }
