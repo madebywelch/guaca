@@ -148,7 +148,7 @@ pub async fn authorize(
     let opened = landing.open(&state).await?;
     let redirect_uri = opened.redirect_uri.clone();
 
-    let client = register(&http, &registration_endpoint, &redirect_uri, gate).await?;
+    let client = register(&http, &registration_endpoint, &opened, gate).await?;
 
     let mut url = format!(
         "{}?response_type=code&client_id={}&redirect_uri={}&state={}\
@@ -582,12 +582,12 @@ impl Registered {
 async fn register(
     http: &reqwest::Client,
     endpoint: &str,
-    redirect_uri: &str,
+    landing: &Opened,
     gate: &Gate<'_>,
 ) -> Result<Registered, OauthError> {
     let body = serde_json::json!({
         "client_name": "Guaca",
-        "redirect_uris": [redirect_uri],
+        "redirect_uris": [landing.redirect_uri],
         "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
         "token_endpoint_auth_method": "none",
