@@ -236,6 +236,21 @@ class Browser:
             if not node.get("ignored") and (node.get("role") or {}).get("value") == role
         })
 
+    def names_within(self, container_role: str, container_name: str, role: str) -> list[str]:
+        nodes = self.ax_nodes()
+        by_id = {node["nodeId"]: node for node in nodes}
+        roots = [node for node in nodes if (node.get("role") or {}).get("value") == container_role
+                 and str((node.get("name") or {}).get("value") or "") == container_name]
+        found, stack = [], [child for root in roots for child in root.get("childIds", [])]
+        while stack:
+            node = by_id.get(stack.pop())
+            if node is None:
+                continue
+            stack.extend(node.get("childIds", []))
+            if not node.get("ignored") and (node.get("role") or {}).get("value") == role:
+                found.append(str((node.get("name") or {}).get("value") or ""))
+        return sorted(found)
+
     def one(self, role: str, name: str, exact: bool = True) -> dict:
         found = self.find(role, name, exact)
         if len(found) == 1:

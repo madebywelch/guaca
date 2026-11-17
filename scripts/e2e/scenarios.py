@@ -68,9 +68,10 @@ def new_agent(w: World, name: str, instructions: str) -> None:
 def open_agent(w: World, name: str) -> None:
     if w.ui.find("log", f"Conversation with {name}"):
         return
-    face = w.wait(f"{name} is on the timeline", lambda: [
-        n for n in w.ui.names("button") if n.startswith(f"{name}, ")])
-    w.ui.click("button", face[0])
+    w.ui.click("button", "Agents")
+    row = w.wait(f"{name} is listed among the agents", lambda: [
+        n for n in w.ui.names_within("dialog", "Groups and agents", "button") if n.startswith(name)])
+    w.ui.click("button", row[0])
     w.wait(f"{name}'s conversation opens", lambda: w.ui.find("log", f"Conversation with {name}"))
 
 

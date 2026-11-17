@@ -57,6 +57,18 @@ class Pipe(unittest.TestCase):
         whole, rest = split_frames(rest + b':2}\0')
         self.assertEqual((whole, rest), ([b'{"id":2}'], b""))
 
+    def test_names_within_a_dialog_leave_out_the_same_names_behind_it(self) -> None:
+        page = Rendering(appears_after=None)
+        page.ax_nodes = lambda: [
+            {"nodeId": "1", "role": {"value": "main"}, "childIds": ["2"]},
+            {"nodeId": "2", "role": {"value": "button"}, "name": {"value": "Robin finished"}},
+            {"nodeId": "3", "role": {"value": "dialog"}, "name": {"value": "Agents"}, "childIds": ["4"]},
+            {"nodeId": "4", "role": {"value": "navigation"}, "childIds": ["5", "6"]},
+            {"nodeId": "5", "role": {"value": "button"}, "name": {"value": "Robin done 1m"}},
+            {"nodeId": "6", "role": {"value": "button"}, "name": {"value": "Sam"}, "ignored": True},
+        ]
+        self.assertEqual(page.names_within("dialog", "Agents", "button"), ["Robin done 1m"])
+
     def test_a_click_waits_for_a_button_the_page_is_still_rendering(self) -> None:
         page = Rendering(appears_after=3)
         page.click("button", "Deny")
