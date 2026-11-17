@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use guac_lib::secrets::ProcessEnv;
 
 use guac_lib::db::Store;
 use guac_lib::e2b::E2bClient;
@@ -33,14 +33,14 @@ fn configured() -> Option<guac_lib::config::AppConfig> {
     (!config.e2b.api_key.trim().is_empty()).then_some(config)
 }
 
-fn credentials_holding(var: &str) -> Option<BTreeMap<String, String>> {
+fn credentials_holding(var: &str) -> Option<ProcessEnv> {
     let store = Store::open(&app_dir()?.join("guac.db")).ok()?;
     store
         .list_agents()
         .ok()?
         .into_iter()
         .filter_map(|group| store.connector_env(group.id).ok())
-        .find(|env| env.contains_key(var))
+        .find(|env| env.contains(var))
 }
 
 struct Machine {
@@ -50,7 +50,7 @@ struct Machine {
 }
 
 impl Machine {
-    async fn start(env: BTreeMap<String, String>, key: &str) -> Machine {
+    async fn start(env: ProcessEnv, key: &str) -> Machine {
         let client = E2bClient::new(key).expect("an E2B key is configured").with_env(env);
         let sandbox = client.create("connector-test", 300).await.expect("a machine to work on");
         Machine { client, id: sandbox.id, token: sandbox.envd_token }

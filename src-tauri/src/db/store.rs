@@ -2004,10 +2004,7 @@ impl Store {
         Ok(out)
     }
 
-    pub fn connector_env(
-        &self,
-        agent: AgentId,
-    ) -> Result<std::collections::BTreeMap<String, String>, StoreError> {
+    pub fn connector_env(&self, agent: AgentId) -> Result<crate::secrets::ProcessEnv, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
             "SELECT c.env_var, c.secret FROM connectors c
@@ -2021,7 +2018,7 @@ impl Store {
         if values.keys().any(|name| crate::domain::connector::reserved(name)) {
             return Err(StoreError::Corrupt("A secret uses a process-control variable. Remove it from the group's Secrets tab and use the service's token variable".into()));
         }
-        Ok(values)
+        Ok(crate::secrets::ProcessEnv::new(values))
     }
 
     pub fn connector_names(&self) -> Result<Vec<String>, StoreError> {
@@ -4645,7 +4642,7 @@ mod tests {
         assert!(!json.contains("hunter2"), "a secret reached the wire: {json}");
 
         let env = f.store.connector_env(agent.id).unwrap();
-        assert_eq!(env.get("GITHUB_TOKEN").map(String::as_str), Some("ghp_hunter2"));
+        assert_eq!(env.get("GITHUB_TOKEN"), Some("ghp_hunter2"));
     }
 
     #[test]
@@ -4665,7 +4662,7 @@ mod tests {
         assert_eq!(f.store.agent_connectors(mine.id).unwrap()[0].agents, vec![mine.id]);
         assert!(f.store.agent_connectors(peer.id).unwrap().is_empty());
         assert_eq!(
-            f.store.connector_env(mine.id).unwrap()["CLOUDFLARE_API_TOKEN"],
+            f.store.connector_env(mine.id).unwrap().get("CLOUDFLARE_API_TOKEN").unwrap(),
             "original-token"
         );
         assert!(f
@@ -4673,12 +4670,12 @@ mod tests {
             .update_connector(secret.id, &[mine.id, outsider.id], Some("wrong-token"))
             .is_err());
         assert_eq!(
-            f.store.connector_env(mine.id).unwrap()["CLOUDFLARE_API_TOKEN"],
+            f.store.connector_env(mine.id).unwrap().get("CLOUDFLARE_API_TOKEN").unwrap(),
             "original-token"
         );
         f.store.update_connector(secret.id, &[mine.id], Some("rotated-token")).unwrap();
         assert_eq!(
-            f.store.connector_env(mine.id).unwrap()["CLOUDFLARE_API_TOKEN"],
+            f.store.connector_env(mine.id).unwrap().get("CLOUDFLARE_API_TOKEN").unwrap(),
             "rotated-token"
         );
         f.store.update_agent(mine.id, &draft_in("Engineer", other.id)).unwrap();
@@ -4714,7 +4711,7 @@ mod tests {
         conn.execute_batch("ALTER TABLE agents DROP COLUMN tidied_through; ALTER TABLE agents DROP COLUMN last_tidy_at; ALTER TABLE groups DROP COLUMN tidy_since; ALTER TABLE groups DROP COLUMN tidy_hour; ALTER TABLE usage DROP COLUMN cached; ALTER TABLE pending_runs DROP COLUMN started_at; DROP TABLE permission_grants; ALTER TABLE decisions DROP COLUMN origin_ref; ALTER TABLE decisions DROP COLUMN origin; DROP TABLE outbox; DROP TABLE outcomes; ALTER TABLE decisions DROP COLUMN filed_run; DROP TABLE onboarding_hires; DROP TABLE operator_sends; DROP TRIGGER routine_delete_history; DROP TABLE routine_occurrences; ALTER TABLE plugins DROP COLUMN grant_generation; DROP TABLE pending_sandbox_resume; DROP TABLE resource_ledger; DROP TABLE workspace_identity; DROP TABLE approval_policies; ALTER TABLE groups DROP COLUMN rail_order; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
         migrations::run(&mut conn).unwrap();
         drop(conn);
-        assert_eq!(f.store.connector_env(mine.id).unwrap()["TOKEN"], "private-token");
+        assert_eq!(f.store.connector_env(mine.id).unwrap().get("TOKEN").unwrap(), "private-token");
         assert!(f.store.connector_env(discarded.id).unwrap().is_empty());
         let later = f.store.create_agent(&draft("Later")).unwrap();
         assert!(f.store.connector_env(later.id).unwrap().is_empty());
@@ -4884,7 +4881,7 @@ mod tests {
         f.store.create_connector(&key_for(other_group.id, "THEIRS", "b")).unwrap();
 
         assert_eq!(f.store.group_connectors(mine.group_id).unwrap().len(), 1);
-        assert!(!f.store.connector_env(mine.id).unwrap().contains_key("THEIRS"));
+        assert!(!f.store.connector_env(mine.id).unwrap().contains("THEIRS"));
     }
 
     #[test]
