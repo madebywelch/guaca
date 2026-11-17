@@ -130,24 +130,14 @@
 </main>
 
 <script>
-/* ===========================================================================
-   Tokens. src/styles.css, and nothing invented.
-   =========================================================================== */
 const T = {
   ink: "#0b0b0a", paper: "#ffffff", rail: "#f5f3ee",
   amber: "#b4530a", amberSoft: "#fdeed9",
   slate: "#2f4858", slateSoft: "#e9eff3", mint: "#14713f",
 };
 
-/* The shipping icon's colors, kept only so the comparison is honest. These are
-   the one set on this page that are not app tokens, which is the whole point. */
 const OLD = { tile: "#14281d", skin: "#386641", flesh: "#a7c957", pit: "#8b5e34" };
 
-/* ===========================================================================
-   Geometry, ported from src/avatars/form.ts. Static: t = 0, no mood, but the
-   gaze term is kept, because a body that leans after its eyes is the one thing
-   that separates a creature from an object and this page has to show both.
-   =========================================================================== */
 const FORM = { box: 64, center: 32, radius: 20, samples: 28 };
 const TAU = Math.PI * 2;
 const PULL = { swell: 0.8, flatten: 0.32, lean: 0.1, width: 0.7 };
@@ -183,7 +173,6 @@ function bodyPoints(lump, shape = {}, gaze) {
   return pts;
 }
 
-/** Catmull-Rom through a closed loop, as cubics. form.ts, verbatim. */
 function outline(pts) {
   const d = [`M${pts[0][0].toFixed(2)} ${pts[0][1].toFixed(2)}`];
   for (let i = 0; i < pts.length; i++) {
@@ -196,13 +185,6 @@ function outline(pts) {
   return d.join("") + "Z";
 }
 
-/**
- * Seat a body in the box: longest dimension to `span`, optically centered.
- *
- * Every variant is sized by this rather than by a hand-picked scale, so two of
- * them side by side are actually the same weight and a change to a lump cannot
- * quietly make one mark bigger than the rest.
- */
 function seat(pts, span, cx = FORM.center, cy = FORM.center) {
   const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
   const x0 = Math.min(...xs), x1 = Math.max(...xs);
@@ -220,26 +202,13 @@ function seat(pts, span, cx = FORM.center, cy = FORM.center) {
   return out;
 }
 
-/* The cast. `orb` is lifted from src/avatars/catalog.ts. `pit` is tuned for the
-   icon: a k=1 lobe at phase 0 is wide at the bottom and narrow at the top,
-   which is an avocado without anybody drawing one. */
 const LUMPS = {
   orb: { ax: 1, ay: 1, sig: [{ k: 2, amp: 0.02, phase: 0.4 }] },
   pit: { ax: 0.80, ay: 1.10, sig: [{ k: 1, amp: 0.105, phase: 0 }, { k: 2, amp: 0.022, phase: 0 }] },
 };
 
-/** How much of the tile the mark takes. One number, so every variant matches. */
 const SPAN = 40;
 
-/**
- * The pair: one big body and one small one, each leaning after its own look.
- *
- * Two agents, and the whole of what the icon says is in the relationship rather
- * than in either shape, so the numbers that carry it are the sizes (clearly
- * unequal, or it reads as one thing split in half), the diagonal, and the gap.
- * Both eyes are aimed across that gap, which is also what the gaze term bends
- * the two silhouettes along.
- */
 const PAIR = {
   big: { span: 29.0, at: [25.5, 36.2], gaze: [0.22, -0.16], eye: 0.20, look: [0.15, -0.11] },
   small: { span: 18.5, at: [42.6, 23.4], gaze: [-0.22, 0.16], eye: 0.22, look: [-0.13, 0.10] },
@@ -260,7 +229,6 @@ function pairBodies() {
 function circle(cx, cy, r, fill) { return `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${r.toFixed(2)}" fill="${fill}"/>`; }
 function path(d, fill) { return `<path d="${d}" fill="${fill}"/>`; }
 
-/** An eye: one stroke, four numbers, per src/avatars/eyes.ts. Idle is { w: .02, h: 2 }. */
 function eye(x, y, r, e, mirror, fill) {
   const w = (e.w ?? 0) * r, c = (e.c ?? 0) * r, a = (e.a ?? 0) * (mirror ? -1 : 1);
   return `<g transform="translate(${x.toFixed(2)} ${y.toFixed(2)}) rotate(${a})">`
@@ -268,7 +236,6 @@ function eye(x, y, r, e, mirror, fill) {
     + ` stroke-width="${((e.h ?? 2) * r).toFixed(2)}" stroke-linecap="round"/></g>`;
 }
 
-/** Superellipse. n = 5 is close to the macOS continuous corner. */
 function squircle(n = 5, steps = 180) {
   const a = FORM.box / 2, c = FORM.center, pts = [];
   for (let i = 0; i <= steps; i++) {
@@ -282,14 +249,6 @@ function squircle(n = 5, steps = 180) {
 }
 const TILE = squircle();
 
-/* ===========================================================================
-   The variants.
-
-   Each declares its own colors as a function of monochrome, because "which
-   shape is the hole" is a per-variant fact: the pit is punched to the tile in
-   one and is the only saturated thing in another, and a single shared palette
-   gets one of those wrong.
-   =========================================================================== */
 const VARIANTS = [
   {
     id: "current", name: "Current", family: "What is shipping",
@@ -347,7 +306,6 @@ const VARIANTS = [
     draw(P) {
       const b = seat(bodyPoints(LUMPS.pit), SPAN * 1.08, 32, 32.6);
       const cut = b.box.left + b.box.w * 0.26;
-      /* Center what is left of the mark, not the mark it was cut from. */
       const dx = 32 - (cut + b.box.right) / 2;
       return path(TILE, P.field)
         + `<clipPath id="wedgecut"><rect x="${cut.toFixed(2)}" y="0" width="64" height="64"/></clipPath>`
@@ -416,13 +374,8 @@ const VARIANTS = [
   },
 ];
 
-/* ===========================================================================
-   Rendering.
-   =========================================================================== */
 const state = { surface: "desk", inset: true, mono: false, tile: true, grid: false };
 
-/* Every control is in the query string, so a particular view is a link rather
-   than a sentence telling somebody which four boxes to tick. */
 const params = new URLSearchParams(location.search);
 for (const key of ["inset", "mono", "tile", "grid"]) {
   if (params.has(key)) state[key] = params.get(key) !== "0";
@@ -443,8 +396,6 @@ function resolve(variant) {
 
 function svg(variant, px) {
   const inner = variant.draw(resolve(variant));
-  /* macOS content is 824 of a 1024 canvas. Without it every icon on this page
-     looks a size larger than it will actually sit in the dock. */
   const k = state.inset ? 824 / 1024 : 1;
   const off = ((1 - k) * FORM.box) / 2;
   const clip = `c-${variant.id}-${px}`;
@@ -460,7 +411,6 @@ function svg(variant, px) {
     + `<g transform="translate(${off.toFixed(3)} ${off.toFixed(3)}) scale(${k})">${marks}${rules}</g></svg>`;
 }
 
-/** Drop the leading tile path so a mark can be judged with no field under it. */
 function stripTile(inner) {
   return inner.replace(/^<path d="M[^"]*Z" fill="[^"]*"\/>/, "");
 }
