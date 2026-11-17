@@ -61,6 +61,14 @@ run_formal() {
   bash scripts/formal.sh
 }
 
+run_e2e() {
+  step "End-to-end harness"
+  python3 scripts/verify.test.py
+
+  step "End-to-end scenarios"
+  python3 scripts/verify.py --build
+}
+
 run_connector() {
   step "Self-hosted Google connector"
   (cd connectors/google && pnpm install --frozen-lockfile && pnpm typecheck && pnpm test)
@@ -147,16 +155,18 @@ case "${1:-all}" in
   daemon) run_daemon ;;
   connector) run_connector ;;
   formal) run_formal ;;
+  e2e) run_e2e ;;
   all)
     run_assets
     run_scripts
     run_web
     run_rust
+    run_e2e
     run_connector
     run_formal
     ;;
   *)
-    echo "usage: $0 [all|assets|scripts|web|rust|desktop|daemon|connector|formal]" >&2
+    echo "usage: $0 [all|assets|scripts|web|rust|desktop|daemon|connector|formal|e2e]" >&2
     exit 2
     ;;
 esac

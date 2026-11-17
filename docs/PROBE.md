@@ -218,7 +218,9 @@ finished work is gathered for ten minutes before it is offered. A scenario
 about being away would wait twelve minutes a run. The scratch Host is built
 with a second test feature, `probe-host`, and a scenario that needs it starts
 the Host with `GUACA_PROBE_MINUTE_MS`, the length of a minute in milliseconds
-(between 1000 and 60000). On that Host both waits run on the shorter minute;
+(between 1000 and 60000). On that Host both waits run on the shorter minute,
+and so does the ten minutes a request is held before it lapses into For you,
+which is how `scripts/verify.py lapse` watches a lapse in ten seconds;
 nothing else changes, and nothing an agent reads says a different length.
 
 It is held to the same promise as the channel. `probe_clock::scaled` is the
