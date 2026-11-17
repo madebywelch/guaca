@@ -1,6 +1,3 @@
-# What an image build must not be handed. `.git` is excluded on purpose: the
-# commit is passed in as GUACA_COMMIT, so the same string reaches the daemon's
-# /health and the page's About without a repository in the build context.
 .git
 node_modules
 dist
