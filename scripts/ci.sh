@@ -5,7 +5,7 @@
 #
 #   ./scripts/ci.sh          everything
 #   ./scripts/ci.sh assets   just the icons and tray glyphs against their scripts
-#   ./scripts/ci.sh scripts  installer checks and probe unit tests
+#   ./scripts/ci.sh scripts  installer checks, probe unit tests, disk image layout
 #   ./scripts/ci.sh rust     just the Rust suite
 #   ./scripts/ci.sh web      just the frontend
 
@@ -45,6 +45,11 @@ run_scripts() {
 
   step "Probe evidence (no app or screen)"
   python3 scripts/probe.test.py
+
+  # Making the image needs hdiutil, so only its Finder layout is held here;
+  # opening a packaged image is a release step in docs/RELEASING.md.
+  step "Release disk image layout"
+  python3 scripts/package-dmg.test.py
 }
 
 run_connector() {
