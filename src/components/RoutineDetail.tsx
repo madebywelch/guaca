@@ -438,20 +438,22 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
               {webhookLine(address.url, secret ?? HIDDEN_SECRET, event.service, event.topic)}
             </pre>
             <div className="webhook__actions">
-              {secret === null && (
-                <button
-                  type="button"
-                  className="btn btn--small btn--ghost"
-                  onClick={() => {
-                    api
-                      .revealWebhookSecret()
-                      .then(setSecret)
-                      .catch((caught) => setError(errorMessage(caught)));
-                  }}
-                >
-                  Show secret
-                </button>
-              )}
+              <button
+                type="button"
+                className="btn btn--small btn--ghost"
+                onClick={() => {
+                  if (secret !== null) {
+                    setSecret(null);
+                    return;
+                  }
+                  api
+                    .revealWebhookSecret()
+                    .then(setSecret)
+                    .catch((caught) => setError(errorMessage(caught)));
+                }}
+              >
+                {secret === null ? "Show secret" : "Hide secret"}
+              </button>
               <button
                 type="button"
                 className="btn btn--small btn--ghost"

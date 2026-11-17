@@ -308,6 +308,23 @@ describe("RoutineDetail", () => {
     expect(actions.nextElementSibling).toBe(screen.getByText(/The body, if there is one/));
   });
 
+  it("hides the secret again once it has been shown", async () => {
+    open({ trigger: "event:stripe/invoice.payment_failed", nextRunAt: null });
+
+    const line = await screen.findByText(/curl -X POST/);
+    fireEvent.click(screen.getByRole("button", { name: "Show secret" }));
+    await waitFor(() => expect(line.textContent).toContain("Authorization: Bearer s3cr3t-s3cr3t"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide secret" }));
+    expect(line.textContent).not.toContain("s3cr3t");
+    expect(line.textContent).toContain("Authorization: Bearer ••••••••");
+    expect(screen.queryByRole("button", { name: "Hide secret" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show secret" }));
+    await waitFor(() => expect(line.textContent).toContain("Authorization: Bearer s3cr3t-s3cr3t"));
+    expect(revealWebhookSecret).toHaveBeenCalledTimes(2);
+  });
+
   it("copies the curl line with the real secret while the line stays masked", async () => {
     const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });

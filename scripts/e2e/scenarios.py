@@ -598,6 +598,11 @@ def scenario_routine(w: World) -> None:
             copied.startswith(f"curl -X POST {address} ") and f"Authorization: Bearer {secret}'" in copied
             and masked_after_copy,
             observed={"carries_secret": secret in copied, "masked_after_copy": masked_after_copy})
+    ui.click("button", "Hide secret")
+    rehidden = w.wait("the secret is masked again", lambda: ui.find("button", "Show secret") and ui.text())
+    w.check("Hide secret masks the line again",
+            secret not in rehidden and "Authorization: Bearer " + "•" * 8 in rehidden,
+            observed={"shows_secret": secret in rehidden, "masked": "•" * 8 in rehidden})
     w.check("the routine is kept, switched on, waiting on the event",
             w.host.rows("SELECT name, fires, active FROM routines")
             == [{"name": "Invoice watch", "fires": "event:billing/invoice.failed", "active": 1}]
@@ -804,13 +809,14 @@ SCENARIOS: dict[str, Scenario] = {
         "a failed model call tells the other conversation the turn acted on at once, with Try again on each",
         "every model call was one the scenario scripted",
     )),
-    "routine": Scenario(scenario_routine, "A person adds a routine on an event, copies its curl line, reveals its secret, and one delivery "
+    "routine": Scenario(scenario_routine, "A person adds a routine on an event, copies its curl line, reveals its secret and hides it again, and one delivery "
                         "fires it once and the agent acts on it; the secret is hidden until asked for, a retry of "
                         "that delivery does not fire it again, and a post without the secret or to an event nobody "
                         "waits on fires nothing.",
     (
         "the secret is shown only when asked for, and no event carried it",
         "Copy puts the line with the real secret on the clipboard and leaves it masked on the page",
+        "Hide secret masks the line again",
         "the routine is kept, switched on, waiting on the event",
         "a post without the secret, or to an event nobody waits on, fires nothing",
         "one delivery fires the routine once, with its body, in a run of its own",
