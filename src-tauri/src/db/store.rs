@@ -3268,14 +3268,14 @@ impl Store {
         name: &str,
     ) -> Result<Option<crate::domain::attachment::Attachment>, StoreError> {
         let conn = self.conn()?;
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare(&format!(
             "SELECT m.id, m.channel_id, m.from_kind, m.from_agent, m.created_at, part.value
                FROM messages m, json_each(m.parts) AS part
-              WHERE (m.channel_id=?1 OR (m.from_kind='agent' AND m.from_agent=?1))
+              WHERE ({READ_BY_AGENT} OR ({WRITTEN_BY_AGENT}))
                 AND json_extract(part.value, '$.type')='file'
                 AND json_extract(part.value, '$.name')=?2 COLLATE NOCASE
-              ORDER BY m.created_at DESC, m.id DESC, part.key DESC LIMIT 1",
-        )?;
+              ORDER BY m.created_at DESC, m.id DESC, part.key DESC LIMIT 1"
+        ))?;
         stmt.query_row(params![agent.to_string(), name], row_to_file_hit)
             .optional()?
             .transpose()
@@ -3300,13 +3300,13 @@ impl Store {
             "WITH visible AS (
                  SELECT id, created_at FROM (
                      SELECT id, created_at FROM messages
-                      WHERE channel_id=?1 AND created_at<=?2 AND {SHOWN}
+                      WHERE {READ_BY_AGENT} AND created_at<=?2 AND {SHOWN}
                       ORDER BY created_at DESC, id DESC LIMIT ?3
                  )
                  UNION
                  SELECT id, created_at FROM (
                      SELECT id, created_at FROM messages
-                      WHERE from_kind='agent' AND from_agent=?1 AND {SHOWN}
+                      WHERE {WRITTEN_BY_AGENT} AND {SHOWN}
                       ORDER BY created_at DESC, id DESC LIMIT ?3
                  )
              ), recent AS (
@@ -3732,6 +3732,10 @@ fn participant_from_columns(kind: &str, agent: Option<String>) -> Result<Partici
 }
 
 pub(super) type RowResult<T> = Result<Result<T, StoreError>, rusqlite::Error>;
+
+const READ_BY_AGENT: &str = "channel_id=?1";
+
+const WRITTEN_BY_AGENT: &str = "from_kind='agent' AND from_agent=?1";
 
 const AGENT_COLUMNS: &str = "id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser,browser_consent,discarded_at,reasoning_effort,runs_errands,subscription_model";
 
