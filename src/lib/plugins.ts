@@ -1,3 +1,4 @@
+import constants from "./mirrors/constants.json";
 import {
   type AgentId,
   type CatalogKind,
@@ -71,7 +72,7 @@ export function nameFor(kind: PluginKind): string {
   return Object.hasOwn(NAMES, kind) ? NAMES[kind as CatalogKind] : kind;
 }
 
-export const STDIO = "stdio:";
+export const STDIO = constants.stdio;
 
 export function allows(access: PluginAccess, agent: AgentId): boolean {
   return access.mode === "everyone" || access.agents.includes(agent);

@@ -8,11 +8,11 @@ use serde_json::{json, Value};
 
 use guac_lib::config::AppConfig;
 use guac_lib::db::Store;
-use guac_lib::domain::agent::CleanDraft;
+use guac_lib::domain::agent::{CleanDraft, MAX_NAME_LEN};
 use guac_lib::domain::connector::CleanConnector;
 use guac_lib::domain::envelope::Envelope;
 use guac_lib::domain::ids::AgentId;
-use guac_lib::domain::plugin::{PluginAccess, PluginKind};
+use guac_lib::domain::plugin::{PluginAccess, PluginKind, STDIO};
 use guac_lib::domain::routine::{human_gap, Cadence, EventTrigger, Trigger};
 use guac_lib::llm::modality::Modalities;
 use guac_lib::llm::openrouter::{LlmClient, ToolCall};
@@ -25,6 +25,7 @@ type Check = fn(&Value);
 
 const CHECKS: &[(&str, Check)] = &[
     ("builds", builds),
+    ("constants", constants),
     ("event-spec", event_spec),
     ("human-gap", gap),
     ("limits", limits),
@@ -227,6 +228,20 @@ fn builds(file: &Value) {
 
 fn money(file: &Value) {
     each(file, guac_lib::menubar::money);
+}
+
+fn constants(file: &Value) {
+    let mut ours = json!({
+        "stdio": STDIO,
+        "maxAgentNameLength": MAX_NAME_LEN,
+        "catalog": PluginKind::ALL.iter().map(PluginKind::slug).collect::<Vec<_>>(),
+    });
+    #[cfg(feature = "desktop")]
+    let clicked = json!(guac_lib::notifications::CLICKED);
+    #[cfg(not(feature = "desktop"))]
+    let clicked = file["notificationClicked"].clone();
+    ours["notificationClicked"] = clicked;
+    assert_eq!(&ours, file);
 }
 
 #[derive(Deserialize)]

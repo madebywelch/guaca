@@ -9,7 +9,14 @@ import { otherBuild } from "./releases";
 import { eventSpec, humanGap, parseTrigger, repeats } from "./routine";
 import { attachedFiles, sendRecipients } from "./toolArgs";
 import { readSpent, splitPluginTool, surfaceOf } from "./trail";
-import { type AgentId, type Envelope, type Part, type PluginAccess, plainText } from "./types";
+import {
+  type AgentId,
+  CATALOG,
+  type Envelope,
+  type Part,
+  type PluginAccess,
+  plainText,
+} from "./types";
 
 const MIRRORS = resolve(__dirname, "mirrors");
 
@@ -47,6 +54,9 @@ const ENVELOPE: Envelope = {
 
 const CHECKS: Record<string, Check> = {
   builds: each(([a, b]: [string, string]) => otherBuild(a, b)),
+  constants: (file) => {
+    expect((file as { catalog: string[] }).catalog).toEqual([...CATALOG]);
+  },
   credentials: (file) => {
     for (const { input, expected } of file as Case<
       { summary: string },
