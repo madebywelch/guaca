@@ -297,8 +297,10 @@ describe("each language", () => {
   });
 });
 
+const STATED = { PATH: process.env.PATH };
+
 function git(cwd, ...args) {
-  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], env: STATED }).trim();
 }
 
 function write(dir, files) {
@@ -742,7 +744,7 @@ describe("a change", () => {
 });
 
 function cli(repo, args, env = {}) {
-  return spawnSync("node", [CLI, ...args], { cwd: repo.dir, encoding: "utf8", env: { ...process.env, GITHUB_ACTIONS: "", ...env } });
+  return spawnSync("node", [CLI, ...args], { cwd: repo.dir, encoding: "utf8", env: { ...STATED, ...env } });
 }
 
 describe("the command", () => {
@@ -764,7 +766,7 @@ describe("the command", () => {
       git(repo.dir, "checkout", "-q", "main");
       write(repo.dir, { "src/a.ts": SOURCE + "// on main\n" });
       commitAll(repo, "push");
-      const out = cli(repo, [], { GITHUB_BASE_REF: "", GRANTS_BASE: "", GITHUB_REF: "" });
+      const out = cli(repo, []);
       assert.equal(out.status, 1);
       assert.match(out.stdout, /the previous commit on main/);
     }),
@@ -786,10 +788,10 @@ describe("the command", () => {
       git(repo.dir, "checkout", "-q", "main");
       setLedger(repo.dir, (ledger) => ledger.grants.push(grantOf("comment", "src/a.ts", "// an old comment")));
       commitAll(repo, "grant");
-      const pushed = cli(repo, [], { GITHUB_BASE_REF: "", GRANTS_BASE: "", GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/heads/main" });
+      const pushed = cli(repo, [], { GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/heads/main" });
       assert.equal(pushed.status, 0, pushed.stdout);
       assert.match(pushed.stdout, /GRANTS CHANGED/);
-      const local = cli(repo, [], { GITHUB_BASE_REF: "", GRANTS_BASE: "", GITHUB_EVENT_NAME: "", GITHUB_REF: "" });
+      const local = cli(repo, []);
       assert.equal(local.status, 1, local.stdout);
     }),
   );
