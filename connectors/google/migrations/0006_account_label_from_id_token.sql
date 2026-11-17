@@ -5,7 +5,7 @@ WITH RECURSIVE
   token (id, rest) AS (
     SELECT id, substr(idToken, instr(idToken, '.') + 1)
     FROM account
-    WHERE idToken IS NOT NULL AND instr(idToken, '.') > 0 AND (label IS NULL OR label = '')
+    WHERE idToken IS NOT NULL AND instr(idToken, '.') > 0
   ),
   decoded (id, rest, bytes, valid, hex) AS (
     SELECT
@@ -40,6 +40,4 @@ WITH RECURSIVE
   )
 UPDATE account
 SET label = (SELECT email FROM emails WHERE emails.id = account.id)
-WHERE id IN (SELECT id FROM emails);
-
-UPDATE account SET idToken = NULL WHERE idToken IS NOT NULL;
+WHERE idToken IS NOT NULL;

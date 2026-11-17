@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { defineWorkersConfig, readD1Migrations } from "@cloudflare/vitest-pool-workers/config";
 
 const migrations = await readD1Migrations("./migrations");
@@ -12,6 +14,7 @@ export default defineWorkersConfig({
           d1Databases: { PREVIOUS_DB: { id: "previous" } },
           bindings: {
             MIGRATIONS: migrations,
+            FINALIZE_ACCOUNT_LABELS: readFileSync("./finalize-account-labels.sql", "utf8"),
             BETTER_AUTH_URL: "http://localhost:8787",
             BETTER_AUTH_SECRET: "test-secret-that-is-long-enough-for-testing",
             SELFHOST_BEARER: "test-bearer-that-is-long-enough-for-testing",

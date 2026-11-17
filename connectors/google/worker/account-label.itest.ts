@@ -4,11 +4,13 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { getAuth } from "./auth";
 import { readConnections } from "./connections";
 import { configuredProviders } from "./connectors";
+import { labelFor as priorLabelFor } from "./prior-label.e23b650.fixture";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {
     MIGRATIONS: D1Migration[];
     PREVIOUS_DB: D1Database;
+    FINALIZE_ACCOUNT_LABELS: string;
   }
 }
 
@@ -39,20 +41,6 @@ const googleClaims = (sub: string, email: string, name: string) => ({
   iat: 1763380000,
   exp: 1763383600,
 });
-
-function previousLabel(idToken: string | null, accountId: string): string {
-  if (!idToken) return accountId;
-  try {
-    const [, payload] = idToken.split(".");
-    if (!payload) return accountId;
-    const claims = JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/"))) as {
-      email?: unknown;
-    };
-    return typeof claims.email === "string" && claims.email ? claims.email : accountId;
-  } catch {
-    return accountId;
-  }
-}
 
 interface Row {
   id: string;
@@ -106,53 +94,106 @@ async function snapshot(db: D1Database) {
   return results;
 }
 
-describe("the migration that replaces the identity token with a label", () => {
+async function oldLabels(db: D1Database) {
+  const { results } = await db
+    .prepare("SELECT id, accountId, idToken FROM account ORDER BY id")
+    .all<{ id: string; accountId: string; idToken: string | null }>();
+  const context = (await getAuth({ ...env, DB: db }).$context) as unknown as Parameters<
+    typeof priorLabelFor
+  >[2];
+  return Object.fromEntries(
+    await Promise.all(
+      results.map(async (row) => [
+        row.id,
+        await priorLabelFor(row.idToken, row.accountId, context),
+      ]),
+    ),
+  );
+}
+
+async function newLabels(db: D1Database) {
+  const providers = configuredProviders(env as unknown as Record<string, unknown>);
+  const connections = await readConnections({ ...env, DB: db }, "owner", providers);
+  return Object.fromEntries(connections.map((connection) => [connection.id, connection.label]));
+}
+
+async function finalize(db: D1Database) {
+  await db.batch(
+    [...migration(BACKFILL).queries, env.FINALIZE_ACCOUNT_LABELS].map((query) =>
+      db.prepare(query),
+    ),
+  );
+}
+
+describe("a rollout from the prior identity-token reader", () => {
   const db = () => env.PREVIOUS_DB;
+  let before: Record<string, string>;
 
   beforeAll(async () => {
     await previousSchema(db());
+    before = await oldLabels(db());
     await applyD1Migrations(db(), LABEL_MIGRATIONS.map(migration));
   });
 
-  it("keeps every connection's label identical to what it was before", async () => {
-    const providers = configuredProviders(env as unknown as Record<string, unknown>);
-    const connections = await readConnections({ ...env, DB: db() }, "owner", providers);
-    const labels = Object.fromEntries(connections.map((connection) => [connection.id, connection.label]));
-    expect(labels).toEqual(
-      Object.fromEntries(ROWS.map((row) => [row.id, previousLabel(row.idToken, row.accountId)])),
-    );
-    expect(labels.a1).toBe("ada@gmail.com");
-    expect(labels.a3).toBe("zoe+work@example.co");
-    expect(labels.a4).toBe("104812345678901234570");
-  });
-
-  it("leaves no identity token on any row", async () => {
+  it("keeps the old reader usable after pre-upload migrations even if upload fails", async () => {
+    expect(before.a1).toBe("ada@gmail.com");
+    expect(before.a3).toBe("zoe+work@example.co");
+    expect(before.a4).toBe("104812345678901234570");
+    expect(await oldLabels(db())).toEqual(before);
+    expect(await newLabels(db())).toEqual(before);
     const rows = await snapshot(db());
-    expect(rows).toHaveLength(ROWS.length);
-    expect(rows.filter((row) => row.idToken !== null)).toEqual([]);
+    expect(rows.map((row) => row.idToken)).toEqual(ROWS.map((row) => row.idToken));
+    expect(await oldLabels(db())).toEqual(before);
   });
 
-  it("changes nothing when it runs a second time", async () => {
-    const before = await snapshot(db());
-    for (const query of migration(BACKFILL).queries) await db().prepare(query).run();
-    expect(await snapshot(db())).toEqual(before);
+  it("finalizes without changing any label and can safely finalize twice", async () => {
+    await finalize(db());
+    expect(await newLabels(db())).toEqual(before);
+    const after = await snapshot(db());
+    expect(after).toHaveLength(ROWS.length);
+    expect(after.every((row) => row.idToken === null)).toBe(true);
+    await finalize(db());
+    expect(await snapshot(db())).toEqual(after);
+    expect(await newLabels(db())).toEqual(before);
   });
 
-  it("fills a label only where it is empty and a token is present", async () => {
-    await db()
-      .prepare("UPDATE account SET label = 'kept@example.com', idToken = ? WHERE id = 'a1'")
-      .bind(jwt(googleClaims("104812345678901234567", "other@example.com", "Ada Lovelace")))
-      .run();
-    await db()
-      .prepare("UPDATE account SET idToken = ? WHERE id = 'a4'")
-      .bind(jwt(googleClaims("104812345678901234570", "late@example.com", "Late Link")))
-      .run();
-    for (const query of migration(BACKFILL).queries) await db().prepare(query).run();
-    const rows = Object.fromEntries((await snapshot(db())).map((row) => [row.id, row]));
-    expect(rows.a1?.label).toBe("kept@example.com");
-    expect(rows.a4?.label).toBe("late@example.com");
-    expect(rows.a7?.label).toBeNull();
-    expect(Object.values(rows).filter((row) => row.idToken !== null)).toEqual([]);
+  it("uses intervening old tokens rather than stale labels after upload", async () => {
+    await db().batch([
+      db()
+        .prepare("UPDATE account SET idToken = ? WHERE id = 'a1'")
+        .bind(jwt(googleClaims("104812345678901234567", "changed@example.com", "Ada Lovelace"))),
+      db()
+        .prepare("UPDATE account SET idToken = ? WHERE id = 'a2'")
+        .bind(jwt({ iss: "https://accounts.google.com", sub: "104812345678901234568" })),
+      db()
+        .prepare(
+          "INSERT INTO account (id, issuer, accountId, providerId, userId, idToken, scope, createdAt, updatedAt) VALUES ('late', 'https://accounts.google.com', 'late-sub', 'google', 'owner', ?, 'openid email https://www.googleapis.com/auth/calendar', unixepoch(), unixepoch())",
+        )
+        .bind(jwt(googleClaims("late-sub", "late@example.com", "Late Link"))),
+    ]);
+    const old = await oldLabels(db());
+    expect(old.a1).toBe("changed@example.com");
+    expect(old.a2).toBe("104812345678901234568");
+    expect(old.late).toBe("late@example.com");
+    const stale = await snapshot(db());
+    expect(stale.find((row) => row.id === "a1")?.label).toBe("ada@gmail.com");
+    await finalize(db());
+    expect(await newLabels(db())).toEqual(old);
+    const after = await snapshot(db());
+    expect(after.every((row) => row.idToken === null)).toBe(true);
+    await finalize(db());
+    expect(await snapshot(db())).toEqual(after);
+    expect(await newLabels(db())).toEqual(old);
+  });
+
+  it("does not overwrite a label written by the new hook during finalization", async () => {
+    const context = await getAuth({ ...env, DB: db() }).$context;
+    await context.internalAdapter.updateAccount("a1", {
+      idToken: jwt(googleClaims("104812345678901234567", "new-worker@example.com", "Ada Lovelace")),
+    });
+    await finalize(db());
+    expect((await newLabels(db())).a1).toBe("new-worker@example.com");
+    expect((await snapshot(db())).find((row) => row.id === "a1")?.idToken).toBeNull();
   });
 });
 

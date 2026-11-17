@@ -13,6 +13,7 @@
     "worker/*.ts",
     "!worker/*.test.ts",
     "!worker/*.itest.ts",
+    "!worker/*.fixture.ts",
     "src/account/*.js",
     "src/account/*.d.ts",
     "src/components/*.js",
