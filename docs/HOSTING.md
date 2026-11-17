@@ -90,6 +90,41 @@ account. It uses the same connector implementation as the existing service.
    complete Google's consent screen. The sign-out control explains how to
    remove the configured bearer; it cannot remove an environment variable.
 
+### Updating the connector to store labels instead of identity tokens
+
+Run these commands from `connectors/google`. First build the new image and
+apply its compatible schema and label backfill while the old connector still
+serves requests:
+
+```sh
+docker compose -f compose.yml build connector
+docker compose -f compose.yml run --rm --no-deps connector pnpm exec wrangler d1 migrations apply guaca-connectors --local --config wrangler.selfhost.jsonc --persist-to /data
+```
+
+The migrations preserve identity tokens. If building or replacing the container
+fails, the old code can still read every existing connection label. Do not
+finalize while the old code is serving requests.
+
+Replace the running container with the new image, then finalize only after that
+command succeeds:
+
+```sh
+docker compose -f compose.yml up -d --no-deps --wait --wait-timeout 120 connector &&
+docker compose -f compose.yml exec -T connector sh -eu <<'SH'
+cat migrations/0006_account_label_from_id_token.sql finalize-account-labels.sql > /tmp/connection-labels.sql
+pnpm exec wrangler d1 execute guaca-connectors --local --config wrangler.selfhost.jsonc --persist-to /data --file /tmp/connection-labels.sql
+pnpm exec wrangler d1 execute guaca-connectors --local --config wrangler.selfhost.jsonc --persist-to /data --json --command "SELECT count(*) AS stored FROM account WHERE idToken IS NOT NULL" |
+  node -e 'const [r] = JSON.parse(require("node:fs").readFileSync(0, "utf8")); if (r.results[0].stored !== 0) process.exit(1)'
+rm /tmp/connection-labels.sql
+SH
+```
+
+Finalization backfills any account created or updated by the old code between
+migration and replacement, then clears its identity token. A token is
+authoritative over an older label during this transition. The SQL backfill is
+reused, not duplicated, and rows with no token keep their labels. Finalization
+is one bounded operation and is safe to repeat; it is not a CI rerun.
+
 ## The runtime runs in the host, and every window is a client
 
 The native client no longer constructs `Runtime`, opens the live database or

@@ -9,7 +9,7 @@ COPY worker ./worker
 COPY src ./src
 COPY migrations ./migrations
 COPY public ./public
-COPY selfhost.sql wrangler.selfhost.jsonc tsconfig.json tsconfig.worker.json start.sh ./
+COPY selfhost.sql finalize-account-labels.sql wrangler.selfhost.jsonc tsconfig.json tsconfig.worker.json start.sh ./
 RUN mkdir -p /data && chown node:node /data /app
 USER node
 EXPOSE 8788

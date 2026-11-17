@@ -373,7 +373,7 @@ app.get("/app", async (c) => {
   if (!session) return c.redirect("/signin?error=required&next=%2Fapp", 302);
 
   const providers = configuredProviders(c.env as unknown as Record<string, unknown>);
-  const connections = await readConnections(c.env, c.var.auth, session.user.id, providers);
+  const connections = await readConnections(c.env, session.user.id, providers);
 
   const notices: Record<string, { text: string; bad?: boolean }> = {
     authorized: { text: "Authorized. Your crews can now choose this account under Plugins." },
@@ -438,7 +438,6 @@ app.post("/app/authorize", async (c) => {
   const connection = form.get("connection")
     ? await readConnection(
         c.env,
-        c.var.auth,
         session.user.id,
         [provider],
         String(form.get("connection")),
@@ -493,7 +492,6 @@ app.post("/app/disconnect", async (c) => {
 
   const connection = await readConnection(
     c.env,
-    c.var.auth,
     session.user.id,
     [provider],
     String(form.get("connection") ?? ""),
@@ -598,7 +596,7 @@ app.get("/api/connectors", async (c) => {
   if (!who.scopes.has(CONNECTORS_SCOPE)) return c.json({ error: "insufficient_scope" }, 403);
 
   const providers = configuredProviders(c.env as unknown as Record<string, unknown>);
-  const connections = await readConnections(c.env, c.var.auth, who.userId, providers);
+  const connections = await readConnections(c.env, who.userId, providers);
 
   return c.json({
     user: { email: who.email },
@@ -631,7 +629,7 @@ app.post("/api/connectors/:provider/token", async (c) => {
   const provider = findProvider(c.req.param("provider"));
   if (!provider) return c.json({ error: "unknown_provider" }, 404);
 
-  const all = await readConnections(c.env, c.var.auth, who.userId, [provider]);
+  const all = await readConnections(c.env, who.userId, [provider]);
   const asked = c.req.query("connection");
   const grant = asked
     ? all.find((connection) => connection.id === asked)
