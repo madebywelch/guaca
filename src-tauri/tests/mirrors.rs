@@ -9,6 +9,8 @@ use serde_json::{json, Value};
 use guac_lib::domain::ids::AgentId;
 use guac_lib::domain::plugin::PluginAccess;
 use guac_lib::domain::routine::{human_gap, Cadence, EventTrigger, Trigger};
+use guac_lib::llm::openrouter::ToolCall;
+use guac_lib::llm::tools::{self, ToolInvocation};
 use guac_lib::runtime::guard::GuardLimits;
 
 type Check = fn(&Value);
@@ -18,6 +20,7 @@ const CHECKS: &[(&str, Check)] = &[
     ("human-gap", gap),
     ("limits", limits),
     ("plugin-access", plugin_access),
+    ("tool-names", tool_names),
     ("trigger", trigger),
 ];
 
@@ -136,4 +139,22 @@ fn event_spec(file: &Value) {
 
 fn gap(file: &Value) {
     each(file, human_gap);
+}
+
+fn tool_names(file: &Value) {
+    #[derive(Deserialize)]
+    struct Call {
+        tool: String,
+        args: Value,
+    }
+    each(file, |call: Call| {
+        let call =
+            ToolCall { id: "call".into(), name: call.tool, arguments: call.args.to_string() };
+        match tools::parse(&call, &[]) {
+            Ok(ToolInvocation::AttachFile { files }) => files,
+            Ok(ToolInvocation::SendMessage { to, .. }) => to,
+            Ok(other) => panic!("{} read as {other:?}", call.name),
+            Err(_) => Vec::new(),
+        }
+    });
 }

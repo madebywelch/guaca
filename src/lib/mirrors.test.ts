@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { LIMITS } from "./limits";
 import { allows } from "./plugins";
 import { eventSpec, humanGap, parseTrigger, repeats } from "./routine";
+import { attachedFiles, sendRecipients } from "./toolArgs";
 import { type AgentId, type PluginAccess } from "./types";
 
 const MIRRORS = resolve(__dirname, "mirrors");
@@ -36,6 +37,9 @@ const CHECKS: Record<string, Check> = {
   },
   "plugin-access": each(({ access, agent }: { access: PluginAccess; agent: AgentId }) =>
     allows(access, agent),
+  ),
+  "tool-names": each(({ tool, args }: { tool: string; args: unknown }) =>
+    tool === "attach_file" ? attachedFiles(args) : sendRecipients(args),
   ),
   trigger: each((spec: string) => {
     const trigger = parseTrigger(spec);

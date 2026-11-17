@@ -1,0 +1,404 @@
+[
+  {
+    "input": {
+      "tool": "attach_file",
+      "args": {
+        "files": [
+          "brief.md"
+        ]
+      }
+    },
+    "expected": [
+      "brief.md"
+    ]
+  },
+  {
+    "input": {
+      "tool": "attach_file",
+      "args": {
+        "attachments": [
+          "brief.md"
+        ]
+      }
+    },
+    "expected": [
+      "brief.md"
+    ]
+  },
+  {
+    "input": {
+      "tool": "attach_file",
+      "args": {
+        "paths": [
+          "brief.md"
+        ]
+      }
+    },
+    "expected": [
+      "brief.md"
+    ]
+  },
+  {
+    "input": {
+      "tool": "attach_file",
+      "args": {
+        "path": "brief.md"
+      }
+    },
+    "expected": [
+      "brief.md"
+    ]
+  },
+  {
+    "input": {
+      "tool": "attach_file",
+      "args": {
+        "file": "brief.md"
+      }
+    },
+    "expected": [
+      "brief.md"
+    ]
+  },
+  {
+    "input": {
+      "tool": "attach_file",
+      "args": {
+        "files": "a.md, b.md"
+      }
+    },
+    "expected": [
+      "a.md",
+      "b.md"
+    ]
+  },
+  {
+    "input": {
+      "tool": "attach_file",
+      "args": {
+        "files": "a.md,,b.md,"
+      }
+    },
+    "expected": [
+      "a.md",
+      "b.md"
+    ]
+  },
+  {
+    "input": {
+      "tool": "attach_file",
+      "args": {
+        "files": [
+          "a, b.md"
+        ]
+      }
+    },
+    "expected": [
+      "a, b.md"
+    ]
+  },
+  {
+    "input": {
+      "tool": "attach_file",
+      "args": {
+        "files": [
+          " a.md ",
+          ""
+        ]
+      }
+    },
+    "expected": [
+      "a.md"
+    ]
+  },
+  {
+    "input": {
+      "tool": "attach_file",
+      "args": {
+        "files": [
+          {
+            "path": "a.md"
+          },
+          {
+            "name": "b.md"
+          },
+          {
+            "file": "c.md"
+          },
+          {
+            "agent": "d.md"
+          }
+        ]
+      }
+    },
+    "expected": [
+      "a.md",
+      "b.md",
+      "c.md",
+      "d.md"
+    ]
+  },
+  {
+    "input": {
+      "tool": "attach_file",
+      "args": {
+        "files": [
+          {
+            "name": 7,
+            "path": "a.md"
+          }
+        ]
+      }
+    },
+    "expected": []
+  },
+  {
+    "input": {
+      "tool": "attach_file",
+      "args": {
+        "files": [
+          {
+            "path": null,
+            "file": "a.md"
+          }
+        ]
+      }
+    },
+    "expected": []
+  },
+  {
+    "input": {
+      "tool": "attach_file",
+      "args": {
+        "files": [
+          "A.md",
+          "a.md",
+          "b.md"
+        ]
+      }
+    },
+    "expected": [
+      "A.md",
+      "b.md"
+    ]
+  },
+  {
+    "input": {
+      "tool": "attach_file",
+      "args": {
+        "files": [
+          "/home/user/work/brief.md"
+        ]
+      }
+    },
+    "expected": [
+      "/home/user/work/brief.md"
+    ]
+  },
+  {
+    "input": {
+      "tool": "attach_file",
+      "args": {
+        "files": [
+          "a.md"
+        ],
+        "path": "c.md"
+      }
+    },
+    "expected": [
+      "a.md"
+    ]
+  },
+  {
+    "input": {
+      "tool": "attach_file",
+      "args": {
+        "files": null,
+        "path": "a.md"
+      }
+    },
+    "expected": []
+  },
+  {
+    "input": {
+      "tool": "attach_file",
+      "args": {
+        "files": [
+          1,
+          2
+        ]
+      }
+    },
+    "expected": []
+  },
+  {
+    "input": {
+      "tool": "attach_file",
+      "args": {
+        "files": 7
+      }
+    },
+    "expected": []
+  },
+  {
+    "input": {
+      "tool": "attach_file",
+      "args": {}
+    },
+    "expected": []
+  },
+  {
+    "input": {
+      "tool": "send_message",
+      "args": {
+        "to": "Ada",
+        "text": "hi"
+      }
+    },
+    "expected": [
+      "Ada"
+    ]
+  },
+  {
+    "input": {
+      "tool": "send_message",
+      "args": {
+        "to": "Ada, Grace",
+        "text": "hi"
+      }
+    },
+    "expected": [
+      "Ada",
+      "Grace"
+    ]
+  },
+  {
+    "input": {
+      "tool": "send_message",
+      "args": {
+        "to": [
+          "Ada",
+          {
+            "name": "Grace"
+          },
+          {
+            "agent": "Linus"
+          },
+          {
+            "path": "Barbara"
+          }
+        ],
+        "text": "hi"
+      }
+    },
+    "expected": [
+      "Ada",
+      "Grace",
+      "Linus",
+      "Barbara"
+    ]
+  },
+  {
+    "input": {
+      "tool": "send_message",
+      "args": {
+        "to": [
+          "Ada",
+          "ada",
+          "ADA"
+        ],
+        "text": "hi"
+      }
+    },
+    "expected": [
+      "Ada"
+    ]
+  },
+  {
+    "input": {
+      "tool": "send_message",
+      "args": {
+        "agent": "Ada",
+        "text": "hi"
+      }
+    },
+    "expected": [
+      "Ada"
+    ]
+  },
+  {
+    "input": {
+      "tool": "send_message",
+      "args": {
+        "agent": " Ada ",
+        "text": "hi"
+      }
+    },
+    "expected": [
+      "Ada"
+    ]
+  },
+  {
+    "input": {
+      "tool": "send_message",
+      "args": {
+        "to": [],
+        "agent": "Ada",
+        "text": "hi"
+      }
+    },
+    "expected": [
+      "Ada"
+    ]
+  },
+  {
+    "input": {
+      "tool": "send_message",
+      "args": {
+        "to": null,
+        "agent": "Ada",
+        "text": "hi"
+      }
+    },
+    "expected": [
+      "Ada"
+    ]
+  },
+  {
+    "input": {
+      "tool": "send_message",
+      "args": {
+        "to": "  ",
+        "agent": "Ada",
+        "text": "hi"
+      }
+    },
+    "expected": [
+      "Ada"
+    ]
+  },
+  {
+    "input": {
+      "tool": "send_message",
+      "args": {
+        "to": [
+          "Ada"
+        ],
+        "agent": "Grace",
+        "text": "hi"
+      }
+    },
+    "expected": [
+      "Ada"
+    ]
+  },
+  {
+    "input": {
+      "tool": "send_message",
+      "args": {
+        "text": "hi"
+      }
+    },
+    "expected": []
+  }
+]
