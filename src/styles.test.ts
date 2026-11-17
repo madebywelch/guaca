@@ -253,6 +253,12 @@ describe("what a crew has spent", () => {
   });
 });
 
+describe("a group's tag", () => {
+  it("lets the pointer through to the circle and the pane under it", () => {
+    expect(getComputedStyle(nest("orb", "orb__tag")).pointerEvents).toBe("none");
+  });
+});
+
 describe("the rail's corner", () => {
   it("is the strip the window's buttons already leave, with no row under it", () => {
     const strip = getComputedStyle(nest("rail__brand"));
