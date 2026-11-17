@@ -1812,6 +1812,14 @@ async fn the_dev_ports_origin_gets_no_socket_without_the_token() {
     assert!(admitted.is_ok(), "the token opens the channel from the app's own origin");
 }
 
+const ON_PURPOSE: [&str; 5] = [
+    "last-four hints",
+    "the local daemon token",
+    "the menu bar host token",
+    "the subscription poll handle",
+    "the webhook secret on request",
+];
+
 const REACHES_OUT: [&str; 7] = [
     "begin_claude_signin",
     "begin_subscription_signin",
@@ -1910,4 +1918,23 @@ async fn no_answer_or_event_carries_a_secret_except_the_webhook_secret_asked_for
     assert_eq!(settings["kernelKeyHint"], "...3m8x");
     assert_eq!(settings["delivery"]["tokenHint"], "...5r1v");
     assert!(events.iter().any(|event| event["type"] == "settingsChanged"));
+}
+
+#[test]
+fn the_secret_rule_names_exactly_the_values_that_reach_the_page_on_purpose() {
+    let invariants =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/INVARIANTS.md"))
+            .expect("docs/INVARIANTS.md");
+    let rule = invariants
+        .split("\n\n")
+        .find(|paragraph| paragraph.starts_with("**A secret never reaches a model.**"))
+        .expect("the secret rule")
+        .replace('\n', " ");
+    let (_, list) = rule
+        .split_once("reach the page on purpose: ")
+        .expect("the rule names what reaches the page");
+    let (list, _) = list.split_once('.').expect("the list ends a sentence");
+    let named: std::collections::BTreeSet<&str> =
+        list.split(", ").map(|item| item.trim_start_matches("and ")).collect();
+    assert_eq!(named, ON_PURPOSE.into_iter().collect());
 }

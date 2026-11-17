@@ -158,9 +158,15 @@ spring in the geometry and its recoil is a displacement of its own outline.
 `docs/CHARACTERS.md`.
 
 **A secret never reaches a model.** A credential's value and a cookie's value do
-not enter a prompt, a transcript, an event or the webview, and there is no field
-on the types that cross those boundaries for one to arrive in. Keep it that way:
-`docs/MACHINES.md`.
+not enter a prompt, a transcript or an event, and there is no field on the types
+that cross those boundaries for one to arrive in: a credential is held in
+`secrets::Secret`, which cannot be serialized or displayed and leaves only
+through `expose()`. Five values reach the page on purpose: last-four hints, the
+local daemon token, the menu bar host token, the subscription poll handle, and
+the webhook secret on request. The webhook secret crosses only through
+`reveal_webhook_secret`, when the operator asks to see it, and never in a state
+payload or an event; `tests/server.rs` holds both that and this list. Keep it
+that way: `docs/MACHINES.md`.
 
 **A computer and a browser are two places, not two views of one.** A computer is
 an E2B machine with a screen, worked by looking and pointing (`use_screen`). A
