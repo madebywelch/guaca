@@ -279,7 +279,7 @@ export function ChannelView({
           </Answering.Provider>
         </div>
 
-        <Arrivals channel={channel} messages={messages} lookups={lookups} />
+        <Arrivals key={`arrivals:${channel}`} messages={messages} lookups={lookups} />
         {agent && (
           <TurnFooter
             key={agent.id}
@@ -543,21 +543,14 @@ function LiveStreams({
 }
 
 function Arrivals({
-  channel,
   messages,
   lookups,
 }: {
-  channel: ChannelKey;
   messages: Envelope[] | undefined;
   lookups: ReturnType<typeof useAgentLookup>;
 }) {
   const [said, setSaid] = useState("");
   const seen = useRef<string | null>(null);
-
-  useEffect(() => {
-    seen.current = null;
-    setSaid("");
-  }, [channel]);
 
   useEffect(() => {
     const newest = messages?.[messages.length - 1];

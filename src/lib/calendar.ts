@@ -5,6 +5,13 @@ export interface Day {
   occasions: Occasion[];
 }
 
+export function fieldDate(occasion: Pick<Occasion, "startsAt" | "allDay">): string {
+  const when = new Date(occasion.startsAt);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const day = `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}`;
+  return occasion.allDay ? day : `${day} ${pad(when.getHours())}:${pad(when.getMinutes())}`;
+}
+
 export interface Window {
   from: number;
   until: number;

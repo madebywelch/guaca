@@ -6,20 +6,26 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use guac_lib::config::AppConfig;
+use chrono::{Local, NaiveDate, TimeZone};
+use guac_lib::config::{AppConfig, Provider};
 use guac_lib::db::Store;
 use guac_lib::domain::agent::{CleanDraft, MAX_NAME_LEN};
+use guac_lib::domain::attachment::Attachment;
 use guac_lib::domain::connector::CleanConnector;
 use guac_lib::domain::envelope::Envelope;
+use guac_lib::domain::group::{GroupInference, InferenceOverrides};
 use guac_lib::domain::ids::AgentId;
+use guac_lib::domain::occasion::{parse_when, When};
 use guac_lib::domain::plugin::{PluginAccess, PluginKind, STDIO};
 use guac_lib::domain::routine::{human_gap, Cadence, EventTrigger, Trigger};
+use guac_lib::domain::view::AWAY_AFTER_MS;
 use guac_lib::llm::modality::Modalities;
 use guac_lib::llm::openrouter::{LlmClient, ToolCall};
 use guac_lib::llm::tools::{self, Surfaces, ToolInvocation};
 use guac_lib::runtime::events::RecordingSink;
 use guac_lib::runtime::guard::GuardLimits;
 use guac_lib::runtime::{OnDisk, Runtime};
+use guac_lib::secrets::Secret;
 
 type Check = fn(&Value);
 
@@ -28,11 +34,14 @@ const CHECKS: &[(&str, Check)] = &[
     ("constants", constants),
     ("event-spec", event_spec),
     ("human-gap", gap),
+    ("inference", inference),
     ("limits", limits),
     ("money", money),
+    ("occasion-field", occasion_field),
     ("plain-text", plain_text),
     ("plugin-access", plugin_access),
     ("plugin-call", plugin_call),
+    ("sizes", sizes),
     ("tool-names", tool_names),
     ("tool-surfaces", tool_surfaces),
     ("trigger", trigger),
@@ -237,10 +246,76 @@ fn money(file: &Value) {
     each(file, guac_lib::menubar::money);
 }
 
+fn sizes(file: &Value) {
+    each(file, |bytes: u64| {
+        Attachment { digest: String::new(), name: String::new(), mime: String::new(), bytes }.size()
+    });
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Paying {
+    provider: Option<Provider>,
+    api_key_set: bool,
+}
+
+#[derive(Deserialize)]
+struct Choices {
+    group: Option<Paying>,
+    workspace: Paying,
+}
+
+fn key(set: bool) -> Option<Secret> {
+    set.then(|| "sk-vector".into())
+}
+
+fn inference(file: &Value) {
+    each(file, |choices: Choices| {
+        let mut base = AppConfig::default().inference;
+        base.provider = choices.workspace.provider.expect("a workspace always has a provider");
+        base.api_key = key(choices.workspace.api_key_set).unwrap_or_default();
+        let group = choices.group.map_or_else(GroupInference::default, |group| GroupInference {
+            overrides: InferenceOverrides { provider: group.provider, ..Default::default() },
+            api_key: key(group.api_key_set),
+        });
+        let paid = group.apply(&base);
+        json!({ "provider": paid.provider, "keyed": !paid.api_key.expose().trim().is_empty() })
+    });
+}
+
+#[derive(Deserialize)]
+struct Wall {
+    date: (i32, u32, u32),
+    time: Option<(u32, u32)>,
+}
+
+fn occasion_field(file: &Value) {
+    for case in file.as_array().expect("a vector file is a list of cases") {
+        let wall: Wall = parsed(&case["input"]);
+        let field: String = parsed(&case["expected"]);
+        let (year, month, day) = wall.date;
+        let (hour, minute) = wall.time.unwrap_or((0, 0));
+        let naive = NaiveDate::from_ymd_opt(year, month, day)
+            .and_then(|date| date.and_hms_opt(hour, minute, 0))
+            .expect("a vector names a real wall time");
+        let starts_at = Local
+            .from_local_datetime(&naive)
+            .single()
+            .expect("a vector names an unambiguous wall time")
+            .timestamp_millis();
+        assert_eq!(
+            parse_when(&field).unwrap_or_else(|e| panic!("{field}: {e}")),
+            When { starts_at, all_day: wall.time.is_none() },
+            "field {field}"
+        );
+    }
+}
+
 fn constants(file: &Value) {
     let mut ours = json!({
         "stdio": STDIO,
         "maxAgentNameLength": MAX_NAME_LEN,
+        "awayAfterMs": AWAY_AFTER_MS,
         "catalog": PluginKind::ALL.iter().map(PluginKind::slug).collect::<Vec<_>>(),
     });
     #[cfg(feature = "desktop")]

@@ -1,5 +1,3 @@
-process.env.TZ = "America/New_York";
-
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -10,6 +8,11 @@ import { Ribbon } from "./Ribbon";
 
 const at = (day: number, hour: number, minute = 0) =>
   new Date(2026, 10, day, hour, minute).getTime();
+
+it("runs in the one zone its labels are written for", () => {
+  expect(Intl.DateTimeFormat().resolvedOptions().timeZone).toBe("America/New_York");
+  expect(new Date(at(16, 9, 12)).toString()).toContain("Eastern Standard Time");
+});
 
 const AGENTS = ["dara", "marlow", "ines", "kit", "wren", "pip"].map((id) => anAgent(id));
 
