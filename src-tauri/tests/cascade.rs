@@ -3333,7 +3333,7 @@ async fn a_routine_that_is_due_wakes_its_agent() {
         )
         .unwrap();
 
-    h.runtime.start_scheduler();
+    h.start_scheduler();
     h.wait_until("the routine to fire", |h| {
         h.channel_texts("Watcher").iter().any(|t| t.contains("checked the listings"))
     })
@@ -3365,7 +3365,7 @@ async fn a_one_off_routine_does_not_come_due_twice() {
         )
         .unwrap();
 
-    h.runtime.start_scheduler();
+    h.start_scheduler();
     h.wait_until("the alarm to go off", |h| {
         h.channel_texts("Sleeper").iter().any(|t| t.contains("woke up"))
     })
@@ -3416,7 +3416,7 @@ async fn a_routine_that_skips_lands_on_the_idle_agent_and_not_on_the_working_one
         );
     }
 
-    h.runtime.start_scheduler();
+    h.start_scheduler();
     h.wait_until("both routines to come due", |h| {
         booked.values().all(|r| !h.runtime.store().routine_runs(r.id, 20).unwrap().is_empty())
     })
@@ -3485,7 +3485,7 @@ async fn a_routine_left_on_the_ordinary_rule_waits_its_turn_rather_than_being_dr
         )
         .unwrap();
 
-    h.runtime.start_scheduler();
+    h.start_scheduler();
     h.wait_until("the routine to be delivered", |h| {
         h.runtime
             .store()
@@ -4282,7 +4282,7 @@ async fn a_fired_one_off_and_a_cancelled_routine_do_not_count_toward_the_cap() {
         )
         .unwrap();
 
-    h.runtime.start_scheduler();
+    h.start_scheduler();
     h.wait_until("the one-off to fire and go", |h| {
         h.channel_texts("Watcher").iter().any(|t| t.contains("Woke up."))
             && h.runtime.store().agent_routines(h.id("Watcher")).unwrap().len() == 19
@@ -4320,7 +4320,7 @@ async fn a_weekday_routine_slept_through_a_weekend_records_the_two_slots_it_miss
         .unwrap();
     h.runtime.set_up_since(local(6, 15));
 
-    h.runtime.start_scheduler();
+    h.start_scheduler();
     h.wait_until("the catch-up firing", |h| {
         h.channel_texts("Watcher").iter().any(|t| t.contains("swept"))
     })
@@ -4352,7 +4352,7 @@ async fn a_routine_that_comes_due_while_the_host_is_up_missed_nothing() {
         .unwrap();
     h.runtime.set_up_since(now_ms() - 5000);
 
-    h.runtime.start_scheduler();
+    h.start_scheduler();
     h.wait_until("the firing", |h| {
         !h.runtime.store().routine_runs(routine.id, 20).unwrap().is_empty()
     })
@@ -4698,7 +4698,7 @@ async fn a_routine_that_is_switched_off_stays_quiet_and_starts_again_when_asked(
         .unwrap();
     h.runtime.store().set_routine_active(routine.id, false).unwrap();
 
-    h.runtime.start_scheduler();
+    h.start_scheduler();
     tokio::time::sleep(Duration::from_millis(400)).await;
     assert!(
         h.channel_texts("Watcher").is_empty(),
@@ -4726,7 +4726,7 @@ fn a_schedule_that_cannot_be_read_parks_until_the_next_tick() {
             let h = harness(&stub, &["Watcher"], GuardLimits::default());
             h.runtime.store().conn().unwrap().execute_batch("DROP TABLE routines").unwrap();
 
-            h.runtime.start_scheduler();
+            h.start_scheduler();
 
             tokio::time::sleep(Duration::from_secs(60)).await;
         });
@@ -6261,8 +6261,8 @@ async fn absorbed_routine_resumes_with_its_consuming_turn_and_records() {
         OnDisk::under(h._dir.path()),
         sink.clone(),
     );
-    runtime.start_all().unwrap();
-    runtime.pick_up(recovered);
+    let started = runtime.start_all().unwrap();
+    runtime.pick_up(&started, recovered);
     assert!(runtime.drain(Duration::from_secs(5)).await.is_complete());
     runtime.stop_agent(agent);
     let store = Store::open(&h._dir.path().join("guac.db")).unwrap();
@@ -6278,8 +6278,8 @@ async fn absorbed_routine_resumes_with_its_consuming_turn_and_records() {
         OnDisk::under(h._dir.path()),
         sink.clone(),
     );
-    runtime.start_all().unwrap();
-    runtime.pick_up(recovered);
+    let started = runtime.start_all().unwrap();
+    runtime.pick_up(&started, recovered);
     let h = Harness { runtime, sink, ids: h.ids, _dir: h._dir };
     h.settle(run).await;
     h.wait_until("the resumed call", |_| stub.transcript.lock().iter().any(picked_up)).await;
@@ -6990,8 +6990,8 @@ fn crash(h: Harness, paused: &[&str]) -> (Harness, Vec<RunId>, usize) {
         OnDisk::under(h._dir.path()),
         sink.clone(),
     );
-    runtime.start_all().unwrap();
-    runtime.pick_up(recovered);
+    let started = runtime.start_all().unwrap();
+    runtime.pick_up(&started, recovered);
     (Harness { runtime, sink, ids: h.ids, _dir: h._dir }, again, interrupted)
 }
 

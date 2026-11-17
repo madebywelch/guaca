@@ -99,10 +99,7 @@ pub async fn open(
     runtime.hold_workspace_lease(lease);
 
     let started =
-        runtime.start_all().map_err(|err| format!("could not start the agents: {err}"))?;
-    runtime.pick_up(recovered);
-    runtime.start_dispatcher();
-    runtime.start_scheduler();
+        runtime.resume(recovered).map_err(|err| format!("could not start the agents: {err}"))?;
     runtime.start_signin_sweep();
     runtime.start_compost();
 

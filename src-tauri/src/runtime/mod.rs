@@ -7,7 +7,7 @@ mod outbox;
 pub mod prompt;
 mod watch;
 
-pub use drain::Drained;
+pub use drain::{Drained, PickedUp};
 use watch::Watch;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -667,6 +667,14 @@ impl Drop for OnMachine<'_> {
     }
 }
 
+pub struct Started(usize);
+
+impl Started {
+    pub fn agents(&self) -> usize {
+        self.0
+    }
+}
+
 #[derive(Clone)]
 pub struct Runtime {
     inner: Arc<Inner>,
@@ -1213,14 +1221,14 @@ impl Runtime {
         }
     }
 
-    pub fn start_all(&self) -> Result<usize, RuntimeError> {
+    pub fn start_all(&self) -> Result<Started, RuntimeError> {
         let agents = self.inner.store.list_agents()?;
         let mut started = 0;
         for card in agents.iter().filter(|c| c.lifecycle != Lifecycle::Terminated) {
             self.start_agent(card.id);
             started += 1;
         }
-        Ok(started)
+        Ok(Started(started))
     }
 
     pub fn start_agent(&self, id: AgentId) {
@@ -1942,7 +1950,7 @@ impl Runtime {
         Ok(delivery)
     }
 
-    pub fn start_scheduler(&self) {
+    pub fn start_scheduler(&self, _: PickedUp) {
         let runtime = self.clone();
         self.inner.handle.spawn(async move {
             loop {
@@ -7634,13 +7642,17 @@ mod tests {
             cause: None,
             created_at: now_ms(),
         };
-        runtime.pick_up(crate::db::Recovered {
-            resumed: vec![crate::db::PutDown { envelope, records: vec![], absorbed: vec![] }],
-            carried: vec![],
-            steps: HashMap::from([(run, 7)]),
-            guards: HashMap::new(),
-            interrupted: 0,
-        });
+        let started = runtime.start_all().unwrap();
+        runtime.pick_up(
+            &started,
+            crate::db::Recovered {
+                resumed: vec![crate::db::PutDown { envelope, records: vec![], absorbed: vec![] }],
+                carried: vec![],
+                steps: HashMap::from([(run, 7)]),
+                guards: HashMap::new(),
+                interrupted: 0,
+            },
+        );
         std::thread::sleep(Duration::from_millis(10));
         let mut guard = runtime.inner.guard.lock();
         for _ in 0..300 {
