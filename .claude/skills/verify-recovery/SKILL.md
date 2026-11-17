@@ -63,7 +63,7 @@ Each action is one SQLite commit, or one section the code runs under `Runtime.in
 | `accepted` | `messages` rows addressed to the agent |
 | `pending` | the `pending_runs` row: `none`, `unstarted` (`started_at IS NULL`), `started` |
 | `put`, `whole` | `put_down` rows (`rec` when `records` is not empty, `link` for a message in its carrier's `absorbed` list) and `put_down_runs` rows |
-| `extra` | other messages in the run (records, notices, replies), which `put_down::UNTOUCHED` tests |
+| `extra` | other messages in the run (records, notices, replies), which `put_down::UNTOUCHED` tests; it skips the system notice a failed start mark writes, which `SkipStartNote` models |
 | `notices` | Interrupted notices written by `Store::recover` |
 | `read`, `acted`, `answered`, `blind`, `marked`, `calledOff`, `resumedOff` | ghosts: what really happened, which the code cannot see |
 | `Send` | `Runtime::deliver_with_expectation`: `Store::append_delivery` and `book`, or while draining `Store::append_put_down` and `hand_on` |
@@ -80,7 +80,7 @@ Each action is one SQLite commit, or one section the code runs under `Runtime.in
 | `End` | the process ending: everything in `Runtime` is gone |
 | `Recover` | `boot::recover` (`Store::recover`), then `Runtime::pick_up` |
 
-The five switches `MarkBeforeRead`, `AcceptOneCommit`, `RecoverUntouched`, `RecoverClears`, `KeepLink` are TRUE in the code. `OperatorStops` and `StartCanFail` are scope settings: they decide whether the operator may stop a conversation, and whether the `start_deliveries` commit may fail.
+The six switches `MarkBeforeRead`, `AcceptOneCommit`, `RecoverUntouched`, `RecoverClears`, `KeepLink`, `SkipStartNote` are TRUE in the code. `OperatorStops` and `StartCanFail` are scope settings: they decide whether the operator may stop a conversation, and whether the `start_deliveries` commit may fail.
 
 ## What it does not cover
 

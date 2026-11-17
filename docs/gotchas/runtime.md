@@ -131,6 +131,9 @@ code.
   that window closes.
 - **A failed start mark puts the batch down.** Settling it reported a turn that
   never ran as finished, and running it anyway is a turn a crash would repeat.
+  The notice it writes is a system `lifecycle` notice, and `put_down::UNTOUCHED`
+  skips exactly that kind. Counted as a touch, two crashes in a row turned a
+  message no turn had started into an interruption report.
 - **The stop check sits before `reserve_step`, not after it.** One line later and
   a run reports a model call that a stop prevented, for the rest of its life.
 - **The checks inside the round loop do not cover the way out of it.** A turn

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 import threading
 from dataclasses import dataclass
 from typing import Callable
@@ -328,6 +329,20 @@ SUMMARIZE = "Summarize the week for me."
 SUMMARY = "This week: three plans, one review."
 DRAFT = "Draft the status report."
 DRAFTED = "The status report is drafted."
+BOOK = "Book the meeting room."
+BOOKED = "The meeting room is booked."
+NOT_STARTED = (f"{AGENT} could not start on this because the workspace could not record it. Nothing was done. "
+               "It will be delivered again when the host next starts.")
+
+
+def refuse_start_marks(w: World, refuse: bool) -> None:
+    conn = sqlite3.connect(w.host.db, timeout=5)
+    try:
+        conn.execute("CREATE TRIGGER refuse_start BEFORE UPDATE OF started_at ON pending_runs "
+                     "BEGIN SELECT RAISE(ABORT, 'disk failure'); END" if refuse else "DROP TRIGGER refuse_start")
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def asked(w: World, ask: str) -> int:
@@ -349,6 +364,8 @@ def scenario_restart(w: World) -> None:
             return held(stopping, say(SUMMARY))
         if c.last_user.endswith(DRAFT):
             return held(crashing, say(DRAFTED))
+        if c.last_user.endswith(BOOK):
+            return say(BOOKED)
         return None
 
     w.model.script = script
@@ -390,6 +407,22 @@ def scenario_restart(w: World) -> None:
     w.check("Try again runs the turn once more and the reply arrives",
             asked(w, DRAFT) == 2 and said(w, AGENT).count(DRAFTED) == 1,
             observed={"asked": asked(w, DRAFT), "said": said(w, AGENT)}, shot=True)
+
+    refuse_start_marks(w, True)
+    write(w, AGENT, BOOK)
+    w.wait("the conversation says the message could not start", lambda: NOT_STARTED in conversation(w))
+    w.check("a message whose start cannot be recorded says so at once, runs nothing and offers no Try again",
+            asked(w, BOOK) == 0 and not w.ui.find("button", "Try again"),
+            observed={"asked": asked(w, BOOK), "tryAgain": bool(w.ui.find("button", "Try again"))}, shot=True)
+    refuse_start_marks(w, False)
+    w.host.stop()
+    w.host.start()
+    w.open_browser()
+    open_agent(w, AGENT)
+    w.wait("the next Host delivers the message that could not start", lambda: BOOKED in said(w, AGENT))
+    w.check("the next Host delivers the message that could not start, and the reply arrives once",
+            asked(w, BOOK) == 1 and said(w, AGENT).count(BOOKED) == 1,
+            observed={"asked": asked(w, BOOK), "said": said(w, AGENT)}, shot=True)
     no_unscripted(w)
 
 
@@ -613,12 +646,15 @@ SCENARIOS: dict[str, Scenario] = {
     ), minute_ms=1000),
     "restart": Scenario(scenario_restart, "A Host stopped while a turn is in the air puts it down, and the next Host "
                         "finishes it; a Host that crashes mid-turn shows the turn as interrupted, repeats nothing, "
-                        "and Try again finishes it.",
+                        "and Try again finishes it; a message whose start cannot be recorded says so at once and the "
+                        "next Host delivers it.",
     (
         "a stopped Host exits cleanly after putting the turn down",
         "the next Host delivered the message again and the reply arrived once",
         "a crashed turn is reported interrupted and is not repeated by itself",
         "Try again runs the turn once more and the reply arrives",
+        "a message whose start cannot be recorded says so at once, runs nothing and offers no Try again",
+        "the next Host delivers the message that could not start, and the reply arrives once",
         "every model call was one the scenario scripted",
     )),
     "routine": Scenario(scenario_routine, "A person adds a routine on an event, one delivery fires it once and the "

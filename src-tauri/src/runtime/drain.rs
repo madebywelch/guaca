@@ -92,7 +92,7 @@ impl Runtime {
         taken: &[Envelope],
         acted_on: usize,
         records: &[MessageId],
-    ) {
+    ) -> bool {
         let routine = Envelope::is_routine;
         for envelope in taken.iter().filter(|envelope| routine(envelope)) {
             self.track_inflight(envelope.run_id, -1);
@@ -199,14 +199,22 @@ impl Runtime {
             })
             .collect();
         drop(guard);
-        if let Err(err) = self.inner.store.put_down_with_absorbed(&messages, &whole, &with_carrier)
-        {
-            tracing::error!(%err, "could not put work down; the next host reports it interrupted");
-        }
+        let written = match self.inner.store.put_down_with_absorbed(
+            &messages,
+            &whole,
+            &with_carrier,
+        ) {
+            Ok(()) => true,
+            Err(err) => {
+                tracing::error!(%err, "could not put work down; the next host reports it interrupted");
+                false
+            }
+        };
         drop(runs);
         for run in ended {
             self.track_inflight(run, -1);
         }
+        written && !kept.is_empty()
     }
 
     pub(super) fn mark_whole(&self, runs: &[RunId]) {

@@ -33,7 +33,9 @@ pub struct Recovered {
 }
 
 pub(super) const UNTOUCHED: &str = "p.started_at IS NULL \
-     AND NOT EXISTS (SELECT 1 FROM messages l WHERE l.run_id=p.run_id AND l.id<>p.message_id) \
+     AND NOT EXISTS (SELECT 1 FROM messages l WHERE l.run_id=p.run_id AND l.id<>p.message_id \
+         AND NOT (l.from_kind='system' AND EXISTS (SELECT 1 FROM json_each(l.parts) \
+             WHERE json_extract(value,'$.type')='notice' AND json_extract(value,'$.kind')='lifecycle'))) \
      AND EXISTS (SELECT 1 FROM messages f JOIN agents a ON a.id=f.to_agent \
          WHERE f.id=p.message_id AND f.to_kind='agent' AND a.lifecycle<>'terminated')";
 

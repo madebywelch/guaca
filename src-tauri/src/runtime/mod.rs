@@ -2635,7 +2635,19 @@ impl Runtime {
         let starting: Vec<_> = batch.iter().map(|envelope| envelope.id).collect();
         if let Err(err) = self.inner.store.start_deliveries(&starting, run_id) {
             tracing::error!(%err, "could not mark a delivery started; putting it down for the next host rather than run a turn a crash would repeat");
-            self.put_down(&batch, &absorbed, &carried, carried.len(), &resumed);
+            if self.put_down(&batch, &absorbed, &carried, carried.len(), &resumed) {
+                self.notice(
+                    agent_id,
+                    run_id,
+                    cause,
+                    NoticeKind::Lifecycle,
+                    format!(
+                        "{} could not start on this because the workspace could not record it. \
+                         Nothing was done. It will be delivered again when the host next starts.",
+                        card.name
+                    ),
+                );
+            }
             self.idle(agent_id);
             return;
         }

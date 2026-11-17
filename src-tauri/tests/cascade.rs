@@ -8245,3 +8245,79 @@ async fn a_message_handed_on_beside_the_turn_that_acted_on_it_is_carried_on_in_t
     );
     assert!(h.channel_texts("Researcher").iter().any(|t| t.contains("Hours and number found.")));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_message_whose_start_cannot_be_recorded_says_so_at_once() {
+    let stub = serve(|_| Script::Say("The room is booked.".into())).await;
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let researcher = h.id("Researcher");
+    h.runtime
+        .store()
+        .conn()
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER reject_start BEFORE UPDATE OF started_at ON pending_runs \
+             BEGIN SELECT RAISE(ABORT,'disk failure'); END;",
+        )
+        .unwrap();
+    let run = h.runtime.send_from_human(researcher, "Book the room.").unwrap();
+    h.wait_until("the start mark to fail and the run to leave the process", |h| {
+        h.runtime.live_runs() == 0
+    })
+    .await;
+
+    let messages = h.runtime.store().channel_messages(researcher, 50).unwrap();
+    let asked = messages.iter().find(|m| m.run_id == run && m.from == Participant::Human).unwrap();
+    let notices: Vec<&Envelope> = messages
+        .iter()
+        .filter(|m| m.run_id == run && m.parts.iter().any(|p| matches!(p, Part::Notice { .. })))
+        .collect();
+    assert_eq!(notices.len(), 1, "{}", h.transcript());
+    assert_eq!(notices[0].cause, Some(asked.id));
+    assert_eq!(
+        notices[0].parts,
+        vec![Part::Notice {
+            kind: NoticeKind::Lifecycle,
+            text: "Researcher could not start on this because the workspace could not record it. \
+                   Nothing was done. It will be delivered again when the host next starts."
+                .into(),
+        }]
+    );
+    assert_eq!(stub.calls.load(Ordering::SeqCst), 0);
+
+    h.runtime.store().conn().unwrap().execute_batch("DROP TRIGGER reject_start;").unwrap();
+    let (h, _) = h.restart(Duration::from_secs(5)).await;
+    h.settle(run).await;
+    assert_eq!(stub.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(h.runtime.store().outcome(run).unwrap().unwrap().status, OutcomeStatus::Done);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_message_whose_start_cannot_be_recorded_is_delivered_after_two_crashes_in_a_row() {
+    let stub = serve(|_| Script::Say("The room is booked.".into())).await;
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let researcher = h.id("Researcher");
+    h.runtime
+        .store()
+        .conn()
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER reject_start BEFORE UPDATE OF started_at ON pending_runs \
+             BEGIN SELECT RAISE(ABORT,'disk failure'); END;",
+        )
+        .unwrap();
+    let run = h.runtime.send_from_human(researcher, "Book the room.").unwrap();
+    h.wait_until("the start mark to fail and the run to leave the process", |h| {
+        h.runtime.live_runs() == 0
+    })
+    .await;
+    h.runtime.store().conn().unwrap().execute_batch("DROP TRIGGER reject_start;").unwrap();
+
+    h.runtime.stop_agent(researcher);
+    let store = Store::open(&h._dir.path().join("guac.db")).unwrap();
+    let first = guac_lib::boot::recover(&store).unwrap();
+    assert_eq!(first.resumed.iter().map(|put| put.envelope.run_id).collect::<Vec<_>>(), vec![run]);
+    let second = guac_lib::boot::recover(&store).unwrap();
+    assert_eq!(second.interrupted, 0, "a message no turn started was reported interrupted");
+    assert_eq!(second.resumed.iter().map(|put| put.envelope.run_id).collect::<Vec<_>>(), vec![run]);
+}

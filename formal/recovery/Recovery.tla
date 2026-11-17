@@ -9,7 +9,8 @@ CONSTANTS
     AcceptOneCommit,
     RecoverUntouched,
     RecoverClears,
-    KeepLink
+    KeepLink,
+    SkipStartNote
 
 Msgs == <<"m1", "m2">>
 MsgSet == {"m1", "m2"}
@@ -158,8 +159,10 @@ MarkFails ==
     /\ LET rides == IF turn.batch \cap resuming /= {} THEN riders ELSE {} IN
           /\ riders' = riders \ rides
           /\ PutDown(turn.batch, rides, turn.batch \cap resuming /= {}, rides)
+    /\ extra' = IF SkipStartNote \/ turn.run \in stopped THEN extra
+                ELSE [extra EXCEPT ![turn.run] = @ + 1]
     /\ turn' = NoTurn
-    /\ UNCHANGED <<up, ends, draining, stopped, inbox, accepted, extra, notices, ghosts>>
+    /\ UNCHANGED <<up, ends, draining, stopped, inbox, accepted, notices, ghosts>>
 
 Begin ==
     /\ up /\ turn.st = "marked"
