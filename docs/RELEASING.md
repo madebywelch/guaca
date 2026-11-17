@@ -121,15 +121,15 @@ export GUACA_COMMIT="$GUACA_SOURCE"
 pnpm install --frozen-lockfile
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 ./scripts/ci.sh
-CI=true APPLE_SIGNING_IDENTITY='Developer ID Application: Robert Welch (LN79XLHFLT)' \
-  pnpm tauri build --target universal-apple-darwin --bundles app,dmg -- --locked
+APPLE_SIGNING_IDENTITY='Developer ID Application: Robert Welch (LN79XLHFLT)' \
+  pnpm tauri build --target universal-apple-darwin --bundles app -- --locked
 ```
 
-The release is built on a Mac someone is working on, so the build must not open
-Finder windows or ask for permission to control Finder. `CI=true` does that: it
-makes Tauri pass `--skip-jenkins` to `bundle_dmg.sh`. The bundler reads the
-variable itself and accepts only the value `true`. The `--ci` flag does not set
-it, so the flag alone still drives Finder.
+The release is built on a Mac someone is working on, so nothing in it may open
+Finder windows or ask for permission to control Finder. Tauri's own disk image
+step arranges its window by driving Finder with AppleScript, so the build makes
+only the app, and the disk image is packaged later by `scripts/package-dmg.py`,
+which drives nothing.
 
 The universal binary contains both Apple Silicon and Intel code. Tauri enables
 the hardened runtime by default and signs with the Keychain identity. No private
@@ -139,11 +139,7 @@ the build environment, Tauri reports that notarization was skipped; the next ste
 performs it explicitly using Keychain.
 
 The app is in `src-tauri/target/universal-apple-darwin/release/bundle/macos/`.
-The sibling `dmg/` directory holds a disk image too, with the `bundle_dmg.sh`
-script and volume icon Tauri made it with. That disk image was packaged before
-the app was notarized, so it is never a release asset; the release disk image is
-packaged later from the stapled app, with the same script. Verify the app before
-submitting it:
+Verify it before submitting it:
 
 ```sh
 GUACA_BUNDLE=src-tauri/target/universal-apple-darwin/release/bundle
@@ -166,8 +162,7 @@ signature by default.
 A stapled ticket lives inside the file it was stapled to. Packaging an app copies
 the ticket it already has, and stapling it afterwards never reaches the copy
 already packaged. So the order is fixed: notarize and staple the app, package that
-stapled app into the disk image, then notarize and staple the disk image. Tauri's
-build packages the app before any of this, which is why its disk image is not used.
+stapled app into the disk image, then notarize and staple the disk image.
 
 ### Notarize and staple the app
 
@@ -216,24 +211,18 @@ xcrun stapler validate "$GUACA_APP"
 
 ### Package the stapled app
 
-Run the script Tauri generated on the stapled app, with the arguments Tauri passes
-it under `CI=true`. `--skip-jenkins` skips the AppleScript step, so packaging
-drives no Finder window. That step is the only reader of the icon positions,
-the window size and `--hide-extension`, so those arguments have no effect here
-and are kept only to match Tauri's own call. The disk image opens with Finder's
-default arrangement, as the build's own disk image does. The volume name, the
-volume icon and the link to Applications are still applied:
+`scripts/package-dmg.py` packages the stapled app into a disk image named Guaca,
+with a link to Applications and the app's icon as the volume icon. Finder opens
+it as a 660 by 400 window with large icons, Guaca on the left and Applications on
+the right. Finder reads that arrangement from the volume's `.DS_Store`, which the
+script writes itself rather than arranging a Finder window, so packaging opens no
+window and runs no AppleScript. The script copies the app with `ditto` and
+compares the copy in the finished image with the original, file by file, so the
+stapled ticket is carried as it is. It refuses to overwrite an existing image:
 
 ```sh
 GUACA_DMG="$GUACA_OUT/Guaca_${GUACA_VERSION}_universal.dmg"
-rm -f "$GUACA_DMG"
-(
-  cd "$GUACA_BUNDLE/macos"
-  ../dmg/bundle_dmg.sh --skip-jenkins --volname Guaca \
-    --icon Guaca.app 180 170 --app-drop-link 480 170 \
-    --window-size 660 400 --hide-extension Guaca.app \
-    --volicon ../dmg/icon.icns "$GUACA_DMG" Guaca.app
-)
+python3 scripts/package-dmg.py "$GUACA_APP" "$GUACA_DMG"
 codesign --force --timestamp \
   --sign 'Developer ID Application: Robert Welch (LN79XLHFLT)' "$GUACA_DMG"
 codesign --verify --verbose=2 "$GUACA_DMG"
@@ -310,14 +299,19 @@ results:
    output above and exit 0, and the signature, architecture and Gatekeeper checks
    from the previous section. A stapled app elsewhere or a Gatekeeper pass does
    not replace the staple check.
-4. Opened in Finder, Guaca drags into Applications and launches with Gatekeeper
+4. Opened in Finder, the disk image shows a 660 by 400 window with large icons,
+   Guaca on the left and Applications on the right. A window with small icons in
+   its top-left corner means the image has no layout: it was not packaged with
+   `scripts/package-dmg.py`. Open it from a fresh mount of the downloaded file;
+   `ls -la "$GUACA_MOUNT"` must list a `.DS_Store`.
+5. Opened in Finder, Guaca drags into Applications and launches with Gatekeeper
    enabled. First-run settings work without cloning the repo, Node, or Rust.
    The `claude` program for the Claude provider is included in the backend
    image; its sign-in must be set up on the backend.
-5. **On this Mac** works with Docker, and **Remote host** works against a
+6. **On this Mac** works with Docker, and **Remote host** works against a
    matching host.
-6. A universal build launches on both Intel and Apple Silicon.
-7. The downloaded `guaca-release.json` verifies against `release-keys.pub` with
+7. A universal build launches on both Intel and Apple Silicon.
+8. The downloaded `guaca-release.json` verifies against `release-keys.pub` with
    its `.sig`, and names the released version, the source commit and the
    backend image digest. Use the check in
    [Release checks in browser and desktop](#release-checks-in-browser-and-desktop).
