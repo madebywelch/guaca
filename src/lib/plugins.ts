@@ -1,4 +1,12 @@
-import { type CatalogKind, errorMessage, type PluginKind, type ServerReport } from "./types";
+import constants from "./mirrors/constants.json";
+import {
+  type AgentId,
+  type CatalogKind,
+  errorMessage,
+  type PluginAccess,
+  type PluginKind,
+  type ServerReport,
+} from "./types";
 
 export interface Brand {
   path: string;
@@ -64,7 +72,11 @@ export function nameFor(kind: PluginKind): string {
   return Object.hasOwn(NAMES, kind) ? NAMES[kind as CatalogKind] : kind;
 }
 
-export const STDIO = "stdio:";
+export const STDIO = constants.stdio;
+
+export function allows(access: PluginAccess, agent: AgentId): boolean {
+  return access.mode === "everyone" || access.agents.includes(agent);
+}
 
 export function hostOf(endpoint: string): string {
   if (endpoint.startsWith(STDIO)) {

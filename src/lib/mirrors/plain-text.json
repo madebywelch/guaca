@@ -1,0 +1,113 @@
+[
+  {
+    "input": [
+      {
+        "type": "text",
+        "text": "hello"
+      }
+    ],
+    "expected": "hello"
+  },
+  {
+    "input": [
+      {
+        "type": "text",
+        "text": " first "
+      },
+      {
+        "type": "text",
+        "text": "second "
+      }
+    ],
+    "expected": "first \nsecond"
+  },
+  {
+    "input": [],
+    "expected": ""
+  },
+  {
+    "input": [
+      {
+        "type": "text",
+        "text": "   "
+      }
+    ],
+    "expected": ""
+  },
+  {
+    "input": [
+      {
+        "type": "json",
+        "name": "result",
+        "value": {
+          "ok": true
+        }
+      },
+      {
+        "type": "text",
+        "text": "done"
+      }
+    ],
+    "expected": "done"
+  },
+  {
+    "input": [
+      {
+        "type": "routine",
+        "routineId": "00000000-0000-4000-8000-000000000003",
+        "name": "Morning",
+        "what": "Write the morning report.",
+        "payload": null
+      }
+    ],
+    "expected": "Write the morning report."
+  },
+  {
+    "input": [
+      {
+        "type": "text",
+        "text": "Before"
+      },
+      {
+        "type": "routine",
+        "routineId": "00000000-0000-4000-8000-000000000003",
+        "name": "Morning",
+        "what": "Write the morning report.",
+        "payload": null
+      }
+    ],
+    "expected": "Before\nWrite the morning report."
+  },
+  {
+    "input": [
+      {
+        "type": "question",
+        "id": "00000000-0000-4000-8000-000000000004",
+        "question": "Ship it?",
+        "options": [
+          "Yes",
+          "No"
+        ]
+      }
+    ],
+    "expected": ""
+  },
+  {
+    "input": [
+      {
+        "type": "toolCall",
+        "name": "directory",
+        "arguments": {},
+        "outcome": {
+          "status": "ok",
+          "summary": "3 agents"
+        }
+      },
+      {
+        "type": "text",
+        "text": "Found them."
+      }
+    ],
+    "expected": "Found them."
+  }
+]

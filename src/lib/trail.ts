@@ -91,11 +91,18 @@ function clip(value: string, at = 60): string {
   return flat.length > at ? `${flat.slice(0, at - 1)}…` : flat;
 }
 
-export function pluginCall(name: string): { plugin: string; tool: string } | null {
-  const at = name.indexOf("__");
+const PLUGIN_SEPARATOR = "__";
+
+export function splitPluginTool(name: string): { server: string; tool: string } | null {
+  const at = name.indexOf(PLUGIN_SEPARATOR);
   if (at <= 0) return null;
-  const tool = name.slice(at + 2);
-  return tool.length > 0 ? { plugin: nameFor(name.slice(0, at)), tool } : null;
+  const tool = name.slice(at + PLUGIN_SEPARATOR.length);
+  return tool.length > 0 ? { server: name.slice(0, at), tool } : null;
+}
+
+export function pluginCall(name: string): { plugin: string; tool: string } | null {
+  const split = splitPluginTool(name);
+  return split ? { plugin: nameFor(split.server), tool: split.tool } : null;
 }
 
 interface Described {
@@ -395,17 +402,21 @@ export function attempt(title: string): string {
   return verb ? `Tried to ${verb}${rest ? ` ${rest}` : ""}` : `Failed: ${title}`;
 }
 
-export function machineInUse(work: LiveCall[] | undefined): "computer" | "browser" | null {
+export type Machine = "computer" | "browser";
+
+export function surfaceOf(tool: string): Machine | null {
+  if (tool === "browse") return "browser";
+  if (tool === "run_command" || tool === "open_on_desktop" || tool === "use_screen") {
+    return "computer";
+  }
+  return null;
+}
+
+export function machineInUse(work: LiveCall[] | undefined): Machine | null {
   for (const call of work ?? []) {
     if (call.done !== null) continue;
-    if (call.name === "browse") return "browser";
-    if (
-      call.name === "run_command" ||
-      call.name === "open_on_desktop" ||
-      call.name === "use_screen"
-    ) {
-      return "computer";
-    }
+    const surface = surfaceOf(call.name);
+    if (surface) return surface;
   }
   return null;
 }

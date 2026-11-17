@@ -1,0 +1,94 @@
+[
+  {
+    "input": 0,
+    "expected": "$0.0000"
+  },
+  {
+    "input": 0.00004,
+    "expected": "$0.0000"
+  },
+  {
+    "input": 0.0001,
+    "expected": "$0.0001"
+  },
+  {
+    "input": 0.00005,
+    "expected": "$0.0001"
+  },
+  {
+    "input": 0.009,
+    "expected": "$0.0090"
+  },
+  {
+    "input": 0.01,
+    "expected": "$0.010"
+  },
+  {
+    "input": 0.0125,
+    "expected": "$0.013"
+  },
+  {
+    "input": 0.0625,
+    "expected": "$0.062"
+  },
+  {
+    "input": 0.125,
+    "expected": "$0.125"
+  },
+  {
+    "input": 0.5,
+    "expected": "$0.500"
+  },
+  {
+    "input": 0.999,
+    "expected": "$0.999"
+  },
+  {
+    "input": 1,
+    "expected": "$1.00"
+  },
+  {
+    "input": 1.005,
+    "expected": "$1.00"
+  },
+  {
+    "input": 1.125,
+    "expected": "$1.12"
+  },
+  {
+    "input": 1.375,
+    "expected": "$1.38"
+  },
+  {
+    "input": 2.5,
+    "expected": "$2.50"
+  },
+  {
+    "input": 12.345,
+    "expected": "$12.35"
+  },
+  {
+    "input": 99.994,
+    "expected": "$99.99"
+  },
+  {
+    "input": 99.995,
+    "expected": "$100.00"
+  },
+  {
+    "input": 100,
+    "expected": "$100"
+  },
+  {
+    "input": 100.5,
+    "expected": "$101"
+  },
+  {
+    "input": 101.5,
+    "expected": "$102"
+  },
+  {
+    "input": 1234.4,
+    "expected": "$1234"
+  }
+]

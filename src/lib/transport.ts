@@ -1,5 +1,6 @@
 import { COMMIT, VERSION } from "./build";
 import { diagnostic } from "./diagnostic";
+import constants from "./mirrors/constants.json";
 import { compatibility, parseHealth } from "./releases";
 import type { NotificationAccess, UiEvent } from "./types";
 
@@ -643,7 +644,7 @@ async function permitted(): Promise<boolean> {
   }
 }
 
-const NOTIFICATION_CLICKED = "notification-clicked";
+const NOTIFICATION_CLICKED = constants.notificationClicked;
 
 let askingMac: Promise<NotificationAccess | null> | null = null;
 

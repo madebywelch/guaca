@@ -343,15 +343,18 @@ export interface ConnectorDraft {
 
 export type PluginId = string;
 
-export type CatalogKind =
-  | "neon"
-  | "cloudflare"
-  | "linear"
-  | "stripe"
-  | "agentmail"
-  | "supermemory"
-  | "firecrawl"
-  | "google";
+export const CATALOG = [
+  "neon",
+  "cloudflare",
+  "linear",
+  "stripe",
+  "agentmail",
+  "supermemory",
+  "firecrawl",
+  "google",
+] as const;
+
+export type CatalogKind = (typeof CATALOG)[number];
 
 export type PluginKind = CatalogKind | (string & {});
 

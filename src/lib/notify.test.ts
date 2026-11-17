@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import constants from "./mirrors/constants.json";
 import type { Delivery, DeliveryId, DeliveryTarget, NotificationAccess, Reveal } from "./types";
 
 const host = vi.hoisted(() => ({
@@ -51,7 +52,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: mac.invoke }));
 const events = vi.hoisted(() => ({
   clicked: undefined as ((message: { payload: number }) => void) | undefined,
   listen: vi.fn(async (name: string, handler: (message: { payload: number }) => void) => {
-    if (name === "notification-clicked") events.clicked = handler;
+    if (name === constants.notificationClicked) events.clicked = handler;
     return () => {};
   }),
 }));
