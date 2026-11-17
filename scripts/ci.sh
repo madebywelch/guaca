@@ -6,11 +6,8 @@
 #   ./scripts/ci.sh          everything
 #   ./scripts/ci.sh assets   just the icons and tray glyphs against their scripts
 #   ./scripts/ci.sh scripts  installer checks, probe unit tests, disk image layout
-#   ./scripts/ci.sh rust     just the Rust suite: desktop, then daemon
-#   ./scripts/ci.sh desktop  the Rust suite with the desktop features on
-#   ./scripts/ci.sh daemon   the Rust suite built as the daemon, without Tauri
+#   ./scripts/ci.sh rust     just the Rust suite
 #   ./scripts/ci.sh web      just the frontend
-#   ./scripts/ci.sh connector  the self-hosted Google connector
 
 set -euo pipefail
 
