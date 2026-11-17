@@ -297,6 +297,16 @@ Reading a message is not answering it, and the run's recovery point is the only
 record that something is still owed: released as it was read, a process that
 died before the turn ended left the message unanswered with no notice.
 
+**A stop of the turn's own conversation is not a stop of what it took in.** A
+turn ended by the operator answers nothing, so a message it took in from another
+conversation that nobody stopped is not settled with it. If the turn made no
+tool call after reading it, nothing has acted on it, and it goes back to the
+front of the agent's queue for a turn of its own (`Runtime::hand_back`). If a
+call ran after it was read, that call may have been for it, and answering it in
+a turn that cannot be told about the call would repeat it. So it stays owed in
+`pending_runs`, started and unsettled, and the next host reports it
+interrupted with Try again, as a crash would.
+
 The run that booked it is remembered as taken in, and it settles with no outcome
 of its own. Its answer is whatever the turn that read it went on to write, so it
 is that run's outcome that says what came of it. See *A run ends in an outcome*.

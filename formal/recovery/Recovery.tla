@@ -20,7 +20,7 @@ InOrder(S) == IF S = {"m1", "m2"} THEN <<"m1", "m2">>
               ELSE IF S = {} THEN <<>> ELSE <<CHOOSE m \in S : TRUE>>
 
 NoTurn == [st |-> "none", run |-> "none", batch |-> {}, taken |-> {}, seen |-> {},
-           carries |-> FALSE, did |-> FALSE, owed |-> <<>>]
+           carries |-> FALSE, did |-> FALSE, owed |-> <<>>, fresh |-> {}]
 
 VARIABLES
     up,
@@ -76,15 +76,20 @@ Release(r) ==
     /\ IF outstanding[r] = 1 /\ r \notin pdMem
           THEN pending' = [pending EXCEPT ![r] = "none"] ELSE pending' = pending
 
-PutDown(booked, taken, records) ==
-    LET ms == booked \cup taken
-        touched == {Run(m) : m \in ms}
-        left == [r \in Runs |-> outstanding[r] - Cardinality({m \in ms : Run(m) = r})]
+PutDown(batch, taken, records, actedOn) ==
+    LET gone == {m \in batch \cup taken : Run(m) \in stopped}
+        booked == batch \ gone
+        owed == IF booked = {} THEN (actedOn \cap taken) \ gone ELSE {}
+        kept == taken \ (gone \cup owed)
+        touched == {Run(m) : m \in booked \cup kept}
+        left == [r \in Runs |-> outstanding[r] - Cardinality({m \in batch \cup taken : Run(m) = r})]
     IN /\ outstanding' = left
        /\ pdMem' = pdMem \cup touched
        /\ put' = [m \in MsgSet |-> IF m \in booked THEN (IF records THEN "rec" ELSE "bare")
-                                   ELSE IF m \in taken THEN "bare" ELSE put[m]]
+                                   ELSE IF m \in kept THEN "bare" ELSE put[m]]
        /\ whole' = whole \cup {r \in touched : left[r] = 0}
+       /\ pending' = [r \in Runs |-> IF r \in {Run(m) : m \in gone} /\ left[r] = 0
+                                      THEN "none" ELSE pending[r]]
 
 ---------------------------------------------------------------------------
 Send ==
@@ -129,8 +134,8 @@ PutDownQueued ==
              THEN /\ extra' = [extra EXCEPT ![Run(m)] = @ + 1]
                   /\ Release(Run(m))
                   /\ UNCHANGED <<put, pdMem>>
-             ELSE /\ PutDown({m}, {}, m \in resuming)
-                  /\ UNCHANGED <<extra, pending>>
+             ELSE /\ PutDown({m}, {}, m \in resuming, {})
+                  /\ UNCHANGED extra
     /\ UNCHANGED <<up, ends, draining, stopped, turn, accepted, notices, ghosts>>
 
 MarkBatch ==
@@ -144,10 +149,10 @@ MarkBatch ==
 
 MarkFails ==
     /\ up /\ StartCanFail /\ turn.st = "dequeued"
-    /\ Release(turn.run)
+    /\ resuming' = resuming \ turn.batch
+    /\ PutDown(turn.batch, {}, turn.batch \cap resuming /= {}, {})
     /\ turn' = NoTurn
-    /\ UNCHANGED <<up, ends, draining, stopped, pdMem, inbox, resuming,
-                   accepted, put, extra, notices, ghosts>>
+    /\ UNCHANGED <<up, ends, draining, stopped, inbox, accepted, extra, notices, ghosts>>
 
 Begin ==
     /\ up /\ turn.st = "marked"
@@ -156,8 +161,8 @@ Begin ==
        IF Halted(turn.run)
           THEN /\ turn' = NoTurn
                /\ IF turn.run \notin stopped
-                     THEN /\ PutDown(turn.batch, {}, carries)
-                          /\ UNCHANGED <<extra, pending>>
+                     THEN /\ PutDown(turn.batch, {}, carries, {})
+                          /\ UNCHANGED extra
                      ELSE /\ extra' = [extra EXCEPT ![turn.run] = @ + 1]
                           /\ Release(turn.run)
                           /\ UNCHANGED <<put, pdMem>>
@@ -173,7 +178,7 @@ TakeIn ==
        /\ pending' = MarkStarted({Run(m)})
        /\ marked' = marked \cup {Run(m)}
        /\ inbox' = Tail(inbox)
-       /\ turn' = [turn EXCEPT !.taken = @ \cup {m}]
+       /\ turn' = [turn EXCEPT !.taken = @ \cup {m}, !.fresh = @ \cup {m}]
     /\ UNCHANGED <<up, ends, draining, stopped, pdMem, outstanding, resuming,
                    accepted, put, whole, extra, notices,
                    read, acted, answered, blind, calledOff, resumedOff>>
@@ -188,7 +193,7 @@ Think ==
 Call ==
     /\ up /\ turn.st = "thinking"
     /\ acted' = [m \in MsgSet |-> IF m \in turn.seen THEN turn.run ELSE acted[m]]
-    /\ turn' = [turn EXCEPT !.st = "acting", !.did = TRUE]
+    /\ turn' = [turn EXCEPT !.st = "acting", !.did = TRUE, !.fresh = {}]
     /\ UNCHANGED <<up, ends, draining, stopped, pdMem, outstanding, inbox, resuming,
                    disk, read, answered, blind, marked, calledOff, resumedOff>>
 
@@ -221,10 +226,15 @@ Answer ==
 HaltStopped ==
     /\ up /\ turn.st = "halted" /\ turn.run \in stopped
     /\ extra' = [extra EXCEPT ![turn.run] = @ + 1]
-    /\ turn' = [turn EXCEPT !.st = "finishing",
-                            !.owed = IF turn.taken = {} THEN <<turn.run>>
-                                     ELSE <<Run(CHOOSE m \in turn.taken : TRUE), turn.run>>]
-    /\ UNCHANGED <<up, ends, draining, stopped, pdMem, outstanding, inbox, resuming,
+    /\ LET ended == {m \in turn.taken : Run(m) \in stopped}
+           unread == (turn.taken \ ended) \cap turn.fresh
+           owed == turn.taken \ (ended \cup unread)
+       IN /\ inbox' = InOrder(unread) \o inbox
+          /\ outstanding' = [r \in Runs |-> outstanding[r] - Cardinality({m \in owed : Run(m) = r})]
+          /\ turn' = [turn EXCEPT !.st = "finishing",
+                                  !.owed = IF ended = {} THEN <<turn.run>>
+                                           ELSE <<Run(CHOOSE m \in ended : TRUE), turn.run>>]
+    /\ UNCHANGED <<up, ends, draining, stopped, pdMem, resuming,
                    accepted, pending, put, whole, notices, ghosts>>
 
 FinishOne ==
@@ -243,10 +253,10 @@ PutTurnDown ==
 
 PutTurnDownCommit ==
     /\ up /\ turn.st = "recorded"
-    /\ PutDown(turn.batch, turn.taken, turn.did \/ turn.carries)
+    /\ PutDown(turn.batch, turn.taken, turn.did \/ turn.carries, turn.taken \ turn.fresh)
     /\ turn' = NoTurn
     /\ UNCHANGED <<up, ends, draining, stopped, inbox, resuming,
-                   accepted, pending, extra, notices, ghosts>>
+                   accepted, extra, notices, ghosts>>
 
 Stop ==
     /\ up /\ OperatorStops
