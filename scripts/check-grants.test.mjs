@@ -792,6 +792,32 @@ describe("the command", () => {
       assert.match(out.stdout, /node \S*check-grants\.mjs grant <file>:<line> --words/);
     }),
   );
+  for (const head of [null, "HEAD"]) {
+    it(
+      "judges a file whose name is not ASCII, " + (head ? "committed" : "in the work tree"),
+      scenario({ "src/a.ts": SOURCE }, (repo) => {
+        write(repo.dir, { "src/café.ts": SOURCE + "// a comment\n" });
+        git(repo.dir, "add", "-A");
+        git(repo.dir, "commit", "-qm", "café");
+        const out = cli(repo, ["--base", repo.base, ...(head ? ["--head", head] : [])]);
+        assert.equal(out.status, 1, out.stdout + out.stderr);
+        assert.match(out.stdout, /src\/café\.ts:5 {2}comment/);
+      }),
+    );
+    it(
+      "refuses a file name git would quote, " + (head ? "committed" : "in the work tree"),
+      scenario({ "src/a.ts": SOURCE }, (repo) => {
+        write(repo.dir, { 'src/a"b.ts': SOURCE, "src/tab\there.ts": SOURCE });
+        git(repo.dir, "add", "-A");
+        git(repo.dir, "commit", "-qm", "names");
+        const out = cli(repo, ["--base", repo.base, ...(head ? ["--head", head] : [])]);
+        assert.equal(out.status, 1, out.stdout + out.stderr);
+        assert.match(out.stdout, /"src\/a\\"b\.ts" {2}a file name git quotes/);
+        assert.match(out.stdout, /"src\/tab\\there\.ts" {2}a file name git quotes/);
+        assert.match(out.stdout, /Rename the file/);
+      }),
+    );
+  }
   it(
     "compares a push to main with the commit before it",
     scenario({ "src/a.ts": SOURCE }, (repo) => {

@@ -20,6 +20,7 @@ export const DATA = [
   },
 ];
 const KINDS = new Set(["comment", "suppression", "document"]);
+const QUOTED = /["\\\u0000-\u001f\u007f]/;
 const GRANT_COMMAND = "node " + relative(process.cwd(), fileURLToPath(import.meta.url)) + " grant";
 const HASH_COMMAND = "node " + relative(process.cwd(), fileURLToPath(import.meta.url)) + " hash";
 const READERS = relative(process.cwd(), fileURLToPath(new URL("./grants/lex.mjs", import.meta.url)));
@@ -72,6 +73,7 @@ const FIXES = {
     ", or, if the file is data that carries no words of ours, add it to DATA in " +
     DATA_LIST +
     " with the reason.",
+  name: "A file name with a double quote, a backslash or a control character, which git quotes, so the lint cannot match the file to its lines. Rename the file.",
   document:
     "A new prose file. Say it where it is enforced or read instead: a rule becomes a check or a test, history goes in the commit message, and design goes in the section of an existing document that docs/ROUTING.md names.",
 };
@@ -181,7 +183,7 @@ export function unitsOf(path, text, scan) {
 }
 
 function git(repo, args, input) {
-  return execFileSync("git", args, { cwd: repo, encoding: "utf8", maxBuffer: 1 << 30, input, stdio: ["pipe", "pipe", "pipe"] });
+  return execFileSync("git", ["-c", "core.quotePath=false", ...args], { cwd: repo, encoding: "utf8", maxBuffer: 1 << 30, input, stdio: ["pipe", "pipe", "pipe"] });
 }
 
 function gitOk(repo, args) {
@@ -221,7 +223,7 @@ export function changedLines(repo, base, head) {
   for (const line of git(repo, args).split("\n")) {
     if (line.startsWith("diff --git ")) current = null;
     else if (line.startsWith("+++ ")) {
-      current = line === "+++ /dev/null" ? null : line.slice(6);
+      current = line === "+++ /dev/null" || line.startsWith('+++ "') ? null : line.slice(6);
       if (current && !changes.has(current)) changes.set(current, new Set());
     } else if (line.startsWith("@@") && current) {
       const hunk = /\+(\d+)(?:,(\d+))?/.exec(line);
@@ -231,7 +233,7 @@ export function changedLines(repo, base, head) {
     }
   }
   if (!head) {
-    for (const path of git(repo, ["ls-files", "--others", "--exclude-standard"]).split("\n").filter(Boolean)) {
+    for (const path of git(repo, ["ls-files", "-z", "--others", "--exclude-standard"]).split("\u0000").filter(Boolean)) {
       changes.set(path, "all");
     }
   }
@@ -291,9 +293,9 @@ function linksAmong(repo, rev, paths) {
 }
 
 function touchedPaths(repo, base, head, changes) {
-  const args = ["diff", "-M", "--name-only", "--diff-filter=ACMRT", "--no-ext-diff", base];
+  const args = ["diff", "-z", "-M", "--name-only", "--diff-filter=ACMRT", "--no-ext-diff", base];
   if (head) args.push(head);
-  return new Set([...changes.keys(), ...git(repo, args).split("\n").filter(Boolean)]);
+  return new Set([...changes.keys(), ...git(repo, args).split("\u0000").filter(Boolean)]);
 }
 
 export function upstreamOf(ledger) {
@@ -343,9 +345,9 @@ function parseLedger(text, problems) {
 }
 
 function listFiles(repo, rev) {
-  if (rev) return git(repo, ["ls-tree", "-r", "--name-only", rev]).split("\n").filter(Boolean);
-  return git(repo, ["ls-files", "--cached", "--others", "--exclude-standard"])
-    .split("\n")
+  if (rev) return git(repo, ["ls-tree", "-r", "-z", "--name-only", rev]).split("\u0000").filter(Boolean);
+  return git(repo, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"])
+    .split("\u0000")
     .filter((path) => path && existsSync(join(repo, path)));
 }
 
@@ -437,8 +439,11 @@ export function check(repo, { base, head = null, ledgerOverride, proseByDiff = f
   const grantFiles = grants.filter((grant) => grant.kind !== "document").map((grant) => grant.path);
   const shipped = shippedMigrations(repo, ledger, head, problems);
   const judgedWhole = (path) => !PROSE.test(path) && !shipped.has(path);
-  const candidates = [...touchedPaths(repo, base, head, changes)].filter((path) => !upstream(path));
-  const tree = listFiles(repo, head).filter((path) => !upstream(path) && judgedWhole(path));
+  const named = (path) => !upstream(path) && !QUOTED.test(path);
+  const files = listFiles(repo, head).filter((path) => !upstream(path));
+  for (const path of files.filter((path) => QUOTED.test(path))) findings.push({ path, line: null, kind: "name", what: "a file name git quotes" });
+  const candidates = [...touchedPaths(repo, base, head, changes)].filter(named);
+  const tree = files.filter((path) => named(path) && judgedWhole(path));
   const links = linksAmong(repo, head, [...new Set([...candidates, ...tree])]);
   const touched = candidates.filter((path) => !links.has(path));
   const wanted = [...new Set([...touched, ...grantFiles, ...tree])].filter((path) => !upstream(path) && !links.has(path));
@@ -633,7 +638,7 @@ export function report(result, base) {
   }
   out.push("grants: " + (findings.length + problems.length) + " to fix since " + base.rev.slice(0, 12) + " (" + base.label + ")", "");
   for (const finding of findings) {
-    const where = finding.line ? finding.path + ":" + finding.line : finding.path;
+    const where = finding.kind === "name" ? JSON.stringify(finding.path) : finding.line ? finding.path + ":" + finding.line : finding.path;
     const label = finding.kind === "document" ? "new document" : finding.what;
     const first = finding.raw ? "  " + finding.raw.split("\n")[0].trim().slice(0, 100) : "";
     out.push(where + "  " + label + first);
@@ -642,6 +647,7 @@ export function report(result, base) {
   const kinds = new Set(findings.map((finding) => finding.kind));
   if (kinds.size > 0) out.push("");
   if (kinds.has("unread")) out.push(FIXES.unread);
+  if (kinds.has("name")) out.push(FIXES.name);
   for (const kind of ["comment", "suppression", "document"]) {
     if (!kinds.has(kind)) continue;
     const target = kind === "document" ? "<file>" : "<file>:<line>";
