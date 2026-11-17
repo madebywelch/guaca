@@ -2612,13 +2612,6 @@ impl Runtime {
             return;
         }
 
-        let starting: Vec<_> = batch.iter().map(|envelope| envelope.id).collect();
-        if let Err(err) = self.inner.store.start_deliveries(&starting, run_id) {
-            tracing::error!(%err, "could not mark a delivery started; abandoning it rather than run a turn a crash would repeat");
-            self.abandon(run_id, batch.len());
-            return;
-        }
-
         let inbound_hop = batch.iter().map(|e| e.hop).max().unwrap_or(0);
         let cause = batch.last().map(|e| e.id);
         let (resumed, absorbed_ids) = self.resumed(&batch);
@@ -2636,6 +2629,14 @@ impl Runtime {
                 return;
             }
         };
+
+        let starting: Vec<_> = batch.iter().map(|envelope| envelope.id).collect();
+        if let Err(err) = self.inner.store.start_deliveries(&starting, run_id) {
+            tracing::error!(%err, "could not mark a delivery started; putting it down for the next host rather than run a turn a crash would repeat");
+            self.put_down(&batch, &absorbed, &[], 0, &resumed);
+            self.idle(agent_id);
+            return;
+        }
 
         let reply_target = batch.iter().rev().find(|e| e.expects_reply).map(|e| e.from);
 
@@ -2658,7 +2659,7 @@ impl Runtime {
 
         if self.stopped(run_id) {
             if !self.called_off(run_id) {
-                self.put_down(&batch, &absorbed, &[], &resumed);
+                self.put_down(&batch, &absorbed, &[], 0, &resumed);
                 self.idle(agent_id);
                 return;
             }
@@ -2888,6 +2889,7 @@ impl Runtime {
         };
         let mut attached: Vec<Attachment> = Vec::new();
         let mut taken_in: Vec<Envelope> = Vec::new();
+        let mut acted_on = 0;
         let mut failure: Option<LlmError> = None;
         let mut hit_tool_ceiling = false;
         let mut budget_exhausted = false;
@@ -3026,6 +3028,7 @@ impl Runtime {
                     strayed = true;
                     break;
                 }
+                acted_on = taken_in.len();
 
                 let errand = surfaces.errands
                     && matches!(tools::parse(call, &named), Ok(ToolInvocation::Errand { .. }));
@@ -3128,6 +3131,7 @@ impl Runtime {
                 &batch,
                 &absorbed,
                 &taken_in,
+                acted_on,
                 collected_text,
                 tool_parts,
                 resumed,
@@ -3184,7 +3188,48 @@ impl Runtime {
             );
         }
 
+        let taken_in =
+            if called_off { self.hand_back(run_id, taken_in, acted_on, intake) } else { taken_in };
         self.finish_turn(agent_id, run_id, batch.len(), &taken_in);
+    }
+
+    fn hand_back(
+        &self,
+        run: RunId,
+        taken: Vec<Envelope>,
+        acted_on: usize,
+        intake: &mut Intake<'_>,
+    ) -> Vec<Envelope> {
+        let routine = |envelope: &Envelope| {
+            envelope.parts.iter().any(|part| matches!(part, Part::Routine { .. }))
+        };
+        let mut ended = Vec::new();
+        let mut unread = Vec::new();
+        {
+            let mut runs = self.inner.runs.lock();
+            let acted: HashSet<RunId> =
+                taken[..acted_on].iter().map(|envelope| envelope.run_id).collect();
+            for envelope in taken {
+                if envelope.run_id == run
+                    || runs.stopped.contains(&envelope.run_id)
+                    || routine(&envelope)
+                {
+                    ended.push(envelope);
+                    continue;
+                }
+                runs.absorbed.remove(&envelope.run_id);
+                if !acted.contains(&envelope.run_id) {
+                    unread.push(envelope);
+                } else if Self::release_bookings(&mut runs, envelope.run_id, 1) {
+                    self.inner.guard.lock().unpin(envelope.run_id);
+                }
+            }
+        }
+        for envelope in unread.into_iter().rev() {
+            intake.depth.fetch_add(1, Ordering::SeqCst);
+            intake.carry.push_front(envelope);
+        }
+        ended
     }
 
     async fn stream_with_retries(

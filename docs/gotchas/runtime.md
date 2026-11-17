@@ -114,6 +114,17 @@ code.
   trajectory suite and double-counts its spend. Marking is the whole mechanism:
   each of the three boundaries releases through `finish_turn`, exactly as an
   ordinary turn does.
+- **A stopped turn settles only what was stopped.** `finish_turn` releases
+  what a turn took in, and for a turn the operator stopped that used to settle
+  every conversation it had read, answered or not. `hand_back` sorts them first:
+  unread since the last tool call goes back to the queue, read before a call
+  stays owed for the next host to report, and only the stopped ones end here.
+- **`put_down` checks the stop itself.** The check in `run_turn` is read
+  before the record is written, and a stop can land between the two. Reading
+  `Runs.stopped` under the lock the commit is written under is the only place
+  that window closes.
+- **A failed start mark puts the batch down.** Settling it reported a turn that
+  never ran as finished, and running it anyway is a turn a crash would repeat.
 - **The stop check sits before `reserve_step`, not after it.** One line later and
   a run reports a model call that a stop prevented, for the rest of its life.
 - **The checks inside the round loop do not cover the way out of it.** A turn
