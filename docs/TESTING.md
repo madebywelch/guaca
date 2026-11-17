@@ -215,6 +215,7 @@ exactly what `./scripts/ci.sh` with no argument runs.
 | web, scripts, assets, connector | `ci.sh assets`, `scripts`, `web`, `connector`, one step each | Node 22 and pnpm |
 | rust desktop | `ci.sh desktop`: format, Clippy and every test with the desktop features | the Tauri headers, Rust, a built `dist/` |
 | rust daemon (no Tauri, no frontend) | `ci.sh daemon`: Clippy and every test built as the daemon | Rust only, so a dependency on Tauri or `dist/` fails here |
+| formal (TLA+ model check) | `ci.sh formal`: the conversation recovery model | Java, and the TLA+ tools jar, cached by its pinned version |
 | images (Dockerfile.ci and the daemon image) | builds `Dockerfile.ci`, then `./scripts/image.sh` | Docker |
 | gate | passes only when every job above passed | nothing |
 

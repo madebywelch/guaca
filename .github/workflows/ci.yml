@@ -87,6 +87,20 @@ jobs:
           workspaces: src-tauri
       - run: ./scripts/ci.sh daemon
 
+  formal:
+    name: formal (TLA+ model check)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/guaca
+          key: tla2tools-${{ hashFiles('scripts/formal.sh') }}
+      - run: ./scripts/ci.sh formal
+
   image:
     name: images (Dockerfile.ci and the daemon image)
     runs-on: ubuntu-24.04
@@ -102,7 +116,7 @@ jobs:
 
   gate:
     if: always()
-    needs: [web, desktop, daemon, image]
+    needs: [web, desktop, daemon, formal, image]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
