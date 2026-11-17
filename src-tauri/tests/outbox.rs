@@ -132,9 +132,7 @@ async fn a_reminder_due_while_the_host_was_down_is_not_lost_at_boot() {
     let h = harness(&stub, &["Assistant"], GuardLimits::default());
     file_due_decision(&h, "Assistant", "thread/time");
 
-    let (h, _) = h.restart(Duration::from_secs(5)).await;
-    h.runtime.start_dispatcher();
-    h.runtime.start_scheduler();
+    let (h, _) = h.reboot(Duration::from_secs(5)).await;
 
     h.wait_until("the reminder to be offered", |h| pending(h).len() == 1).await;
     let waiting = pending(&h);

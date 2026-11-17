@@ -12,7 +12,7 @@ use axum::routing::post;
 use axum::Router;
 
 use guac_lib::config::{AppConfig, E2bConfig, InferenceConfig, KernelConfig};
-use guac_lib::db::Store;
+use guac_lib::db::{Recovered, Store};
 use guac_lib::domain::agent::{CleanDraft, Lifecycle};
 use guac_lib::domain::envelope::{Envelope, Participant};
 use guac_lib::domain::group::CleanGroup;
@@ -885,6 +885,24 @@ impl Harness {
     }
 
     pub async fn restart(self, within: Duration) -> (Harness, Drained) {
+        let (h, drained, recovered) = self.reopen(within).await;
+        let started = h.runtime.start_all().unwrap();
+        h.runtime.pick_up(&started, recovered);
+        (h, drained)
+    }
+
+    pub async fn reboot(self, within: Duration) -> (Harness, Drained) {
+        let (h, drained, recovered) = self.reopen(within).await;
+        h.runtime.resume(recovered).unwrap();
+        (h, drained)
+    }
+
+    pub fn start_scheduler(&self) {
+        let started = self.runtime.start_all().unwrap();
+        self.runtime.start_scheduler(self.runtime.pick_up(&started, Recovered::default()));
+    }
+
+    async fn reopen(self, within: Duration) -> (Harness, Drained, Recovered) {
         let drained = self.runtime.drain(within).await;
         for id in self.ids.values() {
             self.runtime.stop_agent(*id);
@@ -899,9 +917,7 @@ impl Harness {
             OnDisk::under(self._dir.path()),
             sink.clone(),
         );
-        runtime.start_all().unwrap();
-        runtime.pick_up(recovered);
-        (Harness { runtime, sink, ids: self.ids, _dir: self._dir }, drained)
+        (Harness { runtime, sink, ids: self.ids, _dir: self._dir }, drained, recovered)
     }
 
     pub async fn settle(&self, run: RunId) {

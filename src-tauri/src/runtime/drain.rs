@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, Notify};
 
-use super::{CutShort, Intake, RunGuard, Runs, Runtime};
+use super::{CutShort, Intake, RunGuard, Runs, Runtime, RuntimeError, Started};
 use crate::db::Recovered;
 use crate::domain::agent::AgentCard;
 use crate::domain::envelope::{Envelope, Intent, NoticeKind, Part, Participant, Trust};
@@ -13,6 +13,8 @@ use crate::domain::ids::{AgentId, MessageId, RunId};
 use crate::domain::now_ms;
 
 const LOOK: Duration = Duration::from_millis(50);
+
+pub struct PickedUp(());
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Drained {
@@ -360,7 +362,15 @@ impl Runtime {
         batch.iter().find_map(|envelope| resuming.remove(&envelope.id)).unwrap_or_default()
     }
 
-    pub fn pick_up(&self, recovered: Recovered) {
+    pub fn resume(&self, recovered: Recovered) -> Result<usize, RuntimeError> {
+        let started = self.start_all()?;
+        let picked_up = self.pick_up(&started, recovered);
+        self.start_dispatcher(&picked_up);
+        self.start_scheduler(picked_up);
+        Ok(started.agents())
+    }
+
+    pub fn pick_up(&self, _: &Started, recovered: Recovered) -> PickedUp {
         let Recovered { resumed, carried, steps, guards, .. } = recovered;
         let conversations = steps.len();
         let legacy = steps.len().saturating_sub(guards.len());
@@ -407,5 +417,6 @@ impl Runtime {
         if messages > 0 {
             tracing::info!(messages, conversations, "picked up the work the last host put down");
         }
+        PickedUp(())
     }
 }
