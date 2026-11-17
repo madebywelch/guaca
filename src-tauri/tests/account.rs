@@ -853,3 +853,21 @@ fn the_service_seeds_the_client_the_app_signs_in_as() {
         "the service's migration seeds the only client that can sign in, and it has to be the one the app asks as"
     );
 }
+
+#[test]
+fn the_service_trusts_the_client_the_app_signs_in_as() {
+    let auth = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../connectors/google/worker/auth.ts"
+    ))
+    .unwrap();
+    let declared = auth
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("export const DESKTOP_CLIENT_ID = "))
+        .expect("auth.ts declares DESKTOP_CLIENT_ID on one line");
+    assert_eq!(
+        declared,
+        format!("\"{CLIENT_ID}\";"),
+        "the service holds DESKTOP_CLIENT_ID as its trusted client, and it has to be the client the app asks as"
+    );
+}

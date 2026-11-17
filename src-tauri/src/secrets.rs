@@ -1,5 +1,41 @@
 use std::collections::BTreeMap;
 
+#[derive(Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(transparent)]
+pub struct Secret(String);
+
+impl Secret {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl From<String> for Secret {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&str> for Secret {
+    fn from(value: &str) -> Self {
+        Self(value.to_string())
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Secret")
+    }
+}
+
 #[derive(Default)]
 pub struct ProcessEnv(BTreeMap<String, String>);
 
@@ -90,6 +126,18 @@ pub(crate) use assert_lacks;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_secret_cannot_be_serialized_or_displayed() {
+        assert_lacks!(serde::Serialize, Secret);
+        assert_lacks!(std::fmt::Display, Secret);
+    }
+
+    #[test]
+    fn a_secret_debugs_as_nothing_of_its_value() {
+        let printed = format!("{:?}", Some(Secret::new("ghp_hunter2")));
+        assert!(!printed.contains("hunter2"), "a value reached Debug: {printed}");
+    }
 
     #[test]
     fn a_process_env_cannot_be_serialized_or_displayed() {

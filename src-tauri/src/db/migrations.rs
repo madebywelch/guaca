@@ -2325,13 +2325,20 @@ mod tests {
     #[test]
     fn a_shipped_migration_is_never_edited() {
         assert!(MIGRATIONS.len() >= SHIPPED.len(), "a shipped migration was removed");
-        for ((version, sql), (shipped, pinned)) in MIGRATIONS.iter().zip(SHIPPED) {
+        for (at, (version, sql)) in MIGRATIONS.iter().enumerate() {
             let digest: String =
                 Sha256::digest(sql.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect();
-            assert_eq!(
-                (*version, digest.as_str()),
-                (*shipped, *pinned),
-                "migration {shipped} has shipped and is never edited; append a new one instead"
+            let line = format!("        ({version}, \"{digest}\"),");
+            let Some(&(shipped, pinned)) = SHIPPED.get(at) else {
+                panic!(
+                    "migration {version} has no pin. Add this line at the end of SHIPPED:\n{line}"
+                );
+            };
+            assert!(
+                (shipped, pinned) == (*version, digest.as_str()),
+                "migration {shipped} does not match its pin. A shipped migration is never edited, so \
+                 undo the edit and append a new migration. If {version} is new and not yet shipped, \
+                 replace its line in SHIPPED with:\n{line}"
             );
         }
     }

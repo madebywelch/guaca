@@ -8,6 +8,8 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
+use crate::secrets::Secret;
+
 const WAIT_FOR_OPERATOR: Duration = Duration::from_secs(5 * 60);
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -60,18 +62,18 @@ pub enum OauthError {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Grant {
-    pub access_token: String,
-    pub refresh_token: Option<String>,
+    pub access_token: Secret,
+    pub refresh_token: Option<Secret>,
     pub expires_at: Option<i64>,
     pub client_id: String,
-    pub client_secret: Option<String>,
+    pub client_secret: Option<Secret>,
     pub token_endpoint: String,
 }
 
 impl Grant {
     pub fn key(pasted: &str) -> Grant {
         Grant {
-            access_token: pasted.to_string(),
+            access_token: pasted.into(),
             refresh_token: None,
             expires_at: None,
             client_id: String::new(),
@@ -344,11 +346,11 @@ pub async fn refresh(
 
     let mut form = vec![
         ("grant_type".to_string(), "refresh_token".to_string()),
-        ("refresh_token".to_string(), refresh_token.clone()),
+        ("refresh_token".to_string(), refresh_token.expose().to_string()),
         ("client_id".to_string(), grant.client_id.clone()),
     ];
     if let Some(secret) = &grant.client_secret {
-        form.push(("client_secret".to_string(), secret.clone()));
+        form.push(("client_secret".to_string(), secret.expose().to_string()));
     }
 
     let issued = post_token(&http, &grant.token_endpoint, &form, gate).await?;
@@ -563,13 +565,13 @@ impl Discovered {
 struct Registered {
     client_id: String,
     #[serde(default)]
-    client_secret: Option<String>,
+    client_secret: Option<Secret>,
     #[serde(default)]
     token_endpoint_auth_method: Option<String>,
 }
 
 impl Registered {
-    fn secret(&self) -> Option<String> {
+    fn secret(&self) -> Option<Secret> {
         match self.token_endpoint_auth_method.as_deref() {
             Some("none") | None => None,
             _ => self.client_secret.clone(),
@@ -695,9 +697,9 @@ pub fn parse_query(query: &str) -> Vec<(String, String)> {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct Issued {
-    pub access_token: String,
+    pub access_token: Secret,
     #[serde(default)]
-    pub refresh_token: Option<String>,
+    pub refresh_token: Option<Secret>,
     #[serde(default)]
     pub expires_in: Option<i64>,
 }
@@ -724,7 +726,7 @@ async fn exchange(
         ("resource".to_string(), resource.to_string()),
     ];
     if let Some(secret) = &secret {
-        form.push(("client_secret".to_string(), secret.clone()));
+        form.push(("client_secret".to_string(), secret.expose().to_string()));
     }
 
     let issued = post_token(http, &server.token_endpoint, &form, gate).await?;
@@ -1222,7 +1224,7 @@ mod tests {
             ..public.clone()
         };
         assert_eq!(public.secret(), None);
-        assert_eq!(confidential.secret().as_deref(), Some("shh"));
+        assert_eq!(confidential.secret(), Some("shh".into()));
     }
 
     #[test]

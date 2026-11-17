@@ -7,6 +7,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::oauth::{self, OauthError};
+use crate::secrets::Secret;
 
 pub const DEFAULT_ORIGIN: &str = "https://guaca.bot";
 
@@ -108,11 +109,11 @@ impl From<OauthError> for AccountError {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 struct Stored {
-    access_token: String,
+    access_token: Secret,
     #[serde(default)]
-    refresh_token: Option<String>,
+    refresh_token: Option<Secret>,
     #[serde(default)]
     expires_at: Option<i64>,
     #[serde(default)]
@@ -122,7 +123,30 @@ struct Stored {
     origin: String,
 }
 
+#[derive(Serialize)]
+struct OnDisk<'a> {
+    access_token: &'a str,
+    refresh_token: Option<&'a str>,
+    expires_at: Option<i64>,
+    email: &'a str,
+    token_endpoint: &'a str,
+    origin: &'a str,
+}
+
 impl Stored {
+    fn on_disk(&self) -> OnDisk<'_> {
+        let Stored { access_token, refresh_token, expires_at, email, token_endpoint, origin } =
+            self;
+        OnDisk {
+            access_token: access_token.expose(),
+            refresh_token: refresh_token.as_ref().map(Secret::expose),
+            expires_at: *expires_at,
+            email,
+            token_endpoint,
+            origin,
+        }
+    }
+
     fn expiring(&self) -> bool {
         self.expires_at.is_some_and(|at| at - REFRESH_SKEW_MS <= now_ms())
     }
@@ -441,7 +465,7 @@ impl Account {
             origin: self.origin.clone(),
         };
 
-        let held = self.fetch_connectors(&stored.access_token).await?;
+        let held = self.fetch_connectors(stored.access_token.expose()).await?;
         self.store(true, attempt, Stored { email: held.email, ..stored })
     }
 
@@ -469,7 +493,7 @@ impl Account {
         }
         let stored = self.tokens.lock().stored().cloned().ok_or(AccountError::NotSignedIn)?;
         if !stored.expiring() {
-            return Ok(stored.access_token);
+            return Ok(stored.access_token.expose().to_string());
         }
 
         let _gate = self.renewing.lock().await;
@@ -479,21 +503,21 @@ impl Account {
             (state.stored().cloned().ok_or(AccountError::NotSignedIn)?, state.generation)
         };
         if !stored.expiring() {
-            return Ok(stored.access_token);
+            return Ok(stored.access_token.expose().to_string());
         }
 
         let Some(refresh_token) = stored.refresh_token.clone() else {
-            return Ok(stored.access_token);
+            return Ok(stored.access_token.expose().to_string());
         };
 
-        match self.refresh(&stored, &refresh_token, generation).await {
+        match self.refresh(&stored, refresh_token.expose(), generation).await {
             Ok(fresh) => Ok(fresh),
             Err(err @ AccountError::Transport { .. }) => {
                 tracing::warn!(
                     %err,
                     "using the stored account token: its refresh could not be reached"
                 );
-                Ok(stored.access_token)
+                Ok(stored.access_token.expose().to_string())
             }
             Err(err) => {
                 tracing::warn!(%err, origin = %self.origin, "the account refused to renew");
@@ -520,13 +544,13 @@ impl Account {
         )
         .await?;
 
-        let access_token = issued.access_token.clone();
+        let access_token = issued.access_token.expose().to_string();
         self.store(
             false,
             generation,
             Stored {
                 access_token: issued.access_token,
-                refresh_token: issued.refresh_token.or_else(|| Some(refresh_token.to_string())),
+                refresh_token: issued.refresh_token.or_else(|| Some(refresh_token.into())),
                 expires_at: issued.expires_in.map(|secs| now_ms() + secs * 1000),
                 email: stored.email.clone(),
                 token_endpoint: stored.token_endpoint.clone(),
@@ -662,9 +686,8 @@ impl Account {
                 .map_err(|source| AccountError::Io { path: parent.to_path_buf(), source })?;
         }
 
-        let json = serde_json::to_string_pretty(stored).map_err(|err| AccountError::Transport {
-            origin: self.origin.clone(),
-            detail: err.to_string(),
+        let json = serde_json::to_string_pretty(&stored.on_disk()).map_err(|err| {
+            AccountError::Transport { origin: self.origin.clone(), detail: err.to_string() }
         })?;
 
         let tmp = self.path.with_extension("json.tmp");
@@ -722,6 +745,47 @@ mod tests {
     }
     use super::*;
 
+    const RELEASED: &str = r#"{
+  "access_token": "access-1",
+  "refresh_token": "refresh-1",
+  "expires_at": 1767225600000,
+  "email": "ada@example.com",
+  "token_endpoint": "https://guaca.bot/api/auth/oauth2/token",
+  "origin": "https://guaca.bot"
+}"#;
+
+    const RELEASED_UNSET: &str = r#"{
+  "access_token": "access-1",
+  "refresh_token": null,
+  "expires_at": null,
+  "email": "ada@example.com",
+  "token_endpoint": "https://guaca.bot/api/auth/oauth2/token",
+  "origin": "https://guaca.bot"
+}"#;
+
+    fn released_sign_in() -> Stored {
+        Stored {
+            access_token: Secret::new("access-1"),
+            refresh_token: Some(Secret::new("refresh-1")),
+            expires_at: Some(1767225600000),
+            email: "ada@example.com".into(),
+            token_endpoint: "https://guaca.bot/api/auth/oauth2/token".into(),
+            origin: "https://guaca.bot".into(),
+        }
+    }
+
+    #[test]
+    fn a_sign_in_file_is_read_and_written_byte_for_byte_as_released() {
+        let set = released_sign_in();
+        let unset = Stored { refresh_token: None, expires_at: None, ..released_sign_in() };
+        for (bytes, stored) in [(RELEASED, set), (RELEASED_UNSET, unset)] {
+            assert_eq!(serde_json::from_str::<Stored>(bytes).unwrap(), stored);
+            let written = serde_json::to_string_pretty(&stored.on_disk()).unwrap();
+            assert_eq!(written, bytes);
+            assert_eq!(serde_json::from_str::<Stored>(&written).unwrap(), stored);
+        }
+    }
+
     fn account(origin: &str) -> Account {
         let dir = std::env::temp_dir().join(format!("guaca-account-{}", uuid::Uuid::new_v4()));
         Account::open_at(dir.join("account.json"), origin)
@@ -758,14 +822,14 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("account.json");
         let stored = Stored {
-            access_token: "token".to_string(),
+            access_token: "token".into(),
             refresh_token: None,
             expires_at: None,
             email: "a@b.com".to_string(),
             token_endpoint: format!("{origin}/api/auth/oauth2/token"),
             origin: origin.to_string(),
         };
-        fs::write(&path, serde_json::to_string(&stored).unwrap()).unwrap();
+        fs::write(&path, serde_json::to_string(&stored.on_disk()).unwrap()).unwrap();
         path
     }
 

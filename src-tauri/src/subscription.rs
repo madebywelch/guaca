@@ -6,6 +6,8 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
+use crate::secrets::Secret;
+
 pub const DEFAULT_ISSUER: &str = "https://auth.openai.com";
 
 pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -72,17 +74,44 @@ pub struct DeviceCode {
     pub interval_secs: u64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 struct Stored {
-    access_token: String,
-    refresh_token: String,
-    id_token: String,
+    access_token: Secret,
+    refresh_token: Secret,
+    id_token: Secret,
     account_id: String,
     expires_at: i64,
     #[serde(default)]
     email: String,
     #[serde(default)]
     plan: String,
+}
+
+#[derive(Serialize)]
+struct OnDisk<'a> {
+    access_token: &'a str,
+    refresh_token: &'a str,
+    id_token: &'a str,
+    account_id: &'a str,
+    expires_at: i64,
+    email: &'a str,
+    plan: &'a str,
+}
+
+impl Stored {
+    fn on_disk(&self) -> OnDisk<'_> {
+        let Stored { access_token, refresh_token, id_token, account_id, expires_at, email, plan } =
+            self;
+        OnDisk {
+            access_token: access_token.expose(),
+            refresh_token: refresh_token.expose(),
+            id_token: id_token.expose(),
+            account_id,
+            expires_at: *expires_at,
+            email,
+            plan,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -314,9 +343,9 @@ impl Subscription {
             .exchange(
                 "authorization_code",
                 &[
-                    ("code", authorized.authorization_code.as_str()),
+                    ("code", authorized.authorization_code.expose()),
                     ("redirect_uri", &format!("{base}/deviceauth/callback")),
-                    ("code_verifier", authorized.code_verifier.as_str()),
+                    ("code_verifier", authorized.code_verifier.expose()),
                 ],
             )
             .await?;
@@ -361,7 +390,7 @@ impl Subscription {
             return Ok(Access { token: stored.access_token, account_id: stored.account_id });
         }
 
-        match self.renew(&stored.access_token).await {
+        match self.renew(stored.access_token.expose()).await {
             Ok(access) => Ok(access),
             Err(err @ SigninError::Transport { .. }) => {
                 if self.lifecycle.lock().credential != generation {
@@ -384,11 +413,11 @@ impl Subscription {
             };
             (state.credential, held)
         };
-        if held.access_token != refused {
+        if held.access_token.expose() != refused {
             return Ok(Access { token: held.access_token, account_id: held.account_id });
         }
 
-        let fresh = match self.refresh(&held.refresh_token).await {
+        let fresh = match self.refresh(held.refresh_token.expose()).await {
             Ok(fresh) => fresh,
             Err(err) => {
                 if is_terminal(&err) {
@@ -443,7 +472,7 @@ impl Subscription {
             SigninError::Malformed(format!("could not read the new token: {err}"))
         })?;
         if tokens.refresh_token.is_empty() {
-            tokens.refresh_token = refresh_token.to_string();
+            tokens.refresh_token = refresh_token.into();
         }
         Ok(tokens)
     }
@@ -485,9 +514,9 @@ impl Subscription {
             tokens.id_token
         };
 
-        let claims = Claims::of(&id_token);
+        let claims = Claims::of(id_token.expose());
         let stored = Stored {
-            expires_at: expiry_of(&tokens.access_token).unwrap_or(0),
+            expires_at: expiry_of(tokens.access_token.expose()).unwrap_or(0),
             account_id: claims.account_id,
             email: claims.email,
             plan: claims.plan,
@@ -514,7 +543,7 @@ impl Subscription {
                 .map_err(|source| SigninError::Io { path: parent.to_path_buf(), source })?;
         }
 
-        let json = serde_json::to_string_pretty(stored)
+        let json = serde_json::to_string_pretty(&stored.on_disk())
             .map_err(|err| SigninError::Malformed(err.to_string()))?;
 
         let tmp = self.path.with_extension("json.tmp");
@@ -528,7 +557,7 @@ impl Subscription {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Access {
-    pub token: String,
+    pub token: Secret,
     pub account_id: String,
 }
 
@@ -543,17 +572,17 @@ struct UserCode {
 
 #[derive(Debug, Deserialize)]
 struct Authorized {
-    authorization_code: String,
-    code_verifier: String,
+    authorization_code: Secret,
+    code_verifier: Secret,
 }
 
 #[derive(Debug, Deserialize)]
 struct Tokens {
-    access_token: String,
+    access_token: Secret,
     #[serde(default)]
-    refresh_token: String,
+    refresh_token: Secret,
     #[serde(default)]
-    id_token: String,
+    id_token: Secret,
 }
 
 fn seconds<'de, D: serde::Deserializer<'de>>(de: D) -> Result<u64, D::Error> {
@@ -677,6 +706,33 @@ fn restrict(_path: &Path) -> Result<(), SigninError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const RELEASED: &str = r#"{
+  "access_token": "access-2",
+  "refresh_token": "refresh-2",
+  "id_token": "id-2",
+  "account_id": "acct-2",
+  "expires_at": 1767225600,
+  "email": "ada@example.com",
+  "plan": "plus"
+}"#;
+
+    #[test]
+    fn a_subscription_file_is_read_and_written_byte_for_byte_as_released() {
+        let stored = Stored {
+            access_token: Secret::new("access-2"),
+            refresh_token: Secret::new("refresh-2"),
+            id_token: Secret::new("id-2"),
+            account_id: "acct-2".into(),
+            expires_at: 1767225600,
+            email: "ada@example.com".into(),
+            plan: "plus".into(),
+        };
+        assert_eq!(serde_json::from_str::<Stored>(RELEASED).unwrap(), stored);
+        let written = serde_json::to_string_pretty(&stored.on_disk()).unwrap();
+        assert_eq!(written, RELEASED);
+        assert_eq!(serde_json::from_str::<Stored>(&written).unwrap(), stored);
+    }
 
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -860,7 +916,7 @@ mod tests {
         let token = subscription.access().await.unwrap().token;
         let task = {
             let subscription = subscription.clone();
-            tokio::spawn(async move { subscription.renew(&token).await })
+            tokio::spawn(async move { subscription.renew(token.expose()).await })
         };
         gate.wait().await;
         subscription.sign_out().unwrap();
@@ -924,7 +980,7 @@ mod tests {
         let token = subscription.access().await.unwrap().token;
         let task = {
             let subscription = subscription.clone();
-            tokio::spawn(async move { subscription.renew(&token).await })
+            tokio::spawn(async move { subscription.renew(token.expose()).await })
         };
         gate.wait().await;
         let code = subscription.begin().await.unwrap();
@@ -1043,7 +1099,10 @@ mod tests {
         subscription.tokens.lock().as_mut().unwrap().expires_at = 0;
         subscription.access().await.unwrap();
 
-        assert_eq!(subscription.tokens.lock().as_ref().unwrap().refresh_token, "refresh-1");
+        assert_eq!(
+            subscription.tokens.lock().as_ref().unwrap().refresh_token.expose(),
+            "refresh-1"
+        );
 
         subscription.tokens.lock().as_mut().unwrap().expires_at = 0;
         subscription.access().await.unwrap();
@@ -1116,7 +1175,7 @@ mod tests {
         let refused = subscription.access().await.unwrap();
         assert_eq!(stub.refreshes.load(Ordering::SeqCst), 0, "nothing was due yet");
 
-        let fresh = subscription.renew(&refused.token).await.unwrap();
+        let fresh = subscription.renew(refused.token.expose()).await.unwrap();
         assert_eq!(stub.refreshes.load(Ordering::SeqCst), 1);
         assert_ne!(fresh.token, refused.token, "the refused token cannot be handed back");
     }
@@ -1136,7 +1195,7 @@ mod tests {
         for _ in 0..8 {
             let subscription = subscription.clone();
             let refused = refused.clone();
-            crew.push(tokio::spawn(async move { subscription.renew(&refused).await }));
+            crew.push(tokio::spawn(async move { subscription.renew(refused.expose()).await }));
         }
         let mut tokens = Vec::new();
         for agent in crew {

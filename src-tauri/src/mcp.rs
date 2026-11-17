@@ -109,10 +109,10 @@ impl<'a> Dial<'a> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Session {
     pub endpoint: String,
-    pub token: Option<String>,
+    pub token: Option<crate::secrets::Secret>,
     headers: Vec<(String, String)>,
     pub era: Era,
     pub transport: Transport,
@@ -120,6 +120,17 @@ pub struct Session {
     pub server_name: String,
     negotiated: Option<String>,
     process: Option<std::sync::Arc<stdio::Process>>,
+}
+
+impl std::fmt::Debug for Session {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Session")
+            .field("endpoint", &self.endpoint)
+            .field("era", &self.era)
+            .field("transport", &self.transport)
+            .field("server_name", &self.server_name)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Session {
@@ -177,7 +188,7 @@ async fn establish(
     let Spoken { era, transport, negotiated } = spoken;
     let free = |era: Era, negotiated: Option<String>| Session {
         endpoint: dial.endpoint.to_string(),
-        token: dial.token.map(str::to_string),
+        token: dial.token.map(Into::into),
         headers: dial.headers.to_vec(),
         era,
         transport: transport.clone(),
@@ -213,7 +224,7 @@ pub async fn describe(session: &Session) -> Result<String, McpError> {
 fn dial_for(session: &Session) -> Dial<'_> {
     Dial {
         endpoint: &session.endpoint,
-        token: session.token.as_deref(),
+        token: session.token.as_ref().map(crate::secrets::Secret::expose),
         headers: &session.headers,
         legacy_transport: true,
     }
@@ -522,7 +533,7 @@ async fn initialize(http: &reqwest::Client, dial: Dial<'_>) -> Result<Session, M
 
     let session = Session {
         endpoint: endpoint.to_string(),
-        token: dial.token.map(str::to_string),
+        token: dial.token.map(Into::into),
         headers: dial.headers.to_vec(),
         era: Era::Legacy,
         transport: Transport::Streamable,
@@ -600,7 +611,7 @@ impl<'a> Wire<'a> {
     fn of(session: &'a Session) -> Wire<'a> {
         Wire {
             endpoint: &session.endpoint,
-            token: session.token.as_deref(),
+            token: session.token.as_ref().map(crate::secrets::Secret::expose),
             extra: &session.headers,
             version: session.version().to_string(),
             modern: session.modern(),
@@ -767,7 +778,7 @@ async fn notify(
         request = request.header(name.as_str(), value.as_str());
     }
     if let Some(token) = &session.token {
-        request = request.header("authorization", format!("Bearer {token}"));
+        request = request.header("authorization", format!("Bearer {}", token.expose()));
     }
     if let Some(id) = &session.session_id {
         request = request.header("mcp-session-id", id.as_str());

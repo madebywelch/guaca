@@ -93,7 +93,7 @@ impl PluginError {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub enum Credential<'a> {
     Discover,
     Key(&'a str),
@@ -142,7 +142,8 @@ pub async fn connect(
                     now_ms,
                 )
                 .await?;
-                let (session, tools) = ask(dialed.with_token(Some(&grant.access_token))).await?;
+                let (session, tools) =
+                    ask(dialed.with_token(Some(grant.access_token.expose()))).await?;
                 (session, tools, Some(grant))
             }
             Err(err) => return Err(err.into()),
@@ -267,7 +268,7 @@ pub async fn check(
         }
         other => other,
     };
-    inspect(kind.is_custom(), endpoint, grant.as_ref().map(|g| g.access_token.as_str()), &headers)
+    inspect(kind.is_custom(), endpoint, grant.as_ref().map(|g| g.access_token.expose()), &headers)
         .await
 }
 
@@ -300,18 +301,35 @@ async fn account_label(session: &mcp::Session, kind: &PluginKind) -> String {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct AccountUse<'a> {
     pub token: &'a str,
     pub connection: &'a str,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum Held<'a> {
     Absent,
     Token(AccountUse<'a>),
     Invalid,
     Refused(String),
+}
+
+impl std::fmt::Debug for AccountUse<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AccountUse").field("connection", &self.connection).finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for Held<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Held::Absent => f.write_str("Absent"),
+            Held::Token(used) => f.debug_tuple("Token").field(used).finish(),
+            Held::Invalid => f.write_str("Invalid"),
+            Held::Refused(said) => f.debug_tuple("Refused").field(said).finish(),
+        }
+    }
 }
 
 impl<'a> Held<'a> {
@@ -411,7 +429,7 @@ pub async fn call(
     let dialed = dial(kind.is_custom(), endpoint, &headers);
     let attempt = run(
         dialed,
-        grant.as_ref().map(|g| g.access_token.as_str()),
+        grant.as_ref().map(|g| g.access_token.expose()),
         tool,
         arguments,
         schema.as_ref(),
@@ -426,7 +444,7 @@ pub async fn call(
             let (renewed, _) = renew(store, id, generation, kind, endpoint, &headers).await?;
             match run(
                 dialed,
-                Some(&renewed.access_token),
+                Some(renewed.access_token.expose()),
                 tool,
                 arguments,
                 schema.as_ref(),
@@ -659,6 +677,14 @@ mod tests {
             }
             other => panic!("a token is a token: {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_held_token_debugs_without_the_token() {
+        let read = Ok("acct-hunter2".to_string());
+        let printed = format!("{:?}", Held::read(&read, "acct_1"));
+        assert!(printed.contains("acct_1"), "{printed}");
+        assert!(!printed.contains("hunter2"), "a token reached Debug: {printed}");
     }
 
     #[test]

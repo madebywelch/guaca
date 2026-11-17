@@ -95,11 +95,17 @@ pub enum SandboxState {
     Gone,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Sandbox {
     pub id: String,
     pub envd_token: String,
     pub traffic_token: String,
+}
+
+impl std::fmt::Debug for Sandbox {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Sandbox").field("id", &self.id).finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -141,9 +147,9 @@ struct SandboxRow {
     #[serde(rename = "sandboxID", alias = "sandboxId", alias = "sandbox_id")]
     sandbox_id: String,
     #[serde(default, rename = "envdAccessToken")]
-    envd_token: Option<String>,
+    envd_token: Option<crate::secrets::Secret>,
     #[serde(default, rename = "trafficAccessToken")]
-    traffic_token: Option<String>,
+    traffic_token: Option<crate::secrets::Secret>,
     #[serde(default)]
     metadata: std::collections::HashMap<String, String>,
 }
@@ -151,7 +157,7 @@ struct SandboxRow {
 #[derive(Debug, Clone)]
 pub struct E2bClient {
     http: reqwest::Client,
-    api_key: String,
+    api_key: crate::secrets::Secret,
     env: std::sync::Arc<crate::secrets::ProcessEnv>,
     base: String,
 }
@@ -163,7 +169,7 @@ impl E2bClient {
             return None;
         }
         let http = reqwest::Client::builder().timeout(RUN_TIMEOUT).build().ok()?;
-        Some(Self { http, api_key: api_key.to_string(), env: Default::default(), base: api_base() })
+        Some(Self { http, api_key: api_key.into(), env: Default::default(), base: api_base() })
     }
 
     pub fn with_env(mut self, env: crate::secrets::ProcessEnv) -> Self {
@@ -176,7 +182,7 @@ impl E2bClient {
         request: reqwest::RequestBuilder,
     ) -> Result<T, E2bError> {
         let response = request
-            .header("X-API-Key", &self.api_key)
+            .header("X-API-Key", self.api_key.expose())
             .send()
             .await
             .map_err(|e| E2bError::Transport(e.to_string()))?;
@@ -225,8 +231,8 @@ impl E2bClient {
             self.control(self.http.post(format!("{}/sandboxes", self.base)).json(&body)).await?;
         Ok(Sandbox {
             id: row.sandbox_id,
-            envd_token: row.envd_token.unwrap_or_default(),
-            traffic_token: row.traffic_token.unwrap_or_default(),
+            envd_token: row.envd_token.unwrap_or_default().expose().to_string(),
+            traffic_token: row.traffic_token.unwrap_or_default().expose().to_string(),
         })
     }
 
@@ -234,7 +240,7 @@ impl E2bClient {
         let response = self
             .http
             .get(format!("{}/sandboxes/{sandbox}", self.base))
-            .header("X-API-Key", &self.api_key)
+            .header("X-API-Key", self.api_key.expose())
             .send()
             .await
             .map_err(|e| E2bError::Transport(e.to_string()))?;
@@ -264,7 +270,7 @@ impl E2bClient {
         let response = self
             .http
             .post(format!("{}/sandboxes/{sandbox}/pause", self.base))
-            .header("X-API-Key", &self.api_key)
+            .header("X-API-Key", self.api_key.expose())
             .json(&serde_json::json!({ "memory": false }))
             .send()
             .await
@@ -288,8 +294,8 @@ impl E2bClient {
             .await?;
         Ok(Sandbox {
             id: row.sandbox_id,
-            envd_token: row.envd_token.unwrap_or_default(),
-            traffic_token: row.traffic_token.unwrap_or_default(),
+            envd_token: row.envd_token.unwrap_or_default().expose().to_string(),
+            traffic_token: row.traffic_token.unwrap_or_default().expose().to_string(),
         })
     }
 
@@ -297,7 +303,7 @@ impl E2bClient {
         let _ = self
             .http
             .post(format!("{}/sandboxes/{sandbox}/timeout", self.base))
-            .header("X-API-Key", &self.api_key)
+            .header("X-API-Key", self.api_key.expose())
             .json(&serde_json::json!({ "timeout": idle_seconds }))
             .send()
             .await;
@@ -335,7 +341,7 @@ impl E2bClient {
         let response = self
             .http
             .delete(format!("{}/sandboxes/{sandbox}", self.base))
-            .header("X-API-Key", &self.api_key)
+            .header("X-API-Key", self.api_key.expose())
             .send()
             .await
             .map_err(|e| E2bError::Transport(e.to_string()))?;
@@ -1383,6 +1389,19 @@ mod tests {
     fn a_blank_key_means_not_configured_rather_than_a_client_that_always_fails() {
         assert!(E2bClient::new("   ").is_none());
         assert!(E2bClient::new("e2b_x").is_some());
+    }
+
+    #[test]
+    fn a_client_and_a_sandbox_debug_without_their_credentials() {
+        let client = E2bClient::new("e2b_hunter2").unwrap();
+        let sandbox = Sandbox {
+            id: "sbx".into(),
+            envd_token: "envd-hunter2".into(),
+            traffic_token: "traffic-hunter2".into(),
+        };
+        let printed = format!("{client:?} {sandbox:?}");
+        assert!(printed.contains("sbx"), "{printed}");
+        assert!(!printed.contains("hunter2"), "a credential reached Debug: {printed}");
     }
 
     #[test]
