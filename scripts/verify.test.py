@@ -1,6 +1,7 @@
 import http.client
 import inspect
 import json
+import socket
 import sys
 import tempfile
 import threading
@@ -12,8 +13,8 @@ from pathlib import Path
 
 from e2e.browser import Browser, BrowserError, split_frames
 from e2e.scenarios import SCENARIOS, unproved
-from e2e.world import (UNSCRIPTED, Call, Egress, Failed, Model, call, held, redact, refuse, say, stream,
-                       until)
+from e2e.world import (UNSCRIPTED, Call, Egress, Failed, Model, Updater, call, held, redact, refuse, say,
+                       stream, until)
 
 
 def post(base: str, body: dict, key: str = "k") -> tuple[int, bytes]:
@@ -168,6 +169,31 @@ class Stand(unittest.TestCase):
                      {"content-type": "application/json"})
         body = conn.getresponse().read().decode()
         self.assertTrue(body.rstrip().endswith("data: [DONE]"))
+
+
+class Updating(unittest.TestCase):
+    def ask(self, path: Path, request: dict) -> bytes:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+            conn.settimeout(10)
+            conn.connect(str(path))
+            conn.sendall(json.dumps(request).encode() + b"\n")
+            return conn.makefile("rb").readline()
+
+    def test_the_stand_in_updater_answers_its_script_one_line_and_records_the_ask(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            updater = Updater(Path(directory) / "updater.sock", Path(directory))
+            updater.script = lambda ask: {"err": "no"} if ask["ask"] == "update" else {"ok": {"updating": False}}
+            self.assertEqual(json.loads(self.ask(updater.path, {"ask": "status"})), {"ok": {"updating": False}})
+            self.assertEqual(json.loads(self.ask(updater.path, {"ask": "update", "version": "1"})), {"err": "no"})
+            self.assertEqual(updater.updates(), [{"ask": "update", "version": "1"}])
+            updater.stop()
+
+    def test_a_script_that_returns_nothing_closes_without_an_answer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            updater = Updater(Path(directory) / "updater.sock", Path(directory))
+            self.assertEqual(self.ask(updater.path, {"ask": "update", "version": "1"}), b"")
+            self.assertEqual(len(updater.updates()), 1)
+            updater.stop()
 
 
 class Leaving(unittest.TestCase):

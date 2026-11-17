@@ -5,6 +5,7 @@ import json
 import re
 import sqlite3
 import threading
+import urllib.request
 from dataclasses import dataclass
 from typing import Callable
 
@@ -730,12 +731,104 @@ def scenario_lapse(w: World) -> None:
     no_unscripted(w)
 
 
+REVIEWED = "d" * 40
+MOVED = "f" * 40
+IMAGE = "ghcr.io/madebywelch/guaca/guacad@sha256:"
+UPDATE = "Back up and update host"
+MAIN_MOVED = "Main is now at fffffff, not ddddddd. Check for updates and review it again."
+LOST = "Guaca lost the Host's reply, so it can't tell whether the update started."
+
+
+def scenario_update(w: World) -> None:
+    assert w.updater, "the update scenario runs beside a stand-in updater"
+    updater = w.updater
+    feed = {"commit": REVIEWED}
+    other: dict = {"updating": False, "operation": None}
+    running = {"image": f"{IMAGE}{'0' * 64}", "version": ""}
+
+    def another(stage: str) -> dict:
+        return {"attemptId": "another-client", "stage": stage, "backup": None,
+                "previousImage": running["image"], "targetImage": f"{IMAGE}{'e' * 64}",
+                "targetVersion": running["version"], "apiGeneration": 1, "port": None,
+                "preserved": None, "error": None}
+
+    def answer(ask: dict) -> dict | None:
+        if ask.get("ask") == "status":
+            return {"ok": {"channel": "main", "updating": other["updating"], "running": running,
+                           "operation": other["operation"], "error": None}}
+        if ask.get("commit") == REVIEWED:
+            feed["commit"] = MOVED
+            other.update(updating=True, operation=another("Backing up data"))
+            return {"err": MAIN_MOVED}
+        return None
+
+    def release() -> dict:
+        commit = feed["commit"]
+        return {"automatic": True, "checkedAt": "2026-11-17T00:00:00Z", "error": None, "channel": "main",
+                "latest": {"schema": 1, "channel": "main", "version": running["version"], "commit": commit,
+                           "image": f"{IMAGE}{'e' * 64}", "apiGeneration": 1, "clientMinimum": 1,
+                           "clientMaximum": 1, "notes": f"https://github.com/madebywelch/guaca/commit/{commit}"}}
+
+    def asked() -> list[str]:
+        return [str(ask.get("commit"))[:7] for ask in updater.updates()]
+
+    updater.script = answer
+    w.start()
+    with urllib.request.urlopen(f"{w.host.origin}/health", timeout=10) as health:
+        running["version"] = json.loads(health.read())["version"]
+    ui = w.ui
+    ui.answer("*/v1/updates*", release)
+    ui.evaluate("location.reload()")
+    w.wait("the page is back with the release check answered", lambda: ui.find("button", "App settings"))
+
+    def reviewing() -> bool:
+        if ui.find("button", UPDATE):
+            return True
+        if ui.find("button", "Review update"):
+            ui.click("button", "Review update")
+        return False
+
+    w.wait("the update banner opens the panel", reviewing)
+    offered = "Update this host to main at ddddddd." in ui.text()
+    w.check("a box on main offers the build of main that was reviewed", offered and ui.find("button", UPDATE),
+            observed={"offered": offered}, shot=True)
+
+    ui.click("button", UPDATE)
+    w.wait("the panel shows the update that is running", lambda: "Backing up data · step 3 of 5" in ui.text())
+    shown = ui.text()
+    w.check("a refused update says why, under the update another client started and its step",
+            MAIN_MOVED in shown and "Starting update" not in shown and LOST not in shown
+            and asked() == [REVIEWED[:7]],
+            observed={"refusal": MAIN_MOVED in shown, "step": "Backing up data · step 3 of 5" in shown,
+                      "startingUpdate": "Starting update" in shown, "lostReply": LOST in shown,
+                      "asked": asked()}, shot=True)
+
+    other.update(updating=False, operation=another("Host updated"))
+    w.wait("the panel offers the build main moved to", lambda: ui.find("button", UPDATE)
+           and "Update this host to main at fffffff." in ui.text())
+    ended = ui.text()
+    w.check("when the other update ends, the panel offers main's new build and claims nothing as its own",
+            "Host updated to" not in ended and "main at fffffff" in ended,
+            observed={"claimed": "Host updated to" in ended, "offers": "main at fffffff" in ended}, shot=True)
+
+    ui.click("button", UPDATE)
+    w.wait("the panel says the reply was lost", lambda: LOST in ui.text())
+    before = len(updater.asked)
+    ui.click("button", "Check again")
+    w.wait("Check again asks the updater", lambda: len(updater.asked) > before)
+    w.check("an updater that does not answer leaves the outcome unknown, and nothing is sent twice",
+            LOST in ui.text() and not ui.find("button", UPDATE) and asked() == [REVIEWED[:7], MOVED[:7]],
+            observed={"lostReply": LOST in ui.text(), "offersAgain": bool(ui.find("button", UPDATE)),
+                      "asked": asked()}, shot=True)
+
+
 @dataclass(frozen=True)
 class Scenario:
     run: Callable[[World], None]
     proves: str
     claims: tuple[str, ...]
     minute_ms: int | None = None
+    updater: bool = False
 
 
 def unproved(claims: tuple[str, ...], steps: list[dict]) -> list[str]:
@@ -828,4 +921,14 @@ SCENARIOS: dict[str, Scenario] = {
         "the routine's history shows the one firing",
         "every model call was one the scenario scripted",
     )),
+    "update": Scenario(scenario_update, "A person updates a box that follows main while another client's update is "
+                       "running; this click is refused because main moved, and the panel says why under the "
+                       "running update's step, then offers main's new build; an updater that does not answer "
+                       "leaves the outcome unknown and nothing is sent twice.",
+    (
+        "a box on main offers the build of main that was reviewed",
+        "a refused update says why, under the update another client started and its step",
+        "when the other update ends, the panel offers main's new build and claims nothing as its own",
+        "an updater that does not answer leaves the outcome unknown, and nothing is sent twice",
+    ), updater=True),
 }

@@ -93,7 +93,7 @@ def doctor() -> dict:
 
 
 def attempt(name: str, run: int, evidence: Path, keep: bool) -> dict:
-    world = World(name, run, evidence, SCENARIOS[name].minute_ms)
+    world = World(name, run, evidence, SCENARIOS[name].minute_ms, updater=SCENARIOS[name].updater)
     started = time.monotonic()
     error = None
     try:
