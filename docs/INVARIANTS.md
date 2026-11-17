@@ -177,8 +177,14 @@ modifies: every kind of comment, docstrings included; `#[allow]`, `#[expect]`,
 `#[ignore]`, `@ts-ignore`, `@ts-expect-error`, `biome-ignore`, lint-disable
 lines, `noqa`, `type: ignore`, `.skip`, `.only` and `.todo`; a sleep standing in
 for a check in a test or script; and any new prose file (`.md`, `.mdx`,
-`.markdown`, `.rst`, `.adoc`, `.txt`, `.org`, an HTML page or a license). What
-is already there stays until its line is touched. The lint has to read every
+`.markdown`, `.rst`, `.adoc`, `.txt`, `.org`, an HTML page or a license). A
+comment fails wherever it is in the tree, touched or not, except in a prose file,
+where an old one stays until its line is touched, and in a shipped migration the
+ledger lists under `migrations`, which must stay byte-identical to the commit it
+names because a migration is never edited. A suppression already in the tree
+stays until its line is touched. `node scripts/check-grants.mjs strip` removes
+every comment the lint finds and formats what it leaves with rustfmt and Biome,
+for a branch that brought old comments along. The lint has to read every
 file a change touches, so a text file that is neither code it has a reader for,
 prose, nor data on the lint's own list fails until it gets a reader or a place on
 that list with its reason. A poll is not a sleep: a loop whose bound the lint can

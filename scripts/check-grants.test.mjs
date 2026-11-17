@@ -358,7 +358,8 @@ function scenario(files, body) {
   };
 }
 
-const SOURCE = "export function a() {\n  // an old comment\n  return 1;\n}\n";
+const SOURCE = "export function a() {\n  const b = 1;\n  return 1;\n}\n";
+const OLD = "export function a() {\n  // an old comment\n  return 1;\n}\n";
 const approvalOf = (repo) => "grants-approved-" + hashText(readFileSync(join(repo.dir, "grants.json"), "utf8")).slice(0, 12);
 const grantOf = (kind, path, text, words = "keep it") => ({ kind, path, sha256: hashText(text), words, date: "2026-11-17" });
 
@@ -375,8 +376,8 @@ describe("a change", () => {
   );
   it(
     "fails on an old comment whose line it modifies",
-    scenario({ "src/a.ts": SOURCE }, (repo, run) => {
-      write(repo.dir, { "src/a.ts": SOURCE.replace("an old comment", "an edited comment") });
+    scenario({ "src/a.ts": OLD }, (repo, run) => {
+      write(repo.dir, { "src/a.ts": OLD.replace("an old comment", "an edited comment") });
       assert.deepEqual(
         run().findings.map((f) => f.line),
         [2],
@@ -510,9 +511,9 @@ describe("a change", () => {
   );
   it(
     "fails on a granted comment whose text changed, and on the grant it leaves unused",
-    scenario({ "src/a.ts": SOURCE }, (repo, run) => {
+    scenario({ "src/a.ts": OLD }, (repo, run) => {
       setLedger(repo.dir, (ledger) => ledger.grants.push(grantOf("comment", "src/a.ts", "// an old comment")));
-      write(repo.dir, { "src/a.ts": SOURCE.replace("an old comment", "a reworded comment") });
+      write(repo.dir, { "src/a.ts": OLD.replace("an old comment", "a reworded comment") });
       const result = run();
       assert.deepEqual(
         result.findings.map((f) => f.line),
@@ -537,7 +538,7 @@ describe("a change", () => {
   );
   it(
     "fails on a grant without the owner's words",
-    scenario({ "src/a.ts": SOURCE }, (repo, run) => {
+    scenario({ "src/a.ts": OLD }, (repo, run) => {
       setLedger(repo.dir, (ledger) => ledger.grants.push(grantOf("comment", "src/a.ts", "// an old comment", "")));
       assert.match(
         run()
@@ -561,7 +562,7 @@ describe("a change", () => {
   );
   it(
     "fails on a ledger change nobody approved, and names the approval and who may give it",
-    scenario({ "src/a.ts": SOURCE }, (repo, run) => {
+    scenario({ "src/a.ts": OLD }, (repo, run) => {
       setLedger(repo.dir, (ledger) => ledger.grants.push(grantOf("comment", "src/a.ts", "// an old comment")));
       const result = run();
       assert.deepEqual(result.findings, []);
@@ -583,7 +584,7 @@ describe("a change", () => {
   );
   it(
     "passes a ledger change approved for exactly that ledger",
-    scenario({ "src/a.ts": SOURCE }, (repo) => {
+    scenario({ "src/a.ts": OLD }, (repo) => {
       setLedger(repo.dir, (ledger) => ledger.grants.push(grantOf("comment", "src/a.ts", "// an old comment")));
       const result = check(repo.dir, { base: repo.base, approvals: ["grants-approved-000000000000", approvalOf(repo)] });
       assert.deepEqual([...result.findings, ...result.problems], []);
@@ -591,7 +592,7 @@ describe("a change", () => {
   );
   it(
     "fails again when the ledger changes after its approval",
-    scenario({ "src/a.ts": SOURCE }, (repo) => {
+    scenario({ "src/a.ts": OLD }, (repo) => {
       setLedger(repo.dir, (ledger) => ledger.grants.push(grantOf("comment", "src/a.ts", "// an old comment")));
       const approved = approvalOf(repo);
       setLedger(repo.dir, (ledger) => {
@@ -604,7 +605,7 @@ describe("a change", () => {
   );
   it(
     "fails on a committed ledger change nobody approved",
-    scenario({ "src/a.ts": SOURCE }, (repo) => {
+    scenario({ "src/a.ts": OLD }, (repo) => {
       setLedger(repo.dir, (ledger) => ledger.grants.push(grantOf("comment", "src/a.ts", "// an old comment")));
       const label = approvalOf(repo);
       git(repo.dir, "add", "-A");
@@ -615,8 +616,8 @@ describe("a change", () => {
   );
   it(
     "prints a grant it removes or rewords",
-    scenario({ "src/a.ts": SOURCE }, (repo, run) => {
-      write(repo.dir, { "src/a.ts": SOURCE + "// an old comment\n" });
+    scenario({ "src/a.ts": OLD }, (repo, run) => {
+      write(repo.dir, { "src/a.ts": OLD + "// an old comment\n" });
       const grant = grantOf("comment", "src/a.ts", "// an old comment", "first");
       setLedger(repo.dir, (ledger) => ledger.grants.push(grant, { ...grant }));
       commitAll(repo, "grants");
@@ -650,7 +651,7 @@ describe("a change", () => {
     }),
   );
   it(
-    "passes an edit to an existing prose file and to code beside an old comment",
+    "passes an edit to an existing prose file and to code",
     scenario({ "src/a.ts": SOURCE, "README.md": "# A\n" }, (repo, run) => {
       write(repo.dir, { "README.md": "# A\n\nMore.\n", "src/a.ts": SOURCE.replace("return 1", "return 2") });
       const result = run();
@@ -658,10 +659,70 @@ describe("a change", () => {
     }),
   );
   it(
-    "passes a whitespace-only change to a line with an old comment",
-    scenario({ "src/a.ts": SOURCE }, (repo, run) => {
-      write(repo.dir, { "src/a.ts": SOURCE.replace("  // an old", "    // an old") });
-      assert.deepEqual(run().findings, []);
+    "fails on an old comment anywhere in the tree, in a file the change does not touch",
+    scenario({ "src/a.ts": SOURCE, "src/old.rs": "fn a() {}\n/// an old doc comment\nfn b() {}\n", "README.md": "# A\n" }, (repo, run) => {
+      write(repo.dir, { "README.md": "# A\n\nMore.\n" });
+      assert.deepEqual(
+        run().findings.map((f) => [f.path, f.line, f.what]),
+        [["src/old.rs", 2, "doc comment"]],
+      );
+    }),
+  );
+  it(
+    "fails on an old comment on a line a whitespace-only change moves",
+    scenario({ "src/a.ts": OLD }, (repo, run) => {
+      write(repo.dir, { "src/a.ts": OLD.replace("  // an old", "    // an old") });
+      assert.deepEqual(
+        run().findings.map((f) => f.line),
+        [2],
+      );
+    }),
+  );
+  it(
+    "judges an old suppression and an old comment in a prose file only on the lines a change touches",
+    scenario(
+      {
+        "src/a.ts": "export function a() {\n  // biome-ignore lint/style/useConst: old\n  let b = 1;\n  return b;\n}\n",
+        "index.html": "<!-- an old note -->\n<p>old</p>\n",
+      },
+      (repo, run) => {
+        write(repo.dir, { "src/a.ts": "export function a() {\n    // biome-ignore lint/style/useConst: old\n  let b = 1;\n  return b + 1;\n}\n", "index.html": "<!-- an old note -->\n<p>new</p>\n" });
+        assert.deepEqual([...run().findings, ...run().problems], []);
+      },
+    ),
+  );
+  it(
+    "passes the comments in a migration the ledger lists as shipped, unchanged",
+    scenario({ "migrations/0000_init.sql": "-- why this table\nCREATE TABLE a (id INTEGER);\n" }, (repo, run) => {
+      shipMigrations(repo, ["migrations/0000_init.sql"]);
+      assert.deepEqual([...run().findings, ...run().problems], []);
+    }),
+  );
+  it(
+    "fails on a comment in a migration the ledger does not list",
+    scenario({ "migrations/0000_init.sql": "CREATE TABLE a (id INTEGER);\n" }, (repo, run) => {
+      shipMigrations(repo, ["migrations/0000_init.sql"]);
+      write(repo.dir, { "migrations/0001_next.sql": "-- a new reason\nCREATE TABLE b (id INTEGER);\n" });
+      assert.deepEqual(
+        run().findings.map((f) => [f.path, f.line]),
+        [["migrations/0001_next.sql", 1]],
+      );
+    }),
+  );
+  it(
+    "fails on a listed migration that was edited, and on one added to the list after the fact",
+    scenario({ "migrations/0000_init.sql": "-- why\nCREATE TABLE a (id INTEGER);\n" }, (repo, run) => {
+      shipMigrations(repo, ["migrations/0000_init.sql"]);
+      write(repo.dir, {
+        "migrations/0000_init.sql": "-- why\nCREATE TABLE a (id INTEGER, b TEXT);\n",
+        "migrations/0001_later.sql": "-- later\nCREATE TABLE c (id INTEGER);\n",
+      });
+      setLedger(repo.dir, (ledger) => ledger.migrations.files.push("migrations/0001_later.sql"));
+      const messages = run()
+        .problems.map((p) => p.message)
+        .join("\n");
+      assert.match(messages, /migrations\/0000_init\.sql is listed as a shipped migration but differs from/);
+      assert.match(messages, /migrations\/0001_later\.sql is listed as a shipped migration but was not a file at/);
     }),
   );
   it(
@@ -710,7 +771,7 @@ describe("the command", () => {
   );
   it(
     "fails on a ledger change in a local run, and passes it with the approval",
-    scenario({ "src/a.ts": SOURCE }, (repo) => {
+    scenario({ "src/a.ts": OLD }, (repo) => {
       setLedger(repo.dir, (ledger) => ledger.grants.push(grantOf("comment", "src/a.ts", "// an old comment")));
       const refused = cli(repo, ["--base", repo.base]);
       assert.equal(refused.status, 1, refused.stdout);
@@ -721,7 +782,7 @@ describe("the command", () => {
   );
   it(
     "prints a ledger change on a push to main and passes it",
-    scenario({ "src/a.ts": SOURCE }, (repo) => {
+    scenario({ "src/a.ts": OLD }, (repo) => {
       git(repo.dir, "checkout", "-q", "main");
       setLedger(repo.dir, (ledger) => ledger.grants.push(grantOf("comment", "src/a.ts", "// an old comment")));
       commitAll(repo, "grant");

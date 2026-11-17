@@ -369,6 +369,28 @@ function validateLedger(repo, ledger, head, problems) {
   return { files, renamedFrom };
 }
 
+function shippedMigrations(repo, ledger, head, problems) {
+  const listed = ledger?.migrations;
+  if (!listed) return new Set();
+  if (gitOk(repo, ["cat-file", "-e", listed.commit + "^{commit}"]) === null) {
+    problems.push({ path: LEDGER, message: "names migrations.commit " + listed.commit + ", which is not in this clone; fetch full history (git fetch --unshallow)" });
+    return new Set();
+  }
+  const shipped = new Set();
+  for (const path of listed.files ?? []) {
+    const then = gitOk(repo, ["rev-parse", listed.commit + ":" + path]);
+    const now = head ? gitOk(repo, ["rev-parse", head + ":" + path]) : existsSync(join(repo, path)) ? gitOk(repo, ["hash-object", "--", path]) : null;
+    if (then === null) {
+      problems.push({ path: LEDGER, message: path + " is listed as a shipped migration but was not a file at " + listed.commit.slice(0, 12) + "; a new migration gets no exemption" });
+    } else if (now === null) {
+      problems.push({ path: LEDGER, message: path + " is listed as a shipped migration but is gone; remove it from " + LEDGER });
+    } else if (now !== then) {
+      problems.push({ path: LEDGER, message: path + " is listed as a shipped migration but differs from " + listed.commit.slice(0, 12) + "; a shipped migration is never edited, so add a new one" });
+    } else shipped.add(path);
+  }
+  return shipped;
+}
+
 export function check(repo, { base, head = null, ledgerOverride, proseByDiff = false, approvals = [], ledgerGate = true }) {
   const problems = [];
   const findings = [];
@@ -378,10 +400,13 @@ export function check(repo, { base, head = null, ledgerOverride, proseByDiff = f
   const changes = changedLines(repo, base, head);
   const grants = ledger?.grants ?? [];
   const grantFiles = grants.filter((grant) => grant.kind !== "document").map((grant) => grant.path);
+  const shipped = shippedMigrations(repo, ledger, head, problems);
+  const judgedWhole = (path) => !PROSE.test(path) && !shipped.has(path);
   const candidates = [...touchedPaths(repo, base, head, changes)].filter((path) => !upstream(path));
-  const links = linksAmong(repo, head, candidates);
+  const tree = listFiles(repo, head).filter((path) => !upstream(path) && judgedWhole(path));
+  const links = linksAmong(repo, head, [...new Set([...candidates, ...tree])]);
   const touched = candidates.filter((path) => !links.has(path));
-  const wanted = [...new Set([...touched, ...grantFiles])].filter((path) => !upstream(path) && !links.has(path));
+  const wanted = [...new Set([...touched, ...grantFiles, ...tree])].filter((path) => !upstream(path) && !links.has(path));
   const blobs = readBlobs(repo, head, wanted);
   for (const path of touched) {
     const blob = blobs.get(path);
@@ -418,10 +443,11 @@ export function check(repo, { base, head = null, ledgerOverride, proseByDiff = f
       instances.set(k, (instances.get(k) ?? 0) + 1);
     }
   }
-  for (const [path, lines] of changes) {
-    for (const unit of unitsByPath.get(path) ?? []) {
+  for (const [path, units] of unitsByPath) {
+    const lines = changes.get(path) ?? new Set();
+    for (const unit of units) {
       if (unit.kind === "allowed") continue;
-      let touched = lines === "all";
+      let touched = lines === "all" || (unit.kind === "comment" && judgedWhole(path));
       for (let n = unit.line; !touched && n <= unit.endLine; n++) touched = lines.has(n);
       if (!touched) continue;
       const k = key(unit.kind, unit.path, unit.sha256);
@@ -540,6 +566,11 @@ function ledgerChanges(baseText, ledger, unitsByPath) {
   for (const path of setDiff(before.existing?.files, ledger.existing?.files)) lines.push("  - existing " + path);
   if ((before.existing?.commit ?? null) !== (ledger.existing?.commit ?? null)) {
     lines.push("  ~ existing.commit " + (before.existing?.commit ?? "none") + " -> " + ledger.existing?.commit);
+  }
+  for (const path of setDiff(ledger.migrations?.files, before.migrations?.files)) lines.push("  + shipped migration " + path);
+  for (const path of setDiff(before.migrations?.files, ledger.migrations?.files)) lines.push("  - shipped migration " + path);
+  if ((before.migrations?.commit ?? null) !== (ledger.migrations?.commit ?? null)) {
+    lines.push("  ~ migrations.commit " + (before.migrations?.commit ?? "none") + " -> " + (ledger.migrations?.commit ?? "none"));
   }
   for (const entry of setDiff(upstreamText(ledger.upstream), upstreamText(before.upstream))) lines.push("  + upstream " + entry);
   for (const entry of setDiff(upstreamText(before.upstream), upstreamText(ledger.upstream))) lines.push("  - upstream " + entry);
