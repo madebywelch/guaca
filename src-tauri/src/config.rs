@@ -73,6 +73,10 @@ fn default_timeout() -> u64 {
     120
 }
 
+pub fn clamp_request_timeout(secs: u64) -> u64 {
+    secs.clamp(5, 900)
+}
+
 fn default_subscription_model() -> String {
     crate::llm::codex::DEFAULT_MODEL.to_string()
 }
@@ -534,7 +538,7 @@ impl AppConfig {
             self.inference.subscription_model = trimmed.to_string();
         }
         if let Some(timeout) = patch.request_timeout_secs {
-            self.inference.request_timeout_secs = timeout.clamp(5, 900);
+            self.inference.request_timeout_secs = clamp_request_timeout(timeout);
         }
         if let Some(limits) = patch.limits {
             self.limits = GuardLimits {

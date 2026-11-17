@@ -152,7 +152,7 @@ struct SandboxRow {
 pub struct E2bClient {
     http: reqwest::Client,
     api_key: String,
-    env: std::collections::BTreeMap<String, String>,
+    env: std::sync::Arc<crate::secrets::ProcessEnv>,
     base: String,
 }
 
@@ -166,8 +166,8 @@ impl E2bClient {
         Some(Self { http, api_key: api_key.to_string(), env: Default::default(), base: api_base() })
     }
 
-    pub fn with_env(mut self, env: std::collections::BTreeMap<String, String>) -> Self {
-        self.env = env;
+    pub fn with_env(mut self, env: crate::secrets::ProcessEnv) -> Self {
+        self.env = std::sync::Arc::new(env);
         self
     }
 
@@ -372,10 +372,7 @@ impl E2bClient {
         if !status.is_success() {
             return Err(E2bError::Api {
                 status: status.as_u16(),
-                message: crate::secrets::redact(&String::from_utf8_lossy(&body), &self.env)
-                    .chars()
-                    .take(200)
-                    .collect(),
+                message: self.env.quote(&String::from_utf8_lossy(&body), 200),
             });
         }
 
@@ -529,16 +526,13 @@ fn create_body(agent: &str, idle_seconds: u32) -> serde_json::Value {
     })
 }
 
-fn process_body(
-    command: &str,
-    env: &std::collections::BTreeMap<String, String>,
-) -> serde_json::Value {
+fn process_body(command: &str, env: &crate::secrets::ProcessEnv) -> serde_json::Value {
     serde_json::json!({
         "process": {
             "cmd": "/bin/bash",
             "args": ["-l", "-c", command],
             "cwd": "/home/user",
-            "envs": env,
+            "envs": env.process_envs(),
         }
     })
 }
@@ -847,18 +841,15 @@ fn envelope(payload: &[u8]) -> Vec<u8> {
     out
 }
 
-fn collect_private(
-    body: &[u8],
-    env: &std::collections::BTreeMap<String, String>,
-) -> Result<Output, E2bError> {
+fn collect_private(body: &[u8], env: &crate::secrets::ProcessEnv) -> Result<Output, E2bError> {
     let mut output = collect(body).map_err(|error| match error {
         E2bError::Api { status, message } => {
-            E2bError::Api { status, message: crate::secrets::redact(&message, env) }
+            E2bError::Api { status, message: env.redact(&message) }
         }
         other => other,
     })?;
-    output.stdout = crate::secrets::redact(&output.stdout, env);
-    output.stderr = crate::secrets::redact(&output.stderr, env);
+    output.stdout = env.redact(&output.stdout);
+    output.stderr = env.redact(&output.stderr);
     Ok(output)
 }
 
@@ -1013,7 +1004,10 @@ mod tests {
 
     #[test]
     fn a_computer_scrubs_output_and_error_trailers() {
-        let env = std::collections::BTreeMap::from([("TOKEN".into(), "private-value".into())]);
+        let env = crate::secrets::ProcessEnv::new(std::collections::BTreeMap::from([(
+            "TOKEN".into(),
+            "private-value".into(),
+        )]));
         let out =
             stream(&[(0, serde_json::json!({"event":{"data":{"stdout":"cHJpdmF0ZS12YWx1ZQ=="}}}))]);
         assert_eq!(collect_private(&out, &env).unwrap().stdout, "[REDACTED]");
@@ -1360,8 +1354,10 @@ mod tests {
 
     #[test]
     fn a_command_carries_the_credentials_its_agent_was_given() {
-        let mut env = std::collections::BTreeMap::new();
-        env.insert("GITHUB_TOKEN".to_string(), "ghp_hunter2".to_string());
+        let env = crate::secrets::ProcessEnv::new(std::collections::BTreeMap::from([(
+            "GITHUB_TOKEN".to_string(),
+            "ghp_hunter2".to_string(),
+        )]));
 
         let body = process_body("curl -s api.github.com", &env);
         assert_eq!(body["process"]["envs"]["GITHUB_TOKEN"], "ghp_hunter2");
@@ -1373,8 +1369,10 @@ mod tests {
 
     #[test]
     fn a_credential_is_never_written_to_the_machines_disk() {
-        let mut env = std::collections::BTreeMap::new();
-        env.insert("TOKEN".to_string(), "secret".to_string());
+        let env = crate::secrets::ProcessEnv::new(std::collections::BTreeMap::from([(
+            "TOKEN".to_string(),
+            "secret".to_string(),
+        )]));
         let body = process_body("echo hi", &env);
         let command = body["process"]["args"][2].as_str().unwrap_or_default();
         assert!(!command.contains("secret"), "the value reached the command line: {command}");

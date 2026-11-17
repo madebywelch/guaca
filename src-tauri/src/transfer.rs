@@ -1,6 +1,9 @@
 use crate::{
     db::Store,
-    domain::ids::{AgentId, GroupId},
+    domain::{
+        ids::{AgentId, GroupId},
+        occasion,
+    },
     files::FileStore,
     workspace::Workspace,
 };
@@ -448,7 +451,7 @@ pub fn import(
     let mut conn = store.conn().map_err(|e| e.to_string())?;
     let tx = sql(conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate))?;
     for (table, _, _) in TABLES {
-        for original in archive.tables.get(*table).into_iter().flatten() {
+        for (index, original) in archive.tables.get(*table).into_iter().flatten().enumerate() {
             let mut row = original.clone();
             if *table == "agents" {
                 row.remove("harness");
@@ -474,6 +477,59 @@ pub fn import(
             }
             if *table == "routines" {
                 row.insert("active".into(), 0.into());
+            }
+            if *table == "occasions" {
+                let title = text(&row, "title")?;
+                let named = |why: String| {
+                    format!(
+                        "Occasion {} in the group file ({title:?}) cannot be imported: {why}.",
+                        index + 1
+                    )
+                };
+                let words = |key: &str| row.get(key).and_then(Value::as_str).unwrap_or_default();
+                let all_day = match row.get("all_day").filter(|v| !v.is_null()) {
+                    None => false,
+                    Some(value) => match value.as_i64() {
+                        Some(0) => false,
+                        Some(1) => true,
+                        _ => return Err(named("whether it lasts all day is unreadable".into())),
+                    },
+                };
+                let minutes = match row.get("minutes").filter(|v| !v.is_null()) {
+                    None => None,
+                    Some(value) => Some(
+                        value
+                            .as_u64()
+                            .and_then(|minutes| u32::try_from(minutes).ok())
+                            .ok_or_else(|| named("its length is unreadable".into()))?,
+                    ),
+                };
+                let clean = occasion::Clean::new(
+                    text(&row, "group_id")?.parse().map_err(|_| "Invalid group identifier.")?,
+                    row.get("agent_id")
+                        .and_then(Value::as_str)
+                        .map(str::parse)
+                        .transpose()
+                        .map_err(|_| "Invalid agent identifier.")?,
+                    title,
+                    words("detail"),
+                    words("place"),
+                    occasion::When {
+                        starts_at: row
+                            .get("starts_at")
+                            .and_then(Value::as_i64)
+                            .ok_or_else(|| named("its start is unreadable".into()))?,
+                        all_day,
+                    },
+                    minutes,
+                )
+                .map_err(|invalid| named(invalid.to_string()))?;
+                row.insert("title".into(), clean.title().into());
+                row.insert("detail".into(), clean.detail().into());
+                row.insert("place".into(), clean.place().into());
+                row.insert("starts_at".into(), clean.starts_at().into());
+                row.insert("minutes".into(), clean.minutes().into());
+                row.insert("all_day".into(), i64::from(clean.all_day()).into());
             }
             if *table == "agents" && !row.contains_key("subscription_model") {
                 let (model, subscription) =
@@ -767,6 +823,38 @@ mod tests {
         );
         assert_eq!(reconnect(&f.store, imported).unwrap().len(), 1);
         assert!(!f.store.get_group(imported).unwrap().unwrap().api_key_set);
+    }
+    #[test]
+    fn an_imported_all_day_occasion_has_no_length() {
+        let f = Fixture::new();
+        let mut archive = f.export();
+        let occasion = &mut archive.tables.get_mut("occasions").unwrap()[0];
+        occasion.insert("all_day".into(), 1.into());
+        occasion.insert("minutes".into(), 60.into());
+        let imported = f.import(archive).unwrap();
+        let stored = f
+            .store
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT all_day, minutes FROM occasions WHERE group_id = ?1",
+                [imported.to_string()],
+                |r| Ok((r.get::<_, bool>(0)?, r.get::<_, Option<u32>>(1)?)),
+            )
+            .unwrap();
+        assert_eq!(stored, (true, None));
+    }
+    #[test]
+    fn an_occasion_the_calendar_would_refuse_refuses_the_import_and_names_it() {
+        let f = Fixture::new();
+        let mut archive = f.export();
+        archive.tables.get_mut("occasions").unwrap()[0]
+            .insert("minutes".into(), (crate::domain::occasion::MAX_MINUTES + 1).into());
+        let before = f.store.list_groups().unwrap().len();
+        let refused = f.import(archive).unwrap_err();
+        assert!(refused.contains("\"Review\""), "{refused}");
+        assert!(refused.contains("at most 30 days"), "{refused}");
+        assert_eq!(f.store.list_groups().unwrap().len(), before);
     }
     #[test]
     fn a_crews_artifacts_travel_with_it_and_an_owner_who_left_does_not() {
