@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Routine, RoutineDraft, RoutineRun, WebhookAddress } from "../lib/types";
@@ -293,6 +293,19 @@ describe("RoutineDetail", () => {
     expect(screen.queryByLabelText("Date")).toBeNull();
     expect(screen.getByRole("button", { name: "Test run" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Save changes" })).toBeNull();
+  });
+
+  it("gives the curl line's actions a row of their own between the line and its hint", async () => {
+    open({ trigger: "event:stripe/invoice.payment_failed", nextRunAt: null });
+
+    const line = await screen.findByText(/curl -X POST/);
+    const actions = line.nextElementSibling as HTMLElement;
+    expect(
+      within(actions)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Show secret", "Copy"]);
+    expect(actions.nextElementSibling).toBe(screen.getByText(/The body, if there is one/));
   });
 
   it("copies the curl line with the real secret while the line stays masked", async () => {

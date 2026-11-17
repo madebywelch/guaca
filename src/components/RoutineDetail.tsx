@@ -437,38 +437,40 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
             <pre className="webhook">
               {webhookLine(address.url, secret ?? HIDDEN_SECRET, event.service, event.topic)}
             </pre>
-            {secret === null && (
+            <div className="webhook__actions">
+              {secret === null && (
+                <button
+                  type="button"
+                  className="btn btn--small btn--ghost"
+                  onClick={() => {
+                    api
+                      .revealWebhookSecret()
+                      .then(setSecret)
+                      .catch((caught) => setError(errorMessage(caught)));
+                  }}
+                >
+                  Show secret
+                </button>
+              )}
               <button
                 type="button"
                 className="btn btn--small btn--ghost"
                 onClick={() => {
-                  api
-                    .revealWebhookSecret()
-                    .then(setSecret)
+                  const url = address.url;
+                  if (!url) return;
+                  (secret === null ? api.revealWebhookSecret() : Promise.resolve(secret))
+                    .then((shown) =>
+                      navigator.clipboard.writeText(
+                        webhookLine(url, shown, event.service, event.topic),
+                      ),
+                    )
+                    .then(() => setCopied(true))
                     .catch((caught) => setError(errorMessage(caught)));
                 }}
               >
-                Show secret
+                {copied ? "Copied" : "Copy"}
               </button>
-            )}
-            <button
-              type="button"
-              className="btn btn--small btn--ghost"
-              onClick={() => {
-                const url = address.url;
-                if (!url) return;
-                (secret === null ? api.revealWebhookSecret() : Promise.resolve(secret))
-                  .then((shown) =>
-                    navigator.clipboard.writeText(
-                      webhookLine(url, shown, event.service, event.topic),
-                    ),
-                  )
-                  .then(() => setCopied(true))
-                  .catch((caught) => setError(errorMessage(caught)));
-              }}
-            >
-              {copied ? "Copied" : "Copy"}
-            </button>
+            </div>
             <span className="field__hint">
               The body, if there is one, reaches the agent under the instruction as data. Guaca
               calls nobody and polls nothing: whatever posts this is yours to wire.

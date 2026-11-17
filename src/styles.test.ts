@@ -200,6 +200,12 @@ describe("a banner", () => {
   });
 });
 
+describe("the actions under a webhook's curl line", () => {
+  it("are a row of their own, not words in the hint", () => {
+    expect(getComputedStyle(nest("webhook__actions")).display).toBe("flex");
+  });
+});
+
 describe("what a crew has spent", () => {
   it("lets the pointer through to the heading and the rows it covers", () => {
     expect(getComputedStyle(nest("spend")).pointerEvents).toBe("none");
