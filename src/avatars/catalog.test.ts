@@ -13,13 +13,7 @@ import {
 import { bodyPoints, FORM } from "./form";
 import { CREST, SILHOUETTES, type Silhouette } from "./silhouette";
 
-/**
- * Keys that have been written into somebody's database by a shipped build.
- * None of them means anything to the current cast, so each has to be mapped by
- * hand or an existing crew is re-rolled by a hash the day this ships.
- */
 const SHIPPED = [
-  // the vegetables
   "avocado",
   "lime",
   "tomato",
@@ -41,7 +35,6 @@ const SHIPPED = [
   "molcajete",
   "jar",
   "spoon",
-  // the egg with props
   "plain",
   "cheerful",
   "curious",
@@ -62,7 +55,6 @@ const SHIPPED = [
   "headphones",
   "antenna",
   "sprout",
-  // the creatures
   "bean",
   "fox",
   "owl",
@@ -76,7 +68,6 @@ const SHIPPED = [
   "moon",
   "star",
   "cloud",
-  // the emoji before any of it
   "robot",
   "brain",
   "penguin",
@@ -94,7 +85,6 @@ const SHIPPED = [
   "satellite",
 ];
 
-/** How far past its silhouette a character's own stretch and lobes may push. */
 const LUMP = 0.05;
 
 describe("the cast", () => {
@@ -110,9 +100,6 @@ describe("the cast", () => {
     expect(lookupCharacter(DEFAULT_CHARACTER).key).toBe(DEFAULT_CHARACTER);
   });
 
-  // A hash would answer too, and would re-roll every existing agent's face on
-  // the day the cast changed size. The point of the alias table is that an
-  // operator's crew looks the same tomorrow as it did today.
   it("maps every key that has ever shipped by hand", () => {
     const rolled = SHIPPED.filter(
       (key) => !CHARACTERS.some((c) => c.key === key) && ALIASES[key] === undefined,
@@ -126,8 +113,6 @@ describe("the cast", () => {
     }
   });
 
-  /* Shape carries some of an identity now and the eyes carry the rest, so two
-     characters cut from the same silhouette may not also wear the same pair. */
   it("gives every character a distinguishable set of eyes", () => {
     const seen = CHARACTERS.map((c) =>
       [c.eye.one ? 1 : 2, c.eye.spread, c.eye.r, c.eye.x ?? 0, c.eye.y ?? 0].join(":"),
@@ -135,8 +120,6 @@ describe("the cast", () => {
     expect(new Set(seen).size, "two characters wear the same face").toBe(CHARACTERS.length);
   });
 
-  /* Five shapes are five things to keep working, and one nobody is cut from is
-     one that could break with nothing on screen to show it. */
   it("uses every silhouette there is", () => {
     const cut = new Set(CHARACTERS.map((c) => c.form));
     for (const key of Object.keys(SILHOUETTES) as Silhouette[]) {
@@ -146,8 +129,6 @@ describe("the cast", () => {
 
   it("keeps every character to the silhouette it was cut from", () => {
     for (const c of CHARACTERS) {
-      // A lump varies a shape, it does not replace one: a square stretched past
-      // this is a brick, which is a sixth silhouette nobody declared.
       expect(Math.abs(c.ax - 1), c.key).toBeLessThanOrEqual(0.12);
       expect(Math.abs(c.ay - 1), c.key).toBeLessThanOrEqual(0.12);
       const lumpy = c.sig.reduce((sum, lobe) => sum + Math.abs(lobe.amp), 0);
@@ -155,14 +136,6 @@ describe("the cast", () => {
     }
   });
 
-  /*
-   * The one bound that is arithmetic rather than taste. `CREST` is what a shape
-   * may rest at and `LUMP` is what the character on top of it may add, so this
-   * is the only place the two are read together. Everything between here and
-   * `FORM.reach` belongs to the moods, and `form.test.ts` is where they spend
-   * it: a character over this line does not fail here, it fails there, in one
-   * frame of one mood, months later.
-   */
   it("leaves the moods the room they need", () => {
     for (const c of CHARACTERS) {
       let most = 0;
@@ -173,10 +146,6 @@ describe("the cast", () => {
     }
   });
 
-  /* Against the character's own silhouette rather than against a circle: a
-     drop is narrower at the sides than at the top, so a pair of eyes that fits
-     one shape is not a pair that fits all five. `r` is the whole ball, which
-     is the most of an eye either cast draws. */
   it("seats both eyes inside the body", () => {
     for (const c of CHARACTERS) {
       const out = Math.abs(c.eye.x ?? 0) + c.eye.spread + c.eye.r;

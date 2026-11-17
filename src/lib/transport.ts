@@ -1,35 +1,17 @@
-/** One backend transport for browsers and the native desktop client. */
-
 import { COMMIT, VERSION } from "./build";
 import { diagnostic } from "./diagnostic";
 import { compatibility, parseHealth } from "./releases";
 import type { NotificationAccess, UiEvent } from "./types";
 
-/** Tauri v2 puts this on `window` before any of our code runs. */
 export const desktop = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
-/** This page load, so a sign-in the host opens for one window opens there only. */
 export const PAGE_ID: string =
   typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
     : Math.random().toString(36).slice(2);
 
-/** Said on every call, so a host of another version or build can name the
- *  difference and a sign-in finds its way back to this page. In the body,
- *  because a header an older host's CORS does not admit would fail every
- *  preflight. */
 const CLIENT = { version: VERSION, build: COMMIT, desktop, id: PAGE_ID };
 
-/**
- * A box the desktop app is showing instead of its own workspace.
- *
- * The third arrangement, and it is the second one wearing a window: the calls
- * go over HTTP to the box exactly as a browser's would, and only the drop and
- * the menu bar know the difference, because those two are things the window
- * has that a browser does not. Read once at load, like the host itself: the
- * whole page reloads when the operator points it somewhere else, so nothing
- * has to notice a change under it.
- */
 export interface Remote {
   origin: string;
   token: string;
@@ -84,9 +66,7 @@ function readRemote(): Remote | null {
     const remote = { origin: parsed.origin.replace(/\/+$/, ""), token: parsed.token };
     try {
       saveConnection(remote, savedHostMode());
-    } catch {
-      // The legacy record remains usable if storage is unavailable.
-    }
+    } catch {}
     return remote;
   } catch {
     return null;
@@ -115,30 +95,15 @@ async function checkPanelHost(): Promise<void> {
   throw { kind: "config", message: "The host changed. Open Guaca to reconnect." } satisfies Refusal;
 }
 
-/** The host this window is showing, or null before desktop setup. */
 export function attached(): Remote | null {
   return ATTACHED;
 }
 
-/**
- * Points the desktop app at a box, or back at itself. Takes effect on the
- * next load, and the caller is what reloads: everything about which host this
- * is was decided at import time, on purpose, so there is nothing to update in
- * place and nothing that can be half-updated.
- */
 export function activateRemote(remote: Remote): void {
   setRemote(remote);
   ATTACHED = remote;
 }
 
-/**
- * Shows a host this page was handed rather than one it chose.
- *
- * The menu bar panel's, which is told by the tray which host the window is
- * attached to. Held for this load and never stored: what is stored is the
- * window's decision, and a second page writing it back is a second place for
- * it to be decided.
- */
 export function adoptRemote(remote: Remote): void {
   ATTACHED = remote;
 }
@@ -150,12 +115,9 @@ export function setRemote(remote: Remote | null): void {
       window.localStorage.removeItem(CONNECTION_KEY);
       window.localStorage.removeItem(REMOTE_KEY);
     }
-  } catch {
-    /* storage disabled; the next load reads nothing and shows this machine */
-  }
+  } catch {}
 }
 
-/** Reloads the page, which is how a change of workspace takes effect. */
 export const BEFORE_RELOAD = "guaca:before-reload";
 export const RECONNECTED = "guaca:reconnected";
 export function preflightReload(): void {
@@ -168,51 +130,22 @@ export function restart(preflight = true): void {
   window.location.reload();
 }
 
-/** Whether the runtime is somewhere other than this process. */
 export const hosted = true;
 
 const TOKEN_KEY = "guaca.workspace.token";
 let credentialGeneration = 0;
 let exchangeQueue: Promise<void> = Promise.resolve();
 
-/**
- * The fragment a daemon prints its invitation with.
- *
- * `http://box:8787/#token=…` is one thing to click rather than a URL and a
- * string to paste beside it. A fragment because it is the one part of a URL
- * that never leaves the browser: it is not sent to the daemon, not to a proxy
- * in front of it, and not to whatever logs either of them keeps. The query
- * string the socket uses has none of those properties, which is why the
- * invitation does not use it.
- */
 const FRAGMENT_KEY = "token";
 
-/** The name of the event raised when a call is turned away for its token. */
 export const UNAUTHORIZED_EVENT = "guaca:unauthorized";
 
-/** A structured refusal, which is the shape both hosts already produced. */
 export interface Refusal {
   kind: string;
   message: string;
-  /**
-   * The layer underneath's own words, where the message above them is Guaca's.
-   *
-   * Only some refusals have one, and it is never the first thing to read: it is
-   * what a bug report needs, and what an operator who has read the sentence and
-   * still wants to know exactly what was said opens. A refusal that is already
-   * a sentence for a person carries none.
-   */
   detail?: string;
 }
 
-/**
- * Whether a failure is the host being gone rather than anything on it.
- *
- * Its own kind on the refusal rather than a message match, and exported because
- * the banner is not the only place that has a different next step for it: a
- * host that is restarting is waited out, and everything else in this app is
- * changed.
- */
 export function isUnreachable(value: unknown): boolean {
   return (
     typeof value === "object" &&
@@ -221,56 +154,20 @@ export function isUnreachable(value: unknown): boolean {
   );
 }
 
-/**
- * The token this client presents in a header or a query, or empty when it has
- * none.
- *
- * A browser has none by design: its credential is the HttpOnly session cookie
- * the daemon issued, which no script can read. A window showing a box keeps
- * the token beside the box's address, and that is the only script-readable
- * copy left. Read on every call rather than captured once, so a token rotated
- * and pasted in this window takes effect without a reload.
- */
 export function token(): string {
   if (!hosted) return "";
   if (ATTACHED) return ATTACHED.token;
-  // A browser client authenticates by the HttpOnly session cookie the daemon
-  // issues at sign-in. The token is not kept in script-readable storage after
-  // the exchange: a script on this origin cannot read the cookie, and there is
-  // nothing in localStorage for it to find. A desktop window keeps the token
-  // for the box it was pointed at, which is a host the operator chose rather
-  // than the origin that served the page.
   return "";
 }
 
-/**
- * The Authorization header this host's calls carry, or none.
- *
- * A browser client authenticates by the HttpOnly session cookie the daemon
- * issued at sign-in, so it holds no script-readable token and sends no header:
- * the cookie rides along because every call asks for credentials. A desktop
- * window pointed at a box, and every non-browser client, still presents the
- * token it holds. An empty `Bearer ` would be a header the daemon has to parse
- * and turn away, so the header is left off rather than sent empty.
- */
 export function bearer(): Record<string, string> {
   const held = token();
   return held ? { authorization: `Bearer ${held}` } : {};
 }
 
-/**
- * Exchanges a bearer token for the HttpOnly session cookie.
- *
- * The daemon sets the cookie on the response and the browser sends it from
- * then on. The token itself is not stored: a browser client never holds it in
- * script-readable storage. A token rotated on the box, or a browser whose
- * storage was cleared, goes through this same exchange after pasting.
- */
 export async function setToken(value: string): Promise<void> {
   if (ATTACHED) {
     credentialGeneration++;
-    // A rotated token on a box the window is showing is kept with the box's
-    // address, and in memory for the rest of this load.
     ATTACHED.token = value;
     setRemote(value ? ATTACHED : null);
     return;
@@ -283,13 +180,6 @@ export async function setToken(value: string): Promise<void> {
   await exchangeToken(value);
 }
 
-/**
- * Exchanges a token for the session cookie without keeping the token.
- *
- * Called by `setToken` and by the migration path that reads a token an older
- * build left in localStorage. Either way the token crosses once, the cookie is
- * set, and the script-readable copy is deleted.
- */
 export async function exchangeToken(value: string): Promise<void> {
   if (!hosted) return;
   const credential = ++credentialGeneration;
@@ -314,9 +204,6 @@ async function exchangeBrowserToken(value: string, credential: number): Promise<
         authorization: `Bearer ${value}`,
       },
       body: JSON.stringify({}),
-      // The cookie is set for this origin and only this one: a browser client
-      // is served by the daemon it talks to, and a window showing a box
-      // exchanges nothing, because it keeps its token instead.
       credentials: "same-origin",
       signal: AbortSignal.timeout(15_000),
     });
@@ -340,22 +227,11 @@ async function exchangeBrowserToken(value: string, credential: number): Promise<
       message: `${base} answered ${response.status} and nothing this app could read`,
     } satisfies Refusal;
   }
-  // The cookie is set. Clear a token an older build left behind so a script on
-  // this origin cannot read it again.
   try {
     window.localStorage.removeItem(TOKEN_KEY);
-  } catch {
-    /* storage disabled; nothing to clear */
-  }
+  } catch {}
 }
 
-/**
- * Clears the session cookie on the daemon's side and forgets the token.
- *
- * The cookie is HttpOnly, so the daemon is the only one who can clear it. A
- * request to the logout route does that even when the page has already lost
- * its connection; the local copy goes either way.
- */
 export async function signOut(): Promise<void> {
   if (!hosted) return;
   credentialGeneration++;
@@ -371,28 +247,15 @@ export async function signOut(): Promise<void> {
         credentials: "same-origin",
         signal: AbortSignal.timeout(15_000),
       });
-    } catch {
-      /* the cookie is HttpOnly and the daemon clears it when reachable */
-    }
+    } catch {}
   });
   exchangeQueue = logout.catch(() => {});
   await logout;
   try {
     window.localStorage.removeItem(TOKEN_KEY);
-  } catch {
-    /* storage disabled; nothing to clear */
-  }
+  } catch {}
 }
 
-/**
- * Takes a token out of the address bar, if one was clicked in.
- *
- * Stored and then removed from the URL in one step, so a page reloaded, a tab
- * duplicated or a link dragged to a friend carries the address and not the
- * credential. Returns whether one was found, which is what a caller uses to
- * decide whether to skip asking. Only the fragment is read; nothing else on
- * the URL means anything to this app.
- */
 export function adoptInvitation(): boolean {
   if (!hosted) return false;
   const hash = window.location.hash.replace(/^#/, "");
@@ -404,22 +267,8 @@ export function adoptInvitation(): boolean {
   return true;
 }
 
-/**
- * The invitation token taken out of the address bar, waiting for its exchange.
- *
- * Held here rather than in storage so a page reloaded or a tab duplicated
- * cannot replay it. `settleInvitation` is the one caller, and it clears this
- * whatever the exchange answers.
- */
 let PENDING_INVITATION: string | null = null;
 
-/**
- * Turns an invitation or a legacy localStorage token into a session cookie.
- *
- * Returns whether a session now exists. An invitation token is exchanged and
- * forgotten. A token an older build left in localStorage is exchanged and
- * deleted, so nobody already signed in gets locked out by the change.
- */
 export async function settleInvitation(): Promise<boolean> {
   if (!hosted) return false;
   const pending = PENDING_INVITATION;
@@ -438,27 +287,14 @@ export async function settleInvitation(): Promise<boolean> {
       await exchangeToken(stored);
       return true;
     }
-  } catch {
-    /* storage disabled, or the exchange was refused: either way the token is
-       left where it is, so a host that comes back can still be migrated */
-  }
+  } catch {}
   return false;
 }
 
-/** Where the daemon is: the box this window was pointed at, else wherever
- *  this page came from. */
 function origin(): string {
   return ATTACHED?.origin ?? window.location.origin;
 }
 
-/**
- * Asks a box whether a token opens it, before anything is stored.
- *
- * Two reads, both the cheapest there are: `/health` for which build the box
- * is, which is what tells a laptop and a box apart when something differs
- * between them, and `capabilities` for whether the token is accepted. Rejects
- * with the box's own refusal, or `unreachable` when nothing answered.
- */
 export async function probe(candidate: Remote): Promise<{ build: string; capabilities: unknown }> {
   const base = candidate.origin.replace(/\/+$/, "");
   let health: Response;
@@ -515,17 +351,8 @@ export async function probe(candidate: Remote): Promise<{ build: string; capabil
   return { build: String(said.build ?? ""), capabilities: (body as { ok: unknown }).ok };
 }
 
-/** Imported once, by the first local call, and shared by every call after it. */
 let tauriCore: Promise<typeof import("@tauri-apps/api/core")> | null = null;
 
-/**
- * Calls a native client command, whatever host the window shows.
- *
- * For the handful of things that are about this machine rather than the
- * workspace: forwarding a dropped file's bytes, feeding the menu bar. On a
- * page that is not a window there is no such runtime, and saying so is
- * better than a fetch to nowhere.
- */
 export async function invokeLocal<T>(name: string, args?: Record<string, unknown>): Promise<T> {
   if (!desktop) {
     throw {
@@ -537,26 +364,10 @@ export async function invokeLocal<T>(name: string, args?: Record<string, unknown
   return (await tauriCore).invoke<T>(name, args);
 }
 
-/**
- * The origin every file and socket address is spelled against.
- *
- * Exported for `files.ts`, which addresses a stored file by digest on this
- * origin when hosted and never needs to know how the origin was chosen.
- */
 export function workspaceOrigin(): string {
   return origin();
 }
 
-/**
- * Hands one document to a hosted workspace and gets back what a message
- * carries.
- *
- * Bytes rather than a path, because a browser has no path to give. The
- * desktop reads a dropped path natively and posts it to the same route, so a
- * document never enters its renderer; here the renderer is where the document
- * already is, and it crosses once. Refusals come back in the store's own words: the
- * file, its size, and the limit.
- */
 export async function upload<T>(file: File): Promise<T> {
   if (panelGuard) await checkPanelHost();
   const credential = credentialGeneration;
@@ -566,15 +377,9 @@ export async function upload<T>(file: File): Promise<T> {
       method: "POST",
       headers: bearer(),
       body: file,
-      // Same-origin asks for the session cookie; a window showing a box sends
-      // its token in `bearer()` instead and asks for no credentials, which is
-      // also what keeps a cross-origin answer readable without CORS credentials.
       credentials: "same-origin",
     });
   } catch {
-    // Said about the file rather than about the string a browser's `fetch`
-    // throws: the operator's question is whether the document went, and the
-    // answer is no.
     throw {
       kind: "unreachable",
       message: `could not reach this host to send ${file.name}. Try attaching it again once the host is back`,
@@ -597,13 +402,6 @@ export async function upload<T>(file: File): Promise<T> {
   return (body as { ok: T }).ok;
 }
 
-/**
- * Calls one command and resolves with its value.
- *
- * Rejects with a [`Refusal`] on anything else, which is the same contract
- * Tauri's `invoke` has always had: the UI catches, reads `kind`, and draws a
- * duplicate name differently from a disk failure.
- */
 export async function invoke<T>(name: string, args?: Record<string, unknown>): Promise<T> {
   if (panelGuard) await checkPanelHost();
   const credential = credentialGeneration;
@@ -616,16 +414,6 @@ export async function invoke<T>(name: string, args?: Record<string, unknown>): P
       credentials: "same-origin",
     });
   } catch {
-    // The box is off, asleep, or the tunnel is down. Its own kind, because it
-    // is the one failure where the thing to do is wait rather than change
-    // anything: a crew keeps working while nobody can see it.
-    //
-    // The address is in the sentence and the browser's own words are not. The
-    // cause of a `fetch` that fails is one of four strings — "Failed to fetch"
-    // for all of them — so it tells the operator nothing the address does not,
-    // and reads as a stack trace in the one place that has to sound like a
-    // colleague. What to do about it is the banner's, which is the only thing
-    // that knows whether this host is this Mac's or a box's.
     throw {
       kind: "unreachable",
       message: `could not reach this host at ${origin()}. It may be starting up, or the connection to it is down. Its agents keep working either way`,
@@ -635,9 +423,6 @@ export async function invoke<T>(name: string, args?: Record<string, unknown>): P
   const body = await response.json().catch(() => null);
   if (body && typeof body === "object" && "err" in body) {
     const refused = (body as { err: Refusal }).err;
-    // Said once, on the window, rather than handled in every caller. A token
-    // that was rotated on the box turns every call away at once, and the
-    // right answer is one screen asking for the new one, not forty banners.
     if (refused.kind === "unauthorized" && credential === credentialGeneration) {
       window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
     }
@@ -654,25 +439,6 @@ export async function invoke<T>(name: string, args?: Record<string, unknown>): P
 
 export type Unlisten = () => void;
 
-/**
- * Subscribes to the runtime's event channel.
- *
- * It is a WebSocket to the host, in the desktop app as in a browser, and it
- * reconnects, because the host is another process, often across a network,
- * and the socket can drop while everything is fine.
- *
- * Reconnecting is not resynchronizing. Events missed while the socket was down
- * are gone, exactly as they are while no window is open, and the answer
- * is the same in both: what the UI draws it refetches. `onReconnect` is how a
- * caller is told to do that.
- *
- * `onLost` is the other direction and a slower question. A redial usually
- * answers, and the page that announced a lost host a moment before the host
- * came back is a page that took it back. So the loss is only reported once the
- * redial has had its chance, which is also what keeps a socket dropped on
- * purpose — this page drops a lagging one, and a host does the same — from
- * reading as a host that left.
- */
 export function subscribe(
   _channel: string,
   handler: (payload: UiEvent) => void,
@@ -683,16 +449,6 @@ export function subscribe(
   return Promise.resolve(openSocket(handler, onReconnect, onLost, onClose));
 }
 
-/**
- * Nothing is arriving, said as the refusal the rest of the app already reads.
- *
- * The socket knows the host left without being asked, and the sentence it
- * deserves is the one a call that could not reach it gets: the address, and
- * what it may be. The half that is different is what this one costs — a page
- * that is not receiving is a page whose transcript is not current — so it says
- * that instead of claiming the agents are unaffected, which is a thing a dead
- * host cannot be known to be.
- */
 function lostHost(): Refusal {
   return {
     kind: "unreachable",
@@ -700,29 +456,12 @@ function lostHost(): Refusal {
   };
 }
 
-/** How long to wait before trying the socket again, growing to a ceiling. */
 const RETRY_FLOOR = 500;
 const RETRY_CEILING = 15_000;
 
-/**
- * How long a closed socket is given to come back before its close is news.
- *
- * The first redial waits at most `RETRY_FLOOR`, and a host that is answering
- * takes the connection in milliseconds, so anything that returns inside this
- * window was never gone. What is left is a host that is not answering, which is
- * what the mark and the banner are for.
- */
 const LOST_GRACE = 1_500;
 const HANDSHAKE_TIMEOUT = 10_000;
 
-/**
- * The wait before one retry: half the backoff, and a random share of the rest.
- *
- * Every window on a host loses the socket at the same moment when the host
- * restarts, and without the random half they all redial in step and keep
- * doing so. The fixed half keeps a floor under it, so a host that is starting
- * is not asked again before it could have answered.
- */
 export function retryDelay(wait: number, random: () => number = Math.random): number {
   return Math.round(wait / 2 + (random() * wait) / 2);
 }
@@ -735,9 +474,7 @@ function openSocket(
 ): Unlisten {
   let socket: WebSocket | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
-  /** The pending "the host is gone", cancelled by a redial that answers. */
   let pending: ReturnType<typeof setTimeout> | null = null;
-  /** Whether this outage has already been reported, so one silence is one sentence. */
   let said = false;
   let wait = RETRY_FLOOR;
   let closed = false;
@@ -829,41 +566,25 @@ function openSocket(
       authTimer = null;
       window.dispatchEvent(new Event(RECONNECTED));
       wait = RETRY_FLOOR;
-      // The redial answered: whatever closed the last socket was not the host
-      // leaving, and a page that said it had would be taking it back a moment
-      // later.
       said = false;
       if (pending) {
         clearTimeout(pending);
         pending = null;
       }
-      // The first connection may have completed after the initial HTTP reads.
-      // Refresh on it too, so that startup gap cannot lose a durable message.
       onReconnect?.();
     };
     current.onmessage = (message) => {
       if (closed || ended || attempt !== generation) return;
       try {
         const event = JSON.parse(message.data as string);
-        // Sent by hosts older than the one that closes a lagging socket itself.
-        // A page newer than its host still has to resynchronize on it.
         if (event.type === "streamLagged") current.close();
         else handler(event as UiEvent);
-      } catch {
-        // A frame this build cannot parse is a newer daemon talking to an
-        // older page. Dropping it beats taking the channel down: everything
-        // else on the socket still arrives.
-      }
+      } catch {}
     };
     current.onclose = end;
-    // `onerror` is always followed by `onclose`, so reconnecting is handled in
-    // one place rather than raced between two.
     current.onerror = () => {};
   };
 
-  // A laptop waking or a network coming back is the moment the host is most
-  // likely to answer, and a backoff grown long while it slept would sit out
-  // the next fifteen seconds for nothing.
   const online = () => {
     if (closed || socket) return;
     if (timer) clearTimeout(timer);
@@ -885,14 +606,6 @@ function openSocket(
   };
 }
 
-/**
- * Opens a URL where the operator can see it.
- *
- * On a desktop that is the system browser rather than the webview, because the
- * session belongs to them. Hosted, this page *is* in their browser, so a new
- * tab is the same act. `noopener` because the opened page must not be handed a
- * reference back to a document holding a workspace token.
- */
 export async function openExternal(url: string): Promise<void> {
   if (desktop) {
     const opener = await import("@tauri-apps/plugin-opener");
@@ -901,25 +614,8 @@ export async function openExternal(url: string): Promise<void> {
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
-/** The one prompt in flight, so a burst of offers asks once. */
 let asking: Promise<boolean> | null = null;
 
-/**
- * Whether this page may raise a notification, asking the first time.
- *
- * Asked before a delivery is claimed rather than after: a page that claims an
- * offer and then cannot show it has taken the only copy away from every window
- * that could. In a browser the question is a prompt, and one that may not be
- * answered at all without a click, so a page left at "not decided" claims
- * nothing and leaves the offer to another window. Concurrent askers share one
- * prompt.
- *
- * On macOS the app reads the system's own answer for Guaca without asking, and
- * a Mac that has never been asked counts as "could" here. The question itself
- * is `willNotify`, put when there is something to show: asking on connect would
- * put it to someone with nothing waiting. Elsewhere on desktop the plugin
- * answers yes without asking.
- */
 export function mayNotify(): Promise<boolean> {
   asking ??= permitted().finally(() => {
     asking = null;
@@ -947,26 +643,12 @@ async function permitted(): Promise<boolean> {
   }
 }
 
-/** What a click on a banner the app handed to macOS arrives as (notifications.rs). */
 const NOTIFICATION_CLICKED = "notification-clicked";
 
-/** The one question to macOS in flight, so a burst of offers puts it once. */
 let askingMac: Promise<NotificationAccess | null> | null = null;
 
-/**
- * Whether this app answered as macOS, the last time it was asked. A banner on
- * a Mac is handed over by the app itself and not by the plugin, which drops it
- * whenever the main thread is busy (see notifications.rs).
- */
 let onMac = false;
 
-/**
- * Whether a notification raised now would be shown, asking macOS first if it
- * never has. What a page checks before it claims a delivery: on a Mac nobody
- * has been asked about, the prompt comes first and the claim only on yes, so a
- * no leaves the offer to another window or to the push. Concurrent callers
- * share the one prompt. Off macOS this is `mayNotify`.
- */
 export async function willNotify(): Promise<boolean> {
   if (!(await mayNotify())) return false;
   if (!desktop) return true;
@@ -982,21 +664,12 @@ export async function willNotify(): Promise<boolean> {
   }
 }
 
-/**
- * What a click on each desktop notification this page raised should do, by the
- * id it was raised with. The plugin reports a click as the notification's
- * payload and nothing else, so the id is the only way back to the delivery.
- * Bounded, because a notification nobody clicks is never reported closed on
- * macOS, and the ids start somewhere random so a click on one raised before a
- * reload cannot land on a different delivery that reused its number.
- */
 const clicks = new Map<number, () => void>();
 const CLICKS_KEPT = 64;
 let nextClick = Math.floor(Math.random() * 2 ** 30);
 let listening: Promise<unknown> | null = null;
 let listeningOnMac: Promise<unknown> | null = null;
 
-/** Keeps what a click on a notification should do, and the id to find it by. */
 function remember(onClick: () => void): number {
   const id = nextClick++ % 2 ** 31;
   diagnostic("notification.remembered", id);
@@ -1008,7 +681,6 @@ function remember(onClick: () => void): number {
   return id;
 }
 
-/** Runs what a click on the notification raised with this id should do, once. */
 function clicked(id: number | undefined) {
   diagnostic("notification.clicked", id ?? 0);
   const go = id === undefined ? undefined : clicks.get(id);
@@ -1020,26 +692,10 @@ function clicked(id: number | undefined) {
   go();
 }
 
-/**
- * Raises a notification, if the operator has allowed one.
- *
- * Whether one is warranted was decided on the Host long before this is
- * reached. Returns whether it was actually raised, because a caller that
- * believes it interrupted somebody and did not is how a parked turn waits ten
- * minutes in silence. `onClick` runs when the operator clicks it; in a browser
- * the tab is brought forward first, and on desktop bringing the window forward
- * is the caller's, since only the app can raise its own window.
- */
 export async function notify(title: string, body: string, onClick?: () => void): Promise<boolean> {
-  // On a Mac this is macOS's own answer, asked for if it never has been, which
-  // is how the test button puts the question. A Mac that says no gets nothing
-  // raised and hears false.
   if (!(await willNotify())) return false;
   try {
     if (desktop && onMac) {
-      // Handed over by the app, which answers once macOS has taken it or
-      // refused it, so true here means macOS has the banner. Clicks come back
-      // as an event, listened for before anything can be clicked.
       let click: number | null = null;
       if (onClick) {
         listeningOnMac ??= import("@tauri-apps/api/event")
@@ -1058,15 +714,11 @@ export async function notify(title: string, body: string, onClick?: () => void):
       }
     }
     if (desktop) {
-      // Everywhere else the plugin hands a banner to the system and never
-      // reports whether it appeared.
       const plugin = await import("@tauri-apps/plugin-notification");
       if (!onClick) {
         plugin.sendNotification({ title, body });
         return true;
       }
-      // Before the notification, or its click is never reported: the plugin
-      // only tracks what it raised while a listener existed.
       listening ??= plugin
         .onAction((action) => {
           if (action.actionId === "tap") clicked(action.notification?.id);

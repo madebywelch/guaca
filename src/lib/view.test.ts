@@ -51,7 +51,6 @@ describe("telling the host what is on screen", () => {
     await act(async () => vi.advanceTimersByTime(500));
     expect(reportView).toHaveBeenCalledTimes(1);
 
-    // Coming back to the front is a report, even of what it already said.
     focused = true;
     await act(async () => window.dispatchEvent(new Event("focus")));
     expect(reportView).toHaveBeenLastCalledWith(channel, here);
@@ -70,8 +69,6 @@ describe("telling the host what is on screen", () => {
 });
 
 describe("whether anyone is at the window", () => {
-  // The Host counts the operator away two minutes after the last report with
-  // focus. These are the reports that keep that true and no truer.
   let focused = true;
   beforeEach(() => {
     vi.useFakeTimers();
@@ -91,7 +88,6 @@ describe("whether anyone is at the window", () => {
     await act(async () => vi.advanceTimersByTime(500));
     expect(reportView).toHaveBeenCalledTimes(1);
 
-    // Reading one channel for ten minutes is being here for ten minutes.
     await act(async () => vi.advanceTimersByTime(10 * 60_000));
     expect(reportView.mock.calls.length).toBeGreaterThanOrEqual(11);
     for (const call of reportView.mock.calls) expect(call).toEqual([channel, here]);
@@ -121,8 +117,6 @@ describe("whether anyone is at the window", () => {
   });
 
   it("does not count focus moving into a page inside the window as leaving it", async () => {
-    // An agent's page is a frame in this document: the window blurs, and the
-    // document still has focus.
     renderHook(() => useReportView(channel));
     await act(async () => vi.advanceTimersByTime(500));
     await act(async () => {
@@ -147,8 +141,6 @@ describe("whether anyone is at the window", () => {
   });
 
   describe("a page that is hidden and still says it has focus", () => {
-    // What a Mac's webview does when Guaca is hidden: no blur, the document
-    // keeps reporting focus, and only the visibility changes.
     let visibility: DocumentVisibilityState = "visible";
     beforeEach(() => {
       visibility = "visible";

@@ -17,7 +17,6 @@ import { useNow } from "../lib/time";
 import type { AgentCard, Group, SearchHits } from "../lib/types";
 
 interface Props {
-  /** What was already typed when search was asked for, from the field. */
   initial?: string;
   onClose: () => void;
   onOpenChannel?: () => void;
@@ -29,18 +28,8 @@ interface Props {
   onOpenSettings: () => void;
 }
 
-/**
- * How long after a keystroke the store is asked about it.
- *
- * Short enough that the list feels live, long enough that holding a key down is
- * one query rather than eight. Agents, groups and actions do not wait for it:
- * they are matched from state already in hand and redraw on the keystroke
- * itself, so the palette always answers immediately for the things an operator
- * is most often looking for and fills in the transcript a moment later.
- */
 const DEBOUNCE_MS = 120;
 
-/** How many of each kind the store is asked for. */
 const LIMIT = 25;
 
 type Request =
@@ -64,14 +53,6 @@ export function searchRequest(state: Request, event: RequestEvent): Request {
   return state;
 }
 
-/**
- * The workspace search.
- *
- * One ranked list over eight kinds of thing, opened from the rail or with the
- * platform's find shortcut. Everything it can do is a jump or a settings pane.
- * Nothing here deletes, pauses or sends: a control you drive by typing and
- * pressing Enter is the wrong place to keep an irreversible action.
- */
 export function Search({
   initial = "",
   onClose,
@@ -104,9 +85,6 @@ export function Search({
     inputRef.current?.focus();
   }, []);
 
-  // The half that lives in SQLite. Debounced, and stamped: the replies to two
-  // keystrokes can arrive out of order, and the older one landing last leaves
-  // the list showing results for a query the operator has already moved past.
   const issued = useRef(0);
   const request = useRef<Request>({ phase: "inactive" });
   useEffect(() => {
@@ -138,10 +116,6 @@ export function Search({
     [query, agents, groups, hits, lastActive, now, scope],
   );
 
-  // The list reorders under the cursor as answers arrive, so it is clamped
-  // rather than trusted: row twelve of the previous result set is not row
-  // twelve of this one, and acting on a stale index opens something nobody
-  // pointed at.
   const at = Math.min(cursor, Math.max(0, results.length - 1));
   const chosen = results[at];
 
@@ -205,15 +179,8 @@ export function Search({
   );
 
   const isTop = useDismiss(onClose);
-  // Bound to the window rather than to the panel. The palette is modal, and a
-  // handler on the panel stops working the moment focus lands on a tab button,
-  // which is exactly when somebody reaches for Escape.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      // An input method owns its keystrokes: Enter accepts a candidate, the
-      // arrows walk the candidate list, and Escape cancels the composition.
-      // Consuming any of them here would fire the palette at a person who is
-      // still typing.
       if (event.isComposing || !isTop()) return;
       if (event.key === "ArrowDown") {
         event.preventDefault();
@@ -222,8 +189,6 @@ export function Search({
         event.preventDefault();
         setCursor((c) => Math.max(0, c - 1));
       } else if (event.key === "Tab") {
-        // Tab cycles the filters. The alternative is taking a hand off the
-        // keyboard to narrow a list you are already typing into.
         event.preventDefault();
         const step = event.shiftKey ? -1 : 1;
         setScope(SCOPES[(SCOPES.indexOf(scope) + step + SCOPES.length) % SCOPES.length]!);
@@ -238,7 +203,6 @@ export function Search({
     return () => window.removeEventListener("keydown", onKey);
   }, [chosen, isTop, results.length, run, scope]);
 
-  // Keeps the selected row in view when the cursor is driven from the keyboard.
   useEffect(() => {
     listRef.current
       ?.querySelector<HTMLElement>("[data-selected='true']")
@@ -247,8 +211,6 @@ export function Search({
 
   return (
     <div className="scrim scrim--palette">
-      {/* A real button, so dismissing by clicking away is reachable from the
-          keyboard and announced, rather than being an invisible div handler. */}
       <button type="button" className="scrim__close" aria-label="Close search" onClick={onClose} />
 
       <div className="palette" role="dialog" aria-modal="true" aria-label="Search">
@@ -334,8 +296,6 @@ function Row({
       className="palette__row"
       data-selected={selected}
       data-kind={result.kind}
-      // Moving the pointer, not entering: a list that reorders under a still
-      // mouse would otherwise take the cursor away from the keyboard.
       onMouseMove={onHover}
       onClick={onPick}
     >
@@ -362,7 +322,6 @@ function Row({
   );
 }
 
-/** A mark for the rows with no face of their own. */
 const GLYPH: Record<SearchResult["kind"], string> = {
   messages: "❝",
   agents: "◍",

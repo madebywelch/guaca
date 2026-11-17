@@ -9,14 +9,6 @@ interface State {
   info: string;
 }
 
-/**
- * Last line of defense against a blank window.
- *
- * When a render or a layout effect throws, React unmounts the entire tree. The
- * window is left painted with the body background and nothing else: no error,
- * no clue, and reloading changes nothing because it fails again. Showing the
- * message is the difference between a five-minute fix and an hour of guessing.
- */
 export class ErrorBoundary extends Component<Props, State> {
   state: State = { error: null, info: "" };
 

@@ -62,7 +62,6 @@ describe("the launch", () => {
     expect(at(1.3).right.gesture).toBeNull();
     expect(at(1.6).right.gesture).toBe("receive");
     expect(at(1.6).right.mood).toBe("surprised");
-    // Null either side, so the avatar sees each throw as a change.
     expect(at(2.2).left.gesture).toBeNull();
   });
 
@@ -110,8 +109,6 @@ describe("after the launch", () => {
 });
 
 describe("next", () => {
-  // The component renders at `next` and at nothing in between, so a change it
-  // does not predict is a scene that stays stale until something else happens.
   it("predicts every change", () => {
     const situations: Partial<Situation>[] = [
       {},
@@ -125,7 +122,6 @@ describe("next", () => {
         const until = Math.min(now.next, 70);
         for (const u of [0.25, 0.5, 0.75, 0.999]) {
           const later = t + (until - t) * u;
-          // Arriving is an event the component renders for, not a beat it waits on.
           const arrives = s.hoverAt;
           if (typeof arrives === "number" && t < arrives && later >= arrives) continue;
           expect(scene(at(later, s)), `from ${t.toFixed(2)} to ${later.toFixed(2)}`).toEqual(

@@ -2,14 +2,12 @@ import { type Ref, useId } from "react";
 
 import { FORM } from "./form";
 
-/** Material offsets are in the same viewBox units as the animated outline. */
 const PAPER = {
   ink: "#252824",
   shadow: { x: 1.1, y: 2.3, opacity: 0.18 },
   edge: { x: -0.4, y: -0.5, width: 0.55, opacity: 0.45 },
 };
 
-/** One outline drives all three layers, including the README's still frame. */
 export function Skin({ d, pathRef }: { d?: string; pathRef?: Ref<SVGPathElement> }) {
   const id = useId();
   const shape = `${id}-shape`;

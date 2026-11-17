@@ -28,9 +28,7 @@ interface Props {
 
 const EMPTY_OCCASIONS: Occasion[] = [];
 
-/** What the editor holds while it is open. `null` is nothing being edited. */
 interface Editing {
-  /** The occasion being changed, or `null` for one being written. */
   id: OccasionId | null;
   groupId: GroupId;
   title: string;
@@ -40,65 +38,20 @@ interface Editing {
   detail: string;
 }
 
-/** How the date field is written, which is also how Rust reads it back. */
 function fieldDate(occasion: Occasion): string {
   const when = new Date(occasion.startsAt);
   const pad = (n: number) => String(n).padStart(2, "0");
   const day = `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}`;
-  // A date with no time on it is what makes an occasion an all-day one, in
-  // exactly one field. A second checkbox saying so is a second thing to keep in
-  // step with the string beside it.
   return occasion.allDay ? day : `${day} ${pad(when.getHours())}:${pad(when.getMinutes())}`;
 }
 
-/** The month a window names, for the heading. */
 function monthLabel(window: Window): string {
   return new Date(window.from).toLocaleDateString([], { month: "long", year: "numeric" });
 }
 
-/**
- * The workspace calendar: every crew's dates, in one place.
- *
- * Guaca's own, and not the Google plugin's view of the operator's real one.
- * What is on it is what an agent or the operator wrote down as coming, which is
- * the thing nothing else in the app held: an agent that learned a filing was
- * due had memory, a working note and a routine to choose from, and all three
- * are the wrong shape for "what is happening on Thursday".
- *
- * ## Every crew at once, filterable to one
- *
- * The default and the point. A calendar is per crew because the wall between
- * crews is real — one crew's agents cannot see or move another's dates — but
- * the operator is above that wall and stands in front of all of it. Filtering
- * to one crew is a chip, not a mode: the chips are drawn from the groups rather
- * than from the occasions, so a crew with an empty calendar is still something
- * you can pick, and picking it and finding nothing is an answer.
- *
- * ## A month at a time, as days
- *
- * Days rather than a list sorted by date, because a flat list reads as a feed
- * and nothing in it says where Tuesday ends. Only the days with something on
- * them are drawn: a month of empty rows is a month of scrolling, and the
- * heading already says which month is being looked at.
- *
- * A month rather than a rolling thirty days, because "show me October" has an
- * answer and "the next thirty days" slides under the operator every morning.
- * It opens on this month plus the rest of the next, which is what stops a
- * calendar opened on the 29th from being a calendar showing two days.
- *
- * ## An overlay, not a pane
- *
- * The same shape as the cafeteria and the compost, reached from the same
- * footer, because it is the same kind of thing: somewhere you go, look at the
- * whole workspace, and come back from. A pane would have to live inside a crew,
- * which is the one framing this surface exists to escape.
- */
 export function Calendar({ onClose }: Props) {
   const groups = useStore((state) => state.groups);
   const agents = useStore((state) => state.agents);
-  // Bumped whenever any crew's calendar moves, including by an agent mid-turn.
-  // Without it the list on screen is the one that was true when the panel
-  // opened, and the only way to find out otherwise is to close it and come back.
   const changed = useStore((state) => state.calendarVersion);
   const now = useNow(60_000);
 
@@ -119,10 +72,6 @@ export function Calendar({ onClose }: Props) {
     panelRef.current?.focus();
   }, []);
 
-  // The editor takes the keyboard as it opens, on the field that is always the
-  // first thing typed. Keyed on whether one is open rather than on which
-  // occasion it holds, so typing into the title does not pull focus back to the
-  // start of it on every keystroke.
   const editorOpen = editing !== null;
   useEffect(() => {
     if (editorOpen) titleRef.current?.focus();
@@ -131,10 +80,6 @@ export function Calendar({ onClose }: Props) {
   useDismiss(onClose);
   useDismiss(() => setEditing(null), editorOpen);
 
-  // Read unfiltered and filtered in the view. The crew chips carry a count
-  // each, so the read has to cover every crew whichever one is picked; asking
-  // Rust per crew would make the round trips the number of crews and still need
-  // the whole set to draw the chips.
   const load = useCallback(async () => {
     try {
       setRead({ status: "loaded", occasions: await api.calendar(window.from, window.until) });
@@ -156,7 +101,6 @@ export function Calendar({ onClose }: Props) {
   );
   const days = useMemo(() => busyDays(daysIn(shown, window)), [shown, window]);
 
-  /** Which crew a new occasion lands in when the operator has not picked one. */
   const defaultCrew = crew ?? groups[0]?.id;
 
   const save = async () => {
@@ -177,9 +121,6 @@ export function Calendar({ onClose }: Props) {
       setEditing(null);
       await load();
     } catch (caught) {
-      // Left open on a failure. The commonest one is a date Rust could not
-      // read, and closing the editor would throw away everything typed beside
-      // the one field that has to change.
       setError(errorMessage(caught));
     } finally {
       setBusy(false);
@@ -243,15 +184,8 @@ export function Calendar({ onClose }: Props) {
           <span className="occasion__body">
             <span className="occasion__title">{occasion.title}</span>
             <span className="occasion__meta">
-              {/* The crew is drawn on every row, not only in the unfiltered
-                  view. It is what an occasion belongs to and the reason one
-                  crew's agents cannot touch another's, so a row that only says
-                  it while you happen to be looking at everything is a row that
-                  hides the thing that matters about it. */}
               {whose && <span className="occasion__crew">{whose.name}</span>}
               {occasion.place && <span>{occasion.place}</span>}
-              {/* Who noticed it. Blank for the operator's own, which is the
-                  ordinary case and needs no label saying so. */}
               {author && <span>{author.name}</span>}
             </span>
           </span>
@@ -309,16 +243,6 @@ export function Calendar({ onClose }: Props) {
             </div>
           </div>
 
-          {/* One row of crews, and "All" first because it is the default and
-              the thing this surface is for. Drawn even with one crew, so the
-              count on it is the answer to "is anything on this at all".
-
-              A fieldset because it genuinely is one: a set of controls that
-              only mean anything together, and the one thing a screen reader
-              cannot get from the buttons themselves is what the set is for. The
-              legend is offscreen because the chips already read as crew names
-              and a visible "Which crew" above them would be a heading nobody
-              needs. */}
           <fieldset className="calendar__crews">
             <legend className="offscreen">Which group</legend>
             <button
@@ -414,9 +338,6 @@ export function Calendar({ onClose }: Props) {
                   className="input input--slim"
                   aria-label="Group"
                   value={editing.groupId}
-                  // Only on a new one. Moving an occasion between crews would
-                  // move it out from under the agents that keep it, and there
-                  // is no call that does it.
                   disabled={editing.id !== null}
                   onChange={(event) =>
                     setEditing({ ...editing, groupId: event.target.value as GroupId })
@@ -493,10 +414,6 @@ export function Calendar({ onClose }: Props) {
         )}
 
         <div className="calendar__foot">
-          {/* Said once, at the bottom, because it is the same sentence about
-              every row and the same sentence three times is wallpaper. It is
-              also the one thing about this surface nobody would guess: the app
-              has a Google Calendar plugin, and this is not it. */}
           <p className="calendar__note">
             Guaca's own calendar. Agents keep it as they learn things; nothing here books a meeting,
             invites anyone or leaves this machine.

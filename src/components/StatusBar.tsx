@@ -24,22 +24,10 @@ import { type BarFace, type BarLook, barFace, barLook, dressed } from "../lib/wi
 import { useHostState } from "./HostUpdates";
 
 interface Props {
-  /** Opens a place in the app, the way the rail and the palette do. */
   onOpen: (place: QuickPlace) => void;
-  /** Sends as the operator, to the agent whose channel it then shows. */
   onMessage: (agentId: AgentId, text: string) => Promise<void>;
 }
 
-/**
- * The strip along the bottom of the reading column: which host this window
- * shows, the pages pinned to it, and the operator's quick actions.
- *
- * A pinned page is a kept artifact drawn from its condensed view. An agent asks
- * for one with `artifact` and `pin`, and it appears only once the operator has
- * approved it, reads included; the operator pins their own from Artifacts. A
- * quick action is a button of the operator's own for something done often.
- * Every window draws the same bar, because both are settings on the host.
- */
 export function StatusBar({ onOpen, onMessage }: Props) {
   const settings = useStore((s) => s.settings);
   const setSettings = useStore((s) => s.setSettings);
@@ -55,20 +43,12 @@ export function StatusBar({ onOpen, onMessage }: Props) {
   const [error, setError] = useState<string | null>(null);
   const actions = settings?.quickActions ?? [];
   const widgets = settings?.widgets ?? [];
-  // Nothing of the operator's on the bar yet, which is the one state where it
-  // has room to say what can be. Both of its ideas go here because only one of
-  // them has a control of its own: a pinned page is made in Artifacts and has
-  // no door on the bar at all.
   const empty = actions.length === 0 && widgets.length === 0;
   const nameOf = (id: AgentId) => agents.find((a) => a.id === id)?.name ?? "a deleted agent";
 
   const drift = desktop
     ? skew({ version: VERSION, commit: COMMIT }, host?.health ?? null)
     : "unknown";
-  // Which host, whether its build and this window's are one build, and — when
-  // nothing is arriving — when it was last heard from. The version itself is a
-  // click away in Host settings, where it can be acted on; see `hostLabel` for
-  // why it left the bar.
   const label = hostLabel({
     place: hostPlace(),
     drift,
@@ -110,8 +90,6 @@ export function StatusBar({ onOpen, onMessage }: Props) {
     }
   };
 
-  // A quick action that opens a place is the operator's own door to it, so
-  // the bar draws that place once rather than two buttons with one name.
   const opened = new Set(
     actions.flatMap((action) => (action.does.kind === "open" ? [action.does.place.kind] : [])),
   );
@@ -141,10 +119,6 @@ export function StatusBar({ onOpen, onMessage }: Props) {
           ))}
         </div>
       )}
-      {/* The bar's one invitation, when there is nothing of the operator's on
-          it. A quick action has a button beside this; a pinned page has no door
-          on the bar, so the sentence is the only place the second idea is
-          advertised, and it names where the page is pinned from. */}
       {empty && (
         <span className="statusbar__empty">A kept page can be pinned here, from Artifacts.</span>
       )}
@@ -181,8 +155,6 @@ export function StatusBar({ onOpen, onMessage }: Props) {
           {editing ? "Done" : empty ? "Add a quick action" : "Edit"}
         </button>
       </div>
-      {/* The places that are not a person, where the rail's foot kept them:
-          the timeline above draws who, and this end of the window says where. */}
       <nav className="statusbar__places" aria-label="Places">
         <button
           type="button"
@@ -222,12 +194,6 @@ export function StatusBar({ onOpen, onMessage }: Props) {
   );
 }
 
-/**
- * The operator's appearance, as a condensed view is drawn in it. Solved from
- * the preferences rather than read off the document, so it is right on the
- * render that changes it rather than one render later, and followed through
- * the OS for an operator whose surface follows the OS.
- */
 function useBarLook(): BarLook {
   const prefs = useStore((s) => s.prefs);
   const [dark, setDark] = useState(prefersDark);
@@ -252,21 +218,6 @@ export function refusalRead(state: RefusalRead, event: "visible" | "dispose"): R
   return state.kind === "waiting" ? { kind: "sent" } : state;
 }
 
-/**
- * One pinned page, drawn from its condensed view.
- *
- * The frame takes no pointer events and a button of the bar's own lies over
- * it, so every click is the bar's and opens the page in Artifacts, where its
- * reads are allowed, its history is kept and its own buttons reach its owner.
- * A frame on another origin swallows its clicks, so this is also the only way
- * the bar could open anything; and a strip of small buttons that each spend a
- * turn of the owner's is a strip of mis-clicks. The frame's own messages are
- * never listened to: a condensed view has nothing to say to anybody.
- *
- * Its reads run on the pin's clock, with no model, and not while the window
- * is hidden: a read nobody can see is a connector call spent on nothing. Coming
- * back to the window reads again if the last one is older than the clock.
- */
 function PinnedPage({
   widget,
   look,
@@ -309,7 +260,6 @@ function PinnedPage({
   const allowed = view?.artifact.sourcesAllowed ?? false;
   useEffect(() => {
     if (version === null) return;
-    // A page that reads nothing still gets an answer to `guaca.data()`.
     if (!declares) {
       setReads([]);
       return;
@@ -325,8 +275,6 @@ function PinnedPage({
         .then((found) => live && setReads(found))
         .catch(() => {});
     };
-    // Reads the operator has not allowed come back refused, once, so the page
-    // can say so. Asking again on a clock would only say it again.
     if (!allowed) {
       let state: RefusalRead = { kind: "waiting" };
       const onVisible = () => {
@@ -409,7 +357,6 @@ function PinnedPage({
           <iframe
             ref={frame}
             className="widget__frame"
-            // Scripts, and deliberately nothing else: `HtmlArtifact` says why.
             sandbox="allow-scripts"
             referrerPolicy="no-referrer"
             title={title}
@@ -422,9 +369,6 @@ function PinnedPage({
             }}
           />
         ) : (
-          // A version without a condensed view, which a restore can bring back:
-          // the title holds its place. Nothing while one is on its way, so the
-          // title does not flash up and vanish.
           <span className="widget__title">{view && html === null ? title : ""}</span>
         )}
         <button
@@ -451,7 +395,6 @@ function PinnedPage({
 
 type Kind = "message" | "channel" | "calendar" | "forYou" | "settings";
 
-/** The operator's own button. Theirs, so it needs nobody's approval. */
 function QuickActionForm({ onAdded }: { onAdded: () => void }) {
   const agents = useStore((s) => s.agents).filter((a) => a.lifecycle !== "terminated");
   const setSettings = useStore((s) => s.setSettings);

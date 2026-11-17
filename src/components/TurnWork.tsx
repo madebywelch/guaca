@@ -5,7 +5,6 @@ import { callInFlight, type LiveCall, stepDiff, trailStep } from "../lib/trail";
 import type { AgentId } from "../lib/types";
 import { DiffBlock } from "./Trail";
 
-/** Subscribe only while visible; token updates never redraw settled messages. */
 export function TurnWork({ agent, follow }: { agent: AgentId; follow: () => void }) {
   const enabled = useStore((s) => s.prefs.showReasoning);
   return enabled ? <Working agent={agent} follow={follow} /> : null;
@@ -46,7 +45,6 @@ const Thinking = memo(function Thinking({ text }: { text: string }) {
   );
 });
 
-/** Stable calls retain their disclosure state and do not redraw for reasoning. */
 const ToolCall = memo(function ToolCall({ call }: { call: LiveCall }) {
   const step = call.done ? trailStep(call.done, call.callId) : null;
   const changed = step ? stepDiff(step) : null;

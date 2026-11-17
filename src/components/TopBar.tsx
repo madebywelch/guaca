@@ -6,7 +6,6 @@ import { Icon } from "./Icon";
 import { NewMenu } from "./NewMenu";
 
 interface Props {
-  /** Whose page is open, for the way back; none on the opening screen. */
   open: string | null;
   onHome: () => void;
   onSearch: () => void;
@@ -17,14 +16,8 @@ interface Props {
   onOpenCafeteria: () => void;
 }
 
-/** The window's buttons float over this row on a Mac, and nothing may sit under them. */
 const LIGHTS = desktop && IS_MAC;
 
-/**
- * The row above the timeline: where you are on the left, and the four places
- * that are not a person on the right. The groups are one of them, because the
- * timeline draws agents by when they did something and not by whose they are.
- */
 export function TopBar({
   open,
   onHome,
@@ -42,8 +35,6 @@ export function TopBar({
     month: "long",
     day: "numeric",
   });
-  // A phone's top row holds the day beside four buttons on one line only
-  // when the day is said short.
   const short = new Date(now).toLocaleDateString([], {
     month: "short",
     day: "numeric",
@@ -56,7 +47,6 @@ export function TopBar({
           Today
         </button>
       ) : (
-        // Text is part of the row a window is dragged by; only a control is not.
         <p className="topbar__day" data-tauri-drag-region>
           <span className="topbar__day-long">{day}</span>
           <span className="topbar__day-short">{short}</span>

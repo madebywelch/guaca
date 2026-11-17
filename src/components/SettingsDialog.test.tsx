@@ -17,23 +17,6 @@ import type {
   SubscriptionStatus,
 } from "../lib/types";
 
-/**
- * The settings dialog, over a mocked runtime.
- *
- * Nine panes, and every field of every one of them held by the shell. That is
- * where the risk is, and none of it is visible in the markup: the patch the
- * Save button sends is assembled by omission, so a box left blank has to be
- * absent from that object rather than present and empty. An empty string sent
- * as an API key clears a stored key, and a zero sent as a limit is a limit that
- * refuses all work. The other half is the same state read the other way round:
- * changing section unmounts a pane, so anything a pane held would be lost by a
- * glance at Limits and back.
- *
- * The runtime is mocked down to the two calls this surface makes, which is
- * enough to assert the one thing that matters about each: what was on screen
- * when it was pressed.
- */
-
 const HELD: GuardLimits = {
   maxHops: 8,
   maxStepsPerRun: 60,
@@ -42,7 +25,6 @@ const HELD: GuardLimits = {
   maxToolRounds: 24,
 };
 
-/** What the runtime is holding when the dialog opens. */
 function stored(over: Partial<Settings> = {}): Settings {
   return {
     operatorName: "Robert",
@@ -67,7 +49,6 @@ function stored(over: Partial<Settings> = {}): Settings {
   };
 }
 
-/** Nobody signed in, which is what a fresh install looks like. */
 function signedOut(): SubscriptionStatus {
   return { signedIn: false, email: "", plan: "", includesCodex: false };
 }
@@ -86,7 +67,6 @@ const updateSettings = vi.fn<(patch: SettingsPatch) => Promise<Settings>>(async 
 const getSettings = vi.fn<() => Promise<Settings>>(async () => stored());
 const testConnection = vi.fn<(patch?: SettingsPatch) => Promise<string>>(async () => "Reached it.");
 const notifyOperator = vi.fn<(title: string, body: string) => Promise<boolean>>(async () => true);
-/** What macOS says about Guaca; `null` is every other platform. */
 const notificationAccess = vi.fn<() => Promise<NotificationAccess | null>>(async () => null);
 const openNotificationSettings = vi.fn<() => Promise<void>>(async () => {});
 const pushReport = vi.fn<() => Promise<PushReport>>(async () => nothingSent());
@@ -110,7 +90,6 @@ const signOutSubscription = vi.fn<() => Promise<Settings>>(async () =>
 );
 const openExternal = vi.fn<(url: string) => Promise<void>>(async () => {});
 
-/** No Guaca account, which is what an install that never signs in looks like. */
 function noAccount(over: Partial<AccountStatus> = {}): AccountStatus {
   return { signedIn: false, email: "", origin: "https://guaca.bot", ...over };
 }
@@ -147,9 +126,6 @@ const accountStatus = vi.fn<() => Promise<AccountStatus>>(async () => noAccount(
 const signInAccount = vi.fn<() => Promise<AccountStatus>>(async () => linked());
 const accountConnectors = vi.fn<() => Promise<AccountConnectors>>(async () => held());
 const signOutAccount = vi.fn<() => Promise<AccountStatus>>(async () => noAccount());
-/** Installed by default: the provider list draws the same either way, and a
- *  suite that had to opt in to a present program would be asserting the
- *  refusal rather than the row. */
 const claudeProgram = vi.fn<() => Promise<ClaudeProgram>>(async () => ({
   installed: true,
   version: "2.1.247 (Claude Code)",
@@ -158,7 +134,6 @@ const claudeProgram = vi.fn<() => Promise<ClaudeProgram>>(async () => ({
 const claudeSigninStatus = vi.fn(async () => ({ signedIn: false }));
 const beginClaudeSignin = vi.fn(async () => ({ id: "session", url: "https://example.com" }));
 
-/** A desktop window has a menu bar icon; a browser has nowhere to put one. */
 const platform = vi.hoisted(() => ({ desktop: true }));
 vi.mock("../lib/transport", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/transport")>()),
@@ -220,13 +195,6 @@ function pane(label: string): void {
   fireEvent.click(screen.getByRole("tab", { name: label }));
 }
 
-/**
- * One field's input, by the words above it.
- *
- * Anchored patterns rather than exact names: a label is a prefix of another
- * ("API key" of "E2B API key"), and a field that reports its state keeps that
- * line inside the label, so the accessible name of a box can run past it.
- */
 function field(label: RegExp): HTMLInputElement {
   return screen.getByLabelText(label) as HTMLInputElement;
 }
@@ -235,7 +203,6 @@ function type(label: RegExp, value: string): void {
   fireEvent.change(field(label), { target: { value } });
 }
 
-/** A checkbox on the same surface, found the same way and toggled. */
 function check(label: RegExp): void {
   fireEvent.click(field(label));
 }
@@ -244,18 +211,10 @@ function save(): HTMLButtonElement {
   return screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
 }
 
-/**
- * Test connection.
- *
- * It lives in the Provider pane rather than in the foot, because it reads the
- * endpoint, the key and the model and acts on none of the other seven sections.
- * So every test that presses it opens on that pane first.
- */
 function probe(): HTMLButtonElement {
   return screen.getByRole("button", { name: "Test connection" }) as HTMLButtonElement;
 }
 
-/** Whatever the dialog is currently saying about itself. */
 function banner(): HTMLElement {
   const found = document.querySelector(".banner");
   if (!found) throw new Error("no banner on screen");
@@ -268,13 +227,6 @@ function sentPatch(): SettingsPatch {
   return call[0];
 }
 
-/**
- * The switch on the row carrying this label.
- *
- * By the row rather than by role: the switches on this pane are named "On" and
- * "Off" and nothing ties one to the label beside it, so a role query cannot
- * tell the five of them apart.
- */
 function switchOn(label: string): HTMLButtonElement {
   const row = screen.getByText(label).closest(".switch-row");
   const control = row?.querySelector("button");
@@ -317,9 +269,6 @@ describe("when the runtime refuses", () => {
 
     await waitFor(() => expect(screen.getByText(/config\.json is read-only/i)).toBeTruthy());
     expect(banner().className).toContain("banner--error");
-    // Closing on a failed save is the one thing that turns a refusal into lost
-    // work: the operator would reopen the dialog onto the stored values with no
-    // way to tell what had landed.
     expect(onClose).not.toHaveBeenCalled();
     expect(field(/^Your name/).value).toBe("Robert W");
     expect(save().disabled).toBe(false);
@@ -343,15 +292,10 @@ describe("when the runtime refuses", () => {
           settle = resolve;
         }),
     );
-    // On Provider so both of the buttons a press could double up are on screen,
-    // and with the endpoint typed into because the Save is only drawn while
-    // something is waiting for it.
     open(stored(), DEFAULT_PREFS, "provider");
     type(/^Inference endpoint/, "http://localhost:1234/v1");
     fireEvent.click(save());
 
-    // Two config writes racing each other is the failure this prevents, and the
-    // second one would carry the same patch, so nothing would look wrong after.
     expect(save().disabled).toBe(true);
     expect(probe().disabled).toBe(true);
     fireEvent.click(save());
@@ -525,25 +469,17 @@ describe("concurrent settings edits", () => {
 describe("what a save sends", () => {
   it("leaves a blank key, timer and timeout out of the patch entirely", async () => {
     open();
-    // The name is touched and nothing else is, because the Save is only drawn
-    // while something is waiting for it. Every box below opens blank and is
-    // left blank, which is the state this is about.
     type(/^Your name/, "Robert W");
     fireEvent.click(save());
 
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
     const patch = sentPatch();
-    // Absent, not empty and not zero. An empty `apiKey` clears the stored key,
-    // and a zero timeout or sleep timer is a setting nobody chose.
     expect("apiKey" in patch).toBe(false);
     expect("e2bApiKey" in patch).toBe(false);
     expect("computerIdleMinutes" in patch).toBe(false);
     expect("kernelApiKey" in patch).toBe(false);
     expect("browserIdleMinutes" in patch).toBe(false);
     expect("requestTimeoutSecs" in patch).toBe(false);
-    // Only what was changed. A field sent at the value it had when the dialog
-    // opened is a field saved back over whatever another client, or an agent,
-    // has put there since; an omitted one is left alone by the runtime.
     expect(patch).toEqual({ operatorName: "Robert W" });
   });
 
@@ -555,8 +491,6 @@ describe("what a save sends", () => {
     pane("Machines");
     type(/^E2B API key/, " ");
     type(/^Kernel API key/, "   ");
-    // Spaces are not an edit either, by the same rule that keeps them out of
-    // the patch, so the Save is reached through a field that is one.
     pane("General");
     type(/^Your name/, "Robert W");
     fireEvent.click(save());
@@ -587,8 +521,6 @@ describe("what a save sends", () => {
     open();
     pane("Limits");
     type(/^Relay depth/, "");
-    // Clearing a number box hands back nothing at all, and a limit of zero
-    // refuses every send the runtime is asked to make.
     expect(field(/^Relay depth/).value).toBe("1");
 
     fireEvent.click(save());
@@ -603,9 +535,6 @@ describe("what a save sends", () => {
 
     fireEvent.click(save());
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
-    // The ceiling in the field's metadata is drawn, not enforced: only the floor
-    // is applied here, and `GuardLimits::sanitized` is what actually holds this
-    // to 16. Recorded rather than endorsed, and the box goes on reading 40.
     expect(sentPatch().limits?.maxHops).toBe(40);
   });
 
@@ -628,7 +557,6 @@ describe("what a save sends", () => {
 
     fireEvent.click(save());
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
-    // The name typed is the name stored, so it is not a change and not sent.
     expect(sentPatch()).toEqual({
       baseUrl: "http://localhost:1234/v1",
       defaultModel: "qwen3-coder-30b",
@@ -646,8 +574,6 @@ describe("what a save sends", () => {
     open();
     pane("Provider");
     type(/^Inference endpoint/, "http://localhost:1234/v1");
-    // Another window, or an agent, changes two fields while this one is open:
-    // one the operator has edited here and one they have not.
     act(() =>
       useStore.getState().applyEvent({
         type: "settingsChanged",
@@ -668,10 +594,6 @@ describe("what a save sends", () => {
   });
 
   it("carries the browser half of Machines on its own, with no computer touched", async () => {
-    // The half of this pane that pays for browsers went missing from the patch
-    // once: three fields typed into, cleared on save, and never sent. What the
-    // operator saw was the Kernel key refusing to stick and no browser widget
-    // in the channel, with "Saved." over the top of it.
     open();
     pane("Machines");
     type(/^Kernel API key/, "sk_typed");
@@ -715,8 +637,6 @@ describe("what a save sends", () => {
     type(/^Give up on a call after/, "30");
     pane("Machines");
     type(/^E2B API key/, "e2b_typed");
-    // Past the ceiling the runtime clamps to, which is the case a box left
-    // reading what was typed gets wrong.
     type(/^Sleep computers after/, "2000");
 
     updateSettings.mockResolvedValue(
@@ -725,10 +645,6 @@ describe("what a save sends", () => {
     fireEvent.click(save());
     await waitFor(() => expect(screen.getByText("Saved.")).toBeTruthy());
 
-    // Blank is the resting state of every box that stages something, and the
-    // placeholder beside each one is read from what came back. Left as it was
-    // typed, a key is indistinguishable from an edit nobody saved and a
-    // duration is a number under "Saved." that the runtime did not store.
     expect(field(/^E2B API key/).value).toBe("");
     expect(field(/^Sleep computers after/).value).toBe("");
     expect(field(/^Sleep computers after/).placeholder).toBe("1440 minutes");
@@ -760,8 +676,6 @@ describe("the Save in the foot", () => {
   });
 
   it("offers nothing on the panes that write as they are clicked", async () => {
-    // Appearance and Notifications are kept the moment they are pressed, and a
-    // Save under them said the opposite about settings that were already saved.
     const attention = { needsYou: true, failures: true, finished: true };
     updateSettings.mockResolvedValueOnce(stored({ attention: { ...attention, failures: false } }));
     open(stored({ attention }), DEFAULT_PREFS, "appearance");
@@ -782,9 +696,6 @@ describe("the Save in the foot", () => {
   });
 
   it("is still reachable from a pane that stages nothing", () => {
-    // Every pane's state is held by the shell, so an endpoint typed on Provider
-    // is still unsaved from Shortcuts. A Save that went missing on the way past
-    // is how it would get lost.
     open();
     pane("Provider");
     type(/^Inference endpoint/, "http://localhost:1234/v1");
@@ -813,8 +724,6 @@ describe("the Save in the foot", () => {
   });
 
   it("does not count a duration retyped as what is already stored", () => {
-    // The box is blank while it inherits and the placeholder says what that is,
-    // so typing the number back in changes nothing and offers nothing.
     open();
     pane("Machines");
     type(/^Sleep computers after/, "15");
@@ -826,14 +735,8 @@ describe("the Save in the foot", () => {
 
 describe("the menu bar", () => {
   it("says the panel exists, on a host with a menu bar to look at", () => {
-    // Nothing in the app pointed at it: its whole entrance was a tray icon
-    // the OS draws, so a stranger who never noticed the icon never saw the
-    // second client that answers what is waiting without the window.
     open();
     const said = screen.getByText(/Guaca keeps an icon there/);
-    // A row of its own with a label, not help text under the name field: that
-    // is where a hint about the box above it belongs, and this is a fact about
-    // the window.
     const row = said.closest(".field");
     expect(row?.querySelector(".field__label")?.textContent).toBe("Menu bar");
   });
@@ -867,9 +770,6 @@ describe("moving between sections", () => {
     pane("Limits");
     type(/^Recipients per send/, "3");
 
-    // The whole reason every field is held by the shell. A pane owning its own
-    // state loses it the moment the operator glances at another one, and the
-    // loss is silent: the box is simply back to what is stored.
     pane("Provider");
     expect(field(/^Inference endpoint/).value).toBe("http://localhost:1234/v1");
     pane("Machines");
@@ -892,8 +792,6 @@ describe("moving between sections", () => {
   });
 
   it("opens on the section it was pointed at", () => {
-    // The palette and the missing-key banner both point at one, and landing on
-    // General to hunt for it is the step they exist to remove.
     open(stored(), DEFAULT_PREFS, "shortcuts");
     expect(screen.getByRole("tab", { name: "Shortcuts" }).getAttribute("aria-selected")).toBe(
       "true",
@@ -909,14 +807,9 @@ describe("closing", () => {
     tab.focus();
     expect(document.activeElement).toBe(tab);
 
-    // Bound to the window rather than to the panel for exactly this: focus is
-    // on a nav button the moment the operator has finished choosing a section,
-    // which is when they reach for Escape.
     fireEvent.keyDown(tab, { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(1);
 
-    // And from outside the panel, which is where focus goes after a click on
-    // the scrim. A handler on the panel would never see this one.
     fireEvent.keyDown(document.body, { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(2);
   });
@@ -935,20 +828,13 @@ describe("testing the endpoint", () => {
     type(/^API key/, "gsk_typed");
     pane("General");
     type(/^Your name/, "Somebody else");
-    // Back to the pane the button lives on. The name typed on the way past is
-    // still held by the shell, which is the other half of what this checks.
     pane("Provider");
 
     fireEvent.click(probe());
     await waitFor(() => expect(testConnection).toHaveBeenCalledTimes(1));
 
     const patch = testConnection.mock.calls[0]?.[0];
-    // Neither a name nor a limit is something an endpoint can be tested
-    // against, and the unsaved key is the whole point: probing the stored one
-    // reports "no API key" for a key the operator can see in front of them.
     expect(patch).toEqual({
-      // The provider goes with it: a test that reached the subscription while
-      // the operator is looking at a typed endpoint reports on the wrong place.
       provider: "compatible",
       baseUrl: "https://api.groq.com/openai/v1",
       defaultModel: "anthropic/claude-sonnet-4.5",
@@ -1002,7 +888,6 @@ describe("the provider presets", () => {
     expect(preset("OpenRouter").getAttribute("aria-current")).toBe("true");
     expect(preset("OpenAI").getAttribute("aria-current")).toBe("false");
 
-    // A hand-typed endpoint is chosen, not unrecognized, so nothing is marked.
     type(/^Inference endpoint/, "https://gateway.example/v1");
     expect(preset("OpenRouter").getAttribute("aria-current")).toBe("false");
   });
@@ -1016,7 +901,6 @@ describe("the provider presets", () => {
     expect(field(/^Default model/).value).toBe("llama-3.3-70b-versatile");
     expect(preset("Groq").getAttribute("aria-current")).toBe("true");
     expect(preset("OpenRouter").getAttribute("aria-current")).toBe("false");
-    // Filling a box is not saving it.
     expect(updateSettings).not.toHaveBeenCalled();
   });
 
@@ -1026,8 +910,6 @@ describe("the provider presets", () => {
     type(/^Default model/, "qwen3-coder-30b");
     fireEvent.click(preset("LM Studio"));
 
-    // A local server serves whatever is loaded into it, so blanking the model
-    // here would be replacing a working answer with a guess.
     expect(field(/^Inference endpoint/).value).toBe("http://localhost:1234/v1");
     expect(field(/^Default model/).value).toBe("qwen3-coder-30b");
   });
@@ -1035,16 +917,11 @@ describe("the provider presets", () => {
   it("does not ask a machine on this desk for a key", () => {
     open(stored({ apiKeySet: false, apiKeyHint: "" }));
     pane("Provider");
-    // An empty key field beside a warning about a missing key is the state an
-    // operator running a local model will try to fix forever.
     expect(preset("LM Studio").textContent).toContain("On the backend");
     expect(preset("OpenRouter").textContent).toContain("Needs a key");
   });
 
   it("withholds the rows a server cannot offer, and says why on each", () => {
-    // Withheld rather than hidden. A row that vanishes on a server is a pane
-    // that disagrees with the operator's laptop and explains nothing, and a
-    // control that fails only after the field is filled in is worse.
     useStore.setState({
       capabilities: {
         loopbackEndpoints: false,
@@ -1060,7 +937,6 @@ describe("the provider presets", () => {
       expect(preset("LM Studio").textContent).toContain("Not from a server");
       expect((preset("LM Studio") as HTMLButtonElement).disabled).toBe(true);
       expect(preset("Ollama").textContent).toContain("Not from a server");
-      // The ones a server can reach are untouched.
       expect((preset("OpenRouter") as HTMLButtonElement).disabled).toBe(false);
 
       expect(screen.getByText("Not on a server")).toBeTruthy();
@@ -1087,10 +963,6 @@ describe("the provider presets", () => {
   });
 
   it("says nothing about a key on a row that is not the one chosen", () => {
-    // There is one key and it belongs to the endpoint in the field below, so a
-    // hosted row that is not the chosen one has nothing true to say about it.
-    // Reporting on the strength of another provider's key put "Key stored"
-    // against five providers the operator had never used.
     open(stored({ apiKeySet: true, apiKeyHint: "…9f2c" }));
     pane("Provider");
 
@@ -1098,18 +970,10 @@ describe("the provider presets", () => {
       expect(preset(name).textContent, name).not.toContain("Key stored");
       expect(preset(name).textContent, name).not.toContain("Needs a key");
     }
-    // And a local one still says what is true of the server itself.
     expect(preset("Ollama").textContent).toContain("On the backend");
   });
 });
 
-/**
- * The Host pane: pointing this window at a box.
- *
- * Runs as the desktop showing its own workspace, which is the only state the
- * pane offers a choice in. What matters is the order: nothing is stored until
- * the box has answered to the token, and the page reloads only after it is.
- */
 describe("the Host pane", () => {
   beforeEach(() => {
     window.localStorage.removeItem("guaca.workspace.remote");
@@ -1208,17 +1072,7 @@ describe("provider-specific configuration", () => {
   );
 });
 
-/**
- * The ChatGPT subscription.
- *
- * Three states rather than two, and the middle one is the whole reason this is
- * worth testing: the sign-in is one awaited call that parks for as long as the
- * operator takes, so a code drawn on screen and a code that has been redeemed
- * are different renders of the same in-flight promise. All of it lives in the
- * shell, so a glance at Limits mid-sign-in must not discard it.
- */
 describe("the ChatGPT subscription", () => {
-  /** The subscription row, which is not one of the endpoint presets. */
   function row(): HTMLElement {
     const label = screen.getByText("ChatGPT subscription", { selector: ".preset__name" });
     const found = label.closest(".preset");
@@ -1230,7 +1084,6 @@ describe("the ChatGPT subscription", () => {
     return screen.getByRole("button", { name }) as HTMLButtonElement;
   }
 
-  /** A sign-in that has been started and not yet finished. */
   function parked(): { finish: (status: SubscriptionStatus) => void } {
     let release: (status: SubscriptionStatus) => void = () => {};
     completeSubscriptionSignin.mockReturnValue(
@@ -1246,18 +1099,12 @@ describe("the ChatGPT subscription", () => {
     pane("Provider");
     await waitFor(() => expect(subscriptionStatus).toHaveBeenCalled());
     expect(button("Sign in")).toBeTruthy();
-    // No key field, no URL: there is nothing here to type wrong.
-    // One line under the name, and the whole sentence is the row's own title.
-    // The slot beside the name gives up its room first, and the half it gave up
-    // was the second one: the reason to choose the card.
     expect(row().querySelector(".preset__url")?.textContent).toBe("Your plan pays for turns");
     expect(row().title).toBe("Sign in and your plan pays for turns, with no per-token bill.");
   });
 
   it("does not ask the runtime about a sign-in until the pane is opened", async () => {
     open();
-    // Seven other panes have no use for it, and a status nobody is looking at
-    // is a round trip spent for nothing.
     expect(subscriptionStatus).not.toHaveBeenCalled();
     pane("Provider");
     await waitFor(() => expect(subscriptionStatus).toHaveBeenCalledTimes(1));
@@ -1270,8 +1117,6 @@ describe("the ChatGPT subscription", () => {
     fireEvent.click(button("Sign in"));
 
     await waitFor(() => expect(screen.getByText("ABCD-EFGH")).toBeTruthy());
-    // Both, because a browser that refuses to open leaves the operator with
-    // nothing else to go on.
     expect(screen.getByText("https://auth.openai.com/codex/device")).toBeTruthy();
     expect(openExternal).toHaveBeenCalledWith("https://auth.openai.com/codex/device");
 
@@ -1286,9 +1131,6 @@ describe("the ChatGPT subscription", () => {
     fireEvent.click(button("Sign in"));
     await waitFor(() => expect(screen.getByText("ABCD-EFGH")).toBeTruthy());
 
-    // The pane is unmounted and remounted. A code held by it rather than by the
-    // shell would be gone, and the operator would be holding a code the app had
-    // forgotten while the call for it was still parked.
     pane("Limits");
     pane("Provider");
     expect(screen.getByText("ABCD-EFGH")).toBeTruthy();
@@ -1300,13 +1142,10 @@ describe("the ChatGPT subscription", () => {
     fireEvent.click(button("Sign in"));
 
     await waitFor(() => expect(screen.getByText(/Signed in as robert@example\.com/)).toBeTruthy());
-    // Nobody signs in to a subscription in order to keep paying with a key, so
-    // this is done rather than offered as a further step.
     expect(row().textContent).toContain("In use");
     expect(row().textContent).toContain("robert@example.com");
     expect(row().textContent).toContain("Pro");
 
-    // And the save that follows carries it, which is what the message says.
     expect(banner().textContent).toContain("Save to start using it");
     fireEvent.click(save());
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
@@ -1314,9 +1153,6 @@ describe("the ChatGPT subscription", () => {
   });
 
   it("does not send an operator to a Save that is not there", async () => {
-    // A sign-in that stopped working leaves the provider where it was, so
-    // signing back in changes nothing: there is no Save, and a message naming
-    // one sends the operator looking for a button that is not on screen.
     open(stored({ provider: "chatgpt" }));
     pane("Provider");
     fireEvent.click(button("Sign in"));
@@ -1332,12 +1168,7 @@ describe("the ChatGPT subscription", () => {
     pane("Provider");
     fireEvent.click(button("Sign in"));
 
-    // A free plan signs in perfectly well and then cannot make one call, so the
-    // sign-in that looked like a success has to say what will happen next.
     await waitFor(() => expect(screen.getByText(/does not include Codex/)).toBeTruthy());
-    // Drawn as a failure, not as a success. A green "signed in" over a plan that
-    // cannot make one call is the message an operator acts on and then wonders
-    // why every agent is refused.
     expect(banner().className).toContain("banner--error");
   });
 
@@ -1357,7 +1188,6 @@ describe("the ChatGPT subscription", () => {
     fireEvent.click(button("Sign in"));
 
     await waitFor(() => expect(screen.getByText(/fifteen minutes/)).toBeTruthy());
-    // A dead code left on screen is a code somebody will keep typing.
     expect(screen.queryByText("WXYZ-1234")).toBeNull();
     expect(button("Sign in")).toBeTruthy();
   });
@@ -1374,8 +1204,6 @@ describe("the ChatGPT subscription", () => {
   });
 
   it("lists a stored model the known list has never heard of", async () => {
-    // A model chosen before the list changed must not be silently swapped for
-    // another one: that is a turn running on something nobody picked.
     subscriptionStatus.mockResolvedValue(signedIn());
     open(stored({ provider: "chatgpt", subscriptionModel: "gpt-6-unreleased" }));
     pane("Provider");
@@ -1390,16 +1218,11 @@ describe("the ChatGPT subscription", () => {
     open(stored({ provider: "chatgpt" }));
     pane("Provider");
     await waitFor(() => expect(field(/^Model/)).toBeTruthy());
-    // Saved for a reason that has nothing to do with either model, which is the
-    // case where one of them going missing would not be noticed.
     pane("General");
     type(/^Your name/, "Robert W");
 
     fireEvent.click(save());
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
-    // Neither model is sent, and an omitted field is one the runtime keeps. An
-    // operator who runs out of quota and switches back finds the endpoint's
-    // model where they left it, not whatever this window read when it opened.
     expect(sentPatch()).toEqual({ operatorName: "Robert W" });
   });
 
@@ -1415,8 +1238,6 @@ describe("the ChatGPT subscription", () => {
 
     fireEvent.click(save());
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
-    // Otherwise the operator fills in a URL and a key that nothing uses, with
-    // no error anywhere to explain why.
     expect(sentPatch().provider).toBe("compatible");
     expect(sentPatch().baseUrl).toBe("https://api.groq.com/openai/v1");
   });
@@ -1433,8 +1254,6 @@ describe("the ChatGPT subscription", () => {
     fireEvent.click(save());
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
     expect(sentPatch().provider).toBe("chatgpt");
-    // Signing in again would send the operator back to a browser for a
-    // credential this machine is already holding.
     expect(beginSubscriptionSignin).not.toHaveBeenCalled();
   });
 
@@ -1447,23 +1266,12 @@ describe("the ChatGPT subscription", () => {
     fireEvent.click(button("Sign out"));
     await waitFor(() => expect(screen.getByText("Signed out.")).toBeTruthy());
 
-    // Left on the subscription, every agent's next turn is the same refusal.
     expect(button("Sign in")).toBeTruthy();
     expect(row().textContent).not.toContain("In use");
   });
 });
 
-/**
- * The other subscription row, and the three states it has.
- *
- * It wrote one line per state, each long enough for the slot beside the name to
- * cut, and the half that was cut was the reason to choose the card. Now the row
- * says what it is for in the same short line whatever state it is in, the state
- * beside it says whether it can be used, and the sentence that used to be cut
- * is the row's title, where all of it fits.
- */
 describe("the Claude subscription", () => {
-  /** The subscription row, which is not one of the endpoint presets. */
   function row(): HTMLElement {
     const label = screen.getByText("Claude subscription", { selector: ".preset__name" });
     const found = label.closest(".preset");
@@ -1491,14 +1299,10 @@ describe("the Claude subscription", () => {
     pane("Provider");
     await waitFor(() => expect(row().textContent).toContain("Not installed"));
     expect(row().querySelector(".preset__url")?.textContent).toBe("Install the claude program");
-    // The host, not "this machine": the program is read off the host, and from
-    // a browser the machine reading the pane is not where it has to be.
     expect(row().title).toBe("Runs the claude program, which is not installed on this host.");
   });
 
   it("says a group reaches a plan's quota, which is the word everywhere else", async () => {
-    // The last "crew" in the app's own strings. A rolling quota is reached
-    // faster by many agents than by one person, and a set of agents is a group.
     open(stored({ provider: "claude" }));
     pane("Provider");
     await waitFor(() => expect(claudeProgram).toHaveBeenCalled());
@@ -1568,15 +1372,6 @@ describe("the Claude subscription", () => {
   });
 });
 
-/**
- * Where the runtime is, and what this client holds of it.
- *
- * Both sentences were written for the one arrangement this app had first: the
- * keys are on "this machine", and "this app keeps the host's token". A browser
- * is on one machine with its host on another, and since #258 it holds no token
- * at all. Settings is where somebody goes to learn which is which, so the two
- * panes that answer that question have to agree with the bar.
- */
 describe("the panes that name a machine", () => {
   const lede = () => document.querySelector(".settings__pane .settings__lede")?.textContent ?? "";
   const about = () => document.querySelector(".about__facts")?.textContent ?? "";
@@ -1600,8 +1395,6 @@ describe("the panes that name a machine", () => {
     expect(document.body.textContent).not.toContain("runs on this machine");
 
     pane("About");
-    // A browser keeps no token: the session is an HttpOnly cookie the daemon
-    // sets, and the token itself is not stored on this side.
     expect(about()).toContain("a cookie the host sets");
     expect(about()).toContain("the host's token is not stored here");
     expect(about()).not.toContain("keeps the host's address, its token");
@@ -1617,22 +1410,10 @@ describe("the panes that name a machine", () => {
     );
     const browser = legends.find((el) => el.title.startsWith("Lets this host rent a browser"));
     expect(browser?.title).toContain("Which agents have one is set on each agent's Browser panel.");
-    // The key gives nobody a machine: it is what lets the workspace hand one
-    // out, and a legend promising every agent one is a purchase made for
-    // nothing.
     expect(legends.some((el) => el.title.startsWith("Gives every agent"))).toBe(false);
   });
 });
 
-/**
- * The Guaca account.
- *
- * The thing worth testing here is that it is optional and behaves like it. An
- * install that never opens this pane must never reach the service, a sign-in
- * that fails must leave the pane signed out rather than half linked, and a
- * service that no longer recognizes a stored sign-in has to redraw as signed
- * out rather than as an account with an empty list under it.
- */
 describe("the Guaca account", () => {
   function row(): HTMLElement {
     const label = screen.getByText("Guaca account", { selector: ".preset__name" });
@@ -1657,7 +1438,6 @@ describe("the Guaca account", () => {
   it("says it is optional, and what an account is for", async () => {
     open(stored(), DEFAULT_PREFS, "account");
     await waitFor(() => expect(accountStatus).toHaveBeenCalled());
-    // The one claim that has to survive an edit: nothing here is required.
     expect(screen.getByText(/Optional, and it stays that way/)).toBeTruthy();
     expect(screen.getByText(/client secret would be inside a download/)).toBeTruthy();
   });
@@ -1691,8 +1471,6 @@ describe("the Guaca account", () => {
   });
 
   it("says what is happening while the browser has it, and offers nothing to carry", async () => {
-    // Unlike the subscription there is no code: the answer comes back to a port
-    // this process already holds, so this state is a sentence, not a task.
     let release: (status: AccountStatus) => void = () => {};
     signInAccount.mockReturnValue(
       new Promise<AccountStatus>((resolve) => {
@@ -1712,8 +1490,6 @@ describe("the Guaca account", () => {
   });
 
   it("keeps a sign-in in flight across a glance at another section", async () => {
-    // The shell holds it. A pane that held its own would discard a sign-in the
-    // operator is in the middle of.
     signInAccount.mockReturnValue(new Promise<AccountStatus>(() => {}));
     open(stored(), DEFAULT_PREFS, "account");
     await waitFor(() => expect(accountStatus).toHaveBeenCalled());
@@ -1742,8 +1518,6 @@ describe("the Guaca account", () => {
 
     await waitFor(() => expect(accountConnectors).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByText("Gmail")).toBeTruthy());
-    // Drive is in the list and not granted, so it must not be named as one the
-    // agents can reach.
     expect(screen.queryByText(/Drive/)).toBeNull();
   });
 
@@ -1756,8 +1530,6 @@ describe("the Guaca account", () => {
   });
 
   it("redraws as signed out when the service no longer knows the sign-in", async () => {
-    // A stored token the service has revoked. Drawing an account with an empty
-    // list under it would tell the operator they are linked when they are not.
     accountStatus.mockResolvedValue(linked());
     accountConnectors.mockRejectedValue({ kind: "signedOut", message: "sign in again" });
     open(stored(), DEFAULT_PREFS, "account");
@@ -1772,15 +1544,10 @@ describe("the Guaca account", () => {
 
     fireEvent.click(button("Sign out"));
     await waitFor(() => expect(row().textContent).toContain("Sign in to connect Gmail"));
-    // The list went with it. Leaving it on screen would be a list of what an
-    // account this machine no longer holds can reach.
     expect(screen.queryByText("Gmail")).toBeNull();
   });
 
   it("opens the service's own page to change what is authorized", async () => {
-    // The consent screens are Google's and GitHub's, reached through guaca.bot.
-    // There is nothing to tick here and pretending otherwise would be a control
-    // that cannot work.
     accountStatus.mockResolvedValue(linked());
     open(stored(), DEFAULT_PREFS, "account");
     await waitFor(() => expect(row().textContent).toContain("robert@example.com"));
@@ -1790,8 +1557,6 @@ describe("the Guaca account", () => {
   });
 
   it("says out loud when this build signs in somewhere other than guaca.bot", async () => {
-    // Development, or a self-hosted service. The two hold different accounts
-    // and only one of them is the real one.
     accountStatus.mockResolvedValue(linked({ origin: "http://localhost:8787" }));
     open(stored(), DEFAULT_PREFS, "account");
 
@@ -1821,13 +1586,6 @@ describe("appearance", () => {
     expect(useStore.getState().prefs.showReasoning).toBe(false);
   });
 
-  /**
-   * One of the choice buttons.
-   *
-   * Matched on its accessible name rather than the word printed on it: a button
-   * reading "Ink" or "110%" says nothing about what it is choosing, so each
-   * carries an `aria-label` that does.
-   */
   function choice(label: string): HTMLButtonElement {
     return screen.getByRole("button", { name: label }) as HTMLButtonElement;
   }
@@ -1837,8 +1595,6 @@ describe("appearance", () => {
     pane("Appearance");
     fireEvent.click(choice("Reading surface: Dark"));
 
-    // Both halves matter: the preference is what survives the window closing,
-    // and the attribute is what the stylesheet reads.
     expect(useStore.getState().prefs.surface).toBe("dark");
     expect(document.documentElement.dataset.surface).toBe("dark");
     expect(choice("Reading surface: Dark").getAttribute("aria-pressed")).toBe("true");
@@ -1851,8 +1607,6 @@ describe("appearance", () => {
     pane("Appearance");
     fireEvent.click(choice("Reading surface: Match system"));
 
-    // `system` is a choice the operator makes; it is never what the stylesheet
-    // is given. The stub here reports no preference, which is paper.
     expect(useStore.getState().prefs.surface).toBe("system");
     expect(document.documentElement.dataset.surface).toBe("light");
     expect(screen.getByText("Light mode, matching your system.")).toBeTruthy();
@@ -1883,8 +1637,6 @@ describe("appearance", () => {
   it("keeps a chosen cast and shows each one before it is chosen", () => {
     open();
     pane("Appearance");
-    // Each choice draws its own cast whatever the preference says, so the one
-    // not chosen is still there to be looked at.
     expect(choice("Characters: Cut").querySelectorAll('[data-cast="cut"]')).toHaveLength(3);
     expect(choice("Characters: Drawn").querySelectorAll('[data-cast="drawn"]')).toHaveLength(3);
     expect(choice("Characters: Drawn").getAttribute("aria-pressed")).toBe("true");
@@ -1895,7 +1647,6 @@ describe("appearance", () => {
     expect(choice("Characters: Cut").getAttribute("aria-pressed")).toBe("true");
     expect(choice("Characters: Drawn").getAttribute("aria-pressed")).toBe("false");
     expect(choice("Characters: Drawn").querySelectorAll('[data-cast="drawn"]')).toHaveLength(3);
-    // And the surface is left alone: this is not a third way to write it.
     expect(useStore.getState().prefs.surface).toBe(DEFAULT_PREFS.surface);
   });
 
@@ -1912,7 +1663,6 @@ describe("appearance", () => {
       attention: "violet",
       contrast: "more",
     });
-    // The pane draws in the theme it just chose rather than waiting on `App`.
     expect(document.getElementById("guac-theme")?.textContent).toBe(
       themeCss({
         grays: "avocado",
@@ -1923,7 +1673,6 @@ describe("appearance", () => {
     );
     expect(choice("Grays: Avocado").getAttribute("aria-pressed")).toBe("true");
     expect(choice("Grays: Neutral").getAttribute("aria-pressed")).toBe("false");
-    // A theme is colors. It is not a third way to write the surface.
     expect(useStore.getState().prefs.surface).toBe(DEFAULT_PREFS.surface);
   });
 
@@ -1953,9 +1702,6 @@ describe("appearance", () => {
   it("shows each gray and each attention hue before it is chosen", () => {
     open();
     pane("Appearance");
-    // A swatch per choice, in that choice's own color, so the one not chosen
-    // can still be looked at. Drawn from the solver rather than a table of
-    // hexes, which would be a second list of colors to keep equal to the first.
     const warm = choice("Grays: Warm").querySelector<HTMLElement>(".choice__swatch");
     expect(warm?.style.getPropertyValue("--swatch")).toBe(
       themeTokens({ ...DEFAULT_PREFS, grays: "warm" }, "light")["--rail-ground"],
@@ -1982,7 +1728,6 @@ describe("appearance", () => {
     expect(document.documentElement.dataset.typeface).toBe("legible");
     expect(document.documentElement.dataset.reading).toBe("serif");
     expect(document.documentElement.style.getPropertyValue("--type-read")).toBe("1.125rem");
-    // Reading size is not the interface scale under a second name.
     expect(useStore.getState().prefs.uiScale).toBe(DEFAULT_PREFS.uiScale);
   });
 
@@ -1992,8 +1737,6 @@ describe("appearance", () => {
     fireEvent.click(choice("Interface scale: 110%"));
 
     expect(useStore.getState().prefs.uiScale).toBe(110);
-    // Each choice writes both, so a scale that read the wrong surface would
-    // flip the column to paper on the way past.
     expect(useStore.getState().prefs.surface).toBe("dark");
     expect(document.documentElement.dataset.surface).toBe("dark");
     expect(document.documentElement.style.getPropertyValue("--ui-scale")).toBe("1.1");
@@ -2027,13 +1770,10 @@ describe("notifications", () => {
     pane("Notifications");
     await act(async () => fireEvent.click(switchOn(FAILURES)));
 
-    // The one key, as a patch, so a switch another window flipped a moment ago
-    // is not written back over by this one.
     expect(switchOn(FAILURES).textContent).toBe("Off");
     expect(updateSettings.mock.calls).toEqual([[{ attention: { failures: false } }]]);
     expect(useStore.getState().settings?.attention).toEqual({ ...everything, failures: false });
     expect(switchOn("Things that need you").textContent).toBe("On");
-    // The Host's, not this window's: nothing about it is kept in local prefs.
     expect(useStore.getState().prefs).toEqual(DEFAULT_PREFS);
   });
 
@@ -2064,8 +1804,6 @@ describe("notifications", () => {
     pane("Notifications");
     fireEvent.click(screen.getByRole("button", { name: "Send a test notification" }));
 
-    // A refused permission and a working one look identical from in here, which
-    // is the only reason this button exists.
     await waitFor(() => expect(screen.getByText(/System Settings, then try again/)).toBeTruthy());
     expect(banner().className).toContain("banner--error");
   });
@@ -2080,10 +1818,6 @@ describe("notifications", () => {
       "Guaca",
       "This is what a notification looks like.",
     ]);
-    // Neutral, not the success tone, and that is the point. On desktop there is
-    // no per-app grant for the plugin to read, so a machine with notifications
-    // switched off accepts every one of these and shows none: a green "it
-    // worked" would be the one message in the pane that cannot be checked.
     expect(banner().className).not.toContain("banner--ok");
     expect(banner().className).not.toContain("banner--error");
     expect(screen.getByText(/Handed to the operating system/)).toBeTruthy();
@@ -2240,7 +1974,6 @@ describe("sending to a phone", () => {
     expect(field(/^Token/).value).toBe("");
     expect(screen.getByText("https://ntfy.sh/...7f3a")).toBeTruthy();
     expect(document.body.textContent).not.toContain("secret");
-    // Kept by its own button, so the Save in the foot says nothing about it.
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
   });
 
@@ -2376,8 +2109,6 @@ describe("shortcuts", () => {
     open();
     pane("Shortcuts");
 
-    // Discoverability is the whole feature: a binding this panel omits is a
-    // shortcut the operator does not have.
     const rows = [...document.querySelectorAll(".keys__row")];
     expect(rows).toHaveLength(BINDINGS.length);
     for (const binding of BINDINGS) {
@@ -2401,9 +2132,6 @@ describe("about", () => {
     open();
     pane("About");
 
-    // Both values are baked in at build time, so the assertion is on the shape:
-    // the release version, then the short hash, dirty or not. The bare hash
-    // that used to stand here was the one number an operator could not quote.
     expect(document.querySelector(".about__version")?.textContent).toMatch(
       /^Version \d+\.\d+\.\d+ \([0-9a-f]{7,}(-dirty)?\)$/,
     );
@@ -2542,8 +2270,6 @@ describe("the provider key when an endpoint changes", () => {
   it.each(["preset", "typed"])("opens the key editor for a %s endpoint change", async (kind) => {
     open(stored(), DEFAULT_PREFS, "provider");
     expect(screen.queryByLabelText(/^API key/)).toBeNull();
-    // The line about a blank editor is about the editor, so it is not drawn
-    // under a stored key that nobody is replacing.
     expect(screen.queryByText(/Blank keeps the saved key/)).toBeNull();
     if (kind === "preset") {
       fireEvent.click(screen.getByRole("button", { name: /Groq/ }));

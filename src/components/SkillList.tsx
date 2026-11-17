@@ -18,13 +18,6 @@ interface Props {
 
 const BLANK: SkillDraft = { name: "", description: "", body: "" };
 
-/**
- * One scope's skills, and the editor for them.
- *
- * The operator's pane also lists Guaca's own, read-only, because the question
- * an operator arrives with is often "what does an agent know about this app",
- * and the answer is a document they should be able to read.
- */
 export function SkillList({ scope }: Props) {
   const key = skillScopeKey(scope);
   const version = useStore((state) => state.skillsVersion[key] ?? 0);
@@ -38,8 +31,6 @@ export function SkillList({ scope }: Props) {
   const nameRef = useRef<HTMLInputElement>(null);
   const crew = scope.kind === "crew";
 
-  // A scope is a new object on every render and the same scope by its key, so
-  // the list is read through a ref and reloaded when the key or its counter moves.
   const scopeRef = useRef(scope);
   scopeRef.current = scope;
   const load = useCallback(async () => {
@@ -48,7 +39,6 @@ export function SkillList({ scope }: Props) {
     if (at.kind !== "crew") setBundled(await api.listSkills({ kind: "bundled" }));
   }, []);
 
-  // Again whenever this scope changes, which an agent can do mid-turn.
   useEffect(() => {
     void load().catch((caught) => setError(errorMessage(caught)));
   }, [load, key, version]);

@@ -1,26 +1,7 @@
-/**
- * The page's end of the probe: what a test build's window does when a script
- * asks it something through the control channel (src-tauri/src/probe.rs).
- *
- * Only a test build has it. The entries import this file only when the bundle
- * was built with `vite build --mode probe`, a constant the bundler folds away
- * in every other build, and the gate checks that the shipped bundle does not
- * contain it. Even present, it is reachable only by the app evaluating a
- * script in its own webview, which only the probe channel does.
- *
- * Elements are found the way assistive technology finds them, by role and
- * accessible name, so a scenario reads like a person's description of what
- * they pressed ("the button named Send a test notification") and breaks only
- * when what a person would see changes. Every call is synchronous: the
- * channel reads the value the script evaluates to and nothing later, so a
- * script waits by asking again.
- */
-
 import { diagnosticRows } from "./diagnostic";
 import { useStore } from "./store";
 import { attached, saveConnection } from "./transport";
 
-/** What a script can ask a page. */
 export type Call =
   | { do: "ready" }
   | { do: "view" }
@@ -34,7 +15,6 @@ export type Call =
 
 export type Answer = { ok: true; value: unknown } | { ok: false; error: string };
 
-/** The role an element has without saying, after the ARIA in HTML table. */
 function implicitRole(element: Element): string | null {
   const tag = element.tagName.toLowerCase();
   switch (tag) {
@@ -91,7 +71,6 @@ export function roleOf(element: Element): string | null {
 
 const squash = (text: string | null | undefined) => (text ?? "").replace(/\s+/g, " ").trim();
 
-/** Inputs take their name from a label; everything else may take it from its text. */
 function labelled(element: Element): string {
   const own = element.ownerDocument;
   const id = element.getAttribute("id");
@@ -100,11 +79,6 @@ function labelled(element: Element): string {
   return squash((byFor ?? wrapping)?.textContent);
 }
 
-/**
- * The accessible name, by the parts of the algorithm this app's markup uses:
- * aria-labelledby, aria-label, a label for a field, alt text, the text inside,
- * and the title last.
- */
 export function nameOf(element: Element): string {
   const ids = element.getAttribute("aria-labelledby");
   if (ids) {
@@ -129,7 +103,6 @@ export function nameOf(element: Element): string {
   return squash(element.textContent) || squash(element.getAttribute("title"));
 }
 
-/** Whether a person could see it: not hidden by attribute, style, or ancestor. */
 export function shown(element: Element): boolean {
   if (element.closest("[hidden], [aria-hidden='true'], [inert]")) return false;
   const check = (element as Element & { checkVisibility?: (o?: object) => boolean })
@@ -142,7 +115,6 @@ export function shown(element: Element): boolean {
   return true;
 }
 
-/** Every element a person could see with this role, and this name if given. */
 export function findAll(root: ParentNode, role: string, name?: string): Element[] {
   return Array.from(root.querySelectorAll("*")).filter(
     (element) =>
@@ -152,7 +124,6 @@ export function findAll(root: ParentNode, role: string, name?: string): Element[
   );
 }
 
-/** The one element meant, or why there is not exactly one. */
 function only(root: ParentNode, role: string, name: string): Element {
   const found = findAll(root, role, name);
   if (found.length === 1) return found[0] as Element;
@@ -169,7 +140,6 @@ function disabled(element: Element): boolean {
   return element.matches(":disabled") || element.closest("[aria-disabled='true']") !== null;
 }
 
-/** A press as the pointer makes one: down, up, click, with the focus moved between. */
 function press(element: Element): void {
   if (disabled(element)) throw new Error(`"${nameOf(element)}" is disabled`);
   const view = element.ownerDocument.defaultView ?? window;
@@ -183,7 +153,6 @@ function press(element: Element): void {
   element.dispatchEvent(new view.MouseEvent("click", init));
 }
 
-/** Typing replaces what a field holds, through the setter React listens behind. */
 function typeInto(element: Element, text: string): void {
   if (disabled(element)) throw new Error(`"${nameOf(element)}" is disabled`);
   const view = element.ownerDocument.defaultView ?? window;
@@ -209,7 +178,6 @@ function key(document: Document, name: string): void {
   }
 }
 
-/** What the page is showing of the workspace, read from the store it draws. */
 function view() {
   const state = useStore.getState();
   return {
@@ -218,7 +186,6 @@ function view() {
   };
 }
 
-/** Answers one call. Never throws: a failure is an answer that says why. */
 export function run(call: Call, document: Document = window.document): Answer {
   try {
     switch (call.do) {
@@ -237,7 +204,6 @@ export function run(call: Call, document: Document = window.document): Answer {
         return { ok: true, value: diagnosticRows() };
       case "attach":
         saveConnection({ origin: call.origin, token: call.token }, "remote");
-        // After the answer has left: a reload now would take it with it.
         setTimeout(() => document.location.reload(), 0);
         return { ok: true, value: null };
       case "find": {
@@ -270,7 +236,6 @@ export function run(call: Call, document: Document = window.document): Answer {
   }
 }
 
-/** Where the channel finds the bridge. */
 export function install(): void {
   (window as Window & { __guacaProbe?: { run: typeof run } }).__guacaProbe = { run };
 }

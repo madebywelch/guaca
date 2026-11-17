@@ -1,15 +1,3 @@
-/**
- * One ordered list out of two halves.
- *
- * The workspace is searched in two places, because it is held in two places.
- * Messages, files, links and routines live in SQLite and are matched there;
- * agents and groups are already in this store to draw the rail, and actions are
- * not stored anywhere at all. What must not be split is the ranking: a list
- * where an agent and a message are ordered by different rules is a list the
- * operator has to read twice. So both halves arrive here as raw matches and
- * everything is scored by the same function.
- */
-
 import { readableSize } from "./files";
 import { describeTrigger, routineTitle } from "./routine";
 import { relativeTime } from "./time";
@@ -25,7 +13,6 @@ import type {
   SearchHits,
 } from "./types";
 
-/** The tabs, in the order they are drawn. */
 export const SCOPES = [
   "all",
   "messages",
@@ -41,7 +28,6 @@ export const SCOPES = [
 export type Scope = (typeof SCOPES)[number];
 export type ResultKind = Exclude<Scope, "all">;
 
-/** What choosing a result does. Carried out by the palette, not here. */
 export type SearchAction =
   | { do: "openChannel"; agentId: AgentId }
   | { do: "openMessage"; channelId: AgentId; messageId: MessageId }
@@ -55,53 +41,30 @@ export type SearchAction =
   | { do: "openCafeteria" };
 
 export interface SearchResult {
-  /** Unique within a result set: the React key, and what selection tracks. */
   key: string;
   kind: ResultKind;
   title: string;
-  /** The line under the title. Empty when there is nothing worth saying. */
   detail: string;
-  /** The right-hand label: a time, a size, a cadence. */
   meta: string;
   score: number;
   action: SearchAction;
-  /** Color and avatar, for the rows that have a face. */
   face?: { avatar: string; color: string; seed: string };
 }
 
 export interface SearchInput {
   query: string;
-  /** Every agent, including terminated ones: they still name old messages. */
   agents: AgentCard[];
   groups: Group[];
-  /** Null until the first answer comes back. */
   hits: SearchHits | null;
   lastActive: Record<AgentId, number>;
   now: number;
 }
 
-/**
- * What an empty query scores.
- *
- * Not zero: the palette opens before anybody types, and a list that is empty
- * until the first keystroke reads as a workspace with nothing in it. Everything
- * matches equally, so the order falls through to the category and then to
- * recency, which is the order the rail is already in.
- */
 const NEUTRAL = 10;
 
-/**
- * Which kind wins when two results are equally good matches.
- *
- * An agent is what an operator is most often looking for and the cheapest thing
- * to be wrong about: opening the wrong channel costs a click. A link is last
- * because it is the one result that leaves the app.
- */
 const PRIORITY: Record<ResultKind, number> = {
   agents: 8,
   groups: 7,
-  // A kept page is a place, like a crew: somewhere the operator goes, and
-  // named by somebody on purpose, which a line inside a message is not.
   artifacts: 6,
   actions: 5,
   messages: 4,
@@ -110,14 +73,6 @@ const PRIORITY: Record<ResultKind, number> = {
   links: 1,
 };
 
-/**
- * How well a piece of text answers a query, from 0 (not at all) to 100.
- *
- * Ranked by where the match falls rather than by edit distance: somebody typing
- * "man" wants Manager, not the message that happens to contain "command". The
- * whole-word rule is what separates those two, and a shorter haystack breaks
- * the remaining ties, so a name beats a paragraph that contains the same word.
- */
 export function score(text: string, query: string): number {
   const needle = query.trim().toLowerCase();
   if (!needle) return NEUTRAL;
@@ -127,47 +82,24 @@ export function score(text: string, query: string): number {
   if (at < 0) return 0;
 
   const base =
-    hay === needle
-      ? 100
-      : at === 0
-        ? 80
-        : // A match that starts a word, which is what an abbreviation is.
-          /[\s\-_/.,:]/.test(hay[at - 1] ?? "")
-          ? 60
-          : 40;
+    hay === needle ? 100 : at === 0 ? 80 : /[\s\-_/.,:]/.test(hay[at - 1] ?? "") ? 60 : 40;
 
-  // Up to 9 points for concision, which never lifts a result into the band
-  // above it: the bands are what decides the order, this only settles ties.
   return base + Math.round(9 * (needle.length / Math.max(needle.length, hay.length)));
 }
 
-/** The best of several fields, each worth a little less than the last. */
 function bestOf(query: string, fields: [text: string, weight: number][]): number {
   return fields.reduce((best, [text, weight]) => Math.max(best, score(text, query) * weight), 0);
 }
 
-/** The first line of a longer body, for a one-line row. */
 function firstLine(text: string, cap = 120): string {
   const line = text.replace(/\s+/g, " ").trim();
   return line.length > cap ? `${line.slice(0, cap - 1)}…` : line;
 }
 
-/**
- * A URL with the noise taken out, so a list of links is scannable.
- *
- * The scheme and a leading `www.` say nothing an operator is choosing between.
- */
 export function shortUrl(url: string): string {
   return url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "");
 }
 
-/**
- * Everything matching, best first.
- *
- * Ordered by score, then by category, then by recency. Scoring dominates so
- * that a name typed in full wins wherever it lives; the category only settles
- * results that are equally good answers to what was typed.
- */
 export function searchResults(input: SearchInput): SearchResult[] {
   const { query, agents, groups, hits, lastActive, now } = input;
 
@@ -181,8 +113,6 @@ export function searchResults(input: SearchInput): SearchResult[] {
   const results: (SearchResult & { at: number })[] = [];
 
   for (const agent of agents) {
-    // Terminated agents still name the messages they sent, which is why they
-    // are in the list above, but they are not somewhere you can go.
     if (agent.lifecycle === "terminated") continue;
     const value = bestOf(query, [
       [agent.name, 1],
@@ -221,14 +151,9 @@ export function searchResults(input: SearchInput): SearchResult[] {
   for (const door of actionsFor(agents, groups)) {
     const value = score(door.title, query);
     if (value <= 0) continue;
-    // Nothing to be recent about, so equally-scored actions fall through the
-    // sort to their own names.
     results.push({ ...door, score: value, at: 0 });
   }
 
-  // The four below are pushed without a score test. The store already decided
-  // they matched, and dropping one here because this side scores it zero would
-  // be the search disagreeing with itself in front of the operator.
   for (const hit of hits?.messages ?? []) {
     results.push({
       key: `message:${hit.id}`,
@@ -236,8 +161,6 @@ export function searchResults(input: SearchInput): SearchResult[] {
       title: `${nameOf(hit.from)} → ${nameOf(hit.to)}`,
       detail: hit.excerpt,
       meta: relativeTime(hit.createdAt, now),
-      // Scored on the excerpt, which is the part that matched and the part
-      // that is on screen. The full body is not on this side to score.
       score: score(hit.excerpt, query),
       at: hit.createdAt,
       action: { do: "openMessage", channelId: hit.channelId, messageId: hit.id },
@@ -275,23 +198,15 @@ export function searchResults(input: SearchInput): SearchResult[] {
     results.push({
       key: `routine:${routine.id}`,
       kind: "routines",
-      // Titled and described by the same functions the schedule panel uses, so
-      // a routine reads the same here as it does where it is edited.
       title: routineTitle(routine),
       detail: cardOf(routine.agentId)?.name ?? "Deleted agent",
       meta: describeTrigger(routine.trigger, routine.nextRunAt),
-      // Either column is what somebody would type, and the store matches both.
       score: Math.max(score(routine.name, query), score(routine.what, query)),
-      // When it fires next, for the recency tiebreak. A routine waiting on an
-      // event has no such moment, and when it was set up is the honest stand-in.
       at: routine.nextRunAt ?? routine.createdAt,
-      // The channel, not the profile: a schedule sits in the panel beside the
-      // conversation, and the profile dialog no longer has it.
       action: { do: "openChannel", agentId: routine.agentId },
     });
   }
 
-  // Pushed without a score test, like the four above, and for their reason.
   for (const artifact of hits?.artifacts ?? []) {
     results.push({
       key: `artifact:${artifact.id}`,
@@ -316,7 +231,6 @@ export function searchResults(input: SearchInput): SearchResult[] {
     .map(({ at: _at, ...result }) => result);
 }
 
-/** The avatar of whichever end of a message is an agent. */
 function faceFor(
   hit: MessageHit,
   cardOf: (id: AgentId) => AgentCard | undefined,
@@ -326,14 +240,6 @@ function faceFor(
   return card ? { avatar: card.avatar, color: card.color, seed: card.id } : undefined;
 }
 
-/**
- * The things a search can do rather than open.
- *
- * Every one of them is a door: settings for an agent, settings for a group,
- * settings for the app, and the two ways to add to the workspace. Nothing here
- * destroys anything, because a list you arrow through and a list you delete
- * from should not be the same list.
- */
 function actionsFor(agents: AgentCard[], groups: Group[]): Omit<SearchResult, "score">[] {
   const out: Omit<SearchResult, "score">[] = [];
 
@@ -399,12 +305,10 @@ function actionsFor(agents: AgentCard[], groups: Group[]): Omit<SearchResult, "s
   return out;
 }
 
-/** What one tab shows. */
 export function inScope(results: SearchResult[], scope: Scope): SearchResult[] {
   return scope === "all" ? results : results.filter((r) => r.kind === scope);
 }
 
-/** The label on a tab. */
 export function scopeLabel(scope: Scope): string {
   return scope === "all" ? "All" : scope[0]!.toUpperCase() + scope.slice(1);
 }

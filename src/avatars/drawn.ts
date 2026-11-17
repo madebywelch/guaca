@@ -1,116 +1,62 @@
-/**
- * The drawn cast: the same creatures, drawn rather than cut.
- *
- * The body is `bodyPoints`, exactly as the cut cast has it, and the gaze and
- * the moods are the ones every creature shares. What is different is all in
- * how it is put on screen. The outline is one brush stroke that presses at the
- * bottom and lifts off where it began, over a pigment printed a unit out of
- * register. It is drawn on twos: twelve drawings a second, held between, so a
- * look is a snap and a hold is dead still. And the line is an emotional channel
- * of its own: calm moods hold it clean, work boils it, frustration scratches
- * it, and a paused creature's line runs dry.
- *
- * The face has two things the cut cast does not, brows and a mouth. The cut
- * cast refused both, a brow because it has to stay in register with the eye
- * under it and a mouth because it is a smudge at 22px. Here both are strokes
- * computed from the eye they belong to, so register is not something anyone
- * can get wrong, and the mouth is not drawn at all under `MOUTH_PX`.
- *
- * Nothing here touches the DOM. It is geometry in, path data out, so the suite
- * beside it can hold every drawing to the same reach the cut cast is held to.
- */
-
 import { blinkAmount, type Gaze, glance } from "./eyes";
 import { FORM, grip, type Lump, type Point } from "./form";
 import type { Mood } from "./moods";
 
 const TAU = Math.PI * 2;
 
-/** Drawings a second. On twos, at the frame rate animation has always used. */
 export const FPS = 12;
 
-/**
- * Pose to pose. A change of mood is five drawings: the old pose, one halfway,
- * one past the new pose, one just short of it, and the new pose.
- */
 export const POSES = [0, 0.5, 1.14, 0.97, 1] as const;
 
-/** How far into a change of mood the drawing is, from the seconds since it began. */
 export function poseAt(since: number): number {
   const k = Math.floor(Math.max(0, since) * FPS);
   return POSES[Math.min(k, POSES.length - 1)] as number;
 }
 
-/** Under this many CSS pixels a creature has no mouth. */
 export const MOUTH_PX = 40;
 
-/** An ink eye is a pupil and not a ball: this much of the eyeball's radius. */
 const DOT = 2 / 3;
 
-/** How far inside the outline a brow or a mouth is kept, in viewBox units. */
 const ROOM = 0.5;
 
-/** An eye, as one stroke. The stroke the cut cast used to draw, before it had lids. */
 export interface Mark {
-  /** Half the length of the stroke, in eye radii. 0 is a dot. */
   w: number;
-  /** Weight, so `h` of 2 with `w` of 0 is a dot of radius 1. */
   h: number;
-  /** Bow. Negative curves up. */
   c: number;
-  /** Degrees, mirrored. Positive drops the inner ends. */
   a: number;
-  /** Widens the pair, and moves it down, in eye radii. */
   sep: number;
   dy: number;
-  /** The eye on the viewer's right higher, and narrower, in eye radii. */
   skew: number;
   lop: number;
 }
 
 export interface Brow {
-  /** 0 is no brow. In eye radii. */
   weight: number;
-  /** Above the eye's middle, in eye radii. */
   lift: number;
-  /** Degrees. Positive drops the inner end. */
   tilt: number;
   len: number;
   bow: number;
-  /** The brow on the viewer's right higher by this, and turned by `turn`. */
   skew: number;
   turn: number;
 }
 
 export interface Mouth {
-  /** 0 is no mouth. In eye radii. */
   weight: number;
   w: number;
-  /** Positive smiles. */
   curve: number;
   wave: number;
-  /** An open "o" past a half. */
   o: number;
-  /** Off to one side, in eye radii. */
   x: number;
 }
 
 export interface Line {
-  /** In viewBox units, before hinting. */
   weight: number;
-  /** How far the line wanders, and how many new drawings of it a second. */
   boil: number;
   rate: number;
   scratch: number;
-  /** Share of the stroke that has run dry. */
   dry: number;
 }
 
-/**
- * What comics draws beside a head, and has a word for: emanata. A scribble is
- * cross, a drop of sweat is worry, lines round a head are a shock, a star is
- * pleased. `bang` is the one that is amber, and it is still only `blocked`.
- */
 export type Emanata = "dots" | "bang" | "z" | "plewd" | "scribble" | "shock" | "sparkle";
 
 export interface Face {
@@ -120,10 +66,8 @@ export interface Face {
   line: Line;
   blink?: boolean | "slow";
   jitter?: number;
-  /** As the look goes up: the brow on the right cocks, the eye narrows. */
   squint?: { at: number; skew: number; turn: number; lop: number };
   mark?: Emanata;
-  /** Where the mark on its head wants to point, in degrees, and how stiff it is. */
   tuft: { rest: number; stiff: number };
 }
 
@@ -158,8 +102,6 @@ export const DRAWN: Record<Mood, Face> = {
     mark: "dots",
     tuft: { rest: -8, stiff: 0.8 },
   },
-  /* Narrowed and reading. No brow: two dashes under two dashes is a face
-     nobody can read at 24px, and the boiling line already says busy. */
   working: {
     eye: { ...DOT_EYE, w: 1, h: 1.05, a: 8, dy: 0.35 },
     brow: NO_BROW,
@@ -227,7 +169,6 @@ export const DRAWN: Record<Mood, Face> = {
   },
 };
 
-/** Every number on one of these lerps. Past 1 is the overshoot drawing. */
 export function mixFace<T extends object>(a: T, b: T, u: number): T {
   const out = { ...a } as Record<string, number>;
   const x = a as Record<string, number>;
@@ -236,15 +177,11 @@ export function mixFace<T extends object>(a: T, b: T, u: number): T {
   return out as T;
 }
 
-/** The size a line is drawn at its own weight, in CSS pixels. Smaller draws it heavier. */
 const HINT_PX = 40;
 
-/** How much heavier a line is drawn on a small creature, from its size in CSS pixels. */
 export function hint(px: number, most: number): number {
   return Math.max(1, Math.min(most, HINT_PX / px));
 }
-
-/* --- strokes --------------------------------------------------------------- */
 
 function pathOf(pts: Point[], closed: boolean): string {
   let d = "";
@@ -255,7 +192,6 @@ function pathOf(pts: Point[], closed: boolean): string {
   return closed && d ? `${d}Z` : d;
 }
 
-/** A filled stroke along a centerline, with its own width at every point and round ends. */
 export function stroke(center: Point[], widths: number[]): string {
   const n = center.length;
   if (n < 2) return "";
@@ -274,8 +210,6 @@ export function stroke(center: Point[], widths: number[]): string {
     left.push([p[0] - ty * w, p[1] + tx * w]);
     right.push([p[0] + ty * w, p[1] - tx * w]);
   }
-  /* Round ends as points rather than arc commands: an arc's sweep flag is a
-     second thing to get right, and this is the same cap either way round. */
   const cap = (i: number, forward: boolean): Point[] => {
     const [tx, ty] = tangent(i);
     const d = forward ? 1 : -1;
@@ -296,7 +230,6 @@ export function stroke(center: Point[], widths: number[]): string {
   return pathOf([...left, ...cap(n - 1, true), ...right.reverse(), ...cap(0, false)], true);
 }
 
-/** A quadratic from a to b bowed by `bow` (positive bows up the screen), sampled. */
 function arc(a: Point, b: Point, bow: number, n = 10): Point[] {
   const lx = b[0] - a[0];
   const ly = b[1] - a[1];
@@ -315,7 +248,6 @@ function arc(a: Point, b: Point, bow: number, n = 10): Point[] {
   return out;
 }
 
-/** Catmull-Rom through a loop (`closed`) or a run of points, `per` samples a segment. */
 function spline(pts: Point[], per: number, closed: boolean): Point[] {
   const n = pts.length;
   const at = (i: number) =>
@@ -341,20 +273,17 @@ function spline(pts: Point[], per: number, closed: boolean): Point[] {
   return out;
 }
 
-/** Deterministic noise. The same creature boils the same way every reload. */
 function rnd(i: number): number {
   const x = Math.sin(i * 127.1 + 197.3) * 43758.5453;
   return x - Math.floor(x);
 }
 
-/** A number from a string, for anything a character keeps for life. */
 export function seedOf(key: string): number {
   let h = 0;
   for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
   return (h % 10007) / 10007;
 }
 
-/** The pigment: the outline, printed a unit down and to the right of its line. */
 export function pigment(pts: Point[]): string {
   return pathOf(
     spline(pts, 3, true).map(([x, y]): Point => [x + 1.3, y + 1.1]),
@@ -362,12 +291,6 @@ export function pigment(pts: Point[]): string {
   );
 }
 
-/**
- * The body's line: one brush stroke round the outline, heavier underneath,
- * starting at the top left and running a little past where it began, which is
- * what a hand drawing a closed shape does. `step` is which drawing of the boil
- * this is; the same step is the same line.
- */
 export function brush(
   pts: Point[],
   line: Line,
@@ -414,15 +337,8 @@ export function brush(
   return stroke(center, widths);
 }
 
-/* --- what is on its head --------------------------------------------------- */
-
 export type Tuft = "curl" | "leaf" | "tick" | "none";
 
-/**
- * Which mark a character wears, for life. A second thing that tells two
- * creatures cut from one silhouette apart at 24px, and the one piece of
- * secondary motion in the set: it lags the body.
- */
 export function tuftOf(key: string): Tuft {
   const kinds: Tuft[] = ["curl", "tick", "none", "leaf", "tick", "curl", "none"];
   return kinds[Math.floor(seedOf(`${key}:tuft`) * kinds.length)] as Tuft;
@@ -462,7 +378,6 @@ const TUFT_LINES: Record<Tuft, Point[][]> = {
   none: [],
 };
 
-/** The mark on its head, standing on the crown of the outline and turned by `deg`. */
 export function tuftPath(kind: Tuft, pts: Point[], deg: number, width: number): string {
   if (kind === "none") return "";
   let crown = 0;
@@ -488,31 +403,23 @@ export function tuftPath(kind: Tuft, pts: Point[], deg: number, width: number): 
     .join("");
 }
 
-/* --- the face ------------------------------------------------------------------ */
-
 export interface FaceAt {
   t: number;
   live: boolean;
-  /** Where it is looking, smoothed, in body radii. */
   gaze: Point;
-  /** The mood's own gaze, for the blink a large look is hidden behind. None while aimed. */
   watch?: Gaze;
   px: number;
 }
 
 export interface DrawnFace {
-  /** Whether the eyes are shut this drawing: a blink, or a large look being hidden. */
   closed: boolean;
   eyes: string[];
   brows: string[];
   mouth: string;
-  /** The "o", when the mouth is one: center and radii. */
   o: { x: number; y: number; rx: number; ry: number; w: number } | null;
-  /** Everything above, as points and a pad, for the suite that holds it inside the body. */
   ink: { pts: Point[]; pad: number }[];
 }
 
-/** How far a point is inside the outline; negative is outside. Ray cast, so a notch counts. */
 function depth(pts: Point[], x: number, y: number): number {
   let near = Number.POSITIVE_INFINITY;
   let within = false;
@@ -529,15 +436,6 @@ function depth(pts: Point[], x: number, y: number): number {
   return within ? near : -near;
 }
 
-/**
- * A stroke kept inside the outline, point by point: any point with less than
- * `pad` of body round it is drawn in toward `anchor` until it has that much.
- * A brow over a cloud's notch bends down into it rather than floating in the
- * air above it, which is what a brow on a brow ridge does anyway, and a mouth
- * on a squat body rides up off the floor. Measured on the outline itself, as
- * the cut cast's stretch is, because a bound on the numbers that made a
- * drawing is not a bound on the drawing.
- */
 function inside(pts: Point[], run: Point[], pad: number, anchor: Point): Point[] {
   return run.map((p): Point => {
     if (depth(pts, p[0], p[1]) >= pad) return p;
@@ -559,7 +457,6 @@ function dot(x: number, y: number, r: number): string {
   return `M${f(x - r)} ${f(y)}a${f(r)} ${f(r)} 0 1 0 ${f(2 * r)} 0a${f(r)} ${f(r)} 0 1 0 ${f(-2 * r)} 0Z`;
 }
 
-/** One frame of one face, on the outline it is drawn inside. */
 export function faceAt(lump: Lump, face: Face, at: FaceAt, pts: Point[]): DrawnFace {
   let eye = face.eye;
   let brow = face.brow;
@@ -573,7 +470,6 @@ export function faceAt(lump: Lump, face: Face, at: FaceAt, pts: Point[]): DrawnF
     };
     eye = { ...eye, lop: eye.lop + face.squint.lop * up };
   }
-  /* A look down narrows the eye toward a line, the one lid a dot has. */
   const down = Math.max(0, Math.min(1, gy / 0.3));
   if (down > 0) {
     eye = {
@@ -585,8 +481,6 @@ export function faceAt(lump: Lump, face: Face, at: FaceAt, pts: Point[]): DrawnF
     };
   }
 
-  /* Shut on a blink, and shut through a large look: the look is a cut hidden
-     by a blink, as an animator hides a head turn. */
   let closed = false;
   if (at.live && face.blink !== false) {
     closed = blinkAmount(at.t * (face.blink === "slow" ? 0.5 : 0.85)) > 0.4;
@@ -646,7 +540,6 @@ export function faceAt(lump: Lump, face: Face, at: FaceAt, pts: Point[]): DrawnF
     if (brow.weight > 0.04) {
       const mine = side > 0 ? brow.skew : 0;
       const deg = brow.tilt + (side > 0 ? brow.turn : 0);
-      /* A single eye has no inner end: its brow bends in the middle instead. */
       const t = side === 0 ? 0 : (deg * Math.PI) / 180;
       const bend = side === 0 ? -Math.sin((deg * Math.PI) / 180) * brow.len * er * 0.8 : 0;
       const by = ey - (brow.lift + mine) * er;
@@ -662,7 +555,6 @@ export function faceAt(lump: Lump, face: Face, at: FaceAt, pts: Point[]): DrawnF
         bw / 2 + ROOM,
         [x, y],
       );
-      /* Inner end first: that is where a brush presses. */
       brows.push(
         stroke(
           center,
@@ -686,7 +578,6 @@ export function faceAt(lump: Lump, face: Face, at: FaceAt, pts: Point[]): DrawnF
     const weight = mo.weight * r * 0.95;
     if (mo.o > 0.5) {
       const ry = mw * 0.72;
-      /* Kept whole: an "o" pulled in point by point would not be an o. */
       const [[, bottom]] = inside(pts, [[mx, my + 0.4 + ry]], weight / 2 + ROOM, [ex, ey]) as [
         Point,
       ];
@@ -722,16 +613,6 @@ export function faceAt(lump: Lump, face: Face, at: FaceAt, pts: Point[]): DrawnF
   return { closed, eyes, brows, mouth, o, ink };
 }
 
-/* --- beside the head ------------------------------------------------------------ */
-
-/**
- * The marks beside a head, drawn on twos like everything else, as markup for
- * the mark group. `frame` is which drawing this is and `since` is how long the
- * mood has been held, because two of these are only there for a moment. Ink
- * is `var(--eye)`, which the mark group maps to the page's text color so a
- * mark stays visible in a dark room. `bang` is not here: it is `markFor`'s,
- * amber, and the same in both casts.
- */
 export function emanata(
   kind: Emanata | undefined,
   at: { frame: number; since: number; live: boolean; px: number },
@@ -764,7 +645,6 @@ export function emanata(
       return `<path d="M${f(x - 3.2 * s)} ${f(y - 3.2 * s)}h${f(6.4 * s)}l${f(-6.4 * s)} ${f(6.4 * s)}h${f(6.4 * s)}" ${ink} opacity="${f(0.75 - k * 0.1)}"/>`;
     }
     case "plewd": {
-      /* Up and to the left of the head, which is where a drop of sweat goes. */
       let left = 0;
       let most = Number.NEGATIVE_INFINITY;
       for (let i = 0; i < pts.length; i++) {

@@ -31,9 +31,6 @@ describe("Markdown", () => {
   });
 
   it("never renders embedded HTML", () => {
-    // Message bodies come from a model, and on the peer path from another
-    // agent's model. Raw HTML would make that the least trustworthy input in
-    // the app into markup.
     const { container } = render(
       <Markdown>{'<img src=x onerror="alert(1)"><script>alert(2)</script>**safe**'}</Markdown>,
     );
@@ -54,8 +51,6 @@ describe("Markdown", () => {
   });
 
   it("handles the partial markdown a stream produces", () => {
-    // Mid-stream text routinely has an unclosed fence or emphasis. It must
-    // still render rather than throwing and blanking the message.
     expect(() => render(<Markdown>{"here is a list\n\n- one\n- tw"}</Markdown>)).not.toThrow();
     expect(() => render(<Markdown>{"```rust\nfn main("}</Markdown>)).not.toThrow();
     expect(() => render(<Markdown>{"**unclosed"}</Markdown>)).not.toThrow();
@@ -67,7 +62,6 @@ describe("Markdown", () => {
 });
 
 describe("a callout in a body", () => {
-  /** The markup a marker actually produces, which is what the CSS hangs off. */
   function drawn(body: string) {
     return render(<Markdown>{body}</Markdown>).container;
   }
@@ -89,8 +83,6 @@ describe("a callout in a body", () => {
   });
 
   it("stops being a quote, so no rule written for one reaches it", () => {
-    // `.md blockquote` is a rule down the left and a muted color, which is the
-    // opposite of a box. The element is what decides, not a class beside it.
     const container = drawn("> [!WARNING]\n> This deletes the production bucket.");
 
     expect(container.querySelector("blockquote")).toBeNull();
@@ -98,7 +90,6 @@ describe("a callout in a body", () => {
   });
 
   it("holds the prose a box is worth having: a list, a link, a name", () => {
-    // The whole reason this is a quote and not a fence. A fence holds text.
     const container = render(
       <Roster.Provider value={["Chef"]}>
         <Markdown>
@@ -113,8 +104,6 @@ describe("a callout in a body", () => {
   });
 
   it("leaves no blank line where the marker was", () => {
-    // The marker owns its line, so stripping it leaves an empty paragraph
-    // behind: a gap between the label and the first thing said.
     const container = drawn("> [!NOTE]\n> One line.");
 
     const paragraphs = [...container.querySelectorAll(".callout p")];
@@ -136,8 +125,6 @@ describe("a callout in a body", () => {
   });
 
   it("survives the half-written marker a stream produces", () => {
-    // Mid-reply the marker is `[!IMPO`, which is a quote, and a token later it
-    // is a box. Neither may throw and blank the message.
     for (const body of ["> [!IMPO", "> [!IMPORTANT]", "> [!IMPORTANT]\n> "]) {
       expect(() => drawn(body)).not.toThrow();
     }
@@ -148,7 +135,6 @@ describe("a callout in a body", () => {
 describe("a mention in a body", () => {
   const NAMES = ["Critic", "Head Chef"];
 
-  /** A body drawn with a roster behind it, which is what the app provides. */
   function drawn(body: string) {
     return render(
       <Roster.Provider value={NAMES}>
@@ -158,9 +144,6 @@ describe("a mention in a body", () => {
   }
 
   it("is drawn as one thing, wherever in the document it lands", () => {
-    // A tree walk rather than a pass over the prose: a mention turns up inside
-    // a bold run, a heading, a list item and a table cell, and the tree is the
-    // one place all four are the same node.
     const container = drawn("# @Critic\n\n- **@Head Chef** cooks\n\n| who |\n| - |\n| @Critic |");
     const chips = [...container.querySelectorAll(".mention")];
 
@@ -175,9 +158,6 @@ describe("a mention in a body", () => {
   });
 
   it("names nobody the roster does not have", () => {
-    // Which is most of them. A model writes `@` in front of a flag, a handle
-    // and an email address, and a chip on one of those says this app knows who
-    // that is.
     const container = drawn("try @lunch, or mail bob@example.com, or @Critical thinking");
     expect(container.querySelectorAll(".mention")).toHaveLength(0);
   });
@@ -188,16 +168,12 @@ describe("a mention in a body", () => {
   });
 
   it("leaves a link's own words alone", () => {
-    // A chip inside an anchor is two things claiming one click, and an
-    // autolinked address is the one place an @ is certainly not a mention.
     const container = drawn("[@Critic](https://example.com) and bob@example.com");
     expect(container.querySelectorAll(".mention")).toHaveLength(0);
     expect(container.querySelectorAll("a")).toHaveLength(2);
   });
 
   it("draws the prose the model wrote when no roster was provided", () => {
-    // The default, and every surface that has not opted in gets it: nothing
-    // resolves, so nothing is claimed.
     const { container } = render(<Markdown>{"ask @Critic"}</Markdown>);
     expect(container.querySelectorAll(".mention")).toHaveLength(0);
     expect(container.textContent).toBe("ask @Critic");

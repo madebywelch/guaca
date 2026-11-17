@@ -16,80 +16,20 @@ import { OrbTag, useOrbTag } from "./OrbTag";
 
 interface Props {
   groups: Group[];
-  /** Every live agent, across every crew. */
   agents: AgentCard[];
   activity: Record<AgentId, Activity>;
-  /** Every open escalation, so a circle can say a crew has stopped. */
   stuck: readonly Escalation[];
-  /** The crew the rail is inside, or `null` for all of them. */
   focused: GroupId | null;
   onFocus: (id: GroupId | null) => void;
-  /** Whether a dragged row would land on this target if it were dropped now. */
   isOver: (target: DropTarget) => boolean;
   onDragOver: (target: DropTarget) => void;
   onDragOut: () => void;
-  /**
-   * Whether the operator is currently holding an agent.
-   *
-   * Holds the column where it is rather than holding it out. A drop onto a
-   * circle is the one thing this column is load-bearing for, so a column
-   * already reached for must not slide away as the hand carries the row back
-   * across the app; a column that came out for every drag would instead cover
-   * the left edge of every row in the rail during a reorder, which is what
-   * most drags are. `lib/reach.ts` has the rest of it.
-   */
   dragging: boolean;
-  /** The crew whose circle is in the operator's hand, if one is. */
   held: GroupId | null;
-  /** A press on a crew's circle, which becomes a drag if the pointer travels. */
   onPress: (id: GroupId, event: ReactPointerEvent) => void;
-  /** The scrolling list of circles, for the drag that has to reach past its end. */
   listRef: RefObject<HTMLDivElement | null>;
 }
 
-/**
- * The crews, as a column of their own on the far left, out of the way until
- * it is reached for.
- *
- * This was a strip of circles inside the rail, wrapping onto a second line at
- * five crews and a third at nine. It did not overflow or scroll: it ate the
- * rail's own height, so a workspace with a dozen crews spent the top third of
- * its agent list on the navigation for it. Four was a hard wall nobody chose.
- *
- * A column has the axis to spare, and it buys two things the strip could not.
- * The crews are reachable no matter where the operator is, including while the
- * rail is inside one of them, so the badge on a circle is the only permanent
- * statement in the app about the crews you are not looking at: see
- * `lib/presence.ts` for what it may say. And "which crew am I in" stops being
- * something the rail has to give a heading to, because the answer is a lit
- * circle in a fixed place.
- *
- * Standing open, that column charged every window four rem of width for a
- * choice most operators make a few times a day, in front of the rail that is
- * read constantly. So it is a band at the edge of the window that slides out
- * when the pointer comes at it, over the rail rather than pushing it: nothing
- * reflows, the rail keeps its measure, and the gesture is the one somebody
- * heading for the left edge is already making. `lib/reach.ts` owns when, and
- * the two thresholds it uses and why there are two.
- *
- * Two things bring it out and none of them is a click: proximity, and focus
- * inside it, which is what makes the column reachable from the keyboard, since
- * tabbing into a circle nobody can see is a selection nobody can read. A drag
- * brings it out for neither, and only keeps it wherever it already was.
- *
- * Still absent while there is one group, which is the state most workspaces are
- * in and the same rule the strip had. A column offering a choice of one is a
- * drop target that cannot move anybody anywhere, and with one crew the rail is
- * that crew: every row of it is already on screen, saying the same thing the
- * badge would.
- *
- * The circles are arranged by hand, by dragging one along the column, and the
- * order they stand in is the order of every list of crews in the app. A circle
- * therefore means two things as a target, decided by what is in the hand: an
- * agent dropped on one joins that crew, and a crew dropped on one takes the
- * place beside it. The first is a fill and the second a line, because "into
- * this" and "next to this" are different answers.
- */
 export function GroupRail({
   groups,
   agents,
@@ -110,11 +50,6 @@ export function GroupRail({
   const slab = useRef<HTMLDivElement>(null);
   const [near, setNear] = useState(false);
 
-  // On the window rather than on a strip the pointer can enter, because a strip
-  // wide enough to be aimed at overlays the left edge of every agent row behind
-  // it and swallows the click. Both boxes are measured on each movement rather
-  // than cached: the column's own edge is the thing that moves, and the zone's
-  // is a length in the stylesheet that changes with the interface scale.
   useEffect(() => {
     const move = (event: PointerEvent) => {
       const reach = zone.current?.getBoundingClientRect();
@@ -126,25 +61,13 @@ export function GroupRail({
     };
     window.addEventListener("pointermove", move);
     return () => window.removeEventListener("pointermove", move);
-    // Twice a drag, which is what it costs to have the rule read one boolean
-    // rather than a ref that says what it was on the last frame.
   }, [dragging]);
 
   if (groups.length < 2) return null;
 
-  /* The group the rail is inside, and the face that stands for it in the lip:
-     the same first face its own circle seats. Nothing while the rail shows
-     every group, which has no single face — the lip is then the bare handle
-     rather than a claim about which group is current. */
   const current = groups.find((group) => group.id === focused);
   const face = current ? agents.find((agent) => agent.groupId === current.id) : undefined;
 
-  /**
-   * Which side of a circle the crew in hand would land on, if it were let go
-   * over that circle now. Read off `landsBefore`, which is what the drop
-   * itself is decided by, so the line cannot say one place and the drop pick
-   * another.
-   */
   const lands = (id: GroupId): "before" | "after" | undefined => {
     if (held === null || !isOver({ kind: "group", id })) return undefined;
     const before = landsBefore(groups, held, id);
@@ -159,19 +82,8 @@ export function GroupRail({
       data-out={near ? "true" : undefined}
       data-dragging={dragging ? "true" : undefined}
     >
-      {/* The proximity zone, as a box. It carries no pixels and cannot be
-          clicked; what it is for is that its size and its distance from the top
-          of the window are lengths, and every length in this app is named in
-          one stylesheet rather than written into a component. */}
       <span className="grail__reach" aria-hidden="true" ref={zone} />
 
-      {/* The handle on the band. Eight pixels of ground at the edge of the
-          window says a surface is there and nothing says what it is for, so the
-          lip carries the current group's own circle with the window's edge
-          cutting it in half: which group the rail is inside, without the column
-          standing open. It is drawn before the column, whose ground is opaque,
-          so the column covers it on the way out; and it takes no pointer events,
-          because the only thing that acts on this edge is the proximity zone. */}
       <span className="grail__mark" aria-hidden="true">
         {face && (
           <span
@@ -190,10 +102,6 @@ export function GroupRail({
       </span>
 
       <div className="grail__slab" ref={slab}>
-        {/* Everybody, which is the view the rail had before crews were places you
-            could be inside. A count rather than the word, because the label
-            already says "all" and a group's name can be anything, including
-            "everyone". */}
         <button
           type="button"
           className="orb orb--all"
@@ -216,10 +124,6 @@ export function GroupRail({
 
         <span className="grail__rule" aria-hidden="true" />
 
-        {/* Scrolls rather than wraps, which is the whole point of turning this
-            upright: a workspace can hold more crews than fit down the side of a
-            window, and the ones that do not fit have to be reachable rather than
-            folded into a second column. */}
         <div className="grail__list" ref={listRef}>
           {groups.map((group) => (
             <GroupOrb
@@ -233,14 +137,6 @@ export function GroupRail({
               held={held === group.id}
               lands={lands(group.id)}
               onPress={(event) => onPress(group.id, event)}
-              // Clicking the crew the rail is already inside does nothing. It
-              // used to take the rail back out to the overview, which made the
-              // circle a toggle: a double-click on a crew went in and straight
-              // back out again, and a click on the crew you were already in put
-              // you somewhere you had not asked to go. The way out is the
-              // circle at the top of this column, above the rule, which is on
-              // screen for the whole of that gesture. A control with its own
-              // way out beside it does not need to be one.
               onOpen={() => onFocus(group.id)}
               onDragOver={() => onDragOver({ kind: "group", id: group.id })}
               onDragOut={onDragOut}

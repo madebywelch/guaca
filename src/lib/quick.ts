@@ -1,11 +1,3 @@
-/**
- * The status bar's quick actions, described for a person.
- *
- * The same sentence the host tells an agent reading the settings
- * (`QuickAction::describe`), so the tooltip on a button and what an agent says
- * about it read alike. A button an agent asked for, from before agents pinned
- * pages instead, still says who asked.
- */
 import { paneName } from "./sections";
 import type { AgentId, QuickAction } from "./types";
 
@@ -21,8 +13,6 @@ export function describeQuick(action: QuickAction, nameOf: (id: AgentId) => stri
     case "forYou":
       return "Opens For You";
     case "settings": {
-      // The pane's own name: the tooltip and the sentence an agent reads about
-      // the screen are the same sentence, and an id is what travels.
       const pane = paneName(place.section);
       return pane ? `Opens Settings on ${pane}` : "Opens Settings";
     }
@@ -31,7 +21,6 @@ export function describeQuick(action: QuickAction, nameOf: (id: AgentId) => stri
   }
 }
 
-/** The tooltip: what it does, and who put it there when that was not you. */
 export function quickTitle(action: QuickAction, nameOf: (id: AgentId) => string): string {
   const said = describeQuick(action, nameOf);
   return action.addedBy && action.addedBy !== "the operator"

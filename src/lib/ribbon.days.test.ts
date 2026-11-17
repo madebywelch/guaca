@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import { anAgent } from "../test-fixtures";
 import { layoutRibbon, type RibbonInput } from "./ribbon";
 
-/** A local moment, so the weekday is the one named whatever zone runs this. */
 const at = (day: number, hour: number) => new Date(2026, 10, day, hour).getTime();
 
 function strip(now: number): RibbonInput {

@@ -1,13 +1,3 @@
-/**
- * What every design on the page shares: the clock, the moods, the saccade, and
- * the one loop that paints every creature on screen.
- *
- * A design is handed a frame and owns everything else, including its own state
- * between frames (a soft body keeps its points, an inked one keeps its last
- * drawing). The harness decides only what is true: which mood, since when,
- * where the operator's pointer is, whether a message just landed.
- */
-
 import { CHARACTERS, type Character, lookupCharacter } from "../../src/avatars/catalog";
 import { gaitOf } from "../../src/avatars/clock";
 import type { Mood } from "../../src/avatars/moods";
@@ -43,7 +33,6 @@ export const MOOD_SIGNAL: Record<Mood, string> = {
   surprised: "just handed a message",
 };
 
-/** How long taking a message looks surprised. Same number as `moods.ts`. */
 export const STRUCK = 0.9;
 
 export const C = 32;
@@ -53,23 +42,17 @@ export const TAU = Math.PI * 2;
 export const INK = "#252824";
 
 export interface Frame {
-  /** The creature's own clock, gait applied. Only cycles run on it. */
   t: number;
-  /** Shared seconds. Every age is measured on these. */
   now: number;
   dt: number;
   live: boolean;
   mood: Mood;
   from: Mood;
-  /** Seconds since `from` began becoming `mood`. */
   since: number;
   look: Look;
   gesture: Gesture;
-  /** Seconds since the gesture began. */
   age: number;
-  /** The operator's pointer, in body radii from the center, when this creature is watching it. */
   point: Point | null;
-  /** Rendered size in CSS pixels. What stroke hinting reads. */
   px: number;
 }
 
@@ -83,9 +66,6 @@ export interface Design {
   create(svg: SVGSVGElement, who: Character, color: string, seed: string): Creature;
 }
 
-/* --- numbers ------------------------------------------------------------- */
-
-/** Deterministic noise, the same function `eyes.ts` uses. */
 export function rnd(i: number): number {
   const x = Math.sin(i * 127.1 + 197.3) * 43758.5453;
   return x - Math.floor(x);
@@ -104,17 +84,13 @@ export function lerp(a: number, b: number, u: number): number {
   return a + (b - a) * u;
 }
 
-/** A 0..1..0 bump over `dur` seconds starting at 0. */
 export function bump(x: number, dur: number): number {
   return x >= 0 && x < dur ? Math.sin((x / dur) * Math.PI) : 0;
 }
 
-/** Stroke weight grows as the creature shrinks, so a closed eye survives 24px. */
 export function hint(px: number, at = 44, most = 1.8): number {
   return clamp(at / px, 1, most);
 }
-
-/* --- color --------------------------------------------------------------- */
 
 function rgb(hex: string): [number, number, number] {
   const h = hex.replace("#", "");
@@ -133,8 +109,6 @@ export function mix(a: string, b: string, u: number): string {
     .join("")}`;
 }
 
-/* --- the look ------------------------------------------------------------ */
-
 export interface GazeSpec {
   range?: number;
   hz?: number;
@@ -147,13 +121,9 @@ export interface GazeSpec {
 
 export interface Glance {
   at: Point;
-  /** Where the current jump is going. */
   to: Point;
-  /** Seconds since the current jump began. */
   jump: number;
-  /** How far the current jump goes, in body radii. */
   size: number;
-  /** Which jump this is, for anything that wants to roll against it. */
   slot: number;
 }
 
@@ -166,10 +136,6 @@ function span(from: Point, to: Point, cross: number): number {
   return cross * Math.max(1, Math.min(2, far / 0.25));
 }
 
-/**
- * `gazeAt` from `eyes.ts`, with the jump it is in reported alongside. A design
- * that blinks into a saccade has to know when one began.
- */
 export function saccade(t: number, g?: GazeSpec): Glance {
   if (!g) return { at: [0, 0], to: [0, 0], jump: 99, size: 0, slot: 0 };
   const cross = g.cross ?? 0.26;
@@ -226,7 +192,6 @@ export function saccade(t: number, g?: GazeSpec): Glance {
   };
 }
 
-/** `blinkAmount` from `eyes.ts`: slots of about four seconds, one in four doubled. */
 export function blinkAt(t: number): number {
   const P = 4.6;
   const DUR = 0.18;
@@ -240,7 +205,6 @@ export function blinkAt(t: number): number {
   return out;
 }
 
-/** Critically damped follow, in place. The `settle` in `eyes.ts`. */
 export function follow(pos: Point, vel: Point, target: Point, dt: number, settle = 0.12) {
   const w = 2.2 / settle;
   for (const i of [0, 1] as const) {
@@ -250,15 +214,12 @@ export function follow(pos: Point, vel: Point, target: Point, dt: number, settle
   }
 }
 
-/** Where the operator's pointer is as a look, in body radii: near is a glance, far is a stare. */
 export function lookToward(dx: number, dy: number): Point {
   const d = Math.hypot(dx, dy);
   if (d < 1e-6) return [0, 0];
   const reach = 0.42 * (1 - Math.exp(-d / 2.4));
   return [(dx / d) * reach, (dy / d) * reach * 0.8];
 }
-
-/* --- svg ----------------------------------------------------------------- */
 
 const NS = "http://www.w3.org/2000/svg";
 
@@ -290,7 +251,6 @@ export function poly(pts: Point[], close = true): string {
   return close ? `${d}Z` : d;
 }
 
-/** Catmull-Rom through a closed loop, resampled `per` times a segment. */
 export function resample(pts: Point[], per: number): Point[] {
   const out: Point[] = [];
   const n = pts.length;
@@ -310,8 +270,6 @@ export function resample(pts: Point[], per: number): Point[] {
   }
   return out;
 }
-
-/* --- instances and the one loop ------------------------------------------ */
 
 export interface Handle {
   el: HTMLElement;

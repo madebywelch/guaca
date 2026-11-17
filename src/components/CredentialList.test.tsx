@@ -37,7 +37,6 @@ function connector(over: Partial<Connector> = {}): Connector {
   };
 }
 
-/** Opens the form, which is behind a button now that there are no tiles. */
 async function openForm() {
   fireEvent.click(await screen.findByText("Add a secret"));
 }
@@ -52,10 +51,6 @@ describe("CredentialList", () => {
   });
 
   it("offers no brands, only the escape hatch", async () => {
-    // The twelve-tile grid is gone: what a crew reaches is a plugin, and this
-    // is what is left for a service that has none. A tile here would be an
-    // offer Guaca cannot keep, since it knows nothing about the service beyond
-    // the variable name it suggested.
     render(<CredentialList groupId={GROUP} />);
 
     expect(await screen.findByText("Add a secret")).toBeTruthy();
@@ -102,8 +97,6 @@ describe("CredentialList", () => {
     fireEvent.change(screen.getByPlaceholderText("MY_API_KEY"), {
       target: { value: "FLY_API_TOKEN" },
     });
-    // Still not: a variable stored empty reads to the agent as a revoked token
-    // rather than as unfinished setup.
     expect(add().disabled).toBe(true);
 
     fireEvent.change(screen.getByPlaceholderText("Fly token"), { target: { value: "x" } });

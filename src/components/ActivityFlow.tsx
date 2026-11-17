@@ -10,40 +10,6 @@ import { plainText } from "../lib/types";
 import { compact, money, priced } from "./Spend";
 import { MessageModal } from "./WireRow";
 
-/**
- * The conversation as a sequence diagram, one board per run.
- *
- * The question this view exists to answer is who spoke to whom, in what order,
- * and what set it off. An earlier pass drew it sideways — lanes stacked, time
- * running left to right — which is a real sequence diagram but leaves each
- * message a bare arrow in a 92px column. There is no room for a single word, so
- * every message had to be clicked to be read, and following a conversation
- * meant clicking along it one arrow at a time.
- *
- * Turning it upright is what makes it legible. Participants are columns, time
- * runs down, and each message owns a whole row: the arrow says who and to whom,
- * and the rest of the row says what. A relay chain reads as a staircase.
- *
- * Two things then went wrong as a workspace aged, both fixed by cutting the
- * board into runs. Lanes were global, so every agent that ever spoke held a
- * column forever: adding agents pushed the newcomers rightward and stretched
- * every arrow across the dead columns of agents that had been deleted months
- * ago. And the whole history was one scroll, so the thing an operator almost
- * always wants — what just happened — was at the very bottom.
- *
- * So: a run is a board, a board draws only the participants in it, and the
- * newest is first and open. History is still all here, one line each.
- */
-
-/**
- * Width of one participant column, as a multiple of the root font size.
- *
- * A number rather than a `rem` string because the wires between the lanes are
- * SVG coordinates in the same space, so the whole board has to be measured in
- * one unit and that unit has to be pixels. Resolved against the interface scale
- * at render time instead: the names inside these columns are sized in `rem` and
- * a column that did not grow with them would crop them.
- */
 const LANE_REM = 4.5;
 
 const YOU: WirePeer = { id: "human", name: "You", color: "var(--muted)", avatar: "orb" };
@@ -56,7 +22,6 @@ interface Props {
 interface Lane {
   key: string;
   peer: WirePeer;
-  /** A deleted agent. Its traffic is history, but it is not someone you have. */
   gone: boolean;
 }
 
@@ -72,7 +37,6 @@ interface Block {
   startedAt: number;
   rows: Row[];
   lanes: Lane[];
-  /** What set the run off, for reading the history without opening it. */
   opener: string;
 }
 
@@ -84,7 +48,6 @@ function clockTime(ms: number): string {
   return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-/** Only says the day when it is not today, since most reading is of today. */
 function dayLabel(ms: number): string {
   const at = new Date(ms);
   const today = new Date();
@@ -97,20 +60,11 @@ function dayLabel(ms: number): string {
 
 export function ActivityFlow({ messages, byId }: Props) {
   const [open, setOpen] = useState<{ block: number; row: number } | null>(null);
-  // Absent means "the default", which is open for the newest board and closed
-  // for the rest. Storing the exception rather than the state means a new run
-  // arriving does not have to be reconciled with anything.
   const [toggled, setToggled] = useState<Record<string, boolean>>({});
-  // Derived from the scale rather than measured off the document: it is the same
-  // arithmetic the stylesheet's root font size does, and doing it here keeps a
-  // layout read out of a render.
   const laneW = (LANE_REM * ROOT_PX * useStore((s) => s.prefs.uiScale)) / 100;
 
   const blocks = useMemo(() => buildBlocks(messages, byId), [messages, byId]);
 
-  // What each run cost. Asked for once per set of runs on screen rather than
-  // carried on every message, which would repeat one run's totals as many
-  // times as the run had messages.
   const [spent, setSpent] = useState<Record<RunId, Tokens | undefined>>({});
   const runs = useMemo(() => blocks.map((b) => b.runId).join(","), [blocks]);
   useEffect(() => {
@@ -226,9 +180,6 @@ export function ActivityFlow({ messages, byId }: Props) {
                   </div>
 
                   <div className="flow__body">
-                    {/* One continuous rail per participant, behind the rows, so
-                        a column reads as a lifeline rather than as a stack of
-                        unrelated arrows. */}
                     <div className="flow__rails" style={{ width: boardWidth }} aria-hidden="true">
                       {block.lanes.map((lane, i) => (
                         <span key={lane.key} className="flow__rail" style={{ left: laneX(i) }} />
@@ -274,8 +225,6 @@ export function ActivityFlow({ messages, byId }: Props) {
                               strokeWidth="1.6"
                             />
                             <circle cx={x1} cy={13} r="3" fill={sender.color} />
-                            {/* Drawn rather than a marker so it can point either
-                                way without a second marker per color. */}
                             <path
                               d={rightwards ? `M${x2} 13l-6-4v8z` : `M${x2} 13l6-4v8z`}
                               fill={sender.color}
@@ -329,13 +278,6 @@ export function ActivityFlow({ messages, byId }: Props) {
   );
 }
 
-/**
- * Cuts the history into runs, newest first, each with its own lanes.
- *
- * Lanes are per run on purpose. Held globally they only ever grew, so a
- * workspace that had been used for a while drew every message across the dead
- * columns of agents nobody had spoken to in weeks.
- */
 function buildBlocks(messages: Envelope[], byId: (id: AgentId) => AgentCard | undefined): Block[] {
   const blocks: Block[] = [];
   let current: Block | null = null;
@@ -385,17 +327,9 @@ function buildBlocks(messages: Envelope[], byId: (id: AgentId) => AgentCard | un
     });
   }
 
-  // Newest first. What an operator wants from this view is almost always the
-  // most recent thing, and it used to be the furthest scroll away.
   return blocks.reverse();
 }
 
-/**
- * A participant to draw. Deleted agents still get a lane: their messages are
- * part of what happened, and dropping them would leave arrows pointing nowhere.
- * They are marked, because two agents that shared a name are otherwise
- * indistinguishable, which is exactly when this view is being read.
- */
 function peerFor(
   id: AgentId,
   byId: (id: AgentId) => AgentCard | undefined,

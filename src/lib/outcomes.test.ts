@@ -15,12 +15,6 @@ import {
 } from "./outcomes";
 import type { Outcome } from "./types";
 
-/**
- * Finished work, as every surface words it. The components only draw what
- * these decide, so the order, the headings, the words and the seven days are
- * argued here.
- */
-
 const NOW = 30 * 24 * 3_600_000;
 const HOUR = 3_600_000;
 

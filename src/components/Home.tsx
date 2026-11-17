@@ -11,7 +11,6 @@ import { errorMessage, type Outcome } from "../lib/types";
 import { Desk } from "./Desk";
 import { Field } from "./Field";
 
-/** How many filed decisions are drawn as cards before the rest are a count. */
 const FILED_SHOWN = 3;
 
 interface Props {
@@ -19,12 +18,6 @@ interface Props {
   onManageGroups: () => void;
 }
 
-/**
- * The opening screen, in the order a person opens the window for: the field,
- * then what needs them, answered where it is drawn, then what finished while
- * they were away. With none of those it is one sentence, which is the screen
- * seen most and the one that has to be calm.
- */
 export function Home({ onSearch, onManageGroups }: Props) {
   const pending = useStore((state) => state.pending);
   const stuck = useStore((state) => state.stuck);
@@ -88,10 +81,6 @@ export function Home({ onSearch, onManageGroups }: Props) {
                     />
                     <div className="home__cardtext">
                       <p className="home__question">{item.request.question}</p>
-                      {/* No time on it: nothing is waiting any more. The agent
-                          was told it is on For you and went on without it, and
-                          an answer reaches it as a new message, which is what
-                          starts it on this again. */}
                       <p className="home__meta">
                         {name} went on without an answer. Your answer reaches {name} as a new
                         message.
@@ -173,10 +162,6 @@ export function Home({ onSearch, onManageGroups }: Props) {
   );
 }
 
-/**
- * Nothing waiting and nothing new. Said in one sentence, with who is still at
- * work and the one way back into what already happened today.
- */
 function Quiet({ working, decisions, now }: { working: string[]; decisions: number; now: number }) {
   const showForYou = useStore((state) => state.showForYou);
   const [today, setToday] = useState<number | null>(null);
@@ -190,7 +175,6 @@ function Quiet({ working, decisions, now }: { working: string[]; decisions: numb
         if (current) setToday(rows.length);
       })
       .catch((error: unknown) => {
-        // A count under a calm sentence is not worth a banner.
         console.warn(`Today's finished runs could not be read: ${errorMessage(error)}`);
       });
     return () => {

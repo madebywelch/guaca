@@ -1,37 +1,15 @@
-/**
- * The chart palette's gates, recomputed rather than remembered.
- *
- * Every number in `palette.ts`'s doc comment is worked out here from the hexes
- * themselves, so the comment cannot drift away from the values it describes and
- * a hex changed by eye fails the suite. That is the whole point of this file:
- * colorblind separation is not something anybody can check by looking, and a
- * palette is exactly the kind of thing somebody adjusts because a screenshot
- * looked slightly off.
- *
- * The math is the standard one for this: sRGB to linear, Machado, Oliveira &
- * Fernandes (2009) at full severity for the two red-green colorblindnesses,
- * then Euclidean distance in OKLab ×100. The simulation model is part of the
- * standard rather than an implementation detail, because the thresholds below
- * are calibrated against it and a different model moves every borderline pair.
- */
-
 import { describe, expect, it } from "vitest";
 
 import { MAX_SCATTER_HUES, SCATTER_MARKS, SLOTS, seriesColor, seriesMark } from "./palette";
 
-/** The surface a figure card is drawn on, which is `--raised` in both. */
 const SURFACE = { paper: "#ffffff", ink: "#171715" };
 
-/** Neighbors must clear this under simulated colorblindness. */
 const CVD_TARGET = 8;
-/** And this under ordinary color vision, which is a separate failure. */
 const NORMAL_FLOOR = 15;
-/** OKLCH lightness a hue has to sit inside, per surface. */
 const BAND: Record<"paper" | "ink", readonly [number, number]> = {
   paper: [0.43, 0.77],
   ink: [0.48, 0.67],
 };
-/** Below this a hue reads as gray and stops telling series apart at all. */
 const CHROMA_FLOOR = 0.1;
 
 const MACHADO = {
@@ -80,7 +58,6 @@ function simulate(hex: string, vision: Vision): [number, number, number] {
   ];
 }
 
-/** Perceived distance between two colors, optionally through one vision. */
 function distance(one: string, other: string, vision?: Vision): number {
   const a = oklab(vision ? simulate(one, vision) : linear(one));
   const b = oklab(vision ? simulate(other, vision) : linear(other));
@@ -105,12 +82,10 @@ function contrast(one: string, other: string): number {
   return (high + 0.05) / (low + 0.05);
 }
 
-/** Every pair of slots that can touch in a stack, a group or a line chart. */
 function neighbors(colors: string[]): [string, string][] {
   return colors.slice(0, -1).map((color, at) => [color, colors[at + 1] as string]);
 }
 
-/** Every pair, period, which is what a scatter has. */
 function everyPair(colors: string[]): [string, string][] {
   return colors.flatMap((color, at) => colors.slice(at + 1).map((other) => [color, other])) as [
     string,
@@ -125,9 +100,6 @@ const surfaces = [
 
 describe.each(surfaces)("the chart palette on %s", (_surface, colors, ground, band) => {
   it("keeps neighboring slots apart for a red-green colorblind reader", () => {
-    // The gate the order exists to pass. Neighbors are what touch in a stack
-    // and cross in a line chart, so this is the pair list that decides whether
-    // a chart is readable rather than merely colorful.
     for (const vision of ["protan", "deutan"] as const) {
       for (const [one, other] of neighbors([...colors])) {
         expect(
@@ -139,9 +111,6 @@ describe.each(surfaces)("the chart palette on %s", (_surface, colors, ground, ba
   });
 
   it("keeps them apart for everybody else too", () => {
-    // A separate failure from the one above, and not excused by it: a pair can
-    // be safe under simulation and still be two colors an ordinary reader has
-    // to squint at.
     for (const [one, other] of neighbors([...colors])) {
       expect(
         distance(one, other),
@@ -151,9 +120,6 @@ describe.each(surfaces)("the chart palette on %s", (_surface, colors, ground, ba
   });
 
   it("keeps a scatter's first three apart from each other, in every pairing", () => {
-    // Scatter has no neighbors: any dot can land beside any other, so the
-    // adjacent test above says nothing about it. This is the harder gate, and
-    // it is why `MAX_SCATTER_HUES` is three.
     const three = [...colors].slice(0, MAX_SCATTER_HUES);
     for (const vision of ["protan", "deutan"] as const) {
       for (const [one, other] of everyPair(three)) {
@@ -180,10 +146,6 @@ describe.each(surfaces)("the chart palette on %s", (_surface, colors, ground, ba
   });
 
   it("says which hues need the numbers written next to them", () => {
-    // Contrast under 3:1 is allowed here and is not a license to ship a chart
-    // that cannot be read: every figure carries direct labels and a table of
-    // its own numbers, which is what makes a pale fill legible. This asserts
-    // the relief is owed, so removing the table twin is not a silent change.
     const pale = colors.filter((color) => contrast(color, ground) < 3);
     if (_surface === "ink") expect(pale).toEqual([]);
     else expect(pale.length, "paper leans on labels and the table twin").toBeLessThanOrEqual(3);
@@ -192,23 +154,15 @@ describe.each(surfaces)("the chart palette on %s", (_surface, colors, ground, ba
 
 describe("handing colors out", () => {
   it("gives a series the same color wherever its neighbors went", () => {
-    // Color follows the series, never its rank. An operator who has learned
-    // that revenue is green is misled by a legend that repaints what is left
-    // when something is switched off.
     expect(seriesColor(0)).toBe("var(--series-0)");
     expect(seriesColor(3)).toBe("var(--series-3)");
   });
 
   it("wraps rather than inventing a ninth hue", () => {
-    // A generated ninth is indistinguishable from one of the eight under
-    // colorblindness. Wrapping is at least honest about repeating.
     expect(seriesColor(SLOTS.length)).toBe(seriesColor(0));
   });
 
   it("gives a scatter a shape as well as a hue", () => {
-    // The second channel, and the reason a scatter is not capped at three
-    // series. Shape survives every colorblindness, grayscale print and a
-    // screenshot; hue survives none of them.
     expect(seriesMark(0)).toBe(SCATTER_MARKS[0]);
     expect(seriesMark(MAX_SCATTER_HUES)).not.toBe(seriesMark(0));
   });

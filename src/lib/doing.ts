@@ -1,47 +1,25 @@
-/**
- * What a row says an agent is doing, in the words beside its name.
- *
- * One wording, drawn in two places: the rail, and the panel under the menu bar
- * icon. The two are read for the same reason, which is somebody scanning a
- * list of faces for the one that needs them, and a panel that said "thinking"
- * where the rail said "typing" would be two stories about one agent.
- */
-
 import { railMeta } from "./outcomes";
 import { relativeTime } from "./time";
 import { type LiveCall, machineInUse } from "./trail";
 import type { Activity, AgentId, Escalation, Outcome } from "./types";
 
-/** The line, and which of the rail's states it is drawn as. */
 export interface Doing {
   text: string;
   kind: "thinking" | "queued" | "asking" | "paused" | "finished" | undefined;
-  /** What a hover says: the headline, for a row that has news. */
   title?: string;
 }
 
-/** Everything the line is read from, as the store holds it. */
 export interface DoingInputs {
   activity: Record<AgentId, Activity>;
   stuck: Escalation[];
   trail: Record<AgentId, LiveCall[] | undefined>;
   lastActive: Record<AgentId, number>;
-  /** Each agent's newest finished run the operator has not seen. */
   finished: Record<AgentId, Outcome | undefined>;
 }
 
 export function doing(id: AgentId, inputs: DoingInputs, now: number): Doing {
   const state = inputs.activity[id];
 
-  // Above everything but a parked turn, and above it in the same voice. Both
-  // of the states a person is the fix for outrank every state that will
-  // resolve itself, because this column is what somebody scans when they have
-  // noticed that nothing is moving: an agent stuck since Tuesday that happens
-  // to be typing right now must not read as an agent that is fine.
-  //
-  // The age is the label. "Stuck" is a state and "stuck 2d" is a decision,
-  // and the second one is the whole reason this is on the row rather than in
-  // a channel somebody has to open.
   if (state?.state !== "awaitingApproval") {
     const open = inputs.stuck.find((one) => one.agentId === id);
     if (open) {
@@ -51,9 +29,6 @@ export function doing(id: AgentId, inputs: DoingInputs, now: number): Doing {
 
   switch (state?.state) {
     case "thinking":
-      // The machine over the model. "typing" is what a model does, and an
-      // agent driving its computer is doing that too; the row says the
-      // thing the operator can go and watch.
       switch (machineInUse(inputs.trail[id])) {
         case "computer":
           return { text: "on its computer", kind: "thinking" };
@@ -64,23 +39,13 @@ export function doing(id: AgentId, inputs: DoingInputs, now: number): Doing {
       }
     case "queued":
       return { text: `${state.depth} queued`, kind: "queued" };
-    // The one state the operator is the fix for. It reads as an instruction
-    // rather than a status because the agent is parked until they act, and
-    // the request itself is in a channel they may not have open.
     case "awaitingApproval":
       return { text: "needs you", kind: "asking" };
     case "paused":
       return { text: "paused", kind: "paused" };
     default: {
-      // News, when there is some: the time alone says when an agent last did
-      // anything, and "done 5h" says it finished something the operator has
-      // not read. Below every live state, because those are happening now and
-      // this will keep until it is looked at.
       const news = inputs.finished[id];
       if (news) return { text: railMeta(news, now), kind: "finished", title: news.headline };
-      // Falling back to a last-active time keeps the column occupied. An
-      // empty slot the instant an agent stops typing reads as the row
-      // breaking rather than the agent finishing.
       const at = inputs.lastActive[id];
       return { text: at ? relativeTime(at, now) : "", kind: undefined };
     }

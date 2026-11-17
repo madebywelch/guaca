@@ -1,62 +1,16 @@
-/**
- * What an agent can actually do with a grant this origin holds.
- *
- * `connectors.ts` says what a person may authorize, in their words, for a
- * consent screen. This says what a model may call, in its words, for a tool
- * definition. They are deliberately two lists: one is a promise to a person and
- * the other is an API surface, and collapsing them would mean either a consent
- * screen written in JSON Schema or a tool list written in marketing.
- *
- * ## The list is derived from the grant, not from the catalogue
- *
- * A tool is offered only when every scope it needs came back from the provider.
- * That is not defensiveness: a capability can be half-granted, a person can
- * narrow a grant later, and Google's consent screen lets someone untick a box
- * on the way through. A model offered `gmail_send` against a grant that never
- * got `gmail.send` spends a turn discovering a 403, reports the task as
- * impossible, and is right for the wrong reason.
- *
- * ## Why the arguments are narrow
- *
- * Every tool here is a fixed request shape with the model filling in a few
- * fields, rather than one `call_google_api` that takes a URL. A generic caller
- * is smaller code and a much larger blast radius: the grant would reach every
- * endpoint the scopes allow rather than the handful this file names, and
- * nothing in a review could tell you which. Cloudflare's own MCP server makes
- * the opposite trade for a defensible reason — 2,500 endpoints behind `search`
- * and `execute` — and it is not this one. Three Google APIs are small enough to
- * write out.
- */
-
 import type { Provider } from "./connectors";
 import { parseScopes } from "./connectors";
 
 const GMAIL = "https://gmail.googleapis.com/gmail/v1/users/me";
-/** The same resource, reached the way Google wants a message with bytes in it. */
 const GMAIL_UPLOAD = "https://gmail.googleapis.com/upload/gmail/v1/users/me";
 const CALENDAR = "https://www.googleapis.com/calendar/v3";
 const DRIVE = "https://www.googleapis.com/drive/v3";
 const DRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3";
 
-/**
- * How much attached file a send may carry, counted before anything is fetched.
- *
- * This is our limit, not Gmail's: Gmail accepts a 25 MB message, and a Worker
- * has 128 MB of memory for the whole request. Assembling a message means
- * holding the base64 of every file, the wrapped copy of it and the joined
- * message at once, so the ceiling is several times whatever this number is.
- * Raising it means streaming the parts into a resumable upload instead of
- * building a string, which is a different piece of code.
- *
- * Counted from the sizes Gmail already reported on the message, so a request
- * that is too big is refused without transferring a byte.
- */
 const MAX_ATTACHED_BYTES = 10 * 1024 * 1024;
 
-/** A ceiling on fetches per send, so one call cannot become a hundred. */
 const MAX_ATTACHMENTS = 10;
 
-/** What a tool call answers with: text a model reads, or a refusal it can act on. */
 export interface ToolResult {
   text: string;
   isError?: boolean;
@@ -65,9 +19,7 @@ export interface ToolResult {
 export interface Tool {
   name: string;
   description: string;
-  /** JSON Schema, handed to the model as-is. */
   inputSchema: Record<string, unknown>;
-  /** Every entry is required; an array accepts any one of its scopes. */
   scopes: readonly (string | readonly string[])[];
   run: (token: string, args: Record<string, unknown>) => Promise<ToolResult>;
 }
@@ -82,15 +34,6 @@ const num = (args: Record<string, unknown>, key: string): number | undefined => 
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 };
 
-/**
- * One call to a provider, with the failure turned into something readable.
- *
- * A provider's error body is JSON with the useful sentence buried in it, and
- * handing a model the raw envelope wastes a turn. A refusal comes back as a
- * `ToolResult` rather than a thrown error because the two mean different things
- * to an agent: "that call was wrong" is worth rewording and retrying, and "the
- * plugin is unreachable" is not.
- */
 async function callProvider(
   token: string,
   url: string,
@@ -107,8 +50,6 @@ async function callProvider(
       },
     });
   } catch (error) {
-    // Status 0 for "never reached the provider", which is not any HTTP answer
-    // and is the one failure a caller cannot explain to an operator.
     return { ok: false, status: 0, text: `Could not reach the provider: ${String(error)}` };
   }
 
@@ -125,9 +66,6 @@ async function callProvider(
       (body as { error?: { message?: string } } | null)?.error?.message ??
       (typeof body === "string" ? body.slice(0, 300) : "") ??
       "";
-    // The status is named because 403 and 404 mean different things to an
-    // agent: one is a scope it does not have and will never have this turn,
-    // the other is a thing that is not there.
     return {
       ok: false,
       status: res.status,
@@ -143,62 +81,22 @@ const ok = (body: unknown): ToolResult => ({
 
 const refuse = (text: string): ToolResult => ({ text, isError: true });
 
-/**
- * A header value that cannot become two headers.
- *
- * `to` and `subject` are written by a model, and a model can be talked into
- * things. A CR or LF inside either one ends the header and starts another, so
- * a subject reading `Notes\r\nBcc: elsewhere@example.com` would silently copy
- * the mail to a third party. Stripping is right rather than refusing: the
- * newline is never what the caller meant, and a refusal here would be a puzzle
- * for an agent that did nothing wrong.
- */
 const headerValue = (value: string): string => value.replace(/[\r\n]+/g, " ").trim();
 
-/**
- * A boundary that content cannot forge.
- *
- * Both bodies here are model-supplied, and a fixed boundary means a body
- * containing that string splits the message: extra parts, or metadata the
- * caller was never offered a field for. A random one per request cannot be
- * guessed by whatever wrote the content.
- */
 const boundary = () => `guaca-${crypto.randomUUID()}`;
 
-/** One file on its way out, holding Gmail's own base64url rather than bytes. */
 interface Attached {
   filename: string;
   mimeType: string;
-  /** base64url, exactly as Gmail returned it. Never decoded on this path. */
   data: string;
 }
 
-/**
- * base64url to padded base64, wrapped to 76 columns.
- *
- * Gmail hands attachment content out in base64url and MIME wants base64, which
- * is two character substitutions and the padding Gmail omits. The bytes are
- * never decoded: a round trip through a Uint8Array would trade a string copy
- * for two, and the point of this path is that a file passes through the Worker
- * without ever being materialized as bytes.
- *
- * The wrap is not cosmetic. RFC 5322 caps a line at 998 characters, so a
- * megabyte of base64 on one line is a message some hop is entitled to reject.
- */
 function mimeBase64(data: string): string {
   const standard = data.replace(/-/g, "+").replace(/_/g, "/").replace(/=+$/, "");
   const padded = standard + "=".repeat((4 - (standard.length % 4)) % 4);
   return padded.replace(/.{76}/g, "$&\r\n").replace(/\r\n$/, "");
 }
 
-/**
- * `filename=` for a name a person actually gave a file.
- *
- * Quotes and newlines come out because they would end the parameter early. A
- * name outside ASCII gets both forms: a transliterated `filename` that every
- * mailer understands and the RFC 2231 `filename*` that carries the real one,
- * which is what Gmail itself sends.
- */
 function filenameParams(name: string): string {
   const safe = name.replace(/[\r\n"\\]/g, "").trim() || "attachment";
   const printable = /^[\u0020-\u007e]+$/;
@@ -207,7 +105,6 @@ function filenameParams(name: string): string {
   return `filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(safe)}`;
 }
 
-/** RFC 2822: one text part, or a `multipart/mixed` when files came along. */
 function buildMessage(to: string, subject: string, body: string, files: Attached[]): string {
   const head = [`To: ${headerValue(to)}`, `Subject: ${headerValue(subject)}`, "MIME-Version: 1.0"];
   if (files.length === 0) {
@@ -238,7 +135,6 @@ function buildMessage(to: string, subject: string, body: string, files: Attached
   return lines.join("\r\n");
 }
 
-/** base64url of a whole message, which is what Gmail's JSON send takes. */
 function base64urlMessage(message: string): string {
   const bytes = new TextEncoder().encode(message);
   let binary = "";
@@ -246,46 +142,23 @@ function base64urlMessage(message: string): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-/** Gmail's `body` on a part: content inline, or a receipt for fetching it. */
 interface PartBody {
   data?: string;
   attachmentId?: string;
   size?: number;
 }
 
-/** Every part of a payload, depth first, the payload itself included. */
 function* walkParts(part: Record<string, unknown>): Generator<Record<string, unknown>> {
   yield part;
   for (const child of (part.parts ?? []) as Record<string, unknown>[]) yield* walkParts(child);
 }
 
-/**
- * The parts a person would call attachments: the ones with a name of their own.
- *
- * Gmail sets `filename` to the empty string on the parts that make up the
- * message body and to the real name on everything that arrived alongside it,
- * which is the same line a mail client draws. Inline images from HTML mail land
- * on this side of it, correctly: they are files, and a caller can tell from the
- * name and the type.
- */
 function attachedParts(payload: Record<string, unknown>): Record<string, unknown>[] {
   return [...walkParts(payload)].filter(
     (part) => typeof part.filename === "string" && part.filename !== "",
   );
 }
 
-/**
- * Gmail's own message shape, reduced to what an agent asked for.
- *
- * The API answers with a `payload` tree of MIME parts, base64url bodies and a
- * header array. Handing that to a model costs hundreds of tokens per message
- * and it still has to walk the tree, so the walk happens here once.
- *
- * Attachments are listed and not decoded. A file is named, typed, sized and
- * given the `partId` that `gmail_send` takes, which is everything needed to
- * forward it and none of its bytes: a 6 MB deck is 8 MB of base64 that no model
- * can read and every model would have to pay for.
- */
 function readMessage(message: Record<string, unknown>): Record<string, unknown> {
   const payload = (message.payload ?? {}) as Record<string, unknown>;
   const headers = (payload.headers ?? []) as { name?: string; value?: string }[];
@@ -303,10 +176,6 @@ function readMessage(message: Record<string, unknown>): Record<string, unknown> 
     }
   };
 
-  // Depth-first for the first text/plain part that is not itself a file,
-  // falling back to the top-level body. A multipart/alternative message puts
-  // plain text beside the HTML and the plain one is what a model should read;
-  // an attached .txt is not the message and must not be mistaken for it.
   const bodyPart = [...walkParts(payload)].find(
     (part) => part.mimeType === "text/plain" && !part.filename && (part.body as PartBody)?.data,
   );
@@ -331,26 +200,15 @@ function readMessage(message: Record<string, unknown>): Record<string, unknown> 
     date: header("Date"),
     snippet: message.snippet,
     body: text.slice(0, 20000),
-    // Omitted rather than empty: most mail has none, and a `[]` on every
-    // message is a line of noise in every search result that carries it.
     ...(attachments.length ? { attachments } : {}),
   };
 }
 
-/** What `gmail_send` is handed: a file, named by the message it arrived on. */
 interface AttachRef {
   messageId: string;
   partId: string;
 }
 
-/**
- * `attach` as the model wrote it, or `null` if it is not the shape promised.
- *
- * Refusing an unparseable argument outright beats attaching nothing and
- * reporting success, which is how a model concludes it forwarded a file it did
- * not forward. `partId` is accepted as a number as well because Gmail's are
- * `0`, `1`, `1.1` and a model reading that list will sometimes send `1`.
- */
 function attachRefs(value: unknown): AttachRef[] | null {
   if (value === undefined || value === null) return [];
   if (!Array.isArray(value)) return null;
@@ -373,18 +231,6 @@ function attachRefs(value: unknown): AttachRef[] | null {
   return refs;
 }
 
-/**
- * Turn references into files, reading each one out of the mail it arrived on.
- *
- * The name and the type come from the source message rather than from the
- * caller. That is the whole reason the argument is a reference: a model that
- * supplied its own `filename` could relabel a spreadsheet as a PDF, by mistake
- * or because something in the mail it just read told it to, and nothing
- * downstream would notice.
- *
- * Size is checked against what Gmail already reported, before a byte moves. A
- * refusal after four megabytes of transfer is the same refusal, later.
- */
 async function resolveAttachments(
   token: string,
   refs: AttachRef[],
@@ -396,8 +242,6 @@ async function resolveAttachments(
     };
   }
 
-  // One read per message however many files came off it, because two
-  // attachments on one mail are the common case.
   const messages = new Map<string, Record<string, unknown>>();
   for (const { messageId } of refs) {
     if (messages.has(messageId)) continue;
@@ -406,9 +250,6 @@ async function resolveAttachments(
       `${GMAIL}/messages/${encodeURIComponent(messageId)}?format=full`,
     );
     if (!got.ok) {
-      // 403 here is a specific, fixable thing and worth naming: sending is one
-      // half of the Gmail grant and reading is the other, so an account can
-      // hold `gmail_send` and still be unable to attach anything to it.
       const hint =
         got.status === 403
           ? " Attaching a file that arrived by mail needs the read half of the Gmail grant, not only the send half."
@@ -455,8 +296,6 @@ async function resolveAttachments(
   for (const { ref, part } of chosen) {
     const body = (part.body ?? {}) as PartBody;
     let data = body.data;
-    // Gmail inlines a small part and hands out a receipt for a large one, so
-    // both are normal and only the second costs a request.
     if (!data && body.attachmentId) {
       const got = await callProvider(
         token,
@@ -509,8 +348,6 @@ const GOOGLE_TOOLS: Tool[] = [
       );
       if (ids.length === 0) return ok("No messages matched that query.");
 
-      // Metadata rather than full bodies: a search result is for choosing which
-      // message to open, and full bodies would be most of a context window.
       const messages = [];
       for (const id of ids) {
         const got = await callProvider(
@@ -599,10 +436,6 @@ const GOOGLE_TOOLS: Tool[] = [
       const { files } = resolved;
       const message = buildMessage(to, subject, body, files);
 
-      // Two endpoints for one send. The JSON one takes the whole message
-      // base64url'd inside a field, which is fine for text and wasteful for
-      // bytes; the upload one takes the message itself and is what Google
-      // documents for anything with a file on it.
       const sent = files.length
         ? await callProvider(token, `${GMAIL_UPLOAD}/messages/send?uploadType=media`, {
             method: "POST",
@@ -639,8 +472,6 @@ const GOOGLE_TOOLS: Tool[] = [
         orderBy: "startTime",
         maxResults: String(limit),
       });
-      // The API needs a lower bound to order by start time, and "now" is the
-      // range a person means when they do not say.
       params.set("timeMin", str(args, "from") ?? new Date().toISOString());
       const to = str(args, "to");
       if (to) params.set("timeMax", to);
@@ -785,11 +616,6 @@ const GOOGLE_TOOLS: Tool[] = [
       if (!name || content === undefined)
         return refuse("drive_create_file needs name and content.");
 
-      // Multipart, because metadata and bytes go in one request and Drive
-      // rejects a body that sends only one of them. The boundary is random for
-      // the same reason it is in a mail: `content` is written by a model, and a
-      // fixed one could be reproduced inside the file to open a second metadata
-      // part the caller was never offered a field for.
       const mark = boundary();
       const body = [
         `--${mark}`,
@@ -845,13 +671,6 @@ const GOOGLE_TOOLS: Tool[] = [
 
 const BY_PROVIDER: Record<string, Tool[]> = { google: GOOGLE_TOOLS };
 
-/**
- * The tools one grant actually supports.
- *
- * Keyed on the scopes the provider returned rather than on the capabilities the
- * operator ticked, because those are not the same thing: a consent screen lets
- * someone untick a box on the way through, and a grant can be narrowed later.
- */
 export function toolsFor(provider: Provider, scope: string | null | undefined): Tool[] {
   const held = parseScopes(scope);
   return (BY_PROVIDER[provider.id] ?? []).filter((tool) =>
@@ -861,7 +680,6 @@ export function toolsFor(provider: Provider, scope: string | null | undefined): 
   );
 }
 
-/** Every tool this origin could ever offer, for a test that walks them. */
 export function allTools(): Tool[] {
   return Object.values(BY_PROVIDER).flat();
 }

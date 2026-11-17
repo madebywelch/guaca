@@ -1,17 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-/**
- * The transport, in the host this app is not usually tested in.
- *
- * The setup file gives jsdom Tauri's bridge so every other suite draws the
- * desktop, and the module decides which host it is in by reading `window`
- * once, on import. So the bridge comes off first and the import comes after:
- * everything below is the hosted path, and the desktop half is one `import()`
- * of Tauri's own API with nothing of its own to test. What is worth checking
- * is the two things a browser does with a token that a webview never has to:
- * where it takes one from, and what it says when the box stops accepting it.
- */
-
 delete (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 const {
   adoptInvitation,
@@ -28,8 +16,6 @@ const {
 const fetched = vi.fn<typeof fetch>();
 
 beforeEach(async () => {
-  // Stubbed before signing out: signing out is a request to the daemon now,
-  // and a real `fetch` in jsdom would only fail against nothing listening.
   vi.stubGlobal("fetch", fetched);
   fetched.mockResolvedValue(new Response(JSON.stringify({ ok: "signed out" })));
   await setToken("");
@@ -72,12 +58,8 @@ describe("an invitation", () => {
     window.history.replaceState(null, "", "/#token=abc123");
 
     expect(adoptInvitation()).toBe(true);
-    // The credential must not survive in the URL: a reload, a duplicated tab
-    // or a link dragged to somebody else would carry it.
     expect(window.location.hash).toBe("");
     expect(window.location.pathname).toBe("/");
-    // Nor in script-readable storage. It waits for its exchange, which is what
-    // turns it into the HttpOnly cookie this browser keeps instead.
     expect(token()).toBe("");
 
     await expect(settleInvitation()).resolves.toBe(true);
@@ -97,7 +79,6 @@ describe("an invitation", () => {
     const [url, init] = fetched.mock.calls[0]!;
     expect(String(url)).toBe(`${window.location.origin}/v1/auth/session`);
     expect((init!.headers as Record<string, string>).authorization).toBe("Bearer old-token");
-    // The script-readable copy is gone the moment the cookie replaces it.
     expect(window.localStorage.getItem("guaca.workspace.token")).toBeNull();
   });
 
@@ -189,8 +170,6 @@ describe("a window pointed at a box", () => {
       "https://a.example",
     );
   });
-  // The module reads the arrangement once, on import, so this is a second
-  // import with the bridge present and a box on record: the third host.
   it("sends its calls to the box, with the box's token, and files from the box", async () => {
     vi.resetModules();
     (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
@@ -211,7 +190,6 @@ describe("a window pointed at a box", () => {
       expect(String(url)).toBe("http://box.example:8787/v1/call");
       expect((init!.headers as Record<string, string>).authorization).toBe("Bearer box-token");
 
-      // A rotated token stays with the box's record rather than the page's.
       boxed.setToken("rotated");
       expect(JSON.parse(window.localStorage.getItem("guaca.workspace.remote")!)).toEqual({
         origin: "http://box.example:8787",
@@ -298,9 +276,6 @@ describe("an upload", () => {
     await expect(upload(file)).resolves.toMatchObject({ digest: "d", name: "brief.txt" });
     const [url, init] = fetched.mock.calls[0]!;
     expect(String(url)).toBe(`${window.location.origin}/v1/upload?name=brief.txt`);
-    // A browser holds no script-readable token. The session cookie rides along
-    // because a same-origin request asks for credentials, and no header goes
-    // out empty.
     expect((init!.headers as Record<string, string>).authorization).toBeUndefined();
     expect(init!.credentials).toBe("same-origin");
     expect(init!.body).toBe(file);
@@ -359,8 +334,6 @@ describe("a call", () => {
     expect(init!.credentials).toBe("same-origin");
     const sent = JSON.parse(String(init!.body));
     expect(sent).toMatchObject({ name: "capabilities", args: {} });
-    // In the body and never a header: an older host's CORS would refuse the
-    // preflight of every call that carried one it does not know.
     expect(sent.client).toEqual({
       version: expect.stringMatching(/^\d+\.\d+\.\d+/),
       build: expect.any(String),
@@ -371,8 +344,6 @@ describe("a call", () => {
   });
 
   it("says once, on the window, that the token was turned away", async () => {
-    // One event rather than forty banners: a token rotated on the box turns
-    // every call away at once, and the answer is one screen asking again.
     const heard = vi.fn();
     window.addEventListener(UNAUTHORIZED_EVENT, heard);
     fetched.mockResolvedValue(
@@ -407,8 +378,6 @@ describe("a call", () => {
   });
 
   it("names a box that cannot be reached as its own kind of failure", async () => {
-    // The one failure where the thing to do is wait: the crew keeps working
-    // while nobody can see it, and nothing about the settings is wrong.
     fetched.mockRejectedValue(new TypeError("Failed to fetch"));
 
     await expect(invoke("capabilities")).rejects.toMatchObject({ kind: "unreachable" });
@@ -418,11 +387,6 @@ describe("a call", () => {
   });
 
   it("says where it could not reach, and not what the browser called the failure", async () => {
-    // `fetch` has one sentence — "Failed to fetch" — for a box that is off, a
-    // tunnel that dropped and a name that does not resolve. Printing it inside
-    // a sentence that already names the address adds nothing an operator can
-    // act on and reads as a stack trace in the one place that should sound like
-    // a colleague. The address is the part worth having.
     fetched.mockRejectedValue(new TypeError("Failed to fetch"));
 
     const refusal = await invoke("capabilities").catch((error: unknown) => error);
@@ -532,9 +496,6 @@ describe("a host that stops answering", () => {
     try {
       sockets[0]!.onopen?.();
       sockets[0]!.onclose?.();
-      // The redial is still owed an answer: a socket that dropped and came back
-      // inside the first backoff is not a host that left, and a page that said
-      // so would be taking it back a moment later.
       await vi.advanceTimersByTimeAsync(600);
       expect(lost).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1_500);
@@ -542,9 +503,7 @@ describe("a host that stops answering", () => {
       const refusal = lost.mock.calls[0]![0];
       expect(refusal).toMatchObject({ kind: "unreachable" });
       expect(refusal.message).toContain("lost the connection to this host");
-      // Where it is, because what to do about it depends on which host this is.
       expect(refusal.message).toContain(window.location.origin);
-      // One silence, one sentence: the banner is not re-raised every attempt.
       await vi.advanceTimersByTimeAsync(60_000);
       expect(lost).toHaveBeenCalledTimes(1);
     } finally {
@@ -559,8 +518,6 @@ describe("a host that stops answering", () => {
     try {
       sockets[0]!.onopen?.();
       sockets[0]!.onclose?.();
-      // The first redial waits at most the retry floor, so the connection that
-      // lands here is the one that says the host was never gone.
       await vi.advanceTimersByTimeAsync(500);
       sockets[1]!.onopen?.();
       await vi.advanceTimersByTimeAsync(5_000);
@@ -572,9 +529,6 @@ describe("a host that stops answering", () => {
   });
 
   it("says nothing when the page lets the subscription go", async () => {
-    // A reload, a token screen or a second window closing this one is the page
-    // leaving, not the host, and a mark left behind would outlive the reason
-    // for it.
     vi.useFakeTimers();
     const { sockets, lost, stop } = await connected();
     try {

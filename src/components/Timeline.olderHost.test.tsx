@@ -12,10 +12,6 @@ vi.mock("../lib/transport", async (original) => ({
   invoke: vi.fn(),
 }));
 
-/**
- * What a 0.4.0 host answers a 0.5.0 window with: pending requests without
- * `lapsesAt`, and no `upcoming_runs` command at all.
- */
 function olderHost(name: string): Promise<unknown> {
   switch (name) {
     case "pending_approvals": {

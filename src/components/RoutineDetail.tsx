@@ -34,19 +34,15 @@ import { compact, money, priced } from "./Spend";
 
 interface Props {
   agentId: AgentId;
-  /** `"new"` starts an empty one, which exists only once it is created. */
   routineId: RoutineId | "new";
   onBack: () => void;
 }
 
-/** A routine as it is being written. */
 interface Editing {
   name: string;
   what: string;
   trigger: string;
-  /** When it should fire. Only the parts the trigger asks for are read. */
   moment: Moment;
-  /** Drop a firing that lands on an agent already working. Repeats only. */
   skipIfWorking: boolean;
 }
 
@@ -57,8 +53,6 @@ function editingFor(routine: Routine): Editing {
     name: routine.name,
     what: routine.what,
     trigger: routine.trigger,
-    // A routine holding no moment still needs something in the fields, in case
-    // the operator switches it to a trigger that has one.
     moment: routine.nextRunAt === null ? nextRoundMoment() : momentOf(routine.nextRunAt),
     skipIfWorking: routine.skipIfWorking,
   };
@@ -70,38 +64,21 @@ function blank(): Editing {
     what: "",
     trigger: DEFAULT_TRIGGER,
     moment: nextRoundMoment(),
-    // Off unless it is asked for: a routine that has to happen even if it has
-    // to wait is the ordinary one.
     skipIfWorking: false,
   };
 }
 
-/**
- * What to send.
- *
- * `inSecs` is how a moment reaches the backend: it anchors the first firing,
- * and every repeat after that inherits the hour, and for a weekly or monthly
- * repeat the day as well. Null on an edit leaves the schedule exactly where it
- * was, which is what fixing a typo should do.
- */
 function draftOf(editing: Editing, moved: boolean): RoutineDraft {
   return {
     name: editing.name.trim(),
     what: editing.what.trim(),
     trigger: editing.trigger,
     inSecs: moved ? firstRunDelay(editing.trigger, editing.moment) : null,
-    // Dropped rather than sent on a trigger that does not repeat, where the
-    // backend refuses the pair. The tick is hidden there, so a routine ticked
-    // as a repeat and then switched to Once would otherwise fail to save with
-    // its reason on a control nobody can see.
     skipIfWorking: repeats(editing.trigger) && editing.skipIfWorking,
   };
 }
 
-/** Why the trigger on screen cannot be saved yet, or null when it can. */
 function triggerProblem(editing: Editing): string | null {
-  // An event half-named is not one, and the backend refuses it; the fields
-  // are on screen, so the sentence says which of them is wanted.
   if (eventFields(editing.trigger) && parseTrigger(editing.trigger).kind !== "event") {
     return "Name the service and what it reports, with no spaces in either.";
   }
@@ -113,47 +90,25 @@ function triggerProblem(editing: Editing): string | null {
     : "That is not a time of day.";
 }
 
-/**
- * One routine, with the panel given over to it.
- *
- * Everything about a routine is here rather than in a row that has to stay
- * one line: what it is called, what it actually says, when it runs, whether it
- * runs at all, and what it has done. A routine is a standing commitment made
- * to an agent, and deciding whether to keep one means reading the instruction
- * that will be delivered, not a summary of it.
- *
- * Active, Delete and Test run act at once and are deliberately not part of the
- * draft: turning something off is not an edit to what it says, and must not
- * wait on a Save the operator has not pressed.
- */
 export function RoutineDetail({ agentId, routineId, onBack }: Props) {
   const isNew = routineId === "new";
   const [routine, setRoutine] = useState<Routine | null>(null);
   const [draft, setDraft] = useState<Editing>(() => blank());
   const [runs, setRuns] = useState<RoutineRun[] | null>(null);
-  // Whether the moment was touched. An untouched one on an edit has to leave
-  // the next firing where it is: rewording an instruction should not silently
-  // push the schedule to tomorrow.
   const [moved, setMoved] = useState(false);
   const [loading, setLoading] = useState(!isNew);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  // Where an event is posted, read the first time the draft becomes one. Null
-  // until then, and null draws neither sentence: which one is true depends on
-  // whether this workspace is a Host, and only the answer says.
   const [address, setAddress] = useState<WebhookAddress | null>(null);
   const now = useNow(30_000);
 
   const load = useCallback(async () => {
     if (isNew) return;
     try {
-      // Read through the agent's list rather than adding a command for one
-      // row: the panel has just drawn that list, so this is already warm.
       const found = (await api.agentRoutines(agentId)).find((r) => r.id === routineId);
       if (!found) {
-        // Deleted from under us, or belonging to another agent.
         onBack();
         return;
       }
@@ -189,7 +144,6 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
   };
 
   const patch = (fields: Partial<Editing>) => setDraft((current) => ({ ...current, ...fields }));
-  /** Any change to when it fires is a change to the moment it is anchored on. */
   const patchMoment = (fields: Partial<Moment>) => {
     setDraft((current) => ({ ...current, moment: { ...current.moment, ...fields } }));
     setMoved(true);
@@ -329,14 +283,9 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
         <span className="field__label">Name</span>
         <input
           className="input"
-          // Named explicitly because the hint below the next field is inside
-          // its label, so the accessible name would otherwise be the label
-          // plus a sentence of explanation.
           aria-label="Name"
           maxLength={64}
           value={draft.name}
-          // What the list will call it if it is left blank, so nothing about
-          // the row is a surprise.
           placeholder={
             draft.what.trim() ? routineTitle({ name: "", what: draft.what }) : "Listings sweep"
           }
@@ -370,9 +319,6 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
             value={choiceFor(draft.trigger)}
             onChange={(change) => {
               patch({ trigger: change.target.value });
-              // Choosing a trigger with a moment is a decision about when, so
-              // the moment goes with it rather than staying where the old row
-              // was. A trigger with none leaves the schedule alone.
               if (anchorFor(change.target.value) !== "none") setMoved(true);
             }}
           >
@@ -381,9 +327,6 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
                 {choice.label}
               </option>
             ))}
-            {/* A trigger this picker does not offer: a gap an agent chose for
-                itself. Dropping it would silently rewrite the agent's schedule
-                the first time an operator saved an unrelated edit. */}
             {!TRIGGER_CHOICES.some((choice) => choice.spec === choiceFor(draft.trigger)) && (
               <option value={draft.trigger}>{repeatLabel(draft.trigger)}</option>
             )}
@@ -509,9 +452,6 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
         )}
       </div>
 
-      {/* Only where there is a next firing to fall back on. A one-off that
-          skipped would be a one-off that never happened, and the backend
-          refuses the pair rather than storing it. */}
       {repeats(draft.trigger) && (
         <label className="field field--row">
           <input
@@ -569,14 +509,6 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
   );
 }
 
-/**
- * What a routine has actually done.
- *
- * Every firing carries what it spent, because that is the difference between a
- * routine that is working and one that is being delivered to an agent which
- * never runs: the two rows are otherwise identical, and the operator's next
- * move is not the same.
- */
 function History({ runs, now }: { runs: RoutineRun[] | null; now: number }) {
   return (
     <div className="field">
@@ -586,9 +518,6 @@ function History({ runs, now }: { runs: RoutineRun[] | null; now: number }) {
       ) : (
         <ul className="history">
           {runs.map((entry, index) => (
-            // A skipped firing has no run to be keyed by, and two of them in
-            // one second are two rows. The list is read-only and redrawn whole,
-            // so its position is as good an identity as it has.
             <li key={entry.runId ?? `${entry.kind}-${entry.at}-${index}`} className="history__row">
               <span className="history__when">
                 {new Date(entry.at).toLocaleDateString(undefined, {
@@ -597,20 +526,12 @@ function History({ runs, now }: { runs: RoutineRun[] | null; now: number }) {
                 })}{" "}
                 at {clockTime(entry.at)}
               </span>
-              {/* A button press and a real firing look the same in the
-                  transcript, so which one this was is said here. */}
               {entry.kind === "test" && <span className="history__kind">test run</span>}
-              {/* One row for a catch-up rather than one per slot, because
-                  nothing happened at the others; this says it was late, and by
-                  how many slots the host was not there to fire. */}
               {entry.kind === "scheduled" && entry.missed > 0 && (
                 <span className="history__kind">
                   {`Fired late, missed ${entry.missed} ${entry.missed === 1 ? "time" : "times"} while the host was off`}
                 </span>
               )}
-              {/* Recorded because the alternative is a gap, and a gap in this
-                  list is what a scheduler that has stopped working looks
-                  like. */}
               {entry.kind === "failed" ? (
                 <span className="history__quiet">
                   Failed{entry.error ? `: ${entry.error}` : ""}

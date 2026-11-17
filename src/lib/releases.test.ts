@@ -104,14 +104,9 @@ describe("a desktop and its host, updated separately", () => {
     expect(skew(ours("0.1.0"), null)).toBe("unknown");
   });
   it("tells one version on two builds from one build", () => {
-    // A source build carries the last release's version, so against that
-    // release's host a version alone said "same" while the host was missing
-    // every command added since, and the Host pane said Compatible.
     expect(skew(ours("0.1.0", "bbbbbbb"), health)).toBe("otherBuild");
     expect(skew(ours("0.1.0", "bbbbbbb-dirty"), health)).toBe("otherBuild");
     expect(skew(ours("0.1.0", "aaaaaaa-dirty"), health)).toBe("otherBuild");
-    // One commit at two lengths, one dirty tree on both sides, or a side that
-    // names no commit, is not a difference anyone can show.
     expect(skew(ours("0.1.0", "a".repeat(40)), health)).toBe("same");
     const dirty = { ...health, build: "aaaaaaa-dirty" };
     expect(skew(ours("0.1.0", "aaaaaaa-dirty"), dirty)).toBe("same");
@@ -154,7 +149,6 @@ describe("a desktop and its host, updated separately", () => {
     expect(facts({ client: app, health: current, release })?.text).toBe(
       "Guaca 0.3.0 is available for this app and its host.",
     );
-    // A source-built host is never claimed to be behind, and the app still is.
     const source = { ...current, release: false };
     expect(facts({ client: app, health: source, release })?.text).toBe(
       "Guaca 0.3.0 is available for this app.",

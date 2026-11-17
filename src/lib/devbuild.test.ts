@@ -2,18 +2,9 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-/**
- * Guards `pnpm app`, which nothing else in CI runs.
- *
- * Both of these broke without a failing build: one meant the dev app would not
- * start, the other meant it started as the installed app and managed the
- * operator's own local host. Checked by reading the files the tools read.
- */
-
 const root = resolve(__dirname, "../..");
 const read = (path: string) => readFileSync(resolve(root, path), "utf8");
 
-/** `[features]` from Cargo.toml, as name to entries. */
 function features(): Map<string, string[]> {
   const section = read("src-tauri/Cargo.toml").match(/^\[features\]\n([\s\S]*?)(?=^\[)/m);
   if (!section) throw new Error("could not find [features] in Cargo.toml");
@@ -26,8 +17,6 @@ function features(): Map<string, string[]> {
   );
 }
 
-/** What `tauri dev` puts in place of the defaults: every default feature whose
- *  entries do not name `tauri/custom-protocol`, after `--no-default-features`. */
 function tauriDevFeatures(): string[] {
   const all = features();
   return (all.get("default") ?? []).filter(
@@ -35,7 +24,6 @@ function tauriDevFeatures(): string[] {
   );
 }
 
-/** The container name `LocalHost::new` derives from a bundle identifier. */
 const hostName = (identifier: string) => `${identifier.replace(/[^A-Za-z0-9]/g, "-")}-host`;
 
 describe("pnpm app", () => {

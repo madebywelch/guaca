@@ -6,24 +6,6 @@ import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
 import { type AgentCard, type AgentId, errorMessage } from "../lib/types";
 
-/**
- * Where deleted agents go, and what it takes to get one back.
- *
- * A pane in app settings, with one decision and one clock per deleted agent.
- *
- * What a delete actually costs is said once, in the head, and not on every row.
- * It is the whole argument for the panel existing — a deleted agent used to
- * lose its memory, its schedule, its sign-ins and its machine on the click, and
- * none of that is visible at the moment of pressing delete — but it is the same
- * sentence about every agent in the list, and the same sentence three times is
- * wallpaper. Said once at the top it is read; repeated down the column it turns
- * the clock, which is the one thing that differs per row, into more of the
- * same gray text.
- *
- * Restoring is one click and deleting for good is two, which is the same
- * asymmetry the agent menu draws. This is the only surface in the app that
- * destroys a memory on a button, so the button says so before it does it.
- */
 export function Compost() {
   const agents = useStore((s) => s.agents);
   const groups = useStore((s) => s.groups);
@@ -34,21 +16,10 @@ export function Compost() {
   const [busy, setBusy] = useState<AgentId | null>(null);
   const [confirming, setConfirming] = useState<AgentId | null>(null);
 
-  // Read once, when the panel opens. A clock that ticks would redraw every row
-  // to move a number that changes once a day, and nothing here is worth
-  // watching happen: the sweep runs hourly and the panel is open for seconds.
   const [now] = useState(() => Date.now());
 
   const rows = useMemo(() => composted(agents), [agents]);
 
-  /**
-   * One row's button, whichever it was.
-   *
-   * The roster is re-read here rather than left to the runtime's own event,
-   * because both of these change which rows this panel draws and one of them
-   * selects the restored agent. Returns `null` when the call was refused, so
-   * a caller does not act on a failure the operator is currently reading.
-   */
   const act = async <T,>(agent: AgentCard, run: () => Promise<T>): Promise<T | null> => {
     setBusy(agent.id);
     setError(null);
@@ -68,8 +39,6 @@ export function Compost() {
   const restore = async (agent: AgentCard) => {
     const back = await act(agent, () => api.restoreAgent(agent.id));
     if (!back) return;
-    // Show its channel when settings closes. Keep this pane open so restoring
-    // an agent does not discard settings edits waiting to be saved.
     await select(back.id);
   };
 
@@ -81,9 +50,6 @@ export function Compost() {
     return (
       <li key={agent.id} className="compost__row">
         <span className="compost__face">
-          {/* Drawn as what it is: an agent that is not running. The same mark
-              the rail puts on a deleted row, so a face in here and a face in an
-              old transcript agree with each other. */}
           <AgentAvatar
             avatar={agent.avatar}
             color={agent.color}

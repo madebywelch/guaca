@@ -1,12 +1,3 @@
-/**
- * A. Lids. The same paper body, with an eye that has a pupil and two lids.
- *
- * The pupil takes the glance and the lids take the emotion, which is how an
- * animator divides a face. The body, the silhouettes and the moods' shapes are
- * the app's own (`bodyPoints` and `MOODS[m].shape`), so the only thing this
- * direction changes is the eye, and what the eye lets the body stop doing.
- */
-
 import { AIM } from "../../src/avatars/eyes";
 import { blend, bodyPoints, grip, outline } from "../../src/avatars/form";
 import { MOODS, markFor, type Mood } from "../../src/avatars/moods";
@@ -32,23 +23,14 @@ import {
   uid,
 } from "./shared";
 
-/** One eye's lids, in eye radii unless said otherwise. */
 interface Lid {
-  /** Upper lid: 0 clear of the eye, 1 shut, negative retracted. */
   open: number;
-  /** Degrees. Positive drops the inner end, which is cross; negative lifts it, which is worry. */
   tilt: number;
-  /** How far the upper lid arches in its middle. */
   arch: number;
-  /** Lower lid: 0 at rest, 1 up to where a closed eye meets. */
   low: number;
-  /** How far the lower lid bows up in its middle. Cheeks pushing: a smile. */
   smile: number;
-  /** Pupil radius. Small is shock, large is interest. */
   pupil: number;
-  /** The eye's own scale. */
   size: number;
-  /** The creature's right upper lid lower than its left, in `open`. */
   skew: number;
 }
 
@@ -57,13 +39,11 @@ interface Face {
   gaze?: GazeSpec;
   blink?: boolean | "slow";
   jitter?: number;
-  /** How the lids change as the look goes up, blended by how far up. */
   squint?: Partial<Lid>;
 }
 
 const REST: Lid = { open: 0.16, tilt: 0, arch: 0.3, low: 0.05, smile: 0, pupil: 0.5, size: 1, skew: 0 };
 
-/* Working reads. Short steps to the right along a line, one long return. */
 const READING: [number, number, number][] = [
   [-0.2, 0.12, 0.42],
   [-0.08, 0.12, 0.3],
@@ -140,7 +120,6 @@ function mixLid(a: Lid, b: Lid, u: number): Lid {
   return out;
 }
 
-/** Where the lid lines cross the eye, sampled across it. */
 const SAMPLES = 25;
 
 interface EyeParts {
@@ -179,16 +158,6 @@ function eyeParts(svg: SVGSVGElement, defs: SVGDefsElement): EyeParts {
   return { opening, lashClip, sclera, pupil, shade, lash, under };
 }
 
-/**
- * One eye, drawn. `side` is -1 for the eye on the viewer's left and 0 for a
- * single eye. The inner end of each lid is the one toward the other eye, which
- * is what a tilt drops.
- *
- * What is drawn is the opening, not the lids: the white between the two lid
- * lines, cut to the eyeball. Drawing lids in the body's color over a white
- * eyeball leaves a hairline of white round a shut eye wherever the two edges
- * antialias, and the body is already there to be the lid.
- */
 function drawEye(
   p: EyeParts,
   x: number,
@@ -205,11 +174,8 @@ function drawEye(
   const L = rx * 1.3;
   const slope = Math.tan((lid.tilt * Math.PI) / 180);
   const lowSlope = slope * 0.25;
-  /* A single eye has no inner end, so its middle is what a tilt drops. */
   const across = (lx: number) => (side === 0 ? L * 0.5 - Math.abs(lx) : -side * lx);
   const bow = (lx: number) => 1 - (lx / L) ** 2;
-  /* The upper lid closes onto the lower one, wherever that is, so a shut eye
-     is one line and never a line with white under it. */
   const lowerAt = (lx: number) =>
     ry * 1.02 - (ry * 1.02 - shut) * lid.low + lowSlope * across(lx) - lid.smile * ry * bow(lx);
   const upperAt = (lx: number) =>
@@ -247,7 +213,6 @@ function drawEye(
   p.lashClip.setAttribute("rx", (rx * 1.14).toFixed(2));
   p.lashClip.setAttribute("ry", (ry * 1.14).toFixed(2));
 
-  /* The pupil, held inside the white by the same ellipse it is drawn in. */
   const P = lid.pupil * E;
   const roomX = rx - P * 0.8;
   const roomY = ry - P * 0.8;
@@ -262,7 +227,6 @@ function drawEye(
   p.pupil.setAttribute("cy", (y + oy).toFixed(2));
   p.pupil.setAttribute("r", P.toFixed(2));
 
-  /* The lid's shadow on the eyeball: a band under the lid line, faint. */
   p.shade.setAttribute(
     "d",
     poly([...lashLine.map(([a, b]) => [a, b - ry] as Point), ...lashLine.map(([a, b]) => [a, b + ry * 0.22] as Point).reverse()]),
@@ -305,7 +269,6 @@ export const lids: Design = {
         const to = FACES[f.mood];
         const from = FACES[f.from];
 
-        /* Where it looks, and whether this is a jump big enough to blink into. */
         let target: Point;
         let jumpBlink = 0;
         const lookKey = f.look ?? (f.point ? "you" : "mood");
@@ -321,7 +284,6 @@ export const lids: Design = {
           const b = saccade(f.t, to.gaze);
           target = [lerp(a.at[0], b.at[0], u), lerp(a.at[1], b.at[1], u)];
           const g = u > 0.5 ? b : a;
-          /* Lids lead a large saccade by a few frames, as they do in a face. */
           if (g.size > 0.2 && rnd(g.slot + 0.19) < 0.7) jumpBlink = bump(g.jump + 0.05, 0.17);
         }
         if (f.live) follow(look, vel, target, f.dt, 0.09);
@@ -330,8 +292,6 @@ export const lids: Design = {
           look[1] = target[1];
         }
 
-        /* The body is today's body, answering most of the look. The pupil is
-           what took the rest. */
         const bodyLook: Point = [look[0] * 0.8, look[1] * 0.8];
         if (f.gesture && f.live && f.age < 0.9) {
           const wave = f.gesture === "send" ? Math.sin(f.age * 9.4) : Math.cos(f.age * 13.8);
@@ -357,8 +317,6 @@ export const lids: Design = {
             low: lid.low + up * (s.low ?? 0),
           };
         }
-        /* The upper lid rides the pupil down. This, not the stroke, is what
-           makes a downward look read as looking down. */
         lid = { ...lid, open: lid.open + down * 0.32 - up * 0.1, low: lid.low + up * 0.06 };
         if (f.point) lid = { ...lid, pupil: lid.pupil * 1.1 };
 

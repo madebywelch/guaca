@@ -33,19 +33,11 @@ function agent(name: string, discardedAt: number | null): AgentCard {
   };
 }
 
-/** Deleted this many days ago. */
 const thrownOut = (name: string, daysAgo: number) => agent(name, NOW - daysAgo * DAY);
 
 describe("who is in the compost", () => {
   it("is whoever carries a stamp, and nobody else", () => {
-    const rows = composted([
-      agent("Manager", null),
-      thrownOut("Scribe", 1),
-      // Terminated with no stamp: deleted before the compost existed, or
-      // swept out of it. Its transcript still reads and its name is still
-      // drawn there, but there is nothing left to put back.
-      agent("Ghost", null),
-    ]);
+    const rows = composted([agent("Manager", null), thrownOut("Scribe", 1), agent("Ghost", null)]);
 
     expect(rows.map((row) => row.name)).toEqual(["Scribe"]);
   });
@@ -64,9 +56,6 @@ describe("how long is left", () => {
   });
 
   it("drops to hours on the last day, which is when the unit starts to matter", () => {
-    // Rounded down on purpose. An agent with three hours left is not one that
-    // has a day, and telling somebody it does is the error that costs them the
-    // agent.
     const threeHoursLeft = agent("a", NOW - COMPOST_DAYS * DAY + 3 * 60 * 60 * 1000);
     expect(timeLeft(threeHoursLeft, NOW)).toBe("3 hours left");
 
@@ -75,8 +64,6 @@ describe("how long is left", () => {
   });
 
   it("says the wait is over rather than counting backwards", () => {
-    // The sweep runs hourly, so a row can outlive its deadline by up to an
-    // hour. "-0 days left" for that hour reads as something broken.
     expect(timeLeft(thrownOut("a", COMPOST_DAYS + 1), NOW)).toBe("going now");
   });
 

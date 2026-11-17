@@ -1,18 +1,3 @@
-/**
- * C. Ink. Drawn, not cut.
- *
- * The body is the app's own geometry (`bodyPoints`), drawn as one brush stroke
- * over a pigment printed a unit out of register. It is animated on twos: twelve
- * drawings a second, held between, so a look is a snap and a hold is dead
- * still. The line is an emotional channel of its own: calm moods hold it
- * clean, work boils it, frustration scratches it, a paused creature's line
- * dries out.
- *
- * The face gets back two things CHARACTERS.md took away, brows and a mouth.
- * Both are strokes computed from the eye they belong to, so neither can fall
- * out of register with it, and the mouth is only drawn at 40px and up.
- */
-
 import { AIM } from "../../src/avatars/eyes";
 import { blend, bodyPoints, grip } from "../../src/avatars/form";
 import { markFor, MOODS, type Mood } from "../../src/avatars/moods";
@@ -49,39 +34,29 @@ interface Mark {
 }
 
 interface Brow {
-  /** 0 is no brow. */
   weight: number;
-  /** Above the eye's middle, in eye radii. */
   lift: number;
-  /** Degrees. Positive drops the inner end. */
   tilt: number;
   len: number;
   bow: number;
-  /** The creature's right brow higher by this, and turned by `turn`. */
   skew: number;
   turn: number;
 }
 
 interface Mouth {
-  /** 0 is no mouth. */
   weight: number;
   w: number;
-  /** Positive smiles. */
   curve: number;
   wave: number;
-  /** An open "o". */
   o: number;
-  /** Off to one side, in eye radii. */
   x: number;
 }
 
 interface Line {
   weight: number;
-  /** How far the line wanders, and how many new drawings of it a second. */
   boil: number;
   rate: number;
   scratch: number;
-  /** Share of the stroke that has run dry. */
   dry: number;
 }
 
@@ -95,10 +70,8 @@ interface Ink {
   gaze?: GazeSpec;
   blink?: boolean | "slow";
   jitter?: number;
-  /** When looking up: the brow the creature's right cocks, the eye it narrows. */
   squint?: { skew: number; turn: number; lop: number };
   mark?: Emanata;
-  /** Where the mark on its head wants to point, in degrees, and how stiff it is. */
   tuft: { rest: number; stiff: number };
   dim?: boolean;
 }
@@ -234,15 +207,8 @@ function mixAll<T extends object>(a: T, b: T, u: number): T {
   return out as T;
 }
 
-/**
- * Pose to pose, on twos. A change of mood is five drawings: the old pose, one
- * halfway, one past the new pose, one just short of it, and the new pose.
- */
 const POSES = [0, 0.5, 1.14, 0.97, 1];
 
-/* --- strokes --------------------------------------------------------------- */
-
-/** A filled stroke along a centerline, with its own width at every point and round ends. */
 function stroke(center: Point[], widths: number[]): string {
   const n = center.length;
   if (n < 2) return "";
@@ -281,14 +247,12 @@ function stroke(center: Point[], widths: number[]): string {
   return poly([...left, ...cap(n - 1, true), ...right.reverse(), ...cap(0, false)]);
 }
 
-/** A quadratic from a to b bowed by `bow` (positive bows toward -y), sampled. */
 function arc(a: Point, b: Point, bow: number, n = 10): Point[] {
   const mx = (a[0] + b[0]) / 2;
   const my = (a[1] + b[1]) / 2;
   const lx = b[0] - a[0];
   const ly = b[1] - a[1];
   const l = Math.hypot(lx, ly) || 1;
-  /* The normal that points up the screen when a is left of b. */
   const nx = ly / l;
   const ny = -lx / l;
   const cx = mx + nx * bow * 2;
@@ -302,7 +266,6 @@ function arc(a: Point, b: Point, bow: number, n = 10): Point[] {
   return out;
 }
 
-/** The body's line: one brush stroke round the outline, lifted off where it began. */
 function brush(pts: Point[], line: Line, step: number, seed: number, px: number): string {
   const ring = resample(pts, 4);
   const n = ring.length;
@@ -337,7 +300,6 @@ function brush(pts: Point[], line: Line, step: number, seed: number, px: number)
     const dy = y - C;
     const l = Math.hypot(dx, dy) || 1;
     center.push([x + (dx / l) * wander, y + (dy / l) * wander]);
-    /* Heavier underneath, where a brush going round a shape presses. */
     const down = (1 + dy / l) / 2;
     const taper = Math.min(1, 0.4 + s / 0.06, (1 - s) / 0.12);
     const dryness = line.dry > 0 && Math.sin(s * TAU * 9 + seed * 5) > 1 - line.dry * 1.6 ? 0.08 : 1;
@@ -346,8 +308,6 @@ function brush(pts: Point[], line: Line, step: number, seed: number, px: number)
   }
   return stroke(center, widths);
 }
-
-/* --- what is on its head ------------------------------------------------------ */
 
 type Tuft = "curl" | "leaf" | "tick" | "none";
 const TUFTS: Tuft[] = ["curl", "tick", "none", "leaf", "tick", "curl", "none"];
@@ -368,8 +328,6 @@ function tuftLines(kind: Tuft): Point[][] {
   }
 }
 
-/* --- the creature -------------------------------------------------------------- */
-
 export const ink: Design = {
   key: "ink",
   name: "C. Ink",
@@ -377,8 +335,6 @@ export const ink: Design = {
     const seedNum = rnd(seed.length * 3.7 + (seed.charCodeAt(0) || 0));
     const kind = TUFTS[Math.floor(rnd(who.key.length * 5.1 + (who.key.charCodeAt(1) || 0)) * TUFTS.length)] as Tuft;
     const fill = el("path", { fill: "var(--accent)", class: "ink__fill" }, svg);
-    /* The edge and the face are two inks: on a dark page the edge has to be
-       the light one or the silhouette is only the misregistered pigment. */
     const tuft = el("path", { class: "ink__edge" }, svg);
     const line = el("path", { class: "ink__edge" }, svg);
     const face = el("g", { class: "ink__line" }, svg);
@@ -409,7 +365,6 @@ export const ink: Design = {
         else {
           const g = saccade(f.t, { ...to.gaze, cross: 0.05 });
           target = g.at;
-          /* A big look is hidden behind a blink, as an animator cuts a head turn. */
           if (g.size > 0.2 && g.jump < 2 / FPS) {
             jumpClosed = true;
           }
@@ -420,8 +375,6 @@ export const ink: Design = {
           look[1] = target[1];
         }
 
-        /* The mark on its head lags the body, which is the one piece of
-           secondary motion in the set. Simulated every frame, drawn on twos. */
         if (f.live) {
           const want = to.tuft.rest - look[0] * 60 + (f.gesture === "receive" && f.age < 0.3 ? 30 : 0);
           const k = 90 * to.tuft.stiff;
@@ -447,7 +400,6 @@ export const ink: Design = {
           svg.classList.toggle("is-dim", Boolean(to.dim));
         }
 
-        /* Body. */
         const bodyLook: Point = [look[0], look[1]];
         if (f.gesture && f.live && f.age < 0.8) {
           const away = f.look === "down" ? -1 : 1;
@@ -456,14 +408,12 @@ export const ink: Design = {
         }
         const next = bodyPoints(who, MOODS[f.mood].shape, tq, bodyLook).pts;
         const pts = settled ? next : blend(bodyPoints(who, MOODS[f.from].shape, tq, bodyLook).pts, next, u);
-        /* The pigment is printed a unit out of register with the line. */
         fill.setAttribute("d", poly(resample(pts, 3).map(([x, y]) => [x + 1.3, y + 1.1] as Point)));
 
         const ln = settled ? to.line : mixAll(from.line, to.line, clamp(u));
         const boilStep = ln.rate > 0 ? Math.floor(f.t * ln.rate) : 0;
         line.setAttribute("d", brush(pts, ln, boilStep, seedNum * 17, f.px));
 
-        /* Tuft, from the crown. */
         let crown = 0;
         for (let i = 1; i < pts.length; i++) if ((pts[i] as Point)[1] < (pts[crown] as Point)[1]) crown = i;
         const [kx, ky] = pts[crown] as Point;
@@ -483,7 +433,6 @@ export const ink: Design = {
             .join(""),
         );
 
-        /* Face. */
         let eye = settled ? to.eye : mixAll(from.eye, to.eye, u);
         let brow = settled ? to.brow : mixAll(from.brow, to.brow, u);
         const mo = settled ? to.mouth : mixAll(from.mouth, to.mouth, u);
@@ -538,13 +487,11 @@ export const ink: Design = {
           if (brow.weight > 0.04) {
             const mine = side > 0 ? brow.skew : 0;
             const tiltDeg = brow.tilt + (side > 0 ? brow.turn : 0);
-            /* A single eye has no inner end: its brow bends in the middle instead. */
             const t = side === 0 ? 0 : (tiltDeg * Math.PI) / 180;
             const bend = side === 0 ? -Math.sin((tiltDeg * Math.PI) / 180) * brow.len * er * 0.8 : 0;
             const bx = x;
             const by = ey - (brow.lift + mine) * er;
             const half = brow.len * er;
-            /* Inner end first: that is where a brush presses. */
             const inner = side === 0 ? 1 : -side;
             const a: Point = [bx + inner * Math.cos(t) * half, by + Math.sin(t) * half];
             const b: Point = [bx - inner * Math.cos(t) * half, by - Math.sin(t) * half];
@@ -607,7 +554,6 @@ function circle(x: number, y: number, r: number): string {
   return `M${(x - r).toFixed(2)} ${y.toFixed(2)}a${r.toFixed(2)} ${r.toFixed(2)} 0 1 0 ${(2 * r).toFixed(2)} 0a${r.toFixed(2)} ${r.toFixed(2)} 0 1 0 ${(-2 * r).toFixed(2)} 0Z`;
 }
 
-/** Catmull-Rom through an open run of points. */
 function openCurve(pts: Point[]): Point[] {
   const out: Point[] = [];
   const n = pts.length;
@@ -629,11 +575,6 @@ function openCurve(pts: Point[]): Point[] {
   return out;
 }
 
-/**
- * The marks beside a head, drawn on twos like everything else. Comics has a
- * word for these (emanata) and a vocabulary that reads at any size: a scribble
- * is cross, a drop of sweat is worry, lines round a head are a shock.
- */
 function emanata(kind: Emanata | undefined, f: { since: number; live: boolean; px: number }, frame: number, pts: Point[], seed: number): string {
   const w = (1.4 * hint(f.px, 40, 1.6)).toFixed(2);
   const ink = `stroke="var(--text)" stroke-width="${w}" fill="none" stroke-linecap="round" stroke-linejoin="round"`;
@@ -658,7 +599,6 @@ function emanata(kind: Emanata | undefined, f: { since: number; live: boolean; p
       return `<path d="M${(x - 3.2 * s).toFixed(2)} ${(y - 3.2 * s).toFixed(2)}h${(6.4 * s).toFixed(2)}l${(-6.4 * s).toFixed(2)} ${(6.4 * s).toFixed(2)}h${(6.4 * s).toFixed(2)}" ${ink} opacity="${(0.75 - k * 0.1).toFixed(2)}"/>`;
     }
     case "plewd": {
-      /* Up and to the left of the head, which is where a drop of sweat is drawn. */
       let left = 0;
       let most = -Infinity;
       for (let i = 0; i < pts.length; i++) {

@@ -30,7 +30,6 @@ function states(map: Record<string, Activity>): Record<AgentId, Activity> {
   return map as Record<AgentId, Activity>;
 }
 
-/** One open escalation, held by `by`. Nothing else on it is read here. */
 function raisedBy(by: string): Escalation {
   return {
     id: `e-${by}`,
@@ -68,8 +67,6 @@ describe("presenceOf", () => {
     expect(presenceOf(crew, states({ b: { state: "queued", depth: 2 } }), []).working).toBe(true);
   });
 
-  // A paused row is not work in progress. It scores nothing in `liftOf` for the
-  // same reason, and a ring lit for one would never go out.
   it("does not call a paused agent working", () => {
     expect(presenceOf(crew, states({ a: { state: "paused" } }), [])).toEqual(QUIET);
   });
@@ -78,9 +75,6 @@ describe("presenceOf", () => {
     expect(presenceOf(crew, states({ a: { state: "idle" } }), [])).toEqual(QUIET);
   });
 
-  // A parked agent is not also counted as working: it is the one thing the
-  // count is for, and a ring around a number says the crew is busy when in fact
-  // it has stopped.
   it("does not double count a parked agent as working too", () => {
     const presence = presenceOf(crew, states({ a: { state: "awaitingApproval" } }), []);
     expect(presence).toEqual({ blocked: 1, working: false });
@@ -95,16 +89,11 @@ describe("presenceOf", () => {
     expect(presence).toEqual({ blocked: 1, working: true });
   });
 
-  // The activity map is workspace-wide and the column draws one crew at a time.
   it("ignores an agent that is not in the crew", () => {
     const presence = presenceOf([anAgent("a")], states({ z: { state: "awaitingApproval" } }), []);
     expect(presence).toEqual(QUIET);
   });
 
-  // The half no activity state can carry. Nothing is parked on an escalation:
-  // the turn that raised it ended, so the agent holding one is idle or off
-  // doing something else, and a count read off `activity` alone says a crew
-  // that has been stuck since Tuesday is quiet.
   it("counts an open escalation, which no activity state says anything about", () => {
     const presence = presenceOf(crew, states({}), [raisedBy("a")]);
     expect(presence).toEqual({ blocked: 1, working: false });
@@ -115,9 +104,6 @@ describe("presenceOf", () => {
     expect(presence).toEqual({ blocked: 1, working: true });
   });
 
-  // Two things for the operator to deal with, and the desk has two cards for
-  // them. Collapsing them to one would say a crew needs one answer when it
-  // needs two, which is the count being wrong in the direction that matters.
   it("counts a parked turn and that agent's older escalation separately", () => {
     const presence = presenceOf(crew, states({ a: { state: "awaitingApproval" } }), [
       raisedBy("a"),
@@ -132,9 +118,6 @@ describe("presenceOf", () => {
 });
 
 describe("presenceNote", () => {
-  // The tag beside a circle and the label a screen reader hears are the same
-  // sentence minus the name. Two functions here is two descriptions of one
-  // circle, and only one of them can be right.
   it.each([
     [3, QUIET, "3 agents"],
     [1, QUIET, "1 agent"],
@@ -145,8 +128,6 @@ describe("presenceNote", () => {
     expect(presenceNote(count, presence)).toBe(said);
   });
 
-  // The one place the two marks are ranked. A sentence is one channel, and
-  // "waiting on you, and working" buries the half that needs a person.
   it("says waiting rather than working when both are true", () => {
     expect(presenceNote(2, { blocked: 1, working: true })).toBe("2 agents, 1 turn waiting on you");
   });
@@ -158,9 +139,6 @@ describe("presenceNote", () => {
 });
 
 describe("the whole workspace", () => {
-  // The menu bar's number is the workspace total and the column's numbers are
-  // its parts. One fold produces both, so the strip and the column cannot
-  // report different counts of the same parked turns.
   it("is the sum of its crews", () => {
     const everyone = [anAgent("a"), anAgent("b", { groupId: "g2" as AgentCard["groupId"] })];
     const activity = states({ a: { state: "awaitingApproval" }, b: { state: "awaitingApproval" } });
@@ -180,8 +158,6 @@ describe("presenceLabel", () => {
     expect(presenceLabel("Sales", 1, QUIET)).toBe("Sales, 1 agent");
   });
 
-  // The count in the corner is the whole point of the column and it is a
-  // picture. Anything that cannot see it has to be told.
   it("says how many turns are waiting", () => {
     expect(presenceLabel("Sales", 3, { blocked: 2, working: false })).toBe(
       "Sales, 3 agents, 2 turns waiting on you",

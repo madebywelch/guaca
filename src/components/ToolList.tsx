@@ -3,14 +3,6 @@ import { useEffect, useState } from "react";
 import { api } from "../lib/ipc";
 import { errorMessage, type ToolSummary } from "../lib/types";
 
-/**
- * Guaca's own tools, read from the definitions agents are sent.
- *
- * A list rather than switches. Which agent may use which tool is decided by
- * what it was given (a computer, a browser) and, for a
- * connector's tools, under Connectors; this is where an operator reads what
- * the functions are, in the words the agent reads them.
- */
 export function ToolList() {
   const [tools, setTools] = useState<ToolSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);

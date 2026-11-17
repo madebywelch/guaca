@@ -32,7 +32,6 @@ function call(name: string, args: unknown, outcome: ToolOutcome = ok("done")): T
   return { type: "toolCall", name, arguments: args, outcome };
 }
 
-/** A memory rewrite, which is the only call that carries what it overwrote. */
 function rewrote(content: string, replaced: string): ToolCall {
   return { ...call("update_memory", { content }, ok("Memory saved.")), replaced };
 }
@@ -43,16 +42,12 @@ function steps(...calls: ToolCall[]): Step[] {
 
 describe("what one call was", () => {
   it("names the site a browser was pointed at, not the tool", () => {
-    // `used browse` is the name of a function in a file the operator does not
-    // have. Where it went is the thing they opened the channel to find out.
     const [step] = steps(call("browse", { action: "open", url: "https://www.cnn.com/world" }));
     expect(step?.title).toBe("Opened cnn.com");
     expect(step?.target).toBe("https://www.cnn.com/world");
   });
 
   it("shows a url that will not parse exactly as it was written", () => {
-    // An agent that browsed to `cnn.com` browsed to cnn.com. Reporting nothing
-    // because `new URL` threw describes a different session.
     const [step] = steps(call("browse", { action: "open", url: "cnn.com" }));
     expect(step?.title).toBe("Opened cnn.com");
   });
@@ -122,15 +117,10 @@ describe("what one call was", () => {
   });
 
   it("names the document that was attached, since the operator can see the card", () => {
-    // The file itself is drawn under the message. The chip's job is to say
-    // which call put it there, and the path it came from is on a machine the
-    // operator has never seen.
     const [step] = steps(
       call("attach_file", { files: ["/home/user/exec-brief.md"] }, ok("attached exec-brief.md")),
     );
     expect(step?.title).toBe("Attached exec-brief.md");
-    // Nothing behind the chip: the summary is the title again, and the document
-    // is already on screen.
     expect(step?.target).toBeNull();
     expect(tellsMore(step as Step)).toBe(false);
   });
@@ -144,8 +134,6 @@ describe("what one call was", () => {
       ),
     );
     expect(step?.failed).toBe(true);
-    // A failure is never an echo. Whatever went wrong is not something the
-    // title could have said.
     expect(tellsMore(step as Step)).toBe(true);
     expect(step?.said).toContain("was not attached");
   });
@@ -163,10 +151,6 @@ describe("what one call was", () => {
   });
 
   it("says a refusal written for the model in words for the person, and keeps the model's", () => {
-    // The runtime's version names a parameter and tells the agent to call
-    // `directory`, which is right for the agent and reads as a traceback in a
-    // transcript. Both are kept: the sentence on the row, the original behind
-    // the click that already holds the arguments it was about.
     const [step] = steps(
       call(
         "send_message",
@@ -180,13 +164,10 @@ describe("what one call was", () => {
     );
     expect(step?.said).toBe("Nothing was sent: no agent in this group is called Zed.");
     expect(step?.told).toContain("`directory`");
-    // What the row draws for a refusal with nothing else to show is the same
-    // sentence, so the opened row and the chip cannot disagree.
     expect(stepReason(step as Step)).toBe(step?.said);
   });
 
   it("leaves a refusal it cannot translate exactly as the runtime wrote it", () => {
-    // A refusal from a build newer than this one, or one the table has not met.
     const said = "Refused: the archive you named is read-only for this session.";
     const [step] = steps(call("send_message", { text: "hi" }, { status: "refused", reason: said }));
     expect(step?.said).toBe(said);
@@ -196,8 +177,6 @@ describe("what one call was", () => {
 
 describe("a call that failed, said as an attempt", () => {
   it("does not put the successful past tense on work that did not happen", () => {
-    // The row is already washed and the reason is under it; what it used to say
-    // in words was that the schedule was made.
     const [step] = steps(
       call(
         "schedule",
@@ -207,7 +186,6 @@ describe("a call that failed, said as an attempt", () => {
     );
     expect(step?.title).toBe("Tried to schedule Morning market note");
     expect(step?.failed).toBe(true);
-    // The reason is still the reason, not a restatement of the title.
     expect(step?.said).toContain("already exists");
   });
 
@@ -224,17 +202,11 @@ describe("a call that failed, said as an attempt", () => {
   });
 
   it("says a verb it does not know as a failure rather than rewriting it", () => {
-    // Nothing in `describe` writes this today. It is here so a new title that
-    // nobody added to the table reads as a failure with an odd word in front,
-    // not as a past tense claiming the work happened.
     expect(attempt("Brewed the coffee")).toBe("Failed: Brewed the coffee");
   });
 });
 
 describe("credentials a command spent", () => {
-  // Mirrors `credentials_named_in` in `runtime/mod.rs`. If that wording changes
-  // this test is where it is noticed, rather than a transcript quietly losing
-  // the operator's audit trail for their own tokens.
   it("reads the names the runtime wrote, and leaves the rest of the summary", () => {
     const read = readSpent("used Mistral ($MISTRAL_API_KEY) · exit 0, 812 bytes out");
     expect(read.spent).toEqual(["Mistral ($MISTRAL_API_KEY)"]);
@@ -254,9 +226,6 @@ describe("credentials a command spent", () => {
   });
 
   it("never lets one be folded into a count", () => {
-    // Two commands would ordinarily read as "Ran 2 commands". The one that
-    // spent a token keeps its own chip, because that is the row the operator
-    // audits their own credentials from.
     const groups = foldTrail(
       steps(
         call("run_command", { command: "ls" }, ok("exit 0, 4 bytes out")),
@@ -294,8 +263,6 @@ describe("folding a turn's work", () => {
   });
 
   it("counts several of one kind instead of listing them", () => {
-    // The row this replaced: twenty-four lines of `Chef used browse` between
-    // the operator's question and the answer to it.
     const groups = foldTrail(
       steps(
         call("run_command", { command: "ls" }, ok("exit 0")),
@@ -309,8 +276,6 @@ describe("folding a turn's work", () => {
   });
 
   it("names the site when a browsing turn only visited one", () => {
-    // A count that names nothing hides what the operator opened the channel to
-    // find out, which is the same reason a burst draws one chip per peer.
     const groups = foldTrail(
       steps(
         call("browse", { action: "open", url: "https://cnn.com" }),
@@ -322,8 +287,6 @@ describe("folding a turn's work", () => {
   });
 
   it("names the site from the step and not from the words on the chip", () => {
-    // The label used to be recovered by slicing the title back apart, so
-    // rewording "Opened cnn.com" silently cost the group its name.
     const [step] = steps(call("browse", { action: "open", url: "https://cnn.com/world" }));
     expect(step?.where).toBe("cnn.com");
     expect(steps(call("browse", { action: "read" }))[0]?.where).toBeNull();
@@ -340,8 +303,6 @@ describe("folding a turn's work", () => {
   });
 
   it("gathers calls of one kind that a call of another came between", () => {
-    // What the turn did, rather than the order a model happened to interleave
-    // its tools in, which is not something anybody asked about.
     const groups = foldTrail(
       steps(
         call("browse", { action: "read" }),
@@ -360,8 +321,6 @@ describe("folding a turn's work", () => {
         call("run_command", { command: "pwd" }, ok("exit 0")),
       ),
     );
-    // Its own chip, out of the count, and in the words a failure needs: the
-    // command around it is the successful one.
     expect(groups.map((group) => group.label)).toEqual([
       "Ran 2 commands",
       "Tried to run a command",
@@ -373,8 +332,6 @@ describe("folding a turn's work", () => {
 
 describe("whether a chip opens anything", () => {
   it("does not offer a control over a lookup with nothing behind it", () => {
-    // A button that opens nothing is one the operator stops trusting the rest
-    // of.
     const groups = foldTrail(steps(call("directory", {}, ok("2 agent(s): Chef, Scribe"))));
     expect(hasDetail(groups[0]!)).toBe(false);
   });
@@ -393,9 +350,6 @@ describe("whether a chip opens anything", () => {
   });
 
   it("opens a memory that was cleared, which has no content and still lost one", () => {
-    // Nothing in the arguments to draw, so the rule that reads them alone made
-    // this the one memory write the operator could not open: the one where the
-    // agent threw the whole page away.
     const groups = foldTrail(steps(rewrote("", "Smith handles verification.")));
     expect(groups[0]?.steps[0]?.target).toBeNull();
     expect(hasDetail(groups[0]!)).toBe(true);
@@ -412,16 +366,12 @@ describe("what a rewrite changed", () => {
   });
 
   it("reads an empty previous version as a first memory, not as a missing one", () => {
-    // The difference is a falsy string. Read as nothing to compare against, an
-    // agent's first memory draws as a page with no history rather than as a
-    // page that is all new.
     const [step] = steps(rewrote("Smith verifies.", ""));
     expect(step?.replaced).toBe("");
     expect(stepDiff(step!)).toEqual([{ kind: "added", text: "Smith verifies." }]);
   });
 
   it("has nothing to compare where the runtime recorded nothing", () => {
-    // Every write already in a channel, and every other tool there is.
     const [written] = steps(call("update_memory", { content: "Smith verifies." }));
     expect(stepDiff(written!)).toBeNull();
 
@@ -430,8 +380,6 @@ describe("what a rewrite changed", () => {
   });
 
   it("has nothing to draw where a rewrite cleared a memory that was empty", () => {
-    // Both sides empty, so the diff is no lines at all and the panel it would
-    // open is a control that opens onto nothing.
     const [step] = steps(rewrote("", ""));
     expect(stepDiff(step!)).toBeNull();
   });
@@ -439,16 +387,10 @@ describe("what a rewrite changed", () => {
 
 describe("a call while it is still happening", () => {
   it("says what it is waiting on in the present tense", () => {
-    // `describe` says what a call *was*, which is the wrong tense for the one
-    // thing the operator is waiting on: a command still running is not a
-    // command that ran.
     expect(callInFlight("run_command", { command: "npm test" })).toBe("Running a command");
   });
 
   it("says which machine a turn is on, off the call that has not come back", () => {
-    // Mirrors `tools::surface_of`, which the menu bar reads. A call that has
-    // returned is not a machine in use, and a tool that reaches no machine
-    // never is, whatever else is in flight.
     const live = (name: string, done: Part | null = null) =>
       ({ callId: name, name, arguments: {}, done, startedAt: 0 }) as LiveCall;
     const finished = { type: "toolCall", name: "browse", arguments: {}, outcome: { kind: "ok" } };
@@ -458,8 +400,6 @@ describe("a call while it is still happening", () => {
     expect(machineInUse([live("open_on_desktop")])).toBe("computer");
     expect(machineInUse([live("browse")])).toBe("browser");
     expect(machineInUse([live("browse", finished as unknown as Part)])).toBeNull();
-    // The repository's shell is the operator's own machine, and a coding job
-    // is a process rather than a place to watch.
     expect(machineInUse([live("shell"), live("code")])).toBeNull();
     expect(callInFlight("update_memory", { content: "x" })).toBe("Updating its memory");
   });
@@ -468,16 +408,10 @@ describe("a call while it is still happening", () => {
     expect(callInFlight("browse", { action: "open", url: "https://www.cnn.com/world" })).toBe(
       "Opening cnn.com",
     );
-    // Anything else on that browser is the browser, which is what is being
-    // waited on and all the operator needs to know about it.
     expect(callInFlight("browse", { action: "click", id: 4 })).toBe("Working the browser");
   });
 
   it("names the server a plugin call is waiting on, and the tool it called", () => {
-    // A crew's plugin tools are named by that crew's servers, so what one does
-    // is not something this build can say: guessing at it is how
-    // `update_memory` once drew as a message sent to nobody. Where the wait is
-    // is a different question, and the name answers it.
     expect(callInFlight("linear__create_issue", {})).toBe("Using Create issue on Linear");
     expect(callInFlight("run_code", { source: "print(1)" })).toBe("Using run_code");
   });
@@ -487,27 +421,18 @@ describe("a call to a plugin", () => {
   const google = (tool: string) => call(`google__${tool}`, {}, ok(`Google · ${tool}`));
 
   it("says which server the work went to, without the name a model calls it by", () => {
-    // `Used google__gmail_search` is the wire name of a function, drawn beside
-    // the runtime's summary saying the same thing in words: the row said it
-    // twice, once in a spelling nobody reads.
     const groups = foldTrail(steps(google("gmail_search")));
     expect(groups[0]?.label).toBe("Used Gmail search on Google");
     expect(groups[0]?.steps[0]?.where).toBe("Google");
   });
 
   it("keeps the server on the chip and off the calls under it", () => {
-    // A step is only ever drawn under a chip that has already said where the
-    // work went.
     const [step] = steps(google("gmail_search"));
     expect(step?.title).toBe("Used Gmail search");
-    // The row a note opens onto keeps the name a model calls it by, which is
-    // the one place it survives now that the line is in words.
     expect(step?.tool).toBe("google__gmail_search");
   });
 
   it("says nothing more beside a chip that already said it", () => {
-    // `Google · gmail_search` is what the runtime writes so that whatever draws
-    // the call can name the server. The chip names it itself now.
     const [step] = steps(google("gmail_search"));
     expect(tellsMore(step as Step)).toBe(false);
   });
@@ -516,7 +441,6 @@ describe("a call to a plugin", () => {
     const failed = call("google__gmail_search", {}, { status: "failed", error: "not connected" });
     const [step] = steps(failed);
     expect(tellsMore(step as Step)).toBe(true);
-    // Never folded, and still the one chip that has to name the server itself.
     expect(foldTrail(steps(google("gmail_search"), failed)).map((group) => group.label)).toEqual([
       "Used Gmail search on Google",
       "Tried to use Gmail search on Google",
@@ -524,8 +448,6 @@ describe("a call to a plugin", () => {
   });
 
   it("calls a server the operator added what they called it", () => {
-    // Nobody else has a name for it, and inventing one would be this build
-    // naming somebody else's software.
     const groups = foldTrail(
       steps(call("home_assistant__turn_on", {}, ok("home_assistant · turn_on"))),
     );
@@ -533,14 +455,11 @@ describe("a call to a plugin", () => {
   });
 
   it("gathers a turn's work at one server, the way it gathers a turn in a browser", () => {
-    // A plugin is a place and its tools are what the turn did there. Grouped by
-    // tool, the same turn is three chips saying Google three times.
     const groups = foldTrail(
       steps(google("drive_list_files"), google("drive_read_file"), google("gmail_search")),
     );
     expect(groups).toHaveLength(1);
     expect(groups[0]?.label).toBe("3 calls to Google");
-    // Which tools those were is the whole of what the chip opens onto.
     expect(hasDetail(groups[0]!)).toBe(true);
     expect(groups[0]?.steps.map((step) => step.title)).toEqual([
       "Used Drive list files",
@@ -560,8 +479,6 @@ describe("a call to a plugin", () => {
   });
 
   it("leaves a tool with no server in front of it alone", () => {
-    // Two underscores are what the runtime prefixes with, and one is what MCP
-    // servers use inside their own tool names constantly.
     const [step] = steps(call("run_code", { source: "print(1)" }, ok("exit 0")));
     expect(step?.title).toBe("Used run_code");
     expect(step?.where).toBeNull();
@@ -574,9 +491,6 @@ describe("the tools the runtime offers, in a person's words", () => {
   }
 
   it("names the six that used to reach the row as their wire names", () => {
-    // `Used ask_operator` is a function name from a file the operator does not
-    // have, drawn on the page they read most. Each of these is a thing that
-    // happened, said the way the rest of the footnote says it.
     expect(said("ask_operator", { question: "Ship it on Friday?" })).toBe("Asked you");
     expect(said("decision", { action: "request", question: "10 or 11?" })).toBe(
       "Left a decision for you",
@@ -607,10 +521,6 @@ describe("the tools the runtime offers, in a person's words", () => {
   });
 
   it("has a phrase for every tool the runtime offers", () => {
-    // Read off the crate rather than written out here, because the list this
-    // has to agree with is the one the model is handed. A tool added to the
-    // runtime and left out of `describe` reaches the page as `Used tool_name`,
-    // which is exactly the row this replaced.
     const source = read("src-tauri/src/llm/tools.rs");
     const names = [...source.matchAll(/^pub const [A-Z_]+: &str = "([a-z][a-z0-9_]*)";$/gm)].map(
       (match) => match[1]!,
@@ -619,9 +529,6 @@ describe("the tools the runtime offers, in a person's words", () => {
     for (const name of names) {
       const title = said(name);
       expect(title, name).not.toBe(`Used ${name}`);
-      // A wire name is the fallback's whole content, so one with an underscore
-      // must not survive in a phrase either: "Tried to use ask_operator" is
-      // still the name nobody can read.
       if (name.includes("_")) expect(title, name).not.toContain(name);
     }
   });
@@ -635,11 +542,6 @@ describe("the tools the runtime offers, in a person's words", () => {
 
 describe("the memory tool under both of its names", () => {
   it("draws a transcript written before the rename", () => {
-    // A tool call is stored as JSON on the message, so every turn recorded
-    // while this tool was called `update_notes` still says so. A renderer that
-    // knew only the new name would draw a year of history as "Used
-    // update_notes", which is the same failure `Part::Approval` refuses to be
-    // widened over: old rows cannot be migrated into a new spelling.
     const [old] = steps(call("update_notes", { content: "Smith verifies." }));
     const [current] = steps(call("update_memory", { content: "Smith verifies." }));
     expect(old!.title).toBe("Updated its memory");
@@ -657,9 +559,6 @@ describe("a progress note", () => {
   });
 
   it("adds nothing beside a chip that already said it", () => {
-    // "Noted. You have 3 of 16 working notes" is a number the model needs and
-    // the operator can already read off the panel that lists them. Noting is
-    // meant to be cheap and frequent, so its chip has to stay one line.
     const [step] = steps(
       call("note_progress", { note: "waiting" }, ok("Noted. You have 3 of 16 working notes.")),
     );
@@ -667,8 +566,6 @@ describe("a progress note", () => {
   });
 
   it("shows what went wrong when one could not be saved", () => {
-    // A failure is never an echo: whatever broke is not something the title
-    // could have said.
     const [step] = steps(
       call("note_progress", { note: "waiting" }, { status: "failed", error: "database is locked" }),
     );
@@ -678,8 +575,6 @@ describe("a progress note", () => {
 
 describe("an escalation", () => {
   it("says what it is, and is not called asking", () => {
-    // Nothing was asked. The word has to separate it from the two calls that
-    // stop a turn to get something back, in a chip that is one line.
     const [step] = steps(call("escalate", { summary: "The deploy needs a key only you have." }));
     expect(step!.title).toBe("Escalated to the operator");
     expect(step!.target).toBe("The deploy needs a key only you have.");
@@ -687,9 +582,6 @@ describe("an escalation", () => {
   });
 
   it("adds nothing beside a chip that already said it", () => {
-    // What comes back is an instruction to the model, and the two numbers in it
-    // the operator would want are on the desk, read live from the row. Frozen
-    // into a transcript, "2d ago" is wrong by the next morning.
     const [step] = steps(
       call(
         "escalate",
@@ -714,8 +606,6 @@ describe("an escalation", () => {
 
 describe("what the turn has done, on one line", () => {
   it("counts the calls that came back, and says nothing about their kind", () => {
-    // The kinds are what the chips behind the count are for. A line naming the
-    // first of several is a line that is wrong about the rest.
     const tally = tallyTrail(
       steps(
         call("browse", { action: "read" }),
@@ -752,9 +642,6 @@ describe("what the turn has done, on one line", () => {
   });
 
   it("names every credential the turn spent, once each", () => {
-    // The operator's audit trail for their own tokens, which is the one part
-    // of the trail that stays on the line while the turn runs. A name spent
-    // twice is one credential, not two.
     const tally = tallyTrail(
       steps(
         call("run_command", { command: "one" }, ok("used Mistral ($MISTRAL_API_KEY) · exit 0")),
@@ -768,9 +655,6 @@ describe("what the turn has done, on one line", () => {
 
 describe("a call that went wrong", () => {
   it("opens on its reason, where the reason is the whole of what happened", () => {
-    // Clipped on the chip, because a refusal is written to be acted on and
-    // runs to a paragraph: `U… a coding agent is already working in…` is a row
-    // saying one character about which call it was.
     const groups = foldTrail(
       steps(
         call(
@@ -789,7 +673,6 @@ describe("a call that went wrong", () => {
   });
 
   it("opens on what it acted on where there is one, not on the reason", () => {
-    // Somebody opening a failed command came for the command.
     const [step] = steps(
       call("run_command", { command: "npm test" }, { status: "failed", error: "no machine" }),
     );

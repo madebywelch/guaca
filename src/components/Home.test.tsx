@@ -148,8 +148,6 @@ describe("the field", () => {
     });
     const { input } = drawField([dara, noor], [asked]);
     fireEvent.change(input, { target: { value: "draft it" } });
-    // Not prevented: the browser moves focus on, and the field does not
-    // turn into an answer to Dara.
     expect(fireEvent.keyDown(input, { key: "Tab" })).toBe(true);
     expect(screen.getByRole("textbox", { name: "What do you need?" })).toBe(input);
     expect(input.value).toBe("draft it");

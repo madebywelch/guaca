@@ -10,18 +10,6 @@ import { ChannelView } from "./ChannelView";
 import { Search } from "./Search";
 import { SettingsDialog } from "./SettingsDialog";
 
-/**
- * What a channel shows, and what it keeps one click away.
- *
- * The report behind all of this: a channel that reads as a conversation with
- * one agent, until that agent starts working, at which point the operator's
- * own thread is pushed off the screen by traffic addressed to somebody else.
- *
- * Arriving from search is here too, because the two features meet: search
- * finds a message by its text and hands back an id, and a message between two
- * agents no longer has a row of its own to be put next to.
- */
-
 const pairMessages = vi.fn<() => Promise<Envelope[]>>(async () => []);
 const sendMessage = vi.fn(async (..._args: unknown[]) => ({ messageId: "message", runId: "run" }));
 
@@ -161,7 +149,6 @@ beforeEach(() => {
   sendMessage.mockResolvedValue({ messageId: "message", runId: "run" });
   pairMessages.mockClear();
   pairMessages.mockResolvedValue([]);
-  // A mark left by the last test would have this one jumping somewhere.
   useStore.setState({ focused: null });
 });
 
@@ -258,10 +245,6 @@ describe("peer traffic in a channel", () => {
       fromPeer("and another"),
     ]);
 
-    // One note for the two of them. What it adds to the old centered row is the
-    // gist: the first thing said, so a reader can tell whether opening the
-    // thread is worth it. The second message is not quoted, which is what keeps
-    // this a note rather than the burst at a smaller size.
     expect(screen.getByRole("button", { name: /2 messages with Chef/ })).toBeTruthy();
     expect(screen.queryByText("and another")).toBeNull();
     expect(document.querySelectorAll(".footnote")).toHaveLength(1);
@@ -280,15 +263,12 @@ describe("peer traffic in a channel", () => {
     open([fromPeer("all clear")]);
     fireEvent.click(screen.getByRole("button", { name: /Message from Chef/ }));
 
-    // Both sides, in full. This is what the row exists to lead to.
     expect(await screen.findByText("what is the status")).toBeTruthy();
     expect(screen.getByText("all clear")).toBeTruthy();
     expect(screen.getByText(/view-only/)).toBeTruthy();
   });
 
   it("does not offer to send anything from inside that thread", async () => {
-    // Neither of those two agents is addressable from here, and a composer
-    // that refuses is worse than saying so.
     open([fromPeer("all clear")]);
     fireEvent.click(screen.getByRole("button", { name: /Message from Chef/ }));
 
@@ -309,8 +289,6 @@ describe("peer traffic in a channel", () => {
   });
 
   it("keeps a refused send out of the burst, with its reason on the line", () => {
-    // A stop is not part of the conversation, and folding it into a count
-    // would report a message that never arrived as one that did.
     open([
       fromPeer("hi"),
       record({
@@ -331,10 +309,6 @@ describe("peer traffic in a channel", () => {
 
 describe("who said what", () => {
   it("names the speaker once per turn rather than once per message", () => {
-    // A turn is a passage and a passage has one running head. Two replies
-    // written in the same minute are one turn continuing, so the second one
-    // carries no head and no clock: four of them in a row used to be eight
-    // lines carrying two facts.
     open([
       envelope({ parts: [{ type: "text", text: "what is the status" }] }),
       envelope({
@@ -350,10 +324,8 @@ describe("who said what", () => {
     ]);
 
     expect(screen.getByText("all clear")).toBeTruthy();
-    // The pane's title, and the running head over the passage: never a third.
     expect(screen.getAllByText("Manager", { selector: "h1, .msg__head" })).toHaveLength(2);
     expect(document.querySelectorAll(".msg--continued")).toHaveLength(1);
-    // And the operator's own first turn is headed like any other passage.
     expect(document.querySelectorAll(".msg__head")).toHaveLength(2);
   });
 
@@ -367,16 +339,12 @@ describe("who said what", () => {
     const { container } = open([morning, afternoon]);
     const line = container.querySelector(".when-row time");
     expect(line?.getAttribute("datetime")).toBe(new Date(afternoon.createdAt).toISOString());
-    // One line for the gap, not one clock per message.
     expect(container.querySelectorAll(".when-row")).toHaveLength(1);
   });
 });
 
 describe("what the head says answers", () => {
   it("names the model, and whose choice it was, without naming a field", () => {
-    // The line used to print the card's own model field, so an agent that
-    // inherits said "no model of its own · answering as itself": an empty
-    // column's name and a phrase that means nothing to anybody.
     const { container } = open([envelope({ parts: [{ type: "text", text: "hi" }] })]);
     const meta = container.querySelector(".pane__meta")?.textContent ?? "";
     expect(meta).toContain("m");
@@ -386,13 +354,10 @@ describe("what the head says answers", () => {
 });
 
 describe("while an agent is working", () => {
-  /** What the runtime tells the UI as a turn moves through its states. */
   const doing = (state: Activity) =>
     act(() => useStore.setState({ activity: { [MANAGER]: state } }));
 
   it("says so above the composer, naming it", () => {
-    // The gap between sending and the first token is the moment the app looks
-    // broken, and a turn can spend several model calls before writing a word.
     open([envelope({})]);
     expect(screen.queryByText("Manager is working")).toBeNull();
 
@@ -404,9 +369,6 @@ describe("while an agent is working", () => {
   });
 
   it("shows what it is thinking, and stops when the thought is dropped", () => {
-    // The complaint this answers: a pulsing avatar says a turn is alive and
-    // nothing says what it is doing, through a wait that can run to ten
-    // minutes.
     open([envelope({})]);
     doing({ state: "thinking" });
 
@@ -414,15 +376,8 @@ describe("while an agent is working", () => {
     expect(screen.getByText("Checking")).toBeTruthy();
     expect(screen.getByText("the totals agree.")).toBeTruthy();
     expect(screen.queryByText("Manager is working")).toBeNull();
-    // And it stops being a live region while it holds a line that moves under
-    // it, or a screen reader reads out every half sentence of it over whatever
-    // else it was saying. Asked of this line rather than of the pane: an
-    // arriving message is announced by a region of its own, which is the one
-    // thing here that is meant to be heard.
     expect(document.querySelector(".working")?.getAttribute("role")).toBeNull();
 
-    // The runtime clears it when the stream ends, and the line goes back to
-    // saying only that the turn is still going.
     act(() => useStore.setState({ reasoning: {} }));
     const note = document.querySelector(".working");
     expect(note?.getAttribute("role")).toBe("status");
@@ -430,9 +385,6 @@ describe("while an agent is working", () => {
   });
 
   it("draws the heading alone until a sentence under it has finished", () => {
-    // A sentence being typed at streaming speed cannot be read, and replacing
-    // the line with half of the next one sixty times a second is the flicker
-    // the heading exists to stop.
     open([envelope({})]);
     doing({ state: "thinking" });
     act(() => useStore.setState({ reasoning: { [MANAGER]: "**Checking**\n\nthe totals do" } }));
@@ -442,9 +394,6 @@ describe("while an agent is working", () => {
   });
 
   it("opens the whole of the working, and closes it when the turn ends", () => {
-    // A peek is enough right up until the wait runs to ten minutes, when the
-    // question stops being "is it alive" and becomes "is it doing something
-    // sensible", which cannot be answered one sentence at a time.
     open([envelope({})]);
     doing({ state: "thinking" });
     const held = "**Checking**\n\nthe totals agree.\n\nSo the third quarter is the one to redo.";
@@ -454,24 +403,18 @@ describe("while an agent is working", () => {
     fireEvent.click(screen.getByRole("button", { name: /Show what Manager is working through/ }));
     expect(document.querySelector(".thought__text")?.textContent).toBe(held);
 
-    // Asking to watch one turn's working is not a standing decision to watch
-    // every turn's.
     doing({ state: "idle" });
     doing({ state: "thinking" });
     expect(document.querySelector(".thought")).toBeNull();
   });
 
   it("offers nothing to open where the model published nothing", () => {
-    // Anthropic's models over OpenRouter publish no working unless it is asked
-    // for. A control that opens an empty box is one the operator stops
-    // trusting the rest of.
     open([envelope({})]);
     doing({ state: "thinking" });
 
     expect(screen.queryByRole("button", { name: /working through/ })).toBeNull();
   });
 
-  /** A call that has come back, as the runtime reports it. */
   const finished = (
     callId: string,
     name: string,
@@ -497,11 +440,6 @@ describe("while an agent is working", () => {
     );
 
   it("counts the calls the turn has made, and opens them as the transcript will", () => {
-    // Until this, a turn's tool calls were invisible for as long as the turn
-    // ran: a browsing turn spends most of its twenty-four rounds in the
-    // browser and the operator watching had one line of prose. Open, they were
-    // the other extreme: the whole record of a long turn, wrapped across four
-    // rows and reflowing under the composer every time a call came back.
     open([envelope({})]);
     doing({ state: "thinking" });
     act(() => useStore.setState({ trail: { [MANAGER]: [browsed("call_1")] } }));
@@ -511,16 +449,11 @@ describe("while an agent is working", () => {
     fireEvent.click(count);
     expect(screen.getByText("Opened cnn.com")).toBeTruthy();
 
-    // And the count is a count, not a name: a chip carrying the first of
-    // several kinds of work is a chip that is wrong about the rest.
     act(() => useStore.setState({ trail: { [MANAGER]: [browsed("call_1"), browsed("call_2")] } }));
     expect(document.querySelector(".working__steps")?.textContent).toContain("2 steps");
   });
 
   it("marks the count where something went wrong, and says how much", () => {
-    // The one thing on the trail the operator may have to act on. Everything
-    // else about the turn's work can wait behind the click; that it did not
-    // work cannot.
     open([envelope({})]);
     doing({ state: "thinking" });
     act(() =>
@@ -547,9 +480,6 @@ describe("while an agent is working", () => {
   });
 
   it("keeps a spent credential on the line, never behind the click", () => {
-    // The operator's audit trail for their own tokens. A name is what tells
-    // two of them apart; the value is not here and there is no field it could
-    // arrive in.
     open([envelope({})]);
     doing({ state: "thinking" });
     act(() =>
@@ -576,8 +506,6 @@ describe("while an agent is working", () => {
   });
 
   it("gives the working and the calls one slot, so one closes the other", () => {
-    // Two disclosures stacking is the transcript giving up twice the height
-    // for a question asked once, and a composer that moves twice.
     open([envelope({})]);
     doing({ state: "thinking" });
     act(() =>
@@ -597,8 +525,6 @@ describe("while an agent is working", () => {
   });
 
   it("says what it is waiting on, and how long it has been", () => {
-    // While a command runs the model is not thinking, so its last thought is
-    // frozen and stale, which is the state that reads as a hang.
     open([envelope({})]);
     doing({ state: "thinking" });
     act(() =>
@@ -611,8 +537,6 @@ describe("while an agent is working", () => {
               name: "run_command",
               arguments: { command: "npm test" },
               done: null,
-              // Half a second past the whole, so the floor is the same number
-              // whichever side of a millisecond the render lands on.
               startedAt: Date.now() - 74_500,
             },
           ],
@@ -622,15 +546,11 @@ describe("while an agent is working", () => {
 
     expect(screen.getByText("Running a command")).toBeTruthy();
     expect(screen.getByText("1m 14s")).toBeTruthy();
-    // The thought is still there to open; it is just not what the line says.
     expect(screen.queryByText("I should check the tests.")).toBeNull();
     expect(screen.getByRole("button", { name: /working through/ })).toBeTruthy();
   });
 
   it("leaves the line alone for a call that answers immediately", () => {
-    // A directory lookup answers in milliseconds. A line that flashed
-    // "Checking who is available" for each of them would put back the flicker
-    // the sentence rule takes out.
     open([envelope({})]);
     doing({ state: "thinking" });
     act(() =>
@@ -697,8 +617,6 @@ describe("while an agent is working", () => {
     doing({ state: "queued", depth: 2 });
     expect(screen.getByText("Manager is working")).toBeTruthy();
 
-    // Parked on a permission request. The request itself is in this channel
-    // saying what it needs, and it needs the operator, not time.
     doing({ state: "awaitingApproval" });
     expect(screen.queryByText("Manager is working")).toBeNull();
   });
@@ -718,14 +636,11 @@ describe("a message arrived at from search", () => {
       ).toBeTruthy();
     });
     expect(scrolled).toHaveBeenCalled();
-    // One row, not the whole transcript lit up.
     expect(container.querySelectorAll("[data-found='true']")).toHaveLength(1);
     scrolled.mockRestore();
   });
 
   it("stops being marked once it has been shown", async () => {
-    // A mark that outlives the visit is still there next time the channel is
-    // opened, saying nothing about anything.
     vi.useFakeTimers();
     try {
       const rows = Array.from({ length: 12 }, () => envelope({}));
@@ -743,25 +658,16 @@ describe("a message arrived at from search", () => {
   });
 
   it("leaves the transcript alone when the message is not in the window", async () => {
-    // The window is bounded, so a hit older than it opens the channel at the
-    // newest end. That is a partial jump, not a broken transcript.
     const missing = "00000000-0000-4000-8000-999999999999" as MessageId;
     useStore.setState({ focused: missing });
     const { container } = open(Array.from({ length: 12 }, () => envelope({})));
 
     await waitFor(() => expect(container.querySelectorAll("[data-message]")).toHaveLength(12));
     expect(container.querySelector("[data-found='true']")).toBeNull();
-    // Still held, so nothing has quietly decided the jump succeeded.
     expect(useStore.getState().focused).toBe(missing);
   });
 
   it("lands on the row that swallowed a message between two agents", async () => {
-    // Search matches any message with the text in it, and one between two
-    // agents has no row of its own here any more. The row that collapsed it is
-    // where it is in this channel, and opening the thread is how it is read.
-    //
-    // The wanted one is second in the burst deliberately: a row stands for
-    // every message it swallowed, not just the one that opened it.
     const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
     const first = fromPeer("something else entirely");
     const wanted = fromPeer("the detail somebody went looking for");
@@ -779,11 +685,6 @@ describe("a message arrived at from search", () => {
 });
 
 describe("a transcript scrolled up", () => {
-  /**
-   * jsdom does no layout, so the transcript is given a size here. `scrollTop`
-   * clamps and fires a scroll event exactly as a real box does, which is the
-   * only thing the transcript has to tell it where the operator is looking.
-   */
   function measure(el: HTMLElement, content: number, viewport: number) {
     let top = 0;
     Object.defineProperty(el, "scrollHeight", { configurable: true, get: () => content });
@@ -806,15 +707,6 @@ describe("a transcript scrolled up", () => {
     };
   }
 
-  /**
-   * Puts messages in the channel and waits for the frame the transcript writes
-   * its offset on.
-   *
-   * `follow` writes now and again on the next frame, and skips the second call
-   * while one is already booked. Both are deliberate — see `lib/follow.ts` —
-   * and both mean the offset this asserts against is settled a frame later
-   * than the state change that caused it.
-   */
   async function settle(next: () => Envelope[]) {
     await act(async () => {
       useStore.setState({ messages: { [MANAGER]: next() } });
@@ -823,9 +715,6 @@ describe("a transcript scrolled up", () => {
   }
 
   it("stays where it was put after a pair thread has been read and closed", async () => {
-    // The transcript is unmounted while a thread is up, so what comes back is a
-    // different node. Whatever is watching the operator has to come back with
-    // it, or this channel spends the rest of the session dragging them down.
     const rows = [
       envelope({ parts: [{ type: "text", text: "the operator's own message" }] }),
       fromPeer("hi"),
@@ -841,16 +730,9 @@ describe("a transcript scrolled up", () => {
     if (!scroller) throw new Error("no transcript to scroll");
     const box = measure(scroller, 4000, 400);
 
-    // The box only acquires a size here, so the transcript is brought to the
-    // end the way a real one arrives there: a message lands and it follows.
-    // Setting the offset by hand instead leaves the hook holding the end of a
-    // box that had no height when it last looked, which is a state no window
-    // can be in and which decided this assertion by whichever timer fired
-    // first.
     await settle(() => [...rows, fromPeer("something newer")]);
     expect(box.at()).toBe(3600);
 
-    // And now read back up it.
     box.to(900);
 
     await settle(() => [...rows, fromPeer("something newer"), fromPeer("and another thing")]);
@@ -859,9 +741,6 @@ describe("a transcript scrolled up", () => {
   });
 
   it("goes to the end when the operator sends a message from where they were", async () => {
-    // The same rule read the other way. Typing into the box is a decision to be
-    // at the end of the transcript: their own message landing off screen, with
-    // nothing following it, is the same complaint pointing the other way.
     const { container } = open(Array.from({ length: 12 }, () => envelope({})));
     const scroller = container.querySelector<HTMLElement>(".pane__scroll");
     if (!scroller) throw new Error("no transcript to scroll");

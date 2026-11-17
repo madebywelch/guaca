@@ -5,10 +5,8 @@ import { CREST, SILHOUETTES, type Silhouette } from "./silhouette";
 
 const TAU = Math.PI * 2;
 const KEYS = Object.keys(SILHOUETTES) as Silhouette[];
-/** Fine enough that a notch or a corner cannot fall between two of them. */
 const FINE = 4096;
 
-/** The outline of one silhouette, walked at `FINE` steps. */
 function walk(key: Silhouette) {
   const shape = SILHOUETTES[key];
   const pts: [number, number][] = [];
@@ -60,18 +58,11 @@ describe("the five", () => {
     }
   });
 
-  /* The budget the moods leave, not a taste decision. `form.test.ts` is what
-     actually holds the drawing to `FORM.reach`; this is the number a new shape
-     is designed against so that test does not have to be the first to say no. */
   it("keeps every silhouette inside the crest the moods can pay for", () => {
     for (const key of KEYS) expect(crest(key), key).toBeLessThanOrEqual(CREST + 1e-6);
     expect(CREST * FORM.radius).toBeLessThan(FORM.reach);
   });
 
-  /* Sizing five shapes by eye is how a cast ends up with one member that reads
-     as the small one. Equal area is the aim; the crest budget is what a shape
-     with a point or a flat underside gives up to fit, and a shape that had to
-     give up more than this is one to redraw rather than to scale down. */
   it("gives every silhouette the same weight, give or take what the crest costs", () => {
     for (const key of KEYS) {
       const share = area(key) / Math.PI;
@@ -82,9 +73,6 @@ describe("the five", () => {
     expect(area("octagon") / Math.PI).toBeCloseTo(1, 3);
   });
 
-  /* A shape drawn off center is a shape that leans in every rail it appears in,
-     and nothing downstream would say so: `FORM.reach` is a radius, so an
-     outline can sit low inside it and still pass. */
   it("stands every silhouette in the middle of its own box", () => {
     for (const key of KEYS) {
       const { x0, x1, y0, y1 } = box(walk(key));
@@ -93,12 +81,6 @@ describe("the five", () => {
     }
   });
 
-  /*
-   * The outline is walked in `FORM.samples` steps, so a corner that falls
-   * between two of them is a corner that gets chamfered off. A square's are at
-   * 45 degrees and an octagon's at 22.5, which is why the count is divisible by
-   * eight. At 28 the octagon drew as a lumpy circle and nothing failed.
-   */
   it("walks the outline in enough steps to land on a corner", () => {
     expect(FORM.samples % 8).toBe(0);
     for (const key of ["square", "octagon"] as const) {
@@ -111,9 +93,6 @@ describe("the five", () => {
     }
   });
 
-  /* The notches between the puffs are the whole of what says cloud rather than
-     lump, and they are the one thing about these shapes a smaller amplitude
-     would quietly remove. */
   it("notches the cloud and nothing else", () => {
     for (const key of KEYS) {
       const pts = walk(key);
@@ -130,10 +109,6 @@ describe("the five", () => {
     }
   });
 
-  /* A drop's apex and its underside are the same distance out, which is what
-     keeps its crest as low as a point that sharp can be. What tells them apart
-     is how fast the outline leaves: the top comes to a point and the bottom is
-     a ball, so a drop that lost its cone would still pass every test above. */
   it("points the drop straight up", () => {
     const shape = SILHOUETTES.drop;
     const up = shape(-Math.PI / 2);

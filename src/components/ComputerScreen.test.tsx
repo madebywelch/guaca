@@ -256,9 +256,6 @@ describe("ComputerScreen", () => {
   });
 
   it("never shows one agent's machine in another agent's panel", async () => {
-    // The lookup for the agent being left behind is deliberately the slower of
-    // the two: it lands after the operator has already switched, which is the
-    // whole bug. It used to paint its screen into the new agent's panel.
     let settleWithMachine: (value: Computer | null) => void = () => {};
     agentComputer.mockImplementation(
       (id) =>
@@ -285,29 +282,22 @@ describe("ComputerScreen", () => {
     agentComputer.mockResolvedValue(HAS_ONE);
     render(<ComputerScreen agent={card("has-one", "Cook")} />);
     await waitFor(() => expect(screen.getByTitle("Cook's computer")).toBeTruthy());
-    // Its state beside its name, where it can be read without opening it.
     expect(screen.getByText("running")).toBeTruthy();
   });
 
   it("keeps a click off the desktop until the operator asks for it", async () => {
-    // A pointer landing in an agent's desktop by accident is worse than one
-    // extra click to take control, so the preview is watched through a veil.
     agentComputer.mockResolvedValue(HAS_ONE);
     render(<ComputerScreen agent={card("has-one", "Cook")} />);
 
     const veil = await screen.findByRole("button", { name: /take over/i });
     fireEvent.click(veil);
 
-    // Full screen: the veil is gone and the controls that touch the machine
-    // are reachable.
     expect(screen.queryByRole("button", { name: /take over/i })).toBeNull();
     expect(screen.getByRole("button", { name: "Sleep" })).toBeTruthy();
     expect(screen.getByRole("dialog", { name: "Cook's computer" })).toBeTruthy();
   });
 
   it("keeps the same connection open across the change of size", async () => {
-    // Remounting the frame would drop the desktop and reconnect to it, which
-    // is a visible stall every time the operator wants a better look.
     agentComputer.mockResolvedValue(HAS_ONE);
     render(<ComputerScreen agent={card("has-one", "Cook")} />);
 
@@ -352,9 +342,6 @@ describe("ComputerScreen", () => {
   });
 
   it("holds the space the screen had while it covers the window", async () => {
-    // The picture leaves the flow to grow, so something has to stay behind
-    // holding its place. Without it the rest of the panel jumps up the moment
-    // the operator asks for a better look, and back down when they close it.
     agentComputer.mockResolvedValue(HAS_ONE);
     const { container } = render(<ComputerScreen agent={card("has-one", "Cook")} />);
     fireEvent.click(await screen.findByRole("button", { name: /take over/i }));
@@ -367,15 +354,10 @@ describe("ComputerScreen", () => {
   });
 
   it("grows out of the picture it came from rather than appearing at full size", async () => {
-    // FLIP: the stage is already covering the window by the time this runs, so
-    // it is put back over the small picture and let go. A change of size that
-    // lands in a single frame reads as a reconnect that never happened.
     agentComputer.mockResolvedValue(HAS_ONE);
     render(<ComputerScreen agent={card("has-one", "Cook")} />);
     const veil = await screen.findByRole("button", { name: /take over/i });
 
-    // jsdom does no layout, so the two measurements the movement is made of are
-    // supplied: the small picture, then the window the stage grew into.
     const small = { top: 40, left: 100, width: 300, height: 188 } as DOMRect;
     const whole = { top: 0, left: 0, width: 1200, height: 800 } as DOMRect;
     const measure = vi
@@ -388,14 +370,11 @@ describe("ComputerScreen", () => {
     const stage = screen.getByRole("dialog", { name: "Cook's computer" });
     expect(stage.style.transform).toBe("translate(100px, 40px) scale(0.25, 0.235)");
 
-    // And then let go, which is what actually plays the movement.
     await waitFor(() => expect(stage.style.transform).toBe(""));
     expect(stage.dataset.zooming).toBe("true");
   });
 
   it("shrinks again on escape, without needing somewhere else to click first", async () => {
-    // The desktop swallows key presses once it has focus, so this is listened
-    // for on the window rather than on the frame.
     agentComputer.mockResolvedValue(HAS_ONE);
     render(<ComputerScreen agent={card("has-one", "Cook")} />);
 
@@ -405,27 +384,19 @@ describe("ComputerScreen", () => {
   });
 
   it("offers a computer to an agent that has not been given one, and asks nobody", async () => {
-    // The decision is the operator's and it is made here. Asking the provider
-    // what an agent that may not have a machine is doing is a round trip for an
-    // answer that cannot change what the panel draws.
     render(<ComputerScreen agent={card("has-none", "Scribe", false)} />);
 
     const grant = await screen.findByRole("switch", { name: "Computer" });
     expect(grant.getAttribute("aria-checked")).toBe("false");
     expect(agentComputer).not.toHaveBeenCalled();
-    // Off, the switch is the whole section.
     expect(screen.getByRole("button", { name: "Computer" })).toBeTruthy();
 
     fireEvent.click(grant);
     await waitFor(() => expect(giveAgentComputer).toHaveBeenCalledWith("has-none"));
-    // And nothing is rented by saying yes: a machine is still made the first
-    // time one is needed.
     expect(screen.queryByTitle("Scribe's computer")).toBeNull();
   });
 
   it("takes it back from the switch beside its name, whatever the screen is doing", async () => {
-    // The switch is above the picture, so a live desktop filling the panel
-    // does not put the control that ends the arrangement out of reach.
     agentComputer.mockResolvedValue(HAS_ONE);
     render(<ComputerScreen agent={card("has-one", "Cook")} />);
 
@@ -436,9 +407,6 @@ describe("ComputerScreen", () => {
   });
 
   it("keeps the picture off the panel of an agent whose computer was taken back", async () => {
-    // The machine outlives the decision on purpose: its disk holds the
-    // operator's sign-ins. What must not outlive it is the screen, which is a
-    // live connection to a machine this agent may no longer use.
     agentComputer.mockResolvedValue(HAS_ONE);
     const view = render(<ComputerScreen agent={card("has-one", "Cook")} />);
     await waitFor(() => expect(screen.getByTitle("Cook's computer")).toBeTruthy());
@@ -451,8 +419,6 @@ describe("ComputerScreen", () => {
   });
 
   it("says nothing at all when computers were never set up", async () => {
-    // Offering to give an agent a machine that cannot be made is worse than
-    // not mentioning computers.
     useStore.setState({ settings: { ...useStore.getState().settings!, e2bKeySet: false } });
     const { container } = render(<ComputerScreen agent={card("has-none", "Scribe")} />);
     await waitFor(() => expect(container.firstChild).toBeNull());

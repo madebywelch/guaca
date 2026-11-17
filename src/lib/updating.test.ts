@@ -29,7 +29,6 @@ describe("the steps are the ones the programs say", () => {
     expect(HOST_STEPS).toEqual(
       ["Downloading", "Stopping", "BackingUp", "Starting", "Verifying"].map((s) => stages[s]),
     );
-    // The two stages read by name rather than by place.
     expect(stages.Updated).toBe("Host updated");
     expect(stages.Restoring).toBe("Restoring previous version");
   });
@@ -107,7 +106,6 @@ describe("a host update", () => {
   });
 
   it("spans the steps a box's host is silent through, from the last one it was seen at", () => {
-    // Last seen downloading, now silent: no later step has been reported.
     expect(hostProgress(journal("Downloading update"), target, true)).toMatchObject({
       done: 0,
       now: 0,
@@ -117,7 +115,6 @@ describe("a host update", () => {
       done: HOST_STEPS.indexOf("Backing up data"),
       now: 0,
     });
-    // Silent again after the new host answered once: it is past starting.
     expect(hostProgress(journal("Verifying host"), target, true)).toMatchObject({
       done: HOST_STEPS.indexOf("Verifying host"),
       now: 0,

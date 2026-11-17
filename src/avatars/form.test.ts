@@ -20,14 +20,6 @@ import { MOODS, type Mood } from "./moods";
 
 const MOOD_KEYS = Object.keys(MOODS) as Mood[];
 
-/**
- * Every frame of every creature in every mood, coarsely.
- *
- * The old catalog checked bounding boxes of hand-written paths, because a
- * character was a path somebody drew. Nothing is drawn now, so the thing worth
- * checking is different and stronger: no combination of identity, mood, phase
- * and gaze may put ink outside the box the rest of the app sizes against.
- */
 function* everyFrame() {
   for (const lump of CHARACTERS) {
     for (const key of MOOD_KEYS) {
@@ -57,13 +49,6 @@ describe("the body", () => {
     expect(worst, `furthest was ${where}`).toBeLessThanOrEqual(FORM.reach);
   });
 
-  // A message landing is added to the look, so the gaze the body is handed can
-  // be further than any gaze a mood produces, and an aimed look can land on any
-  // mood at all. `PULL.hold` caps the look and the stretch is cut to the room
-  // the outline has left, so this drives every creature in every mood a good
-  // deal past the cap, in every direction, and expects the outline to stop
-  // where it says. Before the stretch was bounded on the outline, a puddle
-  // aimed down was three units over, and nothing sampled it.
   it("stays inside the reach whatever it is handed", () => {
     const past = PULL.hold * 1.15;
     let worst = 0;
@@ -90,8 +75,6 @@ describe("the body", () => {
     expect(worst, `furthest was ${where}`).toBeLessThanOrEqual(FORM.reach);
   });
 
-  // And the cut is a cut, not a cure: a look that fits is left exactly as it
-  // was asked for, so the bound changes nothing about a frame that was inside.
   it("leaves a look that fits alone", () => {
     const lump = CHARACTERS[0];
     if (!lump) throw new Error("no cast");
@@ -99,34 +82,26 @@ describe("the body", () => {
     const look = bodyPoints(lump, {}, 0, [0.3, 0]).pts;
     const expected = 0.3 * (PULL.stretch + PULL.lean) * FORM.radius;
     const drawn = ((look[0] as number[])[0] as number) - ((rest[0] as number[])[0] as number);
-    // the shear moves the same point a little; the stretch and the lean are the rest
     expect(drawn).toBeGreaterThan(expected * 0.9);
     expect(drawn).toBeLessThan(expected * 1.2);
   });
 
-  // The whole of what tells a pear from a lump: the front narrows as it is
-  // drawn out, and the back is left the shape it was.
   it("draws the front out into a snout and leaves the back round", () => {
     const lump = CHARACTERS[0];
     if (!lump) throw new Error("no cast");
     const rest = bodyPoints(lump, {}, 0).pts;
     const look = bodyPoints(lump, {}, 0, [0.36, 0]).pts;
     const n = FORM.samples;
-    // a point a quarter turn ahead of the tip, on the way to it, is narrower
     const shoulder = Math.floor(n / 8);
     const restShoulder = (rest[shoulder] as number[])[1] as number;
     const lookShoulder = (look[shoulder] as number[])[1] as number;
     expect(lookShoulder - FORM.center).toBeLessThan(restShoulder - FORM.center);
-    // and the back has moved by the lean and the shear, which is a fraction of
-    // what the tip has
     const back = Math.floor(n / 2);
     const moved = ((look[back] as number[])[0] as number) - ((rest[back] as number[])[0] as number);
     const tip = ((look[0] as number[])[0] as number) - ((rest[0] as number[])[0] as number);
     expect(Math.abs(moved)).toBeLessThan(tip / 3);
   });
 
-  // The number is not decoration: `orb.test.ts` seats a crew on it, so a reach
-  // that quietly fell would leave every group's circle drawn too loose.
   it("actually uses the reach it claims", () => {
     let worst = 0;
     for (const { lump, mood, t, gaze } of everyFrame()) {
@@ -147,8 +122,6 @@ describe("the body", () => {
     }
   }, 30_000);
 
-  // A gaze the eyes have not taken yet must leave the resting shape alone, or
-  // every creature on screen is permanently deformed by a look nobody took.
   it("is its resting self when it is looking straight ahead", () => {
     const lump = CHARACTERS[0];
     if (!lump) throw new Error("no cast");
@@ -168,10 +141,6 @@ describe("the body", () => {
     expect((right[far] as number[])[0]).toBeGreaterThan((rest[far] as number[])[0] as number);
   });
 
-  // The whole point of the ramp: an idle creature glancing about is a creature
-  // whose body is still, and a look to the edge of the range is the one that
-  // takes the body with it. Measured on the outline, not on `grip`, so a term
-  // that read the raw gaze would fail here.
   it("hardly moves for a glance and moves for a stare", () => {
     const lump = CHARACTERS[0];
     if (!lump) throw new Error("no cast");
@@ -196,7 +165,6 @@ describe("the body", () => {
     expect(grip(PULL.quiet)).toBe(0);
     expect(grip(PULL.wide)).toBeCloseTo(PULL.wide, 6);
     expect(grip(PULL.hold * 2)).toBeCloseTo(PULL.hold, 6);
-    // and it is monotone, so a longer look never moves the body less
     let last = 0;
     for (let r = 0; r <= 0.6; r += 0.01) {
       const g = grip(r);
@@ -205,9 +173,6 @@ describe("the body", () => {
     }
   });
 
-  // A lean is the top going further than the base. The other way round is a
-  // creature sliding across its box, which is the thing this design exists to
-  // avoid, and a shear about the center would move both by the same amount.
   it("cranes over toward a hard look on a planted base", () => {
     const lump = CHARACTERS[0];
     if (!lump) throw new Error("no cast");
@@ -249,7 +214,6 @@ describe("the body", () => {
   });
 });
 
-/** Whether a point is enclosed by the outline. Ray cast, so concavity counts. */
 function encloses(pts: [number, number][], px: number, py: number): boolean {
   let hit = false;
   for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
@@ -260,10 +224,7 @@ function encloses(pts: [number, number][], px: number, py: number): boolean {
   return hit;
 }
 
-/** The ink one drawn eye puts down, as points and how far past each it reaches. */
 function inkOf(eye: Drawn): { pts: [number, number][]; pad: number }[] {
-  /* The lid lines are clipped to a circle round the ball, so only the part of
-     each inside it is ink; the white is ink wherever it is. */
   const inside = (pts: [number, number][]) =>
     pts.filter(([x, y]) => Math.hypot(x - eye.x, y - eye.y) <= eye.r * LASH_REACH);
   const out = [
@@ -274,11 +235,6 @@ function inkOf(eye: Drawn): { pts: [number, number][]; pad: number }[] {
   return out;
 }
 
-/**
- * How much body is left around a drawn eye: the nearest edge of the outline to
- * any point of its ink, less how far the ink reaches past that point. Negative
- * is ink outside the creature it belongs to.
- */
 function clearance(pts: [number, number][], eye: Drawn): number {
   let worst = Infinity;
   for (const { pts: ink, pad } of inkOf(eye)) {
@@ -302,7 +258,6 @@ function clearance(pts: [number, number][], eye: Drawn): number {
   return worst;
 }
 
-/** Area of a polygon, by the shoelace. */
 function area(pts: [number, number][]): number {
   let sum = 0;
   for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
@@ -313,7 +268,6 @@ function area(pts: [number, number][]): number {
   return Math.abs(sum) / 2;
 }
 
-/** How far down the ball the white begins, in viewBox units from the ball's middle. */
 function topOf(eye: Drawn): number {
   return Math.min(...eye.opening.map(([, y]) => y)) - eye.y;
 }
@@ -323,10 +277,6 @@ const eyeOf = (lump: (typeof CHARACTERS)[number], eye: Eye, gaze?: [number, numb
   eyesAt(lump, eye, { blink: false }, still(gaze));
 
 describe("the eyes", () => {
-  // Measured against the outline itself rather than against a radius at an
-  // angle: these bodies are not star-shaped, and a cloud's outer corner sits
-  // over a dip between two lobes, where a radial bound is wrong in both
-  // directions at once.
   it("keeps both inside the body in every mood", () => {
     for (const { lump, key, mood, t, gaze } of everyFrame()) {
       const { pts } = bodyPoints(lump, mood.shape, t, gaze);
@@ -362,10 +312,6 @@ describe("the eyes", () => {
     }
   }, 30_000);
 
-  // An aimed look is the one gaze that does not come out of `gazeAt`, it is the
-  // furthest any of them goes, and the mood it lands on at the moment a message
-  // arrives is `surprised`, which has the widest eyes on the table. So it is the
-  // case that decides how far a look may carry, and `everyFrame` cannot see it.
   it("keeps both inside the body while it is aimed at a peer", () => {
     for (const lump of CHARACTERS) {
       for (const key of MOOD_KEYS) {
@@ -390,9 +336,6 @@ describe("the eyes", () => {
     }
   }, 30_000);
 
-  // The pupil is drawn clipped to the white, so a pupil that left the ball
-  // would not be seen leaving: it would be cut to a sliver and read as a
-  // squint nobody asked for.
   it("keeps the pupil on the ball however far it is asked to look", () => {
     for (const lump of CHARACTERS) {
       for (const key of MOOD_KEYS) {
@@ -410,8 +353,6 @@ describe("the eyes", () => {
     }
   });
 
-  // The whole reason the lids close onto each other rather than onto a line:
-  // a shut eye with a sliver of white under it reads as a creature pretending.
   it("shows no white at all when it is shut", () => {
     for (const lump of CHARACTERS) {
       for (const eye of eyeOf(lump, MOODS.paused.eye)) {
@@ -422,7 +363,6 @@ describe("the eyes", () => {
     }
   });
 
-  // A blink is the same lids closing, so it can be caught halfway.
   it("blinks by closing the lids, and can be caught halfway", () => {
     const lump = CHARACTERS[0];
     if (!lump) throw new Error("no cast");
@@ -440,8 +380,6 @@ describe("the eyes", () => {
     expect(halfway).toBe(true);
   });
 
-  // What an aimed look used to need a second molding for: a look down is the
-  // upper lid coming down after the pupil, and it is true of every look.
   it("brings the upper lid down after the pupil", () => {
     for (const lump of CHARACTERS) {
       const level = eyeOf(lump, MOODS.idle.eye)[0] as Drawn;
@@ -454,7 +392,6 @@ describe("the eyes", () => {
   it("drops the inner ends for cross and lifts them for worry", () => {
     const lump = CHARACTERS[0];
     if (!lump) throw new Error("no cast");
-    // The eye on the viewer's left: its inner end is the one on the right.
     const cross = eyeOf(lump, MOODS.frustrated.eye)[0] as Drawn;
     const worry = eyeOf(lump, MOODS.stuck.eye)[0] as Drawn;
     const ends = (eye: Drawn) => {
@@ -466,8 +403,6 @@ describe("the eyes", () => {
     expect(ends(worry)).toBeLessThan(-1);
   });
 
-  // A smile with no mouth: the lower lid bows up in its middle and the white
-  // over it is a crescent.
   it("smiles with the lower lid", () => {
     const lump = CHARACTERS[0];
     if (!lump) throw new Error("no cast");
@@ -480,7 +415,6 @@ describe("the eyes", () => {
     expect(area(eye.opening)).toBeLessThan(area(idle.opening) * 0.6);
   });
 
-  // A cocked brow is the one expression a mirrored pair cannot make.
   it("lowers one lid under the other by the skew", () => {
     const lump = CHARACTERS[0];
     if (!lump) throw new Error("no cast");
@@ -490,7 +424,6 @@ describe("the eyes", () => {
     expect(topOf(a)).toBeCloseTo(topOf(b), 6);
   });
 
-  // Perspective on a turned head: the eye that went round the curve is smaller.
   it("shrinks the far eye and grows the near one on a sideways look", () => {
     const lump = CHARACTERS[0];
     if (!lump) throw new Error("no cast");
@@ -500,9 +433,6 @@ describe("the eyes", () => {
     expect(l0.r).toBe(r0.r);
   });
 
-  // The pupil takes the glance, so the eyes cross the face by a fraction of a
-  // glance and by more than all of a stare: the same bargain the body makes
-  // through `grip`, and measured the same way, per unit of look.
   it("moves the eyes across the face for a stare and hardly for a glance", () => {
     const lump = CHARACTERS[0];
     if (!lump) throw new Error("no cast");
@@ -522,7 +452,6 @@ describe("the eyes", () => {
     }
   });
 
-  // Reduced motion is a face at rest: no blink can be caught, and no shiver.
   it("holds the lids open and still when nothing may move", () => {
     const lump = CHARACTERS[0];
     if (!lump) throw new Error("no cast");
@@ -540,8 +469,6 @@ describe("the eyes", () => {
 });
 
 describe("the blinks a face has a reason for", () => {
-  // Half of blinking is not on a timer: a face blinks into a large saccade,
-  // lids leading, and not into a small one.
   it("leads a large saccade and never a small one", () => {
     const wide = { range: 0.4, hz: 0.5, cross: 0.22, far: 0.3 };
     const narrow = { range: 0.05, hz: 0.5, cross: 0.28 };
@@ -579,12 +506,9 @@ describe("the gaze", () => {
       if (Math.hypot(at[0] - last[0], at[1] - last[1]) > 1e-4) moving++;
       last = at;
     }
-    // A saccade crosses in 0.2s of every 2s, so at most a fifth of the frames.
     expect(moving).toBeLessThan(200 * 0.25);
   });
 
-  // Without `far`, no target is at the edge of the range, because a uniform
-  // draw does not land there; with it, some are exactly there and level.
   it("goes the whole way to one side for the share of looks it was told to", () => {
     const glances = { range: 0.4, hz: 1, cross: 0.01 };
     const looks = { ...glances, far: 0.3 };
@@ -592,7 +516,6 @@ describe("the gaze", () => {
     let far = 0;
     const N = 400;
     for (let i = 0; i < N; i++) {
-      // sampled at the end of each slot, so every reading is a held target
       const t = i + 0.99;
       farthest = Math.max(farthest, Math.abs(gazeAt(t, glances)[0]));
       const [x, y] = gazeAt(t, looks);
@@ -606,8 +529,6 @@ describe("the gaze", () => {
     expect(far / N).toBeLessThan(0.4);
   });
 
-  // Every hold the same length is a metronome, and a metronome is the thing a
-  // slide is, arrived at from the other side.
   it("does not jump on the beat every time", () => {
     const gaze = { range: 0.3, hz: 1, cross: 0.05 };
     const starts: number[] = [];
@@ -635,14 +556,11 @@ describe("the gaze", () => {
     const gaze = { script, cross: 0.1 };
     expect(gazeAt(0.9, gaze)[1]).toBeCloseTo(0, 2);
     expect(gazeAt(1.5, gaze)[1]).toBeCloseTo(-0.3, 2);
-    // and it cycles rather than running out
     expect(gazeAt(2.9, gaze)[1]).toBeCloseTo(0, 2);
   });
 });
 
 describe("the look", () => {
-  // The eyes read this too, so it must never pass its target: an eye that
-  // overshoots is a wobble. And it must be quick, or a flick becomes a slide.
   it("takes a step in about the settle time and never passes it", () => {
     const mass: Mass = { gaze: [0, 0], vel: [0, 0] };
     let peak = 0;
@@ -658,9 +576,6 @@ describe("the look", () => {
     expect(mass.gaze[0]).toBeCloseTo(0.3, 3);
   });
 
-  // A look the whole way to one side takes longer than a glance, because the
-  // body comes with it now, and a body that becomes a pear in a quarter of a
-  // second is a body that snapped.
   it("crosses a long look more slowly than a short one", () => {
     const time = (script: [number, number, number][]) => {
       const gaze = { script, cross: 0.2 };

@@ -73,7 +73,6 @@ describe("the two casts", () => {
     for (const white of container.querySelectorAll(".avatar__white")) {
       expect(white.getAttribute("d")).toMatch(/^M/);
     }
-    // The pupil is clipped to the white it sits in, and to nothing else.
     const pupil = container.querySelector(".avatar__pupil");
     const clip = pupil?.parentElement?.getAttribute("clip-path")?.match(/url\(#(.+)\)/)?.[1];
     const opening = container.querySelector(`[id="${clip}"] > path`);
@@ -92,8 +91,6 @@ describe("the two casts", () => {
     expect(eyes[1]?.getAttribute("display")).toBe("none");
   });
 
-  // The operator's choice is read by every creature on screen, so changing it
-  // is one write and every face redraws; a preview can still ask for the other.
   it("follows the operator's choice, and lets a preview ask for the other one", () => {
     const crew = (cast: "cut" | "drawn") => (
       <CastContext.Provider value={cast}>
@@ -108,23 +105,17 @@ describe("the two casts", () => {
     const [chosen, pinned] = Array.from(container.querySelectorAll(".avatar"));
     expect(chosen?.getAttribute("data-cast")).toBe("drawn");
     expect(pinned?.getAttribute("data-cast")).toBe("cut");
-    // Drawn: a pigment, an edge and a face, all written on the first paint.
     expect(chosen?.querySelector(".avatar__edge:last-of-type")?.getAttribute("d")).toMatch(/^M/);
     expect(chosen?.querySelector(".avatar__brush path")?.getAttribute("d")).toMatch(/^M/);
     expect(chosen?.querySelector(".avatar__white")).toBeNull();
-    // The thinking dots are the drawn cast's own, on twos, in the mark group.
     expect(chosen?.querySelector(".avatar__mark")?.innerHTML).toContain("circle");
   });
 
-  // Outside the app there is no choice to read, and the default is the one an
-  // operator who never opened Settings has.
   it("draws the drawn cast where nothing says otherwise", () => {
     const { container } = render(<AgentAvatar avatar="orb" color="#7293aa" />);
     expect(container.querySelector(".avatar")?.getAttribute("data-cast")).toBe("drawn");
   });
 
-  // Nothing drawn outside the circle a crew is seated in, which the cut cast
-  // gets from its relief's clip and the drawn one from its own.
   it("clips the drawn body to the reach", () => {
     const { container } = render(
       <AgentAvatar avatar="slab" color="#7293aa" mood="frustrated" cast="drawn" />,
@@ -142,8 +133,6 @@ describe("a directed gaze", () => {
       Number(p.getAttribute("cx")),
     );
 
-  // The pair in the rail's corner looks at each other, which is across, and
-  // an aimed look only goes up or down.
   it("looks where it is told, across as well as up and down", () => {
     const at = (gaze: [number, number] | null) =>
       pupils(
@@ -192,7 +181,6 @@ describe("the knock", () => {
     const [x, y] = knockAway(null, [-0.36, 0]);
     expect(x).toBeCloseTo(1);
     expect(y).toBeCloseTo(0);
-    // A gaze held at the operator is barely a direction, and is not one.
     expect(knockAway(null, [0, 0.02])).toEqual([0, 1]);
   });
 });

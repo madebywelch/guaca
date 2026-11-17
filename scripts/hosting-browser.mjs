@@ -1,5 +1,3 @@
-// Real Chromium + real guacad, with an offline model. No account or API key.
-// GUACAD=/path/to/guacad CHROME_BIN=/path/to/chrome node scripts/hosting-browser.mjs
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -26,7 +24,6 @@ async function until(test, description, timeout = 20000) {
 }
 const model = http.createServer(async (req, res) => {
   for await (const _chunk of req) {
-    /* consume request */
   }
   if (req.method !== "POST") {
     res.writeHead(200, { "content-type": "application/json" });
@@ -189,8 +186,6 @@ try {
     assert.ok(!answer.exceptionDetails, JSON.stringify(answer.exceptionDetails));
     return answer.result.value;
   };
-  // The agents are in the Groups sheet, opened from the people button in the
-  // top row; a row there opens the channel and closes the sheet.
   const openAgent = (name) =>
     evaluate(`(async () => {
       const row = () => [...document.querySelectorAll('.sheet .agent-row')].find((e) => e.textContent.includes(${JSON.stringify(name)}));
@@ -204,7 +199,6 @@ try {
     tab = (await cdp("Target.createTarget", { url: `${base}/#token=${token}` })).targetId;
     session = (await cdp("Target.attachToTarget", { targetId: tab, flatten: true })).sessionId;
     await until(() => openAgent("Browser check"), "real app renders its roster");
-    // A working agent opens on Now; what this check reads is the transcript.
     await until(
       () =>
         evaluate(
@@ -250,8 +244,6 @@ try {
     "PASS: partial reply restored; backend finished with no client; transcript restored.",
   );
 
-  // Phone layout uses real touch hit testing. Keep a draft while changing
-  // panes, and shrink the viewport as a keyboard would before returning wide.
   const tap = async (selector) => {
     const point = await evaluate(`(() => {
       const node = document.querySelector(${JSON.stringify(selector)});
@@ -288,8 +280,6 @@ try {
   };
   const pageTab = (label) => `.agent-tabs__tab:nth-child(${["Now","Conversation"].indexOf(label)+1})`;
   const box = (selector) => evaluate(`(() => { const r=document.querySelector(${JSON.stringify(selector)})?.getBoundingClientRect(); return r ? {left:r.left,right:r.right,top:r.top,bottom:r.bottom,height:r.height} : null; })()`);
-  // Every label on the timeline is inside the top row's margins, and none
-  // is crossed by the now line.
   const ribbonClear = async (where) => {
     const facts = await evaluate(`(() => {
       const edge = parseFloat(getComputedStyle(document.querySelector('.topbar')).paddingRight);
@@ -318,8 +308,6 @@ try {
     await fits(".pane__scroll");
     await fits(".composer");
     assert.equal(await evaluate("document.querySelector('.app > .rail')"), null, "no rail beside the column");
-    // An agent's page on a phone is its conversation: no timeline, a one-line
-    // head, a one-row status bar, and most of the height to read and write in.
     assert.equal(await evaluate("getComputedStyle(document.querySelector('.ribbon')).display"), "none", "the timeline gives way on an agent's page");
     const head = await box(".pane__header");
     assert.ok(head.height <= 60, `the page's head is one line: ${JSON.stringify(head)}`);
@@ -328,10 +316,8 @@ try {
     const reading = await evaluate("(() => { const log=document.querySelector('.pane__scroll[role=log]').getBoundingClientRect(); const c=document.querySelector('.composer').getBoundingClientRect(); return (c.bottom - log.top) / visualViewport.height; })()");
     assert.ok(reading >= 0.6, `conversation and composer take at least 60% of the height: ${reading}`);
     await tap(".composer__input");
-    // The draft from the last width is still there; typing replaces it.
     await evaluate("document.querySelector('.composer__input').select()");
     await cdp("Input.insertText", {text:"Draft survives navigation"},session);
-    // The agent menu has a way in by touch on the page itself.
     await tap(".pane__more");
     await until(() => evaluate("!!document.querySelector('.menu')"), "agent actions open by touch");
     await fits(".menu");
@@ -364,7 +350,6 @@ try {
     await tap(pageTab("Now"));
     await until(() => evaluate("!!document.querySelector('.agent-panel')"), "the agent's details open as a tab");
     await fits(".pane__scroll:has(> .agent-panel)");
-    // Writing while watching: the composer stays under Now.
     await fits(".composer");
     await shoot(`details-${width}`);
     await tap(pageTab("Conversation"));
@@ -378,7 +363,6 @@ try {
     await fits(".composer");
     await size(width,844);
     await evaluate("document.querySelector('.composer__input').focus()");
-    // React must see the input event; assigning .value alone would not clear its draft.
     await evaluate(`(() => { const n=document.querySelector('.composer__input');
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(n,'');
       n.dispatchEvent(new Event('input',{bubbles:true})); n.blur(); })()`);
@@ -420,8 +404,6 @@ try {
   await size(844,390);
   await fits(".pane");
   await fits(".composer");
-  // The smallest window the desktop app allows keeps the same rule as a
-  // phone: the conversation and its composer take at least 60% of the height.
   await size(900,600,false);
   await fits(".pane");
   await fits(".composer");
@@ -432,8 +414,6 @@ try {
   await fits(".ribbon");
   await fits(".pane");
   assert.equal(await evaluate("document.querySelector('.app > .rail')"), null, "no rail beside the column");
-  // The tabs with a routine counted on one and a long model in the caption
-  // beside them: the caption gives way, and no tab's label is cut.
   const draft = { groupId: group.id, name: "Browser check", avatar: "avocado", color: "#7ab55c", systemPrompt: "Answer briefly." };
   const routine = await call("create_routine", { agentId: agent.id, draft: { name: "Morning check", what: "Say good morning.", trigger: "every:86400", inSecs: null, skipIfWorking: false } });
   await call("update_agent", { id: agent.id, draft: { ...draft, model: "offline-test-with-a-long-dated-model-identifier-2026-11-16" } });
@@ -459,7 +439,6 @@ try {
   await ribbonClear("Today at 1280");
   console.log("PASS: phone widths, touch navigation and the agent menu, preserved drafts, keyboard-sized viewport, places, timeline margins and desktop layout.");
 
-  // Exercise the real artifact route in Chromium, including its opaque origin.
   const artifact = await call("frame_artifact", {
     html: `<script>let isolated=false;try{parent.localStorage.getItem('guaca.workspace.token')}catch{isolated=true}guaca.answer({isolated});</script>`,
   });
@@ -473,7 +452,6 @@ try {
   );
   console.log("PASS: artifact bridge works and its script cannot read workspace storage.");
 
-  // Kill an active backend; reboot reports once and does not repeat the call.
   await call("send_message", { agentId: agent.id, text: "This request will be interrupted." });
   await until(() => Boolean(modelResponse), "second model call starts");
   const before = requests;
@@ -502,6 +480,5 @@ try {
   for (const child of children.reverse()) await stop(child);
   model.closeAllConnections();
   await new Promise((resolve) => model.close(resolve));
-  // Chrome's helpers can still be writing its profile a moment after it exits.
   await rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

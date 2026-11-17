@@ -2,40 +2,18 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-/**
- * Guards the seam between Rust and TypeScript.
- *
- * A misspelled command name compiles cleanly on both sides and fails only when
- * a user clicks the thing. Nothing else in the build catches it, so it is
- * checked here by reading the two sources and comparing them.
- */
-
 const root = resolve(__dirname, "../..");
 const read = (path: string) => readFileSync(resolve(root, path), "utf8");
 
-/** Command names the frontend calls. */
 function calledCommands(): Set<string> {
   const source =
     read("src/lib/ipc.ts") +
     read("src/lib/host.ts") +
     read("src/lib/transfer.ts") +
     read("src/lib/transport.ts");
-  // Matches up to the opening paren rather than the first `>`, so a nested
-  // generic like `Record<AgentId, Activity>` does not cut the match short.
-  // Two doors, one surface: `invoke` reaches whichever host the page is in,
-  // and `invokeLocal` reaches the desktop app's own commands for the handful of
-  // things that are about this machine rather than the workspace.
   return new Set([...source.matchAll(/invoke(?:Local)?<[^(]*\(\s*"([a-z_]+)"/g)].map((m) => m[1]!));
 }
 
-/**
- * Command names registered with Tauri.
- *
- * The handler list names the generated wrappers rather than the commands
- * themselves, because `surface!` is what writes them. It is still its own list
- * and still has to be kept in step: the macro cannot register anything with
- * Tauri on its own.
- */
 function registeredCommands(): Set<string> {
   const source = read("src-tauri/src/app.rs");
   const block = source.match(/generate_handler!\[([\s\S]*?)\]/);
@@ -43,13 +21,6 @@ function registeredCommands(): Set<string> {
   return new Set([...block[1]!.matchAll(/\b([a-z_]+)\b/g)].map((m) => m[1]!));
 }
 
-/**
- * The command surface, which is one list in Rust serving two transports.
- *
- * `surface!` in ipc.rs generates the Tauri wrappers, the HTTP dispatch and the
- * `NAMES` constant from this. It is the authority for what a build answers to,
- * and it is why the desktop and a server cannot answer to different sets.
- */
 function surfaceCommands(): Set<string> {
   const source = read("src-tauri/src/ipc.rs");
   const block = source.match(/\nsurface! \{([\s\S]*?)\n\}/);
@@ -57,7 +28,6 @@ function surfaceCommands(): Set<string> {
   return new Set([...block[1]!.matchAll(/^\s{4}([a-z_]+)\(/gm)].map((m) => m[1]!));
 }
 
-/** Functions in commands.rs that a transport can call. */
 function definedCommands(): Set<string> {
   const source = read("src-tauri/src/commands.rs");
   return new Set(
@@ -103,7 +73,6 @@ describe("IPC contract", () => {
     );
   });
   it("finds commands on every side", () => {
-    // If a regex stops matching, the rest of this file would pass vacuously.
     expect(calledCommands().size).toBeGreaterThan(5);
     expect(registeredCommands().size).toBeGreaterThan(2);
     expect(definedCommands().size).toBeGreaterThan(5);
@@ -136,28 +105,18 @@ describe("IPC contract", () => {
   });
 
   it("exposes no command the frontend cannot reach", () => {
-    // The IPC surface is the app's entire attack surface. Anything registered
-    // and unused is surface with no purpose.
     const unused = [...registeredCommands()].filter((name) => !calledCommands().has(name));
     expect(unused, "registered but never called from the frontend").toEqual([]);
   });
 
   it("never exposes a command that could return the API key", () => {
     const source = read("src-tauri/src/commands.rs");
-    // get_settings must hand back the redacted view, never AppConfig.
     expect(source).toMatch(/fn get_settings\([^)]*\)\s*->\s*Reply<RedactedConfig>/);
-    // And the surface must not be able to name it either.
     expect(read("src-tauri/src/ipc.rs")).not.toMatch(/->\s*AppConfig,/);
     expect(source).not.toMatch(/->\s*Reply<AppConfig>/);
   });
 
   it("knows the same twelve use cases on both sides", () => {
-    // A suggestion is asked for by use case, and the backend refuses anything
-    // that is not one of these before it spends a request. So a category
-    // renamed at OpenRouter and updated on one side only is a dialog that draws
-    // nothing, silently, for exactly the agents it was built for. Neither list
-    // is the source — OpenRouter is — and the pair failing together is how a
-    // rename there gets noticed here.
     const rust = read("src-tauri/src/llm/catalog.rs").match(
       /CATEGORIES: \[&str; \d+\] = \[([\s\S]*?)\];/,
     );
@@ -166,19 +125,12 @@ describe("IPC contract", () => {
     expect(web, "no ROLES in roles.ts").not.toBeNull();
 
     const quoted = (block: string) => [...block.matchAll(/"([^"]+)"/g)].map((m) => m[1]!);
-    // The web list is `{ id, label }` pairs and only the id crosses IPC.
     const ids = [...web![1]!.matchAll(/id:\s*"([^"]+)"/g)].map((m) => m[1]!);
 
     expect(ids).toEqual(quoted(rust![1]!));
   });
 
   it("knows the same activity states on both sides", () => {
-    // The group column folds this enum into two marks: a count of the agents a
-    // person has to unblock, and whether anybody is working. `presenceOf` names
-    // every state rather than defaulting, so once the union here matches the
-    // enum there, a variant nobody weighed fails the typecheck. This is the
-    // half the typechecker cannot see: a variant added in Rust and never
-    // written down in TypeScript at all.
     const rust = read("src-tauri/src/runtime/events.rs");
     const block = rust.match(/pub enum Activity \{([\s\S]*?)\n\}/);
     if (!block) throw new Error("could not find enum Activity in events.rs");
@@ -196,10 +148,6 @@ describe("IPC contract", () => {
   });
 
   it("agrees on where the menu bar can send the window", () => {
-    // The strip points at two things and the window answers them with two
-    // different calls. A variant added in Rust and never written down here is a
-    // click that arrives and does nothing: the payload lands, no branch matches
-    // it, and nothing else in the build has an opinion about that.
     const block = read("src-tauri/src/tray.rs").match(/pub enum Reveal \{([\s\S]*?)\n\}/);
     if (!block) throw new Error("could not find enum Reveal in tray.rs");
     const variants = [...block[1]!.matchAll(/^\s{4}([A-Z][A-Za-z]*)/gm)].map(
@@ -215,11 +163,6 @@ describe("IPC contract", () => {
   });
 
   it("reports the menu bar the fields it reads, and no fewer", () => {
-    // The icon is drawn from nothing but this report, and a field Rust
-    // requires that the window never sends refuses the whole report rather
-    // than one number in it. One did: `onMachine` outlived the only code that
-    // wrote it, every report after that was turned away, and the icon sat at
-    // "nothing running" for as long as nobody compared the two lists.
     const block = read("src-tauri/src/menubar.rs").match(/pub struct Presence \{([\s\S]*?)\n\}/);
     if (!block) throw new Error("could not find struct Presence in menubar.rs");
     const rust = [...block[1]!.matchAll(/^\s{4}pub ([a-z_]+):/gm)].map((found) =>
@@ -235,17 +178,10 @@ describe("IPC contract", () => {
   });
 
   it("draws the same floor under a price on both sides", () => {
-    // The rail's meters and the menu bar are two readings of one number, and
-    // each decides on its own whether a cost is worth the width it takes. A
-    // free model prices every call at a real zero, so the two agreeing is what
-    // keeps `$0.0000` off one surface after it was taken off the other. Nothing
-    // else in the build compares them: the rule is written twice because one
-    // reader is TypeScript and the other is Rust.
     const web = read("src/components/Spend.tsx").match(/MIN_PRICE = ([\d.e-]+)/);
     const rust = read("src-tauri/src/menubar.rs").match(/MIN_PRICE: f64 = ([\d._e-]+)/);
     expect(web, "no MIN_PRICE in Spend.tsx").not.toBeNull();
     expect(rust, "no MIN_PRICE in menubar.rs").not.toBeNull();
-    // Rust spells long numbers with underscores; the value is what has to match.
     expect(Number(rust![1]!.replaceAll("_", ""))).toBe(Number(web![1]!));
   });
 });

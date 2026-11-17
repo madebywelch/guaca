@@ -10,20 +10,11 @@ import { Ribbon } from "./Ribbon";
 interface Props {
   onOpenAgent: (agentId: string) => void;
   onOpenPile: () => void;
-  /** Whose page is open, so the strip can mark them. */
   openAgentId?: string | null;
 }
 
-/** How far ahead the timeline reads: through the end of next week, which covers its day columns. */
 const AHEAD_MS = 8 * 86_400_000;
 
-/**
- * The ribbon with what it is drawn from: the store's live state, plus the two
- * reads only it needs, every agent's upcoming runs and the calendar. Read
- * again when a routine or a date changes and as the clock moves on, and a read
- * that fails leaves the timeline drawing what it has: it is a picture of the
- * day, and a picture with one row missing beats a banner over it.
- */
 export function Timeline({ onOpenAgent, onOpenPile, openAgentId }: Props) {
   const agents = useStore((state) => state.agents);
   const activity = useStore((state) => state.activity);

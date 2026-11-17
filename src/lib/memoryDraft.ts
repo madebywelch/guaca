@@ -1,30 +1,11 @@
-/** The versions of one page this panel can be holding at once. */
 export interface Held {
-  /** What is on disk, as of the last read. */
   stored: string;
-  /** What the operator has typed since, or null when they have not. */
   draft: string | null;
-  /**
-   * A newer version that landed while they were typing, held rather than
-   * applied. Null when nothing has.
-   */
   incoming: string | null;
   version?: string;
   incomingVersion?: string;
 }
 
-/**
- * A version read off disk, against what the panel is already holding.
- *
- * The operator's unsaved text is never replaced by it. An agent rewrites this
- * file in the middle of a turn, and the operator is most likely to be editing
- * it exactly then, so a read that applied itself would take a sentence away as
- * it was being typed. It is held to one side instead and the panel says so:
- * keeping what you wrote is Save, and taking what the agent wrote is Cancel.
- *
- * A draft typed back to what is on disk is not an edit, and holding it as one
- * would leave the panel on a page the agent has since replaced.
- */
 export function arrived(held: Held | null, content: string, version?: string): Held {
   if (held === null || held.draft === null || held.draft === (held.incoming ?? held.stored)) {
     return { stored: content, draft: null, incoming: null, ...(version && { version }) };

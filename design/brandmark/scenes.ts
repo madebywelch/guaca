@@ -1,14 +1,3 @@
-/**
- * Three performances of the same idea: the name is on screen for the first few
- * seconds of a launch and then gives the corner back, leaving only the cast.
- *
- * Each direction is a pure function of the seconds since launch and a handful
- * of flags, so a scene is the same scene at the same second however it was
- * reached, and replaying one is setting a number back to zero. Precedence, in
- * every one of them: the launch, then the pointer, then whatever the app is
- * doing, then rest.
- */
-
 import { ACCENTS, lookupCharacter } from "../../src/avatars/catalog";
 import type { Lump, Point } from "../../src/avatars/form";
 import type { Mood } from "../../src/avatars/moods";
@@ -17,12 +6,9 @@ import type { Cue, Look } from "./actor";
 export type Happening = "none" | "message" | "working" | "waiting" | "asleep";
 
 export interface Flags {
-  /** Scene seconds at which the mark condensed. Infinite until it has. */
   condensedAt: number;
   hover: boolean;
-  /** Scene seconds at which the pointer last arrived. */
   hoverAt: number;
-  /** How many times the pointer has arrived. The shapeshifter spends it. */
   visits: number;
   happening: Happening;
   happeningAt: number;
@@ -30,9 +16,7 @@ export interface Flags {
 
 export interface Scene {
   cues: Cue[];
-  /** How much of the set name is shown, 0 to 1. */
   name: number;
-  /** A line said in a bubble, and when it was said; a new time is a new bubble. */
   says: { text: string; at: number } | null;
 }
 
@@ -43,23 +27,17 @@ export interface Direction {
   why: string;
   beats: [string, string][];
   cast: { lump: Lump; color: string; seed: string }[];
-  /** Set beside the cast, or said by it. */
   voice: "set" | "said";
-  /** How wide the condensed mark is at 1x, in CSS pixels. */
   footprint: number;
   at(t: number, f: Flags): Scene;
 }
 
-/** Seconds after launch the full mark is held before it condenses. A number to tune, not a decision. */
 export const HOLD = 6.5;
-/** How long a message landing holds a creature's attention. */
 const STRUCK = 2.4;
 
 export const PIGMENT = Object.fromEntries(ACCENTS.map((a) => [a.name, a.value])) as Record<string, string>;
 const INK = "#2e2f2a";
 
-/* Where to look, in body radii. At the operator is straight out of the screen,
-   which on a face drawn head-on is the pupils centered and a hair low. */
 const FACE: Point = [0, 0.12];
 const RIGHT: Point = [0.36, 0.02];
 const LEFT: Point = [-0.36, 0.02];
@@ -73,18 +51,11 @@ function step<T>(t: number, steps: [number, T][]): T {
 const smooth = (x: number) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x));
 const ramp = (t: number, at: number, over: number) => smooth((t - at) / over);
 
-/** The name once the launch is over: out while the pointer is on the mark, in once it has condensed. */
 function settled(t: number, f: Flags): number {
   if (f.hover) return 1;
   return t >= f.condensedAt ? 0 : 1;
 }
 
-/**
- * What the app is doing, as a face. Only the loud states are worth the
- * corner: a message landing, work in flight, a turn parked on the operator,
- * and nothing at all for a long time. `bang`, the amber mark, is the parked
- * turn and nothing else, which is the one place amber may appear here.
- */
 function happening(t: number, f: Flags, who: number, of: number): Partial<Cue> | null {
   const age = t - f.happeningAt;
   switch (f.happening) {
@@ -120,8 +91,6 @@ function rested(t: number, f: Flags, cue: Cue, who: number, of: number): Cue {
   const now = happening(t, f, who, of);
   return now ? { ...cue, ...now } : cue;
 }
-
-/* --- Pair ------------------------------------------------------------------ */
 
 export const pair: Direction = {
   key: "pair",
@@ -162,8 +131,6 @@ export const pair: Direction = {
       gesture: t >= 1.5 ? { kind: "receive", at: 1.5 } : null,
     };
     if (launched) {
-      /* Every eleven seconds they find each other for a moment, and every
-         third time one of them has something to say. */
       const cycle = Math.floor((t - 3.8) / 11);
       const phase = (t - 3.8) % 11;
       const at = 3.8 + cycle * 11;
@@ -181,8 +148,6 @@ export const pair: Direction = {
     return { cues: [a, b], name: launched ? settled(t, f) : ramp(t, 1.95, 0.5), says: null };
   },
 };
-
-/* --- Namesake -------------------------------------------------------------- */
 
 export const namesake: Direction = {
   key: "namesake",
@@ -222,9 +187,6 @@ export const namesake: Direction = {
   },
 };
 
-/* --- Shapeshifter ---------------------------------------------------------- */
-
-/** One member of the cast per silhouette, in the order the name is written. */
 const MEMBERS: { key: string; color: string; mood: Mood }[] = [
   { key: "orb", color: PIGMENT.Olive as string, mood: "surprised" },
   { key: "puck", color: PIGMENT.Indigo as string, mood: "pleased" },
@@ -232,7 +194,6 @@ const MEMBERS: { key: string; color: string; mood: Mood }[] = [
   { key: "drop", color: PIGMENT.Madder as string, mood: "surprised" },
   { key: "lobe", color: PIGMENT.Verdigris as string, mood: "pleased" },
 ];
-/* It lands on the character and the pigment every new agent starts with. */
 const HOME = { key: "orb", color: PIGMENT.Ochre as string, mood: "idle" as Mood };
 const EVERYONE = [...MEMBERS, HOME];
 const WRITE = { first: 0.35, each: 0.42, morph: 0.3 };
@@ -263,8 +224,6 @@ export const shapeshifter: Direction = {
   footprint: 24,
   at(t, f) {
     const launched = t >= 3.9;
-    /* Which member it is becoming, and how far. The launch walks the five and
-       lands home; after that, every visit of the pointer is one step on. */
     let from = 0;
     let to = 0;
     let u = 1;
@@ -298,7 +257,6 @@ export const shapeshifter: Direction = {
       },
     };
     if (launched) cue = { ...rested(t, f, cue, 0, 1), morph: cue.morph };
-    /* One letter per shape, each written as the shape before it settles. */
     let letters = 0;
     for (let i = 0; i < 5; i++) letters += ramp(t, WRITE.first + i * WRITE.each, 0.16);
     return { cues: [cue], name: launched ? settled(t, f) : letters / 5, says: null };

@@ -3,12 +3,6 @@ import { describe, expect, it } from "vitest";
 import { type DoingInputs, doing } from "./doing";
 import type { Escalation, Outcome } from "./types";
 
-/**
- * The words beside a name, in the rail and in the menu bar panel. The rail's
- * suite draws them in place; this holds the order they outrank each other in,
- * which both surfaces depend on.
- */
-
 const NOW = 10 * 24 * 3_600_000;
 const quiet: DoingInputs = { activity: {}, stuck: [], trail: {}, lastActive: {}, finished: {} };
 

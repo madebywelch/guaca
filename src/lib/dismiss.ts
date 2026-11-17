@@ -35,7 +35,6 @@ function onKey(event: KeyboardEvent) {
   top.dismiss();
 }
 
-/** Whether anything dismissable (a dialog, a sheet, a menu) is open. */
 export function dismissing(): boolean {
   return stack.length > 0;
 }
