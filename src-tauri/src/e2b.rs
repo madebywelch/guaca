@@ -372,12 +372,7 @@ impl E2bClient {
         if !status.is_success() {
             return Err(E2bError::Api {
                 status: status.as_u16(),
-                message: self
-                    .env
-                    .redact(&String::from_utf8_lossy(&body))
-                    .chars()
-                    .take(200)
-                    .collect(),
+                message: self.env.quote(&String::from_utf8_lossy(&body), 200),
             });
         }
 
