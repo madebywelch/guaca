@@ -11,7 +11,7 @@ which reports acceptance without registering a response waiter.
 ```rust,ignore
 let subscription = observe_responses(move |response| {
     // Only a default action on this session's IDs qualifies.
-    // Emit notification-clicked with the click number.
+    // Hand the click number to the relay thread, which emits notification-clicked.
 });
 send(notification.id(&session_request_id)).await?;
 // On actual exit, outside any response callback:
@@ -59,6 +59,10 @@ Dropping the subscription detaches without waiting. Detachment prevents new
 leases; an already leased callback may still finish. The returned drain waits
 for those leases, so after `wait()` returns no callback from that subscription
 can run. Waiting inside its own callback is invalid because it would join itself.
+The app's types keep that out of reach: its callback holds only a sender to the
+relay thread that emits the click, so no event listener runs inside it, and
+`notifications::shutdown` takes the `Observer` that `install` returns, which
+exists only after the callback has been handed over and is held by the run loop.
 The app drains only on actual exit, not an exit request that may be prevented.
 
 One subscription and its active callback leases are the only native observer
