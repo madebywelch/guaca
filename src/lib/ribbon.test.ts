@@ -123,6 +123,20 @@ describe("where a face goes", () => {
     expect(caughtUp.faces.find((f) => f.agentId === "dara")!.x).toBeLessThan(caughtUp.now.x);
   });
 
+  it("places a run that finished after the clock last ticked, rather than piling its agent", () => {
+    const finished = NOW + 30_000;
+    const outcomes = [
+      anOutcome({ agentId: "pip", startedAt: NOW + 5_000, finishedAt: finished, seenAt: finished }),
+    ];
+    const ribbon = layoutRibbon(morning({ outcomes }));
+    expect(ribbon.pile).not.toContain("pip");
+    expect(ribbon.faces.find((one) => one.agentId === "pip")).toMatchObject({
+      state: "rest",
+      at: finished,
+    });
+    expect(ribbon.now.at).toBeGreaterThanOrEqual(finished);
+  });
+
   it("is pulled to the oldest question an agent has asked", () => {
     const approvals = [
       anApproval({ agentId: "dara", createdAt: at(16, 9, 5) }),
