@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -656,6 +656,14 @@ export function report(result, base) {
   return out.join("\n");
 }
 
+function escapeData(text) {
+  return text.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+}
+
+function escapeProperty(text) {
+  return escapeData(text).replace(/:/g, "%3A").replace(/,/g, "%2C");
+}
+
 function annotate(result) {
   if (!process.env.GITHUB_ACTIONS) return;
   for (const finding of result.findings) {
@@ -663,8 +671,10 @@ function annotate(result) {
     const message =
       finding.kind === "unread"
         ? "no reader for this file type; add one, or list the file as data with the reason"
-        : (finding.kind === "document" ? "new document" : finding.what) + " needs the owner's grant";
-    console.log("::error file=" + finding.path + line + "::" + message);
+        : finding.kind === "name"
+          ? "a file name git quotes; rename the file"
+          : (finding.kind === "document" ? "new document" : finding.what) + " needs the owner's grant";
+    console.log("::error file=" + escapeProperty(finding.path) + line + "::" + escapeData(message));
   }
   if (result.ledgerChanges?.length) {
     console.log("::warning file=" + LEDGER + ",title=Grants changed::" + result.ledgerChanges.length + " ledger changes; read them before merging");
@@ -804,7 +814,10 @@ function main() {
   const head = options.head ?? (judge ? "HEAD" : null);
   const result = check(repo, { base: base.rev, head, approvals: approvalsFrom(), ledgerGate: !pushToMain, judge });
   annotate(result);
-  console.log(report(result, base));
+  if (process.env.GITHUB_ACTIONS) {
+    const resume = randomUUID();
+    console.log("::stop-commands::" + resume + "\n" + report(result, base) + "\n::" + resume + "::");
+  } else console.log(report(result, base));
   return result.findings.length + result.problems.length > 0 ? 1 : 0;
 }
 

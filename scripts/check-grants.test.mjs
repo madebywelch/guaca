@@ -819,6 +819,27 @@ describe("the command", () => {
     );
   }
   it(
+    "runs no workflow command a file name or a grant's words brings",
+    scenario({ "src/a.ts": SOURCE }, (repo) => {
+      const forged = "::error file=forged.ts::forged";
+      write(repo.dir, { ["src/x\n" + forged + "\n.ts"]: SOURCE + "// a comment\n" });
+      setLedger(repo.dir, (ledger) => ledger.grants.push({ ...grantOf("comment", "src/a.ts", "// gone"), words: "ok\n::warning::forged" }));
+      const out = cli(repo, ["--base", repo.base], { GITHUB_ACTIONS: "true" });
+      assert.equal(out.status, 1, out.stdout);
+      const lines = out.stdout.split("\n");
+      const stop = lines.findIndex((line) => line.startsWith("::stop-commands::"));
+      assert.notEqual(stop, -1, out.stdout);
+      const token = lines[stop].slice("::stop-commands::".length);
+      assert.match(token, /^[0-9a-f-]{36}$/);
+      const resume = lines.indexOf("::" + token + "::");
+      assert.ok(resume > stop, out.stdout);
+      const live = [...lines.slice(0, stop), ...lines.slice(resume + 1)].filter((line) => line.startsWith("::"));
+      assert.ok(live.some((line) => line.startsWith("::error file=src/x%0A%3A%3Aerror file=forged.ts%3A%3Aforged%0A.ts::")), out.stdout);
+      assert.deepEqual(live.filter((line) => line.includes("forged") && !line.startsWith("::error file=src/x%0A")), []);
+      assert.ok(lines.slice(stop + 1, resume).some((line) => line.startsWith("::warning::forged")), out.stdout);
+    }),
+  );
+  it(
     "compares a push to main with the commit before it",
     scenario({ "src/a.ts": SOURCE }, (repo) => {
       git(repo.dir, "checkout", "-q", "main");
