@@ -331,8 +331,13 @@ function hourTicks(
   return kept.sort((a, b) => a.at - b.at);
 }
 
-export function layoutRibbon(input: RibbonInput): Ribbon {
-  const { now } = input;
+export function layoutRibbon(given: RibbonInput): Ribbon {
+  const now = Math.max(
+    given.now,
+    ...given.outcomes.flatMap((one) => [one.finishedAt, one.seenAt ?? one.finishedAt]),
+    ...given.approvals.map((one) => one.createdAt),
+  );
+  const input = { ...given, now };
   const today = midnight(now);
   const days = comingDays(now);
   const weekEnd = dayStart(now, days + 1);
