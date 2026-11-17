@@ -31,9 +31,11 @@ fn old_full_patches_and_persisted_limits_remain_readable() {
         "maxSendsPerPair": 5, "maxToolRounds": 20});
     config.apply(patch(json!({"limits": old}))).unwrap();
     assert_eq!(serde_json::to_value(config.limits).unwrap(), old);
-    let saved = serde_json::to_value(&config).unwrap();
-    let reloaded: AppConfig = serde_json::from_value(saved.clone()).unwrap();
-    assert_eq!(serde_json::to_value(reloaded).unwrap(), saved);
+    config.version = guac_lib::config::CURRENT_VERSION;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    guac_lib::config::save(&path, &config).unwrap();
+    assert_eq!(guac_lib::config::load(&path).unwrap(), config);
 }
 
 #[test]

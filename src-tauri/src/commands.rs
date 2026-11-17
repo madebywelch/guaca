@@ -2020,7 +2020,7 @@ pub async fn test_routine(state: &AppState, id: RoutineId) -> Reply<RunId> {
 pub async fn webhook_address(state: &AppState) -> Reply<WebhookAddress> {
     Ok(WebhookAddress {
         url: state.reach.origin().map(|origin| format!("{}/events", origin.trim_end_matches('/'))),
-        secret: state.runtime.config().webhook.secret,
+        secret: state.runtime.config().webhook.secret.expose().to_string(),
     })
 }
 
@@ -2357,7 +2357,11 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.inference.base_url, "https://x/v1");
-        assert_eq!(config.inference.api_key, "stored-key", "an absent key must not be cleared");
+        assert_eq!(
+            config.inference.api_key.expose(),
+            "stored-key",
+            "an absent key must not be cleared"
+        );
         assert_eq!(config.inference.default_model, "stored/model");
     }
 
@@ -2373,7 +2377,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(config.inference.api_key, "sk-typed", "whitespace is trimmed");
+        assert_eq!(config.inference.api_key.expose(), "sk-typed", "whitespace is trimmed");
         assert!(config.inference.is_ready(), "the typed key must be usable without saving");
     }
 

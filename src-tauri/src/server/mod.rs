@@ -844,7 +844,7 @@ async fn routine_event(
         .and_then(|h| h.split_once(' '))
         .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
         .map(|(_, token)| token.trim());
-    if secret.is_empty() || !bearer.is_some_and(|token| same(token, &secret)) {
+    if secret.is_empty() || !bearer.is_some_and(|token| same(token, secret.expose())) {
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({

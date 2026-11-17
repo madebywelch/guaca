@@ -94,7 +94,7 @@ impl Registry {
     ) -> (HashMap<String, Modalities>, Duration) {
         let url = format!("{base}/models");
         let mut request = self.http.get(&url);
-        let key = cfg.api_key.trim();
+        let key = cfg.api_key.expose().trim();
         if !key.is_empty() {
             request = request.bearer_auth(key);
         }

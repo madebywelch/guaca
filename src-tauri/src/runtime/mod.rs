@@ -5487,8 +5487,8 @@ impl Runtime {
     pub fn configured(&self) -> tools::Surfaces {
         let config = self.config();
         tools::Surfaces {
-            computer: !config.e2b.api_key.trim().is_empty(),
-            browser: !config.kernel.api_key.trim().is_empty(),
+            computer: !config.e2b.api_key.expose().trim().is_empty(),
+            browser: !config.kernel.api_key.expose().trim().is_empty(),
             errands: true,
         }
     }
@@ -6098,9 +6098,9 @@ impl Runtime {
             "operatorOnly": {
                 "provider": config.inference.provider,
                 "endpoint": endpoint,
-                "apiKeySet": !config.inference.api_key.trim().is_empty(),
-                "computerKeySet": !config.e2b.api_key.trim().is_empty(),
-                "browserKeySet": !config.kernel.api_key.trim().is_empty(),
+                "apiKeySet": !config.inference.api_key.expose().trim().is_empty(),
+                "computerKeySet": !config.e2b.api_key.expose().trim().is_empty(),
+                "browserKeySet": !config.kernel.api_key.expose().trim().is_empty(),
             },
             "yourCrew": crew.map(|group| serde_json::json!({
                 "name": group.name,

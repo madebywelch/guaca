@@ -22,10 +22,10 @@ pub fn delivery_id(values: [Option<&[u8]>; 3]) -> Result<String, &'static str> {
 }
 
 pub fn prepare(config: &mut WebhookConfig) -> bool {
-    if !config.secret.trim().is_empty() {
+    if !config.secret.expose().trim().is_empty() {
         return false;
     }
-    config.secret = crate::oauth::secret();
+    config.secret = crate::oauth::secret().into();
     true
 }
 
@@ -60,7 +60,7 @@ mod tests {
         let mut config = WebhookConfig::default();
         assert!(prepare(&mut config), "an empty config needs a secret");
         let first = config.secret.clone();
-        assert!(first.len() >= 40, "256 bits of base64url: {first:?}");
+        assert!(first.expose().len() >= 40, "256 bits of base64url");
         assert!(!prepare(&mut config), "a second launch keeps the secret it wrote");
         assert_eq!(config.secret, first);
     }

@@ -387,7 +387,7 @@ fn signed_in_where(
         inference: InferenceConfig {
             provider: if by_the_group { Provider::Compatible } else { Provider::Chatgpt },
             base_url: "http://127.0.0.1:1/v1".into(),
-            api_key: String::new(),
+            api_key: Default::default(),
             default_model: "endpoint/model-that-would-fail".into(),
             subscription_model: "gpt-5.6-luna".into(),
             request_timeout_secs: 10,

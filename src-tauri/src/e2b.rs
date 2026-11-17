@@ -163,8 +163,8 @@ pub struct E2bClient {
 }
 
 impl E2bClient {
-    pub fn new(api_key: &str) -> Option<Self> {
-        let api_key = api_key.trim();
+    pub fn new(api_key: &crate::secrets::Secret) -> Option<Self> {
+        let api_key = api_key.expose().trim();
         if api_key.is_empty() {
             return None;
         }
@@ -951,7 +951,7 @@ mod tests {
                 std::future::pending::<()>().await;
             }
         });
-        let mut client = E2bClient::new("test").unwrap();
+        let mut client = E2bClient::new(&"test".into()).unwrap();
         client.base = format!("http://{address}");
         client.http =
             reqwest::Client::builder().timeout(Duration::from_millis(100)).build().unwrap();
@@ -1387,13 +1387,13 @@ mod tests {
 
     #[test]
     fn a_blank_key_means_not_configured_rather_than_a_client_that_always_fails() {
-        assert!(E2bClient::new("   ").is_none());
-        assert!(E2bClient::new("e2b_x").is_some());
+        assert!(E2bClient::new(&"   ".into()).is_none());
+        assert!(E2bClient::new(&"e2b_x".into()).is_some());
     }
 
     #[test]
     fn a_client_and_a_sandbox_debug_without_their_credentials() {
-        let client = E2bClient::new("e2b_hunter2").unwrap();
+        let client = E2bClient::new(&"e2b_hunter2".into()).unwrap();
         let sandbox = Sandbox {
             id: "sbx".into(),
             envd_token: "envd-hunter2".into(),

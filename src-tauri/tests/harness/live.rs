@@ -57,7 +57,7 @@ pub fn configured() -> Option<AppConfig> {
             config.inference.default_model = model;
         }
     }
-    (!config.inference.api_key.trim().is_empty()).then_some(config)
+    (!config.inference.api_key.expose().trim().is_empty()).then_some(config)
 }
 
 fn use_openrouter_key(config: &mut AppConfig, key: Option<&str>) {
@@ -65,7 +65,7 @@ fn use_openrouter_key(config: &mut AppConfig, key: Option<&str>) {
         .is_ok_and(|url| url.origin().ascii_serialization() == "https://openrouter.ai");
     if config.inference.provider == Provider::Compatible && openrouter {
         if let Some(key) = key.map(str::trim).filter(|key| !key.is_empty()) {
-            config.inference.api_key = key.to_owned();
+            config.inference.api_key = key.into();
         }
     }
 }
@@ -85,7 +85,7 @@ fn a_shell_key_overrides_only_the_openrouter_origin() {
         config.inference.base_url = endpoint.into();
         config.inference.api_key = "saved-key".into();
         use_openrouter_key(&mut config, Some(" shell-key "));
-        assert_eq!(config.inference.api_key, expected, "{endpoint}");
+        assert_eq!(config.inference.api_key.expose(), expected, "{endpoint}");
     }
 }
 
@@ -102,7 +102,7 @@ fn an_absent_shell_key_or_subscription_keeps_the_saved_key() {
         config.inference.base_url = "https://openrouter.ai/api/v1".into();
         config.inference.api_key = "saved-key".into();
         use_openrouter_key(&mut config, key);
-        assert_eq!(config.inference.api_key, "saved-key");
+        assert_eq!(config.inference.api_key.expose(), "saved-key");
     }
 }
 

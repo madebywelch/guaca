@@ -177,8 +177,8 @@ pub struct KernelClient {
 }
 
 impl KernelClient {
-    pub fn new(api_key: &str) -> Option<Self> {
-        let api_key = api_key.trim();
+    pub fn new(api_key: &crate::secrets::Secret) -> Option<Self> {
+        let api_key = api_key.expose().trim();
         if api_key.is_empty() {
             return None;
         }
@@ -715,7 +715,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let mut client = KernelClient::new("test").unwrap();
+        let mut client = KernelClient::new(&"test".into()).unwrap();
         client.base = format!("http://{address}");
         assert!(matches!(client.get("browser").await, Err(KernelError::Api { status: 503, .. })));
         assert!(matches!(
@@ -726,7 +726,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_empty_workspace_identity_is_a_local_error() {
-        let client = KernelClient::new("test").unwrap();
+        let client = KernelClient::new(&"test".into()).unwrap();
         let error =
             client.create_for_workspace("agent", "profile", 60, false, "").await.unwrap_err();
         assert_eq!(
@@ -955,9 +955,9 @@ mod tests {
 
     #[test]
     fn a_key_that_is_blank_means_not_configured_rather_than_always_failing() {
-        assert!(KernelClient::new("").is_none());
-        assert!(KernelClient::new("   ").is_none());
-        assert!(KernelClient::new("sk-live").is_some());
+        assert!(KernelClient::new(&"".into()).is_none());
+        assert!(KernelClient::new(&"   ".into()).is_none());
+        assert!(KernelClient::new(&"sk-live".into()).is_some());
     }
 
     #[test]
@@ -1099,7 +1099,7 @@ mod tests {
     #[tokio::test]
     async fn a_page_that_navigates_underneath_an_action_is_read_again_not_reported_as_broken() {
         let browser = FakeBrowser::start_losing(1).await;
-        let client = KernelClient::new("sk-test").expect("a client");
+        let client = KernelClient::new(&"sk-test".into()).expect("a client");
 
         let page = client
             .browse(&browser.session(), "open", &json!({ "url": "https://example.com" }))
@@ -1113,7 +1113,7 @@ mod tests {
     #[tokio::test]
     async fn a_click_that_loses_the_page_is_never_sent_a_second_time() {
         let browser = FakeBrowser::start_losing(1).await;
-        let client = KernelClient::new("sk-test").expect("a client");
+        let client = KernelClient::new(&"sk-test".into()).expect("a client");
 
         let page = client
             .browse(&browser.session(), "click", &json!({ "id": 3 }))
@@ -1129,7 +1129,7 @@ mod tests {
     #[tokio::test]
     async fn an_action_on_a_page_that_stays_put_opens_one_connection() {
         let browser = FakeBrowser::start_losing(0).await;
-        let client = KernelClient::new("sk-test").expect("a client");
+        let client = KernelClient::new(&"sk-test".into()).expect("a client");
 
         client.browse(&browser.session(), "read", &json!({})).await.expect("read the page");
 
@@ -1139,7 +1139,7 @@ mod tests {
     #[tokio::test]
     async fn a_leave_site_box_is_answered_so_the_action_it_stopped_can_finish() {
         let browser = FakeBrowser::start_asking("beforeunload").await;
-        let client = KernelClient::new("sk-test").expect("a client");
+        let client = KernelClient::new(&"sk-test".into()).expect("a client");
 
         let page = client
             .browse(&browser.session(), "open", &json!({ "url": "https://example.com" }))
@@ -1155,7 +1155,7 @@ mod tests {
     #[tokio::test]
     async fn a_prompt_is_declined_rather_than_answered_with_nothing() {
         let browser = FakeBrowser::start_asking("prompt").await;
-        let client = KernelClient::new("sk-test").expect("a client");
+        let client = KernelClient::new(&"sk-test".into()).expect("a client");
 
         let page = client
             .browse(&browser.session(), "open", &json!({ "url": "https://example.com" }))
@@ -1180,7 +1180,7 @@ mod tests {
     #[tokio::test]
     async fn a_page_that_will_not_stay_still_says_what_to_do_about_it() {
         let browser = FakeBrowser::start_losing(usize::MAX).await;
-        let client = KernelClient::new("sk-test").expect("a client");
+        let client = KernelClient::new(&"sk-test".into()).expect("a client");
 
         let err = client
             .browse(&browser.session(), "open", &json!({ "url": "https://example.com" }))

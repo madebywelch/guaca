@@ -1941,7 +1941,10 @@ async fn an_agent_reads_the_settings_and_what_the_operator_is_looking_at_and_nev
     );
     assert!(results.contains("\"maxHops\""), "{results}");
     let key = h.runtime.config().inference.api_key;
-    assert!(!key.is_empty() && !results.contains(&key), "a key reached the model: {results}");
+    assert!(
+        !key.is_empty() && !results.contains(key.expose()),
+        "a key reached the model: {results}"
+    );
 }
 
 #[tokio::test]
