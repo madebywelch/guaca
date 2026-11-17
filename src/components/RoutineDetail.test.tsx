@@ -295,6 +295,42 @@ describe("RoutineDetail", () => {
     expect(screen.queryByRole("button", { name: "Save changes" })).toBeNull();
   });
 
+  it("copies the curl line with the real secret while the line stays masked", async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    open({ trigger: "event:stripe/invoice.payment_failed", nextRunAt: null });
+
+    const line = await screen.findByText(/curl -X POST/);
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    expect(writeText).toHaveBeenCalledWith(
+      [
+        "curl -X POST http://127.0.0.1:4711/events/stripe/invoice.payment_failed \\",
+        "  -H 'Authorization: Bearer s3cr3t-s3cr3t' \\",
+        '  -d \'{"any":"body"}\'',
+      ].join("\n"),
+    );
+    expect(revealWebhookSecret).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole("button", { name: "Copied" })).toBeTruthy();
+    expect(line.textContent).not.toContain("s3cr3t");
+    expect(screen.getByRole("button", { name: "Show secret" })).toBeTruthy();
+  });
+
+  it("says why the line was not copied when the secret cannot be fetched", async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    revealWebhookSecret.mockRejectedValue(new Error("The Host is not answering."));
+    open({ trigger: "event:stripe/invoice.payment_failed", nextRunAt: null });
+
+    await screen.findByText(/curl -X POST/);
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+
+    expect(await screen.findByText("The Host is not answering.")).toBeTruthy();
+    expect(writeText).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Copied" })).toBeNull();
+  });
+
   it("says an event can only be posted to a Host when there is no address", async () => {
     webhookAddress.mockResolvedValue({});
     open({ trigger: "event:stripe/invoice.payment_failed", nextRunAt: null });

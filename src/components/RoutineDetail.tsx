@@ -105,6 +105,7 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [address, setAddress] = useState<WebhookAddress | null>(null);
   const [secret, setSecret] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const now = useNow(30_000);
 
   const load = useCallback(async () => {
@@ -450,6 +451,24 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
                 Show secret
               </button>
             )}
+            <button
+              type="button"
+              className="btn btn--small btn--ghost"
+              onClick={() => {
+                const url = address.url;
+                if (!url) return;
+                (secret === null ? api.revealWebhookSecret() : Promise.resolve(secret))
+                  .then((shown) =>
+                    navigator.clipboard.writeText(
+                      webhookLine(url, shown, event.service, event.topic),
+                    ),
+                  )
+                  .then(() => setCopied(true))
+                  .catch((caught) => setError(errorMessage(caught)));
+              }}
+            >
+              {copied ? "Copied" : "Copy"}
+            </button>
             <span className="field__hint">
               The body, if there is one, reaches the agent under the instruction as data. Guaca
               calls nobody and polls nothing: whatever posts this is yours to wire.
